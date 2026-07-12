@@ -1,93 +1,100 @@
 # Addison
 
-A local-first, zero-config AI agent harness for non-technical users.
+**A local-first AI agent for people who have never opened a terminal.**
 
-Addison is a desktop chat app that talks to an LLM, uses a small set of *safe*
-tools, remembers things locally, can undo anything it does, and lets the user
-turn a sequence of actions into a reusable **Routine**. The hard problem here is
-not agent orchestration — it's product packaging and trust.
+Addison is a desktop app that opens to a chat window. Behind that window is an
+agent that can search the web, read files you hand it, do calculations, and
+draft emails for you — but it is built for someone who has never installed a
+developer tool, never seen an API key, and will close anything that shows an
+error code.
 
-See the specs this scaffold implements:
+## Why this exists
 
-- [`docs/addison-design-doc.md`](docs/addison-design-doc.md) — product / UX rationale
-- [`docs/addison-engineering-spec.md`](docs/addison-engineering-spec.md) — the build brief (architecture is final for v1)
+Agent harnesses today (Claude Code, OpenClaw, and the like) are genuinely
+powerful, but every one of them assumes a user who is comfortable with a
+terminal, config files, and API keys. That leaves out almost everyone: the
+parent, the small-shop owner, the grandparent who just wants help drafting an
+email or summarizing a PDF.
 
-## Architecture (three processes, three trust levels — spec §1.3)
+The bet behind Addison is that **the hard problem isn't the agent — it's the
+packaging and the trust.** Wiring an LLM to some tools is a weekend's work.
+Making a non-technical person feel *safe* running an app that can touch their
+files and browse the web on their behalf — without ever showing them a stack
+trace — is the real, multi-month effort. That is the problem Addison is built
+around.
 
-| Process | Language | Trust | Responsibility |
-|---|---|---|---|
-| Desktop shell | Rust (Tauri 2.x) | highest | OS permissions: keychain, file picker, updater; supervises the core |
-| Agent Core | Python 3.12 | middle | orchestration loop, tool registry, permission gate, routines, SQLite |
-| Frontend | React + TS | lowest | renders state, captures input; never sees keys or the network |
+## What it's trying to be
 
-The shell and core talk over **JSON-RPC 2.0 over stdio**. The core reaches out
-to model sources (Anthropic/OpenAI/Google BYOK, local Ollama, the Setup
-Assistant relay) — the `ModelRouter` picks which one per request (spec §4.1.1).
+- **Zero-terminal setup.** Download → double-click → chat window opens. No CLI
+  ever surfaces.
+- **No API-key hunting on day one.** A conversational Setup Assistant greets you
+  and walks you through getting configured; you can have your first real
+  conversation before you've touched a key.
+- **Visible, revocable permissions.** Every tool the agent can use is opt-in,
+  explained in plain language, and shown live while it runs ("Reading
+  invoice_march.pdf…").
+- **Local-first.** Your conversations and memory live on your own device by
+  default. Nothing is uploaded unless you turn on sync.
+- **Recoverable by design.** A single "undo" reverses anything the agent did to
+  your files — because every action that changes something is reversible by
+  construction, not by best-effort cleanup after the fact.
+- **Plain-language failure.** Errors become a sentence and a suggested next step,
+  never a stack trace.
 
-## Layout
+## What it deliberately is *not*
 
-```
-agent_core/      Python — orchestrator, providers, tools, permissions, memory, snapshots, routines
-shell/           Tauri (Rust) + React frontend
-docs/            design doc + engineering spec
-tests/           starter tests for the core safety invariants
-```
+Addison is not a developer tool, and trying to serve both audiences is how these
+projects drift back into being complicated. So, by design:
 
-## Safety invariants (non-negotiable — spec §8)
+- **No arbitrary shell or code execution.** Tools are a small, typed allow-list
+  (search, read a file you chose, calculate, draft a message) — never "run any
+  command." This is the opposite of the broad system access power-user tools
+  offer, and it's the right trade for this audience.
+- **No always-on / scheduled autonomy.** The agent acts when you ask it to.
+- **No headless or server mode.** It's a desktop app.
 
-1. No tool executes arbitrary shell/code. Routines are **declarative plans**, not scripts.
-2. Every `risk_tier != LOW` tool must have a real `undo()` — **enforced at registration** (raises otherwise).
-3. API keys never reach the frontend; they live in the OS keychain, read only at moment of use.
-4. Setup Assistant relay keys never exist in this repo's runtime.
-5. A Routine never has permissions beyond what the user already granted live.
-6. No scheduling / autonomous triggering in v1.
+## Who it's for
+
+Someone comfortable with email, Word, and Excel but who has never used a
+terminal — and wants help with everyday things: "summarize this," "draft this
+reply," "look this up," "add these numbers and save it as a document."
+
+## How it's built
+
+Three parts, kept at three different trust levels so the safety model is
+enforced by architecture, not convention:
+
+- **Desktop shell** — Rust (Tauri). Holds the real OS permissions (keychain,
+  file picker) and supervises the agent. Small binary, no bundled runtime the
+  user has to install.
+- **Agent core** — Python. Runs the conversation loop, the tool set, the
+  permission gate, local memory (SQLite), and undo. It has no OS permissions of
+  its own — every file or system action routes back through the shell.
+- **Frontend** — React. Renders the chat and the permission cards; it never sees
+  your API keys and never talks to the network directly.
+
+API keys, when you add your own, live in your operating system's keychain — never
+in the app's files, never in the frontend, never in this repository.
 
 ## Status
 
-Scaffold following the spec's build order (§11). Implemented as working code:
+Early scaffold. The safety-critical foundations are working and tested:
 
-- SQLite schema + Python dataclass mirrors (step 1)
-- `ToolRegistry` with the registration-time undo check + `calculator` (step 2)
-- `PermissionGate` (step 3)
-- Orchestration loop, `ModelRouter`, `UndoManager`, `RoutineEngine` ordering — structured, with typed stubs where they call not-yet-built pieces
+- Local database schema and data model
+- A tool registry that **mechanically refuses to register any state-changing
+  tool that can't be undone** — the backbone of the whole safety model
+- The permission gate that gates every tool call
+- The orchestration loop, model router, and undo manager
 
-Everything else (provider HTTP calls, Tauri wiring, web/file tool bodies, Setup
-Assistant relay, Ollama) is stubbed with a `TODO(step N)` pointing at the exact
-spec section. See **Build order** below.
+Everything else — the provider integrations, the desktop shell wiring, the
+reusable "Routines" feature, and local-model support — is scaffolded and being
+built out in sequence.
 
-## Getting started
+## License
 
-### Agent Core (Python)
+Not yet chosen.
 
-```bash
-cd agent_core
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cd .. && pytest tests/ -q          # safety-invariant tests should pass
-```
+---
 
-### Shell (Tauri + React)
-
-```bash
-cd shell
-npm install
-npm run tauri dev                  # once step 7 (shell wiring) is implemented
-```
-
-## Build order (spec §11)
-
-1. ✅ SQLite schema + dataclass mirrors
-2. ✅ `ToolRegistry` + undo check, with 2–3 LOW-risk tools
-3. ✅ `PermissionGate` (in-memory stub handler)
-4. ⬜ `AnthropicProvider` + minimal `ModelRouter` + orchestration loop, CLI-only
-5. ⬜ Remaining v1 tools with their `undo()` bodies
-6. ⬜ `UndoManager` (conversational rewind, then action rewind)
-7. ⬜ Tauri shell + JSON-RPC IPC
-8. ⬜ `RoutineBuilder` + `RoutineEngine`
-9. ⬜ `SetupAssistantProvider` + free relay
-10. ⬜ `OllamaProvider` + full `ModelRouter` (LOCAL role) + model-role selector
-
-## What NOT to build yet (spec §10)
-
-OpenAI/Google providers, automatic model routing, messaging channels, Routine
-step-editing UI, any Routine scheduling/triggers, a Rust rewrite of the core.
+*Detailed product and engineering design documents exist but are kept private
+during early development.*

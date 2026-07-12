@@ -27,3 +27,7 @@ Thumbs.db
 
 # Local editor / tool settings
 .claude/settings.local.json
+
+# Private design/engineering docs — kept local, not published
+docs/addison-design-doc.md
+docs/addison-engineering-spec.md
