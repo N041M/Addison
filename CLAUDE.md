@@ -8,9 +8,16 @@ work — this file is the short version, they are authoritative:
 
 ## What this is
 
-Addison is a local-first desktop chat agent for **non-technical users** (personas
-"Mira", 54, and "Petr", 68 — see design-doc §5). Three processes, three trust
-levels (spec §1.3):
+Addison is a local-first desktop chat agent that is **approachable by default and
+powerful on request**. Its default audience is non-technical users (personas
+"Mira", 54, and "Petr", 68 — design-doc §5); technical users/developers are served
+by an opt-in **Developer profile** (design-doc §7.11), not by complicating the
+default. A profile reshapes the *surface and default capabilities* only — it
+**never** changes the security model (see invariants below). Simple is the default;
+Developer is opt-in. When adding a capability, ask which profile surfaces it — do
+not leak developer affordances into Simple.
+
+Three processes, three trust levels (spec §1.3):
 
 - **`shell/`** — Tauri 2.x (Rust). Highest trust: OS keychain, file picker,
   updater. Supervises the Agent Core; relays IPC. Never runs model instructions.

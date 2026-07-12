@@ -1,12 +1,13 @@
 # Addison
 
-**A local-first AI agent for people who have never opened a terminal.**
+**A local-first AI agent that's approachable by default and powerful when you ask it to be.**
 
 Addison is a desktop app that opens to a chat window. Behind that window is an
 agent that can search the web, read files you hand it, do calculations, and
-draft emails for you — but it is built for someone who has never installed a
-developer tool, never seen an API key, and will close anything that shows an
-error code.
+draft emails for you. By default it's built for someone who has never installed
+a developer tool, never seen an API key, and will close anything that shows an
+error code — but a single opt-in **Developer profile** unfolds the same engine
+for technical users, without ever making the simple experience busier.
 
 ## Why this exists
 
@@ -41,23 +42,47 @@ around.
 - **Plain-language failure.** Errors become a sentence and a suggested next step,
   never a stack trace.
 
+## Profiles: approachable by default, powerful on request
+
+The way most agent tools fail is by serving developers and non-technical users
+through one undifferentiated interface — too complex for the newcomer, too padded
+for the developer. Addison uses **profiles** to avoid that: a single switch that
+reshapes the surface without ever forking the engine or weakening the safety
+model.
+
+- **Simple (default).** The experience above, in full: guided setup, a narrow
+  tool set, plain-language prompts, no jargon, no config. Nothing developer-facing
+  ever intrudes here. You can live in this profile forever.
+- **Developer (opt-in).** The same local-first, undo-safe engine with more of it
+  exposed — bring-your-own-key up front, automations editable as plans, a
+  headless/CLI entry point for scripting, raw diagnostics, and higher-risk tools
+  behind an explicit opt-in.
+
+The rule that makes this work: **a profile changes what's shown and what's on by
+default — never the security model.** Per-action consent, guaranteed undo, and
+key isolation hold identically in both. Arbitrary shell access is never in the
+default set in *any* profile. So welcoming developers makes the simple experience
+*simpler*, not busier — the power lives behind its own profile instead of on
+everyone's screen.
+
 ## What it deliberately is *not*
 
-Addison is not a developer tool, and trying to serve both audiences is how these
-projects drift back into being complicated. So, by design:
-
-- **No arbitrary shell or code execution.** Tools are a small, typed allow-list
-  (search, read a file you chose, calculate, draft a message) — never "run any
-  command." This is the opposite of the broad system access power-user tools
-  offer, and it's the right trade for this audience.
+- **No arbitrary shell or code execution by default, in any profile.** Tools are a
+  small, typed allow-list (search, read a file you chose, calculate, draft a
+  message). Higher-risk capabilities exist only behind an explicit opt-in and stay
+  gated and undoable — never "run any command" as a default.
 - **No always-on / scheduled autonomy.** The agent acts when you ask it to.
-- **No headless or server mode.** It's a desktop app.
+- **Not a server product.** It's a desktop app; the Developer profile exposes a
+  headless/CLI entry point for scripting, but hosting isn't the point.
 
 ## Who it's for
 
-Someone comfortable with email, Word, and Excel but who has never used a
-terminal — and wants help with everyday things: "summarize this," "draft this
-reply," "look this up," "add these numbers and save it as a document."
+- **By default:** someone comfortable with email, Word, and Excel but who has never
+  used a terminal — and wants help with everyday things: "summarize this," "draft
+  this reply," "look this up," "add these numbers and save it as a document."
+- **Via the Developer profile:** technical users who want a local-first, auditable,
+  undo-safe agent they can script and extend — without giving up the trust model or
+  reaching for a heavier developer harness.
 
 ## How it's built
 
