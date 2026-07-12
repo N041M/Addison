@@ -1,0 +1,23 @@
+[package]
+name = "addison"
+version = "0.1.0"
+description = "Addison — local-first consumer agent harness"
+edition = "2021"
+rust-version = "1.77"
+
+# Engineering-spec §1.2: Tauri 2.x. The Rust shell owns the OS-permission-sensitive
+# code (keychain, filesystem picker, updater) and supervises the Python Agent Core.
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-updater = "2"          # signed silent updates (design-doc §7.7)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+keyring = "3"                        # OS keychain (BYOK keys, device key) — §5
+tokio = { version = "1", features = ["full"] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

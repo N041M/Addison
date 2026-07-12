@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Addison",
+  "version": "0.1.0",
+  "identifier": "app.addison.desktop",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Addison",
+        "width": 1000,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 480
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "comment": "Install to user local app-data dir — no admin prompt (design-doc §7.8). Signing/notarization is Phase 3.",
+    "icon": ["icons/icon.png"]
+  },
+  "plugins": {
+    "updater": {
+      "comment": "Signed manifest endpoint + pubkey configured in Phase 3 (design-doc §7.7)."
+    }
+  }
+}

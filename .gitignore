@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+
+# Rust / Tauri
+shell/src-tauri/target/
+shell/src-tauri/gen/
+
+# Local app data / secrets (never commit keys — they live in the OS keychain, §5)
+*.sqlite3
+.addison/
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local editor / tool settings
+.claude/settings.local.json

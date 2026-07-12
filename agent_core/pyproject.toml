@@ -1,0 +1,27 @@
+[project]
+name = "addison-agent-core"
+version = "0.1.0"
+description = "Addison Agent Core — local-first consumer agent harness (engineering-spec §1.2)"
+requires-python = ">=3.12"
+dependencies = [
+    # Kept minimal by design. Cloud providers use stdlib HTTPS or their own SDK;
+    # SQLite is stdlib. Add provider SDKs as their adapters land (spec §11).
+    "httpx>=0.27",          # HTTPS to model providers / Ollama
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["../tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
