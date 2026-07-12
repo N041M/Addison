@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS provider_config (
 -- and populated simultaneously — e.g. role='primary' -> Anthropic, AND
 -- role='local' -> Ollama, both present at once. See §4.1.1 (ModelRouter).
 
+CREATE TABLE IF NOT EXISTS app_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL
+);
+-- Non-secret key/value app config. Notably 'active_profile' ('simple' |
+-- 'developer'), default 'simple' — see §4.7 (Profiles). NEVER holds secrets;
+-- API keys live in the OS keychain (§5), never here.
+
 CREATE TABLE IF NOT EXISTS routines (
     id              TEXT PRIMARY KEY,        -- uuid4
     name            TEXT NOT NULL,           -- user-facing, e.g. "Weekly invoice summary"

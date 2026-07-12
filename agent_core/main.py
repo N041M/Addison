@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 from agent_core.permissions.gate import PermissionGate
+from agent_core.profiles import Profile, resolve_active_profile
 from agent_core.providers.router import ModelRouter
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
@@ -28,21 +29,29 @@ from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.web_search import WebSearchTool
 
 
-def build_registry() -> ToolRegistry:
-    """Register exactly the v1 tool set (engineering-spec §4.2 table).
-    Registration will RAISE for any MEDIUM/HIGH tool lacking undo() — that's the
-    safety invariant, not a bug."""
+def build_registry(profile: Profile | None = None) -> ToolRegistry:
+    """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
+
+    A Profile chooses *which* tools are registered; it never changes *how* safety
+    is enforced — registration still RAISES for any MEDIUM/HIGH tool lacking undo()
+    (that's the safety invariant, not a bug). Defaults to the Simple profile, whose
+    tool set is exactly the v1 §4.2 table.
+    """
+    profile = profile or resolve_active_profile()
+    all_tools = {
+        "web_search": WebSearchTool(),
+        "read_file": ReadFileTool(),
+        "read_clipboard": ReadClipboardTool(),
+        "calculator": CalculatorTool(),
+        "save_file": SaveFileTool(),
+        "draft_message": DraftMessageTool(),
+        "open_link": OpenLinkTool(),
+    }
     registry = ToolRegistry()
-    for tool in (
-        WebSearchTool(),
-        ReadFileTool(),
-        ReadClipboardTool(),
-        CalculatorTool(),
-        SaveFileTool(),
-        DraftMessageTool(),
-        OpenLinkTool(),
-    ):
-        registry.register(tool)
+    for tool_id in profile.tool_ids:
+        # TODO(step 11): Developer-profile opt-in higher-risk tools will live in
+        # this map too; they register through the same undo check as everything else.
+        registry.register(all_tools[tool_id])
     return registry
 
 
@@ -54,11 +63,14 @@ def default_db_path() -> str:
 
 
 def main() -> None:
-    registry = build_registry()
+    profile = resolve_active_profile()          # §4.7 — SIMPLE until step 11 persists a choice
+    registry = build_registry(profile)
     permission_gate = PermissionGate()
     model_router = ModelRouter(configured={})   # populated from provider_config at startup
-    _ = (registry, permission_gate, model_router)
+    _ = (profile, registry, permission_gate, model_router)
     # TODO(step 7): JSON-RPC stdio read/dispatch/write loop over protocol.Method.
+    # TODO(step 11): use profile.onboarding to pick Setup Assistant vs. BYOK-first,
+    #                and expose profile.{headless_cli,raw_diagnostics,...} to the frontend.
     raise NotImplementedError("JSON-RPC stdio loop — spec §11 step 7.")
 
 

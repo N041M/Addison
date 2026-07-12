@@ -83,7 +83,10 @@ Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
 Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
 **CLI-only** — get a working chat-with-tools loop before touching the shell.
 Then (5) remaining tools + their `undo()`, (6) `UndoManager`, (7) Tauri shell +
-IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router.
+IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router, (11)
+Profiles — formalize the Simple/Developer split (`profiles.py` exists as scaffold;
+it parameterizes registration/onboarding, never the permission gate — spec §4.7,
+§8.7).
 
 Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.
