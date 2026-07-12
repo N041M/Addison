@@ -29,6 +29,7 @@ class OpenAIProvider:
             max_context_tokens=128_000,
             supports_streaming=True,
             runs_off_device=False,
+            vision=True,        # modern GPT-class models can analyze images
         )
 
     def send(self, messages: list[Message], tools: list) -> ModelResponse:

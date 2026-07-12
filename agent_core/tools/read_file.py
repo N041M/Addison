@@ -5,6 +5,14 @@ path it can wander with. It gets a *handle* the OS-native file picker returned,
 resolved through the Rust shell via ``context.shell_bridge``. This module must
 not open arbitrary filesystem paths directly.
 
+VISION GATING (§4.1.1, item A): reading an image in is always allowed, but
+*analyzing* it needs a vision-capable model. When the extracted content is an
+image and the active provider reports ``capabilities().vision == False``, the
+orchestrator surfaces a plain-language warning and offers to switch to a
+vision-capable model rather than feeding the image to a model that can't see it.
+This tool just reports the content + its kind; the capability check/warn lives at
+the orchestration layer. Automatic switching to a vision model is v2, not v1.
+
 STATUS: stub. Wire ``shell_bridge.read_scoped_file(handle)`` once the Tauri
 filesystem bridge (shell/src-tauri/src/filesystem.rs) exists — engineering-spec §11 step 7.
 """

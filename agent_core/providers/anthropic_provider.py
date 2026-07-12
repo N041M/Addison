@@ -29,6 +29,7 @@ class AnthropicProvider:
             max_context_tokens=200_000,
             supports_streaming=True,
             runs_off_device=False,
+            vision=True,        # Claude models can analyze images
         )
 
     def send(self, messages: list[Message], tools: list) -> ModelResponse:

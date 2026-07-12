@@ -5,9 +5,18 @@ PRIMARY and LOCAL can both be configured and reachable within the same running
 session, and which one handles a message is a per-request decision, not a
 session-wide setting.
 
-v1 routing is EXPLICIT only (user toggle per message, or a Routine step's
-model_role). Automatic task-based routing is deliberately out of scope (§4.1.1,
-§10) — no hidden decisions about where a message goes.
+Two axes of selection:
+  - role   : PRIMARY | LOCAL | SETUP_ASSISTANT (which *job*)
+  - model  : within LOCAL, *which* of several configured local models (item B).
+             A user can run e.g. a 14B vision model and an 8B text model at once
+             and pick per message; a Routine step can pin one by name.
+
+v1 routing is EXPLICIT only — a user toggle per message, or a Routine step's
+model_role/model_name. Automatic task-based routing (picking the model from task
+difficulty / required capability like vision) is deliberately deferred to v2
+(§4.1.1): v2 will call `resolve()` with a `model_name` it chooses, so the
+substrate here is exactly what it builds on — only the *decision* is deferred.
+No hidden auto-routing in v1.
 """
 
 from __future__ import annotations
@@ -16,23 +25,46 @@ from agent_core.providers.base import ModelProvider, ModelRole
 
 
 class ModelRouter:
-    def __init__(self, configured: dict[ModelRole, ModelProvider]):
-        self._configured = configured   # populated from provider_config at startup
+    def __init__(
+        self,
+        configured: dict[ModelRole, ModelProvider],
+        local_models: dict[str, ModelProvider] | None = None,
+        selected_local: str | None = None,
+    ):
+        # Single-provider roles (PRIMARY, SETUP_ASSISTANT — and optionally a lone
+        # LOCAL) live in `configured`. When several local models are configured,
+        # they live in `local_models` keyed by model name, with one selected.
+        self._configured = configured
+        self._local_models = dict(local_models or {})
+        self._selected_local = selected_local or next(iter(self._local_models), None)
 
-    def resolve(self, requested_role: ModelRole | None = None) -> ModelProvider:
+    def resolve(
+        self, requested_role: ModelRole | None = None, model_name: str | None = None
+    ) -> ModelProvider:
         """Returns the provider for a request. ``requested_role`` is an explicit
         override (UI selection or a Routine step's model_role, §6.2); if None,
-        defaults to PRIMARY. Falls back to whichever role IS configured if the
-        requested one isn't — never a hard error mid-conversation; surface a
-        plain-language notice in the Activity Panel instead."""
+        defaults to PRIMARY. ``model_name`` selects among several LOCAL models
+        (item B); if None, uses the currently selected local model. Falls back to
+        whatever IS configured rather than erroring mid-conversation — surface a
+        plain-language notice in the Activity Panel instead.
+
+        NOTE: in v1 ``model_name`` is only ever passed from an explicit user/Routine
+        choice. v2 auto-routing is the only thing that will pass a model_name Addison
+        picked itself, and even then it stays overridable and visible (§4.1.1)."""
         role = requested_role or ModelRole.PRIMARY
+        if role is ModelRole.LOCAL and self._local_models:
+            name = model_name or self._selected_local
+            if name is not None and name in self._local_models:
+                return self._local_models[name]
+            # else fall through to a single LOCAL provider in `configured`, if any
         if role in self._configured:
             return self._configured[role]
-        # Fallback: prefer PRIMARY, else any configured role.
         if ModelRole.PRIMARY in self._configured:
             return self._configured[ModelRole.PRIMARY]
         if self._configured:
             return next(iter(self._configured.values()))
+        if self._local_models and self._selected_local is not None:
+            return self._local_models[self._selected_local]
         raise RuntimeError("No model provider is configured.")
 
     def register(self, role: ModelRole, provider: ModelProvider) -> None:
@@ -40,8 +72,29 @@ class ModelRouter:
         DirectAPIProvider is registered under PRIMARY without disturbing others."""
         self._configured[role] = provider
 
+    def register_local_model(self, model_name: str, provider: ModelProvider) -> None:
+        """Add a local model to the LOCAL pool (item B). The first one added
+        becomes the selected default."""
+        self._local_models[model_name] = provider
+        if self._selected_local is None:
+            self._selected_local = model_name
+
+    def select_local_model(self, model_name: str) -> None:
+        """Set the local model the per-message Local picker resolves to."""
+        if model_name not in self._local_models:
+            raise KeyError(f"Local model '{model_name}' is not configured.")
+        self._selected_local = model_name
+
+    def available_local_models(self) -> list[str]:
+        """Drives the Local model dropdown in the frontend (item B)."""
+        return list(self._local_models)
+
     def available_roles(self) -> list[ModelRole]:
         """Drives the frontend's model-role selector — only roles the user has
-        actually configured. LOCAL only appears once a local model is
-        downloaded and verified (§4.1.2)."""
-        return list(self._configured.keys())
+        actually configured. LOCAL appears once at least one local model is
+        downloaded and verified (§4.1.2), whether it sits in `configured` or the
+        `local_models` pool."""
+        roles = list(self._configured.keys())
+        if self._local_models and ModelRole.LOCAL not in roles:
+            roles.append(ModelRole.LOCAL)
+        return roles

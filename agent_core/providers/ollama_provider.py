@@ -29,12 +29,17 @@ class OllamaProvider:
         self._base_url = base_url
 
     def capabilities(self) -> ProviderCapabilities:
-        # TODO(step 10): query Ollama model metadata for tool-calling support.
+        # TODO(step 10): query Ollama model metadata for tool-calling AND vision
+        # support — both depend on the loaded model. A Mistral-based vision model
+        # reports vision=True; a text-only model (e.g. an 8B DeepSeek) reports
+        # False, which gates the image path (§4.1.1, item A). Conservative
+        # defaults until queried.
         return ProviderCapabilities(
-            native_tool_calling=False,   # conservative default until queried
+            native_tool_calling=False,
             max_context_tokens=8_192,
             supports_streaming=True,
             runs_off_device=True,
+            vision=False,                # per-model; set True for vision-capable local models
         )
 
     def send(self, messages: list[Message], tools: list) -> ModelResponse:

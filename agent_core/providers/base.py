@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 
 class ModelRole(str, Enum):
@@ -28,6 +28,10 @@ class ProviderCapabilities:
     max_context_tokens: int
     supports_streaming: bool
     runs_off_device: bool        # True only for local providers — informs privacy-sensitive routing
+    vision: bool = False         # can analyze image input — gates the image path (§4.1.1, item A)
+    audio: bool = False          # can analyze audio input
+    # v2 auto-routing (§4.1.1) reads these flags to pick a capable model per task;
+    # in v1 they only drive an explicit warning + manual switch, never an auto-switch.
 
 
 @dataclass
@@ -51,6 +55,7 @@ class ModelResponse:
     finish_reason: str = "stop"
 
 
+@runtime_checkable
 class ModelProvider(Protocol):
     def capabilities(self) -> ProviderCapabilities: ...
 

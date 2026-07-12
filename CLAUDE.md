@@ -94,8 +94,11 @@ section — implement them in order, not opportunistically.
 ## Do NOT build yet (spec §10)
 
 OpenAI/Google providers (Anthropic only for the first build), automatic
-task-based model routing, messaging channels, Routine step-editing UI, any
-Routine scheduling/triggers, a Rust rewrite of the Agent Core.
+task-based model routing/auto-switching (**planned for v2** — v1 ships the
+substrate: `vision`/`audio` capability flags and multiple local models with an
+*explicit* picker, but the automatic choice among them is v2), messaging
+channels, Routine step-editing UI, any Routine scheduling/triggers, a Rust
+rewrite of the Agent Core.
 
 ## Commands
 
