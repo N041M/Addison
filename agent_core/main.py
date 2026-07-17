@@ -983,7 +983,12 @@ def main() -> None:
         # key mid-conversation flips routing to PRIMARY with no restart.
         return bool(_api_key_getter())
 
-    provider = AnthropicProvider(model="claude-opus-4-8", api_key_getter=_api_key_getter)
+    # ADDISON_MODEL is a dev/test knob (like ADDISON_DB_PATH): live test sweeps
+    # run on a cheaper model without touching the shipped default.
+    provider = AnthropicProvider(
+        model=os.environ.get("ADDISON_MODEL", "claude-opus-4-8"),
+        api_key_getter=_api_key_getter,
+    )
     # SETUP_ASSISTANT is a distinct role that never holds a provider key — the shell
     # signs each relay request with the device key (§5). It sits alongside PRIMARY;
     # the §4.6 handoff is additive (PRIMARY populated), never a destructive swap.
