@@ -1,14 +1,14 @@
 // Model picker — sits beside the message input (design-doc §7.3.3, §7.3.4).
 //
 // One compact, obvious control. A single dropdown lists the cloud models by
-// their plain labels ("Most capable", "Balanced", "Fast", …) and — when a model
-// runs on this computer too — those under a plain "On this computer" divider.
-// Choosing an entry sets the role AND the model together, so there is no
-// separate Cloud/On-this-computer toggle to reason about.
+// their names (e.g. "Claude Opus 4.8") — every model the configured key can
+// access — and, when a model runs on this computer too, those under a plain "On
+// this computer" divider. Choosing an entry sets the role AND the model together,
+// so there is no separate Cloud/On-this-computer toggle to reason about.
 //
-// When the chosen model offers levels of effort, a small three-way control
-// appears next to it ("Quick" / "Balanced" / "Thorough"). It is hidden entirely
-// for models that don't (Fast, and models that run on this computer).
+// When the chosen model offers levels of effort, a small control appears next to
+// it, labelled by the API's own effort ids (low / high / xhigh, …). It is hidden
+// entirely for models with no effort control, and for models on this computer.
 //
 // A one-line plain description of the chosen model rides along in the dropdown's
 // title, so it's there on hover/read-out without cluttering the row.
@@ -39,31 +39,31 @@ interface Props {
 // replaces this with the core's real catalog once connected.
 const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
-    id: "__placeholder_capable",
-    label: "Most capable",
-    description: "Best for hard, detailed work. Slower to answer.",
+    id: "claude-opus-4-8",
+    label: "Claude Opus 4.8",
+    description: "",
     effortLevels: [
-      { id: "quick", label: "Quick" },
-      { id: "balanced", label: "Balanced" },
-      { id: "thorough", label: "Thorough" },
-    ],
-    default: false,
-  },
-  {
-    id: "__placeholder_balanced",
-    label: "Balanced",
-    description: "A good mix of speed and depth for everyday things.",
-    effortLevels: [
-      { id: "quick", label: "Quick" },
-      { id: "balanced", label: "Balanced" },
-      { id: "thorough", label: "Thorough" },
+      { id: "low", label: "low" },
+      { id: "high", label: "high" },
+      { id: "xhigh", label: "xhigh" },
     ],
     default: true,
   },
   {
-    id: "__placeholder_fast",
-    label: "Fast",
-    description: "Quick, simple answers.",
+    id: "claude-sonnet-5",
+    label: "Claude Sonnet 5",
+    description: "",
+    effortLevels: [
+      { id: "low", label: "low" },
+      { id: "high", label: "high" },
+      { id: "xhigh", label: "xhigh" },
+    ],
+    default: false,
+  },
+  {
+    id: "claude-haiku-4-5",
+    label: "Claude Haiku 4.5",
+    description: "",
     effortLevels: [],
     default: false,
   },
@@ -142,7 +142,7 @@ export function ModelSelector({
         <select
           disabled={isDisabled}
           value={currentValue}
-          title={description}
+          title={description || undefined}
           onChange={(e) => handlePick(e.target.value)}
           className="border border-line bg-surface px-2.5 py-1.5 text-sm text-ink disabled:opacity-60"
         >
