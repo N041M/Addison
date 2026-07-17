@@ -134,6 +134,22 @@ class IpcShellBridge:
         result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, {"role": role})
         return result.get("key", "")
 
+    # --- device identity & relay signing (§5) -----------------------------
+    def get_device_key(self) -> dict:
+        """Public device identity from the shell/keychain.
+
+        Returns ``{"deviceId", "publicKey"}`` — the PUBLIC half ONLY. The private
+        key never leaves the OS keychain and the core never sees it (§5)."""
+        return self._call(Method.KEYCHAIN_GET_DEVICE_KEY, {})
+
+    def sign_relay_request(self, payload: dict) -> dict:
+        """Ask the shell to sign a Setup Assistant relay body with the device
+        private key. Returns ``{"signature", "deviceId"}``.
+
+        The core hands over bytes to sign and gets back a signature; the key
+        material stays in the OS keychain and is never exposed here (§5, §8.4)."""
+        return self._call(Method.KEYCHAIN_SIGN_RELAY_REQUEST, {"payload": payload})
+
 
 def _error_message(error) -> str:
     """A JSON-RPC error object -> a user-ready sentence, with no internals."""

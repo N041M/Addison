@@ -63,6 +63,13 @@ class AnthropicProvider:
             "max_tokens": _MAX_TOKENS,
             "messages": _translate_history(messages),
         }
+        # A leading role="system" message maps to the Messages API top-level
+        # `system` param, not into the messages list (§4.6 injects the Setup
+        # Assistant prompt this way for a turn). Omitted entirely when absent, so
+        # the no-system path is byte-for-byte unchanged.
+        system = _extract_system(messages)
+        if system:
+            body["system"] = system
         tool_blocks = _translate_tools(tools)
         if tool_blocks:  # omit the key entirely when there are no tools
             body["tools"] = tool_blocks
@@ -114,6 +121,16 @@ def _translate_tools(tools: list) -> list[dict]:
     ]
 
 
+def _extract_system(messages: list[Message]) -> str | None:
+    """Pull role="system" messages out to the API's top-level `system` string.
+
+    Returns None when there are none, so ``send()`` can omit the key and leave
+    the existing (system-free) request shape untouched. Multiple system messages
+    are joined, though in practice §4.6 injects exactly one."""
+    parts = [m.content for m in messages if m.role == "system" and m.content]
+    return "\n\n".join(parts) if parts else None
+
+
 def _translate_history(messages: list[Message]) -> list[dict]:
     """Map Addison's flat message list to Anthropic's alternating turns.
 
@@ -132,6 +149,10 @@ def _translate_history(messages: list[Message]) -> list[dict]:
             pending_results.clear()
 
     for m in messages:
+        if m.role == "system":
+            # Carried by the top-level `system` param (_extract_system), never a
+            # messages-list entry — the API rejects "system" as a message role.
+            continue
         if m.role == "tool":
             pending_results.append(
                 {

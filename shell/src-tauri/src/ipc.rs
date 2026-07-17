@@ -28,7 +28,10 @@ pub const KEYCHAIN_PREFIX: &str = "keychain.";
 
 /// A JSON-RPC error the core can relay to the user as plain language. `message`
 /// is already user-facing (no stack traces, no jargon — CLAUDE.md); the core
-/// surfaces it as-is or maps it to its own no-key/next-step copy.
+/// surfaces it as-is or maps it to its own no-key/next-step copy. `Debug` is safe
+/// to derive: this type only ever carries an int code and a plain message — never
+/// key material — so it can appear in test failures without leaking a secret.
+#[derive(Debug)]
 pub struct RpcError {
     pub code: i64,
     pub message: String,
@@ -133,7 +136,7 @@ mod tests {
 
     #[test]
     fn rejects_keychain_methods_from_the_webview() {
-        for m in ["keychain.getProviderKey", "keychain.getDeviceKey"] {
+        for m in ["keychain.getProviderKey", "keychain.getDeviceKey", "keychain.signRelayRequest"] {
             let frame = json!({ "jsonrpc": "2.0", "method": m });
             assert!(
                 validate_outbound_frame(&frame).is_err(),

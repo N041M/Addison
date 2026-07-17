@@ -21,7 +21,13 @@ rfd = "0.15"                        # native file dialogs (open/save picker) —
 arboard = "3"                       # clipboard text (shell.readClipboard)
 open = "5"                          # open http(s) links in the default browser (shell.openExternal)
 base64 = "0.22"                     # encode picked images for shell.readScopedFile
-uuid = { version = "1", features = ["v4"] }   # opaque file handles — core never sees raw paths
+uuid = { version = "1", features = ["v4"] }   # opaque file handles + device_id (§5)
+
+# Device identity keypair (§5): ed25519 signing key generated in the shell on first
+# launch, private half stored ONLY in the OS keychain. `rand_core`'s OsRng is the
+# CSPRNG that seeds it; the `rand_core` feature exposes `SigningKey::generate`.
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 # OS keychain (BYOK keys, device key) — §5. Feature-select the platform-native
 # store per target so a macOS `cargo check` never tries to build the Linux

@@ -76,5 +76,9 @@ class Method:
     SHELL_OPEN_EXTERNAL = "shell.openExternal"         # {url} -> {}
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
-    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
+    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"      # {} -> {deviceId, publicKey}; public half ONLY
     KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"  # {role} -> {key}; per-call, never cached
+    # {payload} -> {signature, deviceId}. The shell signs relay requests with the
+    # device private key, which never leaves the OS keychain (§5) — the core sends
+    # bytes to sign, never sees key material.
+    KEYCHAIN_SIGN_RELAY_REQUEST = "keychain.signRelayRequest"
