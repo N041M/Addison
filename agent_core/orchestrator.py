@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
-from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.base import Message, ModelRole, ToolCallRequest
 from agent_core.providers.router import ModelRouter
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ExecutionContext, ToolResult
@@ -31,6 +31,19 @@ class Conversation:
 
     def append_assistant_message(self, text: str | None) -> None:
         self.messages.append(Message(role="assistant", content=text or ""))
+
+    def append_assistant_tool_calls(
+        self, text: str | None, tool_calls: list[ToolCallRequest]
+    ) -> None:
+        """Record the assistant turn that REQUESTED tools, before its results.
+
+        Providers with native tool calling (e.g. Anthropic) require each
+        ``tool_result`` to be preceded in history by the assistant ``tool_use``
+        it answers. Without this the next ``provider.send()`` replays an
+        unpaired tool result and the API rejects the turn (spec §4.4)."""
+        self.messages.append(
+            Message(role="assistant", content=text or "", tool_calls=tool_calls)
+        )
 
 
 class Orchestrator:
@@ -57,6 +70,9 @@ class Orchestrator:
                 tools=self.tool_registry.list_for_model(),
             )
             if response.tool_calls:
+                # Record the assistant's tool-call turn BEFORE its results so that
+                # each tool_result pairs with the tool_use it answers (§4.4).
+                conversation.append_assistant_tool_calls(response.text, response.tool_calls)
                 for call in response.tool_calls:
                     status = self.permission_gate.check(call.tool_id)
                     if status == PermissionStatus.NOT_YET_ASKED:

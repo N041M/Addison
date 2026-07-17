@@ -19,6 +19,20 @@ dev = [
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+# This pyproject lives inside the package directory itself; map the current
+# directory to the importable `agent_core` package explicitly.
+package-dir = { "agent_core" = "." }
+packages = [
+    "agent_core",
+    "agent_core.memory",
+    "agent_core.permissions",
+    "agent_core.providers",
+    "agent_core.routines",
+    "agent_core.snapshots",
+    "agent_core.tools",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["../tests"]
 
