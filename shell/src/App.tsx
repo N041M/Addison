@@ -25,6 +25,10 @@ import {
 } from "./ipc/client";
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
+import {
+  RoutineProposalCard,
+  type RoutineProposal,
+} from "./components/RoutineProposalCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Banner } from "./components/Banner";
 
@@ -57,6 +61,7 @@ export function App() {
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
+  const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
   // --- Wire up notifications + initial data on mount ------------------------
   useEffect(() => {
@@ -272,6 +277,34 @@ export function App() {
     refreshRoles();
   }
 
+  // --- Routines (§6.3): propose -> confirmation card -> explicit save --------
+  function handleProposeRoutine() {
+    ipc
+      .proposeRoutine()
+      .then((res) => {
+        const proposal = normalizeProposal(res);
+        if (proposal) setRoutineProposal(proposal);
+        else setStatusBanner("I couldn't turn that into a routine.");
+      })
+      .catch((err) => {
+        setStatusBanner(
+          err instanceof Error ? err.message : "I couldn't turn that into a routine.",
+        );
+      });
+  }
+
+  function handleConfirmRoutine(name: string) {
+    setRoutineProposal(null);
+    ipc
+      .confirmSaveRoutine(name)
+      .then(() => setStatusBanner(`Saved "${name}" — it's in Settings under Routines.`))
+      .catch((err) => {
+        setStatusBanner(
+          err instanceof Error ? err.message : "I couldn't save that routine.",
+        );
+      });
+  }
+
   // --- Render ---------------------------------------------------------------
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
@@ -314,14 +347,24 @@ export function App() {
           onSelectRole={handleSelectRole}
           onSelectLocalModel={handleSelectLocalModel}
           activityStrip={
-            <ActivityPanel
-              isWorking={isWorking}
-              current={currentActivity}
-              activities={activities}
-              hasUndoableActions={hasUndoableActions}
-              onUndoLastAction={handleUndoLastAction}
-              lastUndoDetail={lastUndoDetail}
-            />
+            <>
+              {routineProposal && (
+                <RoutineProposalCard
+                  proposal={routineProposal}
+                  onSave={handleConfirmRoutine}
+                  onCancel={() => setRoutineProposal(null)}
+                />
+              )}
+              <ActivityPanel
+                isWorking={isWorking}
+                current={currentActivity}
+                activities={activities}
+                hasUndoableActions={hasUndoableActions}
+                onUndoLastAction={handleUndoLastAction}
+                lastUndoDetail={lastUndoDetail}
+                onProposeRoutine={connected ? handleProposeRoutine : undefined}
+              />
+            </>
           }
         />
       </main>
@@ -447,6 +490,32 @@ function extractFinalText(result: unknown): string | null {
   const msg = asRecord(obj.message);
   if (msg && typeof msg.content === "string") return msg.content;
   return null;
+}
+
+function normalizeProposal(result: unknown): RoutineProposal | null {
+  const obj = asRecord(result);
+  if (!obj || typeof obj.routineId !== "string") return null;
+  return {
+    routineId: obj.routineId,
+    name: typeof obj.name === "string" ? obj.name : "My new routine",
+    description: typeof obj.description === "string" ? obj.description : "",
+    steps: Array.isArray(obj.steps)
+      ? obj.steps.filter((s): s is string => typeof s === "string")
+      : [],
+    variables: Array.isArray(obj.variables)
+      ? obj.variables.flatMap((v) => {
+          const rv = asRecord(v);
+          if (!rv || typeof rv.name !== "string") return [];
+          return [
+            {
+              name: rv.name,
+              prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
+              default: typeof rv.default === "string" ? rv.default : null,
+            },
+          ];
+        })
+      : [],
+  };
 }
 
 function extractDetail(result: unknown): string | null {

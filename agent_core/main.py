@@ -34,6 +34,10 @@ from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
 from agent_core.providers.router import ModelRouter
+from agent_core.routines.builder import RoutineBuilder
+from agent_core.routines.engine import RoutineEngine
+from agent_core.routines.library import RoutineLibrary
+from agent_core.routines.model import RoutineStep
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ActionSnapshot
@@ -266,11 +270,15 @@ class JsonRpcServer:
         self.store = None
         self.undo_manager: UndoManager | None = None
         self.orchestrator: Orchestrator | None = None
+        self.routine_builder: RoutineBuilder | None = None
+        self.routine_library: RoutineLibrary | None = None
+        self.routine_engine: RoutineEngine | None = None
 
         self.conversation = Conversation(id=conversation_id)
         self._conversation_created = False
         self._message_ids: list[str] = []      # persisted id per conversation.messages entry
         self._next_role: ModelRole | None = None
+        self._draft_routine = None             # pending §6.3 proposal awaiting confirmSave
 
         self._queue: queue.Queue = queue.Queue()
         self._perm_lock = threading.Lock()
@@ -297,6 +305,19 @@ class JsonRpcServer:
             stream_to_frontend=self._emit_stream_chunk,
             on_activity=self._emit_activity,
             shell_bridge=self._shell_bridge,
+        )
+        self.routine_builder = RoutineBuilder(store=self.store)
+        self.routine_library = RoutineLibrary(store=self.store)
+        # INVARIANT (§6.4, §8.5): the engine shares the orchestrator's exact
+        # gate/registry/undo instances — a Routine can never out-permission the
+        # live conversation.
+        self.routine_engine = RoutineEngine(
+            tool_registry=self.tool_registry,
+            permission_gate=self.permission_gate,
+            undo_manager=self.undo_manager,
+            shell_bridge=self._shell_bridge,
+            on_ask_user=self._ask_user_continue,
+            store=self.store,
         )
 
     def _read_loop(self) -> None:
@@ -372,6 +393,9 @@ class JsonRpcServer:
         if method == Method.PERMISSION_RESPOND:
             self._handle_permission_respond(params, request_id)
             return
+        if method in _ROUTINE_JOBS:
+            self._queue.put((_ROUTINE_JOBS[method], params, request_id))
+            return
 
         try:
             if method == Method.MODEL_AVAILABLE_ROLES:
@@ -403,6 +427,17 @@ class JsonRpcServer:
                     self._respond(request_id, self._undo_last_action())
                 elif kind == "rewind":
                     self._handle_rewind(params, request_id)
+                elif kind == "routine_propose":
+                    self._handle_routine_propose(request_id)
+                elif kind == "routine_confirm":
+                    self._handle_routine_confirm(params, request_id)
+                elif kind == "routine_list":
+                    self._respond(request_id, {"routines": self._routine_rows()})
+                elif kind == "routine_run":
+                    self._handle_routine_run(params, request_id)
+                elif kind == "routine_delete":
+                    self.routine_library.delete(params.get("routineId"))
+                    self._respond(request_id, {"ok": True})
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc))
@@ -514,6 +549,104 @@ class JsonRpcServer:
             del self._message_ids[idx + 1:]
         self._respond(request_id, {"ok": True, "detail": "Rewound the conversation."})
 
+    # --- routines (§6) ----------------------------------------------------
+    def _handle_routine_propose(self, request_id) -> None:
+        """§6.3: draft a Routine from the recent conversation and hand the
+        frontend a plain-language preview. NOTHING is saved yet — the draft
+        waits for routine.confirmSave."""
+        try:
+            draft = self.routine_builder.propose_from_recent_actions(self.conversation)
+        except ValueError as exc:
+            self._respond_error(request_id, _SERVER_ERROR, str(exc))
+            return
+        self._draft_routine = draft
+        self._respond(request_id, self.routine_builder.preview(draft, self.tool_registry))
+
+    def _handle_routine_confirm(self, params: dict, request_id) -> None:
+        draft = self._draft_routine
+        if draft is None:
+            self._respond_error(
+                request_id, _SERVER_ERROR, "There's no routine waiting to be saved."
+            )
+            return
+        # The user may rename/redescribe in the confirmation card (§6.3).
+        if params.get("name"):
+            draft.name = str(params["name"])
+        if params.get("description"):
+            draft.description = str(params["description"])
+        self.routine_builder.save(draft, conversation_id=self.conversation.id)
+        self._draft_routine = None
+        self._respond(request_id, {"ok": True, "routineId": draft.id})
+
+    def _routine_rows(self) -> list[dict]:
+        rows = []
+        for entry in self.routine_library.list():
+            routine = entry["routine"]
+            rows.append(
+                {
+                    "id": routine.id,
+                    "name": routine.name,
+                    "description": routine.description,
+                    "runCount": entry["runCount"],
+                    "lastRunAt": entry["lastRunAt"],
+                    "variables": [
+                        {"name": v.name, "prompt": v.prompt, "default": v.default}
+                        for v in routine.variables
+                    ],
+                }
+            )
+        return rows
+
+    def _handle_routine_run(self, params: dict, request_id) -> None:
+        try:
+            routine = self.routine_library.get(params.get("routineId"))
+        except KeyError as exc:
+            self._respond_error(request_id, _SERVER_ERROR, str(exc))
+            return
+        result = self.routine_engine.run(routine, params.get("variables") or {})
+        self.routine_library.record_run(routine.id)
+        self._respond(
+            request_id,
+            {
+                "ok": result.status == "completed",
+                "status": result.status,
+                "detail": result.detail,
+                "steps": [
+                    {
+                        "stepId": step_id,
+                        "ok": step_result.success,
+                        "summary": str(step_result.content)[:200],
+                    }
+                    for step_id, step_result in result.step_results.items()
+                ],
+            },
+        )
+
+    def _ask_user_continue(self, step: RoutineStep, run_id: str, message: str) -> bool:
+        """§6.2 on_failure="ask_user": pause the run and ask, reusing the exact
+        permission-card round-trip — the frontend renders label/description and
+        answers via permission.respond with this synthetic toolId."""
+        waiter_key = f"routine-step:{run_id}:{step.step_id}"
+        event = threading.Event()
+        with self._perm_lock:
+            self._permission_waiters[waiter_key] = {"event": event, "allow": False}
+        self._notify(
+            Method.PERMISSION_REQUEST_GRANT,
+            {
+                "toolId": waiter_key,
+                "label": "Keep going with this routine?",
+                "description": (
+                    f"One step didn't work: {message} "
+                    "Addison can keep going with the rest, or stop here."
+                ),
+                "riskTier": "low",
+            },
+        )
+        event.wait()
+        with self._perm_lock:
+            waiter = self._permission_waiters.pop(waiter_key, None)
+        return bool(waiter and waiter["allow"])
+
     # --- model roles ------------------------------------------------------
     def _available_roles(self) -> dict:
         return {
@@ -549,14 +682,19 @@ class JsonRpcServer:
 
 
 # Methods that belong to later build steps — answered with a plain "not built"
-# error rather than a silent failure (steps 8 and 10; do NOT implement here).
+# error rather than a silent failure (step 10; do NOT implement here).
 _NOT_BUILT_METHODS = {
-    Method.ROUTINE_PROPOSE_FROM_CONVERSATION,
-    Method.ROUTINE_CONFIRM_SAVE,
-    Method.ROUTINE_LIST,
-    Method.ROUTINE_RUN,
-    Method.ROUTINE_DELETE,
     Method.MODEL_START_LOCAL_SETUP,
+}
+
+# routine.* methods all touch the Store, so they run on the worker (§ threading
+# model in JsonRpcServer's docstring). Method -> worker job kind.
+_ROUTINE_JOBS = {
+    Method.ROUTINE_PROPOSE_FROM_CONVERSATION: "routine_propose",
+    Method.ROUTINE_CONFIRM_SAVE: "routine_confirm",
+    Method.ROUTINE_LIST: "routine_list",
+    Method.ROUTINE_RUN: "routine_run",
+    Method.ROUTINE_DELETE: "routine_delete",
 }
 
 

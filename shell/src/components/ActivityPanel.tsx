@@ -19,6 +19,9 @@ interface Props {
   hasUndoableActions: boolean;
   onUndoLastAction: () => void;
   lastUndoDetail?: string | null;
+  // §6.3: offered once a turn actually did something — Addison drafts a routine
+  // from those steps; nothing is saved without the confirmation card.
+  onProposeRoutine?: () => void;
 }
 
 export function ActivityPanel({
@@ -28,6 +31,7 @@ export function ActivityPanel({
   hasUndoableActions,
   onUndoLastAction,
   lastUndoDetail,
+  onProposeRoutine,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
@@ -60,16 +64,27 @@ export function ActivityPanel({
           <span>{headline}</span>
         </div>
 
-        {canExpand && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-expanded={expanded}
-            className="text-sm font-medium text-accent-dark hover:underline"
-          >
-            {expanded ? "Hide steps" : "Show what Addison did"}
-          </button>
-        )}
+        <div className="flex items-center gap-4">
+          {!isWorking && activities.length > 0 && onProposeRoutine && (
+            <button
+              type="button"
+              onClick={onProposeRoutine}
+              className="text-sm font-medium text-accent-dark hover:underline"
+            >
+              Save these steps as a routine
+            </button>
+          )}
+          {canExpand && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              aria-expanded={expanded}
+              className="text-sm font-medium text-accent-dark hover:underline"
+            >
+              {expanded ? "Hide steps" : "Show what Addison did"}
+            </button>
+          )}
+        </div>
       </div>
 
       {expanded && canExpand && (
