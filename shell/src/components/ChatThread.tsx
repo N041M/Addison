@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import type { ModelRole, PermissionRequest } from "../types/protocol";
-import type { DisplayMessage, RoleOption } from "../types/ui";
+import type { CloudModel, DisplayMessage, RoleOption } from "../types/ui";
 import { PermissionCard } from "./PermissionCard";
 import { ModelSelector } from "./ModelSelector";
 
@@ -27,10 +27,13 @@ interface Props {
   retryAvailable: boolean;
   onRewindTo: (messageId: string) => void;
   roles: RoleOption[];
+  cloudModels: CloudModel[];
   selectedRole: ModelRole;
+  selectedCloudModel?: string;
   selectedLocalModel?: string;
-  onSelectRole: (role: ModelRole) => void;
-  onSelectLocalModel: (modelId: string) => void;
+  selectedEffort?: string;
+  onSelectModel: (role: ModelRole, modelId: string) => void;
+  onSelectEffort: (effort: string) => void;
   /** The collapsible activity strip, rendered between the thread and composer. */
   activityStrip?: ReactNode;
 }
@@ -52,10 +55,13 @@ export function ChatThread({
   retryAvailable,
   onRewindTo,
   roles,
+  cloudModels,
   selectedRole,
+  selectedCloudModel,
   selectedLocalModel,
-  onSelectRole,
-  onSelectLocalModel,
+  selectedEffort,
+  onSelectModel,
+  onSelectEffort,
   activityStrip,
 }: Props) {
   const [draft, setDraft] = useState("");
@@ -127,13 +133,16 @@ export function ChatThread({
               aria-label="Message to Addison"
               className="block w-full resize-none bg-transparent px-4 py-3 text-base text-ink placeholder:text-muted focus:outline-none disabled:opacity-60"
             />
-            <div className="flex items-center justify-between gap-3 px-3 pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 pb-3">
               <ModelSelector
                 roles={roles}
+                cloudModels={cloudModels}
                 selectedRole={selectedRole}
+                selectedCloudModel={selectedCloudModel}
                 selectedLocalModel={selectedLocalModel}
-                onSelectRole={onSelectRole}
-                onSelectLocalModel={onSelectLocalModel}
+                selectedEffort={selectedEffort}
+                onSelectModel={onSelectModel}
+                onSelectEffort={onSelectEffort}
                 disabled={isWorking}
               />
               <div className="ml-auto">

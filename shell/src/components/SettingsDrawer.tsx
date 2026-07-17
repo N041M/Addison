@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 import type { ModelRole } from "../types/protocol";
-import type { LocalSetupState, RoleOption } from "../types/ui";
+import type { CloudModel, LocalSetupState, RoleOption } from "../types/ui";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -22,8 +22,11 @@ interface Props {
   open: boolean;
   connected: boolean;
   roles: RoleOption[];
+  cloudModels: CloudModel[];
   defaultRole: ModelRole;
+  defaultCloudModel?: string;
   onChangeDefaultRole: (role: ModelRole) => void;
+  onChangeDefaultCloudModel: (modelId: string) => void;
   onSaveKey: (role: string, provider: string, key: string) => Promise<void>;
   localSetup: LocalSetupState | null;
   onStartLocalSetup: (modelId: string) => void;
@@ -34,8 +37,11 @@ export function SettingsDrawer({
   open,
   connected,
   roles,
+  cloudModels,
   defaultRole,
+  defaultCloudModel,
   onChangeDefaultRole,
+  onChangeDefaultCloudModel,
   onSaveKey,
   localSetup,
   onStartLocalSetup,
@@ -46,6 +52,15 @@ export function SettingsDrawer({
   const [saveError, setSaveError] = useState("");
 
   const configured = roles.filter((r) => r.configured);
+
+  // The persistent default cloud model, resolved the same way the composer
+  // picker resolves it: the stored pick if it's still in the catalog, else the
+  // catalog's default.
+  const cloudValue =
+    (defaultCloudModel && cloudModels.some((m) => m.id === defaultCloudModel)
+      ? defaultCloudModel
+      : (cloudModels.find((m) => m.default) ?? cloudModels[0])?.id) ?? "";
+  const cloudDescription = cloudModels.find((m) => m.id === cloudValue)?.description;
 
   async function saveKey() {
     const trimmed = keyValue.trim();
@@ -183,6 +198,34 @@ export function SettingsDrawer({
                     );
                   })}
                 </div>
+
+                {/* Default cloud model — same catalog labels as the picker by the
+                    message box, so the two stay consistent. */}
+                {cloudModels.length > 0 && (
+                  <div className="mt-4">
+                    <label
+                      htmlFor="default-cloud-model"
+                      className="block text-sm font-medium text-ink-soft"
+                    >
+                      Cloud model
+                    </label>
+                    <select
+                      id="default-cloud-model"
+                      value={cloudValue}
+                      onChange={(e) => onChangeDefaultCloudModel(e.target.value)}
+                      className="mt-1 block w-full border border-line bg-surface px-3 py-2.5 text-base text-ink"
+                    >
+                      {cloudModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                    {cloudDescription && (
+                      <p className="mt-1 text-sm text-muted">{cloudDescription}</p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </section>

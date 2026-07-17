@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
-import type { DisplayMessage, LocalSetupState, RoleOption } from "./types/ui";
+import type { CloudModel, DisplayMessage, LocalSetupState, RoleOption } from "./types/ui";
 import {
   ipc,
   isEngineConnected,
@@ -34,6 +34,8 @@ import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Banner } from "./components/Banner";
 
 const DEFAULT_ROLE_KEY = "addison.defaultRole";
+const CLOUD_MODEL_KEY = "addison.cloudModel";
+const EFFORT_KEY = "addison.effort";
 
 const WELCOME: DisplayMessage = {
   id: "welcome",
@@ -56,8 +58,15 @@ export function App() {
   const [lastUndoDetail, setLastUndoDetail] = useState<string | null>(null);
 
   const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [cloudModels, setCloudModels] = useState<CloudModel[]>([]);
   const [selectedRole, setSelectedRole] = useState<ModelRole>(loadDefaultRole());
+  const [selectedCloudModel, setSelectedCloudModel] = useState<string | undefined>(
+    loadStored(CLOUD_MODEL_KEY),
+  );
   const [selectedLocalModel, setSelectedLocalModel] = useState<string | undefined>(undefined);
+  const [selectedEffort, setSelectedEffort] = useState<string | undefined>(
+    loadStored(EFFORT_KEY),
+  );
   const [localSetup, setLocalSetup] = useState<LocalSetupState | null>(null);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
@@ -150,13 +159,42 @@ export function App() {
     }
   }, [roles, selectedRole]);
 
+  // Once the cloud catalog loads, make sure the selected cloud model is really
+  // in it — otherwise fall back to the catalog's default.
+  useEffect(() => {
+    if (cloudModels.length === 0) return;
+    setSelectedCloudModel((prev) =>
+      prev && cloudModels.some((m) => m.id === prev) ? prev : defaultCloudModel(cloudModels)?.id,
+    );
+  }, [cloudModels]);
+
+  // Keep the effort level valid for the active cloud model: clear it for models
+  // that offer no levels, and reset to the model's default when the current one
+  // isn't among that model's levels.
+  useEffect(() => {
+    const model = cloudModels.find((m) => m.id === selectedCloudModel);
+    if (!model) return;
+    setSelectedEffort((prev) => pickEffort(model, prev));
+  }, [cloudModels, selectedCloudModel]);
+
+  // Persist the picks alongside the default role so they survive a restart.
+  useEffect(() => {
+    saveStored(CLOUD_MODEL_KEY, selectedCloudModel);
+  }, [selectedCloudModel]);
+  useEffect(() => {
+    saveStored(EFFORT_KEY, selectedEffort);
+  }, [selectedEffort]);
+
   function refreshRoles() {
     if (!isEngineConnected()) return;
     ipc
       .availableRoles()
-      .then((res) => setRoles(normalizeRoles(res)))
+      .then((res) => {
+        setRoles(normalizeRoles(res));
+        setCloudModels(normalizeCloudModels(res));
+      })
       .catch(() => {
-        /* leave the selector hidden if we can't read roles */
+        /* leave the selector on placeholders if we can't read roles */
       });
   }
 
@@ -177,11 +215,16 @@ export function App() {
     setIsWorking(true);
 
     try {
-      // Deliver the *effective* local model: if the user picked "On this
-      // computer" but never touched the model dropdown, the picker shows the
-      // first model as selected, so that's the one we must send (§4.1.1 B).
-      const modelId = effectiveLocalModel(selectedRole, selectedLocalModel);
-      const res = await ipc.sendMessage(text, selectedRole, modelId);
+      // Deliver the *effective* model for the active role. For "local", fall
+      // back to the first model when the dropdown was never touched (the picker
+      // shows it as selected). For cloud, send the picked model + its effort
+      // level; effort never applies to local models (§4.1.1 B).
+      const isLocal = selectedRole === "local";
+      const modelId = isLocal
+        ? effectiveLocalModel("local", selectedLocalModel)
+        : effectiveCloudModel();
+      const effort = isLocal ? undefined : selectedEffort;
+      const res = await ipc.sendMessage(text, selectedRole, modelId, effort);
       const finalText = extractFinalText(res);
       setMessages((prev) =>
         prev.map((m) =>
@@ -293,23 +336,45 @@ export function App() {
     return models[0]?.id;
   }
 
-  function handleSelectRole(role: ModelRole) {
-    setSelectedRole(role);
-    if (role !== "local") {
-      setSelectedLocalModel(undefined);
-      ipc.setRoleForNextMessage(role, undefined).catch(() => {});
-      return;
+  // The cloud model id to deliver: the pick if it's still in the catalog, else
+  // the catalog's default. Mirrors how the picker resolves the shown selection.
+  function effectiveCloudModel(): string | undefined {
+    if (selectedCloudModel && cloudModels.some((m) => m.id === selectedCloudModel)) {
+      return selectedCloudModel;
     }
-    // Pin the effective model on the state and the core hint so the per-message
-    // picker path is complete even before the dropdown is touched.
-    const modelId = effectiveLocalModel("local", selectedLocalModel);
-    setSelectedLocalModel(modelId);
-    ipc.setRoleForNextMessage("local", modelId).catch(() => {});
+    return defaultCloudModel(cloudModels)?.id;
   }
 
-  function handleSelectLocalModel(modelId: string) {
-    setSelectedLocalModel(modelId);
-    ipc.setRoleForNextMessage("local", modelId).catch(() => {});
+  // The picker hands back a role + model id together. Cloud picks also carry an
+  // effort level (reset to the model's default when the old one doesn't fit);
+  // local picks never do.
+  function handleSelectModel(role: ModelRole, modelId: string) {
+    setSelectedRole(role);
+    if (role === "local") {
+      setSelectedLocalModel(modelId);
+      ipc.setRoleForNextMessage("local", modelId).catch(() => {});
+      return;
+    }
+    setSelectedCloudModel(modelId);
+    const model = cloudModels.find((m) => m.id === modelId);
+    const effort = pickEffort(model, selectedEffort);
+    setSelectedEffort(effort);
+    ipc.setRoleForNextMessage("primary", modelId, effort).catch(() => {});
+  }
+
+  function handleSelectEffort(effort: string) {
+    setSelectedEffort(effort);
+    // Effort is a cloud-model notion; only hint the core when cloud is active.
+    if (selectedRole === "primary") {
+      ipc.setRoleForNextMessage("primary", effectiveCloudModel(), effort).catch(() => {});
+    }
+  }
+
+  // Settings' persistent "default model" control changes the same cloud pick.
+  function handleChangeDefaultCloudModel(modelId: string) {
+    setSelectedCloudModel(modelId);
+    const model = cloudModels.find((m) => m.id === modelId);
+    setSelectedEffort((prev) => pickEffort(model, prev));
   }
 
   // --- Local model setup (§4.1.2): explicit, opt-in, one at a time -----------
@@ -412,10 +477,13 @@ export function App() {
           retryAvailable={!isWorking && Boolean(lastUserText)}
           onRewindTo={handleRewindTo}
           roles={roles}
+          cloudModels={cloudModels}
           selectedRole={selectedRole}
+          selectedCloudModel={selectedCloudModel}
           selectedLocalModel={selectedLocalModel}
-          onSelectRole={handleSelectRole}
-          onSelectLocalModel={handleSelectLocalModel}
+          selectedEffort={selectedEffort}
+          onSelectModel={handleSelectModel}
+          onSelectEffort={handleSelectEffort}
           activityStrip={
             <>
               {routineProposal && (
@@ -443,8 +511,11 @@ export function App() {
         open={settingsOpen}
         connected={connected}
         roles={roles}
+        cloudModels={cloudModels}
         defaultRole={selectedRole}
+        defaultCloudModel={selectedCloudModel}
         onChangeDefaultRole={handleChangeDefaultRole}
+        onChangeDefaultCloudModel={handleChangeDefaultCloudModel}
         onSaveKey={handleSaveKey}
         localSetup={localSetup}
         onStartLocalSetup={handleStartLocalSetup}
@@ -487,6 +558,39 @@ function saveDefaultRole(role: ModelRole): void {
   } catch {
     /* non-fatal */
   }
+}
+
+function loadStored(key: string): string | undefined {
+  try {
+    return localStorage.getItem(key) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function saveStored(key: string, value: string | undefined): void {
+  try {
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+// The catalog's default model (exactly one has default: true), or the first as
+// a defensive fallback if the core ever omits the flag.
+function defaultCloudModel(models: CloudModel[]): CloudModel | undefined {
+  return models.find((m) => m.default) ?? models[0];
+}
+
+// The effort level to use for a model: keep the current one if the model still
+// offers it, otherwise the model's middle/default level. `undefined` for models
+// with no levels (the effort control is hidden for them).
+function pickEffort(model: CloudModel | undefined, current: string | undefined): string | undefined {
+  const levels = model?.effortLevels ?? [];
+  if (levels.length === 0) return undefined;
+  if (current && levels.some((l) => l.id === current)) return current;
+  return levels[Math.floor(levels.length / 2)].id;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -556,6 +660,38 @@ function normalizeRoles(result: unknown): RoleOption[] {
       label: typeof obj.label === "string" ? obj.label : roleLabel(role),
       configured: obj.configured !== false,
       models,
+    });
+  }
+  return out;
+}
+
+// The cloud catalog rides alongside `roles` on the `model.availableRoles`
+// result. Parse it defensively — like the rest of the core payloads, its exact
+// shape isn't pinned in protocol.ts. An entry with no `effortLevels` simply has
+// none (the picker hides the effort control for it).
+function normalizeCloudModels(result: unknown): CloudModel[] {
+  const record = asRecord(result);
+  const list =
+    record && Array.isArray(record.cloudModels) ? (record.cloudModels as unknown[]) : [];
+
+  const out: CloudModel[] = [];
+  for (const item of list) {
+    const obj = asRecord(item);
+    if (!obj) continue;
+    const id = obj.id ?? obj.name;
+    if (typeof id !== "string") continue;
+    const rawLevels = Array.isArray(obj.effortLevels) ? obj.effortLevels : [];
+    const effortLevels = rawLevels.flatMap((l) => {
+      const lo = asRecord(l);
+      if (!lo || typeof lo.id !== "string") return [];
+      return [{ id: lo.id, label: typeof lo.label === "string" ? lo.label : lo.id }];
+    });
+    out.push({
+      id,
+      label: typeof obj.label === "string" ? obj.label : id,
+      description: typeof obj.description === "string" ? obj.description : "",
+      effortLevels,
+      default: obj.default === true,
     });
   }
   return out;

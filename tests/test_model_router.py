@@ -28,7 +28,7 @@ class _FakeProvider:
             vision=self._vision,
         )
 
-    def send(self, messages, tools):  # pragma: no cover - not exercised here
+    def send(self, messages, tools, effort=None):  # pragma: no cover - not exercised here
         raise NotImplementedError
 
 
