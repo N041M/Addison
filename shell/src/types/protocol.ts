@@ -16,6 +16,8 @@ export const Method = {
   RoutineList: "routine.list",
   RoutineRun: "routine.run",
   RoutineDelete: "routine.delete",
+  ProfileGet: "profile.get",
+  ProfileSet: "profile.set",
   ModelAvailableRoles: "model.availableRoles",
   ModelSetRoleForNextMessage: "model.setRoleForNextMessage",
   ModelStartLocalSetup: "model.startLocalSetup",
@@ -34,6 +36,7 @@ export const Method = {
   ShellReadScopedFile: "shell.readScopedFile",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
+  KeychainSignRelayRequest: "keychain.signRelayRequest",
 } as const;
 
 export type MethodName = (typeof Method)[keyof typeof Method];

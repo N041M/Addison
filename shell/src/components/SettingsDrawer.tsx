@@ -14,16 +14,29 @@
 
 import { useState } from "react";
 import type { ModelRole } from "../types/protocol";
-import type { RoleOption } from "../types/ui";
+import type { CloudModel, LocalSetupState, ProfileState, RoleOption } from "../types/ui";
+import type { DiagnosticEntry } from "../ipc/client";
 import { RoutineLibrary } from "./RoutineLibrary";
+import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
   open: boolean;
   connected: boolean;
   roles: RoleOption[];
+  cloudModels: CloudModel[];
   defaultRole: ModelRole;
+  defaultCloudModel?: string;
   onChangeDefaultRole: (role: ModelRole) => void;
+  onChangeDefaultCloudModel: (modelId: string) => void;
   onSaveKey: (role: string, provider: string, key: string) => Promise<void>;
+  localSetup: LocalSetupState | null;
+  onStartLocalSetup: (modelId: string) => void;
+  /** Profiles (§4.7); null while disconnected or before the core answers. */
+  profile: ProfileState | null;
+  onSetProfile: (profileId: string) => void;
+  /** Developer-only: most recent raw diagnostics, newest first. */
+  diagnostics: DiagnosticEntry[];
+  onClearDiagnostics: () => void;
   onClose: () => void;
 }
 
@@ -31,9 +44,18 @@ export function SettingsDrawer({
   open,
   connected,
   roles,
+  cloudModels,
   defaultRole,
+  defaultCloudModel,
   onChangeDefaultRole,
+  onChangeDefaultCloudModel,
   onSaveKey,
+  localSetup,
+  onStartLocalSetup,
+  profile,
+  onSetProfile,
+  diagnostics,
+  onClearDiagnostics,
   onClose,
 }: Props) {
   const [keyValue, setKeyValue] = useState("");
@@ -41,6 +63,15 @@ export function SettingsDrawer({
   const [saveError, setSaveError] = useState("");
 
   const configured = roles.filter((r) => r.configured);
+
+  // The persistent default cloud model, resolved the same way the composer
+  // picker resolves it: the stored pick if it's still in the catalog, else the
+  // catalog's default.
+  const cloudValue =
+    (defaultCloudModel && cloudModels.some((m) => m.id === defaultCloudModel)
+      ? defaultCloudModel
+      : (cloudModels.find((m) => m.default) ?? cloudModels[0])?.id) ?? "";
+  const cloudDescription = cloudModels.find((m) => m.id === cloudValue)?.description;
 
   async function saveKey() {
     const trimmed = keyValue.trim();
@@ -178,17 +209,165 @@ export function SettingsDrawer({
                     );
                   })}
                 </div>
+
+                {/* Default cloud model — same catalog labels as the picker by the
+                    message box, so the two stay consistent. */}
+                {cloudModels.length > 0 && (
+                  <div className="mt-4">
+                    <label
+                      htmlFor="default-cloud-model"
+                      className="block text-sm font-medium text-ink-soft"
+                    >
+                      Cloud model
+                    </label>
+                    <select
+                      id="default-cloud-model"
+                      value={cloudValue}
+                      onChange={(e) => onChangeDefaultCloudModel(e.target.value)}
+                      className="mt-1 block w-full border border-line bg-surface px-3 py-2.5 text-base text-ink"
+                    >
+                      {cloudModels.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                    {cloudDescription && (
+                      <p className="mt-1 text-sm text-muted">{cloudDescription}</p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </section>
 
-          {/* Routines — step-8 stub */}
+          {/* Run a model on this computer — the local-model setup flow (§4.1.2). */}
+          <LocalModelSetup
+            connected={connected}
+            roles={roles}
+            setup={localSetup}
+            onStartSetup={onStartLocalSetup}
+          />
+
+          {/* Routines */}
           <section>
             <h3 className="text-base font-semibold text-ink">Routines</h3>
             <div className="mt-2">
-              <RoutineLibrary />
+              <RoutineLibrary exposeRoutinePlan={profile?.flags.exposeRoutinePlan} />
             </div>
           </section>
+
+          {/* Profile — always last (spec §7.11). Reshapes what's shown, never
+              how safety works; the safety-identical wording is the core's own
+              per-profile description, rendered verbatim below. */}
+          <section>
+            <h3 className="text-base font-semibold text-ink">Profile</h3>
+            <p className="mt-1 text-sm text-muted">
+              A profile changes what Addison shows you — not what it's allowed to
+              do, or the permissions it asks for.
+            </p>
+            {!connected || !profile || profile.profiles.length === 0 ? (
+              <p className="mt-2 text-sm text-muted">
+                {connected
+                  ? "Profile options will appear here in a moment."
+                  : "Your profile choices appear here once Addison's engine is connected."}
+              </p>
+            ) : (
+              <>
+                <div className="mt-3 flex flex-col gap-2">
+                  {profile.profiles.map((p) => {
+                    const active = p.id === profile.activeProfile;
+                    return (
+                      <label
+                        key={p.id}
+                        className={
+                          "flex cursor-pointer gap-3 border px-4 py-3 text-base " +
+                          (active
+                            ? "border-accent bg-accent-tint"
+                            : "border-line bg-surface hover:border-muted")
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name="addison-profile"
+                          value={p.id}
+                          checked={active}
+                          onChange={() => onSetProfile(p.id)}
+                          className="mt-1 h-4 w-4 shrink-0 accent-accent"
+                        />
+                        <span className="block">
+                          <span
+                            className={
+                              "block font-medium " + (active ? "text-accent-dark" : "text-ink")
+                            }
+                          >
+                            {p.label}
+                          </span>
+                          {p.description && (
+                            <span className="mt-0.5 block text-sm text-muted">
+                              {p.description}
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                {/* Headless/CLI hint — Developer only (§7.11). */}
+                {profile.flags.headlessCli && (
+                  <p className="mt-3 text-sm text-muted">
+                    For scripts: Addison's engine speaks JSON-RPC on stdio — run{" "}
+                    <code className="font-mono text-xs text-ink-soft">
+                      python -m agent_core.main
+                    </code>{" "}
+                    from the repo.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+
+          {/* Diagnostics — Developer only (§7.11). The most recent raw errors,
+              kept in a small in-memory ring; empty until something fails. */}
+          {profile?.flags.rawDiagnostics && (
+            <section>
+              <div className="flex items-center justify-between">
+                <h3 className="text-base font-semibold text-ink">Diagnostics</h3>
+                {diagnostics.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={onClearDiagnostics}
+                    className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <p className="mt-1 text-sm text-muted">
+                The most recent raw errors from the engine, newest first.
+              </p>
+              {diagnostics.length === 0 ? (
+                <p className="mt-2 text-sm text-muted">Nothing to show yet.</p>
+              ) : (
+                <ul className="mt-3 space-y-3">
+                  {diagnostics.map((d, i) => (
+                    <li key={`${d.at}-${i}`} className="border border-line bg-surface p-3">
+                      <div className="flex items-baseline justify-between gap-3">
+                        <span className="text-sm font-medium text-ink">{d.message}</span>
+                        <span className="shrink-0 text-xs text-muted">
+                          {new Date(d.at).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-ink-soft">
+                        {d.raw}
+                      </pre>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+          )}
         </div>
       </aside>
     </div>

@@ -39,6 +39,12 @@ class Profile:
     id: ProfileId
     tool_ids: list[str]                  # which registered tools this profile exposes
     onboarding: str                      # "setup_assistant" | "byok_first"
+    # Plain-language selector copy (design-doc §7.11). ``label`` is the short option
+    # name; ``description`` is one honest sentence — and it MUST keep saying that the
+    # safety rules are identical across profiles (§8.7): Developer changes the surface,
+    # never the gate/undo/key/no-shell invariants.
+    label: str = ""
+    description: str = ""
     expose_routine_plan: bool = False    # Developer: read-only view of the declarative plan (§6.5)
     headless_cli: bool = False           # Developer: expose the Agent Core JSON-RPC entry point
     raw_diagnostics: bool = False        # Developer: real errors/logs vs. translated messages
@@ -49,6 +55,8 @@ SIMPLE = Profile(
     id=ProfileId.SIMPLE,
     tool_ids=list(_V1_TOOL_IDS),
     onboarding="setup_assistant",
+    label="Simple",
+    description="Simple — the everyday Addison.",
 )
 
 DEVELOPER = Profile(
@@ -57,6 +65,9 @@ DEVELOPER = Profile(
     # each still routed through the permission gate + undo (never a safety bypass).
     tool_ids=list(_V1_TOOL_IDS),
     onboarding="byok_first",
+    label="Developer",
+    # Honest per §8.7: extra *visibility*, identical *safety*.
+    description="Developer — extra visibility for technical users. Same safety rules.",
     expose_routine_plan=True,
     headless_cli=True,
     raw_diagnostics=True,
@@ -75,8 +86,16 @@ def get_profile(profile_id: ProfileId) -> Profile:
 def resolve_active_profile(store=None) -> Profile:
     """Return the active profile, defaulting to SIMPLE.
 
-    In the finished product this reads `app_settings.active_profile` (spec §3);
-    in the current scaffold (pre-step-11) there is no persisted value, so it
-    always resolves to SIMPLE."""
-    # TODO(step 11): return get_profile(store.get_setting("active_profile", DEFAULT_PROFILE_ID)).
-    return SIMPLE
+    Reads ``app_settings.active_profile`` (spec §3, §4.7) when a ``store`` is
+    given; with no store (CLI/dev/tests) or a missing/unknown persisted value it
+    resolves to SIMPLE. This is a *surface* choice only — whichever profile comes
+    back, the permission gate, undo-at-registration check, key isolation and
+    no-arbitrary-shell rule are identical (§8.7)."""
+    if store is None:
+        return SIMPLE
+    raw = store.get_setting("active_profile", DEFAULT_PROFILE_ID.value)
+    try:
+        return get_profile(ProfileId(raw))
+    except ValueError:
+        # An unknown/garbage persisted value never escalates surface — SIMPLE.
+        return SIMPLE

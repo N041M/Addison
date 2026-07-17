@@ -30,6 +30,8 @@ class ModelRouter:
         configured: dict[ModelRole, ModelProvider],
         local_models: dict[str, ModelProvider] | None = None,
         selected_local: str | None = None,
+        primary_models: dict[str, ModelProvider] | None = None,
+        selected_primary: str | None = None,
     ):
         # Single-provider roles (PRIMARY, SETUP_ASSISTANT — and optionally a lone
         # LOCAL) live in `configured`. When several local models are configured,
@@ -37,6 +39,13 @@ class ModelRouter:
         self._configured = configured
         self._local_models = dict(local_models or {})
         self._selected_local = selected_local or next(iter(self._local_models), None)
+        # PRIMARY mirrors LOCAL: several *cloud* models (the curated catalog,
+        # models_catalog.py) can be configured at once and picked per message by
+        # name (§6.8 — the cascade substrate extends named selection to the cloud).
+        # `configured[PRIMARY]` remains the default/fallback; the pool holds every
+        # nameable cloud model. All selection stays explicit — no auto-routing.
+        self._primary_models = dict(primary_models or {})
+        self._selected_primary = selected_primary or next(iter(self._primary_models), None)
 
     def resolve(
         self, requested_role: ModelRole | None = None, model_name: str | None = None
@@ -57,6 +66,13 @@ class ModelRouter:
             if name is not None and name in self._local_models:
                 return self._local_models[name]
             # else fall through to a single LOCAL provider in `configured`, if any
+        if role is ModelRole.PRIMARY and self._primary_models:
+            name = model_name or self._selected_primary
+            if name is not None and name in self._primary_models:
+                return self._primary_models[name]
+            # An unknown explicit name (e.g. a Routine step pinning a model the user
+            # has since reconfigured away) is NOT an error mid-conversation (§4.1.1):
+            # fall through to the default/selected primary in `configured` below.
         if role in self._configured:
             return self._configured[role]
         if ModelRole.PRIMARY in self._configured:
@@ -65,6 +81,8 @@ class ModelRouter:
             return next(iter(self._configured.values()))
         if self._local_models and self._selected_local is not None:
             return self._local_models[self._selected_local]
+        if self._primary_models and self._selected_primary is not None:
+            return self._primary_models[self._selected_primary]
         raise RuntimeError("No model provider is configured.")
 
     def register(self, role: ModelRole, provider: ModelProvider) -> None:
@@ -78,6 +96,19 @@ class ModelRouter:
         self._local_models[model_name] = provider
         if self._selected_local is None:
             self._selected_local = model_name
+
+    def register_primary_model(self, model_name: str, provider: ModelProvider) -> None:
+        """Add a cloud model to the PRIMARY pool (§6.8). Mirrors ``register_local_model``:
+        the first one added becomes the selected default. main.py registers one
+        ``AnthropicProvider`` per catalog entry, all sharing the same key-getter."""
+        self._primary_models[model_name] = provider
+        if self._selected_primary is None:
+            self._selected_primary = model_name
+
+    def available_primary_models(self) -> list[str]:
+        """The nameable cloud models — the ids the picker sends back as ``modelId``
+        when the PRIMARY role is selected (§4.1.1)."""
+        return list(self._primary_models)
 
     def select_local_model(self, model_name: str) -> None:
         """Set the local model the per-message Local picker resolves to."""

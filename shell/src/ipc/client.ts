@@ -60,9 +60,27 @@ interface CoreFrame {
   jsonrpc?: string;
   id?: string | number | null;
   result?: unknown;
-  error?: { code: number; message: string };
+  // The plain `message` is identical in both profiles. Under the Developer
+  // profile the core additionally attaches `data.raw` (the real exception text)
+  // — never surfaced to Simple users, but carried through to callers here.
+  error?: { code: number; message: string; data?: Record<string, unknown> };
   method?: string;
   params?: Record<string, unknown>;
+}
+
+// An Error surfaced from a Core response may carry the developer-only raw detail
+// alongside its plain, always-shown `message`. Callers can read `err.raw`.
+export interface RawError extends Error {
+  raw?: string;
+}
+
+// One captured raw diagnostic — the developer-only raw text, the plain message
+// that was (or would be) shown, and when it happened. The App keeps a small
+// ring of the most recent ones for the Settings > Diagnostics panel.
+export interface DiagnosticEntry {
+  message: string;
+  raw: string;
+  at: number; // epoch ms
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +96,7 @@ interface Pending {
 const pending = new Map<string, Pending>();
 const notificationHandlers = new Map<string, Set<(params: Record<string, unknown>) => void>>();
 const statusHandlers = new Set<(text: string) => void>();
+const diagnosticsHandlers = new Set<(entry: DiagnosticEntry) => void>();
 
 let idCounter = 0;
 function nextId(): string {
@@ -118,7 +137,17 @@ function handleCoreMessage(frame: CoreFrame): void {
   pending.delete(key);
   clearTimeout(entry.timer);
   if (frame.error) {
-    entry.reject(new Error(frame.error.message || "Something went wrong."));
+    const message = frame.error.message || "Something went wrong.";
+    const err: RawError = new Error(message);
+    // Developer profile only: the core adds the real exception text under
+    // `error.data.raw`. The plain message above is unchanged for both profiles.
+    const rawValue = frame.error.data?.raw;
+    if (typeof rawValue === "string" && rawValue) {
+      err.raw = rawValue;
+      const entry: DiagnosticEntry = { message, raw: rawValue, at: Date.now() };
+      diagnosticsHandlers.forEach((h) => h(entry));
+    }
+    entry.reject(err);
   } else {
     entry.resolve(frame.result);
   }
@@ -205,6 +234,19 @@ export function subscribeStatus(handler: (text: string) => void): () => void {
   };
 }
 
+/**
+ * Subscribe to developer-only raw diagnostics: each raw error the core attaches
+ * to a failed response (`error.data.raw`) is reported here as it happens. Fires
+ * only when the active profile actually surfaces raw text, so a Simple session
+ * never sees an entry. Returns an unsubscribe function.
+ */
+export function subscribeDiagnostics(handler: (entry: DiagnosticEntry) => void): () => void {
+  diagnosticsHandlers.add(handler);
+  return () => {
+    diagnosticsHandlers.delete(handler);
+  };
+}
+
 function toPlainMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
@@ -216,8 +258,8 @@ function toPlainMessage(err: unknown): string {
 // Method names; params are the free-form JSON-RPC payloads each method expects.
 // ---------------------------------------------------------------------------
 export const ipc = {
-  sendMessage: (text: string, role?: ModelRole, modelId?: string) =>
-    call(Method.ConversationSendMessage, { text, role, modelId }),
+  sendMessage: (text: string, role?: ModelRole, modelId?: string, effort?: string) =>
+    call(Method.ConversationSendMessage, { text, role, modelId, effort }),
 
   respondToPermission: (toolId: string, allow: boolean) =>
     call(Method.PermissionRespond, { toolId, allow }),
@@ -234,10 +276,23 @@ export const ipc = {
     call(Method.RoutineConfirmSave, { name, description }),
   deleteRoutine: (routineId: string) => call(Method.RoutineDelete, { routineId }),
 
+  // Profiles (§4.7). `getProfile` returns the active profile, the pickable
+  // profiles (label/description authored by the core), and the frontend feature
+  // flags. `setProfile` switches immediately (no restart); callers re-fetch
+  // `getProfile` afterwards to pick up the new flags.
+  getProfile: () => call(Method.ProfileGet),
+  setProfile: (profileId: string) => call(Method.ProfileSet, { profileId }),
+
   availableRoles: () => call(Method.ModelAvailableRoles),
-  setRoleForNextMessage: (role: ModelRole, modelId?: string) =>
-    call(Method.ModelSetRoleForNextMessage, { role, modelId }),
-  startLocalSetup: () => call(Method.ModelStartLocalSetup),
+  setRoleForNextMessage: (role: ModelRole, modelId?: string, effort?: string) =>
+    call(Method.ModelSetRoleForNextMessage, { role, modelId, effort }),
+  // Kicks off the one-time local-model download/verify for `modelName` (the
+  // curated Ollama tag). Resolves when the model is set up and has appeared in
+  // `availableRoles`; rejects with a plain-language error (e.g. Ollama not
+  // running, machine too small). Live progress arrives on
+  // `model.localSetupProgress` in between.
+  startLocalSetup: (modelName?: string) =>
+    call(Method.ModelStartLocalSetup, { modelName }),
 };
 
 // ---------------------------------------------------------------------------

@@ -59,6 +59,8 @@ class Method:
     ROUTINE_LIST = "routine.list"
     ROUTINE_RUN = "routine.run"
     ROUTINE_DELETE = "routine.delete"
+    PROFILE_GET = "profile.get"      # {} -> {activeProfile, profiles: [{id,label,description}], flags}
+    PROFILE_SET = "profile.set"      # {profileId} -> {ok}; persisted in app_settings (§4.7)
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
@@ -76,5 +78,9 @@ class Method:
     SHELL_OPEN_EXTERNAL = "shell.openExternal"         # {url} -> {}
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
-    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
+    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"      # {} -> {deviceId, publicKey}; public half ONLY
     KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"  # {role} -> {key}; per-call, never cached
+    # {payload} -> {signature, deviceId}. The shell signs relay requests with the
+    # device private key, which never leaves the OS keychain (§5) — the core sends
+    # bytes to sign, never sees key material.
+    KEYCHAIN_SIGN_RELAY_REQUEST = "keychain.signRelayRequest"

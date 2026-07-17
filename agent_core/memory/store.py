@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any
 
@@ -284,6 +285,30 @@ class Store:
             "UPDATE routine_runs SET status = ?, completed_at = ?, step_log_json = ? "
             "WHERE id = ?",
             (status, completed_at, json.dumps(step_log), id),
+        )
+        self._conn.commit()
+
+    # --- app settings (Profiles §4.7, and any other single-row key/value) ---
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        """Read one ``app_settings`` value, or ``default`` if the key is absent.
+
+        Values are stored as TEXT (the schema's column type); callers that want a
+        typed value parse it themselves. This backs the §4.7 ``active_profile``
+        lookup, but is deliberately generic — it is plain key/value config, never
+        user data or secrets (API keys live only in the OS keychain, §8.3)."""
+        row = self._conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row["value"] if row is not None else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        """Upsert one ``app_settings`` value and commit immediately (durability,
+        like every other write here). ``updated_at`` tracks the last change."""
+        self._conn.execute(
+            "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+            "updated_at = excluded.updated_at",
+            (key, value, int(time.time())),
         )
         self._conn.commit()
 

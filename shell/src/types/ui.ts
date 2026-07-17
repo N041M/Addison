@@ -10,6 +10,12 @@ export interface DisplayMessage extends ChatMessage {
   pending?: boolean;
   /** The turn ended in a plain-language error rather than a normal answer. */
   failed?: boolean;
+  /**
+   * Developer-only raw error text for a failed turn (the core's `error.data.raw`).
+   * Held regardless of profile; only ever rendered when the raw-diagnostics flag
+   * is on (Simple never shows it — the plain `content` is unchanged for both).
+   */
+  raw?: string;
 }
 
 /** One configurable model role, as surfaced by `model.availableRoles`. */
@@ -19,4 +25,81 @@ export interface RoleOption {
   configured: boolean; // whether a way to use this role is set up
   /** Only meaningful for the "local" role: several local models to choose from. */
   models?: { id: string; label: string }[];
+}
+
+/**
+ * One "how hard to work" level for a cloud model, as surfaced inside a
+ * `cloudModels[].effortLevels` entry from `model.availableRoles`. Both fields
+ * come from the core — the id crosses back to the core on send; the label is the
+ * plain-language wording shown to the user (e.g. "Quick" / "Balanced" /
+ * "Thorough"). We never invent or translate these.
+ */
+export interface EffortLevel {
+  id: string;
+  label: string;
+}
+
+/**
+ * One cloud model choice from `model.availableRoles`' `cloudModels` list. The
+ * plain `label` (e.g. "Most capable", "Balanced", "Fast") is what the personas
+ * see; `description` is a one-line plain explainer shown unobtrusively. When
+ * `effortLevels` is empty the effort control is hidden for that model. Exactly
+ * one entry in the catalog has `default: true`.
+ */
+export interface CloudModel {
+  id: string;
+  label: string;
+  description: string;
+  effortLevels: EffortLevel[];
+  default: boolean;
+}
+
+/**
+ * Live state of the "Run a model on this computer" flow (spec §4.1.2), held in
+ * App and rendered inside the Settings section. Only one setup runs at a time;
+ * `modelId` is the curated model the user chose. Progress lines arrive on
+ * `model.localSetupProgress`; the terminal state comes from the
+ * `startLocalSetup` promise (done) or a plain-language error (error).
+ */
+export interface LocalSetupState {
+  modelId: string;
+  status: "running" | "done" | "error";
+  /** Plain-language stage label, e.g. "Checking your computer", "Downloading". */
+  stage?: string;
+  /** 0–100 when the core reports it; omitted for stages with no measurable progress. */
+  percent?: number;
+  /** A plain-language line from the core to show under the stage. */
+  message?: string;
+  /** Plain-language failure, shown inline. */
+  error?: string;
+}
+
+/**
+ * Frontend feature flags carried on `profile.get` (spec §4.7). These reshape
+ * only what is *shown* — never how the permission gate, undo, or key handling
+ * work (§8.7). A profile is presentation + defaults, not a security boundary.
+ */
+export interface ProfileFlags {
+  /** Developer: reveal a routine's declarative plan (READ-ONLY in v1, §6.5). */
+  exposeRoutinePlan: boolean;
+  /** Developer: show real error text / a diagnostics panel instead of only plain messages. */
+  rawDiagnostics: boolean;
+  /** Developer: surface the headless JSON-RPC entry-point hint for scripting. */
+  headlessCli: boolean;
+  /** Developer: BYOK/model config up front instead of the Setup Assistant. */
+  byokFirstOnboarding: boolean;
+}
+
+/** One selectable profile, with label + description authored by the core. */
+export interface ProfileOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** The full profile picture from `profile.get`. */
+export interface ProfileState {
+  activeProfile: string;
+  profiles: ProfileOption[];
+  flags: ProfileFlags;
 }

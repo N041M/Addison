@@ -94,7 +94,7 @@ class _ScriptedProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools) -> ModelResponse:
+    def send(self, messages, tools, effort=None) -> ModelResponse:
         self.histories.append(list(messages))
         return self._responses.pop(0)
 
@@ -247,17 +247,18 @@ def test_core_to_shell_bridge_round_trip(tmp_path):
         _shutdown(reader, thread)
 
 
-def test_unknown_method_and_not_built_methods(tmp_path):
+def test_unknown_method_answers_method_not_found(tmp_path):
     server, reader, writer, _, thread = _server(tmp_path, [])
     try:
         reader.feed({"jsonrpc": "2.0", "id": 8, "method": "bogus.method"})
         error = writer.wait_for(lambda f: f.get("id") == 8 and "error" in f)
         assert error["error"]["code"] == -32601
 
-        # Local setup is step 10 — still answered with the plain not-built error.
+        # Local setup is BUILT at step 10; its pre-flight guard answers plainly
+        # when no model is named (the full flow lives in tests/test_local_setup.py).
         reader.feed({"jsonrpc": "2.0", "id": 9, "method": Method.MODEL_START_LOCAL_SETUP})
         error = writer.wait_for(lambda f: f.get("id") == 9 and "error" in f)
-        assert error["error"]["message"] == "This isn't built yet."
+        assert error["error"]["message"] == "Choose a model to set up first."
     finally:
         _shutdown(reader, thread)
 
@@ -267,7 +268,10 @@ def test_available_roles_answers_without_store(tmp_path):
     try:
         reader.feed({"jsonrpc": "2.0", "id": 10, "method": Method.MODEL_AVAILABLE_ROLES})
         response = writer.wait_for(lambda f: f.get("id") == 10 and "result" in f)
-        assert response["result"] == {"roles": ["primary"], "localModels": []}
+        # availableRoles now also carries the cloud-model menu (§4.1.1, §6.8); this
+        # server is built without a catalog, so it is empty. (The populated shape is
+        # covered by tests/test_model_picker.py.)
+        assert response["result"] == {"roles": ["primary"], "localModels": [], "cloudModels": []}
     finally:
         _shutdown(reader, thread)
 
@@ -348,9 +352,22 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": Method.MODEL_AVAILABLE_ROLES}) + "\n"
         )
         proc.stdin.flush()
-        line = proc.stdout.readline()
-        frame = json.loads(line)
-        assert frame["id"] == 1
+        # availableRoles now probes the shell for a PRIMARY key before deciding whether
+        # to fetch the live model list; with no key it returns the built-in fallback.
+        # Answer that keychain probe (empty key) so the server doesn't wait out its
+        # shell-timeout, then read on to the availableRoles response.
+        frame = None
+        while frame is None:
+            line = proc.stdout.readline()
+            assert line, "server closed before answering availableRoles"
+            msg = json.loads(line)
+            if msg.get("method") == Method.KEYCHAIN_GET_PROVIDER_KEY:
+                proc.stdin.write(
+                    json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"key": ""}}) + "\n"
+                )
+                proc.stdin.flush()
+            elif msg.get("id") == 1 and "result" in msg:
+                frame = msg
         assert "primary" in frame["result"]["roles"]
     finally:
         watchdog.cancel()

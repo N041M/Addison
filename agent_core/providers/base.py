@@ -63,4 +63,12 @@ class ModelResponse:
 class ModelProvider(Protocol):
     def capabilities(self) -> ProviderCapabilities: ...
 
-    def send(self, messages: list[Message], tools: list["ToolDefinition"]) -> ModelResponse: ...  # noqa: F821
+    # ``effort`` is the per-message "answer style" (§4.1.1, models_catalog.py). Only
+    # AnthropicProvider acts on it (and only for models that support it); every other
+    # provider ACCEPTS and IGNORES it, so the orchestrator can pass it uniformly.
+    def send(
+        self,
+        messages: list[Message],
+        tools: list["ToolDefinition"],  # noqa: F821
+        effort: str | None = None,
+    ) -> ModelResponse: ...
