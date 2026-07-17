@@ -41,7 +41,7 @@ export function ModelSelector({
       <div
         role="group"
         aria-label="Where Addison thinks"
-        className="inline-flex rounded-lg border border-line bg-surface p-0.5"
+        className="inline-flex border border-line bg-surface p-0.5"
       >
         {configured.map((r) => {
           const active = r.role === selectedRole;
@@ -53,7 +53,7 @@ export function ModelSelector({
               aria-pressed={active}
               onClick={() => onSelectRole(r.role)}
               className={[
-                "rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
+                "px-3 py-1.5 text-sm font-medium transition-colors",
                 active
                   ? "bg-accent-tint text-accent-dark"
                   : "text-muted hover:text-ink",
@@ -73,7 +73,7 @@ export function ModelSelector({
             disabled={disabled}
             value={selectedLocalModel ?? localRole.models[0]?.id}
             onChange={(e) => onSelectLocalModel(e.target.value)}
-            className="rounded-lg border border-line bg-surface px-2 py-1.5 text-sm text-ink"
+            className="border border-line bg-surface px-2 py-1.5 text-sm text-ink"
           >
             {localRole.models.map((m) => (
               <option key={m.id} value={m.id}>

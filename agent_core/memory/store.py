@@ -200,5 +200,92 @@ class Store:
         )
         self._conn.commit()
 
+    # --- routines (RoutineBuilder / RoutineLibrary / RoutineEngine, §6) -----
+    def insert_routine(
+        self,
+        id: str,
+        name: str,
+        description: str,
+        plan_json: dict,
+        created_from_conversation_id: str | None,
+        created_at: int,
+    ) -> None:
+        """Persist a confirmed Routine (§6.3 — only ever after explicit user
+        confirmation). ``plan_json`` is the §6.2 declarative plan; it is stored
+        as JSON text and never contains code by construction."""
+        self._conn.execute(
+            "INSERT INTO routines "
+            "(id, name, description, plan_json, created_from_conversation_id, "
+            " created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, name, description, json.dumps(plan_json),
+             created_from_conversation_id, created_at, created_at),
+        )
+        self._conn.commit()
+
+    def list_routines(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT id, name, description, plan_json, run_count, last_run_at "
+            "FROM routines ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            {**dict(row), "plan_json": json.loads(row["plan_json"])} for row in rows
+        ]
+
+    def get_routine(self, routine_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, name, description, plan_json, run_count, last_run_at "
+            "FROM routines WHERE id = ?",
+            (routine_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {**dict(row), "plan_json": json.loads(row["plan_json"])}
+
+    def update_routine(
+        self, id: str, name: str, description: str, plan_json: dict, updated_at: int
+    ) -> None:
+        """v1 metadata edit (§6.5): name/description/variable defaults arrive as
+        a full re-serialized plan; the step sequence inside it is unchanged by
+        the only caller (RoutineLibrary.update_metadata)."""
+        self._conn.execute(
+            "UPDATE routines SET name = ?, description = ?, plan_json = ?, updated_at = ? "
+            "WHERE id = ?",
+            (name, description, json.dumps(plan_json), updated_at, id),
+        )
+        self._conn.commit()
+
+    def touch_routine_run_stats(self, routine_id: str, last_run_at: int) -> None:
+        self._conn.execute(
+            "UPDATE routines SET run_count = run_count + 1, last_run_at = ? WHERE id = ?",
+            (last_run_at, routine_id),
+        )
+        self._conn.commit()
+
+    def delete_routine(self, routine_id: str) -> None:
+        # Run-log rows reference the routine; clear them first (FK enforcement on).
+        self._conn.execute("DELETE FROM routine_runs WHERE routine_id = ?", (routine_id,))
+        self._conn.execute("DELETE FROM routines WHERE id = ?", (routine_id,))
+        self._conn.commit()
+
+    # --- routine run log (§6.4: backs "show what you just did") -------------
+    def insert_routine_run(self, id: str, routine_id: str, started_at: int) -> None:
+        self._conn.execute(
+            "INSERT INTO routine_runs (id, routine_id, started_at, status) "
+            "VALUES (?, ?, ?, 'running')",
+            (id, routine_id, started_at),
+        )
+        self._conn.commit()
+
+    def finish_routine_run(
+        self, id: str, status: str, completed_at: int, step_log: list[dict]
+    ) -> None:
+        self._conn.execute(
+            "UPDATE routine_runs SET status = ?, completed_at = ?, step_log_json = ? "
+            "WHERE id = ?",
+            (status, completed_at, json.dumps(step_log), id),
+        )
+        self._conn.commit()
+
     def close(self) -> None:
         self._conn.close()

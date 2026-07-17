@@ -254,7 +254,8 @@ def test_unknown_method_and_not_built_methods(tmp_path):
         error = writer.wait_for(lambda f: f.get("id") == 8 and "error" in f)
         assert error["error"]["code"] == -32601
 
-        reader.feed({"jsonrpc": "2.0", "id": 9, "method": Method.ROUTINE_LIST})
+        # Local setup is step 10 — still answered with the plain not-built error.
+        reader.feed({"jsonrpc": "2.0", "id": 9, "method": Method.MODEL_START_LOCAL_SETUP})
         error = writer.wait_for(lambda f: f.get("id") == 9 and "error" in f)
         assert error["error"]["message"] == "This isn't built yet."
     finally:
@@ -267,6 +268,61 @@ def test_available_roles_answers_without_store(tmp_path):
         reader.feed({"jsonrpc": "2.0", "id": 10, "method": Method.MODEL_AVAILABLE_ROLES})
         response = writer.wait_for(lambda f: f.get("id") == 10 and "result" in f)
         assert response["result"] == {"roles": ["primary"], "localModels": []}
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_routine_propose_confirm_list_run_round_trip(tmp_path):
+    """§6.3/§6.4 over IPC: a live tool turn becomes a saved routine, and running
+    it reuses the live grant — the permission card appears exactly once."""
+    responses = [
+        _tool_call_response(),
+        ModelResponse(text="Saved your summary.", tool_calls=[]),
+    ]
+    server, reader, writer, tool, thread = _server(tmp_path, responses)
+    # Give the tool call a generalizable arg (§6.3 heuristic).
+    server.conversation  # (built at construction; provider script drives the call)
+    responses[0].tool_calls[0].args = {"filename": "summary.txt"}
+    try:
+        # Live turn: permission card -> allow -> turn completes.
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 20,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "save it"}}
+        )
+        writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 21, "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": "spy_tool", "allow": True}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 20 and "result" in f)
+
+        # Propose: plain-language preview, nothing saved yet.
+        reader.feed({"jsonrpc": "2.0", "id": 22,
+                     "method": Method.ROUTINE_PROPOSE_FROM_CONVERSATION})
+        preview = writer.wait_for(lambda f: f.get("id") == 22 and "result" in f)["result"]
+        assert preview["steps"] == ["1. Check something for you"]
+        assert preview["variables"][0]["name"] == "output_filename"
+        assert preview["variables"][0]["default"] == "summary.txt"
+
+        # Confirm with a rename -> persisted.
+        reader.feed({"jsonrpc": "2.0", "id": 23, "method": Method.ROUTINE_CONFIRM_SAVE,
+                     "params": {"name": "Save my summary"}})
+        saved = writer.wait_for(lambda f: f.get("id") == 23 and "result" in f)["result"]
+        routine_id = saved["routineId"]
+
+        reader.feed({"jsonrpc": "2.0", "id": 24, "method": Method.ROUTINE_LIST})
+        listing = writer.wait_for(lambda f: f.get("id") == 24 and "result" in f)["result"]
+        assert [r["name"] for r in listing["routines"]] == ["Save my summary"]
+
+        # Run: the live grant carries over (§8.5) — completes with NO second card.
+        reader.feed({"jsonrpc": "2.0", "id": 25, "method": Method.ROUTINE_RUN,
+                     "params": {"routineId": routine_id, "variables": {}}})
+        run = writer.wait_for(lambda f: f.get("id") == 25 and "result" in f)["result"]
+        assert run["ok"] and run["status"] == "completed"
+        assert len(tool.calls) == 2  # once live, once from the routine
+        cards = [f for f in writer.frames
+                 if f.get("method") == Method.PERMISSION_REQUEST_GRANT]
+        assert len(cards) == 1
     finally:
         _shutdown(reader, thread)
 
