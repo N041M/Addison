@@ -13,11 +13,27 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-updater = "2"          # signed silent updates (design-doc §7.7)
+tauri-plugin-updater = "2"          # signed silent updates (design-doc §7.7) — wired in Phase 3
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-keyring = "3"                        # OS keychain (BYOK keys, device key) — §5
 tokio = { version = "1", features = ["full"] }
+rfd = "0.15"                        # native file dialogs (open/save picker) — §7.4.1
+arboard = "3"                       # clipboard text (shell.readClipboard)
+open = "5"                          # open http(s) links in the default browser (shell.openExternal)
+base64 = "0.22"                     # encode picked images for shell.readScopedFile
+uuid = { version = "1", features = ["v4"] }   # opaque file handles — core never sees raw paths
+
+# OS keychain (BYOK keys, device key) — §5. Feature-select the platform-native
+# store per target so a macOS `cargo check` never tries to build the Linux
+# secret-service backend (and vice-versa). Cross-platform packaging is Phase 3.
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service"] }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

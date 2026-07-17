@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Base document styling. Base type is generous (17px root) because the primary
+   personas are 54 and 68 — comfortable size, high contrast, roomy line-height.
+   No external fonts (strict CSP): a plain system stack only. */
+:root {
+  font-size: 17px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: theme("colors.paper");
+  color: theme("colors.ink");
+  font-family: theme("fontFamily.sans");
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* A clear, non-flashy focus ring — keyboard users (and older eyes) should
+   always be able to see where they are. */
+:focus-visible {
+  outline: 2px solid theme("colors.accent");
+  outline-offset: 2px;
+}
+
+/* Calm, unobtrusive scrollbars in the message thread. */
+.thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.line") transparent;
+}
+.thread-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+.thread-scroll::-webkit-scrollbar-thumb {
+  background-color: theme("colors.line");
+  border-radius: 10px;
+  border: 3px solid theme("colors.paper");
+}
+
+/* Respect users who ask the OS for reduced motion. There is no decorative
+   motion anywhere; this only softens the few functional transitions. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
