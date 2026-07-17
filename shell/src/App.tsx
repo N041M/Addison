@@ -14,15 +14,24 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
-import type { CloudModel, DisplayMessage, LocalSetupState, RoleOption } from "./types/ui";
+import type {
+  CloudModel,
+  DisplayMessage,
+  LocalSetupState,
+  ProfileState,
+  RoleOption,
+} from "./types/ui";
 import {
   ipc,
   isEngineConnected,
   storeProviderKey,
   subscribe,
   subscribeStatus,
+  subscribeDiagnostics,
   type StreamChunkParams,
   type LocalSetupProgressParams,
+  type DiagnosticEntry,
+  type RawError,
 } from "./ipc/client";
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
@@ -73,6 +82,14 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
+
+  // Profiles (§4.7). Simple by default; null until the core answers (and while
+  // disconnected — the Settings section then shows a quiet placeholder).
+  const [profile, setProfile] = useState<ProfileState | null>(null);
+  // A small ring of the most recent raw diagnostics (Developer only). Captured
+  // globally from client.ts regardless of profile; only rendered when the
+  // raw-diagnostics flag is on, so Simple never sees it.
+  const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
 
   // --- Wire up notifications + initial data on mount ------------------------
   useEffect(() => {
@@ -137,7 +154,17 @@ export function App() {
 
     unsubs.push(subscribeStatus((text) => setStatusBanner(text)));
 
+    // Keep the last ~5 raw diagnostics for the Developer-only panel. The ring is
+    // maintained even in Simple (it simply never fills, since the core only ever
+    // emits raw text under the Developer profile) and never rendered there.
+    unsubs.push(
+      subscribeDiagnostics((entry) =>
+        setDiagnostics((prev) => [entry, ...prev].slice(0, 5)),
+      ),
+    );
+
     refreshRoles();
+    refreshProfile();
 
     return () => unsubs.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,6 +225,37 @@ export function App() {
       });
   }
 
+  function refreshProfile() {
+    if (!isEngineConnected()) return;
+    ipc
+      .getProfile()
+      .then((res) => {
+        const parsed = normalizeProfile(res);
+        if (parsed) setProfile(parsed);
+      })
+      .catch(() => {
+        /* leave the Profile section on its quiet placeholder if we can't read it */
+      });
+  }
+
+  // Switching a profile takes effect immediately (no restart). Re-fetch so the
+  // new flags reshape the surface right away; quietly no-op if the switch fails.
+  function handleSetProfile(profileId: string) {
+    if (!isEngineConnected()) return;
+    ipc
+      .setProfile(profileId)
+      .then(() => refreshProfile())
+      .catch((err) => {
+        setStatusBanner(
+          err instanceof Error ? err.message : "I couldn't switch the profile.",
+        );
+      });
+  }
+
+  function clearDiagnostics() {
+    setDiagnostics([]);
+  }
+
   // --- Turn lifecycle -------------------------------------------------------
   async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
     const assistantId = uid();
@@ -235,6 +293,10 @@ export function App() {
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
+      // Developer-only: the client attaches the real exception text as `.raw`.
+      // We keep it on the message; ChatThread renders it only when the
+      // raw-diagnostics flag is on, so the plain message is all Simple ever sees.
+      const raw = (err as RawError | undefined)?.raw;
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -245,6 +307,7 @@ export function App() {
                 content:
                   m.content ||
                   `I couldn't finish that. ${message} You can try again in a moment.`,
+                raw: typeof raw === "string" ? raw : undefined,
               }
             : m,
         ),
@@ -484,6 +547,7 @@ export function App() {
           selectedEffort={selectedEffort}
           onSelectModel={handleSelectModel}
           onSelectEffort={handleSelectEffort}
+          showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
           activityStrip={
             <>
               {routineProposal && (
@@ -519,6 +583,10 @@ export function App() {
         onSaveKey={handleSaveKey}
         localSetup={localSetup}
         onStartLocalSetup={handleStartLocalSetup}
+        profile={profile}
+        onSetProfile={handleSetProfile}
+        diagnostics={diagnostics}
+        onClearDiagnostics={clearDiagnostics}
         onClose={() => setSettingsOpen(false)}
       />
     </div>
@@ -695,6 +763,38 @@ function normalizeCloudModels(result: unknown): CloudModel[] {
     });
   }
   return out;
+}
+
+// Parse `profile.get` defensively, like the other core payloads. `activeProfile`
+// defaults to "simple" and every flag defaults to false, so a partial or missing
+// payload degrades to the protected Simple surface rather than exposing anything.
+function normalizeProfile(result: unknown): ProfileState | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  const profiles = Array.isArray(obj.profiles)
+    ? obj.profiles.flatMap((p) => {
+        const rp = asRecord(p);
+        if (!rp || typeof rp.id !== "string") return [];
+        return [
+          {
+            id: rp.id,
+            label: typeof rp.label === "string" ? rp.label : rp.id,
+            description: typeof rp.description === "string" ? rp.description : "",
+          },
+        ];
+      })
+    : [];
+  const flags = asRecord(obj.flags) ?? {};
+  return {
+    activeProfile: typeof obj.activeProfile === "string" ? obj.activeProfile : "simple",
+    profiles,
+    flags: {
+      exposeRoutinePlan: flags.exposeRoutinePlan === true,
+      rawDiagnostics: flags.rawDiagnostics === true,
+      headlessCli: flags.headlessCli === true,
+      byokFirstOnboarding: flags.byokFirstOnboarding === true,
+    },
+  };
 }
 
 function extractFinalText(result: unknown): string | null {
