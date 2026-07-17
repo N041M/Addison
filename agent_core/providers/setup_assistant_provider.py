@@ -31,18 +31,14 @@ Built after the core loop works end-to-end (engineering-spec §11 step 9).
 
 from __future__ import annotations
 
-import json
-import re
-import uuid
-
 import httpx
 
 from agent_core.providers.base import (
     Message,
     ModelResponse,
     ProviderCapabilities,
-    ToolCallRequest,
 )
+from agent_core.providers.tool_call_parser import parse_tool_call
 
 # Documented placeholder — the real relay URL is supplied via ADDISON_RELAY_URL
 # (main.py reads the env); this default only keeps dev/tests from needing it set.
@@ -55,11 +51,6 @@ _DEFAULT_AT_CAP_MESSAGE = (
     "We've reached the end of the free setup conversation. Add your own API key in "
     "Settings and we can keep going with full speed and capabilities."
 )
-
-# One fenced code block; the language tag (```json / ```) is optional. Captured
-# lazily so the FIRST block wins, and the whole block is grabbed so nested JSON
-# objects survive intact.
-_FENCE_RE = re.compile(r"```[a-zA-Z]*\s*(.*?)```", re.DOTALL)
 
 
 class SetupAssistantProvider:
@@ -80,7 +71,11 @@ class SetupAssistantProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
+        # ``effort`` is a PRIMARY cloud "answer style" (§4.1.1); the onboarding relay
+        # has no such control, so it is accepted and ignored for a uniform call.
         # Device id first (the body carries it), then sign the assembled body.
         device_id = self._device_id()
         body: dict = {
@@ -134,9 +129,12 @@ class SetupAssistantProvider:
         except httpx.HTTPError:
             # Network/timeout failure. Clean message, no chained exception, so
             # nothing about the request (signature included) can leak.
+            # This provider only ever handles turns when NO key is configured
+            # (§4.6), so "add your own key" is always a valid way forward.
             raise RuntimeError(
-                "Couldn't reach the free setup service just now. "
-                "Check your internet connection and try again."
+                "Couldn't reach the free setup service just now. Check your "
+                "internet connection and try again — or add your own API key "
+                "in Settings and Addison will use that instead."
             ) from None
         finally:
             if injected is None:
@@ -211,37 +209,11 @@ def _translate_relay_response(data: dict) -> ModelResponse:
     in the text is promoted to a ToolCallRequest; anything else stays plain text.
     """
     text = data.get("text") or ""
-    tool_call = _parse_tool_call(text)
+    tool_call = parse_tool_call(text, id_prefix="setup")
     if tool_call is not None:
         # A tool call replaces the text (same as a native tool_use turn).
         return ModelResponse(text=None, tool_calls=[tool_call], finish_reason="tool_use")
     return ModelResponse(text=text or None, tool_calls=[], finish_reason="stop")
-
-
-def _parse_tool_call(text: str) -> ToolCallRequest | None:
-    """Scan text for a single fenced JSON ``{"tool", "args"}`` block.
-
-    Returns a ToolCallRequest when a well-formed block is present, else None.
-    NEVER raises and NEVER evaluates code — ``json.loads`` only (§8.1). Malformed
-    or non-tool JSON degrades to plain text (a None return)."""
-    if not text:
-        return None
-    match = _FENCE_RE.search(text)
-    if match is None:
-        return None
-    try:
-        payload = json.loads(match.group(1).strip())
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    tool_id = payload.get("tool")
-    if not isinstance(tool_id, str) or not tool_id:
-        return None
-    args = payload.get("args", {})
-    if not isinstance(args, dict):
-        args = {}
-    return ToolCallRequest(id=f"setup-{uuid.uuid4().hex[:8]}", tool_id=tool_id, args=args)
 
 
 def _relay_error_message(status_code: int) -> str:

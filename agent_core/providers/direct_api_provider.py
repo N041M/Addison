@@ -60,5 +60,9 @@ class DirectAPIProvider:
     def capabilities(self) -> ProviderCapabilities:
         return self._require_adapter().capabilities()
 
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
-        return self._require_adapter().send(messages, tools)
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
+        # Thread ``effort`` through to the underlying adapter (an AnthropicProvider
+        # today), which honors it only for a model that supports it.
+        return self._require_adapter().send(messages, tools, effort=effort)

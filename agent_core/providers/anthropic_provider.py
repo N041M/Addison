@@ -38,12 +38,25 @@ _NO_KEY_MESSAGE = (
 
 
 class AnthropicProvider:
-    def __init__(self, model: str = "claude-opus-4-8", api_key_getter=None, client=None) -> None:
+    def __init__(
+        self,
+        model: str = "claude-opus-4-8",
+        api_key_getter=None,
+        client=None,
+        adaptive_thinking: bool = False,
+        supported_effort=(),
+    ) -> None:
         self._model = model
         self._api_key_getter = api_key_getter  # callable -> str, hits the shell/keychain
         # Optional injected httpx.Client (tests pass one wired to a MockTransport).
         # When None, send() creates and closes a client per request.
         self._client = client
+        # Catalog-driven per-model knobs (models_catalog.py). ``adaptive_thinking``
+        # adds ``thinking: {"type": "adaptive"}``; ``supported_effort`` is the set of
+        # effort ids this model accepts — an effort NOT in it is silently dropped so
+        # an unsupported ``output_config`` is never sent (which would error).
+        self._adaptive_thinking = adaptive_thinking
+        self._supported_effort = tuple(supported_effort)
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -54,7 +67,9 @@ class AnthropicProvider:
             vision=True,        # Claude models can analyze images
         )
 
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
         # Fetch the key fresh for THIS request; keep it in a local only (§5, §8.3).
         api_key = self._resolve_key()
 
@@ -63,6 +78,13 @@ class AnthropicProvider:
             "max_tokens": _MAX_TOKENS,
             "messages": _translate_history(messages),
         }
+        # Per-model reasoning knobs (models_catalog.py). Adaptive thinking is a fixed
+        # per-model choice; the effort "answer style" is per-message but ONLY sent to
+        # a model that supports it — an unsupported effort is dropped, never sent.
+        if self._adaptive_thinking:
+            body["thinking"] = {"type": "adaptive"}
+        if effort is not None and effort in self._supported_effort:
+            body["output_config"] = {"effort": effort}
         # A leading role="system" message maps to the Messages API top-level
         # `system` param, not into the messages list (§4.6 injects the Setup
         # Assistant prompt this way for a turn). Omitted entirely when absent, so
