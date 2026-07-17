@@ -10,6 +10,12 @@ export interface DisplayMessage extends ChatMessage {
   pending?: boolean;
   /** The turn ended in a plain-language error rather than a normal answer. */
   failed?: boolean;
+  /**
+   * Developer-only raw error text for a failed turn (the core's `error.data.raw`).
+   * Held regardless of profile; only ever rendered when the raw-diagnostics flag
+   * is on (Simple never shows it — the plain `content` is unchanged for both).
+   */
+  raw?: string;
 }
 
 /** One configurable model role, as surfaced by `model.availableRoles`. */
@@ -66,4 +72,34 @@ export interface LocalSetupState {
   message?: string;
   /** Plain-language failure, shown inline. */
   error?: string;
+}
+
+/**
+ * Frontend feature flags carried on `profile.get` (spec §4.7). These reshape
+ * only what is *shown* — never how the permission gate, undo, or key handling
+ * work (§8.7). A profile is presentation + defaults, not a security boundary.
+ */
+export interface ProfileFlags {
+  /** Developer: reveal a routine's declarative plan (READ-ONLY in v1, §6.5). */
+  exposeRoutinePlan: boolean;
+  /** Developer: show real error text / a diagnostics panel instead of only plain messages. */
+  rawDiagnostics: boolean;
+  /** Developer: surface the headless JSON-RPC entry-point hint for scripting. */
+  headlessCli: boolean;
+  /** Developer: BYOK/model config up front instead of the Setup Assistant. */
+  byokFirstOnboarding: boolean;
+}
+
+/** One selectable profile, with label + description authored by the core. */
+export interface ProfileOption {
+  id: string;
+  label: string;
+  description: string;
+}
+
+/** The full profile picture from `profile.get`. */
+export interface ProfileState {
+  activeProfile: string;
+  profiles: ProfileOption[];
+  flags: ProfileFlags;
 }

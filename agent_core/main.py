@@ -39,7 +39,14 @@ from agent_core.models_catalog import (
 )
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
-from agent_core.profiles import Profile, resolve_active_profile
+from agent_core.profiles import (
+    DEVELOPER,
+    SIMPLE,
+    Profile,
+    ProfileId,
+    get_profile,
+    resolve_active_profile,
+)
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
@@ -94,6 +101,12 @@ _OLLAMA_NOT_INSTALLED_MESSAGE = (
 _LOCAL_SETUP_BUSY_MESSAGE = (
     "Addison is already setting up a model. Let that one finish before starting another."
 )
+# §4.7 Developer profile is BYOK-first: with no key it asks the user to add their own
+# rather than routing to the Setup Assistant relay (which is the Simple onboarding).
+_BYOK_ONBOARDING_MESSAGE = (
+    "No API key is set up yet. Add your Anthropic API key in Settings."
+)
+_UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
 
 _GB = 1024**3
 
@@ -386,6 +399,13 @@ class JsonRpcServer:
         # then block the worker on a per-tool Event until permission.respond lands.
         self.permission_gate = PermissionGate(on_request=self._on_permission_request)
 
+        # The active §4.7 Profile, resolved from the store on the worker thread by
+        # _ensure_built and held here so it can be consulted per-use (onboarding path,
+        # raw diagnostics, routine-plan visibility). profile.set updates it in place so
+        # a switch takes effect immediately, no restart. It is a SURFACE choice only —
+        # it never gates tool execution or touches key handling (§8.7).
+        self._active_profile: Profile | None = None
+
         # Built on the worker thread by _ensure_built (SQLite thread affinity).
         self.store = None
         self.undo_manager: UndoManager | None = None
@@ -422,6 +442,8 @@ class JsonRpcServer:
         if self.orchestrator is not None:
             return
         self.store = self._store_factory()
+        # §4.7: read the persisted profile now that the store exists (SIMPLE if unset).
+        self._active_profile = resolve_active_profile(self.store)
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
         self.orchestrator = Orchestrator(
             model_router=self.model_router,
@@ -476,12 +498,25 @@ class JsonRpcServer:
             return
         self._write_frame({"jsonrpc": "2.0", "id": request_id, "result": result})
 
-    def _respond_error(self, request_id, code: int, message: str) -> None:
+    def _respond_error(self, request_id, code: int, message: str, data: dict | None = None) -> None:
         if request_id is None:
             return
-        self._write_frame(
-            {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
-        )
+        error: dict = {"code": code, "message": message}
+        # JSON-RPC allows an error ``data`` member; the Developer profile uses it to
+        # carry raw diagnostics. The plain-language ``message`` is IDENTICAL in both
+        # profiles — Developer just gets MORE detail, never a different message (§4.7).
+        if data is not None:
+            error["data"] = data
+        self._write_frame({"jsonrpc": "2.0", "id": request_id, "error": error})
+
+    def _raw_detail(self, exc: Exception) -> dict | None:
+        """Developer-profile raw diagnostics for an error frame: the repr of the
+        underlying exception, or None for Simple (which is unchanged). This adds
+        VISIBILITY only — it never changes control flow or the plain message (§8.7)."""
+        profile = self._active_profile
+        if profile is not None and profile.raw_diagnostics:
+            return {"raw": repr(exc)}
+        return None
 
     # --- Core -> Frontend notifications -----------------------------------
     def _emit_stream_chunk(self, text: str | None) -> None:
@@ -527,6 +562,13 @@ class JsonRpcServer:
             return
         if method in _ROUTINE_JOBS:
             self._queue.put((_ROUTINE_JOBS[method], params, request_id))
+            return
+        # profile.get/set read/write app_settings, so they run on the worker too.
+        if method == Method.PROFILE_GET:
+            self._queue.put(("profile_get", params, request_id))
+            return
+        if method == Method.PROFILE_SET:
+            self._queue.put(("profile_set", params, request_id))
             return
 
         try:
@@ -574,12 +616,19 @@ class JsonRpcServer:
                 elif kind == "routine_delete":
                     self.routine_library.delete(params.get("routineId"))
                     self._respond(request_id, {"ok": True})
+                elif kind == "profile_get":
+                    self._respond(request_id, self._profile_get())
+                elif kind == "profile_set":
+                    self._handle_profile_set(params, request_id)
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
-                self._respond_error(request_id, _SERVER_ERROR, str(exc))
-            except Exception:
-                # Anything else collapses to one plain message — no stack trace.
-                self._respond_error(request_id, _SERVER_ERROR, _GENERIC_TURN_ERROR)
+                self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
+            except Exception as exc:
+                # Anything else collapses to one plain message — no stack trace (the
+                # raw repr is attached only for the Developer profile, §4.7).
+                self._respond_error(
+                    request_id, _SERVER_ERROR, _GENERIC_TURN_ERROR, self._raw_detail(exc)
+                )
 
     def _run_send_message(self, params: dict, request_id) -> None:
         text = params.get("text", "")
@@ -597,6 +646,21 @@ class JsonRpcServer:
         error = self._selection_error(requested_role, model_name, effort)
         if error is not None:
             self._respond_error(request_id, _SERVER_ERROR, error)
+            return
+
+        # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
+        # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the
+        # user to add their own key. Simple keeps the §4.6 relay handoff below,
+        # untouched. This is an onboarding *surface* branch, not a safety branch —
+        # neither path changes the gate/undo/key rules (§8.7).
+        profile = self._active_profile
+        if (
+            requested_role in (None, ModelRole.PRIMARY)
+            and not self._primary_key_available()
+            and profile is not None
+            and profile.onboarding == "byok_first"
+        ):
+            self._respond_error(request_id, _SERVER_ERROR, _BYOK_ONBOARDING_MESSAGE)
             return
 
         self._ensure_conversation()
@@ -765,22 +829,38 @@ class JsonRpcServer:
         self._respond(request_id, {"ok": True, "routineId": draft.id})
 
     def _routine_rows(self) -> list[dict]:
+        # §4.7/§6.5: the Developer profile additionally sees a READ-ONLY view of the
+        # declarative plan. This is safe to expose precisely because the plan has no
+        # code field (§6.1) — it is pure data. There is NO editing surface here;
+        # structural step editing stays v2 (§10).
+        profile = self._active_profile
+        expose_plan = profile is not None and profile.expose_routine_plan
         rows = []
         for entry in self.routine_library.list():
             routine = entry["routine"]
-            rows.append(
-                {
-                    "id": routine.id,
-                    "name": routine.name,
-                    "description": routine.description,
-                    "runCount": entry["runCount"],
-                    "lastRunAt": entry["lastRunAt"],
-                    "variables": [
-                        {"name": v.name, "prompt": v.prompt, "default": v.default}
-                        for v in routine.variables
-                    ],
-                }
-            )
+            row = {
+                "id": routine.id,
+                "name": routine.name,
+                "description": routine.description,
+                "runCount": entry["runCount"],
+                "lastRunAt": entry["lastRunAt"],
+                "variables": [
+                    {"name": v.name, "prompt": v.prompt, "default": v.default}
+                    for v in routine.variables
+                ],
+            }
+            if expose_plan:
+                row["planSteps"] = [
+                    {
+                        "stepId": step.step_id,
+                        "toolId": step.tool_id,
+                        "argsTemplate": step.args_template,
+                        "dependsOn": step.depends_on,
+                        "onFailure": step.on_failure,
+                    }
+                    for step in routine.steps
+                ]
+            rows.append(row)
         return rows
 
     def _handle_routine_run(self, params: dict, request_id) -> None:
@@ -832,6 +912,42 @@ class JsonRpcServer:
         with self._perm_lock:
             waiter = self._permission_waiters.pop(waiter_key, None)
         return bool(waiter and waiter["allow"])
+
+    # --- profiles (§4.7) --------------------------------------------------
+    def _profile_get(self) -> dict:
+        """The active profile, the selector's option list, and the feature flags
+        for the ACTIVE profile. Flags are pure surface signals the frontend uses to
+        show/hide Developer-only affordances — they never gate tool execution (§8.7)."""
+        active = self._active_profile or SIMPLE
+        return {
+            "activeProfile": active.id.value,
+            "profiles": [
+                {"id": p.id.value, "label": p.label, "description": p.description}
+                for p in (SIMPLE, DEVELOPER)
+            ],
+            "flags": {
+                "exposeRoutinePlan": active.expose_routine_plan,
+                "rawDiagnostics": active.raw_diagnostics,
+                "headlessCli": active.headless_cli,
+                "byokFirstOnboarding": active.onboarding == "byok_first",
+            },
+        }
+
+    def _handle_profile_set(self, params: dict, request_id) -> None:
+        """Persist the chosen profile and re-resolve it for the running server so the
+        switch takes effect immediately (no restart). An unknown id is refused plainly.
+
+        Switching profile changes ONLY the surface (onboarding path, diagnostics
+        detail, routine-plan visibility). It does NOT touch the permission gate, the
+        undo-at-registration check, or key handling — those hold identically (§8.7)."""
+        try:
+            profile = get_profile(ProfileId(params.get("profileId")))
+        except ValueError:
+            self._respond_error(request_id, _SERVER_ERROR, _UNKNOWN_PROFILE_MESSAGE)
+            return
+        self.store.set_setting("active_profile", profile.id.value)
+        self._active_profile = profile
+        self._respond(request_id, {"ok": True})
 
     # --- model roles ------------------------------------------------------
     def _maybe_load_live_catalog(self) -> None:
@@ -1071,7 +1187,10 @@ def _plain(exc: Exception) -> str:
 
 
 def main() -> None:
-    profile = resolve_active_profile()          # §4.7 — SIMPLE until step 11 persists a choice
+    # §4.7: build the tool registry profile-agnostically — both v1 profiles register
+    # the same §4.2 tool set. The server resolves the *persisted* active profile on its
+    # worker thread (with the store) and consults it per-use; see server.run() below.
+    profile = resolve_active_profile()
     shell_bridge = IpcShellBridge()             # sender bound by the server below
     registry = build_registry(profile, shell_bridge=shell_bridge)
 
@@ -1159,8 +1278,10 @@ def main() -> None:
         cloud_fetcher=_fetch_live_catalog,
         cloud_provider_factory=_build_cloud_provider,
     )
-    # TODO(step 11): use profile.onboarding to pick Setup Assistant vs. BYOK-first,
-    #                and expose profile.{headless_cli,raw_diagnostics,...} to the frontend.
+    # §4.7: the server re-resolves the active profile from the store on its worker
+    # thread (profile.get/set) and consults it per-use for the onboarding path, raw
+    # diagnostics, and routine-plan visibility. The startup registry is profile-agnostic
+    # here because both v1 profiles register the same §4.2 tool set (build_registry).
     server.run()
 
 

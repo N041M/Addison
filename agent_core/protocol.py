@@ -59,6 +59,8 @@ class Method:
     ROUTINE_LIST = "routine.list"
     ROUTINE_RUN = "routine.run"
     ROUTINE_DELETE = "routine.delete"
+    PROFILE_GET = "profile.get"      # {} -> {activeProfile, profiles: [{id,label,description}], flags}
+    PROFILE_SET = "profile.set"      # {profileId} -> {ok}; persisted in app_settings (§4.7)
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

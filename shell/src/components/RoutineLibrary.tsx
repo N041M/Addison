@@ -9,6 +9,17 @@
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
 
+// One step of a routine's declarative plan (spec §6.1). The core sends these on
+// `routine.list` ONLY under the Developer profile; they are rendered READ-ONLY
+// (§6.5) — there is deliberately no code field and no edit affordance.
+interface PlanStep {
+  stepId: string;
+  toolId: string;
+  argsTemplate: unknown;
+  dependsOn: string[];
+  onFailure: string;
+}
+
 interface RoutineRow {
   id: string;
   name: string;
@@ -16,6 +27,8 @@ interface RoutineRow {
   runCount: number;
   lastRunAt: number | null;
   variables: { name: string; prompt: string; default: string | null }[];
+  /** Developer profile only: the declarative plan, for read-only viewing. */
+  planSteps?: PlanStep[];
 }
 
 interface RunOutcome {
@@ -23,7 +36,15 @@ interface RunOutcome {
   detail: string;
 }
 
-export function RoutineLibrary() {
+interface Props {
+  /**
+   * Developer profile only: allow revealing a routine's declarative plan
+   * (READ-ONLY). Off/absent for Simple, so its routine list is byte-identical.
+   */
+  exposeRoutinePlan?: boolean;
+}
+
+export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
   const connected = isEngineConnected();
   const [routines, setRoutines] = useState<RoutineRow[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -33,6 +54,7 @@ export function RoutineLibrary() {
   const [running, setRunning] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, RunOutcome>>({});
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  const [planOpen, setPlanOpen] = useState<Record<string, boolean>>({}); // Developer: expanded plans
 
   useEffect(() => {
     if (!connected) {
@@ -204,11 +226,72 @@ export function RoutineLibrary() {
                 {outcome[routine.id].detail}
               </p>
             )}
+
+            {exposeRoutinePlan && routine.planSteps && routine.planSteps.length > 0 && (
+              <div className="mt-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setPlanOpen((prev) => ({ ...prev, [routine.id]: !prev[routine.id] }))
+                  }
+                  aria-expanded={Boolean(planOpen[routine.id])}
+                  className="text-xs font-medium text-muted hover:text-ink-soft"
+                >
+                  {planOpen[routine.id] ? "Hide plan" : "View plan"}
+                </button>
+                {planOpen[routine.id] && (
+                  <PlanView steps={routine.planSteps} />
+                )}
+              </div>
+            )}
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+// Read-only rendering of a routine's declarative plan (§6.5). No inputs, no
+// buttons, no reordering — viewing only. Compact and monospace so the shape of
+// the plan is legible to a developer.
+function PlanView({ steps }: { steps: PlanStep[] }) {
+  return (
+    <ol className="mt-2 space-y-2 border border-line bg-paper p-3 font-mono text-xs text-ink-soft">
+      {steps.map((step, i) => (
+        <li
+          key={step.stepId || i}
+          className="border-t border-line pt-2 first:border-t-0 first:pt-0"
+        >
+          <div className="text-ink">
+            <span className="text-muted">step</span> {step.stepId || `#${i + 1}`}{" "}
+            <span className="text-muted">·</span> {step.toolId}
+          </div>
+          {step.dependsOn.length > 0 && (
+            <div className="mt-0.5">
+              <span className="text-muted">depends on</span> {step.dependsOn.join(", ")}
+            </div>
+          )}
+          {step.onFailure && (
+            <div className="mt-0.5">
+              <span className="text-muted">on failure</span> {step.onFailure}
+            </div>
+          )}
+          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">
+            {formatArgs(step.argsTemplate)}
+          </pre>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function formatArgs(args: unknown): string {
+  if (args === undefined || args === null) return "{}";
+  try {
+    return JSON.stringify(args, null, 2);
+  } catch {
+    return String(args);
+  }
 }
 
 function runSummary(routine: RoutineRow): string {
@@ -251,7 +334,28 @@ function normalizeRoutines(result: unknown): RoutineRow[] {
             ];
           })
         : [],
+      // Present only under the Developer profile; absent (undefined) otherwise.
+      planSteps: Array.isArray(r.planSteps) ? normalizePlanSteps(r.planSteps) : undefined,
     });
   }
   return out;
+}
+
+function normalizePlanSteps(raw: unknown[]): PlanStep[] {
+  return raw.flatMap((s) => {
+    if (!s || typeof s !== "object") return [];
+    const rs = s as Record<string, unknown>;
+    return [
+      {
+        stepId: typeof rs.stepId === "string" ? rs.stepId : "",
+        toolId: typeof rs.toolId === "string" ? rs.toolId : "",
+        // argsTemplate is free-form (rendered as pretty JSON), so pass it through.
+        argsTemplate: rs.argsTemplate,
+        dependsOn: Array.isArray(rs.dependsOn)
+          ? rs.dependsOn.filter((d): d is string => typeof d === "string")
+          : [],
+        onFailure: typeof rs.onFailure === "string" ? rs.onFailure : "",
+      },
+    ];
+  });
 }
