@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Baseline for the Addison webview: it may relay IPC to the Agent Core via the app's own `send_to_core` / `store_provider_key` commands (allowed by default, no permission needed) and listen for the shell's `core-message` / `core-status` events. It gets NOTHING else — no direct filesystem, network, keychain, or shell access (spec §1.3, §8).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

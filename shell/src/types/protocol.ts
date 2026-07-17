@@ -20,6 +20,20 @@ export const Method = {
   ModelSetRoleForNextMessage: "model.setRoleForNextMessage",
   ModelStartLocalSetup: "model.startLocalSetup",
   ModelLocalSetupProgress: "model.localSetupProgress",
+
+  // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
+  // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
+  // (§9) covers the full method surface; the frontend must never invoke these.
+  ShellSaveNewFile: "shell.saveNewFile",
+  ShellDeleteFile: "shell.deleteFile",
+  ShellOpenDraft: "shell.openDraft",
+  ShellDiscardDraft: "shell.discardDraft",
+  ShellReadClipboard: "shell.readClipboard",
+  ShellOpenExternal: "shell.openExternal",
+  ShellPickFile: "shell.pickFile",
+  ShellReadScopedFile: "shell.readScopedFile",
+  KeychainGetDeviceKey: "keychain.getDeviceKey",
+  KeychainGetProviderKey: "keychain.getProviderKey",
 } as const;
 
 export type MethodName = (typeof Method)[keyof typeof Method];
