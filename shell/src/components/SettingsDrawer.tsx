@@ -14,8 +14,9 @@
 
 import { useState } from "react";
 import type { ModelRole } from "../types/protocol";
-import type { RoleOption } from "../types/ui";
+import type { LocalSetupState, RoleOption } from "../types/ui";
 import { RoutineLibrary } from "./RoutineLibrary";
+import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
   open: boolean;
@@ -24,6 +25,8 @@ interface Props {
   defaultRole: ModelRole;
   onChangeDefaultRole: (role: ModelRole) => void;
   onSaveKey: (role: string, provider: string, key: string) => Promise<void>;
+  localSetup: LocalSetupState | null;
+  onStartLocalSetup: (modelId: string) => void;
   onClose: () => void;
 }
 
@@ -34,6 +37,8 @@ export function SettingsDrawer({
   defaultRole,
   onChangeDefaultRole,
   onSaveKey,
+  localSetup,
+  onStartLocalSetup,
   onClose,
 }: Props) {
   const [keyValue, setKeyValue] = useState("");
@@ -181,6 +186,14 @@ export function SettingsDrawer({
               </>
             )}
           </section>
+
+          {/* Run a model on this computer — the local-model setup flow (§4.1.2). */}
+          <LocalModelSetup
+            connected={connected}
+            roles={roles}
+            setup={localSetup}
+            onStartSetup={onStartLocalSetup}
+          />
 
           {/* Routines — step-8 stub */}
           <section>

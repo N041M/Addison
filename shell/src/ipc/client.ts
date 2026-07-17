@@ -237,7 +237,13 @@ export const ipc = {
   availableRoles: () => call(Method.ModelAvailableRoles),
   setRoleForNextMessage: (role: ModelRole, modelId?: string) =>
     call(Method.ModelSetRoleForNextMessage, { role, modelId }),
-  startLocalSetup: () => call(Method.ModelStartLocalSetup),
+  // Kicks off the one-time local-model download/verify for `modelName` (the
+  // curated Ollama tag). Resolves when the model is set up and has appeared in
+  // `availableRoles`; rejects with a plain-language error (e.g. Ollama not
+  // running, machine too small). Live progress arrives on
+  // `model.localSetupProgress` in between.
+  startLocalSetup: (modelName?: string) =>
+    call(Method.ModelStartLocalSetup, { modelName }),
 };
 
 // ---------------------------------------------------------------------------

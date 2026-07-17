@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
-import type { DisplayMessage, RoleOption } from "./types/ui";
+import type { DisplayMessage, LocalSetupState, RoleOption } from "./types/ui";
 import {
   ipc,
   isEngineConnected,
@@ -58,6 +58,7 @@ export function App() {
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [selectedRole, setSelectedRole] = useState<ModelRole>(loadDefaultRole());
   const [selectedLocalModel, setSelectedLocalModel] = useState<string | undefined>(undefined);
+  const [localSetup, setLocalSetup] = useState<LocalSetupState | null>(null);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -103,8 +104,25 @@ export function App() {
     unsubs.push(
       subscribe(Method.ModelLocalSetupProgress, (p) => {
         const params = p as LocalSetupProgressParams;
-        const note = params.message ?? params.label ?? params.stage;
-        if (note) setStatusBanner(note);
+        // Progress belongs INSIDE the Settings section, not in a fleeting
+        // banner. Only one setup runs at a time, so we fold each update onto the
+        // in-progress entry (App set its modelId when it kicked things off).
+        setLocalSetup((prev) => {
+          if (!prev) return prev; // no setup running — ignore stray progress
+          const status: LocalSetupState["status"] = params.error
+            ? "error"
+            : params.done
+              ? "done"
+              : "running";
+          return {
+            ...prev,
+            status,
+            stage: params.stage ?? params.label ?? prev.stage,
+            percent: typeof params.percent === "number" ? params.percent : prev.percent,
+            message: params.message ?? params.label ?? prev.message,
+            error: params.error ?? prev.error,
+          };
+        });
       }),
     );
 
@@ -159,7 +177,11 @@ export function App() {
     setIsWorking(true);
 
     try {
-      const res = await ipc.sendMessage(text, selectedRole, selectedLocalModel);
+      // Deliver the *effective* local model: if the user picked "On this
+      // computer" but never touched the model dropdown, the picker shows the
+      // first model as selected, so that's the one we must send (§4.1.1 B).
+      const modelId = effectiveLocalModel(selectedRole, selectedLocalModel);
+      const res = await ipc.sendMessage(text, selectedRole, modelId);
       const finalText = extractFinalText(res);
       setMessages((prev) =>
         prev.map((m) =>
@@ -256,15 +278,65 @@ export function App() {
       });
   }
 
+  // The models configured under the "local" role, or [] when none is set up.
+  function localModelOptions(): { id: string; label: string }[] {
+    return roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
+  }
+
+  // The model id we should actually deliver for a role. For "local", fall back
+  // to the first configured model when the user hasn't picked one — the picker
+  // already displays that first model as selected, so state and delivery agree.
+  function effectiveLocalModel(role: ModelRole, picked?: string): string | undefined {
+    if (role !== "local") return undefined;
+    const models = localModelOptions();
+    if (picked && models.some((m) => m.id === picked)) return picked;
+    return models[0]?.id;
+  }
+
   function handleSelectRole(role: ModelRole) {
     setSelectedRole(role);
-    if (role !== "local") setSelectedLocalModel(undefined);
-    ipc.setRoleForNextMessage(role, role === "local" ? selectedLocalModel : undefined).catch(() => {});
+    if (role !== "local") {
+      setSelectedLocalModel(undefined);
+      ipc.setRoleForNextMessage(role, undefined).catch(() => {});
+      return;
+    }
+    // Pin the effective model on the state and the core hint so the per-message
+    // picker path is complete even before the dropdown is touched.
+    const modelId = effectiveLocalModel("local", selectedLocalModel);
+    setSelectedLocalModel(modelId);
+    ipc.setRoleForNextMessage("local", modelId).catch(() => {});
   }
 
   function handleSelectLocalModel(modelId: string) {
     setSelectedLocalModel(modelId);
     ipc.setRoleForNextMessage("local", modelId).catch(() => {});
+  }
+
+  // --- Local model setup (§4.1.2): explicit, opt-in, one at a time -----------
+  function handleStartLocalSetup(modelId: string) {
+    if (!isEngineConnected()) return;
+    setLocalSetup({ modelId, status: "running", stage: "Getting ready", message: "Getting ready…" });
+    ipc
+      .startLocalSetup(modelId)
+      .then(() => {
+        setLocalSetup((prev) =>
+          prev && prev.modelId === modelId
+            ? { ...prev, status: "done", percent: 100, message: undefined, error: undefined }
+            : prev,
+        );
+        // The new model now exists under the local role — refresh so it appears
+        // in the chat's model selector.
+        refreshRoles();
+      })
+      .catch((err) => {
+        const message =
+          err instanceof Error ? err.message : "Setting up the local model didn't work.";
+        setLocalSetup((prev) =>
+          prev && prev.modelId === modelId
+            ? { ...prev, status: "error", error: message }
+            : { modelId, status: "error", error: message },
+        );
+      });
   }
 
   function handleChangeDefaultRole(role: ModelRole) {
@@ -374,6 +446,8 @@ export function App() {
         defaultRole={selectedRole}
         onChangeDefaultRole={handleChangeDefaultRole}
         onSaveKey={handleSaveKey}
+        localSetup={localSetup}
+        onStartLocalSetup={handleStartLocalSetup}
         onClose={() => setSettingsOpen(false)}
       />
     </div>
@@ -467,8 +541,15 @@ function normalizeRoles(result: unknown): RoleOption[] {
     if (!obj) continue;
     const role = (obj.role ?? obj.id) as unknown;
     if (role !== "primary" && role !== "local") continue; // setup_assistant isn't user-pickable
-    const models = Array.isArray(obj.models)
-      ? (obj.models.map(normalizeModel).filter(Boolean) as { id: string; label: string }[])
+    // The core may carry local models under `models` or `localModels` — accept
+    // either (the field name isn't pinned in protocol.ts).
+    const rawModels = Array.isArray(obj.models)
+      ? obj.models
+      : Array.isArray(obj.localModels)
+        ? (obj.localModels as unknown[])
+        : undefined;
+    const models = rawModels
+      ? (rawModels.map(normalizeModel).filter(Boolean) as { id: string; label: string }[])
       : undefined;
     out.push({
       role,

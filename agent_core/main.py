@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import os
 import queue
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -34,6 +36,12 @@ from agent_core.profiles import Profile, resolve_active_profile
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.ollama_provider import (
+    OllamaProvider,
+    approx_requirements,
+    is_running,
+    pull_model,
+)
 from agent_core.providers.router import ModelRouter
 from agent_core.providers.setup_assistant_provider import (
     DEFAULT_RELAY_URL,
@@ -66,6 +74,58 @@ _GENERIC_TURN_ERROR = (
     "Addison couldn't finish that just now. Check your internet connection and "
     "that your API key is still valid, then try again."
 )
+
+# Local-setup (§4.1.2) plain-language messages. Addison does NOT install Ollama
+# in v1 — it points the user at doing that themselves.
+_OLLAMA_NOT_INSTALLED_MESSAGE = (
+    "Ollama isn't running on this computer. Install it from ollama.com (or start "
+    "it if it's already installed), then try again — Addison can't install it for you."
+)
+_LOCAL_SETUP_BUSY_MESSAGE = (
+    "Addison is already setting up a model. Let that one finish before starting another."
+)
+
+_GB = 1024**3
+
+
+def _free_disk_bytes() -> int | None:
+    """Free disk space in the user's home volume, or None if it can't be read."""
+    try:
+        return shutil.disk_usage(os.path.expanduser("~")).free
+    except OSError:
+        return None
+
+
+def _total_ram_bytes() -> int | None:
+    """Total physical RAM in bytes (macOS ``sysctl -n hw.memsize``).
+
+    Any failure is a "couldn't check" — return None and let the caller SKIP the
+    RAM gate rather than block setup on an unknowable value (§4.1.2 step 2)."""
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        return int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _pull_progress(update: dict) -> tuple[int | None, str | None]:
+    """Turn one Ollama ``/api/pull`` NDJSON line into (percent, plain message).
+
+    Only byte-progress lines (``total``/``completed``) get a user-facing message,
+    so no Ollama jargon ("verifying sha256 digest") leaks into the UI. Returns
+    ``(None, None)`` for lines with nothing worth showing."""
+    total = update.get("total")
+    completed = update.get("completed")
+    if isinstance(total, (int, float)) and total and isinstance(completed, (int, float)):
+        percent = max(0, min(100, int(completed / total * 100)))
+        return percent, f"Downloading the model — {percent}%"
+    return None, None
 
 
 def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
@@ -266,6 +326,8 @@ class JsonRpcServer:
         conversation_id: str = "main",
         primary_key_probe=None,
         setup_prompt: str | None = None,
+        ollama_base_url: str | None = None,
+        ollama_client=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -275,6 +337,11 @@ class JsonRpcServer:
         self._store_factory = store_factory     # called once, on the worker thread
         self.model_router = model_router
         self._shell_bridge = shell_bridge
+        # Local-setup (§4.1.2) talks to Ollama over HTTP. base_url/client default
+        # to the real localhost instance; tests inject an httpx.MockTransport
+        # client so no real Ollama (or network) is ever touched.
+        self._ollama_base_url = ollama_base_url
+        self._ollama_client = ollama_client
         # §4.6 Setup Assistant handoff: with no PRIMARY key yet, a turn runs on the
         # SETUP_ASSISTANT relay under its onboarding system prompt. ``primary_key_probe``
         # is a ()-> bool that reports whether a real PRIMARY key is available right now
@@ -302,11 +369,16 @@ class JsonRpcServer:
         self._conversation_created = False
         self._message_ids: list[str] = []      # persisted id per conversation.messages entry
         self._next_role: ModelRole | None = None
+        self._next_model_name: str | None = None   # explicit LOCAL pick (item B), §4.1.1
         self._draft_routine = None             # pending §6.3 proposal awaiting confirmSave
 
         self._queue: queue.Queue = queue.Queue()
         self._perm_lock = threading.Lock()
         self._permission_waiters: dict[str, dict] = {}
+        # Only one local-model setup may run at a time (§4.1.2); the flag is held
+        # from pre-flight through the background pull/verify.
+        self._local_setup_lock = threading.Lock()
+        self._local_setup_active = False
 
     # --- lifecycle --------------------------------------------------------
     def run(self) -> None:
@@ -426,8 +498,11 @@ class JsonRpcServer:
                 self._respond(request_id, self._available_roles())
             elif method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
                 self._handle_set_role(params, request_id)
+            elif method == Method.MODEL_START_LOCAL_SETUP:
+                # §4.1.2: pre-flight (reachability + hardware) answers here; the
+                # long pull/verify runs on a background thread and streams progress.
+                self._handle_start_local_setup(params, request_id)
             elif method in _NOT_BUILT_METHODS:
-                # Routines (step 8) and local setup (step 10) — not built here.
                 self._respond_error(request_id, _SERVER_ERROR, _NOT_BUILT_MESSAGE)
             else:
                 self._respond_error(
@@ -472,7 +547,12 @@ class JsonRpcServer:
     def _run_send_message(self, params: dict, request_id) -> None:
         text = params.get("text", "")
         requested_role = self._role_from(params.get("role")) or self._next_role
+        # Item B (§4.1.1): thread the explicit LOCAL model pick (per-message param
+        # or the last setRole) into resolve(); resolve() ignores it for non-LOCAL
+        # roles and falls back gracefully if the name is unknown.
+        model_name = params.get("modelId") or self._next_model_name
         self._next_role = None
+        self._next_model_name = None
 
         self._ensure_conversation()
         user_msg = Message(role="user", content=text)
@@ -494,7 +574,9 @@ class JsonRpcServer:
 
         pre_turn = len(self.conversation.messages)
         try:
-            self.orchestrator.run_turn(self.conversation, requested_role=requested_role)
+            self.orchestrator.run_turn(
+                self.conversation, requested_role=requested_role, model_name=model_name
+            )
             # Full-transcript persistence (§4.8 substrate): every message the turn
             # appended, in order, so a later rewind can target any of them by id.
             for msg in self.conversation.messages[pre_turn:]:
@@ -723,8 +805,113 @@ class JsonRpcServer:
                 request_id, _SERVER_ERROR, "That model option isn't available."
             )
             return
+        # Item B (§4.1.1): an explicit LOCAL pick may name WHICH local model. Validate
+        # it against the configured pool so a stale/typo'd id fails plainly here
+        # rather than silently falling back to a different model at send time.
+        model_id = params.get("modelId") or None
+        if role is ModelRole.LOCAL and model_id is not None:
+            if model_id not in self.model_router.available_local_models():
+                self._respond_error(
+                    request_id, _SERVER_ERROR, "That model option isn't available."
+                )
+                return
         self._next_role = role
+        self._next_model_name = model_id
         self._respond(request_id, {"ok": True})
+
+    # --- local model setup (§4.1.2) ---------------------------------------
+    def _handle_start_local_setup(self, params: dict, request_id) -> None:
+        """Steps 1-2 (reachability + hardware) answer via the RPC response; on
+        success the pull/verify (steps 3-4) run on a background thread so the
+        server stays responsive, streaming ``model.localSetupProgress``."""
+        model_name = str(params.get("modelName") or "").strip()
+        if not model_name:
+            self._respond_error(request_id, _SERVER_ERROR, "Choose a model to set up first.")
+            return
+
+        with self._local_setup_lock:
+            if self._local_setup_active:
+                self._respond_error(request_id, _SERVER_ERROR, _LOCAL_SETUP_BUSY_MESSAGE)
+                return
+            self._local_setup_active = True
+
+        # The flag is now held; every path that does NOT start the worker must
+        # release it (the worker owns releasing it once started).
+        started = False
+        try:
+            if not is_running(self._ollama_base_url, self._ollama_client):
+                self._respond_error(request_id, _SERVER_ERROR, _OLLAMA_NOT_INSTALLED_MESSAGE)
+                return
+            refusal = self._hardware_refusal(model_name)
+            if refusal is not None:
+                self._respond_error(request_id, _SERVER_ERROR, refusal)
+                return
+            thread = threading.Thread(
+                target=self._run_local_setup,
+                args=(model_name,),
+                name="local-setup",
+                daemon=True,
+            )
+            thread.start()
+            started = True
+            self._respond(request_id, {"ok": True, "started": True})
+        finally:
+            if not started:
+                with self._local_setup_lock:
+                    self._local_setup_active = False
+
+    def _hardware_refusal(self, model_name: str) -> str | None:
+        """Plain-language refusal if disk/RAM is clearly insufficient, else None
+        (design-doc §7.3.2 — name real GB numbers, never parameter counts)."""
+        need = approx_requirements(model_name)
+        free_disk = _free_disk_bytes()
+        if free_disk is not None and free_disk < need["disk_gb"] * _GB:
+            return (
+                f"This model needs about {need['disk_gb']:.0f} GB of free space, but "
+                f"only {free_disk / _GB:.0f} GB is free on this computer. Free up some "
+                "space and try again."
+            )
+        total_ram = _total_ram_bytes()
+        if total_ram is not None and total_ram < need["ram_gb"] * _GB:
+            return (
+                f"This model needs about {need['ram_gb']:.0f} GB of memory, but this "
+                f"computer has about {total_ram / _GB:.0f} GB, so it wouldn't run well "
+                "and isn't available."
+            )
+        return None
+
+    def _run_local_setup(self, model_name: str) -> None:
+        """Background worker: pull (step 3) → verify (step 4) → register. Every
+        outcome is a ``model.localSetupProgress`` notification; nothing raises out
+        of the thread."""
+        try:
+            self._emit_local_progress("downloading", "Getting the download started...", None)
+            for update in pull_model(model_name, self._ollama_base_url, self._ollama_client):
+                percent, message = _pull_progress(update)
+                if message is not None:
+                    self._emit_local_progress("downloading", message, percent)
+
+            self._emit_local_progress("verifying", "Checking the model works...", None)
+            provider = OllamaProvider(model_name, self._ollama_base_url, self._ollama_client)
+            provider.send([Message(role="user", content="Hello")], [])
+
+            # Verified: register it so ModelRole.LOCAL and the Local picker appear.
+            self.model_router.register_local_model(model_name, provider)
+            self._emit_local_progress("done", f"{model_name} is ready to use.", 100)
+        except RuntimeError as exc:
+            # Provider/pull errors already carry a plain, user-ready sentence.
+            self._emit_local_progress("error", str(exc), None)
+        except Exception:
+            self._emit_local_progress("error", _GENERIC_TURN_ERROR, None)
+        finally:
+            with self._local_setup_lock:
+                self._local_setup_active = False
+
+    def _emit_local_progress(self, stage: str, message: str, percent: int | None) -> None:
+        payload: dict = {"stage": stage, "message": message}
+        if percent is not None:
+            payload["percent"] = percent
+        self._notify(Method.MODEL_LOCAL_SETUP_PROGRESS, payload)
 
     # --- helpers ----------------------------------------------------------
     def _label(self, tool_id: str) -> str:
@@ -744,10 +931,9 @@ class JsonRpcServer:
 
 
 # Methods that belong to later build steps — answered with a plain "not built"
-# error rather than a silent failure (step 10; do NOT implement here).
-_NOT_BUILT_METHODS = {
-    Method.MODEL_START_LOCAL_SETUP,
-}
+# error rather than a silent failure. Empty now that step 10 (local setup) is
+# built; kept as the seam for any future not-yet-implemented §7 method.
+_NOT_BUILT_METHODS: set[str] = set()
 
 # routine.* methods all touch the Store, so they run on the worker (§ threading
 # model in JsonRpcServer's docstring). Method -> worker job kind.

@@ -68,8 +68,16 @@ class Orchestrator:
         self.on_activity = on_activity
         self.shell_bridge = shell_bridge
 
-    def run_turn(self, conversation: Conversation, requested_role: ModelRole | None = None) -> None:
-        provider = self.model_router.resolve(requested_role)   # per-turn resolution, §4.1.1
+    def run_turn(
+        self,
+        conversation: Conversation,
+        requested_role: ModelRole | None = None,
+        model_name: str | None = None,
+    ) -> None:
+        # Per-turn resolution (§4.1.1). ``model_name`` is an EXPLICIT pick among
+        # several LOCAL models (item B) — a user toggle or a Routine step's
+        # model_id; never a choice Addison makes for the user in v1.
+        provider = self.model_router.resolve(requested_role, model_name)
         context = ExecutionContext(
             conversation_id=conversation.id, shell_bridge=self.shell_bridge
         )
@@ -95,9 +103,29 @@ class Orchestrator:
                         if result.snapshot:
                             result.snapshot.tool_call_id = call.id
                             self.undo_manager.record(result.snapshot)
+                        result = self._gate_image_result(result, provider)
                     conversation.append_tool_result(call.id, result)
                 continue  # loop again with tool results appended
             else:
                 conversation.append_assistant_message(response.text)
                 self.stream_to_frontend(response.text)
                 break  # turn complete
+
+    def _gate_image_result(self, result: ToolResult, provider) -> ToolResult:
+        """(A) Vision gate (§4.1.1 item A): don't feed a picture to a model that
+        can't see it. When a tool result's content is an image (the shell reports
+        ``{"kind": "image", ...}``) and the active provider reports
+        ``vision=False``, replace the content with a plain-language notice and
+        surface it — a WARNING plus an explicit manual switch, NEVER an automatic
+        model change (that's v2). Any other result passes through untouched."""
+        content = result.content
+        if not (isinstance(content, dict) and content.get("kind") == "image"):
+            return result
+        if provider.capabilities().vision:
+            return result
+        notice = (
+            "This file is a picture, and the model you're using can't look at "
+            "pictures. Switch to a vision-capable model and try again."
+        )
+        self.stream_to_frontend(notice)
+        return ToolResult(success=False, content=notice)
