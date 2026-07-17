@@ -32,6 +32,8 @@ class OpenAIProvider:
             vision=True,        # modern GPT-class models can analyze images
         )
 
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
         # TODO(Phase 4): chat.completions with function-calling translation.
         raise NotImplementedError("OpenAI adapter is Phase 4 — spec §10.")

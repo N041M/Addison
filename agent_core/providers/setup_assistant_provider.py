@@ -71,7 +71,11 @@ class SetupAssistantProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
+        # ``effort`` is a PRIMARY cloud "answer style" (§4.1.1); the onboarding relay
+        # has no such control, so it is accepted and ignored for a uniform call.
         # Device id first (the body carries it), then sign the assembled body.
         device_id = self._device_id()
         body: dict = {

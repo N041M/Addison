@@ -266,7 +266,7 @@ class _RecordingProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools) -> ModelResponse:
+    def send(self, messages, tools, effort=None) -> ModelResponse:
         self.histories.append(list(messages))
         return self._response
 

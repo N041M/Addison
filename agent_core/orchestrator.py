@@ -73,10 +73,12 @@ class Orchestrator:
         conversation: Conversation,
         requested_role: ModelRole | None = None,
         model_name: str | None = None,
+        effort: str | None = None,
     ) -> None:
-        # Per-turn resolution (§4.1.1). ``model_name`` is an EXPLICIT pick among
-        # several LOCAL models (item B) — a user toggle or a Routine step's
-        # model_id; never a choice Addison makes for the user in v1.
+        # Per-turn resolution (§4.1.1). ``model_name`` is an EXPLICIT pick — among
+        # several LOCAL models (item B) or several cloud models (§6.8) — a user toggle
+        # or a Routine step's model_id; never a choice Addison makes in v1. ``effort``
+        # is the per-message "answer style"; providers that don't support it ignore it.
         provider = self.model_router.resolve(requested_role, model_name)
         context = ExecutionContext(
             conversation_id=conversation.id, shell_bridge=self.shell_bridge
@@ -85,6 +87,7 @@ class Orchestrator:
             response = provider.send(
                 messages=conversation.messages,
                 tools=self.tool_registry.list_for_model(),
+                effort=effort,
             )
             if response.tool_calls:
                 # Record the assistant's tool-call turn BEFORE its results so that

@@ -102,7 +102,11 @@ class OllamaProvider:
         return data
 
     # --- send -------------------------------------------------------------
-    def send(self, messages: list[Message], tools: list) -> ModelResponse:
+    def send(
+        self, messages: list[Message], tools: list, effort: str | None = None
+    ) -> ModelResponse:
+        # ``effort`` is a cloud-model "answer style" (§4.1.1); local models have no
+        # such control, so it is accepted and ignored for a uniform provider call.
         native = self.capabilities().native_tool_calling
         history = _translate_history(messages)
         body: dict = {"model": self._model, "messages": history, "stream": False}

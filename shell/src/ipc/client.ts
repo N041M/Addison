@@ -216,8 +216,8 @@ function toPlainMessage(err: unknown): string {
 // Method names; params are the free-form JSON-RPC payloads each method expects.
 // ---------------------------------------------------------------------------
 export const ipc = {
-  sendMessage: (text: string, role?: ModelRole, modelId?: string) =>
-    call(Method.ConversationSendMessage, { text, role, modelId }),
+  sendMessage: (text: string, role?: ModelRole, modelId?: string, effort?: string) =>
+    call(Method.ConversationSendMessage, { text, role, modelId, effort }),
 
   respondToPermission: (toolId: string, allow: boolean) =>
     call(Method.PermissionRespond, { toolId, allow }),
@@ -235,8 +235,8 @@ export const ipc = {
   deleteRoutine: (routineId: string) => call(Method.RoutineDelete, { routineId }),
 
   availableRoles: () => call(Method.ModelAvailableRoles),
-  setRoleForNextMessage: (role: ModelRole, modelId?: string) =>
-    call(Method.ModelSetRoleForNextMessage, { role, modelId }),
+  setRoleForNextMessage: (role: ModelRole, modelId?: string, effort?: string) =>
+    call(Method.ModelSetRoleForNextMessage, { role, modelId, effort }),
   // Kicks off the one-time local-model download/verify for `modelName` (the
   // curated Ollama tag). Resolves when the model is set up and has appeared in
   // `availableRoles`; rejects with a plain-language error (e.g. Ollama not
