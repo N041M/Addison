@@ -3,25 +3,47 @@
 This is the ONLY cloud provider built in the first pass (engineering-spec §10).
 OpenAI/Google adapters come later (design-doc Phase 4).
 
-STATUS: stub. Implement against the Anthropic Messages API: translate
-Addison's ToolDefinition list into `tools` blocks, map `tool_use` blocks back
-to ToolCallRequest. The API key is fetched from the OS keychain at call time
-via the shell (§5) — never cached in this process beyond a single request.
+Talks to the Anthropic Messages API over ``httpx`` (the declared HTTPS
+dependency — no vendored SDK). It translates Addison's ``ToolDefinition`` list
+into ``tools`` blocks and maps ``tool_use`` response blocks back to
+``ToolCallRequest``. The API key is fetched from the OS keychain at call time
+via the shell (§5) and used locally for one request only — it is never stored
+on the instance or anywhere longer-lived (§8.3).
+
+Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import
+from ``tools/``. Tool definitions are therefore duck-typed here — send() only
+reads ``.id``, ``.description`` and ``.parameters_schema`` off each tool.
 """
 
 from __future__ import annotations
+
+import httpx
 
 from agent_core.providers.base import (
     Message,
     ModelResponse,
     ProviderCapabilities,
+    ToolCallRequest,
+)
+
+_API_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_VERSION = "2023-06-01"
+_MAX_TOKENS = 4096
+_TIMEOUT_SECONDS = 60.0
+
+# Plain-language, never-contains-the-key message for a missing/unset key.
+_NO_KEY_MESSAGE = (
+    "No API key is set up yet. Add your Anthropic API key in Settings to start chatting."
 )
 
 
 class AnthropicProvider:
-    def __init__(self, model: str = "claude-opus-4-8", api_key_getter=None) -> None:
+    def __init__(self, model: str = "claude-opus-4-8", api_key_getter=None, client=None) -> None:
         self._model = model
         self._api_key_getter = api_key_getter  # callable -> str, hits the shell/keychain
+        # Optional injected httpx.Client (tests pass one wired to a MockTransport).
+        # When None, send() creates and closes a client per request.
+        self._client = client
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -33,5 +55,143 @@ class AnthropicProvider:
         )
 
     def send(self, messages: list[Message], tools: list) -> ModelResponse:
-        # TODO(step 4): POST to the Anthropic Messages API and translate the response.
-        raise NotImplementedError("Implement Anthropic Messages API call — spec §11 step 4.")
+        # Fetch the key fresh for THIS request; keep it in a local only (§5, §8.3).
+        api_key = self._resolve_key()
+
+        body: dict = {
+            "model": self._model,
+            "max_tokens": _MAX_TOKENS,
+            "messages": _translate_history(messages),
+        }
+        tool_blocks = _translate_tools(tools)
+        if tool_blocks:  # omit the key entirely when there are no tools
+            body["tools"] = tool_blocks
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
+
+        response = self._post(headers, body)
+
+        if response.status_code >= 400:
+            # Never echo the response body or the key — just a plain next step.
+            raise RuntimeError(_http_error_message(response.status_code))
+
+        return _translate_response(response.json())
+
+    def _resolve_key(self) -> str:
+        getter = self._api_key_getter
+        if getter is None:
+            raise RuntimeError(_NO_KEY_MESSAGE)
+        api_key = getter()
+        if not api_key:
+            raise RuntimeError(_NO_KEY_MESSAGE)
+        return api_key
+
+    def _post(self, headers: dict, body: dict) -> httpx.Response:
+        injected = self._client
+        client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
+        try:
+            return client.post(_API_URL, headers=headers, json=body)
+        except httpx.HTTPError:
+            # Network/timeout failure. Raise a clean message with no chained
+            # exception so nothing about the request (headers included) leaks.
+            raise RuntimeError(
+                "Couldn't reach the Anthropic service. "
+                "Check your internet connection and try again."
+            ) from None
+        finally:
+            if injected is None:
+                client.close()
+
+
+def _translate_tools(tools: list) -> list[dict]:
+    return [
+        {"name": d.id, "description": d.description, "input_schema": d.parameters_schema}
+        for d in tools
+    ]
+
+
+def _translate_history(messages: list[Message]) -> list[dict]:
+    """Map Addison's flat message list to Anthropic's alternating turns.
+
+    Assistant turns that requested tools become a text block (if any) followed
+    by one ``tool_use`` block per call. Consecutive ``tool`` messages are the
+    results for a single assistant turn, so they MUST merge into one ``user``
+    message carrying every ``tool_result`` block — the API rejects them split
+    across messages.
+    """
+    api_messages: list[dict] = []
+    pending_results: list[dict] = []
+
+    def flush_results() -> None:
+        if pending_results:
+            api_messages.append({"role": "user", "content": list(pending_results)})
+            pending_results.clear()
+
+    for m in messages:
+        if m.role == "tool":
+            pending_results.append(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": m.tool_call_id,
+                    "content": str(m.content),
+                }
+            )
+            continue
+
+        # Any non-tool message closes off a run of tool results.
+        flush_results()
+
+        if m.role == "user":
+            api_messages.append({"role": "user", "content": m.content})
+        elif m.role == "assistant":
+            if m.tool_calls:
+                content: list[dict] = []
+                if m.content:
+                    content.append({"type": "text", "text": m.content})
+                for c in m.tool_calls:
+                    content.append(
+                        {"type": "tool_use", "id": c.id, "name": c.tool_id, "input": c.args}
+                    )
+                api_messages.append({"role": "assistant", "content": content})
+            else:
+                api_messages.append({"role": "assistant", "content": m.content})
+
+    flush_results()
+    return api_messages
+
+
+def _translate_response(data: dict) -> ModelResponse:
+    text_parts: list[str] = []
+    tool_calls: list[ToolCallRequest] = []
+    for block in data.get("content", []):
+        block_type = block.get("type")
+        if block_type == "text":
+            text_parts.append(block.get("text", ""))
+        elif block_type == "tool_use":
+            tool_calls.append(
+                ToolCallRequest(
+                    id=block["id"],
+                    tool_id=block["name"],
+                    args=block.get("input", {}),
+                )
+            )
+    text = "".join(text_parts) if text_parts else None
+    return ModelResponse(
+        text=text,
+        tool_calls=tool_calls,
+        finish_reason=data.get("stop_reason", "stop"),
+    )
+
+
+def _http_error_message(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "Your Anthropic API key was rejected. Check that it's entered correctly in Settings."
+    if status_code == 429:
+        return "Anthropic is busy right now (too many requests). Wait a moment and try again."
+    if status_code >= 500:
+        return "The Anthropic service had a problem. Please try again in a moment."
+    return f"The request to Anthropic failed (status {status_code}). Please try again."

@@ -15,10 +15,16 @@ STATUS: skeleton — dispatch table + stdio loop to be filled per §11 step 7.
 from __future__ import annotations
 
 import os
+import sys
 
-from agent_core.permissions.gate import PermissionGate
+from agent_core.orchestrator import Conversation, Orchestrator
+from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.profiles import Profile, resolve_active_profile
+from agent_core.providers.anthropic_provider import AnthropicProvider
+from agent_core.providers.base import Message, ModelRole
 from agent_core.providers.router import ModelRouter
+from agent_core.snapshots.undo_manager import UndoManager
+from agent_core.tools.base import ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
@@ -62,6 +68,114 @@ def default_db_path() -> str:
     return os.path.join(base, "addison.sqlite3")
 
 
+class _InMemorySnapshotStore:
+    """CLI/dev-only stand-in for ``memory.store.Store`` (spec §11 step 6).
+
+    ``UndoManager.record()`` is the only method the CLI loop exercises, so this
+    stub implements exactly that — appending to a list. The real SQLite-backed
+    store (insert/query/prune of ``action_snapshots``) is built at step 6; do NOT
+    grow this stub into it."""
+
+    def __init__(self) -> None:
+        self.snapshots: list[ActionSnapshot] = []
+
+    def insert_action_snapshot(self, snapshot: ActionSnapshot) -> None:
+        self.snapshots.append(snapshot)
+
+
+def _env_api_key() -> str:
+    """Read the Anthropic key from the environment at the moment of use.
+
+    CLI/dev-only key source. Read at call time (never cached at startup) so a
+    rotated key is picked up without a restart, and so the key never lingers in
+    Agent Core memory. The OS-keychain path (read by the Rust shell) replaces
+    this when the desktop shell lands at step 7 (spec §5)."""
+    return os.environ["ANTHROPIC_API_KEY"]
+
+
+def _terminal_permission_handler(registry: ToolRegistry):
+    """Terminal PermissionCard stand-in: plain-language ask, y/n answer.
+
+    In the shell this consent is an IPC event the frontend renders; in the CLI
+    harness we print the tool's plain-language label + description (this app's
+    users are non-technical — CLAUDE.md) and read a yes/no from the terminal."""
+
+    def handler(tool_id: str) -> PermissionStatus:
+        definition = registry.get(tool_id).definition
+        print()
+        print(f"Addison would like to: {definition.label}")
+        print(f"  {definition.description}")
+        answer = input("Allow this? (y/n) ").strip().lower()
+        if answer in ("y", "yes"):
+            return PermissionStatus.GRANTED
+        return PermissionStatus.DENIED
+
+    return handler
+
+
+def run_cli() -> None:
+    """Drive the orchestration loop from the terminal, without the desktop shell.
+
+    Build step 4 (spec §11): a working chat-with-tools loop is provable before the
+    Tauri shell and IPC arrive at step 7. Everything shell-specific here — the
+    env-var key source and the terminal permission prompt — is the CLI/dev path
+    only, replaced by the keychain + PermissionCard IPC later.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        # Never print or log the key itself — just tell the user how to set it.
+        print(
+            "Addison needs your Anthropic API key before it can start.\n"
+            "Set it, then run again:  export ANTHROPIC_API_KEY=your-key-here"
+        )
+        raise SystemExit(1)
+
+    profile = resolve_active_profile()
+    registry = build_registry(profile)
+    permission_gate = PermissionGate(on_request=_terminal_permission_handler(registry))
+
+    provider = AnthropicProvider(model="claude-opus-4-8", api_key_getter=_env_api_key)
+    model_router = ModelRouter(configured={ModelRole.PRIMARY: provider})
+    undo_manager = UndoManager(store=_InMemorySnapshotStore(), tool_registry=registry)
+
+    orchestrator = Orchestrator(
+        model_router=model_router,
+        tool_registry=registry,
+        permission_gate=permission_gate,
+        undo_manager=undo_manager,
+        stream_to_frontend=print,
+    )
+
+    conversation = Conversation(id="cli")
+    print("Addison is ready. Type a message, or 'exit' to quit.")
+    while True:
+        try:
+            user_input = input("\nyou > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()  # leave the cursor on a fresh line
+            break
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit"):
+            break
+        conversation.messages.append(Message(role="user", content=user_input))
+        try:
+            orchestrator.run_turn(conversation)
+        except KeyboardInterrupt:
+            print("\nStopped. You can type another message.")
+            continue
+        except RuntimeError as exc:
+            # Providers raise RuntimeError with a user-ready plain-language
+            # message (key rejected, service busy, offline...) — show it as-is.
+            print(str(exc))
+        except Exception:
+            # No stack traces reach the user (CLAUDE.md): one plain sentence + a
+            # next step. The underlying error is swallowed on purpose here.
+            print(
+                "Addison couldn't reach the model just now. Check your internet "
+                "connection and that your API key is still valid, then try again."
+            )
+
+
 def main() -> None:
     profile = resolve_active_profile()          # §4.7 — SIMPLE until step 11 persists a choice
     registry = build_registry(profile)
@@ -75,4 +189,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # `--cli` runs the step-4 terminal harness; the bare entry point stays the
+    # step-7 JSON-RPC stdio loop (still NotImplementedError until then).
+    if "--cli" in sys.argv[1:]:
+        run_cli()
+    else:
+        main()

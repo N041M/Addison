@@ -46,6 +46,10 @@ class Message:
     role: str                    # 'user' | 'assistant' | 'tool'
     content: str
     tool_call_id: str | None = None
+    # Set on assistant turns that requested tools. Providers with native tool
+    # calling need the original tool_use blocks replayed in history so each
+    # tool_call_id pairs with the tool_result that follows it.
+    tool_calls: list[ToolCallRequest] = field(default_factory=list)
 
 
 @dataclass
