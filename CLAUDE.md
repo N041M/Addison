@@ -108,7 +108,9 @@ Budget Manager / automatic long-conversation continuation (**planned for v2**
 — spec §4.8; v1 ships only the schema substrate at step 6, and it is
 orchestrator machinery, never a registry tool), messaging channels, Routine
 step-editing UI, any Routine scheduling/triggers, a Rust rewrite of the Agent
-Core.
+Core, and the two v2 items adopted from the 2026-07 ecosystem survey —
+Routine export/import sharing and untrusted-content screening (design-doc
+§11 "Adopted from the 2026-07 ecosystem survey") — do not pull them forward.
 
 ## Commands
 
