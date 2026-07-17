@@ -74,8 +74,9 @@ replay tool calls through the exact same registry + gate as the live loop.
   plain message + one suggested next step.
 - **UI (step 7+): distinct, non-AI look** (design-doc §7.1). Never the generic
   AI-chat aesthetic (purple gradients, glassmorphism, sparkle/bot icons,
-  shimmer effects). A calm everyday-utility look: neutral palette + one
-  accent, readability-first type for older users, simple navigation.
+  shimmer effects). A calm everyday-utility look: green-tinted neutral palette
+  + one deep-green accent, sharp corners (no rounded cards), no decorative
+  taglines, readability-first type for older users, simple navigation.
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 

@@ -6,10 +6,10 @@
 // (streamed text, permission prompts, tool activity, local-setup progress) into
 // React state, and Frontend → Core actions back out through the typed `ipc`.
 //
-// Visual direction is binding (CLAUDE.md, design-doc §7.1): a calm warm-neutral
-// everyday-utility look, one green accent for primary actions only, real
-// typographic hierarchy for readers who are 54 and 68 — never a generic AI-chat
-// template.
+// Visual direction is binding (CLAUDE.md, design-doc §7.1): a calm green-tinted
+// everyday-utility look with sharp corners, one deep-green accent for primary
+// actions only, no decorative taglines, real typographic hierarchy for readers
+// who are 54 and 68 — never a generic AI-chat template.
 
 import { useEffect, useMemo, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
@@ -309,14 +309,11 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
       <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
-        <div className="flex items-baseline gap-2.5">
-          <span className="text-xl font-semibold tracking-tight text-ink">Addison</span>
-          <span className="text-sm text-muted">your calm helper</span>
-        </div>
+        <span className="text-xl font-semibold tracking-tight text-ink">Addison</span>
         <button
           type="button"
           onClick={() => setSettingsOpen(true)}
-          className="rounded-lg border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+          className="border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
         >
           Settings
         </button>

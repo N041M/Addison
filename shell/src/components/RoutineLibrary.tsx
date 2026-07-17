@@ -106,7 +106,7 @@ export function RoutineLibrary() {
 
   if (!loaded) {
     return (
-      <div className="rounded-card border border-line bg-surface p-4">
+      <div className="border border-line bg-surface p-4">
         <h3 className="text-base font-semibold text-ink">Saved routines</h3>
         <p className="mt-1 text-sm text-muted">Looking for your routines…</p>
       </div>
@@ -115,7 +115,7 @@ export function RoutineLibrary() {
 
   if (routines.length === 0) {
     return (
-      <div className="rounded-card border border-line bg-surface p-4">
+      <div className="border border-line bg-surface p-4">
         <h3 className="text-base font-semibold text-ink">Saved routines</h3>
         <p className="mt-1 text-sm text-muted">
           {connected
@@ -128,7 +128,7 @@ export function RoutineLibrary() {
   }
 
   return (
-    <div className="rounded-card border border-line bg-surface p-4">
+    <div className="border border-line bg-surface p-4">
       <h3 className="text-base font-semibold text-ink">Saved routines</h3>
       <ul className="mt-3 space-y-4">
         {routines.map((routine) => (
@@ -144,14 +144,14 @@ export function RoutineLibrary() {
                   type="button"
                   disabled={running === routine.id}
                   onClick={() => startRun(routine)}
-                  className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-60"
+                  className="bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-60"
                 >
                   {running === routine.id ? "Running…" : "Run now"}
                 </button>
                 <button
                   type="button"
                   onClick={() => removeRoutine(routine.id)}
-                  className="rounded-lg border border-line bg-paper px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+                  className="border border-line bg-paper px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
                 >
                   {confirmingDelete === routine.id ? "Really remove?" : "Remove"}
                 </button>
@@ -159,7 +159,7 @@ export function RoutineLibrary() {
             </div>
 
             {filling === routine.id && (
-              <div className="mt-3 rounded-lg border border-line bg-paper p-3">
+              <div className="mt-3 border border-line bg-paper p-3">
                 {routine.variables
                   .filter((v) => !v.default)
                   .map((v) => (
@@ -171,7 +171,7 @@ export function RoutineLibrary() {
                         onChange={(e) =>
                           setValues((prev) => ({ ...prev, [v.name]: e.target.value }))
                         }
-                        className="mt-1 w-full rounded-lg border border-line bg-surface px-3 py-2 text-base text-ink"
+                        className="mt-1 w-full border border-line bg-surface px-3 py-2 text-base text-ink"
                       />
                     </label>
                   ))}
@@ -179,14 +179,14 @@ export function RoutineLibrary() {
                   <button
                     type="button"
                     onClick={() => void executeRun(routine)}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark"
+                    className="bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark"
                   >
                     Start
                   </button>
                   <button
                     type="button"
                     onClick={() => setFilling(null)}
-                    className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft"
+                    className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft"
                   >
                     Cancel
                   </button>

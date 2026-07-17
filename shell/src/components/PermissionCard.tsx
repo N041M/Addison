@@ -15,7 +15,7 @@ interface Props {
 
 export function PermissionCard({ request, onRespond }: Props) {
   return (
-    <div className="my-2 rounded-card border border-accent/40 bg-accent-tint/60 p-4 shadow-card">
+    <div className="my-2 border border-accent/40 bg-accent-tint/60 p-4 shadow-card">
       <p className="text-xs font-semibold uppercase tracking-wide text-accent-dark">
         Addison is asking
       </p>
@@ -27,14 +27,14 @@ export function PermissionCard({ request, onRespond }: Props) {
         <button
           type="button"
           onClick={() => onRespond(true)}
-          className="rounded-lg bg-accent px-5 py-2.5 text-base font-semibold text-white hover:bg-accent-dark"
+          className="bg-accent px-5 py-2.5 text-base font-semibold text-white hover:bg-accent-dark"
         >
           Allow
         </button>
         <button
           type="button"
           onClick={() => onRespond(false)}
-          className="rounded-lg border border-line bg-surface px-5 py-2.5 text-base font-medium text-ink-soft hover:border-muted"
+          className="border border-line bg-surface px-5 py-2.5 text-base font-medium text-ink-soft hover:border-muted"
         >
           Not now
         </button>

@@ -58,7 +58,7 @@ export function ActivityPanel({
           <span
             aria-hidden="true"
             className={
-              "h-2 w-2 rounded-full " + (isWorking ? "bg-accent" : "bg-muted/50")
+              "h-2 w-2 " + (isWorking ? "bg-accent" : "bg-muted/50")
             }
           />
           <span>{headline}</span>

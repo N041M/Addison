@@ -31,7 +31,7 @@ export function RewindControls({
         <button
           type="button"
           onClick={onUndoLastAction}
-          className="inline-flex w-fit items-center gap-2 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+          className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
         >
           <span aria-hidden="true">↺</span>
           Undo last action
