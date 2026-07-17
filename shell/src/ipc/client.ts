@@ -230,6 +230,9 @@ export const ipc = {
   runRoutine: (routineId: string, variables: Record<string, string>) =>
     call(Method.RoutineRun, { routineId, variables }),
   proposeRoutine: () => call(Method.RoutineProposeFromConversation),
+  confirmSaveRoutine: (name?: string, description?: string) =>
+    call(Method.RoutineConfirmSave, { name, description }),
+  deleteRoutine: (routineId: string) => call(Method.RoutineDelete, { routineId }),
 
   availableRoles: () => call(Method.ModelAvailableRoles),
   setRoleForNextMessage: (role: ModelRole, modelId?: string) =>

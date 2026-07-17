@@ -88,7 +88,7 @@ export function SettingsDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+            className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
           >
             Close
           </button>
@@ -117,14 +117,14 @@ export function SettingsDrawer({
               }}
               placeholder="Paste your key here"
               disabled={!connected || saveState === "saving"}
-              className="mt-1 block w-full rounded-lg border border-line bg-surface px-3 py-2.5 text-base text-ink placeholder:text-muted disabled:opacity-60"
+              className="mt-1 block w-full border border-line bg-surface px-3 py-2.5 text-base text-ink placeholder:text-muted disabled:opacity-60"
             />
             <div className="mt-3 flex items-center gap-3">
               <button
                 type="button"
                 onClick={saveKey}
                 disabled={!connected || !keyValue.trim() || saveState === "saving"}
-                className="rounded-lg bg-accent px-4 py-2 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                className="bg-accent px-4 py-2 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saveState === "saving" ? "Saving…" : "Save key"}
               </button>
@@ -166,7 +166,7 @@ export function SettingsDrawer({
                         onClick={() => onChangeDefaultRole(r.role)}
                         aria-pressed={active}
                         className={
-                          "flex items-center justify-between rounded-lg border px-4 py-3 text-left text-base " +
+                          "flex items-center justify-between border px-4 py-3 text-left text-base " +
                           (active
                             ? "border-accent bg-accent-tint text-accent-dark"
                             : "border-line bg-surface text-ink hover:border-muted")

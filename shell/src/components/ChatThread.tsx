@@ -112,7 +112,7 @@ export function ChatThread({
 
       <div className="border-t border-line bg-surface">
         <div className="mx-auto w-full max-w-3xl px-6 py-4">
-          <div className="rounded-card border border-line bg-paper/60 focus-within:border-muted">
+          <div className="border border-line bg-paper/60 focus-within:border-muted">
             <textarea
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -125,7 +125,7 @@ export function ChatThread({
                   : "Addison's engine isn't connected yet."
               }
               aria-label="Message to Addison"
-              className="block w-full resize-none rounded-t-card bg-transparent px-4 py-3 text-base text-ink placeholder:text-muted focus:outline-none disabled:opacity-60"
+              className="block w-full resize-none bg-transparent px-4 py-3 text-base text-ink placeholder:text-muted focus:outline-none disabled:opacity-60"
             />
             <div className="flex items-center justify-between gap-3 px-3 pb-3">
               <ModelSelector
@@ -141,7 +141,7 @@ export function ChatThread({
                   <button
                     type="button"
                     onClick={onStop}
-                    className="rounded-lg border border-line bg-surface px-5 py-2.5 text-base font-semibold text-ink-soft hover:border-danger hover:text-danger"
+                    className="border border-line bg-surface px-5 py-2.5 text-base font-semibold text-ink-soft hover:border-danger hover:text-danger"
                   >
                     Stop
                   </button>
@@ -150,7 +150,7 @@ export function ChatThread({
                     type="button"
                     onClick={submit}
                     disabled={!draft.trim()}
-                    className="rounded-lg bg-accent px-6 py-2.5 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                    className="bg-accent px-6 py-2.5 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Send
                   </button>
