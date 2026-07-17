@@ -125,9 +125,12 @@ class SetupAssistantProvider:
         except httpx.HTTPError:
             # Network/timeout failure. Clean message, no chained exception, so
             # nothing about the request (signature included) can leak.
+            # This provider only ever handles turns when NO key is configured
+            # (§4.6), so "add your own key" is always a valid way forward.
             raise RuntimeError(
-                "Couldn't reach the free setup service just now. "
-                "Check your internet connection and try again."
+                "Couldn't reach the free setup service just now. Check your "
+                "internet connection and try again — or add your own API key "
+                "in Settings and Addison will use that instead."
             ) from None
         finally:
             if injected is None:
