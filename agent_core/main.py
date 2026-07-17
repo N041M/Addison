@@ -33,6 +33,7 @@ from agent_core.memory.store import Store
 from agent_core.models_catalog import (
     CloudModel,
     default_cloud_model,
+    fetch_cloud_catalog,
     find_cloud_model,
     load_cloud_catalog,
 )
@@ -314,9 +315,12 @@ class JsonRpcServer:
     are usable only on the thread that opened them, so the ``Store`` (and the
     ``UndoManager`` / ``Orchestrator`` that reach it) are built lazily on the
     worker via ``_ensure_built`` — from a ``store_factory`` main() supplies — and
-    every store-touching request (sendMessage, undo, rewind) runs there. Read-only,
-    store-free requests (available roles, role selection) answer on the read loop
-    so they aren't blocked behind an in-flight turn.
+    every store-touching request (sendMessage, undo, rewind) runs there. Fast
+    store-free reads (role selection) answer on the read loop so they aren't blocked
+    behind an in-flight turn. ``availableRoles`` also runs on the worker, not the
+    read loop: it may lazily fetch the live cloud-model list, which does a Core ->
+    Shell key probe and an outbound HTTPS call — both block on frames the read loop
+    must stay free to deliver, so they can never run on the read loop itself.
 
     Every outgoing frame — notification, response, or Core -> Shell request —
     goes through ``_write_frame`` under one lock; stdout therefore carries only
@@ -338,6 +342,8 @@ class JsonRpcServer:
         ollama_base_url: str | None = None,
         ollama_client=None,
         cloud_catalog: list[CloudModel] | None = None,
+        cloud_fetcher=None,
+        cloud_provider_factory=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -347,10 +353,19 @@ class JsonRpcServer:
         self._store_factory = store_factory     # called once, on the worker thread
         self.model_router = model_router
         self._shell_bridge = shell_bridge
-        # The curated cloud-model menu (models_catalog.py) the picker renders and
-        # validates explicit picks against. Empty when no catalog is wired (CLI/some
-        # tests) — then modelId/effort are unvalidated and simply flow to resolve().
+        # The cloud-model menu (models_catalog.py) the picker renders and validates
+        # explicit picks against. It starts as the built-in fallback (or empty in
+        # CLI/some tests — then modelId/effort are unvalidated and flow to resolve()).
+        # The FIRST availableRoles once a PRIMARY key is available swaps in the live
+        # list of every model the key can access (``_maybe_load_live_catalog``).
         self._cloud_catalog = list(cloud_catalog or [])
+        # ``cloud_fetcher`` is a ()-> list[CloudModel] that returns the live catalog
+        # (raising on failure); ``cloud_provider_factory`` is a (CloudModel)-> provider
+        # that builds one provider per fetched entry. Both None (CLI/tests without them)
+        # means no live fetch ever runs — the fallback stands.
+        self._cloud_fetcher = cloud_fetcher
+        self._cloud_provider_factory = cloud_provider_factory
+        self._cloud_catalog_loaded = False
         # Local-setup (§4.1.2) talks to Ollama over HTTP. base_url/client default
         # to the real localhost instance; tests inject an httpx.MockTransport
         # client so no real Ollama (or network) is ever touched.
@@ -504,14 +519,18 @@ class JsonRpcServer:
         if method == Method.PERMISSION_RESPOND:
             self._handle_permission_respond(params, request_id)
             return
+        if method == Method.MODEL_AVAILABLE_ROLES:
+            # On the worker (not here): it may fetch the live cloud-model list, which
+            # does a Core -> Shell key probe + an HTTPS call that must not block the
+            # read loop (see the class docstring's threading model).
+            self._queue.put(("available_roles", params, request_id))
+            return
         if method in _ROUTINE_JOBS:
             self._queue.put((_ROUTINE_JOBS[method], params, request_id))
             return
 
         try:
-            if method == Method.MODEL_AVAILABLE_ROLES:
-                self._respond(request_id, self._available_roles())
-            elif method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
+            if method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
                 self._handle_set_role(params, request_id)
             elif method == Method.MODEL_START_LOCAL_SETUP:
                 # §4.1.2: pre-flight (reachability + hardware) answers here; the
@@ -537,6 +556,9 @@ class JsonRpcServer:
             try:
                 if kind == "send":
                     self._run_send_message(params, request_id)
+                elif kind == "available_roles":
+                    self._maybe_load_live_catalog()
+                    self._respond(request_id, self._available_roles())
                 elif kind == "undo":
                     self._respond(request_id, self._undo_last_action())
                 elif kind == "rewind":
@@ -812,6 +834,37 @@ class JsonRpcServer:
         return bool(waiter and waiter["allow"])
 
     # --- model roles ------------------------------------------------------
+    def _maybe_load_live_catalog(self) -> None:
+        """First availableRoles once a PRIMARY key exists: replace the built-in
+        fallback with the live list of every model the key can access, and register a
+        provider per fetched entry so by-name picks resolve to it.
+
+        Runs on the worker (never the read loop): the key probe and the fetch each do
+        round-trips that block on frames the read loop must stay free to deliver. Any
+        failure — no key, offline, a bad response — keeps the fallback and leaves the
+        door open to retry on a later availableRoles call (nothing is marked loaded).
+        Registration is idempotent (dict replace), so repeated calls are safe. The
+        frontend always sends an explicit modelId (the live default's id after a swap),
+        so the router's fallback selection is left as-is."""
+        if self._cloud_catalog_loaded or self._cloud_fetcher is None:
+            return
+        if not self._primary_key_available():
+            return
+        try:
+            catalog = self._cloud_fetcher()
+        except Exception:
+            return   # keep the fallback; a later availableRoles may succeed
+        if not catalog:
+            return
+
+        self._cloud_catalog = catalog
+        self._cloud_catalog_loaded = True
+        if self._cloud_provider_factory is not None:
+            for entry in catalog:
+                self.model_router.register_primary_model(
+                    entry.id, self._cloud_provider_factory(entry)
+                )
+
     def _available_roles(self) -> dict:
         return {
             # SETUP_ASSISTANT is an internal onboarding role, never a user-selectable
@@ -1047,22 +1100,30 @@ def main() -> None:
         # key mid-conversation flips routing to PRIMARY with no restart.
         return bool(_api_key_getter())
 
-    # The curated cloud menu (models_catalog.py). ADDISON_MODEL is a dev/test knob
-    # (like ADDISON_DB_PATH): it moves the default onto a cheaper model for live
-    # sweeps without touching the shipped catalog. One AnthropicProvider is built per
-    # entry — all sharing the SAME key-getter (one key, several models) — carrying
-    # that entry's adaptive-thinking flag and supported effort levels.
-    catalog = load_cloud_catalog()
-    default_model = default_cloud_model(catalog)
-    cloud_providers = {
-        entry.id: AnthropicProvider(
+    def _build_cloud_provider(entry: CloudModel) -> AnthropicProvider:
+        # One AnthropicProvider per catalog entry — all sharing the SAME key-getter
+        # (one key, several models) — carrying that entry's adaptive-thinking flag and
+        # supported effort levels. Used for the fallback pool at startup AND for each
+        # live-fetched model (JsonRpcServer._maybe_load_live_catalog).
+        return AnthropicProvider(
             model=entry.id,
             api_key_getter=_api_key_getter,
             adaptive_thinking=entry.adaptive_thinking,
             supported_effort=entry.supported_effort,
         )
-        for entry in catalog
-    }
+
+    def _fetch_live_catalog() -> list[CloudModel]:
+        # Every model _api_key_getter's key can access (§4.1.1); raises on any failure,
+        # which the server catches to keep the fallback catalog.
+        return fetch_cloud_catalog(_api_key_getter)
+
+    # The cloud menu starts as the built-in fallback (models_catalog.py); the server
+    # swaps in the live list on the first availableRoles once a key is present.
+    # ADDISON_MODEL is a dev/test knob (like ADDISON_DB_PATH): it moves the default
+    # onto a cheaper model for live sweeps without touching the shipped fallback.
+    catalog = load_cloud_catalog()
+    default_model = default_cloud_model(catalog)
+    cloud_providers = {entry.id: _build_cloud_provider(entry) for entry in catalog}
     default_provider = cloud_providers[default_model.id]
 
     # SETUP_ASSISTANT is a distinct role that never holds a provider key — the shell
@@ -1095,6 +1156,8 @@ def main() -> None:
         primary_key_probe=_primary_key_available,
         setup_prompt=load_setup_prompt(),
         cloud_catalog=catalog,
+        cloud_fetcher=_fetch_live_catalog,
+        cloud_provider_factory=_build_cloud_provider,
     )
     # TODO(step 11): use profile.onboarding to pick Setup Assistant vs. BYOK-first,
     #                and expose profile.{headless_cli,raw_diagnostics,...} to the frontend.

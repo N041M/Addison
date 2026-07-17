@@ -352,9 +352,22 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
             json.dumps({"jsonrpc": "2.0", "id": 1, "method": Method.MODEL_AVAILABLE_ROLES}) + "\n"
         )
         proc.stdin.flush()
-        line = proc.stdout.readline()
-        frame = json.loads(line)
-        assert frame["id"] == 1
+        # availableRoles now probes the shell for a PRIMARY key before deciding whether
+        # to fetch the live model list; with no key it returns the built-in fallback.
+        # Answer that keychain probe (empty key) so the server doesn't wait out its
+        # shell-timeout, then read on to the availableRoles response.
+        frame = None
+        while frame is None:
+            line = proc.stdout.readline()
+            assert line, "server closed before answering availableRoles"
+            msg = json.loads(line)
+            if msg.get("method") == Method.KEYCHAIN_GET_PROVIDER_KEY:
+                proc.stdin.write(
+                    json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"key": ""}}) + "\n"
+                )
+                proc.stdin.flush()
+            elif msg.get("id") == 1 and "result" in msg:
+                frame = msg
         assert "primary" in frame["result"]["roles"]
     finally:
         watchdog.cancel()
