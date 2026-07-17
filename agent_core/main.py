@@ -35,13 +35,19 @@ from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.web_search import WebSearchTool
 
 
-def build_registry(profile: Profile | None = None) -> ToolRegistry:
+def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
     A Profile chooses *which* tools are registered; it never changes *how* safety
     is enforced — registration still RAISES for any MEDIUM/HIGH tool lacking undo()
     (that's the safety invariant, not a bug). Defaults to the Simple profile, whose
     tool set is exactly the v1 §4.2 table.
+
+    ``shell_bridge`` is threaded into the constructors of the tools whose ``undo()``
+    needs it (save_file, draft_message): undo() gets no ExecutionContext, so its
+    bridge is injected here once and used ONLY by undo() — ``execute()`` still uses
+    ``context.shell_bridge`` per the orchestration contract (§4.4). CLI/``main``
+    pass None today; the real bridge arrives with the shell at step 7.
     """
     profile = profile or resolve_active_profile()
     all_tools = {
@@ -49,8 +55,8 @@ def build_registry(profile: Profile | None = None) -> ToolRegistry:
         "read_file": ReadFileTool(),
         "read_clipboard": ReadClipboardTool(),
         "calculator": CalculatorTool(),
-        "save_file": SaveFileTool(),
-        "draft_message": DraftMessageTool(),
+        "save_file": SaveFileTool(shell_bridge=shell_bridge),
+        "draft_message": DraftMessageTool(shell_bridge=shell_bridge),
         "open_link": OpenLinkTool(),
     }
     registry = ToolRegistry()

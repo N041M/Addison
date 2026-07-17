@@ -46,6 +46,55 @@ class ToolResult:
     snapshot: ActionSnapshot | None = None    # None for read-only tools
 
 
+class ShellBridge(Protocol):
+    """The typed contract every OS-level effect crosses (engineering-spec §1.3).
+
+    The Agent Core has no OS permissions of its own: filesystem, clipboard,
+    external-app, and draft handoffs all go back through the Rust shell via IPC,
+    which is what makes the filesystem-scope-by-picker property (design-doc §9)
+    enforceable at a process boundary rather than by convention. This Protocol is
+    exactly the surface the v1 tools (§4.2) need — nothing broader. The shell owns
+    the risky details (a save dialog that refuses overwrites, file-format
+    extraction, scoped handles); tools only call these methods.
+
+    Not ``runtime_checkable`` on purpose: it's a structural contract for the real
+    Tauri bridge and test fakes, not something we isinstance-check at runtime.
+    """
+
+    def save_new_file(self, filename: str, content: str) -> str:
+        """Write ``content`` to a brand-new file the user picks; return its final
+        path. The shell's save dialog REFUSES to overwrite an existing file, which
+        is what keeps save_file's undo trivial (just delete what it created)."""
+        ...
+
+    def delete_file(self, path: str) -> None:
+        """Delete a file this session created — the undo path for save_new_file."""
+        ...
+
+    def open_draft(self, to: str, subject: str, body: str) -> str:
+        """Open a composed draft in the user's own mail/messaging app; return an
+        opaque draft reference for a later discard. Addison never presses send."""
+        ...
+
+    def discard_draft(self, draft_ref: str) -> None:
+        """Discard a draft opened by open_draft — the undo path for draft_message."""
+        ...
+
+    def read_clipboard(self) -> str:
+        """Return the current clipboard text (only on an explicit paste gesture)."""
+        ...
+
+    def open_external(self, url: str) -> None:
+        """Open an http(s) link in the user's default browser."""
+        ...
+
+    def read_scoped_file(self, file_handle: str) -> dict:
+        """Resolve a handle from the OS file picker to its extracted content. The
+        shell owns format extraction; returns ``{"content": str, "kind":
+        "text"|"image"|...}``. Never accepts a raw path — scope is by picker."""
+        ...
+
+
 @dataclass
 class ExecutionContext:
     """Handed to every ``Tool.execute``. Gives tools their only route to
@@ -53,7 +102,8 @@ class ExecutionContext:
     raw syscall from the Agent Core (engineering-spec §1.3)."""
 
     conversation_id: str
-    shell_bridge: Any = None     # IPC handle to the Tauri shell; None in CLI/test mode
+    # IPC handle to the Tauri shell — the ShellBridge above; None in CLI/test mode.
+    shell_bridge: ShellBridge | None = None
 
 
 @runtime_checkable

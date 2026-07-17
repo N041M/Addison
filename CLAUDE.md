@@ -72,6 +72,10 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **Plain language, no jargon** in any user-facing string (tool labels,
   permission cards, errors). No stack traces reach the user — errors become a
   plain message + one suggested next step.
+- **UI (step 7+): distinct, non-AI look** (design-doc §7.1). Never the generic
+  AI-chat aesthetic (purple gradients, glassmorphism, sparkle/bot icons,
+  shimmer effects). A calm everyday-utility look: neutral palette + one
+  accent, readability-first type for older users, simple navigation.
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 
@@ -96,9 +100,12 @@ section — implement them in order, not opportunistically.
 OpenAI/Google providers (Anthropic only for the first build), automatic
 task-based model routing/auto-switching (**planned for v2** — v1 ships the
 substrate: `vision`/`audio` capability flags and multiple local models with an
-*explicit* picker, but the automatic choice among them is v2), messaging
-channels, Routine step-editing UI, any Routine scheduling/triggers, a Rust
-rewrite of the Agent Core.
+*explicit* picker, but the automatic choice among them is v2), the Context
+Budget Manager / automatic long-conversation continuation (**planned for v2**
+— spec §4.8; v1 ships only the schema substrate at step 6, and it is
+orchestrator machinery, never a registry tool), messaging channels, Routine
+step-editing UI, any Routine scheduling/triggers, a Rust rewrite of the Agent
+Core.
 
 ## Commands
 

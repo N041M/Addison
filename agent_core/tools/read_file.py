@@ -10,11 +10,9 @@ VISION GATING (§4.1.1, item A): reading an image in is always allowed, but
 image and the active provider reports ``capabilities().vision == False``, the
 orchestrator surfaces a plain-language warning and offers to switch to a
 vision-capable model rather than feeding the image to a model that can't see it.
-This tool just reports the content + its kind; the capability check/warn lives at
-the orchestration layer. Automatic switching to a vision model is v2, not v1.
-
-STATUS: stub. Wire ``shell_bridge.read_scoped_file(handle)`` once the Tauri
-filesystem bridge (shell/src-tauri/src/filesystem.rs) exists — engineering-spec §11 step 7.
+This tool just reports the content + its kind (the shell returns
+``{"content": ..., "kind": "text"|"image"|...}``); the capability check/warn lives
+at the orchestration layer. Automatic switching to a vision model is v2, not v1.
 """
 
 from __future__ import annotations
@@ -54,5 +52,8 @@ class ReadFileTool:
                 success=False,
                 content="File reading needs the desktop shell; not available in this mode.",
             )
-        # TODO(step 7): text/pdf/docx/image extraction via the scoped handle.
-        raise NotImplementedError("Wire to shell_bridge.read_scoped_file — spec §11 step 7.")
+        # The shell owns extraction; it hands back {"content": ..., "kind": ...}.
+        # The vision-capability check on "kind" == "image" lives in the
+        # orchestrator (see module docstring), not here.
+        extracted = context.shell_bridge.read_scoped_file(args["file_handle"])
+        return ToolResult(success=True, content=extracted)
