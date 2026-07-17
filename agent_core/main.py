@@ -24,6 +24,7 @@ import queue
 import sys
 import threading
 import time
+from pathlib import Path
 from uuid import uuid4
 
 from agent_core.memory.store import Store
@@ -34,6 +35,10 @@ from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
 from agent_core.providers.router import ModelRouter
+from agent_core.providers.setup_assistant_provider import (
+    DEFAULT_RELAY_URL,
+    SetupAssistantProvider,
+)
 from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
@@ -93,6 +98,16 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
         # this map too; they register through the same undo check as everything else.
         registry.register(all_tools[tool_id])
     return registry
+
+
+_SETUP_PROMPT_PATH = Path(__file__).resolve().parent / "providers" / "prompts" / "setup_assistant.txt"
+
+
+def load_setup_prompt() -> str:
+    """The Setup Assistant system prompt (§4.6), injected for a turn when no
+    PRIMARY key is configured yet. Read at startup — it is bundled with the app,
+    not user data."""
+    return _SETUP_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def default_db_path() -> str:
@@ -249,6 +264,8 @@ class JsonRpcServer:
         model_router: ModelRouter,
         shell_bridge: IpcShellBridge | None = None,
         conversation_id: str = "main",
+        primary_key_probe=None,
+        setup_prompt: str | None = None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -258,6 +275,13 @@ class JsonRpcServer:
         self._store_factory = store_factory     # called once, on the worker thread
         self.model_router = model_router
         self._shell_bridge = shell_bridge
+        # §4.6 Setup Assistant handoff: with no PRIMARY key yet, a turn runs on the
+        # SETUP_ASSISTANT relay under its onboarding system prompt. ``primary_key_probe``
+        # is a ()-> bool that reports whether a real PRIMARY key is available right now
+        # (it re-reads the keychain per call, so the handoff needs no other state). When
+        # None (CLI/tests), the key is treated as present — normal PRIMARY routing.
+        self._primary_key_probe = primary_key_probe
+        self._setup_prompt = setup_prompt
         if shell_bridge is not None:
             # The bridge sends its Core -> Shell requests through our locked writer.
             shell_bridge.bind_sender(self._write_frame)
@@ -455,14 +479,46 @@ class JsonRpcServer:
         self.conversation.messages.append(user_msg)
         self._persist_message(user_msg)
 
-        pre_turn = len(self.conversation.messages)
-        self.orchestrator.run_turn(self.conversation, requested_role=requested_role)
+        # §4.6 handoff: a PRIMARY-bound turn with no key yet routes to the Setup
+        # Assistant, with its system prompt injected FOR THIS TURN ONLY. The prompt
+        # is never persisted and never enters the stored transcript (which also can't
+        # hold a "system" role — messages.role CHECK is user/assistant/tool). Once a
+        # key exists, the probe passes and turns go to PRIMARY, history untouched —
+        # that IS the handoff; no transcript rewrite, no state to flip.
+        system_msg = None
+        if requested_role in (None, ModelRole.PRIMARY) and not self._primary_key_available():
+            requested_role = ModelRole.SETUP_ASSISTANT
+            if self._setup_prompt:
+                system_msg = Message(role="system", content=self._setup_prompt)
+                self.conversation.messages.insert(0, system_msg)
 
-        # Full-transcript persistence (§4.8 substrate): every message the turn
-        # appended, in order, so a later rewind can target any of them by id.
-        for msg in self.conversation.messages[pre_turn:]:
-            self._persist_message(msg)
+        pre_turn = len(self.conversation.messages)
+        try:
+            self.orchestrator.run_turn(self.conversation, requested_role=requested_role)
+            # Full-transcript persistence (§4.8 substrate): every message the turn
+            # appended, in order, so a later rewind can target any of them by id.
+            for msg in self.conversation.messages[pre_turn:]:
+                self._persist_message(msg)
+        finally:
+            # Drop the transient system prompt so it never lingers in history and
+            # in-memory messages stay aligned 1:1 with the persisted _message_ids.
+            if system_msg is not None:
+                try:
+                    self.conversation.messages.remove(system_msg)
+                except ValueError:
+                    pass
         self._respond(request_id, {"ok": True})
+
+    def _primary_key_available(self) -> bool:
+        probe = self._primary_key_probe
+        if probe is None:
+            return True   # CLI/tests: no probe wired -> treat PRIMARY as ready
+        try:
+            return bool(probe())
+        except Exception:
+            # A wedged/failing keychain probe shouldn't strand onboarding — fall
+            # back to the Setup Assistant path rather than erroring the turn.
+            return False
 
     def _ensure_conversation(self) -> None:
         if self._conversation_created:
@@ -650,7 +706,13 @@ class JsonRpcServer:
     # --- model roles ------------------------------------------------------
     def _available_roles(self) -> dict:
         return {
-            "roles": [role.value for role in self.model_router.available_roles()],
+            # SETUP_ASSISTANT is an internal onboarding role, never a user-selectable
+            # option in the model picker (§4.1.1) — surface only PRIMARY/LOCAL.
+            "roles": [
+                role.value
+                for role in self.model_router.available_roles()
+                if role is not ModelRole.SETUP_ASSISTANT
+            ],
             "localModels": self.model_router.available_local_models(),
         }
 
@@ -729,8 +791,26 @@ def main() -> None:
             key = ""
         return key or os.environ.get("ANTHROPIC_API_KEY", "")
 
+    def _primary_key_available() -> bool:
+        # §4.6 probe: reuse the exact PRIMARY getter — no key means this turn runs
+        # on the Setup Assistant relay instead. Read fresh each turn, so adding a
+        # key mid-conversation flips routing to PRIMARY with no restart.
+        return bool(_api_key_getter())
+
     provider = AnthropicProvider(model="claude-opus-4-8", api_key_getter=_api_key_getter)
-    model_router = ModelRouter(configured={ModelRole.PRIMARY: provider})
+    # SETUP_ASSISTANT is a distinct role that never holds a provider key — the shell
+    # signs each relay request with the device key (§5). It sits alongside PRIMARY;
+    # the §4.6 handoff is additive (PRIMARY populated), never a destructive swap.
+    setup_provider = SetupAssistantProvider(
+        shell_bridge=shell_bridge,
+        relay_url=os.environ.get("ADDISON_RELAY_URL", DEFAULT_RELAY_URL),
+    )
+    model_router = ModelRouter(
+        configured={
+            ModelRole.PRIMARY: provider,
+            ModelRole.SETUP_ASSISTANT: setup_provider,
+        }
+    )
 
     server = JsonRpcServer(
         reader=sys.stdin,
@@ -739,6 +819,8 @@ def main() -> None:
         store_factory=_store_factory,
         model_router=model_router,
         shell_bridge=shell_bridge,
+        primary_key_probe=_primary_key_available,
+        setup_prompt=load_setup_prompt(),
     )
     # TODO(step 11): use profile.onboarding to pick Setup Assistant vs. BYOK-first,
     #                and expose profile.{headless_cli,raw_diagnostics,...} to the frontend.

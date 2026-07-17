@@ -34,6 +34,7 @@ export const Method = {
   ShellReadScopedFile: "shell.readScopedFile",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
+  KeychainSignRelayRequest: "keychain.signRelayRequest",
 } as const;
 
 export type MethodName = (typeof Method)[keyof typeof Method];
