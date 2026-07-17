@@ -1,0 +1,476 @@
+// Addison — top-level app shell (design-doc §7.1).
+//
+// Single window, three regions: the message thread, the collapsible activity
+// strip, and the settings drawer (never required on first run). This component
+// owns the conversation/turn state and wires the Core → Frontend notifications
+// (streamed text, permission prompts, tool activity, local-setup progress) into
+// React state, and Frontend → Core actions back out through the typed `ipc`.
+//
+// Visual direction is binding (CLAUDE.md, design-doc §7.1): a calm warm-neutral
+// everyday-utility look, one green accent for primary actions only, real
+// typographic hierarchy for readers who are 54 and 68 — never a generic AI-chat
+// template.
+
+import { useEffect, useMemo, useState } from "react";
+import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
+import type { DisplayMessage, RoleOption } from "./types/ui";
+import {
+  ipc,
+  isEngineConnected,
+  storeProviderKey,
+  subscribe,
+  subscribeStatus,
+  type StreamChunkParams,
+  type LocalSetupProgressParams,
+} from "./ipc/client";
+import { ChatThread } from "./components/ChatThread";
+import { ActivityPanel } from "./components/ActivityPanel";
+import { SettingsDrawer } from "./components/SettingsDrawer";
+import { Banner } from "./components/Banner";
+
+const DEFAULT_ROLE_KEY = "addison.defaultRole";
+
+const WELCOME: DisplayMessage = {
+  id: "welcome",
+  role: "assistant",
+  content:
+    "Hello — I'm Addison. Tell me what you'd like help with, and I'll ask first " +
+    "before doing anything on your computer. You can always undo.",
+};
+
+export function App() {
+  const connected = useMemo(() => isEngineConnected(), []);
+
+  const [messages, setMessages] = useState<DisplayMessage[]>([WELCOME]);
+  const [isWorking, setIsWorking] = useState(false);
+  const [permission, setPermission] = useState<PermissionRequest | null>(null);
+
+  const [currentActivity, setCurrentActivity] = useState<ActivityUpdate | null>(null);
+  const [activities, setActivities] = useState<ActivityUpdate[]>([]);
+  const [hasUndoableActions, setHasUndoableActions] = useState(false);
+  const [lastUndoDetail, setLastUndoDetail] = useState<string | null>(null);
+
+  const [roles, setRoles] = useState<RoleOption[]>([]);
+  const [selectedRole, setSelectedRole] = useState<ModelRole>(loadDefaultRole());
+  const [selectedLocalModel, setSelectedLocalModel] = useState<string | undefined>(undefined);
+
+  const [statusBanner, setStatusBanner] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lastUserText, setLastUserText] = useState<string | null>(null);
+
+  // --- Wire up notifications + initial data on mount ------------------------
+  useEffect(() => {
+    if (!connected) return;
+    const unsubs: Array<() => void> = [];
+
+    unsubs.push(
+      subscribe(Method.ConversationStreamChunk, (p) => {
+        const params = p as StreamChunkParams;
+        const text = params.text ?? params.delta ?? params.content ?? "";
+        if (!text) return;
+        setMessages((prev) =>
+          prev.map((m) => (m.pending ? { ...m, content: m.content + text } : m)),
+        );
+      }),
+    );
+
+    unsubs.push(
+      subscribe(Method.PermissionRequestGrant, (p) => {
+        setPermission(normalizePermission(p));
+      }),
+    );
+
+    unsubs.push(
+      subscribe(Method.ToolActivityUpdate, (p) => {
+        const update: ActivityUpdate = {
+          label: typeof p.label === "string" ? p.label : "Working…",
+          toolId: typeof p.toolId === "string" ? p.toolId : "",
+        };
+        setCurrentActivity(update);
+        setActivities((prev) => [...prev, update]);
+        // Any tool step means something may be undoable; the core reports back
+        // plainly if there's actually nothing to put back.
+        setHasUndoableActions(true);
+      }),
+    );
+
+    unsubs.push(
+      subscribe(Method.ModelLocalSetupProgress, (p) => {
+        const params = p as LocalSetupProgressParams;
+        const note = params.message ?? params.label ?? params.stage;
+        if (note) setStatusBanner(note);
+      }),
+    );
+
+    unsubs.push(subscribeStatus((text) => setStatusBanner(text)));
+
+    refreshRoles();
+
+    return () => unsubs.forEach((u) => u());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected]);
+
+  // Transient shell notices fade out on their own so they don't linger.
+  useEffect(() => {
+    if (!statusBanner) return;
+    const t = setTimeout(() => setStatusBanner(null), 8000);
+    return () => clearTimeout(t);
+  }, [statusBanner]);
+
+  // Once roles load, make sure the selected role is one that's actually set up.
+  useEffect(() => {
+    const configured = roles.filter((r) => r.configured);
+    if (configured.length === 0) return;
+    if (!configured.some((r) => r.role === selectedRole)) {
+      setSelectedRole(configured[0].role);
+    }
+  }, [roles, selectedRole]);
+
+  function refreshRoles() {
+    if (!isEngineConnected()) return;
+    ipc
+      .availableRoles()
+      .then((res) => setRoles(normalizeRoles(res)))
+      .catch(() => {
+        /* leave the selector hidden if we can't read roles */
+      });
+  }
+
+  // --- Turn lifecycle -------------------------------------------------------
+  async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
+    const assistantId = uid();
+    setMessages((prev) => {
+      const base = opts.isRetry
+        ? dropTrailingAssistant(prev)
+        : [...prev, { id: uid(), role: "user", content: text } as DisplayMessage];
+      return [...base, { id: assistantId, role: "assistant", content: "", pending: true }];
+    });
+
+    setLastUserText(text);
+    setActivities([]);
+    setCurrentActivity(null);
+    setPermission(null);
+    setIsWorking(true);
+
+    try {
+      const res = await ipc.sendMessage(text, selectedRole, selectedLocalModel);
+      const finalText = extractFinalText(res);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, pending: false, content: finalText ?? m.content }
+            : m,
+        ),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Something went wrong.";
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                pending: false,
+                failed: true,
+                content:
+                  m.content ||
+                  `I couldn't finish that. ${message} You can try again in a moment.`,
+              }
+            : m,
+        ),
+      );
+    } finally {
+      setIsWorking(false);
+      setCurrentActivity(null);
+    }
+  }
+
+  function handleSend(text: string) {
+    if (!connected) {
+      setStatusBanner("Addison's engine isn't connected yet, so I can't reply.");
+      return;
+    }
+    void runTurn(text);
+  }
+
+  function handleRetry() {
+    if (!connected || isWorking || !lastUserText) return;
+    void runTurn(lastUserText, { isRetry: true });
+  }
+
+  function handleStop() {
+    // The v1 IPC contract has no core-side cancel method, so Stop halts the
+    // webview turn: it stops accepting streamed text and re-enables the input.
+    setIsWorking(false);
+    setCurrentActivity(null);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.pending
+          ? { ...m, pending: false, content: m.content || "(Stopped.)" }
+          : m,
+      ),
+    );
+  }
+
+  function handleRespondPermission(allow: boolean) {
+    const p = permission;
+    setPermission(null);
+    if (!p) return;
+    ipc.respondToPermission(p.toolId, allow).catch(() => {
+      setStatusBanner("I couldn't send that answer. Please try again.");
+    });
+  }
+
+  function handleRewindTo(messageId: string) {
+    // Reset the conversation to that point right away, then let the core
+    // confirm / return the authoritative history.
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId);
+      return idx === -1 ? prev : prev.slice(0, idx + 1);
+    });
+    setPermission(null);
+    ipc
+      .rewindConversation(messageId)
+      .then((res) => {
+        const msgs = extractMessages(res);
+        if (msgs) setMessages(msgs);
+      })
+      .catch(() => {
+        /* keep the local reset if the core doesn't return history */
+      });
+  }
+
+  function handleUndoLastAction() {
+    ipc
+      .undoLastAction()
+      .then((res) => {
+        setLastUndoDetail(extractDetail(res) ?? "Put things back the way they were.");
+      })
+      .catch((err) => {
+        setLastUndoDetail(err instanceof Error ? err.message : "Couldn't undo that.");
+      });
+  }
+
+  function handleSelectRole(role: ModelRole) {
+    setSelectedRole(role);
+    if (role !== "local") setSelectedLocalModel(undefined);
+    ipc.setRoleForNextMessage(role, role === "local" ? selectedLocalModel : undefined).catch(() => {});
+  }
+
+  function handleSelectLocalModel(modelId: string) {
+    setSelectedLocalModel(modelId);
+    ipc.setRoleForNextMessage("local", modelId).catch(() => {});
+  }
+
+  function handleChangeDefaultRole(role: ModelRole) {
+    setSelectedRole(role);
+    saveDefaultRole(role);
+    ipc.setRoleForNextMessage(role).catch(() => {});
+  }
+
+  async function handleSaveKey(role: string, provider: string, key: string) {
+    await storeProviderKey(role, provider, key);
+    refreshRoles();
+  }
+
+  // --- Render ---------------------------------------------------------------
+  return (
+    <div className="flex h-full flex-col bg-paper text-ink">
+      <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
+        <div className="flex items-baseline gap-2.5">
+          <span className="text-xl font-semibold tracking-tight text-ink">Addison</span>
+          <span className="text-sm text-muted">your calm helper</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setSettingsOpen(true)}
+          className="rounded-lg border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+        >
+          Settings
+        </button>
+      </header>
+
+      {!connected && (
+        <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+      )}
+      {statusBanner && (
+        <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+      )}
+
+      <main className="flex min-h-0 flex-1 flex-col">
+        <ChatThread
+          messages={messages}
+          isWorking={isWorking}
+          connected={connected}
+          permission={permission}
+          onRespondPermission={handleRespondPermission}
+          onSend={handleSend}
+          onStop={handleStop}
+          onRetry={handleRetry}
+          retryAvailable={!isWorking && Boolean(lastUserText)}
+          onRewindTo={handleRewindTo}
+          roles={roles}
+          selectedRole={selectedRole}
+          selectedLocalModel={selectedLocalModel}
+          onSelectRole={handleSelectRole}
+          onSelectLocalModel={handleSelectLocalModel}
+          activityStrip={
+            <ActivityPanel
+              isWorking={isWorking}
+              current={currentActivity}
+              activities={activities}
+              hasUndoableActions={hasUndoableActions}
+              onUndoLastAction={handleUndoLastAction}
+              lastUndoDetail={lastUndoDetail}
+            />
+          }
+        />
+      </main>
+
+      <SettingsDrawer
+        open={settingsOpen}
+        connected={connected}
+        roles={roles}
+        defaultRole={selectedRole}
+        onChangeDefaultRole={handleChangeDefaultRole}
+        onSaveKey={handleSaveKey}
+        onClose={() => setSettingsOpen(false)}
+      />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Small pure helpers — defensive parsing of free-form JSON-RPC payloads, since
+// the Python side's result/notification shapes aren't pinned in protocol.ts.
+// ---------------------------------------------------------------------------
+function uid(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function dropTrailingAssistant(list: DisplayMessage[]): DisplayMessage[] {
+  const copy = [...list];
+  while (copy.length && copy[copy.length - 1].role === "assistant") copy.pop();
+  return copy;
+}
+
+function loadDefaultRole(): ModelRole {
+  try {
+    const stored = localStorage.getItem(DEFAULT_ROLE_KEY);
+    if (stored === "primary" || stored === "local") return stored;
+  } catch {
+    /* localStorage may be unavailable; fall through to the default */
+  }
+  return "primary";
+}
+
+function saveDefaultRole(role: ModelRole): void {
+  try {
+    localStorage.setItem(DEFAULT_ROLE_KEY, role);
+  } catch {
+    /* non-fatal */
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function normalizePermission(p: Record<string, unknown>): PermissionRequest {
+  const req = asRecord(p.request) ?? p;
+  const riskTier = req.riskTier;
+  return {
+    toolId: typeof req.toolId === "string" ? req.toolId : "",
+    label: typeof req.label === "string" ? req.label : "Addison would like to do something",
+    description:
+      typeof req.description === "string"
+        ? req.description
+        : "Addison is asking for your permission to continue.",
+    riskTier: riskTier === "medium" || riskTier === "high" ? riskTier : "low",
+  };
+}
+
+function roleLabel(role: string): string {
+  if (role === "local") return "On this computer";
+  if (role === "primary") return "Cloud";
+  return role;
+}
+
+function normalizeModel(m: unknown): { id: string; label: string } | null {
+  if (typeof m === "string") return { id: m, label: m };
+  const obj = asRecord(m);
+  if (!obj) return null;
+  const id = obj.id ?? obj.name;
+  if (typeof id !== "string") return null;
+  return { id, label: typeof obj.label === "string" ? obj.label : id };
+}
+
+function normalizeRoles(result: unknown): RoleOption[] {
+  const record = asRecord(result);
+  const list = Array.isArray(result)
+    ? result
+    : record && Array.isArray(record.roles)
+      ? (record.roles as unknown[])
+      : [];
+
+  const out: RoleOption[] = [];
+  for (const item of list) {
+    if (typeof item === "string") {
+      if (item !== "primary" && item !== "local") continue;
+      out.push({ role: item, label: roleLabel(item), configured: true });
+      continue;
+    }
+    const obj = asRecord(item);
+    if (!obj) continue;
+    const role = (obj.role ?? obj.id) as unknown;
+    if (role !== "primary" && role !== "local") continue; // setup_assistant isn't user-pickable
+    const models = Array.isArray(obj.models)
+      ? (obj.models.map(normalizeModel).filter(Boolean) as { id: string; label: string }[])
+      : undefined;
+    out.push({
+      role,
+      label: typeof obj.label === "string" ? obj.label : roleLabel(role),
+      configured: obj.configured !== false,
+      models,
+    });
+  }
+  return out;
+}
+
+function extractFinalText(result: unknown): string | null {
+  const obj = asRecord(result);
+  if (!obj) return typeof result === "string" ? result : null;
+  if (typeof obj.text === "string") return obj.text;
+  if (typeof obj.content === "string") return obj.content;
+  const msg = asRecord(obj.message);
+  if (msg && typeof msg.content === "string") return msg.content;
+  return null;
+}
+
+function extractDetail(result: unknown): string | null {
+  const obj = asRecord(result);
+  if (!obj) return typeof result === "string" ? result : null;
+  const detail = obj.detail ?? obj.message ?? obj.text;
+  return typeof detail === "string" ? detail : null;
+}
+
+function extractMessages(result: unknown): DisplayMessage[] | null {
+  const obj = asRecord(result);
+  const raw = Array.isArray(result) ? result : obj && Array.isArray(obj.messages) ? obj.messages : null;
+  if (!raw) return null;
+  const out: DisplayMessage[] = [];
+  for (const item of raw) {
+    const m = asRecord(item);
+    if (!m) continue;
+    const role = m.role;
+    if (role !== "user" && role !== "assistant" && role !== "tool") continue;
+    out.push({
+      id: typeof m.id === "string" ? m.id : uid(),
+      role,
+      content: typeof m.content === "string" ? m.content : "",
+    });
+  }
+  return out;
+}

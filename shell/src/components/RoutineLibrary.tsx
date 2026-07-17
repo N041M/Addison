@@ -1,33 +1,18 @@
 // Routine library — engineering-spec §6.5.
-// Lists saved Routines: name, description, last-run time, "Run now" (prompts for
-// variables without defaults, then calls the engine), and edit/delete.
-// v1 editing = name/description/variable-defaults only; structural changes are
-// "delete and recreate via conversation" (§6.5, §10).
+//
+// TODO(step 8): the Routine engine (RoutineBuilder + RoutineEngine) lands in
+// build step 8, only once steps 2–6 are solid. This pane is intentionally left
+// as a stub for step 7 — no wiring, no `ipc.runRoutine`, no variable prompts —
+// so the shell has a place for it without pulling step-8 behaviour forward.
 
-import { ipc } from "../ipc/client";
-
-interface RoutineSummary {
-  id: string;
-  name: string;
-  description: string;
-  lastRunAt?: number;
-}
-
-interface Props {
-  routines: RoutineSummary[];
-}
-
-export function RoutineLibrary({ routines }: Props) {
+export function RoutineLibrary() {
   return (
-    <div className="routine-library">
-      {routines.map((r) => (
-        <div key={r.id} className="routine-card">
-          <h4>{r.name}</h4>
-          <p>{r.description}</p>
-          <button onClick={() => ipc.runRoutine(r.id, {})}>Run now</button>
-          {/* TODO(step 8): prompt for variables without defaults before running */}
-        </div>
-      ))}
+    <div className="rounded-card border border-line bg-surface p-4">
+      <h3 className="text-base font-semibold text-ink">Saved routines</h3>
+      <p className="mt-1 text-sm text-muted">
+        Once you've done something a few times, Addison will be able to save it
+        as a routine you can run again. This arrives in a later update.
+      </p>
     </div>
   );
 }

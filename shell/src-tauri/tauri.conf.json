@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Addison",
         "width": 1000,
         "height": 720,
@@ -26,12 +27,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "comment": "Install to user local app-data dir — no admin prompt (design-doc §7.8). Signing/notarization is Phase 3.",
     "icon": ["icons/icon.png"]
   },
-  "plugins": {
-    "updater": {
-      "comment": "Signed manifest endpoint + pubkey configured in Phase 3 (design-doc §7.7)."
-    }
-  }
+  "plugins": {}
 }

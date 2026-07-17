@@ -4,7 +4,10 @@ Composes ONLY. Opens the draft in the user's own mail/messaging app for them to
 review and send. Addison never presses send — there is no send-capable tool in
 v1 by design. Undo = discard the draft.
 
-STATUS: partial. undo() contract is real so the registry accepts it at MEDIUM.
+Like save_file, the draft is opened through the shell bridge (engineering-spec
+§1.3). ``execute()`` uses ``context.shell_bridge``; ``undo()`` uses the bridge
+injected at construction (build_registry supplies it), never a no-op — a MEDIUM
+tool with a fake undo would break CLAUDE.md §2.
 """
 
 from __future__ import annotations
@@ -16,9 +19,12 @@ from agent_core.tools.base import (
     ActionSnapshot,
     ExecutionContext,
     RiskTier,
+    ShellBridge,
     ToolDefinition,
     ToolResult,
 )
+
+_NO_SHELL_MESSAGE = "Drafting needs the desktop shell; not available in this mode."
 
 
 class DraftMessageTool:
@@ -38,14 +44,19 @@ class DraftMessageTool:
         },
     )
 
+    def __init__(self, shell_bridge: ShellBridge | None = None) -> None:
+        # Injected once by build_registry, used ONLY by undo(); execute() reads
+        # the bridge off the ExecutionContext instead.
+        self._undo_bridge = shell_bridge
+
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         if context.shell_bridge is None:
-            return ToolResult(
-                success=False,
-                content="Drafting needs the desktop shell; not available in this mode.",
-            )
-        # TODO(step 5): shell_bridge.open_draft(...) via mailto:/app handoff.
-        draft_ref = None  # opaque reference to the opened draft, for undo
+            return ToolResult(success=False, content=_NO_SHELL_MESSAGE)
+        draft_ref = context.shell_bridge.open_draft(
+            args.get("to", ""),
+            args.get("subject", ""),
+            args["body"],
+        )
         snapshot = ActionSnapshot(
             id=str(uuid.uuid4()),
             tool_call_id="",
@@ -53,10 +64,10 @@ class DraftMessageTool:
             undo_payload={"draft_ref": draft_ref},
             created_at=int(time.time()),
         )
-        raise NotImplementedError("Wire to shell_bridge.open_draft — spec §11 step 5.")
-        return ToolResult(success=True, content=draft_ref, snapshot=snapshot)  # noqa: unreachable
+        return ToolResult(success=True, content=draft_ref, snapshot=snapshot)
 
     def undo(self, snapshot: ActionSnapshot) -> None:
         """Discard the draft this action opened."""
-        # TODO(step 6): shell_bridge.discard_draft(snapshot.undo_payload["draft_ref"]).
-        raise NotImplementedError("Wire to shell_bridge.discard_draft — spec §11 step 6.")
+        if self._undo_bridge is None:
+            raise RuntimeError("Can't discard that draft — the desktop shell isn't available.")
+        self._undo_bridge.discard_draft(snapshot.undo_payload["draft_ref"])

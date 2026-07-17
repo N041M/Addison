@@ -54,16 +54,25 @@ class Orchestrator:
         permission_gate: PermissionGate,
         undo_manager: UndoManager,
         stream_to_frontend=lambda text: None,
+        on_activity=lambda tool_id, label: None,
+        shell_bridge=None,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
         self.permission_gate = permission_gate
         self.undo_manager = undo_manager
         self.stream_to_frontend = stream_to_frontend
+        # Emitted right before each tool runs so the shell can drive the Activity
+        # Panel (tool.activityUpdate, §7). The shell_bridge is the tools' only
+        # route to OS effects (§1.3); None in CLI/test mode.
+        self.on_activity = on_activity
+        self.shell_bridge = shell_bridge
 
     def run_turn(self, conversation: Conversation, requested_role: ModelRole | None = None) -> None:
         provider = self.model_router.resolve(requested_role)   # per-turn resolution, §4.1.1
-        context = ExecutionContext(conversation_id=conversation.id)
+        context = ExecutionContext(
+            conversation_id=conversation.id, shell_bridge=self.shell_bridge
+        )
         while True:
             response = provider.send(
                 messages=conversation.messages,
@@ -81,6 +90,7 @@ class Orchestrator:
                         result = ToolResult(success=False, content="User declined this permission.")
                     else:
                         tool = self.tool_registry.get(call.tool_id)
+                        self.on_activity(call.tool_id, tool.definition.label)
                         result = tool.execute(call.args, context)
                         if result.snapshot:
                             result.snapshot.tool_call_id = call.id

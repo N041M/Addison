@@ -7,7 +7,10 @@ CREATE TABLE IF NOT EXISTS conversations (
     id              TEXT PRIMARY KEY,       -- uuid4
     title           TEXT,
     started_at      INTEGER NOT NULL,       -- unix epoch seconds
-    provider_id     TEXT NOT NULL           -- which ModelProvider was active
+    provider_id     TEXT NOT NULL,          -- which ModelProvider was active
+    -- §4.8 substrate (v2 Context Budget Manager). Unused by v1 logic:
+    summary         TEXT,                   -- condensed older history, set on continuation
+    continued_from_conversation_id TEXT REFERENCES conversations(id)  -- lineage
 );
 
 CREATE TABLE IF NOT EXISTS messages (
