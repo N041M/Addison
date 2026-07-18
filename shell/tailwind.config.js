@@ -97,7 +97,13 @@ export default {
       boxShadow: {
         // The only two shadows in the app.
         soft: "0 1px 4px rgba(34,38,31,.05)", // composer / cards
-        pine: "0 6px 18px rgba(30,43,37,.18)", // setup banner lift
+        // Setup-banner lift, reworked 2026-07-19 (owner: the handoff's
+        // 0 6px 18px/.18 smeared on light paper) — now a tight, quiet edge in
+        // the same register as `soft`. Named `banner`, NOT `pine`: a token name
+        // shared between `colors` and `boxShadow` makes Tailwind emit
+        // `shadow-pine` twice (box-shadow AND shadow-color), and the color
+        // variant wins with an OPAQUE shadow — that was the original smear.
+        banner: "0 1px 6px rgba(30,43,37,.10)",
       },
     },
   },

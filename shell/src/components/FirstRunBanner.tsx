@@ -31,7 +31,7 @@ export function FirstRunBanner({ step, onStartSetup, onSkip, showGreeting }: Pro
     <div className="flex flex-col gap-9">
       <section
         aria-label="First-time setup"
-        className="rounded-banner bg-pine px-7 py-6 text-cream shadow-pine"
+        className="rounded-banner bg-pine px-7 py-6 text-cream shadow-banner"
       >
         <div className="flex items-baseline justify-between gap-3">
           <p className="text-[10.5px] font-semibold uppercase tracking-[0.11em] text-pine-soft">
