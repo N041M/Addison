@@ -72,18 +72,28 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **Plain language, no jargon** in any user-facing string (tool labels,
   permission cards, errors). No stack traces reach the user — errors become a
   plain message + one suggested next step.
-- **UI (step 7+): distinct, non-AI look** (design-doc §7.1). Never the generic
-  AI-chat aesthetic (purple gradients, glassmorphism, sparkle/bot icons,
-  shimmer effects) and never a model vendor's branding (no warm
-  cream/terracotta). The direction is a **dark, terminal-adjacent everyday-utility
-  look** — minimal chrome, system-monospace accents (wordmark, labels,
-  timestamps, code; body stays sans), one restrained steel-blue accent for
-  primary actions, sharp corners (no rounded cards), no decorative taglines,
-  compact-but-legible type (16px root) for older readers (personas 54 and 68) —
-  dark but calm and legible, never hacker-neon. No external fonts (strict CSP —
-  system stacks only). The tokens in **shell/tailwind.config.js are
-  authoritative**. This **supersedes design-doc §7.1's light cool-slate palette
-  (amended 2026-07)**; §7.1's layout/IA and accessibility rules are unchanged.
+- **UI (step 7+): distinct, non-AI look — "Fern" direction (v3, amended
+  2026-07)** (design-doc §7.1). Never the generic AI-chat aesthetic (purple
+  gradients, glassmorphism, sparkle/bot icons, shimmer) and never a model
+  vendor's branding (no cream/terracotta, no steel blue). The direction is a
+  **warm, calm "correspondence" look**: warm paper neutrals + one **fern-green**
+  accent (Addison's voice, primary actions, live state — never decoration), the
+  message body in a **serif** (Source Serif 4) beside a plain **Public Sans** UI
+  and **IBM Plex Mono** for machine facts only. One honest **shape rule** —
+  **blocky things are live annotations** (square edges, 2px left rules, small-caps
+  labels: "Addison's work", section labels, active sidebar item) and **rounded
+  things are yours to own/act on** (6px small buttons · 8px inputs/rows · 10px
+  cards/composer · 12px banners · 999px pills). **Light by default with a
+  class-driven dark mode** (`darkMode:"class"`, persisted as `addison.theme`);
+  type stays compact-but-legible for older readers (personas 54 and 68). Fonts
+  are the **one exception to "system stacks only"**: the three families are
+  **bundled as OFL woff2** in `shell/src/assets/fonts/` with `@font-face` —
+  CSP-safe because bundled, never hotlinked (strict `default-src 'self'`), always
+  with system fallbacks. **`docs/design-brief-fern` is authoritative** for tokens,
+  type, shape, and copy; the tokens in **shell/tailwind.config.js** implement it.
+  This **supersedes the earlier dark terminal-adjacent look** (which superseded
+  design-doc §7.1's cool-slate palette); §7.1's layout/IA and accessibility rules
+  are unchanged.
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 

@@ -29,7 +29,7 @@ export function HistoryView({ conversations, currentConversationId, onOpen, onBa
   return (
     <div className="thread-scroll min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-6 py-6">
-        <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-muted">
+        <h2 className="mb-4 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-faint">
           Your conversations
         </h2>
 
@@ -40,19 +40,19 @@ export function HistoryView({ conversations, currentConversationId, onOpen, onBa
             {conversations.map((c) => {
               const isCurrent = currentConversationId != null && c.id === currentConversationId;
               return (
-                <li key={c.id} className="border-b border-line/70 last:border-b-0">
+                <li key={c.id}>
                   <button
                     type="button"
                     onClick={() => onOpen(c.id)}
                     className={
-                      "flex w-full items-baseline justify-between gap-4 px-3 py-3.5 text-left hover:bg-surface " +
-                      (isCurrent ? "bg-accent-tint" : "")
+                      "flex w-full items-baseline justify-between gap-4 rounded px-3 py-2.5 text-left hover:bg-hair " +
+                      (isCurrent ? "bg-fern-tint" : "")
                     }
                   >
                     <span className="flex min-w-0 items-baseline gap-2.5">
-                      <span className="truncate text-base text-ink">{c.title}</span>
+                      <span className="truncate text-[13px] text-ink">{c.title}</span>
                       {isCurrent && (
-                        <span className="shrink-0 text-xs font-semibold uppercase tracking-wide text-accent-dark">
+                        <span className="shrink-0 text-[10.5px] font-semibold uppercase tracking-[0.1em] text-fern-deep">
                           Current
                         </span>
                       )}

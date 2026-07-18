@@ -6,11 +6,13 @@
 // (streamed text, permission prompts, tool activity, local-setup progress) into
 // React state, and Frontend → Core actions back out through the typed `ipc`.
 //
-// Visual direction is binding (CLAUDE.md; design-doc §7.1 as amended 2026-07): a
-// dark, terminal-adjacent everyday-utility look — minimal chrome, system-monospace
-// accents, sharp corners, one restrained steel-blue accent for primary actions
-// only, no decorative taglines, real typographic hierarchy for readers who are 54
-// and 68 — never a generic AI-chat template, never a model vendor's branding.
+// Visual direction is binding (CLAUDE.md; Fern direction, docs/design-brief-fern,
+// amended 2026-07 v3): warm paper neutrals + one fern-green accent, a serif
+// "correspondence" voice (Source Serif 4) beside a plain Public Sans UI, blocky
+// live annotations vs. rounded ownable/actionable things, real typographic
+// hierarchy for readers who are 54 and 68 — never a generic AI-chat template,
+// never a model vendor's branding. Theme is class-driven (light default) and
+// persisted in localStorage ("addison.theme").
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
@@ -44,10 +46,14 @@ import {
 } from "./components/RoutineProposalCard";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { Banner } from "./components/Banner";
+import { BellLogo } from "./components/BellLogo";
 
 const DEFAULT_ROLE_KEY = "addison.defaultRole";
 const CLOUD_MODEL_KEY = "addison.cloudModel";
 const EFFORT_KEY = "addison.effort";
+const THEME_KEY = "addison.theme";
+
+type Theme = "light" | "dark";
 
 const WELCOME: DisplayMessage = {
   id: "welcome",
@@ -94,6 +100,10 @@ export function App() {
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Appearance (Fern direction). Light by default; the class on <html> drives the
+  // whole palette. The inline script in index.html sets it before first paint to
+  // avoid a flash; this keeps it in sync and persisted when the user toggles.
+  const [theme, setThemeState] = useState<Theme>(loadTheme);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
@@ -213,6 +223,24 @@ export function App() {
     const t = setTimeout(() => setStatusBanner(null), 8000);
     return () => clearTimeout(t);
   }, [statusBanner]);
+
+  // Reflect the chosen theme onto <html> (the Tailwind `dark:` selector keys off
+  // this class) and persist it. The inline bg matches so a reload paints the
+  // right color before the stylesheet is parsed.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle("dark", theme === "dark");
+    root.style.backgroundColor = theme === "dark" ? "#171D1A" : "#F6F5F1";
+    try {
+      localStorage.setItem(THEME_KEY, theme);
+    } catch {
+      /* non-fatal */
+    }
+  }, [theme]);
+
+  function setTheme(next: Theme) {
+    setThemeState(next);
+  }
 
   // Once roles load, make sure the selected role is one that's actually set up.
   useEffect(() => {
@@ -686,14 +714,17 @@ export function App() {
   // --- Render ---------------------------------------------------------------
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
-      <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
-        <span className="font-mono text-xl font-semibold tracking-tight text-ink">Addison</span>
-        <div className="flex items-center gap-4">
+      <header className="flex items-center justify-between border-b border-line bg-side px-6 py-3">
+        <span className="flex items-center gap-2 text-ink">
+          <BellLogo size={17} className="text-fern" />
+          <span className="text-base font-bold tracking-[-0.02em]">Addison</span>
+        </span>
+        <div className="flex items-center gap-5">
           <button
             type="button"
             onClick={handleNewChat}
             disabled={!connected || controlsBusy}
-            className="text-sm font-medium text-ink-soft hover:text-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-[13px] font-medium text-ink-soft hover:text-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
           >
             New chat
           </button>
@@ -701,14 +732,14 @@ export function App() {
             type="button"
             onClick={() => (view === "history" ? setView("chat") : handleShowHistory())}
             disabled={!connected || controlsBusy}
-            className="text-sm font-medium text-ink-soft hover:text-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+            className="text-[13px] font-medium text-ink-soft hover:text-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
           >
             History
           </button>
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
-            className="border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+            className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[13px] font-medium text-ink-soft hover:border-muted"
           >
             Settings
           </button>
@@ -795,6 +826,8 @@ export function App() {
         onSetProfile={handleSetProfile}
         diagnostics={diagnostics}
         onClearDiagnostics={clearDiagnostics}
+        theme={theme}
+        onSetTheme={setTheme}
         onClose={() => setSettingsOpen(false)}
       />
     </div>
@@ -841,6 +874,17 @@ function saveDefaultRole(role: ModelRole): void {
   } catch {
     /* non-fatal */
   }
+}
+
+// Appearance persists like the default role. Light unless the user chose dark.
+function loadTheme(): Theme {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    if (t === "light" || t === "dark") return t;
+  } catch {
+    /* localStorage may be unavailable; fall through to the default */
+  }
+  return "light";
 }
 
 function loadStored(key: string): string | undefined {

@@ -3,10 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Addison</title>
+    <script>
+      // Theme bootstrap — runs before the stylesheet loads so there's no flash
+      // of the wrong theme. Reads "addison.theme" ("light" | "dark", default
+      // light), sets the class the Tailwind palette keys off, and paints the
+      // background immediately. App.tsx keeps localStorage in sync afterwards.
+      (function () {
+        try {
+          var t = localStorage.getItem("addison.theme");
+          if (t !== "light" && t !== "dark") t = "light";
+          var root = document.documentElement;
+          if (t === "dark") root.classList.add("dark");
+          root.style.backgroundColor = t === "dark" ? "#171D1A" : "#F6F5F1";
+        } catch (e) {
+          document.documentElement.style.backgroundColor = "#F6F5F1";
+        }
+      })();
+    </script>
   </head>
-  <body style="background-color: #15171b">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

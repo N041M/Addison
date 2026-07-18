@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#f6f5f1;color:#22261f;font-family:"Public Sans",system-ui,sans-serif;line-height:1.6}
+  a{color:#2a5142}a:hover{color:#33604f}
+</style>
+</helmet>
+<div style="max-width:860px;margin:0 auto;padding:56px 40px 80px" data-screen-label="Addison Brand Book">
+  <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#9a9d92">Brand & UI guidelines · v1 · July 2026</p>
+  <h1 style="margin:10px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:44px;font-weight:500;letter-spacing:-0.015em">Addison</h1>
+  <p style="margin:12px 0 0;font-size:17px;color:#4d5147;max-width:620px">A local-first agent that anyone can trust. The interface reads like calm correspondence: paper surfaces, a fern accent, serif conversation, and one honest rule — <strong>blocky things are live annotations; rounded things are yours to own or act on.</strong></p>
+
+  <div style="margin:40px 0 0;border-left:2px solid #d8e5de;padding-left:18px">
+    <p style="margin:0 0 8px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">Principles</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 28px;max-width:680px">
+      <p style="margin:0;font-size:14px"><strong>Asks first.</strong> Consent is one calm question with two answers — never a modal, never jargon.</p>
+      <p style="margin:0;font-size:14px"><strong>Shows its work.</strong> Every step is listed in plain words while it happens.</p>
+      <p style="margin:0;font-size:14px"><strong>Everything undoes.</strong> Undo is always one visible click away.</p>
+      <p style="margin:0;font-size:14px"><strong>One surface, two depths.</strong> Simple and Developer differ in what's shown, never in safety.</p>
+    </div>
+  </div>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Logo — the service bell</h2>
+  <div style="margin-top:16px;display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+    <div style="width:88px;height:88px;border-radius:20px;background:#e4ede8;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="52" height="52" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="#33604f"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="#33604f"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="#33604f"></rect></svg></div>
+    <div style="width:88px;height:88px;border-radius:20px;background:#1e2b25;display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="52" height="52" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="#e9ede9"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="#e9ede9"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="#e9ede9"></rect></svg></div>
+    <p style="margin:2px 0 0;font-size:13px;color:#4d5147;max-width:420px">Ring, and Addison comes — it acts when asked, never uninvited. Three shapes (knob, dome, base), fern on tint or cream on pine, monochrome only, never with effects. Lockup: bell + "Addison" in Source Serif 4 (500). See <a href="Addison%20Logo.dc.html">the logo sheet</a> for variants and small sizes.</p>
+  </div>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Color</h2>
+  <p style="margin:8px 0 0;font-size:14px;color:#4d5147;max-width:620px">Warm paper neutrals and one fern-green accent. Green is reserved for Addison's voice, primary actions, and live state — never decoration. Deliberately distant from vendor branding: no cream/terracotta, no purple, no steel blue.</p>
+  <p style="margin:20px 0 8px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">Light</p>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+    <div><div style="height:56px;border-radius:8px;background:#f6f5f1;border:1px solid #e3e1d8"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">paper</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#F6F5F1</p></div>
+    <div><div style="height:56px;border-radius:8px;background:#fdfcfa;border:1px solid #e3e1d8"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">surface</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#FDFCFA</p></div>
+    <div><div style="height:56px;border-radius:8px;background:#e3e1d8"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">line</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#E3E1D8</p></div>
+    <div><div style="height:56px;border-radius:8px;background:#22261f"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">ink</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#22261F</p></div>
+    <div><div style="height:56px;border-radius:8px;background:#33604f"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">fern</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#33604F</p></div>
+    <div><div style="height:56px;border-radius:8px;background:#e4ede8"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">fern-tint</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#E4EDE8</p></div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:10px">
+    <div><div style="height:36px;border-radius:8px;background:#4d5147"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">ink-soft</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#4D5147</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#6b6f64"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">muted</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#6B6F64</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#9a9d92"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">faint</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#9A9D92</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#2a5142"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">fern-deep</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#2A5142</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#d8e5de"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">rule</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#D8E5DE</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#1e2b25"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600">pine (banner)</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#6b6f64">#1E2B25</p></div>
+  </div>
+  <p style="margin:20px 0 8px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">Dark</p>
+  <div style="background:#171d1a;border-radius:12px;padding:14px;display:grid;grid-template-columns:repeat(6,1fr);gap:8px">
+    <div><div style="height:36px;border-radius:8px;background:#171d1a;border:1px solid #2e3a33"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">paper</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#171D1A</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#1f2723"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">surface</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#1F2723</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#2e3a33"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">line</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#2E3A33</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#e7ebe7"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">ink</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#E7EBE7</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#7fb59a"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">fern</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#7FB59A</p></div>
+    <div><div style="height:36px;border-radius:8px;background:#223229"></div><p style="margin:5px 0 0;font-size:11px;font-weight:600;color:#c3cdc6">fern-tint</p><p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#92a099">#223229</p></div>
+  </div>
+  <p style="margin:10px 0 0;font-size:12.5px;color:#6b6f64">Dark mode inverts value, not hue: same fern family, lightened for contrast; primary buttons flip to dark text (#14201A) on light fern. Body text is AA at 15px in both modes.</p>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Typography</h2>
+  <div style="margin-top:16px;display:flex;flex-direction:column;gap:14px">
+    <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 20px">
+      <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:24px">Source Serif 4 — the conversation</p>
+      <p style="margin:4px 0 0;font-size:12.5px;color:#6b6f64">Messages, greetings, section titles. 17px/1.7 for message text; 500 weight for display. The serif is what makes threads read as correspondence, not chat.</p>
+    </div>
+    <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 20px">
+      <p style="margin:0;font-size:20px;font-weight:600">Public Sans — the interface</p>
+      <p style="margin:4px 0 0;font-size:12.5px;color:#6b6f64">Everything interactive: buttons, labels, sidebar, settings. 15px body, 13px controls, 10.5px small-caps section labels (letter-spacing .09–.11em, uppercase, faint).</p>
+    </div>
+    <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 20px">
+      <p style="margin:0;font-family:'IBM Plex Mono',monospace;font-size:16px">IBM Plex Mono — the machine</p>
+      <p style="margin:4px 0 0;font-size:12.5px;color:#6b6f64">Numbers and system facts only: token counts, latency, model tags, Developer diagnostics. Never for prose.</p>
+    </div>
+  </div>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Shape language</h2>
+  <p style="margin:8px 0 0;font-size:14px;color:#4d5147;max-width:640px">The blocky/rounded mix is systematic, not decorative:</p>
+  <div style="margin-top:14px;display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div style="border-left:2px solid #d8e5de;padding-left:16px">
+      <p style="margin:0;font-size:13px;font-weight:600">Blocky = live annotation</p>
+      <p style="margin:4px 0 0;font-size:12.5px;color:#6b6f64">Square edges, 2px left rules, small-caps labels. Used for: "Addison's work" step lists, active sidebar item, section labels. The rule spans <strong>only its list</strong> — it ends where the list ends.</p>
+    </div>
+    <div style="background:#e4ede8;border-radius:10px;padding:14px 16px">
+      <p style="margin:0;font-size:13px;font-weight:600">Rounded = ownable / actionable</p>
+      <p style="margin:4px 0 0;font-size:12.5px;color:#4d5147">Radius 10px cards, 999px pills. Used for: widgets, consent cards, composer, buttons, setup banner (12px). If the user can click it, run it, or keep it — it's rounded.</p>
+    </div>
+  </div>
+  <p style="margin:14px 0 0;font-size:13px;color:#4d5147">Radius scale: <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">6</span> small buttons · <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">8</span> inputs/rows · <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">10</span> cards · <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">12</span> banners · <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">999</span> pills. Shadows near-zero: <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">0 1px 4px rgba(34,38,31,.05)</span>; the pine banner alone gets a soft lift.</p>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Layout & components</h2>
+  <div style="margin-top:14px;display:flex;flex-direction:column;gap:10px;font-size:14px;color:#4d5147">
+    <p style="margin:0"><strong>Three columns:</strong> sidebar 216px (chats, Settings, profile) · conversation ≤580px, independently scrolling · widget rail 270px, independently scrolling, hideable («/» toggle), overflow behind a stacked-edge tray tab.</p>
+    <p style="margin:0"><strong>Messages:</strong> no bubbles. Small-caps sender label (YOU faint / ADDISON fern) over serif text. Hover reveals "Rewind to here".</p>
+    <p style="margin:0"><strong>Consent card:</strong> fern-tint, rounded, one question ("Allow Addison to save…?"), one plain consequence line ("One new file. You can undo it afterwards."), pill Allow + text Not now. Rendered in the rail near the step it blocks; inline in-thread when the rail is hidden.</p>
+    <p style="margin:0"><strong>Widgets:</strong> user-pinned support scripts (routines, token meter, connections, anything Addison codes on request). Card anatomy: small-caps title, mono value, one optional action pill.</p>
+    <p style="margin:0"><strong>Setup banner:</strong> pine #1E2B25, serif headline, numbered steps, cream button. The only high-contrast block in the app — shown only in intro mode (no key, no local model) and never again after.</p>
+    <p style="margin:0"><strong>Voice:</strong> plain sentences, no jargon, no exclamation marks, always name the consequence and the way back ("You can undo this afterwards"). Errors are one sentence plus a next step, never a code.</p>
+  </div>
+
+  <h2 style="margin:52px 0 0;font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500">Implementation — mapping to the Addison codebase</h2>
+  <div style="margin-top:14px;background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:18px 22px">
+    <p style="margin:0;font-size:13px;font-weight:600">1 · Tokens — replace the theme in <span style="font-family:'IBM Plex Mono',monospace;font-size:12px">shell/tailwind.config.js</span></p>
+    <pre style="margin:10px 0 0;background:#f2f1ec;border-radius:8px;padding:14px 16px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.6;overflow-x:auto;color:#22261f">colors: {
+  paper:"#f6f5f1", surface:"#fdfcfa", line:"#e3e1d8", hair:"#eceae2",
+  ink:"#22261f", "ink-soft":"#4d5147", muted:"#6b6f64", faint:"#9a9d92",
+  accent:"#33604f", "accent-deep":"#2a5142", "accent-tint":"#e4ede8",
+  rule:"#d8e5de", pine:"#1e2b25", danger:"#8f3a44",
+},
+borderRadius: { sm:"6px", DEFAULT:"8px", card:"10px", banner:"12px" },
+fontFamily: {
+  sans:["Public Sans","-apple-system","Segoe UI","sans-serif"],
+  serif:["Source Serif 4","Georgia","serif"],
+  mono:["IBM Plex Mono","ui-monospace","monospace"],
+}</pre>
+    <p style="margin:12px 0 0;font-size:12.5px;color:#6b6f64">Dark mode: add the dark palette under a <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">.dark</span> class (Tailwind darkMode:"class"), toggled from Settings → Appearance and persisted like <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">addison.defaultRole</span> in localStorage.</p>
+    <p style="margin:12px 0 0;font-size:12.5px;color:#6b6f64"><strong>Fonts under the strict CSP:</strong> don't hotlink Google Fonts — bundle the three families as woff2 in <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">shell/src/assets/fonts/</span> with @font-face in styles.css (all are OFL-licensed). Keep the system stack as fallback.</p>
+  </div>
+  <div style="margin-top:12px;background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:18px 22px">
+    <p style="margin:0;font-size:13px;font-weight:600">2 · Component moves</p>
+    <div style="margin-top:10px;display:flex;flex-direction:column;gap:8px;font-size:12.5px;color:#4d5147">
+      <p style="margin:0"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">App.tsx</span> — replace header+drawer shell with the 3-column grid: new <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">Sidebar.tsx</span> (conversation list needs a conversations table in the SQLite schema — currently single-thread), main pane router (chat | settings), <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">WidgetRail.tsx</span>.</p>
+      <p style="margin:0"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">ChatThread.tsx</span> — keep the correspondence rows; swap message font to serif 17/1.7; composer becomes the rounded card (textarea + model pill left, Send right).</p>
+      <p style="margin:0"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">ActivityPanel.tsx</span> → "Addison's work" block in the rail: same <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">tool.activityUpdate</span> feed, rendered as the ruled dot list (filled = done, outlined = in progress); "Save these steps as a routine" keeps calling <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">proposeRoutine</span>.</p>
+      <p style="margin:0"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">PermissionCard.tsx</span> — restyle to the fern-tint rounded card; render in the rail when open, inline in-thread when the rail is hidden. Same <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">respondToPermission</span> wiring.</p>
+      <p style="margin:0"><span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">SettingsDrawer.tsx</span> → <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">SettingsPage.tsx</span>: same sections (key, where-Addison-thinks, LocalModelSetup, RoutineLibrary, Profile) laid out as the 2×2 card grid, routed in-window — delete the scrim/translate drawer logic.</p>
+      <p style="margin:0"><strong>New:</strong> <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">WidgetRail.tsx</span> — pinned widget list + tray overflow + rail collapse (persist both in localStorage). Widgets are declarative JSON (id, title, valueSource, action?) so the core can propose new ones the same way it proposes routines: gated, undoable, saved only on confirm. Token/latency widgets read from a new <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">stats.get</span> IPC method; connections widget reuses role/status data the shell already has.</p>
+      <p style="margin:0"><strong>Setup banner</strong> — render in-thread when no role is configured (<span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px">roles.every(r =&gt; !r.configured)</span>); "Start setup" hands off to the existing Setup Assistant conversation; never shown again once a key or local model exists.</p>
+    </div>
+  </div>
+  <div style="margin-top:12px;background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:18px 22px">
+    <p style="margin:0;font-size:13px;font-weight:600">3 · Order of work</p>
+    <p style="margin:10px 0 0;font-size:12.5px;color:#4d5147">Tokens + fonts (pure config, everything reskins at once) → settings page (moves the drawer, no new data) → 3-column shell + sidebar (needs conversations schema) → rail with Addison's-work + consent (rewires existing feeds) → widgets + stats IPC → dark mode → first-run banner. Each step ships usable on its own; safety invariants (gate, undo, key isolation) are untouched throughout.</p>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

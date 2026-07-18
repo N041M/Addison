@@ -37,6 +37,9 @@ interface Props {
   /** Developer-only: most recent raw diagnostics, newest first. */
   diagnostics: DiagnosticEntry[];
   onClearDiagnostics: () => void;
+  /** Appearance (Fern direction): current theme + setter, persisted by App. */
+  theme: "light" | "dark";
+  onSetTheme: (theme: "light" | "dark") => void;
   onClose: () => void;
 }
 
@@ -56,6 +59,8 @@ export function SettingsDrawer({
   onSetProfile,
   diagnostics,
   onClearDiagnostics,
+  theme,
+  onSetTheme,
   onClose,
 }: Props) {
   const [keyValue, setKeyValue] = useState("");
@@ -106,8 +111,7 @@ export function SettingsDrawer({
       }
       aria-hidden={!open}
     >
-      {/* Scrim — a genuine darkening wash over the dark app (an ink-based tint
-          would lighten it, since `ink` is now light-on-dark). */}
+      {/* Scrim — a plain darkening wash behind the panel, on either theme. */}
       <div
         onClick={onClose}
         className={
@@ -130,7 +134,7 @@ export function SettingsDrawer({
           <button
             type="button"
             onClick={onClose}
-            className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+            className="rounded-sm border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
           >
             Close
           </button>
@@ -159,19 +163,19 @@ export function SettingsDrawer({
               }}
               placeholder="Paste your key here"
               disabled={!connected || saveState === "saving"}
-              className="mt-1 block w-full border border-line bg-surface px-3 py-2.5 text-base text-ink placeholder:text-muted disabled:opacity-60"
+              className="mt-1 block w-full rounded border border-line bg-surface px-3 py-2.5 text-base text-ink placeholder:text-muted disabled:opacity-60"
             />
             <div className="mt-3 flex items-center gap-3">
               <button
                 type="button"
                 onClick={saveKey}
                 disabled={!connected || !keyValue.trim() || saveState === "saving"}
-                className="bg-accent px-4 py-2 text-base font-semibold text-accent-fg hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-sm bg-fern px-4 py-2 text-base font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saveState === "saving" ? "Saving…" : "Save key"}
               </button>
               {saveState === "saved" && (
-                <span className="text-sm text-accent-dark">Saved securely.</span>
+                <span className="text-sm text-fern-deep">Saved securely.</span>
               )}
               {saveState === "error" && (
                 <span className="text-sm text-danger">{saveError}</span>
@@ -208,9 +212,9 @@ export function SettingsDrawer({
                         onClick={() => onChangeDefaultRole(r.role)}
                         aria-pressed={active}
                         className={
-                          "flex items-center justify-between border px-4 py-3 text-left text-base " +
+                          "flex items-center justify-between rounded border px-4 py-3 text-left text-base " +
                           (active
-                            ? "border-accent bg-accent-tint text-accent-dark"
+                            ? "border-fern bg-fern-tint text-fern-deep"
                             : "border-line bg-surface text-ink hover:border-muted")
                         }
                       >
@@ -235,7 +239,7 @@ export function SettingsDrawer({
                       id="default-cloud-model"
                       value={cloudValue}
                       onChange={(e) => onChangeDefaultCloudModel(e.target.value)}
-                      className="mt-1 block w-full border border-line bg-surface px-3 py-2.5 text-base text-ink"
+                      className="mt-1 block w-full rounded border border-line bg-surface px-3 py-2.5 text-base text-ink"
                     >
                       {cloudModels.map((m) => (
                         <option key={m.id} value={m.id}>
@@ -292,9 +296,9 @@ export function SettingsDrawer({
                       <label
                         key={p.id}
                         className={
-                          "flex cursor-pointer gap-3 border px-4 py-3 text-base " +
+                          "flex cursor-pointer gap-3 rounded border px-4 py-3 text-base " +
                           (active
-                            ? "border-accent bg-accent-tint"
+                            ? "border-fern bg-fern-tint"
                             : "border-line bg-surface hover:border-muted")
                         }
                       >
@@ -304,12 +308,12 @@ export function SettingsDrawer({
                           value={p.id}
                           checked={active}
                           onChange={() => onSetProfile(p.id)}
-                          className="mt-1 h-4 w-4 shrink-0 accent-accent"
+                          className="mt-1 h-4 w-4 shrink-0 accent-fern"
                         />
                         <span className="block">
                           <span
                             className={
-                              "block font-medium " + (active ? "text-accent-dark" : "text-ink")
+                              "block font-medium " + (active ? "text-fern-deep" : "text-ink")
                             }
                           >
                             {p.label}
@@ -339,6 +343,38 @@ export function SettingsDrawer({
             )}
           </section>
 
+          {/* Appearance (Fern direction). A hair divider above, 13px segmented
+              control; flips the class-driven theme immediately and persists. */}
+          <section className="border-t border-hair pt-6">
+            <h3 className="text-base font-semibold text-ink">Appearance</h3>
+            <p className="mt-1 text-sm text-muted">
+              Choose how Addison looks. Light is the default.
+            </p>
+            <div
+              role="group"
+              aria-label="Appearance"
+              className="mt-3 inline-flex rounded-pill border border-line bg-surface p-0.5"
+            >
+              {(["light", "dark"] as const).map((t) => {
+                const active = theme === t;
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => onSetTheme(t)}
+                    className={
+                      "rounded-pill px-4 py-1.5 text-[13px] font-medium capitalize transition-colors " +
+                      (active ? "bg-fern-tint text-fern-deep" : "text-muted hover:text-ink")
+                    }
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
           {/* Diagnostics — Developer only (§7.11). The most recent raw errors,
               kept in a small in-memory ring; empty until something fails. */}
           {profile?.flags.rawDiagnostics && (
@@ -349,7 +385,7 @@ export function SettingsDrawer({
                   <button
                     type="button"
                     onClick={onClearDiagnostics}
-                    className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+                    className="rounded-sm border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
                   >
                     Clear
                   </button>
@@ -363,7 +399,7 @@ export function SettingsDrawer({
               ) : (
                 <ul className="mt-3 space-y-3">
                   {diagnostics.map((d, i) => (
-                    <li key={`${d.at}-${i}`} className="border border-line bg-surface p-3">
+                    <li key={`${d.at}-${i}`} className="rounded border border-line bg-surface p-3">
                       <div className="flex items-baseline justify-between gap-3">
                         <span className="text-sm font-medium text-ink">{d.message}</span>
                         <span className="shrink-0 text-xs text-muted">

@@ -1,0 +1,41 @@
+Bundled fonts — Fern design direction (Addison shell)
+=====================================================
+
+These woff2 files are bundled locally (never hotlinked) because the app runs
+under a strict Content-Security-Policy (default-src 'self'). All three families
+are licensed under the SIL Open Font License, Version 1.1 (OFL-1.1), which
+permits bundling and redistribution with the software.
+
+Each was subset to the `latin` + `latin-ext` character sets (so Czech and other
+Central-European diacritics render in the serif body). Source: Google Fonts,
+retrieved 2026-07-18 via the google-webfonts-helper API
+(https://gwfh.mranftl.com), which serves the upstream Google Fonts binaries.
+
+Files and weights/styles
+-------------------------
+Source Serif 4  — Copyright 2014-2023 Adobe (https://github.com/adobe-fonts/source-serif)
+  SourceSerif4-Regular.woff2   400 normal
+  SourceSerif4-Medium.woff2    500 normal
+  SourceSerif4-Italic.woff2    400 italic
+
+Public Sans     — Copyright 2019 The Public Sans Project Authors
+                  (https://github.com/uswds/public-sans)
+  PublicSans-Regular.woff2     400 normal
+  PublicSans-Medium.woff2      500 normal
+  PublicSans-SemiBold.woff2    600 normal
+  PublicSans-Bold.woff2        700 normal
+
+IBM Plex Mono   — Copyright 2017 IBM Corp. (https://github.com/IBM/plex)
+  IBMPlexMono-Regular.woff2    400 normal
+  IBMPlexMono-Medium.woff2     500 normal
+
+License
+-------
+SIL Open Font License, Version 1.1 — https://openfontlicense.org
+Full text: https://openfontlicense.org/open-font-license-official-text/
+
+Each upstream project ships the complete OFL.txt with the reserved font names
+and copyright notices above. These families are the one sanctioned exception to
+the project's "system stacks only" rule: bundling keeps them CSP-safe (no
+external host is ever contacted), and the @font-face stacks in styles.css always
+fall back to system serif / sans / mono if a file fails to load.

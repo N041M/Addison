@@ -56,7 +56,7 @@ export function RoutineProposalCard({ proposal, onSave, onCancel }: Props) {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          className="mt-1 w-full max-w-md border border-line bg-paper px-3 py-2 text-base text-ink"
+          className="mt-1 w-full max-w-md rounded border border-line bg-paper px-3 py-2 text-base text-ink"
         />
       </label>
 
@@ -64,14 +64,14 @@ export function RoutineProposalCard({ proposal, onSave, onCancel }: Props) {
         <button
           type="button"
           onClick={() => onSave(name.trim() || proposal.name)}
-          className="bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-dark"
+          className="rounded-sm bg-fern px-4 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep"
         >
           Save routine
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="border border-line bg-paper px-4 py-2 text-sm font-medium text-ink-soft hover:border-muted"
+          className="rounded-sm border border-line bg-paper px-4 py-2 text-sm font-medium text-ink-soft hover:border-muted"
         >
           Not now
         </button>
