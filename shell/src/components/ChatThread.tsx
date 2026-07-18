@@ -28,6 +28,8 @@ interface Props {
    * message. Off (and absent) for Simple, so its thread is byte-identical.
    */
   showTechnicalDetails?: boolean;
+  /** Rendered before the messages, inside the scroll (first-run banner + greeting). */
+  header?: ReactNode;
   /** Rendered after the last message, inside the scroll (consent + work inline). */
   footer?: ReactNode;
 }
@@ -43,22 +45,30 @@ export function ChatThread({
   retryAvailable,
   onRewindTo,
   showTechnicalDetails = false,
+  header,
   footer,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // Keep the newest content in view without any fancy motion.
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages, footer]);
-
   // Correspondence view shows the human turns; live tool steps live in the
   // widget rail / work block, so tool messages aren't repeated here.
   const visible = messages.filter((m) => m.role !== "tool");
+
+  // Keep the newest content in view without any fancy motion. Skip it entirely
+  // when there are no messages yet: on first run the header (pine banner +
+  // greeting) is the content, and it must stay at the top rather than being
+  // scrolled out of sight.
+  useEffect(() => {
+    if (visible.length === 0) return;
+    bottomRef.current?.scrollIntoView({ block: "end" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, header, footer]);
   const lastAssistantId = [...visible].reverse().find((m) => m.role === "assistant" && !m.pending)?.id;
 
   return (
     <div className="no-scrollbar flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-[26px] overflow-y-auto py-[30px]">
+      {header}
+
       {visible.map((m) => (
         <MessageRow
           key={m.id}

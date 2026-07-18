@@ -44,6 +44,14 @@ export default {
         rule: withOpacity("--c-rule"), // 2px "Addison's work" left rule
         dash: withOpacity("--c-dash"), // dashed "add widget" border
         pine: withOpacity("--c-pine"), // setup banner bg (high-contrast block)
+        // Pine-banner text scale (first-run). Fixed across themes — the pine
+        // block never inverts. See :root in styles.css (not overridden in .dark).
+        "pine-soft": withOpacity("--c-pine-soft"), // eyebrow small-caps
+        "pine-ink": withOpacity("--c-pine-ink"), // serif headline (cream)
+        cream: withOpacity("--c-cream"), // body text / step circle / button
+        "pine-body": withOpacity("--c-pine-body"), // current-step description
+        "pine-muted": withOpacity("--c-pine-muted"), // skip / later-step text
+        "pine-line": withOpacity("--c-pine-line"), // outlined step circle
         // Text that sits ON a fern-filled button: white on light, dark on the
         // lightened dark-mode fern. One token, flips with the theme.
         "on-accent": withOpacity("--c-on-accent"),

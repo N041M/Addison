@@ -134,28 +134,66 @@ can keep chatting." Chat and the model picker must work normally afterwards
 (the app re-fetches the model list from the new engine). A second kill stays
 down: "Addison's engine has stopped. Please restart the app."
 
-## 13. Dark restyle & rich rendering (visual, amended 2026-07)
+## 13. Fern app shell (visual + flows, amended 2026-07 v3)
 
-**Dark theme.** On launch, the window shows **no white flash** before the CSS
-loads (the body pre-paints dark), the macOS **titlebar is dark** ("theme": "Dark"),
-and the overall look is dark, calm, and legible — not neon. Scrollbars in the
-thread read on dark; keyboard focus rings (Tab through buttons/inputs) are clearly
-visible. The wordmark, uppercase sender labels, activity/tool labels, the model
-name, timestamps, and the composer hint render in **monospace**; message body text
-stays sans.
+**First-run banner.** Launch with **no key configured** (fresh keychain or a
+throwaway `ADDISON_DB_PATH` + removed provider keys). The chat column shows the
+**pine setup banner** — "FIRST-TIME SETUP · STEP 1 OF 2", serif "Let's get
+Addison ready.", step 1 as a filled cream circle, step 2 outlined — above a
+serif time-of-day greeting ("Good morning/afternoon/evening.") instead of the
+welcome message. **Start setup** opens Settings scrolled to the API keys card
+with the first key input focused. Connect a key, come back: the banner reads
+**step 2 of 2** ("Say hello"), step 1 shows ✓, and the composer is focused.
+**Skip for now** hides it for this launch only (it returns on relaunch while
+nothing is configured); once a key is configured at startup it never renders.
 
-**History.** Open **History** — the list renders, rows hover-highlight, and the
-current conversation is marked. Reopen a past conversation (it loads back into the
-thread) and start a **New chat** (thread resets to the welcome message).
+**Sidebar / history.** Conversations list in the left column under TODAY /
+EARLIER, newest first; long titles ellipsize; the open conversation gets the
+`hair` background + 2px fern left bar. **＋ New chat** resets the thread;
+picking a past conversation loads it. Collapse (`«`) shrinks the sidebar to a
+slim bell rail and persists across relaunch. **Settings** at the bottom gets
+the same active treatment while the Settings screen is open.
 
-**Markdown.** Ask for an answer using **bold**, a bulleted and a numbered list, a
-table, and a fenced code block in some language — confirm the code is
-syntax-highlighted with the calm (non-neon) palette and reads against the inset
-code background.
+**Settings page.** In-window (no drawer): two card columns on a wide window,
+one column under ~900px; Escape or "Back to chat" returns. Cards: Where
+Addison thinks (selected row = fern border + tint + ✓), API keys, Routines,
+Run a model on this computer, Profile (+ Appearance).
 
-**Mermaid.** Ask for a small diagram (e.g. a flowchart) — it renders as a dark-
-themed SVG that matches the app. Then send a **malformed** ```mermaid fence and
-confirm it **falls back** to plain code rather than breaking the message row.
+**API keys (multi-provider).** Anthropic, OpenAI, Google, and "Your own
+server" rows. A connected row shows "✓ Key saved · added <date>" with an
+outlined **Replace** button and a **Remove** text button; Google collapses to
+"Add key"; the custom row takes an `http(s)://…` base URL (mono) + optional
+key. Saving shows "Checked with one tiny request…", a bad key shows a plain
+error and still offers "Remove the saved key". Models from every connected
+provider appear together in the composer's picker.
+
+**Widgets / tray.** The right rail: YOUR WIDGETS + Edit, pinned widget cards
+(routine rows with a fern-tint **Run** pill), the token meter ("TOKENS ·
+<month>" small-caps + right-aligned mono count, 5px fern bar only when a limit
+exists), and the connections card (fern dot = up, gray = idle, rose = down;
+mono values right — no card title). Unpinned widgets sit behind the
+stacked-edge "**N more widgets ▾**" tray row; Edit mode shows pin (⬤/◯) and
+remove (✕) per stored widget. "＋ Ask Addison to build a widget" seeds the
+composer. "Hide widgets »" moves Addison's-work + consent cards inline into
+the thread and persists.
+
+**Both themes.** Settings → Appearance flips light/dark instantly with a calm
+cross-fade and **no white flash** on relaunch (the theme pre-paints before
+CSS). Walk chat, sidebar, settings, and the rail in **both** themes: all text
+legible, keyboard focus rings (Tab) clearly visible everywhere, the pine
+banner keeps its fixed dark look in both.
+
+**Fonts.** Message bodies, greetings, and settings headings render in the
+**serif** (Source Serif 4 — real serifs, not a system fallback); UI controls
+in Public Sans; machine facts only — token counts, latency, model ids, the
+custom server URL — in **IBM Plex Mono**. No network font requests (bundled
+woff2 only; check devtools Network offline if in doubt).
+
+**Markdown + mermaid.** Ask for bold, lists, a table, and a fenced code block —
+code highlights with the calm palette on the inset `surface` background, the
+table gets hairline borders + small-caps headers. Ask for a small mermaid
+flowchart — it renders as an SVG matching the theme; a **malformed** fence
+falls back to plain code without breaking the row.
 
 ---
 

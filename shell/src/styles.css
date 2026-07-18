@@ -101,6 +101,17 @@
   --c-on-accent: 255 255 255; /* #FFFFFF */
   --c-notice: 110 87 32; /* #6E5720 */
   --c-notice-tint: 244 236 216; /* #F4ECD8 */
+
+  /* Pine setup-banner scale (first-run). The pine banner is the one fixed
+     high-contrast block — it never inverts between themes (pine stays #1E2B25),
+     so these text/step colors are declared ONCE here and deliberately NOT
+     overridden in .dark: they inherit the same values under either theme. */
+  --c-pine-soft: 143 181 162; /* #8FB5A2 small-caps eyebrow */
+  --c-pine-ink: 244 246 243; /* #F4F6F3 serif headline (cream-on-pine) */
+  --c-cream: 233 237 233; /* #E9EDE9 cream — body text, step circle, button */
+  --c-pine-body: 207 224 214; /* #CFE0D6 current-step description text */
+  --c-pine-muted: 143 163 152; /* #8FA398 skip button / later-step text */
+  --c-pine-line: 59 79 69; /* #3B4F45 outlined (later) step circle border */
 }
 
 .dark {

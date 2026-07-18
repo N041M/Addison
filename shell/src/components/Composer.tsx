@@ -28,6 +28,8 @@ interface Props {
   /** One-shot prefill from a rewind's edit-and-resend; nothing runs until Send. */
   draftSeed?: string | null;
   onDraftSeedUsed?: () => void;
+  /** Bump to focus the textarea without prefilling (first-run "say hello" nudge). */
+  focusSignal?: number;
 }
 
 export function Composer({
@@ -45,6 +47,7 @@ export function Composer({
   onSelectEffort,
   draftSeed,
   onDraftSeedUsed,
+  focusSignal,
 }: Props) {
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -57,6 +60,14 @@ export function Composer({
       textareaRef.current?.focus();
     }
   }, [draftSeed, onDraftSeedUsed]);
+
+  // First-run "say hello" nudge: focus the textarea (no prefill) when the signal
+  // bumps. Guarded on > 0 so the initial mount doesn't steal focus.
+  useEffect(() => {
+    if (focusSignal && focusSignal > 0 && !isWorking) {
+      textareaRef.current?.focus();
+    }
+  }, [focusSignal, isWorking]);
 
   function submit() {
     const text = draft.trim();

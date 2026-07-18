@@ -111,7 +111,12 @@ Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
 (3) `PermissionGate`. Also shipped past the numbered sequence: the Fern UI
 redesign, and the **widget rail** — declarative routine/stat widgets
 (`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
-substrate (§4.8) that feeds the token meter + connections cards.
+substrate (§4.8) that feeds the token meter + connections cards. The Fern wave
+is complete through its final PR: multi-provider API keys, the three-column
+app shell + in-window Settings, widgets/tray, class-driven dark mode, the
+**first-run pine banner** (`FirstRunBanner.tsx` — setup steps, launch-only
+skip, serif time-of-day greeting) with the bell favicon bundled from
+`shell/public/`, and a both-themes QA pass (TESTING-CHECKLIST §13).
 
 Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
 **CLI-only** — get a working chat-with-tools loop before touching the shell.

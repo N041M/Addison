@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#eceae5;font-family:"Public Sans",system-ui,sans-serif;color:#22261f}
+  a{color:#2a5142}a:hover{color:#33604f}
+</style>
+</helmet>
+<div style="padding:40px 44px" data-screen-label="Addison Mobile">
+  <div style="max-width:920px;margin:0 0 28px">
+    <p style="margin:0;font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:#9a9d92">Addison · mobile companion</p>
+    <p style="margin:8px 0 0;font:12.5px/1.6 system-ui,sans-serif;color:rgba(0,0,0,.6);max-width:760px">Same fern language, three mobile moves: the widget rail becomes a <strong>bottom sheet</strong> behind a bell button; <strong>consent cards render inline</strong> in the thread; the sidebar becomes a slide-over drawer. All hit targets ≥44px.</p>
+  </div>
+  <div style="display:flex;flex-wrap:wrap;gap:36px;align-items:flex-start">
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)">Chat — consent inline, widgets behind the bell</span>
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="430px,900px">
+        <div style="display:flex;flex-direction:column;height:100%;padding-top:63px;padding-bottom:30px;box-sizing:border-box;background:#f6f5f1;font-family:'Public Sans',system-ui,sans-serif;color:#22261f;line-height:1.55" data-screen-label="Mobile — Chat">
+          <header style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #e3e1d8;flex-shrink:0">
+            <button aria-label="Chats" style="display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;background:none;color:#4d5147;font-size:19px;cursor:pointer">☰</button>
+            <span style="font-size:13px;font-weight:600;color:#4d5147">Weather note for tomorrow</span>
+            <button aria-label="Widgets" style="display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;background:none;cursor:pointer"><svg width="19" height="19" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="#33604f"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="#33604f"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="#33604f"></rect></svg></button>
+          </header>
+          <div style="flex:1;min-height:0;overflow-y:auto;padding:22px 20px;display:flex;flex-direction:column;gap:22px">
+            <div>
+              <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">You</p>
+              <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Look up tomorrow's weather in Brno and save a short note about it in my Documents folder.</p>
+            </div>
+            <div>
+              <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#2a5142">Addison</p>
+              <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Tomorrow in Brno looks mild — around 24 °C with sunshine in the afternoon. I'll write that up as a short note now.</p>
+              <div style="margin-top:12px;border-left:2px solid #d8e5de;padding-left:14px">
+                <p style="margin:0 0 8px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">Addison's work</p>
+                <div style="display:flex;flex-direction:column;gap:7px">
+                  <div style="display:flex;gap:8px;align-items:baseline"><span style="width:6px;height:6px;border-radius:999px;background:#33604f;flex-shrink:0;transform:translateY(-1px)"></span><span style="font-size:12.5px;color:#4d5147">Searched the web — Brno forecast</span></div>
+                  <div style="display:flex;gap:8px;align-items:baseline"><span style="width:6px;height:6px;border-radius:999px;border:1.5px solid #33604f;box-sizing:border-box;flex-shrink:0;transform:translateY(-1px)"></span><span style="font-size:12.5px;color:#4d5147">Writing "Weather note.txt"…</span></div>
+                </div>
+              </div>
+              <div style="margin-top:14px;background:#e4ede8;border-radius:10px;padding:14px 16px">
+                <p style="margin:0;font-size:13.5px;font-weight:600">Allow Addison to save "Weather note.txt" in Documents?</p>
+                <p style="margin:4px 0 0;font-size:12px;color:#4d5147">One new file. You can undo it afterwards.</p>
+                <div style="display:flex;align-items:center;gap:14px;margin-top:12px">
+                  <button style="border:none;background:#33604f;color:#fff;font:600 13.5px 'Public Sans',sans-serif;padding:12px 26px;border-radius:999px;cursor:pointer">Allow</button>
+                  <button style="border:none;background:none;font:500 13.5px 'Public Sans',sans-serif;color:#4d5147;cursor:pointer;padding:12px 6px">Not now</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style="padding:10px 16px 14px;flex-shrink:0">
+            <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:12px;padding:12px 14px 10px;box-shadow:0 1px 4px rgba(34,38,31,.05)">
+              <p style="margin:0 0 16px;font-size:15px;color:#9a9d92">Write to Addison…</p>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+                <button style="border:none;background:none;padding:8px 0;font:500 12.5px 'Public Sans',sans-serif;color:#6b6f64;cursor:pointer">Opus 4.8 · thorough ▾</button>
+                <button aria-label="Send" style="display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;border-radius:999px;background:#33604f;color:#fff;font-size:17px;cursor:pointer">↑</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)">Widgets — bottom sheet (bell tap)</span>
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="430px,900px">
+        <div style="position:relative;display:flex;flex-direction:column;height:100%;padding-top:63px;padding-bottom:30px;box-sizing:border-box;background:#f6f5f1;font-family:'Public Sans',system-ui,sans-serif;color:#22261f;line-height:1.55;overflow:hidden" data-screen-label="Mobile — Widgets sheet">
+          <header style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #e3e1d8;flex-shrink:0">
+            <button aria-label="Chats" style="display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;background:none;color:#4d5147;font-size:19px;cursor:pointer">☰</button>
+            <span style="font-size:13px;font-weight:600;color:#4d5147">Weather note for tomorrow</span>
+            <button aria-label="Widgets" style="display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:none;background:none;cursor:pointer"><svg width="19" height="19" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="#33604f"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="#33604f"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="#33604f"></rect></svg></button>
+          </header>
+          <div style="flex:1;padding:22px 20px;opacity:.35">
+            <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">You</p>
+            <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Look up tomorrow's weather in Brno and save a short note…</p>
+          </div>
+          <div style="position:absolute;inset:0;background:rgba(34,38,31,.25)"></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;background:#f6f5f1;border-radius:18px 18px 0 0;box-shadow:0 -8px 28px rgba(34,38,31,.18);padding:10px 20px 48px;max-height:78%;display:flex;flex-direction:column">
+            <div style="width:36px;height:4px;border-radius:999px;background:#c9ccbe;margin:0 auto 14px;flex-shrink:0"></div>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px;flex-shrink:0">
+              <p style="margin:0;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">Your widgets</p>
+              <button style="border:none;background:none;padding:6px 0;font:500 12px 'Public Sans',sans-serif;color:#6b6f64;cursor:pointer">Edit</button>
+            </div>
+            <div style="overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:0">
+              <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:13px 15px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:13.5px;font-weight:600">Morning weather note</span><button style="border:none;background:#e4ede8;color:#2a5142;font:600 12px 'Public Sans',sans-serif;padding:9px 18px;border-radius:999px;cursor:pointer">Run</button></div>
+              <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:13px 15px">
+                <div style="display:flex;align-items:baseline;justify-content:space-between"><span style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#9a9d92">Tokens · July</span><span style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:#4d5147">412k / 1M</span></div>
+                <div style="margin-top:9px;height:5px;border-radius:999px;background:#eceae2;overflow:hidden"><div style="width:41%;height:100%;background:#33604f;border-radius:999px"></div></div>
+              </div>
+              <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:13px 15px;display:flex;flex-direction:column;gap:6px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:999px;background:#33604f"></span><span style="font-size:13px">Ollama · this phone's Mac</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9d92">running</span></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:6px;height:6px;border-radius:999px;background:#33604f"></span><span style="font-size:13px">Anthropic API</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9d92">42 ms</span></div>
+              </div>
+              <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:13px 15px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:13px;color:#4d5147">Peak usage hours</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#9a9d92">18:00</span></div>
+              <button style="border:1px dashed #c9ccbe;background:transparent;color:#6b6f64;font:500 12.5px 'Public Sans',sans-serif;padding:13px 10px;border-radius:10px;cursor:pointer;text-align:center">＋ Ask Addison to build a widget</button>
+            </div>
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)">Chats — slide-over drawer (☰ tap)</span>
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="430px,900px">
+        <div style="position:relative;display:flex;flex-direction:column;height:100%;padding-top:63px;padding-bottom:30px;box-sizing:border-box;background:#f6f5f1;font-family:'Public Sans',system-ui,sans-serif;color:#22261f;line-height:1.55;overflow:hidden" data-screen-label="Mobile — Chats drawer">
+          <div style="flex:1;padding:22px 20px;opacity:.35">
+            <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:#9a9d92">You</p>
+            <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Look up tomorrow's weather in Brno…</p>
+          </div>
+          <div style="position:absolute;inset:0;background:rgba(34,38,31,.25)"></div>
+          <div style="position:absolute;left:0;top:0;bottom:0;width:82%;background:#f2f1ec;box-shadow:8px 0 28px rgba(34,38,31,.18);display:flex;flex-direction:column;padding:70px 0 44px">
+            <div style="display:flex;align-items:center;gap:8px;padding:0 20px 16px">
+              <svg width="17" height="17" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="#33604f"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="#33604f"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="#33604f"></rect></svg>
+              <span style="font-weight:700;font-size:16px;letter-spacing:-0.02em">Addison</span>
+            </div>
+            <button style="margin:0 16px;border:1px solid #d8d6ca;background:transparent;color:#2a5142;font:600 14px 'Public Sans',sans-serif;padding:12px 14px;border-radius:8px;cursor:pointer;text-align:left">＋ New chat</button>
+            <p style="margin:22px 20px 6px;font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#9a9d92">Today</p>
+            <button style="border:none;border-left:2px solid #33604f;background:#eceae2;color:#22261f;font:500 14px 'Public Sans',sans-serif;padding:13px 18px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Weather note for tomorrow</button>
+            <button style="border:none;border-left:2px solid transparent;background:transparent;color:#6b6f64;font:400 14px 'Public Sans',sans-serif;padding:13px 18px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Reply to the landlord</button>
+            <p style="margin:18px 20px 6px;font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:#9a9d92">Earlier</p>
+            <button style="border:none;border-left:2px solid transparent;background:transparent;color:#6b6f64;font:400 14px 'Public Sans',sans-serif;padding:13px 18px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Summary of the lease PDF</button>
+            <button style="border:none;border-left:2px solid transparent;background:transparent;color:#6b6f64;font:400 14px 'Public Sans',sans-serif;padding:13px 18px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Holiday budget totals</button>
+            <div style="margin-top:auto;padding:0 16px;display:flex;flex-direction:column;gap:2px">
+              <button style="border:none;background:transparent;color:#4d5147;font:500 14px 'Public Sans',sans-serif;padding:12px 4px;cursor:pointer;text-align:left">Settings</button>
+              <p style="margin:0;padding:2px 4px;font-size:12.5px;color:#9a9d92">Simple profile</p>
+            </div>
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:400 11px/1.3 system-ui,sans-serif;color:rgba(0,0,0,.55)">Settings — one flowing column</span>
+      <x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" hint-size="430px,900px">
+        <div style="display:flex;flex-direction:column;height:100%;padding-top:63px;padding-bottom:30px;box-sizing:border-box;background:#f6f5f1;font-family:'Public Sans',system-ui,sans-serif;color:#22261f;line-height:1.55" data-screen-label="Mobile — Settings">
+          <header style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid #e3e1d8;flex-shrink:0">
+            <button style="border:none;background:none;padding:12px 4px;font:500 13px 'Public Sans',sans-serif;color:#2a5142;cursor:pointer">‹ Back</button>
+            <span style="font-size:13px;font-weight:600;color:#4d5147">Settings</span>
+            <span style="width:44px"></span>
+          </header>
+          <div style="flex:1;min-height:0;overflow-y:auto;padding:18px 16px 24px;display:flex;flex-direction:column;gap:14px">
+            <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 18px">
+              <h3 style="margin:0;font-size:15px;font-weight:600">Where Addison thinks</h3>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+                <button style="display:flex;align-items:center;justify-content:space-between;border:1px solid #33604f;background:#e4ede8;color:#2a5142;font:500 14px 'Public Sans',sans-serif;padding:13px 15px;border-radius:8px;cursor:pointer;text-align:left"><span>Cloud — Claude Opus 4.8</span><span aria-hidden="true">✓</span></button>
+                <button style="display:flex;align-items:center;border:1px solid #e3e1d8;background:#f6f5f1;color:#22261f;font:500 14px 'Public Sans',sans-serif;padding:13px 15px;border-radius:8px;cursor:pointer;text-align:left">On this computer — Balanced</button>
+              </div>
+            </div>
+            <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 18px">
+              <h3 style="margin:0;font-size:15px;font-weight:600">API keys</h3>
+              <p style="margin:4px 0 0;font-size:12.5px;color:#6b6f64">Keys go straight to the keychain and are never shown again.</p>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e3e1d8;background:#f6f5f1;border-radius:8px;padding:12px 14px">
+                  <div><p style="margin:0;font-size:13.5px;font-weight:600">Anthropic</p><p style="margin:1px 0 0;font-size:11.5px;color:#2a5142">✓ Key saved</p></div>
+                  <button style="border:1px solid #e3e1d8;background:transparent;color:#4d5147;font:500 12.5px 'Public Sans',sans-serif;padding:9px 16px;border-radius:6px;cursor:pointer;flex-shrink:0">Replace</button>
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e3e1d8;background:#f6f5f1;border-radius:8px;padding:12px 14px">
+                  <div><p style="margin:0;font-size:13.5px;font-weight:600">OpenAI</p><p style="margin:1px 0 0;font-size:11.5px;color:#9a9d92">Not connected</p></div>
+                  <button style="border:1px solid #e3e1d8;background:transparent;color:#2a5142;font:600 12.5px 'Public Sans',sans-serif;padding:9px 16px;border-radius:6px;cursor:pointer;flex-shrink:0">Add key</button>
+                </div>
+              </div>
+            </div>
+            <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 18px">
+              <h3 style="margin:0;font-size:15px;font-weight:600">Routines</h3>
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e3e1d8;background:#f6f5f1;border-radius:8px;padding:12px 14px;margin-top:12px">
+                <div><p style="margin:0;font-size:13.5px;font-weight:600">Morning weather note</p><p style="margin:1px 0 0;font-size:11.5px;color:#9a9d92">Run 12 times</p></div>
+                <button style="border:none;background:#e4ede8;color:#2a5142;font:600 12.5px 'Public Sans',sans-serif;padding:9px 20px;border-radius:999px;cursor:pointer;flex-shrink:0">Run</button>
+              </div>
+            </div>
+            <div style="background:#fdfcfa;border:1px solid #e3e1d8;border-radius:10px;padding:16px 18px">
+              <h3 style="margin:0;font-size:15px;font-weight:600">Profile</h3>
+              <div role="group" style="display:flex;border:1px solid #e3e1d8;border-radius:8px;padding:3px;gap:2px;background:#f6f5f1;margin-top:12px">
+                <button style="flex:1;border:none;background:#e4ede8;color:#2a5142;font:600 13.5px 'Public Sans',sans-serif;padding:11px 0;border-radius:6px;cursor:pointer">Simple</button>
+                <button style="flex:1;border:none;background:transparent;color:#6b6f64;font:500 13.5px 'Public Sans',sans-serif;padding:11px 0;border-radius:6px;cursor:pointer">Developer</button>
+              </div>
+              <div style="margin-top:14px;padding-top:12px;border-top:1px solid #eceae2;display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13.5px;color:#4d5147">Appearance</span>
+                <div role="group" style="display:flex;border:1px solid #e3e1d8;border-radius:6px;padding:2px;gap:1px;background:#f6f5f1">
+                  <button style="border:none;background:#e4ede8;color:#2a5142;font:500 12.5px 'Public Sans',sans-serif;padding:9px 16px;border-radius:5px;cursor:pointer">Light</button>
+                  <button style="border:none;background:transparent;color:#6b6f64;font:500 12.5px 'Public Sans',sans-serif;padding:9px 16px;border-radius:5px;cursor:pointer">Dark</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </x-import>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

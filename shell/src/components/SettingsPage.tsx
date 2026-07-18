@@ -15,7 +15,7 @@
 // API keys ships the Anthropic-only row this PR; the provider rows are a mapped
 // array so the multi-provider PR is purely additive.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, LocalSetupState, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
@@ -42,7 +42,17 @@ interface Props {
   theme: "light" | "dark";
   onSetTheme: (theme: "light" | "dark") => void;
   onBack: () => void;
+  /**
+   * A DOM id to scroll into view once, when the page opens (the first-run
+   * "Start setup" button routes here focused on the API-keys card). Cleared by
+   * `onScrolled` after it's honored so a later Settings visit lands at the top.
+   */
+  scrollTarget?: string | null;
+  onScrolled?: () => void;
 }
+
+// Stable id on the API-keys card so first-run's "Start setup" can scroll to it.
+export const API_KEYS_SECTION_ID = "settings-api-keys";
 
 // The API-key provider rows (multi-provider, owner decision 2026-07-18). ``kind``
 // picks the row's affordance: a direct password input ("key"), an outlined
@@ -92,7 +102,23 @@ export function SettingsPage({
   theme,
   onSetTheme,
   onBack,
+  scrollTarget,
+  onScrolled,
 }: Props) {
+  // Honor a one-shot scroll request (first-run "Start setup" → API keys). The
+  // timeout lets the page paint before we scroll, then we clear the request.
+  useEffect(() => {
+    if (!scrollTarget) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById(scrollTarget);
+      el?.scrollIntoView({ behavior: "smooth", block: "start" });
+      // Draw the eye to the first key input without stealing it destructively.
+      el?.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
+      onScrolled?.();
+    }, 60);
+    return () => clearTimeout(t);
+  }, [scrollTarget, onScrolled]);
+
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-screen="settings">
       <header className="flex items-baseline justify-between border-b border-line px-[44px] py-3.5">
@@ -159,18 +185,20 @@ export function SettingsPage({
 
 // --- Card shell ------------------------------------------------------------
 function Card({
+  id,
   title,
   subtitle,
   action,
   children,
 }: {
+  id?: string;
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-card border border-line bg-surface px-[22px] py-5">
+    <section id={id} className="scroll-mt-4 rounded-card border border-line bg-surface px-[22px] py-5">
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
         {action}
@@ -313,8 +341,9 @@ function ApiKeys({
   const byId = new Map(providers.map((p) => [p.id, p]));
   return (
     <Card
+      id={API_KEYS_SECTION_ID}
       title="API keys"
-      subtitle="Keys go straight to your computer's keychain and are never shown again — not even here."
+      subtitle="Connect any provider. Keys go straight to your computer's keychain and are never shown again — not even here."
     >
       <div className="flex flex-col gap-2">
         {KEY_PROVIDERS.map((p) => (
@@ -434,7 +463,7 @@ function ProviderRow({
               type="button"
               onClick={() => setEditing(true)}
               disabled={working}
-              className="text-xs font-medium text-fern-deep hover:text-fern disabled:opacity-50"
+              className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[12.5px] font-semibold text-ink hover:border-muted disabled:opacity-50"
             >
               Replace
             </button>

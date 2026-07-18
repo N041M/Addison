@@ -10,6 +10,7 @@ The `.dc.html` files in this bundle are **design references created in HTML** �
 - `Addison Brand Book.dc.html` — tokens, type, shape rules, component specs, implementation order.
 - `Addison Logo.dc.html` — logo sheet; **concept B (service bell) is chosen.**
 - `Addison Redesign Directions.dc.html` — exploration history (context only; the app file wins on conflicts).
+- `Addison Mobile.dc.html` — mobile companion reference (four phone screens; needs `ios-frame.jsx` beside it). Mobile moves: widget rail → bottom sheet behind the bell button, consent cards inline in the thread, sidebar → slide-over drawer, settings one flowing column, hit targets ≥44px, 63px safe-area top padding for the status bar/island.
 
 ## Fidelity
 **High-fidelity.** Colors, type, spacing, radii, and copy are final; recreate pixel-perfectly with Tailwind against the token set below. The widget contents (token counts, latency) are sample data.

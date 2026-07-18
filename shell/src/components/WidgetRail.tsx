@@ -387,19 +387,22 @@ function TokenMeterBody({ title, stats }: { title: string; stats: Stats | null }
   );
 }
 
+// The implicit connections card carries no title of its own (final design
+// screenshots 2026-07): the dot rows are self-explanatory. A user-saved stat
+// widget still shows its own title via ConnectionsBody's `title`.
 function ConnectionsCard({ stats }: { stats: Stats | null }) {
   return (
     <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
-      <ConnectionsBody title="Connections" stats={stats} />
+      <ConnectionsBody stats={stats} />
     </div>
   );
 }
 
-function ConnectionsBody({ title, stats }: { title: string; stats: Stats | null }) {
+function ConnectionsBody({ title, stats }: { title?: string; stats: Stats | null }) {
   const rows = stats?.connections ?? [];
   return (
     <div className="flex flex-col gap-[5px]">
-      <SmallCaps className="mb-0.5">{title}</SmallCaps>
+      {title && <SmallCaps className="mb-0.5">{title}</SmallCaps>}
       {rows.length === 0 && <p className="text-[11.5px] text-faint">Nothing connected yet.</p>}
       {rows.map((c) => (
         <div key={c.id} className="flex items-center gap-[7px]">
