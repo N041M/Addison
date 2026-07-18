@@ -44,7 +44,11 @@ rather than working around it silently.**
    codebase (spec §9).
 3. **API keys never reach the frontend/webview.** They live in the OS keychain,
    read by the Rust shell / Agent Core only at the moment of use, never persisted
-   in Agent Core memory beyond one request, never in SQLite.
+   in Agent Core memory beyond one request, never in SQLite. The Rust shell may
+   hold a session-lifetime in-memory cache of provider keys (owner decision
+   2026-07-19 — one OS keychain read/prompt per provider per launch; evicted on
+   Remove, gone at exit). The cache never widens where keys can GO — shell
+   process memory only.
 4. The Setup Assistant relay's keys never exist in this repo's runtime — they're
    external and server-side.
 5. **A Routine never gets permissions beyond what the user granted live** — no

@@ -18,6 +18,9 @@
 // (bytes-to-sign in, signature out) — so the private key is never logged, never
 // emitted, and never crosses an IPC boundary.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use keyring::Entry;
@@ -26,6 +29,38 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::ipc::{required_str, RpcError};
+
+/// In-process, session-lifetime cache of provider keys (owner decision
+/// 2026-07-19). Reading the OS keychain on every provider call made macOS
+/// re-prompt for the login-keychain password — once per MESSAGE in the worst
+/// case, and after every dev rebuild even with "Always Allow". The cache
+/// collapses that to at most ONE OS read per provider per launch.
+///
+/// Invariant §8.3 is preserved: the cache lives only in this shell process's
+/// memory (the same trust level that already handles every key read), is
+/// updated on Replace, evicted on Remove, and vanishes when the app exits.
+/// Keys still never touch SQLite, the webview, or long-lived core memory.
+static KEY_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+
+fn key_cache() -> &'static Mutex<HashMap<String, String>> {
+    KEY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn cache_get(provider: &str) -> Option<String> {
+    key_cache().lock().ok()?.get(provider).cloned()
+}
+
+fn cache_put(provider: &str, key: &str) {
+    if let Ok(mut cache) = key_cache().lock() {
+        cache.insert(provider.to_string(), key.to_string());
+    }
+}
+
+fn cache_evict(provider: &str) {
+    if let Ok(mut cache) = key_cache().lock() {
+        cache.remove(provider);
+    }
+}
 
 /// Keychain service name — matches the app identifier (tauri.conf.json).
 const SERVICE: &str = "app.addison.desktop";
@@ -59,6 +94,9 @@ pub fn store_provider_key(provider: String, key: String) -> Result<(), String> {
     entry
         .set_password(&key)
         .map_err(|_| "Couldn't save your key to the system keychain.".to_string())?;
+    // Keep the session cache coherent so a Replace takes effect immediately
+    // without another OS keychain round-trip (and prompt).
+    cache_put(&provider, &key);
     Ok(())
 }
 
@@ -68,6 +106,9 @@ pub fn store_provider_key(provider: String, key: String) -> Result<(), String> {
 pub fn delete_provider_key(provider: String) -> Result<(), String> {
     let entry = Entry::new(SERVICE, &account_for_provider(&provider))
         .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
+    // Evict BEFORE the OS delete: even if the OS call fails, a removed key must
+    // never keep being served from memory.
+    cache_evict(&provider);
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => Err("Couldn't remove your key from the system keychain.".to_string()),
@@ -83,9 +124,14 @@ pub fn delete_provider_key(provider: String) -> Result<(), String> {
 /// it into `provider-key:anthropic` (best-effort) so an existing key survives the
 /// upgrade to the per-provider scheme without the user re-pasting it.
 fn get_provider_key(provider: &str) -> Result<String, keyring::Error> {
+    // Session cache first — at most one OS keychain read (and at most one OS
+    // permission prompt) per provider per launch.
+    if let Some(key) = cache_get(provider) {
+        return Ok(key);
+    }
     let entry = Entry::new(SERVICE, &account_for_provider(provider))?;
-    match entry.get_password() {
-        Ok(key) => Ok(key),
+    let key = match entry.get_password() {
+        Ok(key) => key,
         Err(keyring::Error::NoEntry) if provider == "anthropic" => {
             let legacy = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT)?;
             let key = legacy.get_password()?; // propagates NoEntry when there's nothing to migrate
@@ -94,10 +140,12 @@ fn get_provider_key(provider: &str) -> Result<String, keyring::Error> {
             // regardless, and the migration retries on the next read.
             let _ = entry.set_password(&key);
             let _ = legacy.delete_credential();
-            Ok(key)
+            key
         }
-        Err(e) => Err(e),
-    }
+        Err(e) => return Err(e),
+    };
+    cache_put(provider, &key);
+    Ok(key)
 }
 
 /// The device identity: a stable public `device_id` plus the ed25519 signing key
@@ -202,7 +250,8 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
 /// caller (agent_process.rs) — it never passes through the webview.
 pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
     match method {
-        // {provider} -> {key}. Per-call, never cached shell-side (§5).
+        // {provider} -> {key}. Served from the session cache after the first OS
+        // read (owner decision 2026-07-19 — see KEY_CACHE); never persisted.
         "keychain.getProviderKey" => {
             let provider = required_str(params, "provider", "A provider is required.")?;
             match get_provider_key(provider) {
@@ -266,6 +315,43 @@ mod tests {
     fn device_account_is_distinct_from_provider_accounts() {
         assert_ne!(DEVICE_ACCOUNT, account_for_provider("anthropic"));
         assert!(!DEVICE_ACCOUNT.starts_with("provider-key:"));
+    }
+
+    // --- Session cache: exercised directly, no OS keychain involved. Tests own
+    // distinct provider ids so parallel test threads can't collide.
+
+    #[test]
+    fn cache_round_trips_a_key() {
+        cache_put("cache-test-a", "sk-value-1");
+        assert_eq!(cache_get("cache-test-a").as_deref(), Some("sk-value-1"));
+    }
+
+    #[test]
+    fn cache_replace_overwrites_in_place() {
+        cache_put("cache-test-b", "sk-old");
+        cache_put("cache-test-b", "sk-new");
+        assert_eq!(cache_get("cache-test-b").as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn cache_evict_removes_the_entry() {
+        cache_put("cache-test-c", "sk-value");
+        cache_evict("cache-test-c");
+        assert_eq!(cache_get("cache-test-c"), None);
+    }
+
+    #[test]
+    fn cache_miss_is_none_not_empty_string() {
+        assert_eq!(cache_get("cache-test-never-written"), None);
+    }
+
+    #[test]
+    fn cache_is_namespaced_per_provider() {
+        cache_put("cache-test-d1", "sk-one");
+        cache_put("cache-test-d2", "sk-two");
+        cache_evict("cache-test-d1");
+        assert_eq!(cache_get("cache-test-d1"), None);
+        assert_eq!(cache_get("cache-test-d2").as_deref(), Some("sk-two"));
     }
 
     #[test]
