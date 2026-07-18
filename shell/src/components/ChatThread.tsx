@@ -184,7 +184,7 @@ export function ChatThread({
                     type="button"
                     onClick={submit}
                     disabled={!draft.trim()}
-                    className="bg-accent px-6 py-2.5 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                    className="bg-accent px-6 py-2.5 text-base font-semibold text-accent-fg hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     Send
                   </button>
@@ -192,7 +192,7 @@ export function ChatThread({
               </div>
             </div>
           </div>
-          <p className="mt-2 text-xs text-muted">
+          <p className="mt-2 font-mono text-xs text-muted">
             Press Enter to send. Shift+Enter starts a new line.
           </p>
         </div>
@@ -225,7 +225,7 @@ function MessageRow({
   return (
     <div className="group border-b border-line/70 py-4 last:border-b-0">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+        <span className="font-mono text-xs font-semibold uppercase tracking-wide text-muted">
           {label}
         </span>
         {canRewind && (

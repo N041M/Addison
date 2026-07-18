@@ -45,7 +45,7 @@ export function HistoryView({ conversations, currentConversationId, onOpen, onBa
                     type="button"
                     onClick={() => onOpen(c.id)}
                     className={
-                      "flex w-full items-baseline justify-between gap-4 px-3 py-3.5 text-left hover:bg-paper " +
+                      "flex w-full items-baseline justify-between gap-4 px-3 py-3.5 text-left hover:bg-surface " +
                       (isCurrent ? "bg-accent-tint" : "")
                     }
                   >

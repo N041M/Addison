@@ -166,7 +166,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
                   type="button"
                   disabled={running === routine.id}
                   onClick={() => startRun(routine)}
-                  className="bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark disabled:opacity-60"
+                  className="bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-dark disabled:opacity-60"
                 >
                   {running === routine.id ? "Running…" : "Run now"}
                 </button>
@@ -201,7 +201,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
                   <button
                     type="button"
                     onClick={() => void executeRun(routine)}
-                    className="bg-accent px-3 py-1.5 text-sm font-semibold text-white hover:bg-accent-dark"
+                    className="bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-dark"
                   >
                     Start
                   </button>

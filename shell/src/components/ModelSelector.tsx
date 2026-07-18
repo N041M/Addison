@@ -13,9 +13,9 @@
 // A one-line plain description of the chosen model rides along in the dropdown's
 // title, so it's there on hover/read-out without cluttering the row.
 //
-// Visual direction is binding (CLAUDE.md): cool-slate surfaces, sharp corners,
-// one steel-blue accent, plain language for readers who are 54 and 68 — never a
-// generic AI-chat look.
+// Visual direction is binding (CLAUDE.md): dark terminal-adjacent surfaces, sharp
+// corners, one restrained steel-blue accent, system-monospace for the model name,
+// plain language for readers who are 54 and 68 — never a generic AI-chat look.
 
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
@@ -144,7 +144,7 @@ export function ModelSelector({
           value={currentValue}
           title={description || undefined}
           onChange={(e) => handlePick(e.target.value)}
-          className="border border-line bg-surface px-2.5 py-1.5 text-sm text-ink disabled:opacity-60"
+          className="border border-line bg-surface px-2.5 py-1.5 font-mono text-sm text-ink disabled:opacity-60"
         >
           {cloud.map((m) => (
             <option key={m.id} value={encode("primary", m.id)}>

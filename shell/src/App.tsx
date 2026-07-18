@@ -6,11 +6,11 @@
 // (streamed text, permission prompts, tool activity, local-setup progress) into
 // React state, and Frontend → Core actions back out through the typed `ipc`.
 //
-// Visual direction is binding (CLAUDE.md, design-doc §7.1): a calm cool-slate
-// everyday-utility look with sharp corners, one deep steel-blue accent for
-// primary actions only, no decorative taglines, real typographic hierarchy for
-// readers who are 54 and 68 — never a generic AI-chat template, never a model
-// vendor's branding.
+// Visual direction is binding (CLAUDE.md; design-doc §7.1 as amended 2026-07): a
+// dark, terminal-adjacent everyday-utility look — minimal chrome, system-monospace
+// accents, sharp corners, one restrained steel-blue accent for primary actions
+// only, no decorative taglines, real typographic hierarchy for readers who are 54
+// and 68 — never a generic AI-chat template, never a model vendor's branding.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
@@ -687,7 +687,7 @@ export function App() {
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
       <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
-        <span className="text-xl font-semibold tracking-tight text-ink">Addison</span>
+        <span className="font-mono text-xl font-semibold tracking-tight text-ink">Addison</span>
         <div className="flex items-center gap-4">
           <button
             type="button"

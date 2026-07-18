@@ -45,9 +45,8 @@ export function MermaidDiagram({ code }: Props) {
         // Lazy, code-split import: keeps mermaid out of the initial chunk.
         const mermaid = await import("mermaid");
         if (!initialized) {
-          // theme "dark" is deliberate: the app flips fully dark in the next PR.
-          // Against the current light surface it reads slightly off for one PR —
-          // accepted, and retuned when the dark restyle lands.
+          // theme "dark" matches the app's dark surface — the diagram sits on the
+          // same palette as the rest of the message thread.
           mermaid.default.initialize({
             startOnLoad: false,
             securityLevel: "strict",
