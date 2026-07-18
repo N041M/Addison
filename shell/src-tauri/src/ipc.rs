@@ -58,6 +58,18 @@ impl RpcError {
     }
 }
 
+/// Pull a required string parameter out of a JSON-RPC `params` object, or return a
+/// plain-language `invalid_params` error. A missing key AND a present-but-non-string
+/// value both yield `missing` — the caller words it for the field ("A file name is
+/// required."). Consolidates the `get(..).and_then(as_str).ok_or_else(..)` that every
+/// shell/keychain handler otherwise repeats verbatim.
+pub fn required_str<'a>(params: &'a Value, key: &str, missing: &str) -> Result<&'a str, RpcError> {
+    params
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| RpcError::invalid_params(missing))
+}
+
 /// True for methods the core sends *back* to the shell — never callable from the
 /// webview, always handled in-process.
 pub fn is_shell_bound(method: &str) -> bool {
@@ -151,6 +163,19 @@ mod tests {
         assert!(validate_outbound_frame(&json!([1, 2, 3])).is_err());
         assert!(validate_outbound_frame(&json!({ "id": 1 })).is_err());
         assert!(validate_outbound_frame(&json!({ "method": 42 })).is_err());
+    }
+
+    #[test]
+    fn required_str_extracts_present_string_and_rejects_missing_or_wrong_type() {
+        let params = json!({ "name": "x", "count": 5 });
+        assert_eq!(required_str(&params, "name", "need name").unwrap(), "x");
+        // Missing key -> the caller's plain-language message, invalid_params code.
+        let missing = required_str(&params, "other", "need other").unwrap_err();
+        assert_eq!(missing.code, -32602);
+        assert_eq!(missing.message, "need other");
+        // Present but not a string -> same missing message (matches prior semantics).
+        let wrong_type = required_str(&params, "count", "need count as text").unwrap_err();
+        assert_eq!(wrong_type.code, -32602);
     }
 
     #[test]

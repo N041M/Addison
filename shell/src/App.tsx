@@ -12,7 +12,7 @@
 // readers who are 54 and 68 — never a generic AI-chat template, never a model
 // vendor's branding.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
 import type {
   CloudModel,
@@ -71,6 +71,12 @@ export function App() {
   const [canRedo, setCanRedo] = useState(false);
   // One-shot composer prefill for rewind's edit-and-resend.
   const [composerSeed, setComposerSeed] = useState<string | null>(null);
+  // Identifies the turn whose IPC result may still touch shared turn state (the
+  // assistant message, isWorking, the activity line). Stop and every new turn
+  // reassign it, so a result arriving late from an abandoned turn — the core has
+  // no cancel, so its work keeps landing after Stop (see handleStop) — is dropped
+  // instead of resurrecting stopped text or re-enabling the composer mid-turn.
+  const currentTurnRef = useRef<string | null>(null);
 
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [cloudModels, setCloudModels] = useState<CloudModel[]>([]);
@@ -281,6 +287,7 @@ export function App() {
   async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
     const assistantId = uid();
     const userId = uid();
+    currentTurnRef.current = assistantId;
     setMessages((prev) => {
       const base = opts.isRetry
         ? dropTrailingAssistant(prev)
@@ -305,6 +312,9 @@ export function App() {
         : effectiveCloudModel();
       const effort = isLocal ? undefined : selectedEffort;
       const res = await ipc.sendMessage(text, selectedRole, modelId, effort);
+      // Stopped or superseded by a newer turn while we were waiting — drop this
+      // result so it can't overwrite "(Stopped.)" or a later turn's answer.
+      if (currentTurnRef.current !== assistantId) return;
       const finalText = extractFinalText(res);
       // The core's persisted ids: what "Rewind to here" must anchor on.
       const ids = asRecord(res);
@@ -323,6 +333,9 @@ export function App() {
         }),
       );
     } catch (err) {
+      // Same guard on the failure path: an abandoned turn's error must not
+      // replace the stopped message or a newer turn's content.
+      if (currentTurnRef.current !== assistantId) return;
       const message = err instanceof Error ? err.message : "Something went wrong.";
       // Developer-only: the client attaches the real exception text as `.raw`.
       // We keep it on the message; ChatThread renders it only when the
@@ -344,8 +357,14 @@ export function App() {
         ),
       );
     } finally {
-      setIsWorking(false);
-      setCurrentActivity(null);
+      // Only the still-current turn clears the working/activity state; an
+      // abandoned turn's cleanup would otherwise re-enable the composer and hide
+      // the activity line while a newer turn is still running.
+      if (currentTurnRef.current === assistantId) {
+        currentTurnRef.current = null;
+        setIsWorking(false);
+        setCurrentActivity(null);
+      }
     }
   }
 
@@ -365,6 +384,9 @@ export function App() {
   function handleStop() {
     // The v1 IPC contract has no core-side cancel method, so Stop halts the
     // webview turn: it stops accepting streamed text and re-enables the input.
+    // Abandon the turn so its still-in-flight result can't land later and
+    // overwrite the "(Stopped.)" message (the core keeps working regardless).
+    currentTurnRef.current = null;
     setIsWorking(false);
     setCurrentActivity(null);
     setMessages((prev) =>

@@ -133,6 +133,31 @@ class _SnapshotTool:
         self.undone.append(snapshot.id)
 
 
+class _RaisingTool:
+    """LOW tool whose execute RAISES like a shell-bridge refusal — save_file's
+    ``save_new_file`` raises RuntimeError ("A file with that name is already
+    there") rather than returning success=False. A routine step must treat that
+    as a FAILED step, not a crashed run."""
+
+    definition = ToolDefinition(
+        id="flaky",
+        label="Do a step",
+        description="Test tool that raises.",
+        risk_tier=RiskTier.LOW,
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    def __init__(self, exc: Exception | None = None):
+        self.executed: list[dict] = []
+        self._exc = exc or RuntimeError(
+            "A file with that name is already there — please choose another name."
+        )
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        self.executed.append(args)
+        raise self._exc
+
+
 def _engine(tmp_path, tool=None, gate=None, on_ask_user=None):
     registry = ToolRegistry()
     tool = tool or _FlakyTool()
@@ -281,6 +306,54 @@ def test_step_result_feeds_later_step_and_snapshots_recorded(tmp_path):
     # The mutating step's snapshot is undoable like any live action (§6.4).
     undo_results = undo.undo_last(1)
     assert undo_results[0].success and mutating.undone == ["snap-1"]
+
+
+def test_raising_tool_is_a_failed_step_not_a_crashed_run(tmp_path):
+    # A tool that RAISES (shell-bridge refusal) must fail the step, honour the
+    # on_failure policy, and — critically — still finish the run so its
+    # routine_runs log isn't left stuck at 'running'. Before the fix the
+    # exception propagated out of run(), skipping _finish entirely.
+    engine, tool, gate, store = _engine(tmp_path, tool=_RaisingTool())
+    gate.grant("flaky")
+    routine = _routine([
+        RoutineStep("s1", "flaky", {}, on_failure="abort"),
+        RoutineStep("s2", "flaky", {}, depends_on=["s1"]),
+    ])
+    result = engine.run(routine, {})
+    assert result.status == "failed"
+    # The plain bridge sentence is carried through as the run detail (not a stack trace).
+    assert "already there" in result.detail
+    assert len(tool.executed) == 1  # aborted before s2
+    # The run log was finalised, not abandoned mid-run.
+    row = store._conn.execute("SELECT status FROM routine_runs").fetchone()
+    assert row["status"] == "failed"
+
+
+def test_raising_tool_with_skip_continues_to_next_step(tmp_path):
+    # on_failure="skip" applies to a RAISED failure exactly as to a returned one.
+    engine, tool, gate, _ = _engine(tmp_path, tool=_RaisingTool())
+    gate.grant("flaky")
+    routine = _routine([
+        RoutineStep("s1", "flaky", {"n": 1}, on_failure="skip"),
+        RoutineStep("s2", "flaky", {"n": 2}, depends_on=["s1"], on_failure="skip"),
+    ])
+    result = engine.run(routine, {})
+    # Both steps ran (the raise didn't abort the run); the run completed.
+    assert result.status == "completed"
+    assert tool.executed == [{"n": 1}, {"n": 2}]
+
+
+def test_non_runtime_error_from_tool_becomes_plain_failed_step(tmp_path):
+    # A non-RuntimeError (a genuine bug in a tool) must not leak its repr — it
+    # collapses to one plain sentence, same as the live orchestrator.
+    engine, tool, gate, _ = _engine(
+        tmp_path, tool=_RaisingTool(exc=ValueError("boom internal detail"))
+    )
+    gate.grant("flaky")
+    result = engine.run(_routine([RoutineStep("s1", "flaky", {}, on_failure="abort")]), {})
+    assert result.status == "failed"
+    assert result.detail == "That step didn't work."
+    assert "boom internal detail" not in result.detail
 
 
 # --- builder (§6.3) ----------------------------------------------------------

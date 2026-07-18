@@ -16,7 +16,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
-use crate::ipc::RpcError;
+use crate::ipc::{required_str, RpcError};
 
 /// Session-scoped bookkeeping, held in Tauri managed state.
 #[derive(Default)]
@@ -58,68 +58,40 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
 
 // shell.saveNewFile {filename, content} -> {path}
 async fn save_new_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
-    let filename = params
-        .get("filename")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::invalid_params("A file name is required."))?
-        .to_string();
-    let content = params
-        .get("content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::invalid_params("There's nothing to save."))?
-        .to_string();
+    let filename = required_str(params, "filename", "A file name is required.")?.to_string();
+    let content = required_str(params, "content", "There's nothing to save.")?.to_string();
 
-    let seed = filename.clone();
     let picked: Option<PathBuf> =
-        on_main(app, move || rfd::FileDialog::new().set_file_name(seed).save_file()).await?;
+        on_main(app, move || rfd::FileDialog::new().set_file_name(filename).save_file()).await?;
     let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
 
-    // create_new(true) REFUSES an existing file even if the dialog let the user
-    // point at one — this is what keeps save_file's undo trivial (just delete what
-    // we created) and is required by §7.4.1 regardless of dialog behaviour.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                RpcError::app("A file with that name is already there — please choose another name.")
-            }
-            _ => RpcError::app("Addison couldn't save that file."),
-        })?;
-    file.write_all(content.as_bytes())
-        .map_err(|_| RpcError::app("Addison couldn't save that file."))?;
+    create_new_and_write(
+        &path,
+        &content,
+        "A file with that name is already there — please choose another name.",
+        "Addison couldn't save that file.",
+    )?;
 
-    app.state::<FileState>()
-        .created
-        .lock()
-        .expect("created-files lock")
-        .insert(path.clone());
-
+    lock(&app.state::<FileState>().created).insert(path.clone());
     Ok(json!({ "path": path.to_string_lossy() }))
 }
 
 // shell.deleteFile {path} -> {}   (save_file's undo path)
 fn delete_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
-    let path = PathBuf::from(
-        params
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| RpcError::invalid_params("A file path is required."))?,
-    );
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
 
     let state = app.state::<FileState>();
     {
-        let created = state.created.lock().expect("created-files lock");
+        let created = lock(&state.created);
         if !created.contains(&path) {
             // Only ever remove what we made this session — never an arbitrary path.
             return Err(RpcError::app("Addison can only remove a file it just created."));
         }
     }
     std::fs::remove_file(&path).map_err(|_| RpcError::app("Addison couldn't remove that file."))?;
-    state.created.lock().expect("created-files lock").remove(&path);
+    lock(&state.created).remove(&path);
     // The path graduates to the restorable set: redo may re-create it, once.
-    state.deleted.lock().expect("deleted-files lock").insert(path);
+    lock(&state.deleted).insert(path);
     Ok(json!({}))
 }
 
@@ -128,42 +100,27 @@ fn delete_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
 // Only re-creates a file that `shell.deleteFile` removed THIS SESSION — the
 // mirror of delete's allowlist, so redo structurally cannot write anywhere new.
 fn restore_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
-    let path = PathBuf::from(
-        params
-            .get("path")
-            .and_then(Value::as_str)
-            .ok_or_else(|| RpcError::invalid_params("A file path is required."))?,
-    );
-    let content = params
-        .get("content")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::invalid_params("There's nothing to put back."))?
-        .to_string();
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    let content = required_str(params, "content", "There's nothing to put back.")?.to_string();
 
     let state = app.state::<FileState>();
     {
-        let deleted = state.deleted.lock().expect("deleted-files lock");
+        let deleted = lock(&state.deleted);
         if !deleted.contains(&path) {
             return Err(RpcError::app("Addison can only put back a file it just removed."));
         }
     }
     // create_new: if something ELSE now lives at that path, refuse rather than
     // overwrite — same §7.4.1 rule as saving.
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                RpcError::app("A file with that name is already there — nothing was changed.")
-            }
-            _ => RpcError::app("Addison couldn't put that file back."),
-        })?;
-    file.write_all(content.as_bytes())
-        .map_err(|_| RpcError::app("Addison couldn't put that file back."))?;
+    create_new_and_write(
+        &path,
+        &content,
+        "A file with that name is already there — nothing was changed.",
+        "Addison couldn't put that file back.",
+    )?;
 
-    state.deleted.lock().expect("deleted-files lock").remove(&path);
-    state.created.lock().expect("created-files lock").insert(path);
+    lock(&state.deleted).remove(&path);
+    lock(&state.created).insert(path);
     Ok(json!({}))
 }
 
@@ -174,28 +131,20 @@ async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
     let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
 
     let handle = uuid::Uuid::new_v4().to_string();
-    app.state::<FileState>()
-        .handles
-        .lock()
-        .expect("file-handles lock")
-        .insert(handle.clone(), path);
+    lock(&app.state::<FileState>().handles).insert(handle.clone(), path);
     Ok(json!({ "fileHandle": handle }))
 }
 
 // shell.readScopedFile {fileHandle} -> {content, kind}
 fn read_scoped_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
-    let handle = params
-        .get("fileHandle")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::invalid_params("A file handle is required."))?;
+    let handle = required_str(params, "fileHandle", "A file handle is required.")?;
 
     // Resolve ONLY a handle we minted; a raw/unknown handle reads nothing.
     let state = app.state::<FileState>();
-    let path = {
-        let handles = state.handles.lock().expect("file-handles lock");
-        handles.get(handle).cloned()
-    }
-    .ok_or_else(|| RpcError::app("Addison can't read that file — please pick it again."))?;
+    let path = lock(&state.handles)
+        .get(handle)
+        .cloned()
+        .ok_or_else(|| RpcError::app("Addison can't read that file — please pick it again."))?;
 
     let bytes = std::fs::read(&path).map_err(|_| RpcError::app("Addison couldn't read that file."))?;
 
@@ -211,10 +160,7 @@ fn read_scoped_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> 
 
 // shell.openExternal {url} -> {}
 fn open_external(params: &Value) -> Result<Value, RpcError> {
-    let url = params
-        .get("url")
-        .and_then(Value::as_str)
-        .ok_or_else(|| RpcError::invalid_params("A link is required."))?;
+    let url = required_str(params, "url", "A link is required.")?;
 
     // Re-validate the scheme in Rust — don't trust the core's check (§8, defense in depth).
     if !is_http_url(url) {
@@ -231,6 +177,41 @@ fn read_clipboard() -> Result<Value, RpcError> {
     // No text on the clipboard is a valid empty result, not an error.
     let text = clipboard.get_text().unwrap_or_default();
     Ok(json!({ "text": text }))
+}
+
+/// Acquire a session-state lock, recovering the guard if a previous holder panicked.
+/// These sets/maps only ever see whole insert/remove/contains/get operations, so a
+/// poisoned lock carries no half-updated invariant — recovering is strictly safer
+/// than letting a stray panic cascade into the stdio supervisor that answers the core.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Create `path` fresh and write `content`, never overwriting an existing file
+/// (§7.4.1 — the anti-clobber rule that keeps save_file's undo trivial). If the
+/// write fails after the file was created, the just-created file is rolled back so a
+/// mid-write failure can't strand a partial orphan that the undo path won't touch.
+/// `exists_msg`/`fail_msg` carry the caller's plain-language wording.
+fn create_new_and_write(
+    path: &Path,
+    content: &str,
+    exists_msg: &str,
+    fail_msg: &str,
+) -> Result<(), RpcError> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => RpcError::app(exists_msg),
+            _ => RpcError::app(fail_msg),
+        })?;
+    if file.write_all(content.as_bytes()).is_err() {
+        drop(file); // release the handle before unlinking (matters on Windows)
+        let _ = std::fs::remove_file(path); // best-effort: leave no partial orphan
+        return Err(RpcError::app(fail_msg));
+    }
+    Ok(())
 }
 
 /// Run a blocking native dialog on the main/UI thread (required on macOS/Windows/
@@ -288,6 +269,31 @@ mod tests {
         assert!(!is_http_url("mailto:x@example.com"));
         assert!(!is_http_url("example.com"));
         assert!(!is_http_url(""));
+    }
+
+    fn temp_path() -> PathBuf {
+        std::env::temp_dir().join(format!("addison-fs-test-{}.txt", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    fn create_new_and_write_writes_a_fresh_file() {
+        let path = temp_path();
+        assert!(create_new_and_write(&path, "hello", "exists", "fail").is_ok());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn create_new_and_write_refuses_to_overwrite_and_leaves_the_original() {
+        let path = temp_path();
+        std::fs::write(&path, "original").expect("seed file");
+        // An existing file must be refused with the caller's exists message, never
+        // clobbered — this is the anti-overwrite property save/restore both rely on.
+        let err = create_new_and_write(&path, "new", "already there", "fail").unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(err.message, "already there");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

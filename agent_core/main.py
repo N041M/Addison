@@ -667,6 +667,13 @@ class JsonRpcServer:
             self._respond_error(request_id, _SERVER_ERROR, error)
             return
 
+        # Is a real PRIMARY key available right now? Both the BYOK-onboarding refusal
+        # and the §4.6 Setup Assistant handoff below turn on this, so probe it ONCE
+        # here rather than per branch — the probe is a keychain round-trip (§5). Only
+        # a PRIMARY/default turn touches the key path; a LOCAL turn never probes.
+        primary_role = requested_role in (None, ModelRole.PRIMARY)
+        primary_key_available = self._primary_key_available() if primary_role else True
+
         # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
         # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the
         # user to add their own key. Simple keeps the §4.6 relay handoff below,
@@ -674,8 +681,8 @@ class JsonRpcServer:
         # neither path changes the gate/undo/key rules (§8.7).
         profile = self._active_profile
         if (
-            requested_role in (None, ModelRole.PRIMARY)
-            and not self._primary_key_available()
+            primary_role
+            and not primary_key_available
             and profile is not None
             and profile.onboarding == "byok_first"
         ):
@@ -694,7 +701,7 @@ class JsonRpcServer:
         # key exists, the probe passes and turns go to PRIMARY, history untouched —
         # that IS the handoff; no transcript rewrite, no state to flip.
         system_msg = None
-        if requested_role in (None, ModelRole.PRIMARY) and not self._primary_key_available():
+        if primary_role and not primary_key_available:
             requested_role = ModelRole.SETUP_ASSISTANT
             if self._setup_prompt:
                 system_msg = Message(role="system", content=self._setup_prompt)

@@ -148,8 +148,10 @@ function handleCoreMessage(frame: CoreFrame): void {
     const rawValue = frame.error.data?.raw;
     if (typeof rawValue === "string" && rawValue) {
       err.raw = rawValue;
-      const entry: DiagnosticEntry = { message, raw: rawValue, at: Date.now() };
-      diagnosticsHandlers.forEach((h) => h(entry));
+      // Named `diag`, not `entry`: the outer `entry` is the pending request we
+      // reject just below — shadowing it here would be a footgun.
+      const diag: DiagnosticEntry = { message, raw: rawValue, at: Date.now() };
+      diagnosticsHandlers.forEach((h) => h(diag));
     }
     entry.reject(err);
   } else {
