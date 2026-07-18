@@ -464,7 +464,7 @@ def test_simple_no_key_turn_still_routes_to_setup_assistant(tmp_path):
     try:
         assert _rpc(
             reader, writer, 1, Method.CONVERSATION_SEND_MESSAGE, {"text": "hi"}
-        )["result"] == {"ok": True}
+        )["result"]["ok"] is True
         # Simple keeps the §4.6 relay handoff: the Setup Assistant handled the turn.
         assert len(setup.histories) == 1
         assert primary.histories == []

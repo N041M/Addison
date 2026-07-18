@@ -25,6 +25,10 @@ pub struct FileState {
     /// (save_file's undo path) will only touch a path in this set — defense in depth
     /// so the undo route can't be steered into deleting an arbitrary file.
     created: Mutex<HashSet<PathBuf>>,
+    /// Paths the shell created and then REMOVED via `shell.deleteFile` this session.
+    /// `shell.restoreFile` (save_file's redo path) will only write a path in this
+    /// set — redo can re-create exactly what undo removed, and nothing else.
+    deleted: Mutex<HashSet<PathBuf>>,
     /// Opaque handle -> path the user picked this session. The core only ever sees
     /// the handle; `shell.readScopedFile` resolves it. Not persisted: handles die
     /// with the session.
@@ -37,6 +41,7 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
     match method {
         "shell.saveNewFile" => save_new_file(app, params).await,
         "shell.deleteFile" => delete_file(app, params),
+        "shell.restoreFile" => restore_file(app, params),
         "shell.pickFile" => pick_file(app).await,
         "shell.readScopedFile" => read_scoped_file(app, params),
         "shell.openExternal" => open_external(params),
@@ -113,6 +118,52 @@ fn delete_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     }
     std::fs::remove_file(&path).map_err(|_| RpcError::app("Addison couldn't remove that file."))?;
     state.created.lock().expect("created-files lock").remove(&path);
+    // The path graduates to the restorable set: redo may re-create it, once.
+    state.deleted.lock().expect("deleted-files lock").insert(path);
+    Ok(json!({}))
+}
+
+// shell.restoreFile {path, content} -> {}   (save_file's redo path)
+//
+// Only re-creates a file that `shell.deleteFile` removed THIS SESSION — the
+// mirror of delete's allowlist, so redo structurally cannot write anywhere new.
+fn restore_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(
+        params
+            .get("path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RpcError::invalid_params("A file path is required."))?,
+    );
+    let content = params
+        .get("content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| RpcError::invalid_params("There's nothing to put back."))?
+        .to_string();
+
+    let state = app.state::<FileState>();
+    {
+        let deleted = state.deleted.lock().expect("deleted-files lock");
+        if !deleted.contains(&path) {
+            return Err(RpcError::app("Addison can only put back a file it just removed."));
+        }
+    }
+    // create_new: if something ELSE now lives at that path, refuse rather than
+    // overwrite — same §7.4.1 rule as saving.
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::AlreadyExists => {
+                RpcError::app("A file with that name is already there — nothing was changed.")
+            }
+            _ => RpcError::app("Addison couldn't put that file back."),
+        })?;
+    file.write_all(content.as_bytes())
+        .map_err(|_| RpcError::app("Addison couldn't put that file back."))?;
+
+    state.deleted.lock().expect("deleted-files lock").remove(&path);
+    state.created.lock().expect("created-files lock").insert(path);
     Ok(json!({}))
 }
 

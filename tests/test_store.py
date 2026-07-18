@@ -132,6 +132,28 @@ def test_truncate_with_same_second_timestamps_uses_rowid(store: Store):
     assert [m["id"] for m in store.messages_for_conversation("c1")] == ["m1", "m2"]
 
 
+def test_create_conversation_is_idempotent_across_relaunches(store: Store):
+    # The server/CLI use fixed conversation ids ("main"/"cli"), so every launch
+    # after the first finds the row already on disk. That must read as resumption
+    # — the original row kept, no IntegrityError. (Found in the 2026-07 manual
+    # pass: the desktop app failed every turn from its second launch onward.)
+    store.create_conversation("main", title="first", provider_id="anthropic", started_at=1)
+    store.create_conversation("main", title="second", provider_id="anthropic", started_at=2)
+
+    store.insert_message(id="m1", conversation_id="main", role="user",
+                         content="still works", created_at=3)
+    assert [m["id"] for m in store.messages_for_conversation("main")] == ["m1"]
+
+
+def test_truncate_without_anchor_removes_the_anchor_too(store: Store):
+    # keep_anchor=False is rewind's edit-and-resend mode: the anchored user
+    # message leaves history (its text returns to the composer instead).
+    _seed_conversation(store, "c1", ["m1", "m2", "m3"], base=0)
+
+    store.truncate_messages("c1", to_message_id="m2", keep_anchor=False)
+    assert [m["id"] for m in store.messages_for_conversation("c1")] == ["m1"]
+
+
 def test_truncate_leaves_other_conversations_and_snapshots_alone(store: Store):
     _seed_conversation(store, "c1", ["m1", "m2", "m3"], base=0)
     _seed_conversation(store, "c2", ["n1", "n2", "n3"], base=100)

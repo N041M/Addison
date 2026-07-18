@@ -76,6 +76,16 @@ export function SettingsDrawer({
   async function saveKey() {
     const trimmed = keyValue.trim();
     if (!trimmed) return;
+    // Catch clipboard damage at the door: a real key is printable ASCII with no
+    // spaces. Smart quotes, "…" from a truncated copy, or a non-breaking space
+    // would otherwise be saved and fail every request afterwards.
+    if (!/^[\x21-\x7E]+$/.test(trimmed)) {
+      setSaveState("error");
+      setSaveError(
+        "That doesn't look like a complete API key — copy the whole key and paste it again.",
+      );
+      return;
+    }
     setSaveState("saving");
     setSaveError("");
     try {

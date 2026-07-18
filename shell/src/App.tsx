@@ -27,6 +27,7 @@ import {
   storeProviderKey,
   subscribe,
   subscribeStatus,
+  subscribeCoreState,
   subscribeDiagnostics,
   type StreamChunkParams,
   type LocalSetupProgressParams,
@@ -65,6 +66,11 @@ export function App() {
   const [activities, setActivities] = useState<ActivityUpdate[]>([]);
   const [hasUndoableActions, setHasUndoableActions] = useState(false);
   const [lastUndoDetail, setLastUndoDetail] = useState<string | null>(null);
+  // Mirrors the core's session redo stack: set from undo/redo responses,
+  // cleared whenever a new tool action lands (the core clears its stack too).
+  const [canRedo, setCanRedo] = useState(false);
+  // One-shot composer prefill for rewind's edit-and-resend.
+  const [composerSeed, setComposerSeed] = useState<string | null>(null);
 
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [cloudModels, setCloudModels] = useState<CloudModel[]>([]);
@@ -122,8 +128,10 @@ export function App() {
         setCurrentActivity(update);
         setActivities((prev) => [...prev, update]);
         // Any tool step means something may be undoable; the core reports back
-        // plainly if there's actually nothing to put back.
+        // plainly if there's actually nothing to put back. A new action also
+        // discards the undone future — the core just cleared its redo stack.
         setHasUndoableActions(true);
+        setCanRedo(false);
       }),
     );
 
@@ -153,6 +161,19 @@ export function App() {
     );
 
     unsubs.push(subscribeStatus((text) => setStatusBanner(text)));
+
+    // Every "ready" is a fresh engine process (first launch OR the shell's
+    // one-time respawn after a crash). Re-fetch what we cached from the old
+    // one — offering a dead engine's model catalog produces "That model
+    // option isn't available." (2026-07 manual pass finding).
+    unsubs.push(
+      subscribeCoreState((state) => {
+        if (state === "ready") {
+          refreshRoles();
+          refreshProfile();
+        }
+      }),
+    );
 
     // Keep the last ~5 raw diagnostics for the Developer-only panel. The ring is
     // maintained even in Simple (it simply never fills, since the core only ever
@@ -259,10 +280,11 @@ export function App() {
   // --- Turn lifecycle -------------------------------------------------------
   async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
     const assistantId = uid();
+    const userId = uid();
     setMessages((prev) => {
       const base = opts.isRetry
         ? dropTrailingAssistant(prev)
-        : [...prev, { id: uid(), role: "user", content: text } as DisplayMessage];
+        : [...prev, { id: userId, role: "user", content: text } as DisplayMessage];
       return [...base, { id: assistantId, role: "assistant", content: "", pending: true }];
     });
 
@@ -284,12 +306,21 @@ export function App() {
       const effort = isLocal ? undefined : selectedEffort;
       const res = await ipc.sendMessage(text, selectedRole, modelId, effort);
       const finalText = extractFinalText(res);
+      // The core's persisted ids: what "Rewind to here" must anchor on.
+      const ids = asRecord(res);
+      const userStoreId = typeof ids?.userMessageId === "string" ? ids.userMessageId : undefined;
+      const assistantStoreId =
+        typeof ids?.assistantMessageId === "string" ? ids.assistantMessageId : undefined;
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantId
-            ? { ...m, pending: false, content: finalText ?? m.content }
-            : m,
-        ),
+        prev.map((m) => {
+          if (m.id === assistantId) {
+            return { ...m, pending: false, content: finalText ?? m.content, storeId: assistantStoreId };
+          }
+          if (m.id === userId) {
+            return { ...m, storeId: userStoreId };
+          }
+          return m;
+        }),
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong.";
@@ -304,9 +335,9 @@ export function App() {
                 ...m,
                 pending: false,
                 failed: true,
-                content:
-                  m.content ||
-                  `I couldn't finish that. ${message} You can try again in a moment.`,
+                // The core and the IPC client both send complete plain-language
+                // sentences with a next step — render them as-is, no re-wrapping.
+                content: m.content || message,
                 raw: typeof raw === "string" ? raw : undefined,
               }
             : m,
@@ -354,22 +385,31 @@ export function App() {
     });
   }
 
-  function handleRewindTo(messageId: string) {
-    // Reset the conversation to that point right away, then let the core
-    // confirm / return the authoritative history.
+  function handleRewindTo(storeId: string) {
+    // Edit-and-resend: the anchored message leaves the thread too, and its text
+    // goes back into the composer — nothing re-runs until the user presses Send.
+    // Optimistic, but reversible: if the core can't rewind, the view snaps back
+    // (a thread that looks rewound while the core remembers is the worst outcome).
+    let before: DisplayMessage[] = [];
+    let anchorText = "";
     setMessages((prev) => {
-      const idx = prev.findIndex((m) => m.id === messageId);
-      return idx === -1 ? prev : prev.slice(0, idx + 1);
+      before = prev;
+      const idx = prev.findIndex((m) => m.storeId === storeId);
+      if (idx === -1) return prev;
+      anchorText = prev[idx].content;
+      return prev.slice(0, idx);
     });
     setPermission(null);
     ipc
-      .rewindConversation(messageId)
-      .then((res) => {
-        const msgs = extractMessages(res);
-        if (msgs) setMessages(msgs);
+      .rewindConversation(storeId)
+      .then(() => {
+        if (anchorText) setComposerSeed(anchorText);
       })
-      .catch(() => {
-        /* keep the local reset if the core doesn't return history */
+      .catch((err) => {
+        setMessages(before);
+        setStatusBanner(
+          err instanceof Error ? err.message : "Couldn't rewind the conversation.",
+        );
       });
   }
 
@@ -378,9 +418,24 @@ export function App() {
       .undoLastAction()
       .then((res) => {
         setLastUndoDetail(extractDetail(res) ?? "Put things back the way they were.");
+        setCanRedo(asRecord(res)?.canRedo === true);
       })
       .catch((err) => {
         setLastUndoDetail(err instanceof Error ? err.message : "Couldn't undo that.");
+      });
+  }
+
+  function handleRedoLastAction() {
+    ipc
+      .redoLastAction()
+      .then((res) => {
+        setLastUndoDetail(extractDetail(res) ?? "Did that again.");
+        setCanRedo(asRecord(res)?.canRedo === true);
+        // A successful redo means the action is live again — undoable again.
+        setHasUndoableActions(true);
+      })
+      .catch((err) => {
+        setLastUndoDetail(err instanceof Error ? err.message : "Couldn't do that again.");
       });
   }
 
@@ -548,6 +603,8 @@ export function App() {
           onSelectModel={handleSelectModel}
           onSelectEffort={handleSelectEffort}
           showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
+          draftSeed={composerSeed}
+          onDraftSeedUsed={() => setComposerSeed(null)}
           activityStrip={
             <>
               {routineProposal && (
@@ -563,6 +620,8 @@ export function App() {
                 activities={activities}
                 hasUndoableActions={hasUndoableActions}
                 onUndoLastAction={handleUndoLastAction}
+                canRedo={canRedo}
+                onRedoLastAction={handleRedoLastAction}
                 lastUndoDetail={lastUndoDetail}
                 onProposeRoutine={connected ? handleProposeRoutine : undefined}
               />
@@ -840,21 +899,3 @@ function extractDetail(result: unknown): string | null {
   return typeof detail === "string" ? detail : null;
 }
 
-function extractMessages(result: unknown): DisplayMessage[] | null {
-  const obj = asRecord(result);
-  const raw = Array.isArray(result) ? result : obj && Array.isArray(obj.messages) ? obj.messages : null;
-  if (!raw) return null;
-  const out: DisplayMessage[] = [];
-  for (const item of raw) {
-    const m = asRecord(item);
-    if (!m) continue;
-    const role = m.role;
-    if (role !== "user" && role !== "assistant" && role !== "tool") continue;
-    out.push({
-      id: typeof m.id === "string" ? m.id : uid(),
-      role,
-      content: typeof m.content === "string" ? m.content : "",
-    });
-  }
-  return out;
-}

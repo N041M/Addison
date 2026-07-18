@@ -19,6 +19,8 @@ interface Props {
   hasUndoableActions: boolean;
   onUndoLastAction: () => void;
   lastUndoDetail?: string | null;
+  canRedo?: boolean;
+  onRedoLastAction?: () => void;
   // §6.3: offered once a turn actually did something — Addison drafts a routine
   // from those steps; nothing is saved without the confirmation card.
   onProposeRoutine?: () => void;
@@ -31,12 +33,14 @@ export function ActivityPanel({
   hasUndoableActions,
   onUndoLastAction,
   lastUndoDetail,
+  canRedo,
+  onRedoLastAction,
   onProposeRoutine,
 }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   // Nothing worth showing: stay out of the way entirely.
-  if (!isWorking && activities.length === 0 && !hasUndoableActions && !lastUndoDetail) {
+  if (!isWorking && activities.length === 0 && !hasUndoableActions && !lastUndoDetail && !canRedo) {
     return null;
   }
 
@@ -97,12 +101,14 @@ export function ActivityPanel({
         </ol>
       )}
 
-      {(hasUndoableActions || lastUndoDetail) && (
+      {(hasUndoableActions || lastUndoDetail || canRedo) && (
         <div className="mt-3">
           <RewindControls
             hasUndoableActions={hasUndoableActions}
             onUndoLastAction={onUndoLastAction}
             lastUndoDetail={lastUndoDetail}
+            canRedo={canRedo}
+            onRedoLastAction={onRedoLastAction}
           />
         </div>
       )}

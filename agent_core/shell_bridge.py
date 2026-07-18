@@ -106,6 +106,10 @@ class IpcShellBridge:
     def delete_file(self, path: str) -> None:
         self._call(Method.SHELL_DELETE_FILE, {"path": path})
 
+    def restore_file(self, path: str, content: str) -> None:
+        # Redo of delete_file: the shell only honors paths it removed this session.
+        self._call(Method.SHELL_RESTORE_FILE, {"path": path, "content": content})
+
     def open_draft(self, to: str, subject: str, body: str) -> str:
         result = self._call(
             Method.SHELL_OPEN_DRAFT, {"to": to, "subject": subject, "body": body}

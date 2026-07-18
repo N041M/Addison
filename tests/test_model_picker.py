@@ -279,6 +279,34 @@ def test_fetch_raises_catalog_error_on_network_failure():
         fetch_cloud_catalog(lambda: "sk-test", client=client)
 
 
+def test_fetch_with_non_ascii_key_degrades_to_catalog_error_and_makes_no_request():
+    # A key with clipboard damage ("…", smart quotes) must read as a fetch
+    # failure — falling back to the built-in list — not crash header encoding.
+    hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+        return httpx.Response(200, json={"data": [], "has_more": False})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(CatalogFetchError):
+        fetch_cloud_catalog(lambda: "sk-truncated…", client=client)
+    assert hits["n"] == 0
+
+
+def test_fetch_strips_clipboard_whitespace_from_key():
+    page = {"data": [_model_entry("claude-x-1")], "has_more": False}
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["key"] = request.headers["x-api-key"]
+        return httpx.Response(200, json=page)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    fetch_cloud_catalog(lambda: " sk-pasted\n", client=client)
+    assert seen["key"] == "sk-pasted"
+
+
 def test_fetch_raises_catalog_error_when_no_key_and_makes_no_request():
     hits = {"n": 0}
 

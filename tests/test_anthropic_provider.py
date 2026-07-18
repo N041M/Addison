@@ -201,6 +201,33 @@ def test_empty_key_raises_plain_language():
         provider.send([Message(role="user", content="hi")], [])
 
 
+def test_key_with_clipboard_whitespace_is_stripped_and_works():
+    # Pasted keys arrive with trailing newlines/spaces; the provider must strip
+    # them rather than let them corrupt the HTTP header.
+    payload = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+    provider, captured, _ = _make(payload, key="  sk-pasted-key\n")
+    provider.send([Message(role="user", content="hi")], [])
+    assert captured["headers"]["x-api-key"] == "sk-pasted-key"
+
+
+def test_key_with_non_ascii_character_raises_plain_language_without_leaking_key():
+    # A truncated clipboard copy ends in "…"; without the guard this crashes
+    # header encoding with a raw exception and the user sees the generic
+    # turn error instead of a fixable next step (found in the 2026-07 manual pass).
+    provider, _, _ = _make({}, key="sk-truncated…")
+    with pytest.raises(RuntimeError) as excinfo:
+        provider.send([Message(role="user", content="hi")], [])
+    message = str(excinfo.value)
+    assert "Settings" in message           # plain next step, not a stack trace
+    assert "sk-truncated" not in message   # never leak key material
+
+
+def test_key_whitespace_only_reads_as_no_key():
+    provider = AnthropicProvider(api_key_getter=lambda: "   \n")
+    with pytest.raises(RuntimeError, match="No API key"):
+        provider.send([Message(role="user", content="hi")], [])
+
+
 def test_http_error_raises_runtimeerror_without_leaking_key():
     payload = {"error": {"type": "authentication_error", "message": "invalid x-api-key"}}
     provider, _, _ = _make(payload, status_code=401, key="sk-super-secret")

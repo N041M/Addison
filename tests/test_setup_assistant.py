@@ -271,7 +271,13 @@ class _RecordingProvider:
         return self._response
 
 
-def _routing_server(tmp_path, *, key_available: bool, setup_prompt: str = "SETUP-PROMPT"):
+def _routing_server(
+    tmp_path,
+    *,
+    key_available: bool,
+    setup_prompt: str = "SETUP-PROMPT",
+    primary_prompt: str | None = None,
+):
     primary = _RecordingProvider(ModelResponse(text="primary reply", tool_calls=[]))
     setup = _RecordingProvider(ModelResponse(text="setup reply", tool_calls=[]))
     router = ModelRouter(
@@ -287,6 +293,7 @@ def _routing_server(tmp_path, *, key_available: bool, setup_prompt: str = "SETUP
         model_router=router,
         primary_key_probe=lambda: key_available,
         setup_prompt=setup_prompt,
+        primary_prompt=primary_prompt,
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -335,6 +342,42 @@ def test_key_available_routes_to_primary_without_system_prompt(tmp_path):
         history = primary.histories[0]
         assert all(m.role != "system" for m in history)
         assert history[-1].role == "user" and history[-1].content == "hi"
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_primary_turn_gets_app_context_prompt_transiently(tmp_path):
+    # 2026-07 manual pass: with no app-context prompt, "save these steps as a
+    # routine" typed into chat got an improvised non-answer. Regular turns now
+    # carry the app prompt under the same transient rules as the setup prompt.
+    server, reader, writer, primary, setup, thread = _routing_server(
+        tmp_path, key_available=True, primary_prompt="APP-PROMPT"
+    )
+    try:
+        _send(reader, writer, 1, "hi")
+        assert setup.histories == []
+        history = primary.histories[0]
+        assert history[0].role == "system" and history[0].content == "APP-PROMPT"
+        assert history[1].role == "user" and history[1].content == "hi"
+        # Transient: gone from memory after the turn, never in the transcript.
+        assert all(m.role != "system" for m in server.conversation.messages)
+        assert len(server.conversation.messages) == 2
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_setup_turn_gets_setup_prompt_not_app_prompt(tmp_path):
+    # The two prompts never stack: a no-key turn is the Setup Assistant's, with
+    # ONLY the setup prompt, even when an app prompt is configured.
+    server, reader, writer, primary, setup, thread = _routing_server(
+        tmp_path, key_available=False, primary_prompt="APP-PROMPT"
+    )
+    try:
+        _send(reader, writer, 1, "hi")
+        assert primary.histories == []
+        history = setup.histories[0]
+        systems = [m.content for m in history if m.role == "system"]
+        assert systems == ["SETUP-PROMPT"]
     finally:
         _shutdown(reader, thread)
 

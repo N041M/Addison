@@ -16,27 +16,44 @@ interface Props {
   hasUndoableActions: boolean;
   onUndoLastAction: () => void;
   lastUndoDetail?: string | null;
+  /** True when the core reports something undone this session can be re-applied. */
+  canRedo?: boolean;
+  onRedoLastAction?: () => void;
 }
 
 export function RewindControls({
   hasUndoableActions,
   onUndoLastAction,
   lastUndoDetail,
+  canRedo,
+  onRedoLastAction,
 }: Props) {
-  if (!hasUndoableActions && !lastUndoDetail) return null;
+  if (!hasUndoableActions && !lastUndoDetail && !canRedo) return null;
 
   return (
     <div className="flex flex-col gap-1.5">
-      {hasUndoableActions && (
-        <button
-          type="button"
-          onClick={onUndoLastAction}
-          className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
-        >
-          <span aria-hidden="true">↺</span>
-          Undo last action
-        </button>
-      )}
+      <div className="flex flex-wrap gap-2">
+        {hasUndoableActions && (
+          <button
+            type="button"
+            onClick={onUndoLastAction}
+            className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+          >
+            <span aria-hidden="true">↺</span>
+            Undo last action
+          </button>
+        )}
+        {canRedo && onRedoLastAction && (
+          <button
+            type="button"
+            onClick={onRedoLastAction}
+            className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+          >
+            <span aria-hidden="true">↻</span>
+            Do it again
+          </button>
+        )}
+      </div>
       {lastUndoDetail && (
         <p className="text-sm text-muted">{lastUndoDetail}</p>
       )}

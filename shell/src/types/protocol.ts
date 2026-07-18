@@ -11,6 +11,7 @@ export const Method = {
   ToolActivityUpdate: "tool.activityUpdate",
   UndoRewindConversation: "undo.rewindConversation",
   UndoUndoLastAction: "undo.undoLastAction",
+  UndoRedoLastAction: "undo.redoLastAction",
   RoutineProposeFromConversation: "routine.proposeFromConversation",
   RoutineConfirmSave: "routine.confirmSave",
   RoutineList: "routine.list",
@@ -28,6 +29,7 @@ export const Method = {
   // (§9) covers the full method surface; the frontend must never invoke these.
   ShellSaveNewFile: "shell.saveNewFile",
   ShellDeleteFile: "shell.deleteFile",
+  ShellRestoreFile: "shell.restoreFile",
   ShellOpenDraft: "shell.openDraft",
   ShellDiscardDraft: "shell.discardDraft",
   ShellReadClipboard: "shell.readClipboard",

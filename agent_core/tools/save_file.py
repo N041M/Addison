@@ -59,7 +59,9 @@ class SaveFileTool:
             id=str(uuid.uuid4()),
             tool_call_id="",  # filled by the orchestrator
             tool_id=self.definition.id,
-            undo_payload={"created_file": created_path},
+            # ``content`` rides along so redo() can put the identical file back
+            # without a dialog — the shell only honors paths its own undo removed.
+            undo_payload={"created_file": created_path, "content": args["content"]},
             created_at=int(time.time()),
         )
         return ToolResult(success=True, content=created_path, snapshot=snapshot)
@@ -70,3 +72,15 @@ class SaveFileTool:
         if self._undo_bridge is None:
             raise RuntimeError("Can't undo saving that file — the desktop shell isn't available.")
         self._undo_bridge.delete_file(snapshot.undo_payload["created_file"])
+
+    def redo(self, snapshot: ActionSnapshot) -> None:
+        """Re-create the exact file undo() removed. The shell enforces that the
+        path is one IT deleted this session and refuses if anything else now
+        lives there — redo can never write anywhere new (§7.4.1 still holds)."""
+        if self._undo_bridge is None:
+            raise RuntimeError("Can't put that file back — the desktop shell isn't available.")
+        content = snapshot.undo_payload.get("content")
+        if content is None:
+            # Snapshot from an older session/version without the content payload.
+            raise RuntimeError("Addison no longer has that file's contents to put back.")
+        self._undo_bridge.restore_file(snapshot.undo_payload["created_file"], content)

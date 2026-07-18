@@ -42,6 +42,12 @@ interface Props {
   showTechnicalDetails?: boolean;
   /** The collapsible activity strip, rendered between the thread and composer. */
   activityStrip?: ReactNode;
+  /**
+   * One-shot composer prefill: rewinding to one of the user's messages pulls
+   * its text back into the box for editing — nothing runs until they Send.
+   */
+  draftSeed?: string | null;
+  onDraftSeedUsed?: () => void;
 }
 
 const SENDER_LABEL: Record<string, string> = {
@@ -70,6 +76,8 @@ export function ChatThread({
   onSelectEffort,
   showTechnicalDetails = false,
   activityStrip,
+  draftSeed,
+  onDraftSeedUsed,
 }: Props) {
   const [draft, setDraft] = useState("");
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +86,14 @@ export function ChatThread({
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: "end" });
   }, [messages, permission, isWorking]);
+
+  // Rewind's edit-and-resend: the rewound message's text lands here, once.
+  useEffect(() => {
+    if (draftSeed != null && draftSeed !== "") {
+      setDraft(draftSeed);
+      onDraftSeedUsed?.();
+    }
+  }, [draftSeed, onDraftSeedUsed]);
 
   // Correspondence view shows the human turns; live tool steps live in the
   // Activity strip, so tool messages aren't repeated here.
@@ -106,7 +122,7 @@ export function ChatThread({
             <MessageRow
               key={m.id}
               message={m}
-              canRewind={m.role === "user"}
+              canRewind={m.role === "user" && Boolean(m.storeId)}
               canRetry={m.id === lastAssistantId && retryAvailable}
               onRewindTo={onRewindTo}
               onRetry={onRetry}
@@ -214,7 +230,7 @@ function MessageRow({
         {canRewind && (
           <button
             type="button"
-            onClick={() => onRewindTo(message.id)}
+            onClick={() => message.storeId && onRewindTo(message.storeId)}
             className="text-xs font-medium text-muted opacity-0 transition-opacity hover:text-accent-dark focus:opacity-100 group-hover:opacity-100"
           >
             Rewind to here

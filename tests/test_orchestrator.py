@@ -219,7 +219,59 @@ def test_denied_permission_skips_execution():
     assert asked == ["calculator"]
     assert tool.calls == []  # execute() never reached
     tool_result = next(m for m in conv.messages if m.role == "tool")
-    assert tool_result.content == "User declined this permission."
+    assert tool_result.content.startswith("User declined this step.")
+    # The denial nudges the model to deliver what it already found in chat.
+    assert "give it directly in your reply" in tool_result.content
+
+
+def test_denial_lasts_only_its_own_turn_then_reasks():
+    # 2026-07 manual pass: one "Not now" used to become a silent permanent
+    # denial. It must last one turn only — the next user message asks again.
+    tool = _SpyTool("calculator", content=7)
+    registry = ToolRegistry()
+    registry.register(tool)
+    provider = _ScriptedProvider([
+        _calls_response(_tool_call("call-1", "calculator")),
+        _text_response("skipped it"),
+        _calls_response(_tool_call("call-2", "calculator", {"expression": "3+4"})),
+        _text_response("7"),
+    ])
+    answers = [PermissionStatus.DENIED, PermissionStatus.GRANTED]
+    asked: list[str] = []
+    gate = PermissionGate(on_request=lambda tid: (asked.append(tid), answers.pop(0))[1])
+    orchestrator, _ = _make_orchestrator(provider, registry, gate)
+
+    conv = _conversation_with("do the thing")
+    orchestrator.run_turn(conv)          # turn 1: user says Not now
+    assert tool.calls == []
+
+    conv.messages.append(Message(role="user", content="please try again"))
+    orchestrator.run_turn(conv)          # turn 2: the card must come back
+
+    assert asked == ["calculator", "calculator"]   # re-asked, not silently denied
+    assert tool.calls == [{"expression": "3+4"}]   # and ran once granted
+
+
+def test_denial_sticks_for_the_rest_of_its_turn():
+    # Within ONE turn a model retry of the denied tool must not re-prompt —
+    # that would nag the user who just said Not now.
+    tool = _SpyTool("calculator")
+    registry = ToolRegistry()
+    registry.register(tool)
+    provider = _ScriptedProvider([
+        _calls_response(_tool_call("call-1", "calculator")),
+        _calls_response(_tool_call("call-2", "calculator")),   # model insists
+        _text_response("fine, no calculator"),
+    ])
+    asked: list[str] = []
+    gate = PermissionGate(on_request=lambda tid: (asked.append(tid), PermissionStatus.DENIED)[1])
+    orchestrator, _ = _make_orchestrator(provider, registry, gate)
+
+    conv = _conversation_with("do the thing")
+    orchestrator.run_turn(conv)
+
+    assert asked == ["calculator"]   # asked once, denied once, never nagged
+    assert tool.calls == []
 
 
 def test_not_yet_asked_requests_then_executes_on_grant():

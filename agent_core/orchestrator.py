@@ -80,6 +80,9 @@ class Orchestrator:
         # or a Routine step's model_id; never a choice Addison makes in v1. ``effort``
         # is the per-message "answer style"; providers that don't support it ignore it.
         provider = self.model_router.resolve(requested_role, model_name)
+        # A "Not now" from an earlier turn must not silently deny this one:
+        # each new user message may ask again (grants, by contrast, persist).
+        self.permission_gate.clear_denials()
         context = ExecutionContext(
             conversation_id=conversation.id, shell_bridge=self.shell_bridge
         )
@@ -98,15 +101,39 @@ class Orchestrator:
                     if status == PermissionStatus.NOT_YET_ASKED:
                         status = self.permission_gate.request(call.tool_id)  # blocks for UI
                     if status == PermissionStatus.DENIED:
-                        result = ToolResult(success=False, content="User declined this permission.")
+                        # Steer the model past the refusal: "not now" declines the
+                        # STEP, not the request — anything already gathered (search
+                        # results, a calculation) should be delivered in chat.
+                        result = ToolResult(
+                            success=False,
+                            content=(
+                                "User declined this step. Do not ask again this turn. "
+                                "Finish the request without it — if you already found "
+                                "the information, give it directly in your reply."
+                            ),
+                        )
                     else:
                         tool = self.tool_registry.get(call.tool_id)
                         self.on_activity(call.tool_id, tool.definition.label)
-                        result = tool.execute(call.args, context)
-                        if result.snapshot:
-                            result.snapshot.tool_call_id = call.id
-                            self.undo_manager.record(result.snapshot)
-                        result = self._gate_image_result(result, provider)
+                        # A tool/bridge failure is a FAILED STEP, never a crashed
+                        # turn: crashing here would leave this tool_use with no
+                        # tool_result, and the provider then rejects every later
+                        # request (API 400) until the app restarts.
+                        try:
+                            result = tool.execute(call.args, context)
+                        except RuntimeError as exc:
+                            # Bridge refusals carry a plain user-ready sentence
+                            # (e.g. "A file with that name is already there…").
+                            result = ToolResult(success=False, content=str(exc))
+                        except Exception:
+                            result = ToolResult(
+                                success=False, content="That step didn't work, so it was skipped."
+                            )
+                        else:
+                            if result.snapshot:
+                                result.snapshot.tool_call_id = call.id
+                                self.undo_manager.record(result.snapshot)
+                            result = self._gate_image_result(result, provider)
                     conversation.append_tool_result(call.id, result)
                 continue  # loop again with tool results appended
             else:

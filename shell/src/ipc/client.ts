@@ -96,6 +96,10 @@ interface Pending {
 const pending = new Map<string, Pending>();
 const notificationHandlers = new Map<string, Set<(params: Record<string, unknown>) => void>>();
 const statusHandlers = new Set<(text: string) => void>();
+// Structured engine-lifecycle state ("ready" | "restarting" | "stopped" |
+// "error") from the same core-status event — a "ready" after a restart means
+// the NEW engine process needs its catalog/profile re-fetched.
+const stateHandlers = new Set<(state: string) => void>();
 const diagnosticsHandlers = new Set<(entry: DiagnosticEntry) => void>();
 
 let idCounter = 0;
@@ -155,8 +159,13 @@ function handleCoreMessage(frame: CoreFrame): void {
 
 function handleCoreStatus(payload: unknown): void {
   const text = normalizeStatusText(payload);
-  if (!text) return;
-  statusHandlers.forEach((h) => h(text));
+  if (text) statusHandlers.forEach((h) => h(text));
+  if (payload && typeof payload === "object") {
+    const state = (payload as Record<string, unknown>).state;
+    if (typeof state === "string" && state) {
+      stateHandlers.forEach((h) => h(state));
+    }
+  }
 }
 
 function normalizeStatusText(payload: unknown): string {
@@ -235,6 +244,21 @@ export function subscribeStatus(handler: (text: string) => void): () => void {
 }
 
 /**
+ * Subscribe to the engine-lifecycle state carried on the same `core-status`
+ * event ("ready" | "restarting" | "stopped" | "error"). Every "ready" is a
+ * FRESH engine process — subscribers should re-fetch anything cached from the
+ * previous one (model catalog, profile), or stale ids produce errors like
+ * "That model option isn't available."
+ */
+export function subscribeCoreState(handler: (state: string) => void): () => void {
+  void ensureListeners();
+  stateHandlers.add(handler);
+  return () => {
+    stateHandlers.delete(handler);
+  };
+}
+
+/**
  * Subscribe to developer-only raw diagnostics: each raw error the core attaches
  * to a failed response (`error.data.raw`) is reported here as it happens. Fires
  * only when the active profile actually surfaces raw text, so a Simple session
@@ -265,6 +289,7 @@ export const ipc = {
     call(Method.PermissionRespond, { toolId, allow }),
 
   undoLastAction: () => call(Method.UndoUndoLastAction),
+  redoLastAction: () => call(Method.UndoRedoLastAction),
   rewindConversation: (toMessageId: string) =>
     call(Method.UndoRewindConversation, { toMessageId }),
 
