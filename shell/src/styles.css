@@ -201,9 +201,38 @@ body {
   height: 0;
 }
 
+/* Narrow-window (mobile) chrome motion: the slide-over drawer, the widget bottom
+   sheet, and their scrim. 250ms enter animations; the reduced-motion rule below
+   disables them, so the element simply appears at its resting position (instant).
+   Nothing here is decorative — these only announce that an overlay opened. */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes drawer-in {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
 /* Respect users who ask the OS for reduced motion. There is no decorative motion
    anywhere; this only softens the few functional transitions, including the
-   theme cross-fade above. */
+   theme cross-fade above and the drawer/sheet slide-ins (they snap open instead). */
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

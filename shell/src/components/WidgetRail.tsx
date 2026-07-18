@@ -30,6 +30,14 @@ interface Props {
   work?: ReactNode;
   /** The consent card (PermissionCard), when a permission is pending. */
   consent?: ReactNode;
+  /**
+   * "rail" is the desktop right column (270px, own scroll). "sheet" is the
+   * narrow-window bottom sheet (BottomSheet supplies the chrome + drag handle):
+   * the same content flows to fill the sheet and scroll within it. On mobile
+   * consent renders inline in the thread, so `consent` is not passed in sheet
+   * mode — the sheet shows widgets + Addison's work only.
+   */
+  variant?: "rail" | "sheet";
   /** Stored widgets from `widget.list` (routine/stat specs). */
   widgets: Widget[];
   /** Core-computed stats for the token meter + connections cards. */
@@ -50,6 +58,7 @@ export interface RunOutcome {
 export function WidgetRail({
   work,
   consent,
+  variant = "rail",
   widgets,
   stats,
   routines,
@@ -65,6 +74,7 @@ export function WidgetRail({
   const unpinned = widgets.filter((w) => !w.pinned);
 
   const hasUsage = (stats?.tokensMonth.total ?? 0) > 0;
+  const isSheet = variant === "sheet";
 
   function toggleTray() {
     setTrayOpen((v) => {
@@ -77,7 +87,12 @@ export function WidgetRail({
   return (
     <aside
       aria-label="Your widgets"
-      className="thread-scroll flex w-[270px] shrink-0 flex-col gap-[22px] overflow-y-auto py-[30px]"
+      className={
+        "thread-scroll flex flex-col gap-[22px] overflow-y-auto " +
+        (isSheet
+          ? "min-h-0 flex-1 pb-4"
+          : "w-[270px] shrink-0 py-[30px]")
+      }
     >
       <div>
         <div className="mb-2.5 flex items-baseline justify-between">
@@ -142,7 +157,7 @@ export function WidgetRail({
                   type="button"
                   onClick={toggleTray}
                   aria-expanded={trayOpen}
-                  className="relative flex w-full items-center justify-between rounded-card border border-line bg-surface px-[13px] py-[9px] hover:opacity-85"
+                  className="relative flex w-full items-center justify-between rounded-card border border-line bg-surface px-[13px] py-[9px] hover:opacity-85 max-md:min-h-[44px]"
                 >
                   <span className="text-[12.5px] font-semibold text-fern-deep">
                     {trayOpen ? "Show fewer" : `${unpinned.length} more widget${unpinned.length === 1 ? "" : "s"}`}
@@ -156,7 +171,7 @@ export function WidgetRail({
           <button
             type="button"
             onClick={onAskBuildWidget}
-            className="rounded-card border border-dashed border-dash bg-transparent px-2.5 py-2 text-center text-[11.5px] font-medium text-muted hover:opacity-80"
+            className="rounded-card border border-dashed border-dash bg-transparent px-2.5 py-2 text-center text-[11.5px] font-medium text-muted hover:opacity-80 max-md:min-h-[44px] max-md:text-[12.5px]"
           >
             ＋ Ask Addison to build a widget
           </button>
@@ -291,7 +306,7 @@ function RoutineWidgetBody({
           type="button"
           disabled={running}
           onClick={() => void run()}
-          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep hover:opacity-85 disabled:opacity-60"
+          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep hover:opacity-85 disabled:opacity-60 max-md:min-h-[44px] max-md:px-5 max-md:text-[12px]"
         >
           {running ? "Running…" : "Run"}
         </button>
