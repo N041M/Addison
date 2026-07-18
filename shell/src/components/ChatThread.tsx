@@ -13,6 +13,7 @@ import type { ModelRole, PermissionRequest } from "../types/protocol";
 import type { CloudModel, DisplayMessage, RoleOption } from "../types/ui";
 import { PermissionCard } from "./PermissionCard";
 import { ModelSelector } from "./ModelSelector";
+import { Markdown } from "./Markdown";
 
 interface Props {
   messages: DisplayMessage[];
@@ -240,6 +241,13 @@ function MessageRow({
 
       {showWriting ? (
         <p className="mt-1 text-base italic text-muted">Addison is writing…</p>
+      ) : message.role === "assistant" && !message.failed ? (
+        // Assistant answers render as markdown (with mermaid + code highlighting).
+        // User input and failed turns stay plain text — never markdown-render
+        // what the user typed, and keep error copy verbatim.
+        <div className="mt-1 text-base leading-relaxed text-ink">
+          <Markdown content={message.content} pending={message.pending} />
+        </div>
       ) : (
         <p
           className={

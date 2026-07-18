@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Method, type ModelRole } from "../types/protocol";
+import { parseConversationSummaries, type ConversationSummary } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -320,7 +321,76 @@ export const ipc = {
   // `model.localSetupProgress` in between.
   startLocalSetup: (modelName?: string) =>
     call(Method.ModelStartLocalSetup, { modelName }),
+
+  // Conversation history (backend already merged on the parent branch).
+  // `list` returns summaries newest-first; `new` mints a fresh conversation and
+  // returns its id; `load` returns the stored rows (user + non-empty assistant,
+  // in order) for one conversation, or a plain-language error for a bad id.
+  listConversations: (): Promise<ConversationSummary[]> =>
+    call(Method.ConversationList).then(parseConversationSummaries),
+
+  newConversation: (): Promise<string> =>
+    call(Method.ConversationNew).then(parseConversationId),
+
+  loadConversation: (conversationId: string): Promise<LoadedConversation> =>
+    call(Method.ConversationLoad, { conversationId }).then(parseLoadedConversation),
 };
+
+// ---------------------------------------------------------------------------
+// Conversation-history result shapes + defensive parsers. Like the rest of the
+// core payloads these aren't pinned in protocol.ts, so we coerce carefully.
+// ---------------------------------------------------------------------------
+export interface LoadedConversationRow {
+  id: string;
+  role: string;
+  content: string;
+}
+
+export interface LoadedConversation {
+  conversationId: string;
+  title: string | null;
+  messages: LoadedConversationRow[];
+}
+
+function asRec(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function parseConversationId(result: unknown): string {
+  const obj = asRec(result);
+  const id = obj?.conversationId ?? obj?.id;
+  if (typeof id !== "string" || !id) {
+    throw new Error("Couldn't start a new conversation.");
+  }
+  return id;
+}
+
+function parseLoadedConversation(result: unknown): LoadedConversation {
+  const obj = asRec(result);
+  if (!obj) throw new Error("Couldn't open that conversation.");
+  const conversationId =
+    typeof obj.conversationId === "string"
+      ? obj.conversationId
+      : typeof obj.id === "string"
+        ? obj.id
+        : "";
+  const rawMessages = Array.isArray(obj.messages) ? obj.messages : [];
+  const messages: LoadedConversationRow[] = [];
+  for (const item of rawMessages) {
+    const row = asRec(item);
+    if (!row || typeof row.role !== "string") continue;
+    messages.push({
+      id: typeof row.id === "string" ? row.id : "",
+      role: row.role,
+      content: typeof row.content === "string" ? row.content : "",
+    });
+  }
+  return {
+    conversationId,
+    title: typeof obj.title === "string" ? obj.title : null,
+    messages,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Keychain write (Frontend → Rust shell, NOT via the core). BYOK keys are
