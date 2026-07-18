@@ -71,6 +71,11 @@ class ShellBridge(Protocol):
         """Delete a file this session created — the undo path for save_new_file."""
         ...
 
+    def restore_file(self, path: str, content: str) -> None:
+        """Re-create a file delete_file removed this session — the redo path.
+        The shell refuses any path its own undo didn't remove."""
+        ...
+
     def open_draft(self, to: str, subject: str, body: str) -> str:
         """Open a composed draft in the user's own mail/messaging app; return an
         opaque draft reference for a later discard. Addison never presses send."""

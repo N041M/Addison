@@ -16,6 +16,13 @@ export interface DisplayMessage extends ChatMessage {
    * is on (Simple never shows it — the plain `content` is unchanged for both).
    */
   raw?: string;
+  /**
+   * The core's persisted id for this message (from the sendMessage result).
+   * "Rewind to here" needs THIS id — the local `id` is display-only and means
+   * nothing to the core. Messages without one (welcome, errors) can't anchor
+   * a rewind.
+   */
+  storeId?: string;
 }
 
 /** One configurable model role, as surfaced by `model.availableRoles`. */

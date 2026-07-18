@@ -48,7 +48,7 @@ pub fn spawn(app: &AppHandle) -> tauri::Result<()> {
 /// loop: if the single respawn also exits, surface a final plain-language notice
 /// and stop (the user restarts the app).
 async fn supervise(app: AppHandle, stdin_state: CoreStdin) {
-    match run_and_wait(&app, &stdin_state).await {
+    match run_and_wait(&app, &stdin_state, "Addison is ready.").await {
         Ok(()) => {
             // Clean spawn, but the child exited (stdout closed).
             emit_status(&app, "restarting", "Addison's engine stopped — restarting…");
@@ -62,7 +62,15 @@ async fn supervise(app: AppHandle, stdin_state: CoreStdin) {
 
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
-    if let Err(err) = run_and_wait(&app, &stdin_state).await {
+    // The respawn announces itself AS a restart — "Addison is ready." after a
+    // crash reads like the crash never happened (2026-07 manual pass finding).
+    if let Err(err) = run_and_wait(
+        &app,
+        &stdin_state,
+        "Addison's engine restarted — you can keep chatting.",
+    )
+    .await
+    {
         eprintln!("[addison] agent core respawn failed: {err}");
     }
     emit_status(&app, "stopped", "Addison's engine has stopped. Please restart the app.");
@@ -71,7 +79,11 @@ async fn supervise(app: AppHandle, stdin_state: CoreStdin) {
 /// Spawn the core, publish its stdin, and pump its stdout until it closes.
 /// Returns `Ok(())` when the child exits (EOF on stdout); `Err` only if it can't
 /// be spawned at all.
-async fn run_and_wait(app: &AppHandle, stdin_state: &CoreStdin) -> std::io::Result<()> {
+async fn run_and_wait(
+    app: &AppHandle,
+    stdin_state: &CoreStdin,
+    ready_message: &str,
+) -> std::io::Result<()> {
     let mut command = resolve_core_command();
     command
         .stdin(Stdio::piped())
@@ -84,7 +96,7 @@ async fn run_and_wait(app: &AppHandle, stdin_state: &CoreStdin) -> std::io::Resu
     let stdin = child.stdin.take().expect("piped stdin");
 
     *stdin_state.0.lock().await = Some(stdin);
-    emit_status(app, "ready", "Addison is ready.");
+    emit_status(app, "ready", ready_message);
 
     let mut lines = BufReader::new(stdout).lines();
     loop {

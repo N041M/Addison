@@ -25,7 +25,7 @@ use rand_core::OsRng;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::ipc::RpcError;
+use crate::ipc::{required_str, RpcError};
 
 /// Keychain service name — matches the app identifier (tauri.conf.json).
 const SERVICE: &str = "app.addison.desktop";
@@ -172,10 +172,7 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
     match method {
         // {role} -> {key}. Per-call, never cached shell-side (§5).
         "keychain.getProviderKey" => {
-            let role = params
-                .get("role")
-                .and_then(Value::as_str)
-                .ok_or_else(|| RpcError::invalid_params("A model role is required."))?;
+            let role = required_str(params, "role", "A model role is required.")?;
             match get_provider_key(role) {
                 Ok(key) => Ok(json!({ "key": key })),
                 // Clean, value-free error. The core turns this into its own

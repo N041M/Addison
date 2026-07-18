@@ -184,6 +184,7 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
 
 
 _SETUP_PROMPT_PATH = Path(__file__).resolve().parent / "providers" / "prompts" / "setup_assistant.txt"
+_PRIMARY_PROMPT_PATH = Path(__file__).resolve().parent / "providers" / "prompts" / "primary.txt"
 
 
 def load_setup_prompt() -> str:
@@ -191,6 +192,15 @@ def load_setup_prompt() -> str:
     PRIMARY key is configured yet. Read at startup — it is bundled with the app,
     not user data."""
     return _SETUP_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+def load_primary_prompt() -> str:
+    """The app-context system prompt for regular (non-setup) turns: tells the
+    model it is inside Addison and which UI control handles what, so a chat
+    request like "save these steps as a routine" gets pointed at the real
+    affordance instead of an improvised non-answer (found in the 2026-07 manual
+    pass). Injected transiently per turn, exactly like the setup prompt."""
+    return _PRIMARY_PROMPT_PATH.read_text(encoding="utf-8")
 
 
 def default_db_path() -> str:
@@ -352,6 +362,7 @@ class JsonRpcServer:
         conversation_id: str = "main",
         primary_key_probe=None,
         setup_prompt: str | None = None,
+        primary_prompt: str | None = None,
         ollama_base_url: str | None = None,
         ollama_client=None,
         cloud_catalog: list[CloudModel] | None = None,
@@ -391,6 +402,9 @@ class JsonRpcServer:
         # None (CLI/tests), the key is treated as present — normal PRIMARY routing.
         self._primary_key_probe = primary_key_probe
         self._setup_prompt = setup_prompt
+        # App-context prompt for every non-setup turn (None in CLI/tests that
+        # don't pass one — those turns then run system-free, as before).
+        self._primary_prompt = primary_prompt
         if shell_bridge is not None:
             # The bridge sends its Core -> Shell requests through our locked writer.
             shell_bridge.bind_sender(self._write_frame)
@@ -545,6 +559,9 @@ class JsonRpcServer:
         if method == Method.CONVERSATION_SEND_MESSAGE:
             self._queue.put(("send", params, request_id))
             return
+        if method == Method.UNDO_REDO_LAST_ACTION:
+            self._queue.put(("redo", params, request_id))
+            return
         if method == Method.UNDO_UNDO_LAST_ACTION:
             self._queue.put(("undo", params, request_id))
             return
@@ -603,6 +620,8 @@ class JsonRpcServer:
                     self._respond(request_id, self._available_roles())
                 elif kind == "undo":
                     self._respond(request_id, self._undo_last_action())
+                elif kind == "redo":
+                    self._respond(request_id, self._redo_last_action())
                 elif kind == "rewind":
                     self._handle_rewind(params, request_id)
                 elif kind == "routine_propose":
@@ -648,6 +667,13 @@ class JsonRpcServer:
             self._respond_error(request_id, _SERVER_ERROR, error)
             return
 
+        # Is a real PRIMARY key available right now? Both the BYOK-onboarding refusal
+        # and the §4.6 Setup Assistant handoff below turn on this, so probe it ONCE
+        # here rather than per branch — the probe is a keychain round-trip (§5). Only
+        # a PRIMARY/default turn touches the key path; a LOCAL turn never probes.
+        primary_role = requested_role in (None, ModelRole.PRIMARY)
+        primary_key_available = self._primary_key_available() if primary_role else True
+
         # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
         # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the
         # user to add their own key. Simple keeps the §4.6 relay handoff below,
@@ -655,8 +681,8 @@ class JsonRpcServer:
         # neither path changes the gate/undo/key rules (§8.7).
         profile = self._active_profile
         if (
-            requested_role in (None, ModelRole.PRIMARY)
-            and not self._primary_key_available()
+            primary_role
+            and not primary_key_available
             and profile is not None
             and profile.onboarding == "byok_first"
         ):
@@ -666,7 +692,7 @@ class JsonRpcServer:
         self._ensure_conversation()
         user_msg = Message(role="user", content=text)
         self.conversation.messages.append(user_msg)
-        self._persist_message(user_msg)
+        user_message_id = self._persist_message(user_msg)
 
         # §4.6 handoff: a PRIMARY-bound turn with no key yet routes to the Setup
         # Assistant, with its system prompt injected FOR THIS TURN ONLY. The prompt
@@ -675,13 +701,19 @@ class JsonRpcServer:
         # key exists, the probe passes and turns go to PRIMARY, history untouched —
         # that IS the handoff; no transcript rewrite, no state to flip.
         system_msg = None
-        if requested_role in (None, ModelRole.PRIMARY) and not self._primary_key_available():
+        if primary_role and not primary_key_available:
             requested_role = ModelRole.SETUP_ASSISTANT
             if self._setup_prompt:
                 system_msg = Message(role="system", content=self._setup_prompt)
                 self.conversation.messages.insert(0, system_msg)
+        elif self._primary_prompt:
+            # Every non-setup turn (cloud or local) gets the app-context prompt,
+            # under the same transient rules: this turn only, never persisted.
+            system_msg = Message(role="system", content=self._primary_prompt)
+            self.conversation.messages.insert(0, system_msg)
 
         pre_turn = len(self.conversation.messages)
+        assistant_message_id: str | None = None
         try:
             self.orchestrator.run_turn(
                 self.conversation,
@@ -692,7 +724,16 @@ class JsonRpcServer:
             # Full-transcript persistence (§4.8 substrate): every message the turn
             # appended, in order, so a later rewind can target any of them by id.
             for msg in self.conversation.messages[pre_turn:]:
-                self._persist_message(msg)
+                persisted_id = self._persist_message(msg)
+                if msg.role == "assistant":
+                    assistant_message_id = persisted_id
+        except Exception:
+            # A failed turn must leave NO partial exchange behind: an unpaired
+            # tool_use would make the provider reject every later request (API
+            # 400), and unpersisted entries would break the 1:1 alignment
+            # between conversation.messages and _message_ids that rewind needs.
+            del self.conversation.messages[pre_turn:]
+            raise
         finally:
             # Drop the transient system prompt so it never lingers in history and
             # in-memory messages stay aligned 1:1 with the persisted _message_ids.
@@ -701,7 +742,16 @@ class JsonRpcServer:
                     self.conversation.messages.remove(system_msg)
                 except ValueError:
                     pass
-        self._respond(request_id, {"ok": True})
+        # The persisted ids let the frontend anchor "Rewind to here" on REAL
+        # store ids — its own display ids mean nothing to the core.
+        self._respond(
+            request_id,
+            {
+                "ok": True,
+                "userMessageId": user_message_id,
+                "assistantMessageId": assistant_message_id,
+            },
+        )
 
     def _primary_key_available(self) -> bool:
         probe = self._primary_key_probe
@@ -725,7 +775,7 @@ class JsonRpcServer:
         )
         self._conversation_created = True
 
-    def _persist_message(self, message: Message) -> None:
+    def _persist_message(self, message: Message) -> str:
         message_id = str(uuid4())
         self.store.insert_message(
             id=message_id,
@@ -736,6 +786,7 @@ class JsonRpcServer:
             tool_call_id=message.tool_call_id,
         )
         self._message_ids.append(message_id)
+        return message_id
 
     # --- permissions ------------------------------------------------------
     def _on_permission_request(self, tool_id: str) -> PermissionStatus:
@@ -772,31 +823,61 @@ class JsonRpcServer:
     # --- undo / rewind ----------------------------------------------------
     def _undo_last_action(self) -> dict:
         results = self.undo_manager.undo_last(1)
+        can_redo = self.undo_manager.can_redo()
         if not results:
-            return {"ok": False, "detail": "There was nothing to undo."}
+            return {"ok": False, "detail": "There was nothing to undo.", "canRedo": can_redo}
         result = results[0]
         if result.success:
-            return {"ok": True, "detail": f"Undid the last action ({self._label(result.tool_id)})."}
+            return {
+                "ok": True,
+                "detail": f"Undid the last action ({self._label(result.tool_id)}).",
+                "canRedo": can_redo,
+            }
         return {
             "ok": False,
             "detail": "Couldn't undo the last action. You may need to reverse it yourself.",
+            "canRedo": can_redo,
+        }
+
+    def _redo_last_action(self) -> dict:
+        results = self.undo_manager.redo_last(1)
+        can_redo = self.undo_manager.can_redo()
+        if not results:
+            return {"ok": False, "detail": "There was nothing to redo.", "canRedo": can_redo}
+        result = results[0]
+        if result.success:
+            return {
+                "ok": True,
+                "detail": f"Did that again ({self._label(result.tool_id)}).",
+                "canRedo": can_redo,
+            }
+        # The plain reason (e.g. "A file with that name is already there") beats
+        # a generic sentence; redo failures carry user-ready details.
+        return {
+            "ok": False,
+            "detail": result.detail or "Couldn't do that again.",
+            "canRedo": can_redo,
         }
 
     def _handle_rewind(self, params: dict, request_id) -> None:
         to_message_id = params.get("toMessageId")
         try:
-            # Store truncation first; it raises if the id isn't in this conversation.
-            self.undo_manager.rewind_conversation(self.conversation.id, to_message_id)
+            # Edit-and-resend semantics: the anchor message is REMOVED too, so
+            # nothing re-runs until the user actually sends again — its text goes
+            # back into the composer on the frontend side.
+            self.undo_manager.rewind_conversation(
+                self.conversation.id, to_message_id, keep_anchor=False
+            )
         except KeyError:
             self._respond_error(
                 request_id, _SERVER_ERROR, "Couldn't find that point to rewind to."
             )
             return
-        # Mirror the truncation in the in-memory conversation, keeping the anchor.
+        # Mirror the truncation in the in-memory conversation, anchor included.
         if to_message_id in self._message_ids:
             idx = self._message_ids.index(to_message_id)
-            del self.conversation.messages[idx + 1:]
-            del self._message_ids[idx + 1:]
+            del self.conversation.messages[idx:]
+            del self._message_ids[idx:]
         self._respond(request_id, {"ok": True, "detail": "Rewound the conversation."})
 
     # --- routines (§6) ----------------------------------------------------
@@ -1274,6 +1355,7 @@ def main() -> None:
         shell_bridge=shell_bridge,
         primary_key_probe=_primary_key_available,
         setup_prompt=load_setup_prompt(),
+        primary_prompt=load_primary_prompt(),
         cloud_catalog=catalog,
         cloud_fetcher=_fetch_live_catalog,
         cloud_provider_factory=_build_cloud_provider,

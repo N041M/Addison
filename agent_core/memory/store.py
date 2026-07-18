@@ -95,6 +95,15 @@ class Store:
         )
         self._conn.commit()
 
+    def mark_snapshot_unreverted(self, snapshot_id: str) -> None:
+        """Redo's mirror of mark_snapshot_reverted: the action is live again,
+        so it re-enters the undoable set."""
+        self._conn.execute(
+            "UPDATE action_snapshots SET reverted = 0 WHERE id = ?",
+            (snapshot_id,),
+        )
+        self._conn.commit()
+
     def prune_action_snapshots(self, cutoff: int, keep_last: int) -> None:
         """Retention for the action-rewind window (spec §4.5).
 
@@ -129,12 +138,16 @@ class Store:
         started_at: int,
         continued_from: str | None = None,
     ) -> None:
-        """Insert a conversation row. ``continued_from`` populates the §4.8
-        lineage column (``continued_from_conversation_id``); ``summary`` is left
-        NULL — v1 never writes it (the Context Budget Manager that would is v2,
-        spec §10)."""
+        """Insert a conversation row, or leave the existing one untouched.
+
+        Idempotent on purpose: the server and CLI use fixed ids ("main"/"cli"),
+        so on any launch after the first the row already exists on disk — that
+        is resumption, not an error, and turns must keep working. ``continued_from``
+        populates the §4.8 lineage column (``continued_from_conversation_id``);
+        ``summary`` is left NULL — v1 never writes it (the Context Budget Manager
+        that would is v2, spec §10)."""
         self._conn.execute(
-            "INSERT INTO conversations "
+            "INSERT OR IGNORE INTO conversations "
             "(id, title, started_at, provider_id, continued_from_conversation_id) "
             "VALUES (?, ?, ?, ?, ?)",
             (id, title, started_at, provider_id, continued_from),
@@ -174,10 +187,15 @@ class Store:
         ).fetchall()
         return [dict(row) for row in rows]
 
-    def truncate_messages(self, conversation_id: str, to_message_id: str) -> None:
+    def truncate_messages(
+        self, conversation_id: str, to_message_id: str, *, keep_anchor: bool = True
+    ) -> None:
         """Conversational rewind (spec §4.5): delete every message AFTER
-        ``to_message_id`` in this conversation, keeping ``to_message_id`` itself.
-        "After" uses the same (created_at, rowid) ordering as
+        ``to_message_id`` in this conversation. With ``keep_anchor`` (default)
+        the anchor itself stays; ``keep_anchor=False`` removes it too — the
+        edit-and-resend rewind, where the anchor's text goes back to the
+        composer instead of staying in history as a pending request. "After"
+        uses the same (created_at, rowid) ordering as
         ``messages_for_conversation``.
 
         This is deliberately independent of action rewind — it does NOT touch
@@ -194,9 +212,10 @@ class Store:
                 f"No message '{to_message_id}' in conversation "
                 f"'{conversation_id}'; cannot rewind to it."
             )
+        comparison = ">=" if not keep_anchor else ">"
         self._conn.execute(
             "DELETE FROM messages WHERE conversation_id = ? AND "
-            "(created_at > ? OR (created_at = ? AND rowid > ?))",
+            f"(created_at > ? OR (created_at = ? AND rowid {comparison} ?))",
             (conversation_id, anchor["created_at"], anchor["created_at"], anchor["rowid"]),
         )
         self._conn.commit()

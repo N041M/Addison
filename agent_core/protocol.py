@@ -54,6 +54,7 @@ class Method:
     TOOL_ACTIVITY_UPDATE = "tool.activityUpdate"
     UNDO_REWIND_CONVERSATION = "undo.rewindConversation"
     UNDO_UNDO_LAST_ACTION = "undo.undoLastAction"
+    UNDO_REDO_LAST_ACTION = "undo.redoLastAction"
     ROUTINE_PROPOSE_FROM_CONVERSATION = "routine.proposeFromConversation"
     ROUTINE_CONFIRM_SAVE = "routine.confirmSave"
     ROUTINE_LIST = "routine.list"
@@ -72,6 +73,7 @@ class Method:
     # the ShellBridge contract (tools/base.py) across the process boundary.
     SHELL_SAVE_NEW_FILE = "shell.saveNewFile"          # {filename, content} -> {path}
     SHELL_DELETE_FILE = "shell.deleteFile"             # {path} -> {}
+    SHELL_RESTORE_FILE = "shell.restoreFile"           # {path, content} -> {} (redo of delete)
     SHELL_OPEN_DRAFT = "shell.openDraft"               # {to, subject, body} -> {draftRef}
     SHELL_DISCARD_DRAFT = "shell.discardDraft"         # {draftRef} -> {}
     SHELL_READ_CLIPBOARD = "shell.readClipboard"       # {} -> {text}

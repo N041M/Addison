@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -165,9 +166,190 @@ def test_send_message_streams_and_completes(tmp_path):
         chunk = writer.wait_for(lambda f: f.get("method") == Method.CONVERSATION_STREAM_CHUNK)
         assert chunk["params"]["text"] == "Hello there."
         done = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
-        assert done["result"] == {"ok": True}
+        assert done["result"]["ok"] is True
+        # The persisted ids ride along so the frontend can anchor rewind.
+        assert isinstance(done["result"]["userMessageId"], str)
+        assert isinstance(done["result"]["assistantMessageId"], str)
     finally:
         _shutdown(reader, thread)
+
+
+class _CrashingTool:
+    """MEDIUM-shaped tool whose execute() raises like a shell-bridge refusal
+    (e.g. Rust's "A file with that name is already there")."""
+
+    definition = ToolDefinition(
+        id="crashy_tool",
+        label="Save something for you",
+        description="A test tool that refuses.",
+        risk_tier=RiskTier.LOW,   # LOW so no undo() is required for registration
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        raise RuntimeError("A file with that name is already there — please choose another name.")
+
+
+def test_tool_refusal_fails_the_step_not_the_turn_and_next_turn_is_clean(tmp_path):
+    # 2026-07 manual pass: a save-over-existing refusal used to CRASH the turn,
+    # leaving an unpaired tool_use that made the provider reject every later
+    # request (API 400). Now: the step fails, the turn completes, and the next
+    # turn starts from clean, fully-paired history.
+    responses = [
+        _tool_call_response("crashy_tool"),
+        ModelResponse(text="That name is taken — pick another.", tool_calls=[]),
+        ModelResponse(text="Second turn works.", tool_calls=[]),
+    ]
+    registry = ToolRegistry()
+    registry.register(_CrashingTool())
+    provider = _ScriptedProvider(responses)
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=registry,
+        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "save it"}}
+        )
+        # Grant the permission card the crashy tool triggers.
+        card = writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+        reader.feed(
+            {"jsonrpc": "2.0", "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": card["params"]["toolId"], "allow": True}}
+        )
+        done = writer.wait_for(lambda f: f.get("id") == 1)
+        assert done.get("result", {}).get("ok") is True, done.get("error")
+        # The model saw the refusal as a failed tool step, in plain language.
+        failed_step = next(m for m in provider.histories[1] if m.role == "tool")
+        assert "already there" in failed_step.content
+
+        # Turn 2 must run on clean history: every tool message pairs with a call.
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "ok, thanks"}}
+        )
+        done2 = writer.wait_for(lambda f: f.get("id") == 2)
+        assert done2.get("result", {}).get("ok") is True, done2.get("error")
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_failed_turn_rolls_back_partial_history_and_next_turn_succeeds(tmp_path):
+    # A provider blow-up mid-turn must leave no partial exchange in memory —
+    # the next turn's history has to be exactly what is persisted.
+    class _FlakyProvider(_ScriptedProvider):
+        def __init__(self, responses):
+            super().__init__(responses)
+            self.fail_first = True
+
+        def send(self, messages, tools, effort=None):
+            if self.fail_first:
+                self.fail_first = False
+                self.histories.append(list(messages))
+                raise RuntimeError("The Anthropic service had a problem. Please try again in a moment.")
+            return super().send(messages, tools, effort)
+
+    provider = _FlakyProvider([ModelResponse(text="Recovered fine.", tool_calls=[])])
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=ToolRegistry(),
+        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "first"}}
+        )
+        failed = writer.wait_for(lambda f: f.get("id") == 1)
+        assert "error" in failed
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "second"}}
+        )
+        done = writer.wait_for(lambda f: f.get("id") == 2)
+        assert done.get("result", {}).get("ok") is True, done.get("error")
+        # In-memory alignment held: user "first" persisted, nothing partial kept.
+        roles = [m.role for m in server.conversation.messages]
+        assert roles == ["user", "user", "assistant"]
+        assert len(server._message_ids) == len(server.conversation.messages)
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_rewind_with_returned_store_id_truncates_memory_and_store(tmp_path):
+    # The frontend anchors rewind on the userMessageId from the sendMessage
+    # result (its own display ids mean nothing to the core — that mismatch is
+    # why rewind never worked in the desktop app before).
+    responses = [
+        ModelResponse(text="First answer.", tool_calls=[]),
+        ModelResponse(text="Second answer.", tool_calls=[]),
+    ]
+    server, reader, writer, _, thread = _server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "one"}}
+        )
+        first = writer.wait_for(lambda f: f.get("id") == 1)["result"]
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "two"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 2)
+        assert len(server.conversation.messages) == 4
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 3,
+             "method": Method.UNDO_REWIND_CONVERSATION,
+             "params": {"toMessageId": first["userMessageId"]}}
+        )
+        done = writer.wait_for(lambda f: f.get("id") == 3)
+        assert done.get("result", {}).get("ok") is True, done.get("error")
+        # Edit-and-resend semantics: the anchor leaves history too — its text
+        # goes back to the composer, so nothing re-runs until the user sends.
+        assert server.conversation.messages == []
+        assert server._message_ids == []
+        # Store agrees (fresh connection: the server's is bound to its thread).
+        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+            stored = conn.execute(
+                "SELECT content FROM messages ORDER BY rowid"
+            ).fetchall()
+        assert stored == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_second_launch_on_same_database_still_chats(tmp_path):
+    # Regression (2026-07 manual pass): with a persistent DB, the second app
+    # launch re-inserts the fixed "main" conversation row; that used to raise
+    # IntegrityError and fail EVERY turn of every session after the first.
+    for launch in (1, 2):
+        responses = [ModelResponse(text=f"Hello from launch {launch}.", tool_calls=[])]
+        server, reader, writer, _, thread = _server(tmp_path, responses)
+        try:
+            reader.feed(
+                {"jsonrpc": "2.0", "id": 1,
+                 "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "hi"}}
+            )
+            done = writer.wait_for(lambda f: f.get("id") == 1)
+            assert done.get("result", {}).get("ok") is True, done.get("error")
+        finally:
+            _shutdown(reader, thread)
 
 
 def test_tool_turn_blocks_on_permission_then_runs(tmp_path):

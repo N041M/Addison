@@ -34,6 +34,7 @@ class FakeShellBridge:
     def __init__(self) -> None:
         self.saved: list[tuple] = []
         self.deleted: list[str] = []
+        self.restored: list[tuple] = []
         self.drafts: list[tuple] = []
         self.discarded: list[str] = []
         self.opened: list[str] = []
@@ -47,6 +48,9 @@ class FakeShellBridge:
 
     def delete_file(self, path: str) -> None:
         self.deleted.append(path)
+
+    def restore_file(self, path: str, content: str) -> None:
+        self.restored.append((path, content))
 
     def open_draft(self, to: str, subject: str, body: str) -> str:
         ref = f"draft-{len(self.drafts)}"
@@ -103,6 +107,32 @@ def test_save_file_undo_without_bridge_raises_plain_runtimeerror():
     assert "desktop shell" in str(excinfo.value)
     # Plain language: no stack-trace jargon, no NotImplementedError.
     assert not isinstance(excinfo.value, NotImplementedError)
+
+
+def test_save_file_redo_restores_the_exact_file():
+    bridge = FakeShellBridge()
+    tool = SaveFileTool(shell_bridge=bridge)
+    result = tool.execute({"filename": "notes.txt", "content": "hi"}, _ctx(bridge))
+
+    tool.undo(result.snapshot)
+    tool.redo(result.snapshot)
+
+    # Redo re-creates exactly what undo removed — same path, same content.
+    assert bridge.restored == [("/Users/test/Desktop/notes.txt", "hi")]
+
+
+def test_save_file_redo_without_content_payload_raises_plain_language():
+    # A snapshot from before redo existed carries no content — refuse plainly.
+    snapshot = ActionSnapshot(
+        id="s1",
+        tool_call_id="c1",
+        tool_id="save_file",
+        undo_payload={"created_file": "/Users/test/Desktop/notes.txt"},
+        created_at=0,
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        SaveFileTool(shell_bridge=FakeShellBridge()).redo(snapshot)
+    assert "no longer has" in str(excinfo.value)
 
 
 def test_save_file_without_bridge_is_graceful_in_cli_mode():

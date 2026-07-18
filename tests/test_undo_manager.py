@@ -196,3 +196,96 @@ def test_prune_keep_last_floor_retains_old_snapshot_via_manager(store: Store):
 
     survivors = {s.id for s in store.recent_unreverted_snapshots(limit=10)}
     assert survivors == {"week_old"}
+
+
+# --- redo (session-scoped, per-tool opt-in) ---------------------------------
+
+
+class _RedoableTool(_RecordingTool):
+    """A _RecordingTool that also supports redo, logging "redo:<id>"."""
+
+    def redo(self, snapshot: ActionSnapshot) -> None:
+        self._log.append(f"redo:{snapshot.id}")
+
+
+def test_redo_reapplies_in_reverse_undo_order_and_is_undoable_again(store: Store):
+    log: list[str] = []
+    registry = ToolRegistry()
+    registry.register(_RedoableTool("rec", log))
+    manager = UndoManager(store=store, tool_registry=registry)
+
+    _record(manager, "s1", "rec", created_at=1)
+    _record(manager, "s2", "rec", created_at=2)
+
+    manager.undo_last(n=2)                     # undoes s2, then s1
+    assert manager.can_redo()
+
+    results = manager.redo_last(n=2)
+    # Editor semantics: the most recently UNDONE comes back first (s1, then s2).
+    assert log == ["s2", "s1", "redo:s1", "redo:s2"]
+    assert all(r.success for r in results)
+    assert not manager.can_redo()
+    # Re-applied actions are live again — both back in the undoable set.
+    assert {s.id for s in store.recent_unreverted_snapshots(limit=10)} == {"s1", "s2"}
+
+
+def test_new_action_clears_the_redo_stack(store: Store):
+    log: list[str] = []
+    registry = ToolRegistry()
+    registry.register(_RedoableTool("rec", log))
+    manager = UndoManager(store=store, tool_registry=registry)
+
+    _record(manager, "s1", "rec", created_at=1)
+    manager.undo_last(n=1)
+    assert manager.can_redo()
+
+    # Doing something NEW discards the undone future (standard editor rule).
+    _record(manager, "s2", "rec", created_at=2)
+    assert not manager.can_redo()
+    assert manager.redo_last(n=1) == []
+
+
+def test_redo_on_tool_without_redo_fails_plainly(store: Store):
+    log: list[str] = []
+    registry = ToolRegistry()
+    registry.register(_RecordingTool("rec", log))   # undo only, no redo()
+    manager = UndoManager(store=store, tool_registry=registry)
+
+    _record(manager, "s1", "rec", created_at=1)
+    manager.undo_last(n=1)
+
+    results = manager.redo_last(n=1)
+    assert len(results) == 1 and results[0].success is False
+    assert "can't be re-done" in results[0].detail
+    # The snapshot stays reverted — nothing was silently re-applied.
+    assert store.recent_unreverted_snapshots(limit=10) == []
+
+
+def test_failed_redo_keeps_the_snapshot_for_retry(store: Store):
+    class _FlakyRedoTool(_RedoableTool):
+        def __init__(self, tool_id, log):
+            super().__init__(tool_id, log)
+            self.fail_once = True
+
+        def redo(self, snapshot: ActionSnapshot) -> None:
+            if self.fail_once:
+                self.fail_once = False
+                raise RuntimeError("A file with that name is already there — nothing was changed.")
+            super().redo(snapshot)
+
+    log: list[str] = []
+    registry = ToolRegistry()
+    registry.register(_FlakyRedoTool("rec", log))
+    manager = UndoManager(store=store, tool_registry=registry)
+
+    _record(manager, "s1", "rec", created_at=1)
+    manager.undo_last(n=1)
+
+    failed = manager.redo_last(n=1)
+    assert failed[0].success is False
+    assert "already there" in failed[0].detail
+    assert manager.can_redo()                  # kept: the user may clear the blocker
+
+    retried = manager.redo_last(n=1)
+    assert retried[0].success is True
+    assert log[-1] == "redo:s1"

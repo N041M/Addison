@@ -65,3 +65,11 @@ class PermissionGate:
 
     def revoke(self, tool_id: str) -> None:
         self._grants.pop(tool_id, None)
+
+    def clear_denials(self) -> None:
+        """Forget "Not now" answers. The orchestrator calls this at the start of
+        every user turn: a denial silences re-asking only for the REST of the
+        turn it happened in (so a model retry can't nag), never future turns —
+        "Not now" means not now, not never (2026-07 manual pass finding: one
+        denial silently blocked the tool for the whole session)."""
+        self._denied.clear()

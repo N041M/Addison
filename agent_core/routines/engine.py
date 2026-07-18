@@ -154,7 +154,19 @@ class RoutineEngine:
                 )
 
             tool = self.tool_registry.get(step.tool_id)
-            result = tool.execute(resolved_args, context)
+            # A tool/bridge failure is a FAILED STEP, never a crashed run — mirror
+            # the live orchestrator (§4.4). Letting it propagate would skip the
+            # on_failure policy below AND leave the routine_runs log stuck at
+            # 'running' (its _finish never runs). A shell-bridge refusal (e.g.
+            # save_file's "A file with that name is already there") raises
+            # RuntimeError with a plain user-ready sentence; anything else collapses
+            # to one plain message.
+            try:
+                result = tool.execute(resolved_args, context)
+            except RuntimeError as exc:
+                result = ToolResult(success=False, content=str(exc))
+            except Exception:
+                result = ToolResult(success=False, content="That step didn't work.")
             if result.snapshot:
                 result.snapshot.tool_call_id = f"{run_id}:{step.step_id}"
                 self.undo_manager.record(result.snapshot)   # Routine runs are undoable too

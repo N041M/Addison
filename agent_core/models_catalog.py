@@ -243,8 +243,13 @@ def _resolve_fetch_key(api_key_getter) -> str:
         key = api_key_getter()
     except Exception:
         raise CatalogFetchError("Couldn't read the API key for the model list.") from None
+    key = key.strip() if key else ""
     if not key:
         raise CatalogFetchError("No API key available for the model list.")
+    if not key.isascii() or not key.isprintable():
+        # A key with header-illegal characters must degrade to the built-in
+        # list like every other fetch failure, not crash header encoding.
+        raise CatalogFetchError("The API key has a stray character in it.")
     return key
 
 

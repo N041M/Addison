@@ -35,6 +35,13 @@ _TIMEOUT_SECONDS = 60.0
 _NO_KEY_MESSAGE = (
     "No API key is set up yet. Add your Anthropic API key in Settings to start chatting."
 )
+# A key with a character that can't go in an HTTP header (a smart quote, an
+# ellipsis from a truncated copy, a non-breaking space). Without this check it
+# would crash header encoding below as an exception with no plain message.
+_MALFORMED_KEY_MESSAGE = (
+    "Your API key has a stray character in it — that can happen when copying. "
+    "Open Settings and paste the whole key again."
+)
 
 
 class AnthropicProvider:
@@ -115,8 +122,12 @@ class AnthropicProvider:
         if getter is None:
             raise RuntimeError(_NO_KEY_MESSAGE)
         api_key = getter()
+        if api_key:
+            api_key = api_key.strip()
         if not api_key:
             raise RuntimeError(_NO_KEY_MESSAGE)
+        if not api_key.isascii() or not api_key.isprintable():
+            raise RuntimeError(_MALFORMED_KEY_MESSAGE)
         return api_key
 
     def _post(self, headers: dict, body: dict) -> httpx.Response:
