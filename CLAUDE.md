@@ -113,9 +113,25 @@ it parameterizes registration/onboarding, never the permission gate — spec §4
 Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.
 
+## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
+
+OpenAI, Google (Gemini), and an OpenAI-compatible **custom server** are now v1,
+alongside Anthropic. Keys are stored per **provider id** (`anthropic | openai |
+google | custom`) in the OS keychain (Rust `store_provider_key`/`delete_provider_key`,
+account = `provider-key:{provider}`; the legacy `provider-key:primary` Anthropic
+entry auto-migrates on first read). The core reads a key via
+`keychain.getProviderKey {provider}` at the moment of use only — keys never reach
+the webview or SQLite (`provider.list`/`connect` responses carry status/metadata
+ONLY). `provider.connect` validates with one tiny request (Anthropic: `GET /v1/models`;
+OpenAI/custom: `GET {base}/v1/models`; Google: `GET /v1beta/models`), then folds the
+provider's models into the single picker union. Non-secret connection metadata lives
+in the `provider_config` table; the custom base URL is the ONE permitted `http://`
+case (validated http(s)://). The orchestrator stays provider-agnostic — capability
+differences via `ProviderCapabilities`, never `isinstance`.
+
 ## Do NOT build yet (spec §10)
 
-OpenAI/Google providers (Anthropic only for the first build), automatic
+Automatic
 task-based model routing/auto-switching (**planned for v2** — v1 ships the
 substrate: `vision`/`audio` capability flags and multiple local models with an
 *explicit* picker, but the automatic choice among them is v2), the Context

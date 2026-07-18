@@ -26,6 +26,12 @@ export const Method = {
   ModelSetRoleForNextMessage: "model.setRoleForNextMessage",
   ModelStartLocalSetup: "model.startLocalSetup",
   ModelLocalSetupProgress: "model.localSetupProgress",
+  // Multi-provider API keys (owner decision 2026-07-18). These carry only
+  // non-secret status/metadata — the key itself goes to the OS keychain via the
+  // Rust `store_provider_key` command, never through the core.
+  ProviderList: "provider.list",
+  ProviderConnect: "provider.connect",
+  ProviderDisconnect: "provider.disconnect",
 
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test

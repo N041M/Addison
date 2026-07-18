@@ -18,7 +18,7 @@
 import { useState } from "react";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, LocalSetupState, ProfileState, RoleOption } from "../types/ui";
-import type { DiagnosticEntry } from "../ipc/client";
+import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -30,7 +30,9 @@ interface Props {
   defaultCloudModel?: string;
   onChangeDefaultRole: (role: ModelRole) => void;
   onChangeDefaultCloudModel: (modelId: string) => void;
-  onSaveKey: (role: string, provider: string, key: string) => Promise<void>;
+  providers: ProviderInfo[];
+  onConnectProvider: (provider: string, key: string, baseUrl?: string) => Promise<void>;
+  onRemoveProvider: (provider: string) => Promise<void>;
   localSetup: LocalSetupState | null;
   onStartLocalSetup: (modelId: string) => void;
   profile: ProfileState | null;
@@ -42,11 +44,33 @@ interface Props {
   onBack: () => void;
 }
 
-// The API-key providers surfaced as rows. v1 ships Anthropic only (spec §10); the
-// array shape is what makes the multi-provider PR additive — add a row here.
-const KEY_PROVIDERS: { id: string; label: string; role: string }[] = [
-  { id: "anthropic", label: "Anthropic", role: "primary" },
+// The API-key provider rows (multi-provider, owner decision 2026-07-18). ``kind``
+// picks the row's affordance: a direct password input ("key"), an outlined
+// "Add key" button that expands to one ("collapsed"), or the custom
+// OpenAI-compatible server row with a base-URL + optional key ("custom").
+type ProviderKind = "key" | "collapsed" | "custom";
+const KEY_PROVIDERS: { id: string; label: string; kind: ProviderKind }[] = [
+  { id: "anthropic", label: "Anthropic", kind: "key" },
+  { id: "openai", label: "OpenAI", kind: "key" },
+  { id: "google", label: "Google", kind: "collapsed" },
+  { id: "custom", label: "Your own server", kind: "custom" },
 ];
+
+// Printable-ASCII, no whitespace — catches clipboard damage (smart quotes, a "…"
+// from a truncated copy, a non-breaking space) at the door before it's stored.
+const KEY_SHAPE = /^[\x21-\x7E]+$/;
+
+function formatAdded(addedAt?: number): string {
+  if (!addedAt) return "";
+  try {
+    return new Date(addedAt * 1000).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return "";
+  }
+}
 
 export function SettingsPage({
   connected,
@@ -56,7 +80,9 @@ export function SettingsPage({
   defaultCloudModel,
   onChangeDefaultRole,
   onChangeDefaultCloudModel,
-  onSaveKey,
+  providers,
+  onConnectProvider,
+  onRemoveProvider,
   localSetup,
   onStartLocalSetup,
   profile,
@@ -93,7 +119,12 @@ export function SettingsPage({
               onChangeDefaultRole={onChangeDefaultRole}
               onChangeDefaultCloudModel={onChangeDefaultCloudModel}
             />
-            <ApiKeys connected={connected} onSaveKey={onSaveKey} />
+            <ApiKeys
+              connected={connected}
+              providers={providers}
+              onConnect={onConnectProvider}
+              onRemove={onRemoveProvider}
+            />
             <Card title="Routines" subtitle="Steps Addison saved for you. Run them here or from a widget.">
               <RoutineLibrary exposeRoutinePlan={profile?.flags.exposeRoutinePlan} />
             </Card>
@@ -270,127 +301,245 @@ function SelectableRow({
 // --- API keys --------------------------------------------------------------
 function ApiKeys({
   connected,
-  onSaveKey,
+  providers,
+  onConnect,
+  onRemove,
 }: {
   connected: boolean;
-  onSaveKey: (role: string, provider: string, key: string) => Promise<void>;
+  providers: ProviderInfo[];
+  onConnect: (provider: string, key: string, baseUrl?: string) => Promise<void>;
+  onRemove: (provider: string) => Promise<void>;
 }) {
-  // Per-provider transient state, keyed by provider id — one map so adding a
-  // provider row is purely additive.
-  const [draft, setDraft] = useState<Record<string, string>>({});
-  const [state, setState] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
-  const [error, setError] = useState<Record<string, string>>({});
-  // Providers the user has saved a key for this session; lets an already-saved
-  // row offer "Replace" (the key itself is never read back — invariant §8.3).
-  const [editing, setEditing] = useState<Record<string, boolean>>({});
-
-  async function save(p: { id: string; label: string; role: string }) {
-    const trimmed = (draft[p.id] ?? "").trim();
-    if (!trimmed) return;
-    // Catch clipboard damage at the door: a real key is printable ASCII with no
-    // spaces. Smart quotes, "…" from a truncated copy, or a non-breaking space
-    // would otherwise be saved and fail every request afterwards.
-    if (!/^[\x21-\x7E]+$/.test(trimmed)) {
-      setState((s) => ({ ...s, [p.id]: "error" }));
-      setError((e) => ({
-        ...e,
-        [p.id]: "That doesn't look like a complete API key — copy the whole key and paste it again.",
-      }));
-      return;
-    }
-    setState((s) => ({ ...s, [p.id]: "saving" }));
-    setError((e) => ({ ...e, [p.id]: "" }));
-    try {
-      await onSaveKey(p.role, p.id, trimmed);
-      // Never keep the key around in the webview once it's handed off.
-      setDraft((d) => ({ ...d, [p.id]: "" }));
-      setEditing((ed) => ({ ...ed, [p.id]: false }));
-      setState((s) => ({ ...s, [p.id]: "saved" }));
-    } catch (err) {
-      setState((s) => ({ ...s, [p.id]: "error" }));
-      setError((e) => ({ ...e, [p.id]: err instanceof Error ? err.message : "Couldn't save the key." }));
-    }
-  }
-
+  const byId = new Map(providers.map((p) => [p.id, p]));
   return (
     <Card
       title="API keys"
       subtitle="Keys go straight to your computer's keychain and are never shown again — not even here."
     >
       <div className="flex flex-col gap-2">
-        {KEY_PROVIDERS.map((p) => {
-          const saved = state[p.id] === "saved" && !editing[p.id];
-          const showInput = !saved;
-          return (
-            <div key={p.id} className="rounded border border-line bg-paper px-[14px] py-2.5">
-              <div className="flex items-center justify-between gap-2.5">
-                <div className="min-w-0">
-                  <p className="text-[13.5px] font-semibold text-ink">{p.label}</p>
-                  <p
-                    className={
-                      "mt-px text-[11.5px] " + (saved ? "text-fern-deep" : "text-faint")
-                    }
-                  >
-                    {saved ? "✓ Key saved" : "Not connected"}
-                  </p>
-                </div>
-                {saved && (
-                  <button
-                    type="button"
-                    onClick={() => setEditing((ed) => ({ ...ed, [p.id]: true }))}
-                    className="shrink-0 rounded-sm border border-line bg-transparent px-3.5 py-1.5 text-xs font-medium text-ink-soft hover:border-muted"
-                  >
-                    Replace
-                  </button>
-                )}
-              </div>
-
-              {showInput && (
-                <>
-                  <div className="mt-2.5 flex gap-2">
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={draft[p.id] ?? ""}
-                      onChange={(e) => {
-                        setDraft((d) => ({ ...d, [p.id]: e.target.value }));
-                        if (state[p.id] && state[p.id] !== "idle") {
-                          setState((s) => ({ ...s, [p.id]: "idle" }));
-                        }
-                      }}
-                      placeholder={`Paste your ${p.label} key…`}
-                      disabled={!connected || state[p.id] === "saving"}
-                      className="min-w-0 flex-1 rounded-sm border border-line bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint disabled:opacity-60"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void save(p)}
-                      disabled={!connected || !(draft[p.id] ?? "").trim() || state[p.id] === "saving"}
-                      className="shrink-0 rounded-sm bg-fern px-4 py-2 text-[12.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {state[p.id] === "saving" ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                  {state[p.id] === "error" && (
-                    <p className="mt-2 text-[11.5px] text-danger">{error[p.id]}</p>
-                  )}
-                  {!connected && (
-                    <p className="mt-2 text-[11.5px] text-muted">
-                      You can add a key once Addison's engine is connected.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-          );
-        })}
+        {KEY_PROVIDERS.map((p) => (
+          <ProviderRow
+            key={p.id}
+            def={p}
+            info={byId.get(p.id)}
+            connected={connected}
+            onConnect={onConnect}
+            onRemove={onRemove}
+          />
+        ))}
       </div>
       <p className="mt-3 text-[11.5px] text-faint">
         Addison uses whichever provider the model you pick belongs to. Models from
         every connected provider appear together in the picker by the message box.
       </p>
     </Card>
+  );
+}
+
+function ProviderRow({
+  def,
+  info,
+  connected,
+  onConnect,
+  onRemove,
+}: {
+  def: { id: string; label: string; kind: ProviderKind };
+  info: ProviderInfo | undefined;
+  connected: boolean;
+  onConnect: (provider: string, key: string, baseUrl?: string) => Promise<void>;
+  onRemove: (provider: string) => Promise<void>;
+}) {
+  const isConnected = info?.connected === true;
+  const [key, setKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(info?.baseUrl ?? "");
+  const [status, setStatus] = useState<"idle" | "working" | "error">("idle");
+  const [error, setError] = useState("");
+  // "Replace" on a connected row, or the expand on a collapsed ("Add key") row.
+  const [editing, setEditing] = useState(false);
+  // A connect attempt stores the key BEFORE validating; if the validate fails the
+  // key is still saved, so the row keeps offering Remove to clear it.
+  const [removable, setRemovable] = useState(false);
+
+  const kind = def.kind;
+  const needsKey = kind !== "custom"; // custom key is optional
+  const showInput = !isConnected && (kind !== "collapsed" || editing);
+
+  async function connect() {
+    const trimmedKey = key.trim();
+    const trimmedUrl = baseUrl.trim();
+    if (needsKey && !trimmedKey) return;
+    if (trimmedKey && !KEY_SHAPE.test(trimmedKey)) {
+      setStatus("error");
+      setError("That doesn't look like a complete API key — copy the whole key and paste it again.");
+      return;
+    }
+    if (kind === "custom" && !/^https?:\/\/.+/.test(trimmedUrl)) {
+      setStatus("error");
+      setError("Enter a web address that starts with http:// or https://.");
+      return;
+    }
+    setStatus("working");
+    setError("");
+    if (trimmedKey) setRemovable(true); // the key is about to be stored
+    try {
+      await onConnect(def.id, trimmedKey, kind === "custom" ? trimmedUrl : undefined);
+      setKey("");
+      setEditing(false);
+      setRemovable(false);
+      setStatus("idle");
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Couldn't connect. Check the key and try again.");
+    }
+  }
+
+  async function remove() {
+    setStatus("working");
+    setError("");
+    try {
+      await onRemove(def.id);
+      setKey("");
+      setEditing(false);
+      setRemovable(false);
+      setStatus("idle");
+    } catch (err) {
+      setStatus("error");
+      setError(err instanceof Error ? err.message : "Couldn't remove the key.");
+    }
+  }
+
+  const working = status === "working";
+  const focusBorder = "border-fern"; // expanded/active input → fern border (design §4)
+
+  return (
+    <div className="rounded-[8px] border border-line bg-paper px-[14px] py-2.5">
+      <div className="flex items-center justify-between gap-2.5">
+        <div className="min-w-0">
+          <p className="text-[13.5px] font-semibold text-ink">{def.label}</p>
+          {isConnected ? (
+            <p className="mt-px text-[11.5px] text-fern-deep">
+              ✓ Key saved{info?.addedAt ? ` · added ${formatAdded(info.addedAt)}` : ""}
+            </p>
+          ) : kind === "custom" ? (
+            <p className="mt-px font-mono text-[10.5px] text-faint">
+              OpenAI-compatible · {info?.baseUrl || "http://…"}
+            </p>
+          ) : (
+            <p className="mt-px text-[11.5px] text-faint">Not connected</p>
+          )}
+        </div>
+        {isConnected && (
+          <div className="flex shrink-0 gap-3">
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              disabled={working}
+              className="text-xs font-medium text-fern-deep hover:text-fern disabled:opacity-50"
+            >
+              Replace
+            </button>
+            <button
+              type="button"
+              onClick={() => void remove()}
+              disabled={working}
+              className="text-xs font-medium text-muted hover:text-danger disabled:opacity-50"
+            >
+              Remove
+            </button>
+          </div>
+        )}
+        {/* Collapsed (Google) disconnected row → an outlined "Add key" button. */}
+        {!isConnected && kind === "collapsed" && !editing && (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            disabled={!connected}
+            className="shrink-0 rounded-sm border border-line bg-transparent px-3.5 py-1.5 text-xs font-medium text-ink-soft hover:border-muted disabled:opacity-50"
+          >
+            Add key
+          </button>
+        )}
+      </div>
+
+      {showInput && (
+        <div className="mt-2.5 flex flex-col gap-2">
+          {kind === "custom" && (
+            <input
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              value={baseUrl}
+              onChange={(e) => {
+                setBaseUrl(e.target.value);
+                if (status !== "idle") setStatus("idle");
+              }}
+              placeholder="http://localhost:1234/v1"
+              disabled={!connected || working}
+              className={
+                "min-w-0 rounded-sm border bg-surface px-3 py-2 font-mono text-[12px] text-ink placeholder:text-faint disabled:opacity-60 " +
+                (baseUrl ? focusBorder : "border-line")
+              }
+            />
+          )}
+          <div className="flex gap-2">
+            <input
+              type="password"
+              autoComplete="off"
+              spellCheck={false}
+              value={key}
+              onChange={(e) => {
+                setKey(e.target.value);
+                if (status !== "idle") setStatus("idle");
+              }}
+              placeholder={
+                kind === "custom" ? "Key (optional)…" : `Paste your ${def.label} key…`
+              }
+              disabled={!connected || working}
+              className={
+                "min-w-0 flex-1 rounded-sm border bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint disabled:opacity-60 " +
+                (key ? focusBorder : "border-line")
+              }
+            />
+            <button
+              type="button"
+              onClick={() => void connect()}
+              disabled={
+                !connected ||
+                working ||
+                (needsKey && !key.trim()) ||
+                (kind === "custom" && !baseUrl.trim())
+              }
+              className="shrink-0 rounded-sm bg-fern px-4 py-2 text-[12.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {working ? "Checking…" : kind === "custom" ? "Connect" : "Save"}
+            </button>
+          </div>
+          {status === "error" && <p className="text-[11.5px] text-danger">{error}</p>}
+          {status !== "error" && (isConnected || removable) && (
+            <p className="text-[11.5px] text-faint">
+              Checked with one tiny request, then locked away in the keychain.
+            </p>
+          )}
+          {/* A failed connect still stored the key — offer to clear it. */}
+          {removable && !isConnected && (
+            <button
+              type="button"
+              onClick={() => void remove()}
+              disabled={working}
+              className="self-start text-[11.5px] font-medium text-muted hover:text-danger disabled:opacity-50"
+            >
+              Remove the saved key
+            </button>
+          )}
+          {!connected && (
+            <p className="text-[11.5px] text-muted">
+              You can add a key once Addison's engine is connected.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -21,6 +21,7 @@ from pathlib import Path
 
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
+from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
 from agent_core.providers.base import (
     ModelResponse,
@@ -757,6 +758,171 @@ def test_routine_propose_confirm_list_run_round_trip(tmp_path):
         cards = [f for f in writer.frames
                  if f.get("method") == Method.PERMISSION_REQUEST_GRANT]
         assert len(cards) == 1
+    finally:
+        _shutdown(reader, thread)
+
+
+# ===========================================================================
+# Multi-provider API keys — provider.list / connect / disconnect (owner
+# decision 2026-07-18). Scripted connect + key-probe callables keep it offline.
+# ===========================================================================
+def _provider_server(tmp_path, connect_fn=None, key_probe=None, catalog=None):
+    registry = ToolRegistry()
+    provider = _ScriptedProvider([])
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=registry,
+        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+        cloud_catalog=catalog or [],
+        connect_provider=connect_fn,
+        provider_key_probe=key_probe,
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return server, reader, writer, thread
+
+
+def _no_key_material(writer: _FrameWriter, secret: str) -> None:
+    """No captured frame may ever carry key material (invariant §8.3)."""
+    blob = json.dumps(writer.frames)
+    assert secret not in blob
+
+
+def test_provider_list_reports_all_four_and_never_leaks_keys(tmp_path):
+    # A key-probe that reports anthropic connected (a legacy/migrated key), the rest not.
+    server, reader, writer, thread = _provider_server(
+        tmp_path, key_probe=lambda pid: pid == "anthropic"
+    )
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_LIST})
+        res = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        providers = {p["id"]: p for p in res["providers"]}
+        assert set(providers) == {"anthropic", "openai", "google", "custom"}
+        assert providers["anthropic"]["connected"] is True   # implicit via key probe
+        assert providers["openai"]["connected"] is False
+        # NON-secret metadata only — no key field anywhere.
+        for p in res["providers"]:
+            assert set(p) <= {"id", "label", "connected", "addedAt", "baseUrl", "lastCheckOk"}
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_provider_connect_success_marks_connected_and_unions_catalog(tmp_path):
+    secret = "sk-openai-super-secret"
+    connect_calls = {"n": 0}
+
+    def connect_fn(provider_id, base_url):
+        connect_calls["n"] += 1
+        # A real connect would use ``secret`` from the keychain; the server must never
+        # place it in any response frame.
+        assert secret  # (the key lives only inside the connect closure in production)
+        return [CloudModel(id="gpt-4.1", label="GPT-4.1", description="", provider="openai")]
+
+    server, reader, writer, thread = _provider_server(tmp_path, connect_fn=connect_fn)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_CONNECT,
+             "params": {"provider": "openai"}}
+        )
+        res = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert res == {"ok": True}
+        assert connect_calls["n"] == 1
+
+        # provider.list now shows openai connected with an added date.
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.PROVIDER_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        openai_row = next(p for p in listed["providers"] if p["id"] == "openai")
+        assert openai_row["connected"] is True
+        assert isinstance(openai_row["addedAt"], int)
+        assert openai_row["lastCheckOk"] is True
+
+        # availableRoles carries the new provider's model in the union catalog.
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.MODEL_AVAILABLE_ROLES})
+        roles = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        ids = {m["id"] for m in roles["cloudModels"]}
+        assert "gpt-4.1" in ids
+        providers = {m["provider"] for m in roles["cloudModels"]}
+        assert "openai" in providers
+        _no_key_material(writer, secret)
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_provider_connect_failure_reports_plain_error_and_stays_disconnected(tmp_path):
+    def connect_fn(provider_id, base_url):
+        raise RuntimeError("That key doesn't work. Check it and try again.")
+
+    server, reader, writer, thread = _provider_server(tmp_path, connect_fn=connect_fn)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_CONNECT,
+             "params": {"provider": "google"}}
+        )
+        res = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert res["ok"] is False
+        assert res["error"] == "That key doesn't work. Check it and try again."
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.PROVIDER_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        google_row = next(p for p in listed["providers"] if p["id"] == "google")
+        assert google_row["connected"] is False
+        assert google_row["lastCheckOk"] is False
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_provider_connect_custom_requires_valid_http_url(tmp_path):
+    called = {"n": 0}
+
+    def connect_fn(provider_id, base_url):
+        called["n"] += 1
+        return []
+
+    server, reader, writer, thread = _provider_server(tmp_path, connect_fn=connect_fn)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_CONNECT,
+             "params": {"provider": "custom", "baseUrl": "ftp://nope"}}
+        )
+        res = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert res["ok"] is False
+        assert "http" in res["error"]
+        assert called["n"] == 0  # never even attempted the connect
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_provider_disconnect_removes_from_catalog_and_list(tmp_path):
+    def connect_fn(provider_id, base_url):
+        return [CloudModel(id="gemini-2.5-pro", label="Gemini 2.5 Pro", description="", provider="google")]
+
+    server, reader, writer, thread = _provider_server(tmp_path, connect_fn=connect_fn)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_CONNECT,
+             "params": {"provider": "google"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2, "method": Method.PROVIDER_DISCONNECT,
+             "params": {"provider": "google"}}
+        )
+        res = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert res == {"ok": True}
+
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.MODEL_AVAILABLE_ROLES})
+        roles = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        assert all(m["provider"] != "google" for m in roles["cloudModels"])
+
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.PROVIDER_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        google_row = next(p for p in listed["providers"] if p["id"] == "google")
+        assert google_row["connected"] is False
     finally:
         _shutdown(reader, thread)
 

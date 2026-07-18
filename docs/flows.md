@@ -198,3 +198,35 @@ sequenceDiagram
     RLY-->>SAP: text, or an at_cap wrap-up
     SAP-->>ORC: ModelResponse
 ```
+
+## 7. Connecting a provider key (multi-provider)
+
+Adding a provider key (owner decision 2026-07-18) is a three-hop dance: the webview
+hands the key straight to the highest-trust Rust process (never the core), then asks
+the core to validate and record the connection. The core pulls the just-stored key
+from the keychain, makes ONE tiny request to prove it works, and folds that provider's
+models into the picker union. On failure the provider is left disconnected and the
+card offers Remove to clear the stored key. Keys never cross to the core in a frame —
+only the provider id does, and the core reads the value from the keychain at the moment
+of use.
+
+```mermaid
+sequenceDiagram
+    participant UI as Webview (API keys card)
+    participant SH as Rust shell keychain
+    participant SRV as JsonRpcServer
+    participant BR as IpcShellBridge
+    participant P as Provider API
+
+    UI->>SH: invoke store_provider_key(provider, key)
+    Note over SH: key written to provider-key:{provider}, never echoed back
+    UI->>SRV: provider.connect(provider, baseUrl?)
+    SRV->>BR: get_provider_key(provider)
+    BR->>SH: keychain.getProviderKey {provider}
+    SH-->>BR: key (core-ward only, one request)
+    SRV->>P: one tiny request (GET models / generateContent probe)
+    P-->>SRV: 200 ok, or 401/timeout
+    Note over SRV: on ok — record connected + added_at in provider_config,<br/>register the provider's models in the union
+    SRV-->>UI: {ok: true} or {ok: false, error}
+    UI->>SRV: provider.list + model.availableRoles (refresh)
+```

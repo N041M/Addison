@@ -38,8 +38,20 @@ class Store:
         self._apply_schema()
 
     def _apply_schema(self) -> None:
+        self._migrate_provider_config()
         self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         self._conn.commit()
+
+    def _migrate_provider_config(self) -> None:
+        """Drop a pre-multi-provider ``provider_config`` so the new per-provider
+        shape is created fresh (owner decision 2026-07-18). The old role-keyed table
+        was never written to by any code, so dropping it loses nothing; a brand-new
+        database has no table yet and this is a no-op. ``CREATE TABLE IF NOT EXISTS``
+        would otherwise leave a stale-shaped table in place forever."""
+        cols = self._conn.execute("PRAGMA table_info(provider_config)").fetchall()
+        if cols and not any(row["name"] == "connected" for row in cols):
+            self._conn.execute("DROP TABLE provider_config")
+            self._conn.commit()
 
     # --- action snapshots (UndoManager) -----------------------------------
     def insert_action_snapshot(self, snapshot: ActionSnapshot) -> None:
@@ -378,5 +390,86 @@ class Store:
         )
         self._conn.commit()
 
+    # --- provider connection metadata (multi-provider, §4.1.1) --------------
+    # NON-SECRET connection state only — which providers are connected, when, the
+    # custom server base URL, and an optional cached catalog. API keys NEVER appear
+    # here; they live only in the OS keychain (§5, §8.3).
+    def upsert_provider_config(
+        self,
+        provider_id: str,
+        *,
+        connected: bool,
+        added_at: int | None = None,
+        base_url: str | None = None,
+        catalog_json: str | None = None,
+        last_check_ok: bool | None = None,
+    ) -> None:
+        """Insert or update one provider's connection metadata. ``added_at`` is
+        first-write-wins (``COALESCE`` keeps the earliest connect time), so re-connecting
+        a provider never resets its "added" date. ``last_check_ok`` maps True/False/None
+        to 1/0/NULL."""
+        last_ok = None if last_check_ok is None else int(last_check_ok)
+        self._conn.execute(
+            "INSERT INTO provider_config "
+            "(provider_id, connected, added_at, base_url, catalog_json, last_check_ok, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(provider_id) DO UPDATE SET "
+            "  connected = excluded.connected, "
+            "  added_at = COALESCE(provider_config.added_at, excluded.added_at), "
+            "  base_url = excluded.base_url, "
+            "  catalog_json = excluded.catalog_json, "
+            "  last_check_ok = excluded.last_check_ok, "
+            "  updated_at = excluded.updated_at",
+            (
+                provider_id,
+                int(connected),
+                added_at,
+                base_url,
+                catalog_json,
+                last_ok,
+                int(time.time()),
+            ),
+        )
+        self._conn.commit()
+
+    def get_provider_config(self, provider_id: str) -> dict[str, Any] | None:
+        """One provider's stored connection metadata, or None if never connected."""
+        row = self._conn.execute(
+            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok "
+            "FROM provider_config WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        return _provider_config_row(row) if row is not None else None
+
+    def list_provider_configs(self) -> list[dict[str, Any]]:
+        """Every provider that has connection metadata, in insertion order."""
+        rows = self._conn.execute(
+            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok "
+            "FROM provider_config ORDER BY rowid ASC"
+        ).fetchall()
+        return [_provider_config_row(row) for row in rows]
+
+    def delete_provider_config(self, provider_id: str) -> None:
+        """Forget a provider's connection metadata (the "Remove"/disconnect action).
+        The key itself is deleted separately by the Rust keychain command."""
+        self._conn.execute(
+            "DELETE FROM provider_config WHERE provider_id = ?", (provider_id,)
+        )
+        self._conn.commit()
+
     def close(self) -> None:
         self._conn.close()
+
+
+def _provider_config_row(row) -> dict[str, Any]:
+    """One ``provider_config`` row as a plain dict with typed booleans (SQLite stores
+    them as 0/1; NULL ``last_check_ok`` stays None)."""
+    last_ok = row["last_check_ok"]
+    return {
+        "provider_id": row["provider_id"],
+        "connected": bool(row["connected"]),
+        "added_at": row["added_at"],
+        "base_url": row["base_url"],
+        "catalog_json": row["catalog_json"],
+        "last_check_ok": None if last_ok is None else bool(last_ok),
+    }

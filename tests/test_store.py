@@ -261,3 +261,56 @@ def test_continued_from_lineage_column_is_persisted(store: Store):
         "SELECT continued_from_conversation_id FROM conversations WHERE id = 'c2'"
     ).fetchone()
     assert row["continued_from_conversation_id"] == "c1"
+
+
+# --- provider connection metadata (multi-provider, owner decision 2026-07-18) ---
+
+
+def test_provider_config_upsert_and_get(store: Store):
+    store.upsert_provider_config(
+        "anthropic", connected=True, added_at=1000, last_check_ok=True
+    )
+    cfg = store.get_provider_config("anthropic")
+    assert cfg["provider_id"] == "anthropic"
+    assert cfg["connected"] is True
+    assert cfg["added_at"] == 1000
+    assert cfg["last_check_ok"] is True
+    assert cfg["base_url"] is None
+
+
+def test_provider_config_added_at_is_first_write_wins(store: Store):
+    # A later reconnect must NOT reset the original added date.
+    store.upsert_provider_config("openai", connected=True, added_at=1000, last_check_ok=True)
+    store.upsert_provider_config("openai", connected=True, added_at=9999, last_check_ok=True)
+    assert store.get_provider_config("openai")["added_at"] == 1000
+
+
+def test_provider_config_failed_connect_stays_disconnected(store: Store):
+    store.upsert_provider_config("google", connected=False, last_check_ok=False)
+    cfg = store.get_provider_config("google")
+    assert cfg["connected"] is False
+    assert cfg["last_check_ok"] is False
+    assert cfg["added_at"] is None
+
+
+def test_provider_config_custom_base_url_round_trips(store: Store):
+    store.upsert_provider_config(
+        "custom", connected=True, added_at=5, base_url="http://localhost:1234/v1", last_check_ok=True
+    )
+    assert store.get_provider_config("custom")["base_url"] == "http://localhost:1234/v1"
+
+
+def test_provider_config_list_and_delete(store: Store):
+    store.upsert_provider_config("anthropic", connected=True, added_at=1)
+    store.upsert_provider_config("openai", connected=True, added_at=2)
+    ids = [c["provider_id"] for c in store.list_provider_configs()]
+    assert ids == ["anthropic", "openai"]
+    store.delete_provider_config("anthropic")
+    assert store.get_provider_config("anthropic") is None
+    assert [c["provider_id"] for c in store.list_provider_configs()] == ["openai"]
+
+
+def test_provider_config_rejects_unknown_provider_id(store: Store):
+    # The CHECK constraint guards the four known provider ids.
+    with pytest.raises(Exception):
+        store.upsert_provider_config("bogus", connected=True)

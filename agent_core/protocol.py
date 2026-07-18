@@ -69,6 +69,12 @@ class Method:
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
     MODEL_LOCAL_SETUP_PROGRESS = "model.localSetupProgress"
+    # Multi-provider API keys (owner decision 2026-07-18). Keys themselves NEVER
+    # cross this boundary — the webview stores them straight into the OS keychain via
+    # the Rust command; these methods carry only non-secret status/metadata.
+    PROVIDER_LIST = "provider.list"            # {} -> {providers: [{id,label,connected,addedAt?,baseUrl?,lastCheckOk?}]}
+    PROVIDER_CONNECT = "provider.connect"      # {provider, baseUrl?} -> {ok, error?}
+    PROVIDER_DISCONNECT = "provider.disconnect"  # {provider} -> {ok}
 
     # Core -> Shell (handled in Rust, NEVER exposed to or callable from the
     # webview — §1.3, §5). Listed here and mirrored in protocol.ts only so the
@@ -84,7 +90,7 @@ class Method:
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
     KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"      # {} -> {deviceId, publicKey}; public half ONLY
-    KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"  # {role} -> {key}; per-call, never cached
+    KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"  # {provider} -> {key}; per-call, never cached
     # {payload} -> {signature, deviceId}. The shell signs relay requests with the
     # device private key, which never leaves the OS keychain (§5) — the core sends
     # bytes to sign, never sees key material.

@@ -31,11 +31,16 @@ from uuid import uuid4
 
 from agent_core.memory.store import Store
 from agent_core.models_catalog import (
+    PROVIDER_IDS,
+    CatalogFetchError,
     CloudModel,
     default_cloud_model,
     fetch_cloud_catalog,
     find_cloud_model,
     load_cloud_catalog,
+    merge_catalogs,
+    provider_label,
+    static_catalog_for,
 )
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -50,12 +55,16 @@ from agent_core.profiles import (
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.google_provider import GoogleProvider
+from agent_core.providers.google_provider import list_models as google_list_models
 from agent_core.providers.ollama_provider import (
     OllamaProvider,
     approx_requirements,
     is_running,
     pull_model,
 )
+from agent_core.providers.openai_provider import OpenAIProvider
+from agent_core.providers.openai_provider import list_models as openai_list_models
 from agent_core.providers.router import ModelRouter
 from agent_core.providers.setup_assistant_provider import (
     DEFAULT_RELAY_URL,
@@ -381,6 +390,8 @@ class JsonRpcServer:
         cloud_catalog: list[CloudModel] | None = None,
         cloud_fetcher=None,
         cloud_provider_factory=None,
+        connect_provider=None,
+        provider_key_probe=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -403,6 +414,17 @@ class JsonRpcServer:
         self._cloud_fetcher = cloud_fetcher
         self._cloud_provider_factory = cloud_provider_factory
         self._cloud_catalog_loaded = False
+        # Multi-provider (owner decision 2026-07-18). ``connect_provider`` is a
+        # (provider_id, base_url) -> list[CloudModel] callable that makes the "one
+        # tiny request" to validate the provider, registers a provider instance per
+        # model in the SAME ModelRouter, and returns that provider's catalog (raising
+        # RuntimeError with a plain message on failure). ``provider_key_probe`` is a
+        # (provider_id) -> bool telling whether a key is stored (drives provider.list's
+        # implicit-connected state for a legacy/migrated key). Both None in CLI/tests
+        # that don't wire them — provider.* then reports metadata only, no live connect.
+        self._connect_provider = connect_provider
+        self._provider_key_probe = provider_key_probe
+        self._providers_reconnected = False
         # Local-setup (§4.1.2) talks to Ollama over HTTP. base_url/client default
         # to the real localhost instance; tests inject an httpx.MockTransport
         # client so no real Ollama (or network) is ever touched.
@@ -613,6 +635,13 @@ class JsonRpcServer:
         if method == Method.PROFILE_SET:
             self._queue.put(("profile_set", params, request_id))
             return
+        # provider.list/connect/disconnect touch the Store and the ModelRouter, and
+        # connect makes an outbound HTTPS ping + a Core -> Shell key fetch — all of
+        # which must run on the worker, never the read loop (same rule as
+        # availableRoles; see the class docstring's threading model).
+        if method in _PROVIDER_JOBS:
+            self._queue.put((_PROVIDER_JOBS[method], params, request_id))
+            return
 
         try:
             if method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
@@ -642,7 +671,7 @@ class JsonRpcServer:
                 if kind == "send":
                     self._run_send_message(params, request_id)
                 elif kind == "available_roles":
-                    self._maybe_load_live_catalog()
+                    self._maybe_load_catalogs()
                     self._respond(request_id, self._available_roles())
                 elif kind == "undo":
                     self._respond(request_id, self._undo_last_action())
@@ -672,6 +701,12 @@ class JsonRpcServer:
                 elif kind == "conversation_list":
                     self._ensure_built()
                     self._respond(request_id, {"conversations": self._conversation_rows()})
+                elif kind == "provider_list":
+                    self._respond(request_id, self._provider_list())
+                elif kind == "provider_connect":
+                    self._respond(request_id, self._provider_connect(params))
+                elif kind == "provider_disconnect":
+                    self._respond(request_id, self._provider_disconnect(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1146,18 +1181,27 @@ class JsonRpcServer:
         self._respond(request_id, {"ok": True})
 
     # --- model roles ------------------------------------------------------
-    def _maybe_load_live_catalog(self) -> None:
-        """First availableRoles once a PRIMARY key exists: replace the built-in
-        fallback with the live list of every model the key can access, and register a
-        provider per fetched entry so by-name picks resolve to it.
+    def _maybe_load_catalogs(self) -> None:
+        """First availableRoles: swap in the live Anthropic catalog (if a key is
+        present) and reconnect every other provider the user connected in a previous
+        launch, so the picker's union is whole again after a restart.
 
-        Runs on the worker (never the read loop): the key probe and the fetch each do
-        round-trips that block on frames the read loop must stay free to deliver. Any
-        failure — no key, offline, a bad response — keeps the fallback and leaves the
-        door open to retry on a later availableRoles call (nothing is marked loaded).
-        Registration is idempotent (dict replace), so repeated calls are safe. The
-        frontend always sends an explicit modelId (the live default's id after a swap),
-        so the router's fallback selection is left as-is."""
+        Runs on the worker (never the read loop): the key probe, the Anthropic fetch,
+        and each provider reconnect ping all do round-trips that block on frames the
+        read loop must stay free to deliver. Failures are swallowed and leave the door
+        open to retry (Anthropic) or to a manual reconnect (others)."""
+        self._maybe_load_live_catalog()
+        self._maybe_reconnect_saved_providers()
+
+    def _maybe_load_live_catalog(self) -> None:
+        """First availableRoles once a PRIMARY (Anthropic) key exists: swap the
+        built-in fallback for the live list of every model the key can access, and
+        register a provider per fetched entry so by-name picks resolve to it. Merges
+        into the union (never clobbers other connected providers' models).
+
+        Any failure — no key, offline, a bad response — keeps the fallback and leaves
+        the door open to retry on a later availableRoles call (nothing is marked
+        loaded). Registration is idempotent (dict replace), so repeated calls are safe."""
         if self._cloud_catalog_loaded or self._cloud_fetcher is None:
             return
         if not self._primary_key_available():
@@ -1169,13 +1213,137 @@ class JsonRpcServer:
         if not catalog:
             return
 
-        self._cloud_catalog = catalog
+        self._set_provider_models("anthropic", catalog)
         self._cloud_catalog_loaded = True
         if self._cloud_provider_factory is not None:
             for entry in catalog:
                 self.model_router.register_primary_model(
                     entry.id, self._cloud_provider_factory(entry)
                 )
+
+    def _maybe_reconnect_saved_providers(self) -> None:
+        """Reconnect the non-Anthropic providers persisted as connected in a prior
+        launch (their keys are still in the keychain). One-shot per launch: a provider
+        that can't be reached right now simply has no models until the user reconnects
+        it from Settings. Anthropic is handled by the live-catalog path above."""
+        if self._providers_reconnected or self._connect_provider is None or self.store is None:
+            return
+        self._providers_reconnected = True
+        for cfg in self.store.list_provider_configs():
+            provider_id = cfg["provider_id"]
+            if provider_id == "anthropic" or not cfg["connected"]:
+                continue
+            try:
+                models = self._connect_provider(provider_id, cfg["base_url"])
+            except Exception:
+                continue   # transient failure — user can reconnect manually
+            self._set_provider_models(provider_id, models)
+
+    def _set_provider_models(self, provider_id: str, models: list[CloudModel]) -> None:
+        """Replace one provider's slice of the union picker menu with ``models``,
+        keeping a single default across the whole union (merge_catalogs). Other
+        providers' entries are untouched."""
+        others = [m for m in self._cloud_catalog if m.provider != provider_id]
+        self._cloud_catalog = merge_catalogs([others, list(models)])
+
+    # --- provider connections (multi-provider, §4.1.1) --------------------
+    def _provider_key_present(self, provider_id: str) -> bool:
+        probe = self._provider_key_probe
+        if probe is None:
+            return False
+        try:
+            return bool(probe(provider_id))
+        except Exception:
+            return False
+
+    def _provider_list(self) -> dict:
+        """provider.list -> {providers: [...]}. Carries ONLY non-secret status and
+        metadata — NEVER any key material (invariant §8.3): id, plain label, whether
+        it is connected, and (when known) the added date, custom base URL, and the
+        last connect-check result.
+
+        ``connected`` trusts a stored connection row exactly; only when there is NO
+        row does it fall back to 'a key is already in the keychain' — that fallback
+        exists so a legacy/migrated Anthropic key shows connected without a re-connect."""
+        self._ensure_built()
+        stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
+        rows: list[dict] = []
+        for provider_id in PROVIDER_IDS:
+            cfg = stored.get(provider_id)
+            if cfg is not None:
+                connected = cfg["connected"]
+            else:
+                connected = provider_id != "custom" and self._provider_key_present(provider_id)
+            row: dict = {
+                "id": provider_id,
+                "label": provider_label(provider_id),
+                "connected": connected,
+            }
+            if cfg is not None:
+                if cfg["added_at"] is not None:
+                    row["addedAt"] = cfg["added_at"]
+                if provider_id == "custom" and cfg["base_url"]:
+                    row["baseUrl"] = cfg["base_url"]
+                if cfg["last_check_ok"] is not None:
+                    row["lastCheckOk"] = cfg["last_check_ok"]
+            rows.append(row)
+        return {"providers": rows}
+
+    def _provider_connect(self, params: dict) -> dict:
+        """provider.connect {provider, baseUrl?} -> {ok, error?}. The key was already
+        stored by the Rust command; here the core pulls it from the keychain, makes ONE
+        tiny validating request, and — on success — records metadata and folds the
+        provider's models into the picker union. On failure it does NOT mark the provider
+        connected (the card offers Remove to clear the stored key)."""
+        self._ensure_built()
+        provider_id = params.get("provider")
+        base_url = (params.get("baseUrl") or "").strip() or None
+        if provider_id not in PROVIDER_IDS:
+            return {"ok": False, "error": "That provider isn't available."}
+        if provider_id == "custom" and not _valid_http_url(base_url):
+            return {
+                "ok": False,
+                "error": "Enter a web address that starts with http:// or https://.",
+            }
+        if self._connect_provider is None:
+            return {"ok": False, "error": "Connecting a provider needs the desktop app."}
+        try:
+            models = self._connect_provider(provider_id, base_url)
+        except RuntimeError as exc:
+            # Provider errors already carry a plain, user-ready sentence. Record the
+            # failed check WITHOUT marking connected, so provider.list shows it off.
+            self.store.upsert_provider_config(
+                provider_id, connected=False, base_url=base_url, last_check_ok=False
+            )
+            return {"ok": False, "error": str(exc)}
+        except Exception:
+            self.store.upsert_provider_config(
+                provider_id, connected=False, base_url=base_url, last_check_ok=False
+            )
+            return {"ok": False, "error": _GENERIC_TURN_ERROR}
+        self.store.upsert_provider_config(
+            provider_id,
+            connected=True,
+            added_at=int(time.time()),
+            base_url=base_url,
+            last_check_ok=True,
+        )
+        self._set_provider_models(provider_id, models)
+        return {"ok": True}
+
+    def _provider_disconnect(self, params: dict) -> dict:
+        """provider.disconnect {provider} -> {ok}. Forget the connection metadata and
+        drop that provider's models from the picker union and the router pool. The key
+        itself is removed separately by the Rust keychain command (the webview calls it)."""
+        self._ensure_built()
+        provider_id = params.get("provider")
+        if provider_id not in PROVIDER_IDS:
+            return {"ok": False, "error": "That provider isn't available."}
+        self.store.delete_provider_config(provider_id)
+        for model in [m for m in self._cloud_catalog if m.provider == provider_id]:
+            self.model_router.unregister_primary_model(model.id)
+        self._cloud_catalog = [m for m in self._cloud_catalog if m.provider != provider_id]
+        return {"ok": True}
 
     def _available_roles(self) -> dict:
         return {
@@ -1383,6 +1551,26 @@ _CONVERSATION_JOBS = {
     Method.CONVERSATION_LIST: "conversation_list",
 }
 
+# provider.list/connect/disconnect run on the worker (Store + router + connect ping).
+_PROVIDER_JOBS = {
+    Method.PROVIDER_LIST: "provider_list",
+    Method.PROVIDER_CONNECT: "provider_connect",
+    Method.PROVIDER_DISCONNECT: "provider_disconnect",
+}
+
+
+def _valid_http_url(url) -> bool:
+    """A custom-server base URL is accepted only when it is an ``http://`` or
+    ``https://`` URL with a host after the scheme. ``http://`` is deliberately
+    permitted — a custom server is the ONE allowed plain-HTTP case (localhost/LAN
+    model hosts). No other scheme (``file:``, ``ftp:``, …) is ever accepted."""
+    if not isinstance(url, str):
+        return False
+    for scheme in ("http://", "https://"):
+        if url.startswith(scheme) and len(url) > len(scheme):
+            return True
+    return False
+
 
 def _plain(exc: Exception) -> str:
     """A user-ready sentence for a handler failure — never the raw exception."""
@@ -1407,22 +1595,35 @@ def main() -> None:
     def _store_factory() -> Store:
         return Store(db_path)
 
-    def _api_key_getter() -> str:
-        # Per-call key fetch from the OS keychain via the shell (§5), kept only in
-        # this local. If the shell reports no key (or isn't reachable), fall back
-        # to the env var so the core is runnable in dev without the desktop shell.
-        # DEV FALLBACK — remove once BYOK-via-keychain is the only path.
-        try:
-            key = shell_bridge.get_provider_key("primary")
-        except RuntimeError:
-            key = ""
-        return key or os.environ.get("ANTHROPIC_API_KEY", "")
+    def _provider_key_getter(provider_id: str):
+        """A per-call keychain getter for one provider (§5). The key is fetched fresh
+        at the moment of use and kept only in the returned callable's local — never
+        cached. Anthropic keeps the dev env-var fallback so the core is runnable
+        without the desktop shell; other providers have keychain only."""
+
+        def getter() -> str:
+            try:
+                key = shell_bridge.get_provider_key(provider_id)
+            except RuntimeError:
+                key = ""
+            if not key and provider_id == "anthropic":
+                # DEV FALLBACK — remove once BYOK-via-keychain is the only path.
+                key = os.environ.get("ANTHROPIC_API_KEY", "")
+            return key
+
+        return getter
+
+    _api_key_getter = _provider_key_getter("anthropic")
 
     def _primary_key_available() -> bool:
-        # §4.6 probe: reuse the exact PRIMARY getter — no key means this turn runs
+        # §4.6 probe: reuse the exact Anthropic getter — no key means this turn runs
         # on the Setup Assistant relay instead. Read fresh each turn, so adding a
         # key mid-conversation flips routing to PRIMARY with no restart.
         return bool(_api_key_getter())
+
+    def _provider_key_present(provider_id: str) -> bool:
+        # provider.list's implicit-connected signal for a legacy/migrated key.
+        return bool(_provider_key_getter(provider_id)())
 
     def _build_cloud_provider(entry: CloudModel) -> AnthropicProvider:
         # One AnthropicProvider per catalog entry — all sharing the SAME key-getter
@@ -1440,6 +1641,65 @@ def main() -> None:
         # Every model _api_key_getter's key can access (§4.1.1); raises on any failure,
         # which the server catches to keep the fallback catalog.
         return fetch_cloud_catalog(_api_key_getter)
+
+    def _connect_provider(provider_id: str, base_url: str | None) -> list[CloudModel]:
+        """The "one tiny request" provider.connect makes: validate the stored key/
+        server, register a provider instance per model in the shared ModelRouter, and
+        return that provider's catalog. Raises RuntimeError with a plain message on
+        failure (bad key, unreachable host) — the server turns it into the card's error
+        line. The key rides only inside each getter, fetched per request, never cached
+        here (§8.3)."""
+        getter = _provider_key_getter(provider_id)
+        if provider_id == "anthropic":
+            # The live catalog fetch IS the validating request (it 401s on a bad key).
+            try:
+                models = fetch_cloud_catalog(getter)
+            except CatalogFetchError:
+                raise RuntimeError("That key doesn't work. Check it and try again.") from None
+            for entry in models:
+                model_router.register_primary_model(entry.id, _build_cloud_provider(entry))
+            return models
+        if provider_id == "openai":
+            openai_list_models("https://api.openai.com/v1", getter)  # validates the key
+            models = static_catalog_for("openai")
+            for entry in models:
+                model_router.register_primary_model(
+                    entry.id, OpenAIProvider(model=entry.id, api_key_getter=getter)
+                )
+            return models
+        if provider_id == "google":
+            google_list_models(getter)  # validates the key
+            models = static_catalog_for("google")
+            for entry in models:
+                model_router.register_primary_model(
+                    entry.id, GoogleProvider(model=entry.id, api_key_getter=getter)
+                )
+            return models
+        if provider_id == "custom":
+            # GET {base}/v1/models both validates and lists the server's models; an
+            # empty/unlistable server falls back to one visible "Custom model" entry.
+            ids = openai_list_models(base_url, getter, require_key=False)
+            if ids:
+                models = [
+                    CloudModel(id=mid, label=mid, description="", provider="custom") for mid in ids
+                ]
+            else:
+                models = [
+                    CloudModel(id="custom-model", label="Custom model", description="", provider="custom")
+                ]
+            for entry in models:
+                model_router.register_primary_model(
+                    entry.id,
+                    OpenAIProvider(
+                        model=entry.id,
+                        api_key_getter=getter,
+                        base_url=base_url,
+                        require_key=False,
+                        service_label="the server",
+                    ),
+                )
+            return models
+        raise RuntimeError("That provider isn't available.")
 
     # The cloud menu starts as the built-in fallback (models_catalog.py); the server
     # swaps in the live list on the first availableRoles once a key is present.
@@ -1483,6 +1743,8 @@ def main() -> None:
         cloud_catalog=catalog,
         cloud_fetcher=_fetch_live_catalog,
         cloud_provider_factory=_build_cloud_provider,
+        connect_provider=_connect_provider,
+        provider_key_probe=_provider_key_present,
     )
     # §4.7: the server re-resolves the active profile from the store on its worker
     # thread (profile.get/set) and consults it per-use for the onboarding path, raw

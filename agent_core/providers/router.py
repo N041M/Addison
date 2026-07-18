@@ -105,6 +105,14 @@ class ModelRouter:
         if self._selected_primary is None:
             self._selected_primary = model_name
 
+    def unregister_primary_model(self, model_name: str) -> None:
+        """Remove a cloud model from the PRIMARY pool (provider.disconnect). If it was
+        the selected default, fall back to whatever remains. Unknown names are a no-op —
+        disconnecting is idempotent."""
+        self._primary_models.pop(model_name, None)
+        if self._selected_primary == model_name:
+            self._selected_primary = next(iter(self._primary_models), None)
+
     def available_primary_models(self) -> list[str]:
         """The nameable cloud models — the ids the picker sends back as ``modelId``
         when the PRIMARY role is selected (§4.1.1)."""

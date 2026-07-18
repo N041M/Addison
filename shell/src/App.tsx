@@ -29,6 +29,7 @@ import {
   ipc,
   isEngineConnected,
   storeProviderKey,
+  deleteProviderKey,
   subscribe,
   subscribeStatus,
   subscribeCoreState,
@@ -36,6 +37,7 @@ import {
   type StreamChunkParams,
   type LocalSetupProgressParams,
   type DiagnosticEntry,
+  type ProviderInfo,
   type RawError,
 } from "./ipc/client";
 import { ChatThread } from "./components/ChatThread";
@@ -93,6 +95,9 @@ export function App() {
 
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [cloudModels, setCloudModels] = useState<CloudModel[]>([]);
+  // Multi-provider API keys (owner decision 2026-07-18). Non-secret status only —
+  // the keys themselves live in the OS keychain and never reach the webview.
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedRole, setSelectedRole] = useState<ModelRole>(loadDefaultRole());
   const [selectedCloudModel, setSelectedCloudModel] = useState<string | undefined>(
     loadStored(CLOUD_MODEL_KEY),
@@ -218,6 +223,7 @@ export function App() {
       subscribeCoreState((state) => {
         if (state === "ready") {
           refreshRoles();
+          refreshProviders();
           refreshProfile();
           refreshConversations();
         }
@@ -234,6 +240,7 @@ export function App() {
     );
 
     refreshRoles();
+    refreshProviders();
     refreshProfile();
     refreshConversations();
 
@@ -319,6 +326,16 @@ export function App() {
       })
       .catch(() => {
         /* leave the selector on placeholders if we can't read roles */
+      });
+  }
+
+  function refreshProviders() {
+    if (!isEngineConnected()) return;
+    ipc
+      .listProviders()
+      .then(setProviders)
+      .catch(() => {
+        /* leave the API-keys card on its last-known rows if we can't read them */
       });
   }
 
@@ -650,9 +667,35 @@ export function App() {
     ipc.setRoleForNextMessage(role).catch(() => {});
   }
 
-  async function handleSaveKey(role: string, provider: string, key: string) {
-    await storeProviderKey(role, provider, key);
-    refreshRoles();
+  // Connect a provider (multi-provider, owner decision 2026-07-18). The key (if any)
+  // goes straight to the OS keychain via the Rust command; then the core validates it
+  // with one tiny request and records the connection. On failure we throw the plain
+  // error so the row can show it (and offer Remove to clear the stored key); the
+  // picker's model union is refreshed either way.
+  async function handleConnectProvider(provider: string, key: string, baseUrl?: string) {
+    if (key) await storeProviderKey(provider, key);
+    let result;
+    try {
+      result = await ipc.connectProvider(provider, baseUrl);
+    } finally {
+      refreshProviders();
+      refreshRoles();
+    }
+    if (!result.ok) {
+      throw new Error(result.error || "Couldn't connect. Check the key and try again.");
+    }
+  }
+
+  // Remove a provider's key (the "Remove" action): delete it from the keychain and
+  // clear the core's connection metadata, then refresh the card + the model union.
+  async function handleRemoveProvider(provider: string) {
+    try {
+      await deleteProviderKey(provider);
+      await ipc.disconnectProvider(provider);
+    } finally {
+      refreshProviders();
+      refreshRoles();
+    }
   }
 
   // --- Routines (§6.3): propose -> confirmation card -> explicit save --------
@@ -830,7 +873,9 @@ export function App() {
             defaultCloudModel={selectedCloudModel}
             onChangeDefaultRole={handleChangeDefaultRole}
             onChangeDefaultCloudModel={handleChangeDefaultCloudModel}
-            onSaveKey={handleSaveKey}
+            providers={providers}
+            onConnectProvider={handleConnectProvider}
+            onRemoveProvider={handleRemoveProvider}
             localSetup={localSetup}
             onStartLocalSetup={handleStartLocalSetup}
             profile={profile}
@@ -1117,6 +1162,8 @@ function normalizeCloudModels(result: unknown): CloudModel[] {
       description: typeof obj.description === "string" ? obj.description : "",
       effortLevels,
       default: obj.default === true,
+      provider: typeof obj.provider === "string" ? obj.provider : undefined,
+      providerLabel: typeof obj.providerLabel === "string" ? obj.providerLabel : undefined,
     });
   }
   return out;

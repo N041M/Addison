@@ -100,6 +100,14 @@ export interface CloudModel {
   description: string;
   effortLevels: EffortLevel[];
   default: boolean;
+  /**
+   * Which connected provider this model belongs to, and its plain-language name
+   * (multi-provider, owner decision 2026-07-18). The picker shows models from
+   * every connected provider together and attributes each to its provider when
+   * more than one is connected. Optional so an older/partial payload still parses.
+   */
+  provider?: string;
+  providerLabel?: string;
 }
 
 /**

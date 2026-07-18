@@ -35,25 +35,26 @@ const SERVICE: &str = "app.addison.desktop";
 /// identity and BYOK keys never collide.
 const DEVICE_ACCOUNT: &str = "device-identity";
 
-/// Keychain account for a provider key, namespaced by model *role*
-/// (`primary` | `local` | `setup_assistant`). The role is the only key the core
-/// has when it later asks for it (`keychain.getProviderKey {role}`), so storage
-/// is keyed by role: one key per role at a time, overwritten when the user
-/// swaps the provider behind a role. The concrete provider id is non-secret and
-/// tracked by the core in `provider_config` (SQLite, §3) — not needed here.
-fn account_for_role(role: &str) -> String {
-    format!("provider-key:{role}")
+/// Keychain account for a provider key, namespaced by PROVIDER id
+/// (`anthropic` | `openai` | `google` | `custom`) — the multi-provider scheme
+/// (owner decision 2026-07-18). One key per provider at a time, overwritten when
+/// the user replaces it. The provider id is the only handle the core has when it
+/// later asks for the key (`keychain.getProviderKey {provider}`).
+fn account_for_provider(provider: &str) -> String {
+    format!("provider-key:{provider}")
 }
 
+/// The legacy role-based Anthropic account, from before the per-provider scheme.
+/// Read once and migrated to `provider-key:anthropic` so an already-saved key keeps
+/// working across the upgrade (see `get_provider_key`).
+const LEGACY_ANTHROPIC_ACCOUNT: &str = "provider-key:primary";
+
 /// Webview -> Shell. Write-only path for a BYOK key the user typed. The key goes
-/// straight into the OS keychain and is never echoed back anywhere. `provider` is
-/// accepted for a complete call signature but isn't part of the storage location
-/// (see `account_for_role`); the core owns the role->provider mapping.
+/// straight into the OS keychain, keyed by provider id, and is never echoed back
+/// anywhere (§8.3).
 #[tauri::command]
-pub fn store_provider_key(role: String, provider: String, key: String) -> Result<(), String> {
-    // Touch `provider` without ever touching `key` in a log line (§8.3).
-    let _ = &provider;
-    let entry = Entry::new(SERVICE, &account_for_role(&role))
+pub fn store_provider_key(provider: String, key: String) -> Result<(), String> {
+    let entry = Entry::new(SERVICE, &account_for_provider(&provider))
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
     entry
         .set_password(&key)
@@ -61,11 +62,42 @@ pub fn store_provider_key(role: String, provider: String, key: String) -> Result
     Ok(())
 }
 
-/// Agent-Core-internal read. Returns the stored key for a role, or a keyring error
-/// (notably `NoEntry` when nothing is saved yet). Never exposed as a Tauri command,
-/// so the webview has no route to it.
-fn get_provider_key(role: &str) -> Result<String, keyring::Error> {
-    Entry::new(SERVICE, &account_for_role(role))?.get_password()
+/// Webview -> Shell. Delete a provider's stored key (the "Remove" action). A
+/// missing entry is treated as success — removing an absent key is idempotent.
+#[tauri::command]
+pub fn delete_provider_key(provider: String) -> Result<(), String> {
+    let entry = Entry::new(SERVICE, &account_for_provider(&provider))
+        .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(_) => Err("Couldn't remove your key from the system keychain.".to_string()),
+    }
+}
+
+/// Agent-Core-internal read. Returns the stored key for a provider, or a keyring
+/// error (notably `NoEntry` when nothing is saved yet). Never exposed as a Tauri
+/// command, so the webview has no route to it.
+///
+/// Backward compat: on the first read for `anthropic` with no per-provider entry,
+/// fall back to the legacy role-based account (`provider-key:primary`) and MIGRATE
+/// it into `provider-key:anthropic` (best-effort) so an existing key survives the
+/// upgrade to the per-provider scheme without the user re-pasting it.
+fn get_provider_key(provider: &str) -> Result<String, keyring::Error> {
+    let entry = Entry::new(SERVICE, &account_for_provider(provider))?;
+    match entry.get_password() {
+        Ok(key) => Ok(key),
+        Err(keyring::Error::NoEntry) if provider == "anthropic" => {
+            let legacy = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT)?;
+            let key = legacy.get_password()?; // propagates NoEntry when there's nothing to migrate
+            // Best-effort migration: copy into the per-provider account and drop the
+            // legacy one. A failure here doesn't fail the read — the value is returned
+            // regardless, and the migration retries on the next read.
+            let _ = entry.set_password(&key);
+            let _ = legacy.delete_credential();
+            Ok(key)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// The device identity: a stable public `device_id` plus the ed25519 signing key
@@ -170,10 +202,10 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
 /// caller (agent_process.rs) — it never passes through the webview.
 pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
     match method {
-        // {role} -> {key}. Per-call, never cached shell-side (§5).
+        // {provider} -> {key}. Per-call, never cached shell-side (§5).
         "keychain.getProviderKey" => {
-            let role = required_str(params, "role", "A model role is required.")?;
-            match get_provider_key(role) {
+            let provider = required_str(params, "provider", "A provider is required.")?;
+            match get_provider_key(provider) {
                 Ok(key) => Ok(json!({ "key": key })),
                 // Clean, value-free error. The core turns this into its own
                 // "no key yet, here's how to add one" message.
@@ -216,19 +248,28 @@ mod tests {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
     #[test]
-    fn account_is_namespaced_by_role() {
-        assert_eq!(account_for_role("primary"), "provider-key:primary");
-        assert_ne!(account_for_role("primary"), account_for_role("local"));
+    fn account_is_namespaced_by_provider() {
+        assert_eq!(account_for_provider("anthropic"), "provider-key:anthropic");
+        assert_ne!(account_for_provider("anthropic"), account_for_provider("openai"));
+        assert_ne!(account_for_provider("google"), account_for_provider("custom"));
+    }
+
+    #[test]
+    fn legacy_anthropic_account_differs_from_the_per_provider_one() {
+        // The migration source must be a DIFFERENT account than the destination, or
+        // the copy-and-delete would erase the value it just migrated.
+        assert_ne!(LEGACY_ANTHROPIC_ACCOUNT, account_for_provider("anthropic"));
+        assert_eq!(LEGACY_ANTHROPIC_ACCOUNT, "provider-key:primary");
     }
 
     #[test]
     fn device_account_is_distinct_from_provider_accounts() {
-        assert_ne!(DEVICE_ACCOUNT, account_for_role("primary"));
+        assert_ne!(DEVICE_ACCOUNT, account_for_provider("anthropic"));
         assert!(!DEVICE_ACCOUNT.starts_with("provider-key:"));
     }
 
     #[test]
-    fn get_provider_key_requires_a_role() {
+    fn get_provider_key_requires_a_provider() {
         let err = handle("keychain.getProviderKey", &json!({})).unwrap_err();
         assert_eq!(err.code, -32602);
     }

@@ -50,6 +50,11 @@ class CloudModel:
     adaptive_thinking: bool = False
     effort_levels: tuple[EffortLevel, ...] = ()
     default: bool = False         # the catalog default — exactly one entry has this
+    # Which connected provider this model belongs to (``anthropic`` | ``openai`` |
+    # ``google`` | ``custom``). The picker shows models from every connected provider
+    # together (§4.1.1); this is the attribution the frontend renders, and it is what
+    # the router keys a by-name pick to the right provider instance.
+    provider: str = "anthropic"
 
     @property
     def supported_effort(self) -> tuple[str, ...]:
@@ -60,8 +65,10 @@ class CloudModel:
 
     def to_wire(self) -> dict:
         """The ``cloudModels`` entry shape the frontend renders (§4.1.1 contract):
-        ``{id, label, description, effortLevels: [{id, label, default}], default}``.
-        ``effortLevels`` is empty when the model has no answer-style control."""
+        ``{id, label, description, effortLevels: [{id, label, default}], default,
+        provider, providerLabel}``. ``effortLevels`` is empty when the model has no
+        answer-style control; ``providerLabel`` is the plain provider name for the
+        picker's attribution."""
         return {
             "id": self.id,
             "label": self.label,
@@ -71,6 +78,8 @@ class CloudModel:
                 for level in self.effort_levels
             ],
             "default": self.default,
+            "provider": self.provider,
+            "providerLabel": provider_label(self.provider),
         }
 
 
@@ -113,6 +122,78 @@ FALLBACK_CLOUD_MODELS: tuple[CloudModel, ...] = (
         effort_levels=(),   # no effort control — sending output_config errors
     ),
 )
+
+
+# ---------------------------------------------------------------------------
+# Provider registry (multi-provider, owner decision 2026-07-18)
+# ---------------------------------------------------------------------------
+# The four provider ids the keychain, Store, and picker share. ``custom`` is an
+# OpenAI-compatible server the user points at (their own LAN model host).
+PROVIDER_IDS: tuple[str, ...] = ("anthropic", "openai", "google", "custom")
+
+_PROVIDER_LABELS: dict[str, str] = {
+    "anthropic": "Anthropic",
+    "openai": "OpenAI",
+    "google": "Google",
+    "custom": "Your own server",
+}
+
+
+def provider_label(provider_id: str) -> str:
+    """Plain-language name for a provider id (the picker's attribution, the API-keys
+    card row title). Unknown ids fall back to the id itself rather than raising."""
+    return _PROVIDER_LABELS.get(provider_id, provider_id)
+
+
+# Static catalogs for the non-Anthropic cloud providers. Unlike Anthropic (whose
+# list is fetched live, GET /v1/models), these are curated per-provider entries —
+# real model ids, raw names, no editorial copy. None carry an effort control (the
+# "answer style" is an Anthropic knob only; every other provider ignores effort).
+# Each catalog's strongest entry is marked ``default``; the union-builder keeps at
+# most one default across all connected providers.
+OPENAI_CLOUD_MODELS: tuple[CloudModel, ...] = (
+    CloudModel(id="gpt-4.1", label="GPT-4.1", description="", provider="openai", default=True),
+    CloudModel(id="gpt-4o", label="GPT-4o", description="", provider="openai"),
+    CloudModel(id="gpt-4o-mini", label="GPT-4o mini", description="", provider="openai"),
+)
+
+GOOGLE_CLOUD_MODELS: tuple[CloudModel, ...] = (
+    CloudModel(
+        id="gemini-2.5-pro", label="Gemini 2.5 Pro", description="", provider="google", default=True
+    ),
+    CloudModel(id="gemini-2.5-flash", label="Gemini 2.5 Flash", description="", provider="google"),
+)
+
+
+def static_catalog_for(provider_id: str) -> list[CloudModel]:
+    """The curated static catalog for a non-Anthropic provider, or [] for one that
+    has no static list (Anthropic fetches live; custom lists via GET /v1/models)."""
+    if provider_id == "openai":
+        return [replace(m) for m in OPENAI_CLOUD_MODELS]
+    if provider_id == "google":
+        return [replace(m) for m in GOOGLE_CLOUD_MODELS]
+    return []
+
+
+def merge_catalogs(catalogs: list[list[CloudModel]]) -> list[CloudModel]:
+    """Union several providers' catalogs into the single picker menu, keeping at
+    most ONE default across the whole list (the first default seen wins; later
+    providers' defaults are cleared). De-dupes by model id (first occurrence wins)
+    so the same id can't appear twice if two providers ever share one."""
+    merged: list[CloudModel] = []
+    seen_ids: set[str] = set()
+    have_default = False
+    for catalog in catalogs:
+        for model in catalog:
+            if model.id in seen_ids:
+                continue
+            seen_ids.add(model.id)
+            if model.default and have_default:
+                model = replace(model, default=False)
+            if model.default:
+                have_default = True
+            merged.append(model)
+    return merged
 
 
 def load_cloud_catalog(model_override: str | None = None) -> list[CloudModel]:

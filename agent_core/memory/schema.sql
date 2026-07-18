@@ -53,16 +53,20 @@ CREATE TABLE IF NOT EXISTS device_identity (
 );
 
 CREATE TABLE IF NOT EXISTS provider_config (
-    role            TEXT PRIMARY KEY CHECK(role IN ('primary','local','setup_assistant')),
-    provider_id     TEXT NOT NULL,        -- 'anthropic', 'openai', 'ollama', 'setup_assistant_relay'
-    -- API keys are NEVER stored here. This table only holds non-secret config
-    -- (selected model name, Ollama base URL, etc.). Keys live in OS keychain.
-    config_json     TEXT,
+    provider_id     TEXT PRIMARY KEY
+                        CHECK(provider_id IN ('anthropic','openai','google','custom')),
+    -- API keys are NEVER stored here. This table only holds non-secret connection
+    -- metadata; keys live in the OS keychain (§5, §8.3).
+    connected       INTEGER NOT NULL DEFAULT 0,   -- did provider.connect succeed
+    added_at        INTEGER,                       -- epoch seconds the key was first connected
+    base_url        TEXT,                          -- custom (OpenAI-compatible) server only
+    catalog_json    TEXT,                          -- optional cached model catalog for this provider
+    last_check_ok   INTEGER,                       -- 1/0/NULL: did the last connect ping pass
     updated_at      INTEGER NOT NULL
 );
--- Unlike a single "active provider" flag, multiple roles can be configured
--- and populated simultaneously — e.g. role='primary' -> Anthropic, AND
--- role='local' -> Ollama, both present at once. See §4.1.1 (ModelRouter).
+-- Multi-provider (owner decision 2026-07-18): several providers can be connected
+-- at once — anthropic + openai + google + a custom server — and the picker shows
+-- every connected provider's models together. See §4.1.1 (ModelRouter).
 
 CREATE TABLE IF NOT EXISTS app_settings (
     key         TEXT PRIMARY KEY,

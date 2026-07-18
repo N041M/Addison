@@ -29,8 +29,8 @@ def _typescript_methods() -> set[str]:
 def test_both_files_define_methods():
     # Guards the regexes themselves: an accidental format change that makes a
     # pattern match nothing must fail loudly, not silently pass set() == set().
-    assert len(_python_methods()) >= 19
-    assert len(_typescript_methods()) >= 19
+    assert len(_python_methods()) >= 22
+    assert len(_typescript_methods()) >= 22
 
 
 def test_method_sets_are_in_lockstep():

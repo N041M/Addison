@@ -130,12 +130,13 @@ class IpcShellBridge:
         return self._call(Method.SHELL_READ_SCOPED_FILE, {"fileHandle": file_handle})
 
     # --- key fetch (§5) ---------------------------------------------------
-    def get_provider_key(self, role: str = "primary") -> str:
-        """Per-call API-key fetch from the OS keychain via the shell.
+    def get_provider_key(self, provider: str = "anthropic") -> str:
+        """Per-call API-key fetch from the OS keychain via the shell, keyed by
+        PROVIDER id (``anthropic`` | ``openai`` | ``google`` | ``custom``).
 
         The key is returned to the caller for immediate one-request use and is
         never retained on this bridge (§8.3)."""
-        result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, {"role": role})
+        result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, {"provider": provider})
         return result.get("key", "")
 
     # --- device identity & relay signing (§5) -----------------------------
