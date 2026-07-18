@@ -220,6 +220,53 @@ class Store:
         )
         self._conn.commit()
 
+    def list_conversations(self) -> list[dict[str, Any]]:
+        """Every conversation that has at least one message, newest first.
+
+        The INNER JOIN is deliberate — a conversation row is created lazily on the
+        first turn (``_ensure_conversation``), but an abandoned empty chat that
+        somehow left a row behind must never surface in history, so a zero-message
+        conversation is excluded. ``message_count`` counts only user/assistant
+        turns (``m.role != 'tool'`` sums to the non-tool row count) so the tool
+        plumbing rows never inflate the displayed length. ``first_user_message``
+        backs a NULL-title fallback for legacy rows that were never auto-titled.
+        Ordering matches the rest of the file: ``started_at`` then rowid, both
+        descending, so the newest conversation comes first with a stable tiebreak
+        when two share a start second."""
+        rows = self._conn.execute(
+            "SELECT c.id, c.title, c.started_at, "
+            "       SUM(m.role != 'tool') AS message_count, "
+            "       (SELECT content FROM messages "
+            "        WHERE conversation_id = c.id AND role = 'user' "
+            "        ORDER BY created_at ASC, rowid ASC LIMIT 1) AS first_user_message "
+            "FROM conversations c JOIN messages m ON m.conversation_id = c.id "
+            "GROUP BY c.id ORDER BY c.started_at DESC, c.rowid DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
+        """One conversation's header row (id/title/started_at/provider_id), or
+        None if there is no such conversation. Used to validate a load request
+        before rebuilding its transcript."""
+        row = self._conn.execute(
+            "SELECT id, title, started_at, provider_id "
+            "FROM conversations WHERE id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def set_conversation_title(self, conversation_id: str, title: str) -> None:
+        """First-write-wins auto-title: set the title only while it is still NULL.
+
+        The ``title IS NULL`` guard makes this idempotent and safe to call on every
+        turn — once a conversation has a title (auto-derived from its first message,
+        or one day user-set), a later call is a no-op and never overwrites it."""
+        self._conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ? AND title IS NULL",
+            (title, conversation_id),
+        )
+        self._conn.commit()
+
     # --- routines (RoutineBuilder / RoutineLibrary / RoutineEngine, §6) -----
     def insert_routine(
         self,

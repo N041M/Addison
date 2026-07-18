@@ -151,6 +151,19 @@ def _pull_progress(update: dict) -> tuple[int | None, str | None]:
     return None, None
 
 
+def _auto_title(text: str) -> str | None:
+    """Derive a conversation title from its first user message: whitespace runs
+    collapsed to single spaces, trimmed to the first 60 characters (with an
+    ellipsis when something was cut). None for an effectively empty message —
+    the history list then falls back to "Untitled"."""
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return None
+    if len(collapsed) > 60:
+        return collapsed[:60] + "…"
+    return collapsed
+
+
 def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
@@ -359,7 +372,7 @@ class JsonRpcServer:
         store_factory,
         model_router: ModelRouter,
         shell_bridge: IpcShellBridge | None = None,
-        conversation_id: str = "main",
+        conversation_id: str | None = None,
         primary_key_probe=None,
         setup_prompt: str | None = None,
         primary_prompt: str | None = None,
@@ -428,8 +441,15 @@ class JsonRpcServer:
         self.routine_library: RoutineLibrary | None = None
         self.routine_engine: RoutineEngine | None = None
 
-        self.conversation = Conversation(id=conversation_id)
+        # A fresh uuid per launch unless the caller pins an id (tests do). The old
+        # fixed "main" id appended every launch's turns to one ever-growing stored
+        # transcript that the in-memory conversation never reloaded — the model
+        # couldn't see those prior rows, so they were dead weight that also made
+        # history a single giant entry. One conversation per launch matches what
+        # the model actually sees; prior chats come back via conversation.load.
+        self.conversation = Conversation(id=conversation_id or str(uuid4()))
         self._conversation_created = False
+        self._conversation_titled = False      # auto-title has run for this conversation
         self._message_ids: list[str] = []      # persisted id per conversation.messages entry
         self._next_role: ModelRole | None = None
         self._next_model_name: str | None = None   # explicit LOCAL/cloud pick, §4.1.1, §6.8
@@ -580,6 +600,12 @@ class JsonRpcServer:
         if method in _ROUTINE_JOBS:
             self._queue.put((_ROUTINE_JOBS[method], params, request_id))
             return
+        # conversation.new/load/list touch the Store and the worker-owned
+        # conversation state, so they run on the worker like every other
+        # store-backed job (SQLite thread affinity + turn serialization).
+        if method in _CONVERSATION_JOBS:
+            self._queue.put((_CONVERSATION_JOBS[method], params, request_id))
+            return
         # profile.get/set read/write app_settings, so they run on the worker too.
         if method == Method.PROFILE_GET:
             self._queue.put(("profile_get", params, request_id))
@@ -639,6 +665,13 @@ class JsonRpcServer:
                     self._respond(request_id, self._profile_get())
                 elif kind == "profile_set":
                     self._handle_profile_set(params, request_id)
+                elif kind == "conversation_new":
+                    self._handle_conversation_new(request_id)
+                elif kind == "conversation_load":
+                    self._handle_conversation_load(params, request_id)
+                elif kind == "conversation_list":
+                    self._ensure_built()
+                    self._respond(request_id, {"conversations": self._conversation_rows()})
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -693,6 +726,16 @@ class JsonRpcServer:
         user_msg = Message(role="user", content=text)
         self.conversation.messages.append(user_msg)
         user_message_id = self._persist_message(user_msg)
+
+        # Auto-title on the first user message with any content. The store call is
+        # first-write-wins (title IS NULL guard), so the flag is only an
+        # optimization that skips the write on every later turn; a whitespace-only
+        # first message leaves the flag down so the next real one can title it.
+        if not self._conversation_titled:
+            title = _auto_title(text)
+            if title is not None:
+                self.store.set_conversation_title(self.conversation.id, title)
+                self._conversation_titled = True
 
         # §4.6 handoff: a PRIMARY-bound turn with no key yet routes to the Setup
         # Assistant, with its system prompt injected FOR THIS TURN ONLY. The prompt
@@ -879,6 +922,78 @@ class JsonRpcServer:
             del self.conversation.messages[idx:]
             del self._message_ids[idx:]
         self._respond(request_id, {"ok": True, "detail": "Rewound the conversation."})
+
+    # --- conversation history (new / load / list) --------------------------
+    def _handle_conversation_new(self, request_id) -> None:
+        """Start a fresh conversation: new uuid, empty in-memory state. NO store
+        row is inserted here — rows stay lazy via ``_ensure_conversation`` (first
+        real turn), so an abandoned empty chat never appears in history."""
+        self.conversation = Conversation(id=str(uuid4()))
+        self._message_ids = []
+        self._conversation_created = False
+        self._conversation_titled = False
+        self._draft_routine = None
+        self._respond(request_id, {"conversationId": self.conversation.id})
+
+    def _handle_conversation_load(self, params: dict, request_id) -> None:
+        """Reopen a stored conversation as the active one.
+
+        The in-memory state is rebuilt from the persisted transcript in one
+        filtered pass that keeps user messages and non-empty assistant messages.
+        Persisted ``tool`` rows (and the empty assistant stubs that requested the
+        tools) are SKIPPED on purpose: ``insert_message`` never persists assistant
+        ``tool_calls``, so replaying persisted tool rows would send unpaired
+        tool_results and the provider would 400 on every subsequent turn — a
+        resumed conversation keeps the assistant's final prose only. Each kept row
+        appends to BOTH the fresh Conversation and the fresh ``_message_ids`` list
+        in the same pass; that 1:1 alignment is the rewind-anchoring invariant
+        (``_handle_rewind`` indexes one list with the other's position)."""
+        self._ensure_built()
+        conversation_id = params.get("conversationId")
+        header = self.store.get_conversation(conversation_id) if conversation_id else None
+        if header is None:
+            self._respond_error(request_id, _SERVER_ERROR, "Couldn't find that conversation.")
+            return
+        conversation = Conversation(id=conversation_id)
+        message_ids: list[str] = []
+        wire_messages: list[dict] = []
+        for row in self.store.messages_for_conversation(conversation_id):
+            keep = row["role"] == "user" or (row["role"] == "assistant" and row["content"])
+            if not keep:
+                continue
+            conversation.messages.append(Message(role=row["role"], content=row["content"]))
+            message_ids.append(row["id"])
+            wire_messages.append({"id": row["id"], "role": row["role"], "content": row["content"]})
+        self.conversation = conversation
+        self._message_ids = message_ids
+        self._conversation_created = True
+        self._conversation_titled = header["title"] is not None
+        self._draft_routine = None
+        self._respond(
+            request_id,
+            {
+                "conversationId": conversation_id,
+                "title": header["title"],
+                "messages": wire_messages,
+            },
+        )
+
+    def _conversation_rows(self) -> list[dict]:
+        """History rows for conversation.list. The title is never null: stored
+        title, else the trimmed first user message (legacy rows that predate
+        auto-titling), else "Untitled"."""
+        rows = []
+        for row in self.store.list_conversations():
+            title = row["title"] or _auto_title(row["first_user_message"] or "") or "Untitled"
+            rows.append(
+                {
+                    "id": row["id"],
+                    "title": title,
+                    "startedAt": row["started_at"],
+                    "messageCount": row["message_count"],
+                }
+            )
+        return rows
 
     # --- routines (§6) ----------------------------------------------------
     def _handle_routine_propose(self, request_id) -> None:
@@ -1257,6 +1372,15 @@ _ROUTINE_JOBS = {
     Method.ROUTINE_LIST: "routine_list",
     Method.ROUTINE_RUN: "routine_run",
     Method.ROUTINE_DELETE: "routine_delete",
+}
+
+# conversation.new/load/list also run on the worker: load/list read the Store,
+# and new swaps the worker-owned active conversation, which must serialize
+# behind any in-flight turn. Method -> worker job kind.
+_CONVERSATION_JOBS = {
+    Method.CONVERSATION_NEW: "conversation_new",
+    Method.CONVERSATION_LOAD: "conversation_load",
+    Method.CONVERSATION_LIST: "conversation_list",
 }
 
 

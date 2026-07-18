@@ -48,6 +48,9 @@ class JsonRpcResponse:
 # Method name constants — keep in lockstep with protocol.ts.
 class Method:
     CONVERSATION_SEND_MESSAGE = "conversation.sendMessage"
+    CONVERSATION_NEW = "conversation.new"    # {} -> {conversationId}
+    CONVERSATION_LOAD = "conversation.load"  # {conversationId} -> {conversationId, title, messages}
+    CONVERSATION_LIST = "conversation.list"  # {} -> {conversations}
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
