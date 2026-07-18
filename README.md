@@ -1,125 +1,120 @@
 # Addison
 
-**A local-first AI agent that's approachable by default and powerful when you ask it to be.**
+Addison is a local-first desktop chat agent — approachable by default, powerful on
+request. It is built for people who are not developers: it asks in plain language
+before it does anything on your computer, and everything it does can be undone.
+Technical users opt into a Developer profile that adds visibility without changing
+any of the safety rules.
 
-Addison is a desktop app that opens to a chat window. Behind that window is an
-agent that can search the web, read files you hand it, do calculations, and
-draft emails for you. By default it's built for someone who has never installed
-a developer tool, never seen an API key, and will close anything that shows an
-error code — but a single opt-in **Developer profile** unfolds the same engine
-for technical users, without ever making the simple experience busier.
+Local-first means what it says. Your conversations live in a SQLite database on
+your own machine. You bring your own model key (BYOK); it is stored in the operating
+system keychain and never travels to the part of the app that draws the screen.
 
-## Why this exists
+## Architecture at a glance
 
-Agent harnesses today (Claude Code, OpenClaw, and the like) are genuinely
-powerful, but every one of them assumes a user who is comfortable with a
-terminal, config files, and API keys. That leaves out almost everyone: the
-parent, the small-shop owner, the grandparent who just wants help drafting an
-email or summarizing a PDF.
+Addison is three processes at three trust levels. They talk over JSON-RPC 2.0 —
+the webview to the Rust shell through a single Tauri command, the shell to the
+Python core over stdio.
 
-The bet behind Addison is that **the hard problem isn't the agent — it's the
-packaging and the trust.** Wiring an LLM to some tools is a weekend's work.
-Making a non-technical person feel *safe* running an app that can touch their
-files and browse the web on their behalf — without ever showing them a stack
-trace — is the real, multi-month effort. That is the problem Addison is built
-around.
+```mermaid
+flowchart TB
+    subgraph webview["React webview — lowest trust"]
+        UI["Renders state only. No network. Never sees API keys."]
+    end
+    subgraph shell["Tauri shell in Rust — highest trust"]
+        Relay["IPC relay and process supervisor"]
+        KC["OS keychain: API keys, device identity"]
+        FS["Filesystem, native pickers, clipboard"]
+        UP["Auto-updater"]
+    end
+    subgraph core["Agent Core in Python — orchestration"]
+        Orch["Orchestrator, tools, permission gate, routines"]
+        DB["SQLite, on device"]
+    end
 
-## What it's trying to be
+    webview -->|"invoke send_to_core"| Relay
+    Relay -->|"JSON-RPC 2.0 over stdio"| core
+    core -.->|"shell.* and keychain.* back over stdio"| shell
+    Relay -.->|"core-message and core-status events"| webview
+```
 
-- **Zero-terminal setup.** Download → double-click → chat window opens. No CLI
-  ever surfaces.
-- **No API-key hunting on day one.** A conversational Setup Assistant greets you
-  and walks you through getting configured; you can have your first real
-  conversation before you've touched a key.
-- **Visible, revocable permissions.** Every tool the agent can use is opt-in,
-  explained in plain language, and shown live while it runs ("Reading
-  invoice_march.pdf…").
-- **Local-first.** Your conversations and memory live on your own device by
-  default. Nothing is uploaded unless you turn on sync.
-- **Recoverable by design.** A single "undo" reverses anything the agent did to
-  your files — because every action that changes something is reversible by
-  construction, not by best-effort cleanup after the fact.
-- **Plain-language failure.** Errors become a sentence and a suggested next step,
-  never a stack trace.
+- **Tauri shell (Rust)** — highest trust. Owns the OS keychain, the filesystem and
+  native pickers, and the updater. It spawns and supervises the Agent Core and
+  relays IPC frames. It never runs model instructions and never interprets a frame's
+  meaning.
+- **Agent Core (Python)** — the orchestration loop, tool registry, permission gate,
+  routine engine, and SQLite store. It has no OS permissions of its own: every
+  filesystem or keychain effect is a request back to the shell.
+- **React webview** — lowest trust. Renders state and collects clicks. It never
+  reaches the network, never talks to the core directly, and never sees a key.
 
-## Profiles: approachable by default, powerful on request
+More detail: [docs/architecture.md](docs/architecture.md).
 
-The way most agent tools fail is by serving developers and non-technical users
-through one undifferentiated interface — too complex for the newcomer, too padded
-for the developer. Addison uses **profiles** to avoid that: a single switch that
-reshapes the surface without ever forking the engine or weakening the safety
-model.
+## Safety invariants
 
-- **Simple (default).** The experience above, in full: guided setup, a narrow
-  tool set, plain-language prompts, no jargon, no config. Nothing developer-facing
-  ever intrudes here. You can live in this profile forever.
-- **Developer (opt-in).** The same local-first, undo-safe engine with more of it
-  exposed — bring-your-own-key up front, automations editable as plans, a
-  headless/CLI entry point for scripting, raw diagnostics, and higher-risk tools
-  behind an explicit opt-in.
+These are hard constraints, enforced in code rather than by convention:
 
-The rule that makes this work: **a profile changes what's shown and what's on by
-default — never the security model.** Per-action consent, guaranteed undo, and
-key isolation hold identically in both. Arbitrary shell access is never in the
-default set in *any* profile. So welcoming developers makes the simple experience
-*simpler*, not busier — the power lives behind its own profile instead of on
-everyone's screen.
+1. **No arbitrary code or shell execution, ever.** Tools are individual typed
+   functions, not a "run command". Routines are declarative plans — data, with no
+   code, eval, or shell field anywhere in the structure.
+2. **Every mutating tool has a real undo.** Any tool whose risk tier is not LOW must
+   implement a genuine `undo()`; the tool registry raises at registration time if it
+   does not. A tool that cannot be undone must stay LOW and read-only.
+3. **API keys never reach the webview.** They live in the OS keychain, are read by
+   the shell or core only at the moment of use, are never persisted in core memory
+   beyond one request, and are never written to SQLite.
+4. **The Setup Assistant relay's keys never exist in this repository.** They are
+   server-side; the device only signs requests with a keypair whose private half
+   never leaves the keychain.
+5. **A routine never exceeds live-granted permissions.** The routine engine uses the
+   exact same registry, permission gate, and undo manager instances as the live
+   loop — no privilege escalation through automation.
+6. **No scheduling or autonomous triggering.** Nothing runs unless the user starts it.
 
-## What it deliberately is *not*
+## Feature highlights
 
-- **No arbitrary shell or code execution by default, in any profile.** Tools are a
-  small, typed allow-list (search, read a file you chose, calculate, draft a
-  message). Higher-risk capabilities exist only behind an explicit opt-in and stay
-  gated and undoable — never "run any command" as a default.
-- **No always-on / scheduled autonomy.** The agent acts when you ask it to.
-- **Not a server product.** It's a desktop app; the Developer profile exposes a
-  headless/CLI entry point for scripting, but hosting isn't the point.
+- Chat with tool use — web search, reading a picked file, the clipboard, a
+  calculator, saving a new file, drafting a message, opening a link.
+- A per-message model picker: cloud models the configured key can access, plus local
+  models run through Ollama, chosen explicitly per message with an answer-style
+  ("effort") control where the model supports it.
+- Conversation history — start, list, and reopen past conversations, each
+  auto-titled from its first message.
+- Undo and conversational rewind — reverse the last mutating action, or rewind the
+  thread to an earlier message and edit-and-resend.
+- Routines — save a sequence of steps Addison just did as a declarative plan you can
+  re-run, with per-run values generalized into variables.
+- Simple and Developer profiles — a surface choice that reshapes onboarding and
+  visibility, never the security model.
+- Markdown and Mermaid rendering in a calm, dark, terminal-adjacent interface.
 
-## Who it's for
+## Quickstart
 
-- **By default:** someone comfortable with email, Word, and Excel but who has never
-  used a terminal — and wants help with everyday things: "summarize this," "draft
-  this reply," "look this up," "add these numbers and save it as a document."
-- **Via the Developer profile:** technical users who want a local-first, auditable,
-  undo-safe agent they can script and extend — without giving up the trust model or
-  reaching for a heavier developer harness.
+```bash
+# Agent Core (from agent_core/)
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pytest ../tests/ -q          # safety-invariant tests must pass
 
-## How it's built
+# Shell (from shell/)
+npm install
+npm run tauri dev
+```
 
-Three parts, kept at three different trust levels so the safety model is
-enforced by architecture, not convention:
+The core can also be driven without the desktop shell for development:
+`python3 -m agent_core.main --cli` (needs `ANTHROPIC_API_KEY` in the environment).
 
-- **Desktop shell** — Rust (Tauri). Holds the real OS permissions (keychain,
-  file picker) and supervises the agent. Small binary, no bundled runtime the
-  user has to install.
-- **Agent core** — Python. Runs the conversation loop, the tool set, the
-  permission gate, local memory (SQLite), and undo. It has no OS permissions of
-  its own — every file or system action routes back through the shell.
-- **Frontend** — React. Renders the chat and the permission cards; it never sees
-  your API keys and never talks to the network directly.
+## Documentation map
 
-API keys, when you add your own, live in your operating system's keychain — never
-in the app's files, never in the frontend, never in this repository.
-
-## Status
-
-Early scaffold. The safety-critical foundations are working and tested:
-
-- Local database schema and data model
-- A tool registry that **mechanically refuses to register any state-changing
-  tool that can't be undone** — the backbone of the whole safety model
-- The permission gate that gates every tool call
-- The orchestration loop, model router, and undo manager
-
-Everything else — the provider integrations, the desktop shell wiring, the
-reusable "Routines" feature, and local-model support — is scaffolded and being
-built out in sequence.
+- [docs/architecture.md](docs/architecture.md) — trust boundaries and the agent
+  core's internal components.
+- [docs/flows.md](docs/flows.md) — sequence diagrams for the main runtime flows.
+- [docs/data-model.md](docs/data-model.md) — the SQLite schema, table by table.
+- [docs/classes.md](docs/classes.md) — class diagrams of the core, providers, and
+  routines.
+- [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md) and
+  [docs/VERIFICATION.md](docs/VERIFICATION.md) — manual test and verification notes.
 
 ## License
 
 Not yet chosen.
-
----
-
-*Detailed product and engineering design documents exist but are kept private
-during early development.*
