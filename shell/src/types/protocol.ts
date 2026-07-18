@@ -5,6 +5,9 @@
 
 export const Method = {
   ConversationSendMessage: "conversation.sendMessage",
+  ConversationNew: "conversation.new",
+  ConversationLoad: "conversation.load",
+  ConversationList: "conversation.list",
   ConversationStreamChunk: "conversation.streamChunk",
   PermissionRequestGrant: "permission.requestGrant",
   PermissionRespond: "permission.respond",

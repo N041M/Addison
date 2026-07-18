@@ -133,10 +133,12 @@ def test_truncate_with_same_second_timestamps_uses_rowid(store: Store):
 
 
 def test_create_conversation_is_idempotent_across_relaunches(store: Store):
-    # The server/CLI use fixed conversation ids ("main"/"cli"), so every launch
-    # after the first finds the row already on disk. That must read as resumption
-    # — the original row kept, no IntegrityError. (Found in the 2026-07 manual
-    # pass: the desktop app failed every turn from its second launch onward.)
+    # The server now mints a fresh uuid per launch, but the CLI still reuses its
+    # fixed "cli" id, and conversation.load reopens an existing stored id — so a
+    # reused id whose row is already on disk stays a real case. That must read as
+    # resumption (the original row kept, no IntegrityError), which the fixed id
+    # below stands in for. (Found in the 2026-07 manual pass: the desktop app,
+    # then on a fixed id, failed every turn from its second launch onward.)
     store.create_conversation("main", title="first", provider_id="anthropic", started_at=1)
     store.create_conversation("main", title="second", provider_id="anthropic", started_at=2)
 
@@ -183,6 +185,71 @@ def test_truncate_message_from_other_conversation_raises(store: Store):
     # And nothing in either conversation was deleted by the failed call.
     assert [m["id"] for m in store.messages_for_conversation("c1")] == ["m1", "m2"]
     assert [m["id"] for m in store.messages_for_conversation("c2")] == ["n1", "n2"]
+
+
+# --- conversation history (list / titles) -----------------------------------
+
+
+def test_list_conversations_newest_first_with_rowid_tiebreak(store: Store):
+    _seed_conversation(store, "older", ["m1", "m2"], base=100)
+    _seed_conversation(store, "newer", ["n1", "n2"], base=200)
+    # Same started_at as "newer": rowid (insertion order) breaks the tie, so the
+    # later-created conversation still lists first.
+    _seed_conversation(store, "tied", ["t1"], base=200)
+
+    listed = store.list_conversations()
+    assert [c["id"] for c in listed] == ["tied", "newer", "older"]
+    assert listed[2]["started_at"] == 100
+
+
+def test_list_conversations_message_count_excludes_tool_rows(store: Store):
+    store.create_conversation("c1", title=None, provider_id="anthropic", started_at=0)
+    store.insert_message(id="u1", conversation_id="c1", role="user",
+                         content="hi", created_at=1)
+    store.insert_message(id="t1", conversation_id="c1", role="tool",
+                         content="tool output", created_at=2, tool_call_id="call-1")
+    store.insert_message(id="a1", conversation_id="c1", role="assistant",
+                         content="hello", created_at=3)
+
+    (row,) = store.list_conversations()
+    assert row["message_count"] == 2  # user + assistant; the tool row doesn't count
+
+
+def test_list_conversations_excludes_empty_conversations(store: Store):
+    # A row without messages (e.g. left behind before lazy creation existed)
+    # must never surface in history.
+    store.create_conversation("empty", title=None, provider_id="anthropic", started_at=50)
+    _seed_conversation(store, "full", ["m1"], base=10)
+
+    assert [c["id"] for c in store.list_conversations()] == ["full"]
+
+
+def test_list_conversations_first_user_message_backs_null_title(store: Store):
+    # Legacy rows predate auto-titling: title is NULL, so the caller falls back
+    # to the FIRST user message — not an assistant one, not a later user one.
+    store.create_conversation("legacy", title=None, provider_id="anthropic", started_at=0)
+    store.insert_message(id="a0", conversation_id="legacy", role="assistant",
+                         content="welcome", created_at=1)
+    store.insert_message(id="u1", conversation_id="legacy", role="user",
+                         content="first question", created_at=2)
+    store.insert_message(id="u2", conversation_id="legacy", role="user",
+                         content="second question", created_at=3)
+
+    (row,) = store.list_conversations()
+    assert row["title"] is None
+    assert row["first_user_message"] == "first question"
+
+
+def test_set_conversation_title_first_write_wins(store: Store):
+    store.create_conversation("c1", title=None, provider_id="anthropic", started_at=0)
+    store.insert_message(id="m1", conversation_id="c1", role="user",
+                         content="x", created_at=1)
+
+    store.set_conversation_title("c1", "First title")
+    store.set_conversation_title("c1", "Second title")  # no-op: title already set
+
+    (row,) = store.list_conversations()
+    assert row["title"] == "First title"
 
 
 def test_continued_from_lineage_column_is_persisted(store: Store):

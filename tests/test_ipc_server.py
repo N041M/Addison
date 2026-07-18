@@ -335,9 +335,10 @@ def test_rewind_with_returned_store_id_truncates_memory_and_store(tmp_path):
 
 
 def test_second_launch_on_same_database_still_chats(tmp_path):
-    # Regression (2026-07 manual pass): with a persistent DB, the second app
-    # launch re-inserts the fixed "main" conversation row; that used to raise
-    # IntegrityError and fail EVERY turn of every session after the first.
+    # Regression (2026-07 manual pass): a second app launch on a persistent DB
+    # used to fail every turn (the then-fixed "main" conversation row raised
+    # IntegrityError on re-insert). Each launch now starts its own uuid
+    # conversation; this guards that a reused database still chats fine.
     for launch in (1, 2):
         responses = [ModelResponse(text=f"Hello from launch {launch}.", tool_calls=[])]
         server, reader, writer, _, thread = _server(tmp_path, responses)
@@ -350,6 +351,253 @@ def test_second_launch_on_same_database_still_chats(tmp_path):
             assert done.get("result", {}).get("ok") is True, done.get("error")
         finally:
             _shutdown(reader, thread)
+
+
+def test_send_message_short_text_titles_row_verbatim(tmp_path):
+    # A short first message becomes the title verbatim — no ellipsis, no trim.
+    responses = [ModelResponse(text="Sure.", tool_calls=[])]
+    server, reader, writer, _, thread = _server(tmp_path, responses)
+    text = "Plan my week"
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": text}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.CONVERSATION_LIST})
+        listing = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        (row,) = listing["conversations"]
+        assert row["id"] == server.conversation.id
+        assert row["title"] == text        # verbatim, under the 60-char cutoff
+        assert "…" not in row["title"]
+        assert row["messageCount"] == 2     # user + assistant
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_send_message_then_list_shows_one_titled_row(tmp_path):
+    responses = [ModelResponse(text="Sure.", tool_calls=[])]
+    server, reader, writer, _, thread = _server(tmp_path, responses)
+    text = "Please help me plan a small garden party for twelve people next weekend"
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": text}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.CONVERSATION_LIST})
+        listing = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        (row,) = listing["conversations"]
+        assert row["id"] == server.conversation.id
+        # Auto-title: the first 60 characters of the first user message.
+        assert row["title"] == text[:60] + "…"
+        assert row["messageCount"] == 2
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_conversation_new_starts_second_row_and_abandoned_new_adds_none(tmp_path):
+    responses = [
+        ModelResponse(text="First chat.", tool_calls=[]),
+        ModelResponse(text="Second chat.", tool_calls=[]),
+    ]
+    server, reader, writer, _, thread = _server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "one"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        first_id = server.conversation.id
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.CONVERSATION_NEW})
+        fresh = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert fresh["conversationId"] != first_id
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 3,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "two"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+
+        # A "new" the user abandons (no message ever sent) must add no row:
+        # conversation rows are created lazily on the first turn.
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.CONVERSATION_NEW})
+        writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)
+
+        reader.feed({"jsonrpc": "2.0", "id": 5, "method": Method.CONVERSATION_LIST})
+        listing = writer.wait_for(lambda f: f.get("id") == 5 and "result" in f)["result"]
+        assert [c["title"] for c in listing["conversations"]] == ["two", "one"]
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_load_restores_history_and_next_turn_replays_it(tmp_path):
+    # Chat in A, start B, then load A again: the load response carries A's
+    # transcript in order, and the NEXT turn's provider request must begin with
+    # that reloaded history — resuming is real, not just a redraw.
+    responses = [
+        ModelResponse(text="A answer.", tool_calls=[]),
+        ModelResponse(text="B answer.", tool_calls=[]),
+        ModelResponse(text="A again.", tool_calls=[]),
+    ]
+    registry = ToolRegistry()
+    registry.register(_SpyTool())
+    provider = _ScriptedProvider(responses)
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=registry,
+        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "A question"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        conv_a = server.conversation.id
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.CONVERSATION_NEW})
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 3,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "B question"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 4, "method": Method.CONVERSATION_LOAD,
+             "params": {"conversationId": conv_a}}
+        )
+        loaded = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        assert loaded["conversationId"] == conv_a
+        assert loaded["title"] == "A question"
+        assert [(m["role"], m["content"]) for m in loaded["messages"]] == [
+            ("user", "A question"),
+            ("assistant", "A answer."),
+        ]
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 5,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "A follow-up"}}
+        )
+        done = writer.wait_for(lambda f: f.get("id") == 5)
+        assert done.get("result", {}).get("ok") is True, done.get("error")
+        replayed = [(m.role, m.content) for m in provider.histories[2]]
+        assert replayed == [
+            ("user", "A question"),
+            ("assistant", "A answer."),
+            ("user", "A follow-up"),
+        ]
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_load_missing_conversation_answers_plainly(tmp_path):
+    server, reader, writer, _, thread = _server(tmp_path, [])
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_LOAD,
+             "params": {"conversationId": "no-such-conversation"}}
+        )
+        error = writer.wait_for(lambda f: f.get("id") == 1 and "error" in f)
+        assert error["error"]["message"] == "Couldn't find that conversation."
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_rewind_after_load_truncates_store_and_memory(tmp_path):
+    # The load response's message ids must be REAL rewind anchors: loading a
+    # conversation rebuilds the id/message alignment, so a rewind to a loaded
+    # user id truncates both the store and the in-memory transcript.
+    responses = [
+        ModelResponse(text="First answer.", tool_calls=[]),
+        ModelResponse(text="Second answer.", tool_calls=[]),
+    ]
+    server, reader, writer, _, thread = _server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "one"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "two"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        conv_id = server.conversation.id
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 3, "method": Method.CONVERSATION_LOAD,
+             "params": {"conversationId": conv_id}}
+        )
+        loaded = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        second_user_id = loaded["messages"][2]["id"]
+        assert loaded["messages"][2] == {"id": second_user_id, "role": "user", "content": "two"}
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 4, "method": Method.UNDO_REWIND_CONVERSATION,
+             "params": {"toMessageId": second_user_id}}
+        )
+        done = writer.wait_for(lambda f: f.get("id") == 4)
+        assert done.get("result", {}).get("ok") is True, done.get("error")
+
+        # Edit-and-resend semantics: the anchor left too — the first exchange stays.
+        assert [(m.role, m.content) for m in server.conversation.messages] == [
+            ("user", "one"),
+            ("assistant", "First answer."),
+        ]
+        assert len(server._message_ids) == 2
+        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+            stored = [r[0] for r in conn.execute(
+                "SELECT content FROM messages ORDER BY rowid"
+            ).fetchall()]
+        assert stored == ["one", "First answer."]
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_load_after_tool_turn_skips_tool_rows_and_empty_stubs(tmp_path):
+    # insert_message never persists assistant tool_calls, so a reload must keep
+    # only user messages and the assistant's final prose — replaying persisted
+    # tool rows would send unpaired tool_results and the provider would 400.
+    responses = [_tool_call_response(), ModelResponse(text="Done.", tool_calls=[])]
+    server, reader, writer, tool, thread = _server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "go"}}
+        )
+        writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+        reader.feed(
+            {"jsonrpc": "2.0", "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": "spy_tool", "allow": True}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        # The stored transcript has 4 rows (user, empty tool-request stub, tool
+        # result, final prose); the reload keeps exactly two of them.
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2, "method": Method.CONVERSATION_LOAD,
+             "params": {"conversationId": server.conversation.id}}
+        )
+        loaded = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert [(m["role"], m["content"]) for m in loaded["messages"]] == [
+            ("user", "go"),
+            ("assistant", "Done."),
+        ]
+        assert len(server.conversation.messages) == 2
+        assert len(server._message_ids) == 2
+    finally:
+        _shutdown(reader, thread)
 
 
 def test_tool_turn_blocks_on_permission_then_runs(tmp_path):
