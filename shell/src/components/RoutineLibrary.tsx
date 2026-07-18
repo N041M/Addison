@@ -127,58 +127,50 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
   }
 
   if (!loaded) {
-    return (
-      <div className="rounded-card border border-line bg-surface p-4">
-        <h3 className="text-base font-semibold text-ink">Saved routines</h3>
-        <p className="mt-1 text-sm text-muted">Looking for your routines…</p>
-      </div>
-    );
+    return <p className="text-[12.5px] text-muted">Looking for your routines…</p>;
   }
 
   if (routines.length === 0) {
     return (
-      <div className="rounded-card border border-line bg-surface p-4">
-        <h3 className="text-base font-semibold text-ink">Saved routines</h3>
-        <p className="mt-1 text-sm text-muted">
-          {connected
-            ? "None yet. After Addison does something for you, look for " +
-              "“Save these steps as a routine” — saved ones appear here."
-            : "You can see and run your saved routines here once Addison's engine is connected."}
-        </p>
-      </div>
+      <p className="text-[12.5px] text-muted">
+        {connected
+          ? "None yet. After Addison does something for you, look for " +
+            "“Save these steps as a routine” — saved ones appear here."
+          : "You can see and run your saved routines here once Addison's engine is connected."}
+      </p>
     );
   }
 
   return (
-    <div className="rounded-card border border-line bg-surface p-4">
-      <h3 className="text-base font-semibold text-ink">Saved routines</h3>
-      <ul className="mt-3 space-y-4">
-        {routines.map((routine) => (
-          <li key={routine.id} className="border-t border-line pt-3 first:border-t-0 first:pt-0">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-ink">{routine.name}</p>
-                <p className="mt-0.5 text-sm text-muted">{routine.description}</p>
-                <p className="mt-0.5 text-xs text-muted">{runSummary(routine)}</p>
-              </div>
-              <div className="flex shrink-0 gap-2">
-                <button
-                  type="button"
-                  disabled={running === routine.id}
-                  onClick={() => startRun(routine)}
-                  className="rounded-sm bg-fern px-3 py-1.5 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-60"
-                >
-                  {running === routine.id ? "Running…" : "Run now"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => removeRoutine(routine.id)}
-                  className="rounded-sm border border-line bg-paper px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
-                >
-                  {confirmingDelete === routine.id ? "Really remove?" : "Remove"}
-                </button>
-              </div>
+    <ul className="flex flex-col gap-2">
+      {routines.map((routine) => (
+        <li
+          key={routine.id}
+          className="rounded border border-line bg-paper px-[14px] py-2.5"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[13.5px] font-semibold text-ink">{routine.name}</p>
+              <p className="mt-px text-[11.5px] text-faint">{runSummary(routine)}</p>
             </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                disabled={running === routine.id}
+                onClick={() => startRun(routine)}
+                className="rounded-pill bg-fern-tint px-[14px] py-1.5 text-xs font-semibold text-fern-deep hover:opacity-85 disabled:opacity-60"
+              >
+                {running === routine.id ? "Running…" : "Run"}
+              </button>
+              <button
+                type="button"
+                onClick={() => removeRoutine(routine.id)}
+                className="px-1 py-1.5 text-xs font-medium text-faint hover:text-muted"
+              >
+                {confirmingDelete === routine.id ? "Really remove?" : "Remove"}
+              </button>
+            </div>
+          </div>
 
             {filling === routine.id && (
               <div className="mt-3 rounded border border-line bg-paper p-3">
@@ -247,7 +239,6 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
           </li>
         ))}
       </ul>
-    </div>
   );
 }
 

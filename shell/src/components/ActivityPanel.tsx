@@ -1,22 +1,20 @@
-// Activity strip — the collapsible middle region (design-doc §7.1, §7.9.1).
+// "Addison's work" block — the live-annotation list (design-brief-fern README §3,
+// handoff §2/§4). A blocky annotation: a 2px `rule` left border wrapping ONLY the
+// small-caps label and the dot list (filled fern = done, 1.5px outlined ring =
+// in progress). Below the list, the underlined "Save these steps as a routine"
+// link once a turn actually did something.
 //
-// While a turn runs it shows the latest thing Addison is doing in plain words
-// ("Searching the web…"), fed by `tool.activityUpdate`. It expands to the full
-// list of what happened this turn ("Show what you just did" — the transparency
-// counterpart to Undo). The "Undo last action" panic button lives here too, via
-// RewindControls, always reachable while any change can be put back.
-//
-// No shimmer, no spinner theatrics — just a calm "Working…" line.
+// This renders as a bare content block with no outer chrome, so it can sit inside
+// the widget rail (rail open) or inline above the composer (rail hidden) — App
+// chooses the slot. The "Undo last action" panic button now lives in the chat
+// header; only the redo affordance and the plain undo-detail line remain here.
 
 import type { ActivityUpdate } from "../types/protocol";
-import { RewindControls } from "./RewindControls";
 
 interface Props {
   isWorking: boolean;
   current: ActivityUpdate | null;
   activities: ActivityUpdate[];
-  hasUndoableActions: boolean;
-  onUndoLastAction: () => void;
   lastUndoDetail?: string | null;
   canRedo?: boolean;
   onRedoLastAction?: () => void;
@@ -29,15 +27,13 @@ export function ActivityPanel({
   isWorking,
   current,
   activities,
-  hasUndoableActions,
-  onUndoLastAction,
   lastUndoDetail,
   canRedo,
   onRedoLastAction,
   onProposeRoutine,
 }: Props) {
   // Nothing worth showing: stay out of the way entirely.
-  if (!isWorking && activities.length === 0 && !hasUndoableActions && !lastUndoDetail && !canRedo) {
+  if (!isWorking && activities.length === 0 && !lastUndoDetail && !canRedo) {
     return null;
   }
 
@@ -56,53 +52,55 @@ export function ActivityPanel({
         : [];
 
   return (
-    <section aria-label="What Addison is doing" className="border-t border-line bg-paper px-6 py-4">
-      <div className="mx-auto w-full max-w-3xl">
-        {steps.length > 0 && (
-          // Blocky "live annotation": a 2px rule wrapping ONLY the label + list.
-          <div className="border-l-2 border-rule pl-3.5">
-            <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-faint">
-              Addison's work
-            </p>
-            <ul className="mt-2 space-y-1.5">
-              {steps.map((s, i) => (
-                <li key={i} className="flex items-start gap-2.5 text-[12.5px] text-ink-soft">
-                  <span aria-hidden="true" className="mt-[6px] shrink-0">
-                    {s.done ? (
-                      <span className="block h-[7px] w-[7px] rounded-pill bg-fern" />
-                    ) : (
-                      <span className="block h-[7px] w-[7px] rounded-pill border-[1.5px] border-fern" />
-                    )}
-                  </span>
-                  <span>{s.label}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+    <section aria-label="What Addison is doing">
+      {steps.length > 0 && (
+        // Blocky "live annotation": a 2px rule wrapping ONLY the label + list.
+        <div className="border-l-2 border-rule pl-3.5">
+          <p className="text-[10.5px] font-semibold uppercase tracking-[0.11em] text-faint">
+            Addison's work
+          </p>
+          <ul className="mt-2.5 space-y-[7px]">
+            {steps.map((s, i) => (
+              <li key={i} className="flex items-baseline gap-2 text-[12.5px] text-ink-soft">
+                <span aria-hidden="true" className="shrink-0 -translate-y-[1px]">
+                  {s.done ? (
+                    <span className="block h-[6px] w-[6px] rounded-pill bg-fern" />
+                  ) : (
+                    <span className="block h-[6px] w-[6px] rounded-pill border-[1.5px] border-fern" />
+                  )}
+                </span>
+                <span>{s.label}</span>
+              </li>
+            ))}
+          </ul>
 
-        {!isWorking && activities.length > 0 && onProposeRoutine && (
-          <button
-            type="button"
-            onClick={onProposeRoutine}
-            className="mt-3 text-[13px] font-medium text-fern-deep underline underline-offset-2 hover:text-fern"
-          >
-            Save these steps as a routine
-          </button>
-        )}
+          {!isWorking && activities.length > 0 && onProposeRoutine && (
+            <button
+              type="button"
+              onClick={onProposeRoutine}
+              className="mt-2.5 text-xs font-medium text-fern-deep underline underline-offset-2 hover:text-fern"
+            >
+              Save these steps as a routine
+            </button>
+          )}
+        </div>
+      )}
 
-        {(hasUndoableActions || lastUndoDetail || canRedo) && (
-          <div className="mt-3">
-            <RewindControls
-              hasUndoableActions={hasUndoableActions}
-              onUndoLastAction={onUndoLastAction}
-              lastUndoDetail={lastUndoDetail}
-              canRedo={canRedo}
-              onRedoLastAction={onRedoLastAction}
-            />
-          </div>
-        )}
-      </div>
+      {(canRedo || lastUndoDetail) && (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {canRedo && onRedoLastAction && (
+            <button
+              type="button"
+              onClick={onRedoLastAction}
+              className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted hover:text-ink-soft"
+            >
+              <span aria-hidden="true">↻</span>
+              Do it again
+            </button>
+          )}
+          {lastUndoDetail && <p className="text-[13px] text-muted">{lastUndoDetail}</p>}
+        </div>
+      )}
     </section>
   );
 }

@@ -1,17 +1,14 @@
 // "Run a model on this computer" — the local-model setup flow (spec §4.1.2,
-// design-doc §7.3.2). Lives inside the Settings drawer, under "Where Addison
-// thinks". Distinct, explicit, opt-in: NOT enabled by default and never shown
-// during onboarding.
+// design-doc §7.3.2; Fern direction: design-brief-fern README §4). Lives inside
+// the in-window Settings page, as the inner content of the "Run a model on this
+// computer" card (App/SettingsPage provides the card shell + heading). Distinct,
+// explicit, opt-in: NOT enabled by default and never shown during onboarding.
 //
-// The user picks one of a small curated list; that hands the Ollama model tag
-// to the core via `ipc.startLocalSetup(modelName)`. Live progress streams back
-// on `model.localSetupProgress` and renders inline here (a plain stage label +
-// a simple linear percent — no spinner theatrics, no shimmer). On success the
-// roles refresh and the model shows up in the chat's model selector.
-//
-// Visual direction is binding (CLAUDE.md; Fern direction, docs/design-brief-fern):
-// warm paper surfaces, one fern-green accent, rounded ownable/actionable controls,
-// plain language for readers who are 54 and 68.
+// The user picks one of a small curated list; that hands the Ollama model tag to
+// the core via `ipc.startLocalSetup(modelName)`. Live progress streams back on
+// `model.localSetupProgress` and renders inline here (a plain stage label + a 5px
+// fern progress bar on `hair` — no spinner theatrics). On success the roles
+// refresh and the model shows up in the chat's model selector.
 
 import { useState } from "react";
 import type { LocalSetupState, RoleOption } from "../types/ui";
@@ -20,15 +17,14 @@ import type { LocalSetupState, RoleOption } from "../types/ui";
 // The curated choices. ONE obvious constant so the core team can align exact
 // tags / sizes / memory floors later (these are placeholders pending the core's
 // hardware-gating list). Copy tone follows design-doc §7.3.2: a plain name, an
-// honest download size, and a plain "needs at least X memory" line — no
-// parameter counts, no quantization jargon. `id` is the Ollama tag the core
-// pulls; it is used for the call, not shown as the primary label.
+// honest "X GB download · needs Y GB memory" line — no parameter counts, no
+// quantization jargon. `id` is the Ollama tag the core pulls; it is used for the
+// call, not shown as the primary label.
 // ---------------------------------------------------------------------------
 export interface LocalModelChoice {
   id: string;
   name: string;
-  downloadLabel: string;
-  memoryLabel: string;
+  metaLabel: string;
   note?: string;
 }
 
@@ -36,22 +32,19 @@ export const LOCAL_MODEL_CHOICES: LocalModelChoice[] = [
   {
     id: "llama3.2:3b",
     name: "Light and quick",
-    downloadLabel: "About 2 GB to download",
-    memoryLabel: "Needs a computer with at least 8 GB of memory",
+    metaLabel: "2 GB download · needs 8 GB memory",
     note: "Fast, good for everyday questions. Basic tool support.",
   },
   {
     id: "llama3.1:8b",
     name: "Balanced",
-    downloadLabel: "About 4.7 GB to download",
-    memoryLabel: "Needs a computer with at least 16 GB of memory",
+    metaLabel: "4.7 GB download · needs 16 GB memory",
     note: "A capable all-rounder for most everyday tasks.",
   },
   {
     id: "qwen2.5:14b",
     name: "Most capable",
-    downloadLabel: "About 9 GB to download",
-    memoryLabel: "Needs a computer with at least 32 GB of memory",
+    metaLabel: "9 GB download · needs 32 GB memory",
     note: "Slower, but handles longer, more involved tasks.",
   },
 ];
@@ -76,42 +69,35 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
   const anyRunning = setup?.status === "running";
 
   return (
-    <section>
-      <h3 className="text-base font-semibold text-ink">Run a model on this computer</h3>
-      <p className="mt-1 text-sm text-muted">
-        Addison can also use a model that runs entirely on this computer —
-        nothing you say leaves your machine. It needs a one-time download.
-      </p>
-
-      {/* Requires Ollama — honest up front, with a plain explainer on request. */}
-      <p className="mt-2 text-sm text-muted">
-        This runs through Ollama, a free helper program.{" "}
+    <div>
+      <p className="text-[12.5px] text-muted">
+        Nothing you say leaves your machine. One-time download, runs through Ollama —{" "}
         <button
           type="button"
           onClick={() => setOllamaOpen((v) => !v)}
           aria-expanded={ollamaOpen}
           className="font-medium text-fern-deep underline underline-offset-2 hover:text-fern"
         >
-          What's Ollama?
+          what's Ollama?
         </button>
       </p>
       {ollamaOpen && (
-        <p className="mt-2 border-l-2 border-line pl-3 text-sm text-ink-soft">
+        <p className="mt-2 border-l-2 border-line pl-3 text-[12px] text-ink-soft">
           Ollama is a small, free program that downloads and runs models on your
           own computer. Addison uses it behind the scenes — if it isn't installed
-          or running, Addison will tell you plainly and can't set up a local
-          model until it is.
+          or running, Addison will tell you plainly and can't set up a local model
+          until it is.
         </p>
       )}
 
       {!connected && (
-        <p className="mt-3 text-sm text-muted">
+        <p className="mt-2 text-[12px] text-muted">
           Setting up a local model needs the desktop app. You can look over the
           choices here, but downloading starts once Addison is connected.
         </p>
       )}
 
-      <ul className="mt-4 flex flex-col gap-3">
+      <ul className="mt-3.5 flex flex-col gap-2">
         {LOCAL_MODEL_CHOICES.map((choice) => {
           const isInstalled = installed.has(choice.id.toLowerCase());
           const isThis = setup?.modelId === choice.id;
@@ -120,39 +106,35 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
           const errored = isThis && setup?.status === "error";
 
           return (
-            <li key={choice.id} className="rounded-card border border-line bg-surface px-4 py-3">
-              <div className="flex items-start justify-between gap-3">
+            <li key={choice.id} className="rounded border border-line bg-paper px-[14px] py-2.5">
+              <div className="flex items-center justify-between gap-2.5">
                 <div className="min-w-0">
-                  <p className="text-base font-medium text-ink">{choice.name}</p>
-                  <p className="mt-0.5 text-sm text-muted">{choice.downloadLabel}</p>
-                  <p className="text-sm text-muted">{choice.memoryLabel}</p>
-                  {choice.note && (
-                    <p className="mt-1 text-sm text-ink-soft">{choice.note}</p>
-                  )}
+                  <p className="text-[13.5px] font-semibold text-ink">{choice.name}</p>
+                  <p className="mt-px text-[11.5px] text-faint">{choice.metaLabel}</p>
                 </div>
 
                 <div className="shrink-0 text-right">
                   {done ? (
-                    <span className="inline-flex items-center gap-1 text-sm font-medium text-fern-deep">
-                      <span aria-hidden="true">✓</span> On this computer
+                    <span className="text-xs font-medium text-fern-deep">
+                      ✓ On this computer
                     </span>
                   ) : (
                     <button
                       type="button"
                       onClick={() => onStartSetup(choice.id)}
                       disabled={!connected || anyRunning}
-                      className="rounded-sm bg-fern px-4 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-sm border border-line bg-transparent px-[14px] py-1.5 text-xs font-semibold text-fern-deep hover:border-muted disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {running ? "Setting up…" : "Download and set up"}
+                      {running ? "Setting up…" : "Set up"}
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Live progress — plain stage line + simple linear percent. */}
+              {/* Live progress — plain stage line + a 5px fern bar on `hair`. */}
               {running && (
-                <div className="mt-3">
-                  <p className="text-sm text-ink-soft">
+                <div className="mt-2.5">
+                  <p className="text-[12px] text-ink-soft">
                     {setup?.message ?? setup?.stage ?? "Getting ready…"}
                   </p>
                   {typeof setup?.percent === "number" && (
@@ -170,7 +152,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                           style={{ width: `${clampPercent(setup.percent)}%` }}
                         />
                       </div>
-                      <span className="w-10 text-right text-sm tabular-nums text-muted">
+                      <span className="w-9 text-right text-[11px] tabular-nums text-muted">
                         {Math.round(clampPercent(setup.percent))}%
                       </span>
                     </div>
@@ -180,30 +162,29 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
 
               {/* Just-finished confirmation (installed rows already read as done). */}
               {isThis && setup?.status === "done" && !isInstalled && (
-                <p className="mt-3 text-sm text-fern-deep">
-                  Ready to use. Pick "On this computer" beside the message box to
-                  use it.
+                <p className="mt-2.5 text-[12px] text-fern-deep">
+                  Ready to use. Pick "On this computer" beside the message box to use it.
                 </p>
               )}
 
               {/* Inline, plain-language error — includes the core's own message
                   (e.g. Ollama isn't running, or the machine is too small). */}
               {errored && (
-                <div className="mt-3">
-                  <p className="text-sm text-danger">
+                <div className="mt-2.5">
+                  <p className="text-[12px] text-danger">
                     {setup?.error ?? "Setting this up didn't work. Please try again."}
                   </p>
                   {mentionsOllama(setup?.error) && (
-                    <p className="mt-1 text-sm text-muted">
+                    <p className="mt-1 text-[12px] text-muted">
                       Addison needs Ollama installed and running first — see
-                      "What's Ollama?" above.
+                      "what's Ollama?" above.
                     </p>
                   )}
                   <button
                     type="button"
                     onClick={() => onStartSetup(choice.id)}
                     disabled={!connected || anyRunning}
-                    className="mt-2 text-sm font-medium text-fern-deep hover:text-fern disabled:opacity-50"
+                    className="mt-2 text-[12px] font-medium text-fern-deep hover:text-fern disabled:opacity-50"
                   >
                     Try again
                   </button>
@@ -213,7 +194,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
           );
         })}
       </ul>
-    </section>
+    </div>
   );
 }
 
