@@ -9,8 +9,9 @@
 // a simple linear percent — no spinner theatrics, no shimmer). On success the
 // roles refresh and the model shows up in the chat's model selector.
 //
-// Visual direction is binding (CLAUDE.md): cool-slate surfaces, sharp corners,
-// one steel-blue accent, plain language for readers who are 54 and 68.
+// Visual direction is binding (CLAUDE.md): dark terminal-adjacent surfaces, sharp
+// corners, one restrained steel-blue accent, plain language for readers who are 54
+// and 68.
 
 import { useState } from "react";
 import type { LocalSetupState, RoleOption } from "../types/ui";
@@ -140,7 +141,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                       type="button"
                       onClick={() => onStartSetup(choice.id)}
                       disabled={!connected || anyRunning}
-                      className="bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                      className="bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {running ? "Setting up…" : "Download and set up"}
                     </button>

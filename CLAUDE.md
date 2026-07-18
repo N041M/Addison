@@ -75,10 +75,15 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **UI (step 7+): distinct, non-AI look** (design-doc §7.1). Never the generic
   AI-chat aesthetic (purple gradients, glassmorphism, sparkle/bot icons,
   shimmer effects) and never a model vendor's branding (no warm
-  cream/terracotta). A calm everyday-utility look: cool-slate neutral palette
-  + one deep steel-blue accent, sharp corners (no rounded cards), no
-  decorative taglines, readability-first type for older users, simple
-  navigation. Tokens live in shell/tailwind.config.js.
+  cream/terracotta). The direction is a **dark, terminal-adjacent everyday-utility
+  look** — minimal chrome, system-monospace accents (wordmark, labels,
+  timestamps, code; body stays sans), one restrained steel-blue accent for
+  primary actions, sharp corners (no rounded cards), no decorative taglines,
+  compact-but-legible type (16px root) for older readers (personas 54 and 68) —
+  dark but calm and legible, never hacker-neon. No external fonts (strict CSP —
+  system stacks only). The tokens in **shell/tailwind.config.js are
+  authoritative**. This **supersedes design-doc §7.1's light cool-slate palette
+  (amended 2026-07)**; §7.1's layout/IA and accessibility rules are unchanged.
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 

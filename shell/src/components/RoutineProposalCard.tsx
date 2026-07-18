@@ -64,7 +64,7 @@ export function RoutineProposalCard({ proposal, onSave, onCancel }: Props) {
         <button
           type="button"
           onClick={() => onSave(name.trim() || proposal.name)}
-          className="bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-dark"
+          className="bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-dark"
         >
           Save routine
         </button>

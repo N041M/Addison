@@ -2,11 +2,13 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base document styling. Base type is generous (17px root) because the primary
-   personas are 54 and 68 — comfortable size, high contrast, roomy line-height.
-   No external fonts (strict CSP): a plain system stack only. */
+/* Base document styling. Compact like a terminal UI (16px root) but still
+   comfortably legible for the primary personas (54 and 68) — high contrast on a
+   dark surface, roomy line-height. No external fonts (strict CSP): plain system
+   stacks only. */
 :root {
-  font-size: 17px;
+  font-size: 16px;
+  color-scheme: dark;
 }
 
 html,
@@ -20,19 +22,21 @@ body {
   background-color: theme("colors.paper");
   color: theme("colors.ink");
   font-family: theme("fontFamily.sans");
-  line-height: 1.55;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
 
 /* A clear, non-flashy focus ring — keyboard users (and older eyes) should
-   always be able to see where they are. */
+   always be able to see where they are. Accent-based so it stays visible on the
+   dark surface. */
 :focus-visible {
   outline: 2px solid theme("colors.accent");
   outline-offset: 2px;
 }
 
-/* Calm, unobtrusive scrollbars in the message thread. */
+/* Calm, unobtrusive scrollbars in the message thread, re-derived for dark: a
+   thumb one step lighter than the background so it reads without glaring. */
 .thread-scroll {
   scrollbar-width: thin;
   scrollbar-color: theme("colors.line") transparent;
@@ -56,9 +60,11 @@ body {
 
 /* --------------------------------------------------------------------------
    Rendered markdown in assistant messages (Markdown.tsx). Authored entirely
-   against the existing token names so the coming dark restyle only remaps the
-   token values. Compact spacing, hairline borders, sharp corners — matches the
-   rest of the app; no rounded anything.
+   against the token names, so the dark restyle mostly rode along for free.
+   Compact spacing, hairline borders, sharp corners — matches the rest of the
+   app; no rounded anything. Inline code and fenced blocks get a dedicated inset
+   shade (one step off `surface`) so they read on dark against either a paper or
+   a surface parent.
    -------------------------------------------------------------------------- */
 @layer components {
   .markdown-body > :first-child {
@@ -137,9 +143,9 @@ body {
   /* Inline code: subtle chip. font-mono isn't wired app-wide yet, so the mono
      stack is spelled out directly here for now. */
   .markdown-body code {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: theme("fontFamily.mono");
     font-size: 0.9em;
-    background-color: theme("colors.surface");
+    background-color: #23272e;
     border: 1px solid theme("colors.line");
     padding: 0.05em 0.35em;
   }
@@ -149,7 +155,7 @@ body {
   .markdown-body pre {
     margin: 0.75em 0;
     padding: 0.75em 0.9em;
-    background-color: theme("colors.surface");
+    background-color: #23272e;
     border: 1px solid theme("colors.line");
     overflow-x: auto;
   }
@@ -192,53 +198,53 @@ body {
   }
 }
 
-/* highlight.js token colors. Chosen at mid-saturation so they read on the
-   current light `surface` background AND survive the coming dark restyle
-   (which will retune these values). Kept deliberately restrained — code, not
-   confetti. */
+/* highlight.js token colors, retuned for the dark `pre` background (#23272e).
+   Mid-saturation, AA-ish contrast on that inset — a calm, desaturated palette of
+   blues, greens and ambers. Kept deliberately restrained — code, not confetti,
+   and no neon. */
 .markdown-body .hljs-comment,
 .markdown-body .hljs-quote {
-  color: #6b7684;
+  color: #7d8795;
   font-style: italic;
 }
 .markdown-body .hljs-keyword,
 .markdown-body .hljs-selector-tag,
 .markdown-body .hljs-doctag {
-  color: #9a3b6c;
+  color: #cb92b1;
 }
 .markdown-body .hljs-string,
 .markdown-body .hljs-regexp {
-  color: #2f7d5b;
+  color: #8fbf9f;
 }
 .markdown-body .hljs-number,
 .markdown-body .hljs-literal {
-  color: #b3671a;
+  color: #d9b57e;
 }
 .markdown-body .hljs-title,
 .markdown-body .hljs-title.function_,
 .markdown-body .hljs-section {
-  color: #2d5e8b;
+  color: #7fb0e0;
 }
 .markdown-body .hljs-attr,
 .markdown-body .hljs-attribute {
-  color: #7a5b18;
+  color: #d0b06a;
 }
 .markdown-body .hljs-built_in,
 .markdown-body .hljs-class .hljs-title {
-  color: #2f6f8f;
+  color: #79b8c9;
 }
 .markdown-body .hljs-type,
 .markdown-body .hljs-symbol,
 .markdown-body .hljs-bullet {
-  color: #6a4bab;
+  color: #a99adb;
 }
 .markdown-body .hljs-variable,
 .markdown-body .hljs-template-variable,
 .markdown-body .hljs-name {
-  color: #a23b5c;
+  color: #d290a0;
 }
 .markdown-body .hljs-meta {
-  color: #6b7684;
+  color: #7d8795;
 }
 .markdown-body .hljs-emphasis {
   font-style: italic;
@@ -247,12 +253,12 @@ body {
   font-weight: 600;
 }
 .markdown-body .hljs-link {
-  color: #2d5e8b;
+  color: #8db4de;
   text-decoration: underline;
 }
 .markdown-body .hljs-deletion {
-  color: #8f3a44;
+  color: #e08791;
 }
 .markdown-body .hljs-addition {
-  color: #2f7d5b;
+  color: #8fbf9f;
 }

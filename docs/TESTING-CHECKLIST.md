@@ -134,6 +134,29 @@ can keep chatting." Chat and the model picker must work normally afterwards
 (the app re-fetches the model list from the new engine). A second kill stays
 down: "Addison's engine has stopped. Please restart the app."
 
+## 13. Dark restyle & rich rendering (visual, amended 2026-07)
+
+**Dark theme.** On launch, the window shows **no white flash** before the CSS
+loads (the body pre-paints dark), the macOS **titlebar is dark** ("theme": "Dark"),
+and the overall look is dark, calm, and legible — not neon. Scrollbars in the
+thread read on dark; keyboard focus rings (Tab through buttons/inputs) are clearly
+visible. The wordmark, uppercase sender labels, activity/tool labels, the model
+name, timestamps, and the composer hint render in **monospace**; message body text
+stays sans.
+
+**History.** Open **History** — the list renders, rows hover-highlight, and the
+current conversation is marked. Reopen a past conversation (it loads back into the
+thread) and start a **New chat** (thread resets to the welcome message).
+
+**Markdown.** Ask for an answer using **bold**, a bulleted and a numbered list, a
+table, and a fenced code block in some language — confirm the code is
+syntax-highlighted with the calm (non-neon) palette and reads against the inset
+code background.
+
+**Mermaid.** Ask for a small diagram (e.g. a flowchart) — it renders as a dark-
+themed SVG that matches the app. Then send a **malformed** ```mermaid fence and
+confirm it **falls back** to plain code rather than breaking the message row.
+
 ---
 
 ## After the pass

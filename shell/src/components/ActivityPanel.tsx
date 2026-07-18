@@ -65,7 +65,7 @@ export function ActivityPanel({
               "h-2 w-2 " + (isWorking ? "bg-accent" : "bg-muted/50")
             }
           />
-          <span>{headline}</span>
+          <span className="font-mono">{headline}</span>
         </div>
 
         <div className="flex items-center gap-4">
@@ -94,7 +94,7 @@ export function ActivityPanel({
       {expanded && canExpand && (
         <ol className="mt-3 space-y-1.5 border-l-2 border-line pl-4">
           {activities.map((a, i) => (
-            <li key={`${a.toolId}-${i}`} className="text-sm text-muted">
+            <li key={`${a.toolId}-${i}`} className="font-mono text-sm text-muted">
               {a.label}
             </li>
           ))}

@@ -106,11 +106,12 @@ export function SettingsDrawer({
       }
       aria-hidden={!open}
     >
-      {/* Scrim */}
+      {/* Scrim — a genuine darkening wash over the dark app (an ink-based tint
+          would lighten it, since `ink` is now light-on-dark). */}
       <div
         onClick={onClose}
         className={
-          "absolute inset-0 bg-ink/20 transition-opacity " +
+          "absolute inset-0 bg-black/60 transition-opacity " +
           (open ? "opacity-100" : "opacity-0")
         }
       />
@@ -120,7 +121,7 @@ export function SettingsDrawer({
         role="dialog"
         aria-label="Settings"
         className={
-          "absolute right-0 top-0 flex h-full w-full max-w-md flex-col bg-paper shadow-drawer transition-transform " +
+          "absolute right-0 top-0 flex h-full w-full max-w-md flex-col border-l border-line bg-paper transition-transform " +
           (open ? "translate-x-0" : "translate-x-full")
         }
       >
@@ -165,7 +166,7 @@ export function SettingsDrawer({
                 type="button"
                 onClick={saveKey}
                 disabled={!connected || !keyValue.trim() || saveState === "saving"}
-                className="bg-accent px-4 py-2 text-base font-semibold text-white hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                className="bg-accent px-4 py-2 text-base font-semibold text-accent-fg hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {saveState === "saving" ? "Saving…" : "Save key"}
               </button>
