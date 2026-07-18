@@ -25,6 +25,47 @@ export interface DisplayMessage extends ChatMessage {
   storeId?: string;
 }
 
+/**
+ * One row in the conversation history list, from `conversation.list`. Parsed
+ * defensively like the other free-form core payloads (the shape isn't pinned in
+ * protocol.ts). `title` is never null on the wire, but we coerce to a plain
+ * fallback just in case; `startedAt` is epoch SECONDS.
+ */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  startedAt: number;
+  messageCount: number;
+}
+
+/**
+ * Defensive parser for a `conversation.list` result. Accepts either a bare
+ * array or `{ conversations: [...] }`, drops any entry without a string id, and
+ * fills sensible fallbacks so a partial payload never crashes the list.
+ */
+export function parseConversationSummaries(result: unknown): ConversationSummary[] {
+  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const list = Array.isArray(result)
+    ? result
+    : record && Array.isArray(record.conversations)
+      ? (record.conversations as unknown[])
+      : [];
+
+  const out: ConversationSummary[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    if (typeof obj.id !== "string") continue;
+    out.push({
+      id: obj.id,
+      title: typeof obj.title === "string" && obj.title ? obj.title : "Untitled conversation",
+      startedAt: typeof obj.startedAt === "number" ? obj.startedAt : 0,
+      messageCount: typeof obj.messageCount === "number" ? obj.messageCount : 0,
+    });
+  }
+  return out;
+}
+
 /** One configurable model role, as surfaced by `model.availableRoles`. */
 export interface RoleOption {
   role: ModelRole; // "primary" (Cloud) | "local" (On this computer)

@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Method, type ModelRole, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
 import type {
   CloudModel,
+  ConversationSummary,
   DisplayMessage,
   LocalSetupState,
   ProfileState,
@@ -36,6 +37,7 @@ import {
 } from "./ipc/client";
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
+import { HistoryView } from "./components/HistoryView";
 import {
   RoutineProposalCard,
   type RoutineProposal,
@@ -94,6 +96,14 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
+
+  // Conversation history. The core mints a conversation per launch, but the
+  // frontend doesn't learn its id until it starts or loads one — `null` means
+  // "the launch conversation", and History simply won't mark any row current
+  // until an id is known. `view` toggles between the live thread and the list.
+  const [view, setView] = useState<"chat" | "history">("chat");
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
 
   // Profiles (§4.7). Simple by default; null until the core answers (and while
   // disconnected — the Settings section then shows a quiet placeholder).
@@ -583,18 +593,126 @@ export function App() {
       });
   }
 
+  // --- Conversation history -------------------------------------------------
+  // Both header controls are held while a turn is running or a permission prompt
+  // is open — switching conversations mid-turn would strand in-flight work.
+  const controlsBusy = isWorking || permission != null;
+
+  // Clear the per-turn/per-conversation transient state. Deliberately leaves the
+  // global action undo/redo state (hasUndoableActions / canRedo) alone — that's
+  // core session state, not tied to which conversation is on screen.
+  function resetTransientState() {
+    currentTurnRef.current = null;
+    setIsWorking(false);
+    setActivities([]);
+    setCurrentActivity(null);
+    setPermission(null);
+    setLastUserText(null);
+    setRoutineProposal(null);
+    setComposerSeed(null);
+  }
+
+  function handleShowHistory() {
+    if (!connected) {
+      setStatusBanner("Addison's engine isn't connected yet.");
+      return;
+    }
+    ipc
+      .listConversations()
+      .then((list) => {
+        setConversations(list);
+        setView("history");
+      })
+      .catch(() => setStatusBanner("Couldn't load your conversations."));
+  }
+
+  function handleNewChat() {
+    if (!connected || controlsBusy) return;
+    ipc
+      .newConversation()
+      .then((id) => {
+        resetTransientState();
+        setMessages([WELCOME]);
+        setCurrentConversationId(id);
+        setView("chat");
+      })
+      .catch(() => setStatusBanner("Couldn't start a new conversation."));
+  }
+
+  function handleOpenConversation(id: string) {
+    ipc
+      .loadConversation(id)
+      .then((loaded) => {
+        const rows: DisplayMessage[] = loaded.messages.map((row) => ({
+          id: row.id,
+          storeId: row.id,
+          role: normalizeRole(row.role),
+          content: row.content,
+        }));
+        resetTransientState();
+        setMessages(rows);
+        setCurrentConversationId(loaded.conversationId || id);
+        setView("chat");
+      })
+      .catch((err) => {
+        // Stay in the list; surface the plain-language reason (e.g. the core's
+        // "Couldn't find that conversation.").
+        setStatusBanner(
+          err instanceof Error ? err.message : "Couldn't open that conversation.",
+        );
+      });
+  }
+
+  // Window-level shortcuts: Escape leaves History; Cmd/Ctrl+N starts a new chat
+  // (unless a turn or permission prompt is in flight).
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && view === "history") {
+        setView("chat");
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === "n" || e.key === "N")) {
+        if (connected && !controlsBusy) {
+          e.preventDefault();
+          handleNewChat();
+        }
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, connected, controlsBusy]);
+
   // --- Render ---------------------------------------------------------------
   return (
     <div className="flex h-full flex-col bg-paper text-ink">
       <header className="flex items-center justify-between border-b border-line bg-surface px-6 py-3">
         <span className="text-xl font-semibold tracking-tight text-ink">Addison</span>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen(true)}
-          className="border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
-        >
-          Settings
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={handleNewChat}
+            disabled={!connected || controlsBusy}
+            className="text-sm font-medium text-ink-soft hover:text-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            New chat
+          </button>
+          <button
+            type="button"
+            onClick={() => (view === "history" ? setView("chat") : handleShowHistory())}
+            disabled={!connected || controlsBusy}
+            className="text-sm font-medium text-ink-soft hover:text-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            History
+          </button>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="border border-line bg-paper px-3.5 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+          >
+            Settings
+          </button>
+        </div>
       </header>
 
       {!connected && (
@@ -605,6 +723,14 @@ export function App() {
       )}
 
       <main className="flex min-h-0 flex-1 flex-col">
+        {view === "history" ? (
+          <HistoryView
+            conversations={conversations}
+            currentConversationId={currentConversationId}
+            onOpen={handleOpenConversation}
+            onBack={() => setView("chat")}
+          />
+        ) : (
         <ChatThread
           messages={messages}
           isWorking={isWorking}
@@ -650,6 +776,7 @@ export function App() {
             </>
           }
         />
+        )}
       </main>
 
       <SettingsDrawer
@@ -683,6 +810,13 @@ function uid(): string {
     return crypto.randomUUID();
   }
   return `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+// Coerce a stored row's role string to the display union. Loaded history holds
+// only user + assistant rows; anything unexpected is shown as an assistant line
+// rather than dropped.
+function normalizeRole(role: string): DisplayMessage["role"] {
+  return role === "user" || role === "assistant" || role === "tool" ? role : "assistant";
 }
 
 function dropTrailingAssistant(list: DisplayMessage[]): DisplayMessage[] {
