@@ -24,6 +24,7 @@ from agent_core.providers.base import (
     ModelResponse,
     ProviderCapabilities,
     ToolCallRequest,
+    Usage,
 )
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -193,9 +194,24 @@ def _translate_response(data: dict) -> ModelResponse:
         elif isinstance(part.get("text"), str):
             text_parts.append(part["text"])
     text = "".join(text_parts) if text_parts else None
+    usage = _translate_usage(data.get("usageMetadata"))
     if tool_calls:
-        return ModelResponse(text=text, tool_calls=tool_calls, finish_reason="tool_use")
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop")
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_usage(usage) -> Usage | None:
+    """Map the Gemini ``usageMetadata`` block ({promptTokenCount,
+    candidatesTokenCount}) to Addison's ``Usage``. None when absent or unreadable."""
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("promptTokenCount")
+    out = usage.get("candidatesTokenCount")
+    if isinstance(inp, int) and isinstance(out, int):
+        return Usage(input_tokens=inp, output_tokens=out)
+    return None
 
 
 def _http_error_message(status_code: int) -> str:

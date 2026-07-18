@@ -9,6 +9,7 @@ here rather than inside any provider.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -55,6 +56,7 @@ class Orchestrator:
         undo_manager: UndoManager,
         stream_to_frontend=lambda text: None,
         on_activity=lambda tool_id, label: None,
+        on_usage=lambda usage, latency_ms, requested_role, model_name: None,
         shell_bridge=None,
     ) -> None:
         self.model_router = model_router
@@ -66,6 +68,11 @@ class Orchestrator:
         # Panel (tool.activityUpdate, §7). The shell_bridge is the tools' only
         # route to OS effects (§1.3); None in CLI/test mode.
         self.on_activity = on_activity
+        # Called after EACH provider call with its token usage (or None) and the
+        # wall-clock latency, so the server can record a usage_log row (§4.8). This
+        # is orchestrator machinery — the single choke point every turn's model
+        # calls pass through — NEVER a registry tool.
+        self.on_usage = on_usage
         self.shell_bridge = shell_bridge
 
     def run_turn(
@@ -87,11 +94,16 @@ class Orchestrator:
             conversation_id=conversation.id, shell_bridge=self.shell_bridge
         )
         while True:
+            started = time.monotonic()
             response = provider.send(
                 messages=conversation.messages,
                 tools=self.tool_registry.list_for_model(),
                 effort=effort,
             )
+            latency_ms = int((time.monotonic() - started) * 1000)
+            # Record this call's usage + latency at the single choke point (§4.8).
+            # A provider that reports no usage passes None; the recorder skips it.
+            self.on_usage(response.usage, latency_ms, requested_role, model_name)
             if response.tool_calls:
                 # Record the assistant's tool-call turn BEFORE its results so that
                 # each tool_result pairs with the tool_use it answers (§4.4).

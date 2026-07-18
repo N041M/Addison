@@ -13,7 +13,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Method, type ModelRole } from "../types/protocol";
-import { parseConversationSummaries, type ConversationSummary } from "../types/ui";
+import {
+  parseConversationSummaries,
+  type ConversationSummary,
+  type Widget,
+  type WidgetProposal,
+  type WidgetSpec,
+  type WidgetStatSource,
+  type Stats,
+  type ConnectionStat,
+  type ProviderLatencyStat,
+} from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
@@ -360,6 +370,25 @@ export const ipc = {
 
   loadConversation: (conversationId: string): Promise<LoadedConversation> =>
     call(Method.ConversationLoad, { conversationId }).then(parseLoadedConversation),
+
+  // Widgets — DECLARATIVE specs only (see agent_core/widgets.py). `list` returns
+  // stored widgets (invalid specs already hidden by the core); `setPinned`/`delete`
+  // persist edit-mode changes. Proposing mirrors routines: a draft is held in the
+  // core and only saved on `confirmWidget({accept:true})`. Saving is display-only
+  // (LOW-risk) — the routine a routine-widget runs keeps its own gates at run time.
+  listWidgets: (): Promise<Widget[]> => call(Method.WidgetList).then(parseWidgetList),
+  setWidgetPinned: (id: string, pinned: boolean): Promise<WidgetMutationResult> =>
+    call(Method.WidgetSetPinned, { id, pinned }).then(parseWidgetMutation),
+  deleteWidget: (id: string): Promise<WidgetMutationResult> =>
+    call(Method.WidgetDelete, { id }).then(parseWidgetMutation),
+  proposeWidget: (): Promise<WidgetProposal> =>
+    call(Method.WidgetProposeFromConversation).then(parseWidgetProposal),
+  confirmWidget: (accept: boolean): Promise<WidgetMutationResult> =>
+    call(Method.WidgetConfirmSave, { accept }).then(parseWidgetMutation),
+
+  // Core-computed, read-only stats for the token meter + connections cards. No
+  // key material is ever in this payload (§8.3).
+  getStats: (): Promise<Stats> => call(Method.StatsGet).then(parseStats),
 };
 
 // ---------------------------------------------------------------------------
@@ -450,6 +479,115 @@ function parseLoadedConversation(result: unknown): LoadedConversation {
     title: typeof obj.title === "string" ? obj.title : null,
     messages,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Widget / stats result shapes + defensive parsers. Like the rest of the core
+// payloads these aren't pinned in protocol.ts, so we coerce carefully — and a
+// spec that doesn't match one of the two allowed shapes is DROPPED, never
+// rendered (the frontend mirror of the core's render-time validation).
+// ---------------------------------------------------------------------------
+export interface WidgetMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+const STAT_SOURCES: WidgetStatSource[] = ["tokens_month", "provider_latency", "connections"];
+
+function parseWidgetSpec(value: unknown): WidgetSpec | null {
+  const obj = asRec(value);
+  if (!obj || typeof obj.title !== "string" || !obj.title) return null;
+  if (obj.kind === "routine") {
+    if (typeof obj.routineId !== "string" || !obj.routineId) return null;
+    return { kind: "routine", routineId: obj.routineId, title: obj.title };
+  }
+  if (obj.kind === "stat") {
+    const source = obj.source;
+    if (typeof source !== "string" || !STAT_SOURCES.includes(source as WidgetStatSource)) {
+      return null;
+    }
+    return { kind: "stat", source: source as WidgetStatSource, title: obj.title };
+  }
+  return null;
+}
+
+function parseWidgetList(result: unknown): Widget[] {
+  const obj = asRec(result);
+  const list = obj && Array.isArray(obj.widgets) ? (obj.widgets as unknown[]) : [];
+  const out: Widget[] = [];
+  for (const item of list) {
+    const row = asRec(item);
+    if (!row || typeof row.id !== "string") continue;
+    const spec = parseWidgetSpec(row.spec);
+    if (!spec) continue; // drop anything not one of the two allowed shapes
+    out.push({
+      id: row.id,
+      spec,
+      pinned: row.pinned !== false,
+      position: typeof row.position === "number" ? row.position : 0,
+    });
+  }
+  return out;
+}
+
+function parseWidgetMutation(result: unknown): WidgetMutationResult {
+  const obj = asRec(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+function parseWidgetProposal(result: unknown): WidgetProposal {
+  const obj = asRec(result);
+  const spec = parseWidgetSpec(obj?.spec);
+  if (!obj || !spec) {
+    throw new Error("Addison couldn't draft a widget from this yet.");
+  }
+  return {
+    title: typeof obj.title === "string" ? obj.title : spec.title,
+    kind: typeof obj.kind === "string" ? obj.kind : spec.kind,
+    summary: typeof obj.summary === "string" ? obj.summary : "",
+    spec,
+  };
+}
+
+function parseStats(result: unknown): Stats {
+  const obj = asRec(result);
+  const tokens = asRec(obj?.tokensMonth);
+  const total = typeof tokens?.total === "number" ? tokens.total : 0;
+  const limit = typeof tokens?.limit === "number" ? tokens.limit : null;
+
+  const latencyRaw = obj && Array.isArray(obj.providerLatency) ? obj.providerLatency : [];
+  const providerLatency: ProviderLatencyStat[] = [];
+  for (const item of latencyRaw) {
+    const row = asRec(item);
+    if (!row || typeof row.provider !== "string" || typeof row.ms !== "number") continue;
+    providerLatency.push({
+      provider: row.provider,
+      ms: row.ms,
+      checkedAt: typeof row.checkedAt === "number" ? row.checkedAt : 0,
+    });
+  }
+
+  const connRaw = obj && Array.isArray(obj.connections) ? obj.connections : [];
+  const connections: ConnectionStat[] = [];
+  for (const item of connRaw) {
+    const row = asRec(item);
+    if (!row || typeof row.id !== "string") continue;
+    const status = row.status;
+    connections.push({
+      id: row.id,
+      label: typeof row.label === "string" ? row.label : row.id,
+      status:
+        status === "running" || status === "reachable" || status === "idle" || status === "unreachable"
+          ? status
+          : "idle",
+      detail: typeof row.detail === "string" ? row.detail : "",
+    });
+  }
+
+  return { tokensMonth: { total, limit }, providerLatency, connections };
 }
 
 // ---------------------------------------------------------------------------

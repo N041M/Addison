@@ -36,6 +36,7 @@ from agent_core.providers.base import (
     ModelResponse,
     ProviderCapabilities,
     ToolCallRequest,
+    Usage,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
 
@@ -122,10 +123,15 @@ class OllamaProvider:
         if response.status_code >= 400:
             raise RuntimeError(_chat_error_message(response.status_code))
 
-        message = (response.json() or {}).get("message") or {}
+        payload = response.json() or {}
+        message = payload.get("message") or {}
+        # Ollama carries token counts at the TOP level of the /api/chat response
+        # (prompt_eval_count / eval_count), not inside ``message`` — populate when
+        # present, else None (a modest local model may omit them).
+        usage = _translate_usage(payload)
         if native:
-            return _translate_native_response(message)
-        return _translate_fallback_response(message)
+            return _translate_native_response(message, usage)
+        return _translate_fallback_response(message, usage)
 
     # --- HTTP -------------------------------------------------------------
     def _post(self, path: str, body: dict) -> httpx.Response:
@@ -198,7 +204,7 @@ def _with_tool_instructions(history: list[dict], tools: list) -> list[dict]:
     return [{"role": "system", "content": block}, *updated]
 
 
-def _translate_native_response(message: dict) -> ModelResponse:
+def _translate_native_response(message: dict, usage: Usage | None = None) -> ModelResponse:
     tool_calls: list[ToolCallRequest] = []
     for raw in message.get("tool_calls") or []:
         fn = raw.get("function") or {}
@@ -211,16 +217,30 @@ def _translate_native_response(message: dict) -> ModelResponse:
         tool_calls.append(ToolCallRequest(id=_call_id(), tool_id=name, args=args))
     text = message.get("content") or None
     if tool_calls:
-        return ModelResponse(text=text, tool_calls=tool_calls, finish_reason="tool_use")
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop")
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
 
 
-def _translate_fallback_response(message: dict) -> ModelResponse:
+def _translate_fallback_response(message: dict, usage: Usage | None = None) -> ModelResponse:
     text = message.get("content") or ""
     tool_call = parse_tool_call(text, id_prefix="ollama")
     if tool_call is not None:
-        return ModelResponse(text=None, tool_calls=[tool_call], finish_reason="tool_use")
-    return ModelResponse(text=text or None, tool_calls=[], finish_reason="stop")
+        return ModelResponse(
+            text=None, tool_calls=[tool_call], finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text or None, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_usage(payload: dict) -> Usage | None:
+    """Map Ollama's top-level ``prompt_eval_count``/``eval_count`` to ``Usage``.
+    None when either is missing — a small local model may not report them."""
+    inp = payload.get("prompt_eval_count")
+    out = payload.get("eval_count")
+    if isinstance(inp, int) and isinstance(out, int):
+        return Usage(input_tokens=inp, output_tokens=out)
+    return None
 
 
 def _context_length(meta: dict) -> int:

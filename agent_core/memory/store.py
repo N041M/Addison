@@ -457,6 +457,155 @@ class Store:
         )
         self._conn.commit()
 
+    # --- usage log (§4.8 substrate: token meter + provider latency) ----------
+    def insert_usage(
+        self,
+        *,
+        id: str,
+        conversation_id: str | None,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        latency_ms: int | None,
+        created_at: int,
+    ) -> None:
+        """Record one provider call's token usage + latency. Written by
+        orchestrator machinery only (main.py after a turn), never a registry tool."""
+        self._conn.execute(
+            "INSERT INTO usage_log "
+            "(id, conversation_id, provider, model, input_tokens, output_tokens, "
+            " latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                id,
+                conversation_id,
+                provider,
+                model,
+                int(input_tokens),
+                int(output_tokens),
+                None if latency_ms is None else int(latency_ms),
+                created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def usage_totals_since(self, epoch: int) -> dict[str, int]:
+        """Summed input/output tokens for every usage row at or after ``epoch``.
+
+        ``epoch`` is the month boundary (computed by the caller) — 'this month' is
+        just 'since the first of the month in epoch seconds'. Returns zeros when
+        there is no usage yet, so the token meter renders a clean 0 rather than
+        crashing on an empty table."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(input_tokens), 0) AS inp, "
+            "       COALESCE(SUM(output_tokens), 0) AS out "
+            "FROM usage_log WHERE created_at >= ?",
+            (epoch,),
+        ).fetchone()
+        inp = int(row["inp"])
+        out = int(row["out"])
+        return {"input": inp, "output": out, "total": inp + out}
+
+    def latest_latency_per_provider(self) -> list[dict[str, Any]]:
+        """The most recent recorded latency for each provider, newest row wins.
+
+        Backs the ``provider_latency`` stat + each connected provider's latency
+        detail. Rows with no latency (NULL) are ignored. Ordering matches the rest
+        of the file: (created_at, rowid) descending, so the newest call per
+        provider is the one kept."""
+        rows = self._conn.execute(
+            "SELECT provider, latency_ms, created_at FROM usage_log u "
+            "WHERE latency_ms IS NOT NULL AND created_at = ("
+            "  SELECT MAX(created_at) FROM usage_log "
+            "  WHERE provider = u.provider AND latency_ms IS NOT NULL"
+            ") "
+            "GROUP BY provider "
+            "ORDER BY created_at DESC, rowid DESC",
+            (),
+        ).fetchall()
+        return [
+            {
+                "provider": row["provider"],
+                "ms": int(row["latency_ms"]),
+                "checkedAt": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    # --- widgets (declarative specs — see agent_core/widgets.py) --------------
+    def insert_widget(
+        self, *, id: str, spec_json: str, pinned: bool, position: int, created_at: int
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO widgets (id, spec_json, pinned, position, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (id, spec_json, int(pinned), int(position), created_at),
+        )
+        self._conn.commit()
+
+    def list_widgets(self) -> list[dict[str, Any]]:
+        """Every stored widget, in user-visible order (position, then insertion)."""
+        rows = self._conn.execute(
+            "SELECT id, spec_json, pinned, position, created_at FROM widgets "
+            "ORDER BY position ASC, rowid ASC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "spec_json": row["spec_json"],
+                "pinned": bool(row["pinned"]),
+                "position": row["position"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_widget(self, widget_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, spec_json, pinned, position, created_at FROM widgets WHERE id = ?",
+            (widget_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "spec_json": row["spec_json"],
+            "pinned": bool(row["pinned"]),
+            "position": row["position"],
+            "created_at": row["created_at"],
+        }
+
+    def set_widget_pinned(self, widget_id: str, pinned: bool) -> None:
+        self._conn.execute(
+            "UPDATE widgets SET pinned = ? WHERE id = ?", (int(pinned), widget_id)
+        )
+        self._conn.commit()
+
+    def count_pinned_widgets(self, exclude_id: str | None = None) -> int:
+        """How many widgets are currently pinned, optionally excluding one id (so a
+        re-pin of an already-pinned widget doesn't count itself against the cap)."""
+        if exclude_id is None:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM widgets WHERE pinned = 1"
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM widgets WHERE pinned = 1 AND id != ?",
+                (exclude_id,),
+            ).fetchone()
+        return int(row["n"])
+
+    def next_widget_position(self) -> int:
+        """One past the current highest position, so a new widget lands at the end."""
+        row = self._conn.execute(
+            "SELECT COALESCE(MAX(position), -1) AS m FROM widgets"
+        ).fetchone()
+        return int(row["m"]) + 1
+
+    def delete_widget(self, widget_id: str) -> None:
+        self._conn.execute("DELETE FROM widgets WHERE id = ?", (widget_id,))
+        self._conn.commit()
+
     def close(self) -> None:
         self._conn.close()
 

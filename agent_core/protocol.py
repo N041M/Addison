@@ -76,6 +76,17 @@ class Method:
     PROVIDER_CONNECT = "provider.connect"      # {provider, baseUrl?} -> {ok, error?}
     PROVIDER_DISCONNECT = "provider.disconnect"  # {provider} -> {ok}
 
+    # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
+    # pill or a whitelisted stat display. NEVER code. Widgets are proposed like
+    # routines (draft-held-in-memory + explicit confirm) and saved LOW-risk.
+    WIDGET_LIST = "widget.list"                # {} -> {widgets: [{id, spec, pinned, position}]}
+    WIDGET_SET_PINNED = "widget.setPinned"     # {id, pinned} -> {ok, error?}
+    WIDGET_DELETE = "widget.delete"            # {id} -> {ok}
+    WIDGET_PROPOSE_FROM_CONVERSATION = "widget.proposeFromConversation"  # {} -> {title, kind, summary, spec}
+    WIDGET_CONFIRM_SAVE = "widget.confirmSave"  # {accept} -> {ok, widgetId?}
+    # Core-computed, read-only stat sources for the token meter / connections cards.
+    STATS_GET = "stats.get"                    # {} -> {tokensMonth, providerLatency, connections}
+
     # Core -> Shell (handled in Rust, NEVER exposed to or callable from the
     # webview — §1.3, §5). Listed here and mirrored in protocol.ts only so the
     # golden-file drift test (§9) covers the full method surface. These carry

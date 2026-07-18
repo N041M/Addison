@@ -33,6 +33,17 @@ export const Method = {
   ProviderConnect: "provider.connect",
   ProviderDisconnect: "provider.disconnect",
 
+  // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
+  // pill or a whitelisted stat display, NEVER code. Proposed like routines
+  // (draft-in-memory + explicit confirm) and saved LOW-risk (display-only).
+  WidgetList: "widget.list",
+  WidgetSetPinned: "widget.setPinned",
+  WidgetDelete: "widget.delete",
+  WidgetProposeFromConversation: "widget.proposeFromConversation",
+  WidgetConfirmSave: "widget.confirmSave",
+  // Core-computed, read-only stat sources for the token meter / connections cards.
+  StatsGet: "stats.get",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.

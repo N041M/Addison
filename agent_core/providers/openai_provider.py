@@ -30,6 +30,7 @@ from agent_core.providers.base import (
     ModelResponse,
     ProviderCapabilities,
     ToolCallRequest,
+    Usage,
 )
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -211,9 +212,24 @@ def _translate_response(data: dict) -> ModelResponse:
                 args=_parse_arguments(fn.get("arguments")),
             )
         )
+    usage = _translate_usage(data.get("usage"))
     if tool_calls:
-        return ModelResponse(text=text, tool_calls=tool_calls, finish_reason="tool_use")
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop")
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_usage(usage) -> Usage | None:
+    """Map the chat.completions ``usage`` block ({prompt_tokens, completion_tokens})
+    to Addison's ``Usage``. None when absent or unreadable — never guessed."""
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("prompt_tokens")
+    out = usage.get("completion_tokens")
+    if isinstance(inp, int) and isinstance(out, int):
+        return Usage(input_tokens=inp, output_tokens=out)
+    return None
 
 
 def _parse_arguments(raw) -> dict:
