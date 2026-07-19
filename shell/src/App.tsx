@@ -1,8 +1,9 @@
-// Addison — top-level app shell (design-doc §7.1).
+// Addison — top-level app shell (Fern direction; design-brief-fern README §1).
 //
-// Single window, three regions: the message thread, the collapsible activity
-// strip, and the settings drawer (never required on first run). This component
-// owns the conversation/turn state and wires the Core → Frontend notifications
+// Three columns: the conversation Sidebar, the chat column (header + ChatThread +
+// Composer), and the hideable WidgetRail. Settings is an in-window screen
+// (SettingsPage) that replaces the chat column, not a drawer. This component owns
+// the conversation/turn/UI-chrome state and wires the Core → Frontend notifications
 // (streamed text, permission prompts, tool activity, local-setup progress) into
 // React state, and Frontend → Core actions back out through the typed `ipc`.
 //
@@ -39,19 +40,23 @@ import {
 } from "./ipc/client";
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
-import { HistoryView } from "./components/HistoryView";
+import { Sidebar } from "./components/Sidebar";
+import { WidgetRail } from "./components/WidgetRail";
+import { Composer } from "./components/Composer";
+import { PermissionCard } from "./components/PermissionCard";
 import {
   RoutineProposalCard,
   type RoutineProposal,
 } from "./components/RoutineProposalCard";
-import { SettingsDrawer } from "./components/SettingsDrawer";
+import { SettingsPage } from "./components/SettingsPage";
 import { Banner } from "./components/Banner";
-import { BellLogo } from "./components/BellLogo";
 
 const DEFAULT_ROLE_KEY = "addison.defaultRole";
 const CLOUD_MODEL_KEY = "addison.cloudModel";
 const EFFORT_KEY = "addison.effort";
 const THEME_KEY = "addison.theme";
+const RAIL_OPEN_KEY = "addison.railOpen";
+const SIDEBAR_COLLAPSED_KEY = "addison.sidebarCollapsed";
 
 type Theme = "light" | "dark";
 
@@ -99,7 +104,14 @@ export function App() {
   const [localSetup, setLocalSetup] = useState<LocalSetupState | null>(null);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  // In-window screen: the live chat, or the Settings page (replaces the drawer).
+  const [screen, setScreen] = useState<"chat" | "settings">("chat");
+  // Fern app-shell chrome, both persisted. Rail hosts the widget column + the
+  // "Addison's work"/consent blocks; hiding it moves those inline (§3–§4).
+  const [railOpen, setRailOpen] = useState<boolean>(() => loadBool(RAIL_OPEN_KEY, true));
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
+    loadBool(SIDEBAR_COLLAPSED_KEY, false),
+  );
   // Appearance (Fern direction). Light by default; the class on <html> drives the
   // whole palette. The inline script in index.html sets it before first paint to
   // avoid a flash; this keeps it in sync and persisted when the user toggles.
@@ -107,13 +119,23 @@ export function App() {
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
-  // Conversation history. The core mints a conversation per launch, but the
-  // frontend doesn't learn its id until it starts or loads one — `null` means
-  // "the launch conversation", and History simply won't mark any row current
-  // until an id is known. `view` toggles between the live thread and the list.
-  const [view, setView] = useState<"chat" | "history">("chat");
+  // Conversations. The core mints a conversation per launch, but the frontend
+  // doesn't learn its id until it starts or loads one — `null` means "the launch
+  // conversation", and the sidebar marks no row current until an id is known. The
+  // list lives permanently in the sidebar (it replaced the old HistoryView): it's
+  // loaded on mount and refreshed after each completed turn + after new/load, so a
+  // new chat's auto-title appears without a reload.
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  // The active conversation's title, shown in the chat header. Null → the
+  // "New conversation" fallback (an untitled or not-yet-titled chat).
+  const [conversationTitle, setConversationTitle] = useState<string | null>(null);
+  // A stable mirror of the current id so the post-turn list refresh (which runs
+  // in an async `finally`) reads the up-to-date value, not a stale closure.
+  const currentConversationIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentConversationIdRef.current = currentConversationId;
+  }, [currentConversationId]);
 
   // Profiles (§4.7). Simple by default; null until the core answers (and while
   // disconnected — the Settings section then shows a quiet placeholder).
@@ -197,6 +219,7 @@ export function App() {
         if (state === "ready") {
           refreshRoles();
           refreshProfile();
+          refreshConversations();
         }
       }),
     );
@@ -212,6 +235,7 @@ export function App() {
 
     refreshRoles();
     refreshProfile();
+    refreshConversations();
 
     return () => unsubs.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -241,6 +265,14 @@ export function App() {
   function setTheme(next: Theme) {
     setThemeState(next);
   }
+
+  // Persist the app-shell chrome toggles alongside the other prefs.
+  useEffect(() => {
+    saveBool(RAIL_OPEN_KEY, railOpen);
+  }, [railOpen]);
+  useEffect(() => {
+    saveBool(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed);
+  }, [sidebarCollapsed]);
 
   // Once roles load, make sure the selected role is one that's actually set up.
   useEffect(() => {
@@ -300,6 +332,32 @@ export function App() {
       })
       .catch(() => {
         /* leave the Profile section on its quiet placeholder if we can't read it */
+      });
+  }
+
+  // Refresh the sidebar's conversation list. When `adopt` is set and we don't yet
+  // know the current conversation's id (the launch conversation, whose id the
+  // frontend never learns until a turn lands), take the newest row as current —
+  // that's the chat a just-finished turn belongs to — so the sidebar highlights
+  // it and the header shows its freshly minted auto-title. Otherwise just refresh
+  // the current row's title in place.
+  function refreshConversations(adopt = false) {
+    if (!isEngineConnected()) return;
+    ipc
+      .listConversations()
+      .then((list) => {
+        setConversations(list);
+        const currentId = currentConversationIdRef.current;
+        if (currentId != null) {
+          const match = list.find((c) => c.id === currentId);
+          if (match) setConversationTitle(match.title);
+        } else if (adopt && list.length > 0) {
+          setCurrentConversationId(list[0].id);
+          setConversationTitle(list[0].title);
+        }
+      })
+      .catch(() => {
+        /* leave the sidebar list as-is if we can't read it */
       });
   }
 
@@ -402,6 +460,10 @@ export function App() {
         currentTurnRef.current = null;
         setIsWorking(false);
         setCurrentActivity(null);
+        // A turn just landed: refresh the sidebar so a new chat's auto-title
+        // appears, and adopt the launch conversation as current if we didn't
+        // know its id yet.
+        refreshConversations(true);
       }
     }
   }
@@ -621,9 +683,9 @@ export function App() {
       });
   }
 
-  // --- Conversation history -------------------------------------------------
-  // Both header controls are held while a turn is running or a permission prompt
-  // is open — switching conversations mid-turn would strand in-flight work.
+  // --- Conversations --------------------------------------------------------
+  // Sidebar controls are held while a turn is running or a permission prompt is
+  // open — switching conversations mid-turn would strand in-flight work.
   const controlsBusy = isWorking || permission != null;
 
   // Clear the per-turn/per-conversation transient state. Deliberately leaves the
@@ -640,20 +702,6 @@ export function App() {
     setComposerSeed(null);
   }
 
-  function handleShowHistory() {
-    if (!connected) {
-      setStatusBanner("Addison's engine isn't connected yet.");
-      return;
-    }
-    ipc
-      .listConversations()
-      .then((list) => {
-        setConversations(list);
-        setView("history");
-      })
-      .catch(() => setStatusBanner("Couldn't load your conversations."));
-  }
-
   function handleNewChat() {
     if (!connected || controlsBusy) return;
     ipc
@@ -662,7 +710,11 @@ export function App() {
         resetTransientState();
         setMessages([WELCOME]);
         setCurrentConversationId(id);
-        setView("chat");
+        setConversationTitle(null);
+        setScreen("chat");
+        // The new (still empty) conversation may not be in the list until its
+        // first turn; refresh anyway so an existing row is reconciled.
+        refreshConversations();
       })
       .catch(() => setStatusBanner("Couldn't start a new conversation."));
   }
@@ -680,23 +732,26 @@ export function App() {
         resetTransientState();
         setMessages(rows);
         setCurrentConversationId(loaded.conversationId || id);
-        setView("chat");
+        setConversationTitle(
+          loaded.title ?? conversations.find((c) => c.id === (loaded.conversationId || id))?.title ?? null,
+        );
+        setScreen("chat");
       })
       .catch((err) => {
-        // Stay in the list; surface the plain-language reason (e.g. the core's
-        // "Couldn't find that conversation.").
+        // Surface the plain-language reason (e.g. the core's "Couldn't find that
+        // conversation.").
         setStatusBanner(
           err instanceof Error ? err.message : "Couldn't open that conversation.",
         );
       });
   }
 
-  // Window-level shortcuts: Escape leaves History; Cmd/Ctrl+N starts a new chat
-  // (unless a turn or permission prompt is in flight).
+  // Window-level shortcuts: Escape returns from Settings to chat; Cmd/Ctrl+N
+  // starts a new chat (unless a turn or permission prompt is in flight).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && view === "history") {
-        setView("chat");
+      if (e.key === "Escape" && screen === "settings") {
+        setScreen("chat");
         return;
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === "n" || e.key === "N")) {
@@ -709,127 +764,150 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, connected, controlsBusy]);
+  }, [screen, connected, controlsBusy]);
 
   // --- Render ---------------------------------------------------------------
+  // The two movable blocks (design-brief-fern §3–§4): the "Addison's work"
+  // annotation and the consent card live in the widget rail when it's open, and
+  // fall back inline in the thread when it's hidden. Assemble each once so it can
+  // render in either slot without duplication.
+  const hasWork =
+    isWorking || activities.length > 0 || Boolean(lastUndoDetail) || canRedo;
+  const workBlock = hasWork ? (
+    <ActivityPanel
+      isWorking={isWorking}
+      current={currentActivity}
+      activities={activities}
+      canRedo={canRedo}
+      onRedoLastAction={handleRedoLastAction}
+      lastUndoDetail={lastUndoDetail}
+      onProposeRoutine={connected ? handleProposeRoutine : undefined}
+    />
+  ) : null;
+  const consentBlock = permission ? (
+    <PermissionCard request={permission} onRespond={handleRespondPermission} />
+  ) : null;
+  const proposalBlock = routineProposal ? (
+    <RoutineProposalCard
+      proposal={routineProposal}
+      onSave={handleConfirmRoutine}
+      onCancel={() => setRoutineProposal(null)}
+    />
+  ) : null;
+
+  const profileLabel =
+    profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
+
   return (
-    <div className="flex h-full flex-col bg-paper text-ink">
-      <header className="flex items-center justify-between border-b border-line bg-side px-6 py-3">
-        <span className="flex items-center gap-2 text-ink">
-          <BellLogo size={17} className="text-fern" />
-          <span className="text-base font-bold tracking-[-0.02em]">Addison</span>
-        </span>
-        <div className="flex items-center gap-5">
-          <button
-            type="button"
-            onClick={handleNewChat}
-            disabled={!connected || controlsBusy}
-            className="text-[13px] font-medium text-ink-soft hover:text-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            New chat
-          </button>
-          <button
-            type="button"
-            onClick={() => (view === "history" ? setView("chat") : handleShowHistory())}
-            disabled={!connected || controlsBusy}
-            className="text-[13px] font-medium text-ink-soft hover:text-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            History
-          </button>
-          <button
-            type="button"
-            onClick={() => setSettingsOpen(true)}
-            className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[13px] font-medium text-ink-soft hover:border-muted"
-          >
-            Settings
-          </button>
-        </div>
-      </header>
+    <div className="flex h-full bg-paper text-ink">
+      <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
+        conversations={conversations}
+        currentConversationId={currentConversationId}
+        onOpenConversation={handleOpenConversation}
+        onNewChat={handleNewChat}
+        newChatDisabled={!connected || controlsBusy}
+        screen={screen}
+        onOpenSettings={() => setScreen("settings")}
+        profileLabel={profileLabel}
+      />
 
-      {!connected && (
-        <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-      )}
-      {statusBanner && (
-        <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
-      )}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {!connected && (
+          <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+        )}
+        {statusBanner && (
+          <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+        )}
 
-      <main className="flex min-h-0 flex-1 flex-col">
-        {view === "history" ? (
-          <HistoryView
-            conversations={conversations}
-            currentConversationId={currentConversationId}
-            onOpen={handleOpenConversation}
-            onBack={() => setView("chat")}
+        {screen === "settings" ? (
+          <SettingsPage
+            connected={connected}
+            roles={roles}
+            cloudModels={cloudModels}
+            defaultRole={selectedRole}
+            defaultCloudModel={selectedCloudModel}
+            onChangeDefaultRole={handleChangeDefaultRole}
+            onChangeDefaultCloudModel={handleChangeDefaultCloudModel}
+            onSaveKey={handleSaveKey}
+            localSetup={localSetup}
+            onStartLocalSetup={handleStartLocalSetup}
+            profile={profile}
+            onSetProfile={handleSetProfile}
+            diagnostics={diagnostics}
+            onClearDiagnostics={clearDiagnostics}
+            theme={theme}
+            onSetTheme={setTheme}
+            onBack={() => setScreen("chat")}
           />
         ) : (
-        <ChatThread
-          messages={messages}
-          isWorking={isWorking}
-          connected={connected}
-          permission={permission}
-          onRespondPermission={handleRespondPermission}
-          onSend={handleSend}
-          onStop={handleStop}
-          onRetry={handleRetry}
-          retryAvailable={!isWorking && Boolean(lastUserText)}
-          onRewindTo={handleRewindTo}
-          roles={roles}
-          cloudModels={cloudModels}
-          selectedRole={selectedRole}
-          selectedCloudModel={selectedCloudModel}
-          selectedLocalModel={selectedLocalModel}
-          selectedEffort={selectedEffort}
-          onSelectModel={handleSelectModel}
-          onSelectEffort={handleSelectEffort}
-          showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
-          draftSeed={composerSeed}
-          onDraftSeedUsed={() => setComposerSeed(null)}
-          activityStrip={
-            <>
-              {routineProposal && (
-                <RoutineProposalCard
-                  proposal={routineProposal}
-                  onSave={handleConfirmRoutine}
-                  onCancel={() => setRoutineProposal(null)}
-                />
-              )}
-              <ActivityPanel
-                isWorking={isWorking}
-                current={currentActivity}
-                activities={activities}
-                hasUndoableActions={hasUndoableActions}
-                onUndoLastAction={handleUndoLastAction}
-                canRedo={canRedo}
-                onRedoLastAction={handleRedoLastAction}
-                lastUndoDetail={lastUndoDetail}
-                onProposeRoutine={connected ? handleProposeRoutine : undefined}
+          <>
+            {/* Chat header — active title left; undo (when undoable) + rail toggle
+                right (design-brief-fern §2). */}
+            <header className="flex items-baseline justify-between gap-4 border-b border-line px-[44px] py-3.5">
+              <span className="min-w-0 truncate text-[13px] font-semibold tracking-[0.02em] text-ink-soft">
+                {conversationTitle || "New conversation"}
+              </span>
+              <div className="flex shrink-0 items-baseline gap-[18px]">
+                {hasUndoableActions && (
+                  <button
+                    type="button"
+                    onClick={handleUndoLastAction}
+                    className="text-[12.5px] font-medium text-muted hover:text-ink-soft"
+                  >
+                    <span aria-hidden="true">↺</span> Undo last action
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setRailOpen((v) => !v)}
+                  className="text-[12.5px] font-medium text-fern-deep hover:text-fern"
+                >
+                  {railOpen ? "Hide widgets »" : "« Show widgets"}
+                </button>
+              </div>
+            </header>
+
+            {/* Body: centered chat column + (optional) widget rail, each with its
+                own scroll. */}
+            <div className="flex min-h-0 flex-1 justify-center gap-[38px] px-[44px]">
+              <ChatThread
+                messages={messages}
+                onRetry={handleRetry}
+                retryAvailable={!isWorking && Boolean(lastUserText)}
+                onRewindTo={handleRewindTo}
+                showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
+                footer={
+                  <>
+                    {proposalBlock}
+                    {!railOpen && workBlock}
+                    {!railOpen && consentBlock}
+                  </>
+                }
               />
-            </>
-          }
-        />
+              {railOpen && <WidgetRail work={workBlock} consent={consentBlock} />}
+            </div>
+
+            <Composer
+              connected={connected}
+              isWorking={isWorking}
+              onSend={handleSend}
+              onStop={handleStop}
+              roles={roles}
+              cloudModels={cloudModels}
+              selectedRole={selectedRole}
+              selectedCloudModel={selectedCloudModel}
+              selectedLocalModel={selectedLocalModel}
+              selectedEffort={selectedEffort}
+              onSelectModel={handleSelectModel}
+              onSelectEffort={handleSelectEffort}
+              draftSeed={composerSeed}
+              onDraftSeedUsed={() => setComposerSeed(null)}
+            />
+          </>
         )}
       </main>
-
-      <SettingsDrawer
-        open={settingsOpen}
-        connected={connected}
-        roles={roles}
-        cloudModels={cloudModels}
-        defaultRole={selectedRole}
-        defaultCloudModel={selectedCloudModel}
-        onChangeDefaultRole={handleChangeDefaultRole}
-        onChangeDefaultCloudModel={handleChangeDefaultCloudModel}
-        onSaveKey={handleSaveKey}
-        localSetup={localSetup}
-        onStartLocalSetup={handleStartLocalSetup}
-        profile={profile}
-        onSetProfile={handleSetProfile}
-        diagnostics={diagnostics}
-        onClearDiagnostics={clearDiagnostics}
-        theme={theme}
-        onSetTheme={setTheme}
-        onClose={() => setSettingsOpen(false)}
-      />
     </div>
   );
 }
@@ -885,6 +963,26 @@ function loadTheme(): Theme {
     /* localStorage may be unavailable; fall through to the default */
   }
   return "light";
+}
+
+// Boolean prefs (rail open / sidebar collapsed) persist as "1"/"0".
+function loadBool(key: string, fallback: boolean): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === "1") return true;
+    if (v === "0") return false;
+  } catch {
+    /* localStorage may be unavailable; fall through to the default */
+  }
+  return fallback;
+}
+
+function saveBool(key: string, value: boolean): void {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* non-fatal */
+  }
 }
 
 function loadStored(key: string): string | undefined {
