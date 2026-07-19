@@ -53,7 +53,7 @@ import { useModelSelection } from "./hooks/useModelSelection";
 import { useWidgets } from "./hooks/useWidgets";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
-import { asRecord, normalizeVariables } from "./lib/parse";
+import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
 
 const THEME_KEY = "addison.theme";
 const RAIL_OPEN_KEY = "addison.railOpen";
@@ -135,6 +135,8 @@ export function App() {
     // Invoked from runTurn's `finally` — at event time, well after render, when
     // the `conversationsState` const below is initialized. The lazy wrapper is
     // what keeps the hook call order acyclic.
+    // HAZARD: never invoke this lazy wrapper synchronously during render —
+    // `conversationsState` is a forward reference, uninitialized until the hooks below run.
     refreshConversations: (adopt?: boolean) => conversationsState.refreshConversations(adopt),
     refreshStats: widgetsState.refreshStats,
   });
@@ -169,6 +171,9 @@ export function App() {
         const params = p as StreamChunkParams;
         const text = params.text ?? params.delta ?? params.content ?? "";
         if (!text) return;
+        // TODO(streaming): real streaming needs two edits — the final result's
+        // `finalText` must append to (not overwrite) streamed content in useTurn's
+        // runTurn, and this handler must target the message by id, not the `pending` flag.
         turn.setMessages((prev) =>
           prev.map((m) => (m.pending ? { ...m, content: m.content + text } : m)),
         );
@@ -854,43 +859,6 @@ function normalizePermission(p: Record<string, unknown>): PermissionRequest {
         ? req.description
         : "Addison is asking for your permission to continue.",
     riskTier: riskTier === "medium" || riskTier === "high" ? riskTier : "low",
-  };
-}
-
-// Parse `profile.get` defensively, like the other core payloads. `activeProfile`
-// defaults to "simple" and every flag defaults to false, so a partial or missing
-// payload degrades to the protected Simple surface rather than exposing anything.
-function normalizeProfile(result: unknown): ProfileState | null {
-  const obj = asRecord(result);
-  if (!obj) return null;
-  const profiles = Array.isArray(obj.profiles)
-    ? obj.profiles.flatMap((p) => {
-        const rp = asRecord(p);
-        if (!rp || typeof rp.id !== "string") return [];
-        return [
-          {
-            id: rp.id,
-            label: typeof rp.label === "string" ? rp.label : rp.id,
-            description: typeof rp.description === "string" ? rp.description : "",
-          },
-        ];
-      })
-    : [];
-  const flags = asRecord(obj.flags) ?? {};
-  // The policy mode ("safe" | "open") the active profile runs under (policy.py).
-  // Anything unrecognized falls back to "safe" — an unknown surface never
-  // escalates the safety model.
-  const mode = obj.mode === "open" ? "open" : "safe";
-  return {
-    activeProfile: typeof obj.activeProfile === "string" ? obj.activeProfile : "simple",
-    profiles,
-    mode,
-    flags: {
-      exposeRoutinePlan: flags.exposeRoutinePlan === true,
-      rawDiagnostics: flags.rawDiagnostics === true,
-      headlessCli: flags.headlessCli === true,
-      byokFirstOnboarding: flags.byokFirstOnboarding === true,
-    },
   };
 }
 

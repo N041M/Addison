@@ -528,7 +528,7 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
   return null;
 }
 
-function parseWidgetList(result: unknown): Widget[] {
+export function parseWidgetList(result: unknown): Widget[] {
   const obj = asRecord(result);
   const list = obj && Array.isArray(obj.widgets) ? (obj.widgets as unknown[]) : [];
   const out: Widget[] = [];
@@ -581,7 +581,7 @@ function parseWidgetProposal(result: unknown): WidgetProposal {
   };
 }
 
-function parseStats(result: unknown): Stats {
+export function parseStats(result: unknown): Stats {
   const obj = asRecord(result);
   const tokens = asRecord(obj?.tokensMonth);
   const total = typeof tokens?.total === "number" ? tokens.total : 0;

@@ -363,6 +363,60 @@ def test_latest_latency_per_provider_keeps_newest(store: Store):
     assert "ollama" not in rows
 
 
+def test_prune_usage_log_deletes_only_older_than_cutoff(store: Store):
+    _usage(store, at=100)     # old
+    _usage(store, at=200)     # old
+    _usage(store, at=500)     # exactly at cutoff -> retained (strict <)
+    _usage(store, at=900)     # new
+    store.prune_usage_log(cutoff=500)
+    # Everything strictly before 500 is gone; the boundary row and newer stay.
+    assert store.usage_totals_since(0)["total"] == (10 + 5) * 2  # two survivors
+
+
+def test_prune_usage_log_empty_table_is_safe(store: Store):
+    store.prune_usage_log(cutoff=1000)  # no rows -> no error
+    assert store.usage_totals_since(0)["total"] == 0
+
+
+# --- schema indexes ---------------------------------------------------------
+
+
+def _index_names(store: Store) -> set[str]:
+    rows = store._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_%'"
+    ).fetchall()
+    return {row["name"] for row in rows}
+
+
+def test_expected_indexes_exist_after_open(store: Store):
+    assert {
+        "idx_messages_conversation_created",
+        "idx_usage_log_created",
+        "idx_usage_log_provider_created",
+    } <= _index_names(store)
+
+
+def test_reopening_existing_db_is_idempotent(tmp_path: Path):
+    # A pre-index DB (schema applied once) must reopen cleanly — executescript
+    # re-runs the CREATE INDEX IF NOT EXISTS statements without error.
+    db_path = tmp_path / "reopen.db"
+    first = Store(db_path)
+    _usage(first, at=1000)
+    first.close()
+
+    second = Store(db_path)  # must not raise on the second executescript pass
+    try:
+        assert {
+            "idx_messages_conversation_created",
+            "idx_usage_log_created",
+            "idx_usage_log_provider_created",
+        } <= _index_names(second)
+        # Existing data is intact and still queryable through the indexed paths.
+        assert second.usage_totals_since(0)["total"] == 15
+    finally:
+        second.close()
+
+
 # --- widgets ----------------------------------------------------------------
 
 

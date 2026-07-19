@@ -508,6 +508,20 @@ class Store:
         )
         self._conn.commit()
 
+    def prune_usage_log(self, cutoff: int) -> None:
+        """Retention for the §4.8 usage substrate: delete every usage row strictly
+        older than ``cutoff`` (its ``created_at`` epoch seconds is less than it).
+
+        Unlike ``prune_action_snapshots`` there is no recency floor — usage rows
+        are pure telemetry backing the token-meter/latency widgets (no undo depends
+        on them), so a plain age cutoff is all this needs. The caller computes
+        ``cutoff`` from the same epoch-seconds clock the rows are written with."""
+        self._conn.execute(
+            "DELETE FROM usage_log WHERE created_at < ?",
+            (cutoff,),
+        )
+        self._conn.commit()
+
     def usage_totals_since(self, epoch: int) -> dict[str, int]:
         """Summed input/output tokens for every usage row at or after ``epoch``.
 

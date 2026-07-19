@@ -314,7 +314,7 @@ function normalizeModel(m: unknown): { id: string; label: string } | null {
   return { id, label: typeof obj.label === "string" ? obj.label : id };
 }
 
-function normalizeRoles(result: unknown): RoleOption[] {
+export function normalizeRoles(result: unknown): RoleOption[] {
   const record = asRecord(result);
   const list = Array.isArray(result)
     ? result
@@ -357,7 +357,7 @@ function normalizeRoles(result: unknown): RoleOption[] {
 // result. Parse it defensively — like the rest of the core payloads, its exact
 // shape isn't pinned in protocol.ts. An entry with no `effortLevels` simply has
 // none (the picker hides the effort control for it).
-function normalizeCloudModels(result: unknown): CloudModel[] {
+export function normalizeCloudModels(result: unknown): CloudModel[] {
   const record = asRecord(result);
   const list =
     record && Array.isArray(record.cloudModels) ? (record.cloudModels as unknown[]) : [];

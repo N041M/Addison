@@ -11,152 +11,35 @@ entrypoint answers. No network anywhere.
 from __future__ import annotations
 
 import json
-import queue
 import sqlite3
 import subprocess
 import sys
 import threading
-import time
 from pathlib import Path
 
 import httpx
 
-from agent_core.main import JsonRpcServer
-from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
-from agent_core.providers.base import (
-    ModelResponse,
-    ModelRole,
-    ProviderCapabilities,
-    ToolCallRequest,
-    Usage,
-)
-from agent_core.providers.router import ModelRouter
+from agent_core.providers.base import ModelResponse, Usage
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
-from agent_core.tools.registry import ToolRegistry
+from tests.conftest import (
+    IPC_DB_NAME,
+    _FrameWriter,
+    _ScriptedProvider,
+    _shutdown,
+    _SpyTool,
+    _tool_call_response,
+    build_server,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-class _PipeReader:
-    """Blocking readline() fed frame-by-frame from the test."""
-
-    def __init__(self) -> None:
-        self._lines: queue.Queue[str] = queue.Queue()
-
-    def feed(self, frame: dict) -> None:
-        self._lines.put(json.dumps(frame) + "\n")
-
-    def close(self) -> None:
-        self._lines.put("")  # readline() returning "" is EOF for the read loop
-
-    def readline(self) -> str:
-        return self._lines.get()
-
-
-class _FrameWriter:
-    """Captures outgoing frames and lets tests block until one matches."""
-
-    def __init__(self) -> None:
-        self.frames: list[dict] = []
-        self._cond = threading.Condition()
-
-    def write(self, line: str) -> None:
-        frame = json.loads(line)
-        with self._cond:
-            self.frames.append(frame)
-            self._cond.notify_all()
-
-    def flush(self) -> None:
-        pass
-
-    def wait_for(self, predicate, timeout: float = 5.0) -> dict:
-        deadline = time.monotonic() + timeout
-        with self._cond:
-            while True:
-                for frame in self.frames:
-                    if predicate(frame):
-                        return frame
-                remaining = deadline - time.monotonic()
-                assert remaining > 0, f"expected frame never arrived; got {self.frames}"
-                self._cond.wait(remaining)
-
-
-class _ScriptedProvider:
-    """Returns canned ModelResponses in order; records replayed histories."""
-
-    def __init__(self, responses: list[ModelResponse]) -> None:
-        self._responses = list(responses)
-        self.histories: list[list] = []
-
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            native_tool_calling=True,
-            max_context_tokens=100_000,
-            supports_streaming=False,
-            runs_off_device=False,
-        )
-
-    def send(self, messages, tools, effort=None) -> ModelResponse:
-        self.histories.append(list(messages))
-        return self._responses.pop(0)
-
-
-class _SpyTool:
-    """LOW-risk tool that records executions; optionally reads the clipboard
-    through the shell bridge so tests can drive a Core -> Shell round-trip."""
-
-    definition = ToolDefinition(
-        id="spy_tool",
-        label="Check something for you",
-        description="A test tool.",
-        risk_tier=RiskTier.LOW,
-        parameters_schema={"type": "object", "properties": {}},
-    )
-
-    def __init__(self, use_bridge: bool = False) -> None:
-        self.calls: list[dict] = []
-        self._use_bridge = use_bridge
-
-    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
-        self.calls.append(args)
-        if self._use_bridge:
-            return ToolResult(success=True, content=context.shell_bridge.read_clipboard())
-        return ToolResult(success=True, content="spied")
-
-
-def _tool_call_response(tool_id: str = "spy_tool") -> ModelResponse:
-    return ModelResponse(
-        text=None,
-        tool_calls=[ToolCallRequest(id="call-1", tool_id=tool_id, args={})],
-    )
-
-
 def _server(tmp_path, responses, tool=None, bridge=None):
-    registry = ToolRegistry()
-    tool = tool or _SpyTool()
-    registry.register(tool)
-    provider = _ScriptedProvider(responses)
-    reader = _PipeReader()
-    writer = _FrameWriter()
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
-        shell_bridge=bridge,
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    return server, reader, writer, tool, thread
-
-
-def _shutdown(reader: _PipeReader, thread: threading.Thread) -> None:
-    reader.close()
-    thread.join(timeout=5)
+    h = build_server(tmp_path, responses=responses, tool=tool, bridge=bridge)
+    return h.server, h.reader, h.writer, h.tool, h.thread
 
 
 def test_send_message_streams_and_completes(tmp_path):
@@ -204,20 +87,8 @@ def test_tool_refusal_fails_the_step_not_the_turn_and_next_turn_is_clean(tmp_pat
         ModelResponse(text="That name is taken — pick another.", tool_calls=[]),
         ModelResponse(text="Second turn works.", tool_calls=[]),
     ]
-    registry = ToolRegistry()
-    registry.register(_CrashingTool())
-    provider = _ScriptedProvider(responses)
-    reader = _PipeReader()
-    writer = _FrameWriter()
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    h = build_server(tmp_path, responses=responses, tool=_CrashingTool())
+    reader, writer, provider, thread = h.reader, h.writer, h.provider, h.thread
     try:
         reader.feed(
             {"jsonrpc": "2.0", "id": 1,
@@ -262,17 +133,8 @@ def test_failed_turn_rolls_back_partial_history_and_next_turn_succeeds(tmp_path)
             return super().send(messages, tools, effort)
 
     provider = _FlakyProvider([ModelResponse(text="Recovered fine.", tool_calls=[])])
-    reader = _PipeReader()
-    writer = _FrameWriter()
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=ToolRegistry(),
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
+    h = build_server(tmp_path, provider=provider, register_tool=False)
+    server, reader, writer, thread = h.server, h.reader, h.writer, h.thread
     try:
         reader.feed(
             {"jsonrpc": "2.0", "id": 1,
@@ -329,7 +191,7 @@ def test_rewind_with_returned_store_id_truncates_memory_and_store(tmp_path):
         assert server.conversation.messages == []
         assert server._message_ids == []
         # Store agrees (fresh connection: the server's is bound to its thread).
-        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+        with sqlite3.connect(tmp_path / IPC_DB_NAME) as conn:
             stored = conn.execute(
                 "SELECT content FROM messages ORDER BY rowid"
             ).fetchall()
@@ -447,20 +309,10 @@ def test_load_restores_history_and_next_turn_replays_it(tmp_path):
         ModelResponse(text="B answer.", tool_calls=[]),
         ModelResponse(text="A again.", tool_calls=[]),
     ]
-    registry = ToolRegistry()
-    registry.register(_SpyTool())
-    provider = _ScriptedProvider(responses)
-    reader = _PipeReader()
-    writer = _FrameWriter()
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    h = build_server(tmp_path, responses=responses)
+    server, reader, writer, provider, thread = (
+        h.server, h.reader, h.writer, h.provider, h.thread
     )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
     try:
         reader.feed(
             {"jsonrpc": "2.0", "id": 1,
@@ -561,7 +413,7 @@ def test_rewind_after_load_truncates_store_and_memory(tmp_path):
             ("assistant", "First answer."),
         ]
         assert len(server._message_ids) == 2
-        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+        with sqlite3.connect(tmp_path / IPC_DB_NAME) as conn:
             stored = [r[0] for r in conn.execute(
                 "SELECT content FROM messages ORDER BY rowid"
             ).fetchall()]
@@ -770,23 +622,14 @@ def test_routine_propose_confirm_list_run_round_trip(tmp_path):
 # decision 2026-07-18). Scripted connect + key-probe callables keep it offline.
 # ===========================================================================
 def _provider_server(tmp_path, connect_fn=None, key_probe=None, catalog=None):
-    registry = ToolRegistry()
-    provider = _ScriptedProvider([])
-    reader = _PipeReader()
-    writer = _FrameWriter()
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    h = build_server(
+        tmp_path,
+        register_tool=False,
         cloud_catalog=catalog or [],
         connect_provider=connect_fn,
         provider_key_probe=key_probe,
     )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    return server, reader, writer, thread
+    return h.server, h.reader, h.writer, h.thread
 
 
 def _no_key_material(writer: _FrameWriter, secret: str) -> None:
@@ -980,26 +823,17 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
 # reports token totals, per-provider latency, and connection status — NEVER keys.
 # ===========================================================================
 def _widget_server(tmp_path, responses=None, ollama_status=200, key_probe=None):
-    registry = ToolRegistry()
-    provider = _ScriptedProvider(responses or [])
-    reader = _PipeReader()
-    writer = _FrameWriter()
-
     def _ollama_handler(request):  # deterministic — no real Ollama, no network
         return httpx.Response(ollama_status, json={"models": []})
 
-    server = JsonRpcServer(
-        reader=reader,
-        writer=writer,
-        tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
-        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+    h = build_server(
+        tmp_path,
+        responses=responses or [],
+        register_tool=False,
         ollama_client=httpx.Client(transport=httpx.MockTransport(_ollama_handler)),
         provider_key_probe=key_probe,
     )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    return server, reader, writer, thread
+    return h.server, h.reader, h.writer, h.thread
 
 
 def test_widget_propose_confirm_list_round_trip(tmp_path):
@@ -1123,7 +957,7 @@ def test_usage_recorded_after_turn_and_stats_get_shape(tmp_path):
         writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
 
         # The usage row landed in the store (fresh connection: worker owns its own).
-        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+        with sqlite3.connect(tmp_path / IPC_DB_NAME) as conn:
             rows = conn.execute(
                 "SELECT provider, input_tokens, output_tokens, latency_ms FROM usage_log"
             ).fetchall()
