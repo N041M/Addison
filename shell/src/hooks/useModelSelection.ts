@@ -377,7 +377,6 @@ function normalizeCloudModels(result: unknown): CloudModel[] {
     out.push({
       id,
       label: typeof obj.label === "string" ? obj.label : id,
-      description: typeof obj.description === "string" ? obj.description : "",
       effortLevels,
       default: obj.default === true,
       provider: typeof obj.provider === "string" ? obj.provider : undefined,

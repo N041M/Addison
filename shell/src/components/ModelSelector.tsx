@@ -50,7 +50,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-opus-4-8",
     label: "Claude Opus 4.8",
-    description: "",
     effortLevels: [
       { id: "low", label: "low" },
       { id: "high", label: "high" },
@@ -61,7 +60,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-sonnet-5",
     label: "Claude Sonnet 5",
-    description: "",
     effortLevels: [
       { id: "low", label: "low" },
       { id: "high", label: "high" },
@@ -72,7 +70,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-haiku-4-5",
     label: "Claude Haiku 4.5",
-    description: "",
     effortLevels: [],
     default: false,
   },

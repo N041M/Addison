@@ -521,7 +521,6 @@ function parseWidgetList(result: unknown): Widget[] {
       id: row.id,
       spec,
       pinned: row.pinned !== false,
-      position: typeof row.position === "number" ? row.position : 0,
     });
   }
   return out;
@@ -563,7 +562,6 @@ function parseStats(result: unknown): Stats {
     providerLatency.push({
       provider: row.provider,
       ms: row.ms,
-      checkedAt: typeof row.checkedAt === "number" ? row.checkedAt : 0,
     });
   }
 

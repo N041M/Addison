@@ -36,7 +36,6 @@ export interface ConversationSummary {
   id: string;
   title: string;
   startedAt: number;
-  messageCount: number;
 }
 
 /**
@@ -61,7 +60,6 @@ export function parseConversationSummaries(result: unknown): ConversationSummary
       id: obj.id,
       title: typeof obj.title === "string" && obj.title ? obj.title : "Untitled conversation",
       startedAt: typeof obj.startedAt === "number" ? obj.startedAt : 0,
-      messageCount: typeof obj.messageCount === "number" ? obj.messageCount : 0,
     });
   }
   return out;
@@ -91,14 +89,12 @@ export interface EffortLevel {
 /**
  * One cloud model choice from `model.availableRoles`' `cloudModels` list. The
  * plain `label` (e.g. "Most capable", "Balanced", "Fast") is what the personas
- * see; `description` is a one-line plain explainer shown unobtrusively. When
- * `effortLevels` is empty the effort control is hidden for that model. Exactly
- * one entry in the catalog has `default: true`.
+ * see. When `effortLevels` is empty the effort control is hidden for that
+ * model. Exactly one entry in the catalog has `default: true`.
  */
 export interface CloudModel {
   id: string;
   label: string;
-  description: string;
   effortLevels: EffortLevel[];
   default: boolean;
   /**
@@ -168,12 +164,15 @@ export interface StatWidgetSpec {
 
 export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec;
 
-/** One stored widget from `widget.list`: id + declarative spec + pin/order state. */
+/**
+ * One stored widget from `widget.list`: id + declarative spec + pin state. The
+ * core returns the list already in user-visible order (ORDER BY position in
+ * MemoryStore.list_widgets), so the frontend renders it as received.
+ */
 export interface Widget {
   id: string;
   spec: WidgetSpec;
   pinned: boolean;
-  position: number;
 }
 
 /** A drafted widget from `widget.proposeFromConversation`, awaiting confirm. */
@@ -196,7 +195,6 @@ export interface ConnectionStat {
 export interface ProviderLatencyStat {
   provider: string;
   ms: number;
-  checkedAt: number;
 }
 
 /** The full `stats.get` picture backing the token meter + connections cards. */

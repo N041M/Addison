@@ -12,8 +12,8 @@
 //   Column A: Where Addison thinks · API keys · Routines
 //   Column B: Run a model on this computer · Profile (+ Appearance) · Diagnostics
 //
-// API keys ships the Anthropic-only row this PR; the provider rows are a mapped
-// array so the multi-provider PR is purely additive.
+// API keys is multi-provider (owner decision 2026-07-18): one mapped row each
+// for anthropic | openai | google | custom (an OpenAI-compatible server).
 
 import { useEffect, useState } from "react";
 import type { ModelRole } from "../types/protocol";
