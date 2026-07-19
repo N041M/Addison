@@ -133,9 +133,14 @@ export function SettingsPage({
             {notice}
           </div>
         )}
-        <div className="mx-auto flex max-w-[880px] flex-col items-start gap-4 min-[900px]:flex-row">
-          {/* Column A */}
-          <div className="flex w-full min-w-0 flex-1 flex-col gap-4">
+        {/* Self-balancing columns (owner request 2026-07-19): CSS multicol
+            distributes whole cards by height, so a tall card (e.g. API keys
+            with four providers) never leaves a hole under a short opposite
+            column — later cards wrap up into the shorter side automatically.
+            Reading order: down the first column, then the second. Below 900px
+            it's the same DOM in one stacked column. */}
+        <div className="mx-auto max-w-[880px] gap-4 min-[900px]:columns-2">
+          <CardSlot>
             <WhereAddisonThinks
               connected={connected}
               roles={models.roles}
@@ -145,12 +150,16 @@ export function SettingsPage({
               onChangeDefaultRole={models.handleChangeDefaultRole}
               onChangeDefaultCloudModel={models.handleChangeDefaultCloudModel}
             />
+          </CardSlot>
+          <CardSlot>
             <ApiKeys
               connected={connected}
               providers={models.providers}
               onConnect={models.handleConnectProvider}
               onRemove={models.handleRemoveProvider}
             />
+          </CardSlot>
+          <CardSlot>
             <Card title="Routines" subtitle="Steps Addison saved for you. Run them here or from a widget.">
               <RoutineLibrary
                 exposeRoutinePlan={profile?.flags.exposeRoutinePlan}
@@ -158,10 +167,8 @@ export function SettingsPage({
                 refreshKey={profile?.activeProfile}
               />
             </Card>
-          </div>
-
-          {/* Column B */}
-          <div className="flex w-full min-w-0 flex-1 flex-col gap-4">
+          </CardSlot>
+          <CardSlot>
             <Card title="Run a model on this computer">
               <LocalModelSetup
                 connected={connected}
@@ -170,6 +177,8 @@ export function SettingsPage({
                 onStartSetup={models.handleStartLocalSetup}
               />
             </Card>
+          </CardSlot>
+          <CardSlot>
             <ProfileCard
               connected={connected}
               profile={profile}
@@ -177,10 +186,12 @@ export function SettingsPage({
               theme={theme}
               onSetTheme={onSetTheme}
             />
-            {profile?.flags.rawDiagnostics && (
+          </CardSlot>
+          {profile?.flags.rawDiagnostics && (
+            <CardSlot>
               <Diagnostics diagnostics={diagnostics} onClear={onClearDiagnostics} />
-            )}
-          </div>
+            </CardSlot>
+          )}
         </div>
       </div>
     </div>
@@ -188,6 +199,14 @@ export function SettingsPage({
 }
 
 // --- Card shell ------------------------------------------------------------
+
+/** One card's slot in the self-balancing settings columns: keeps the card in
+ * one piece across a column break and owns the vertical rhythm (multicol can't
+ * use flex gap, so spacing lives here). */
+function CardSlot({ children }: { children: React.ReactNode }) {
+  return <div className="mb-4 break-inside-avoid">{children}</div>;
+}
+
 function Card({
   id,
   title,
