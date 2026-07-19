@@ -592,15 +592,19 @@ export function App() {
       )}
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {screen === "settings" && (
-          <>
-            {!connected && (
-              <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-            )}
-            {statusBanner && (
-              <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
-            )}
-          </>
+        {screen === "settings" && (!connected || statusBanner) && (
+          /* Same alignment rule as the chat screen: banners share the settings
+             content's gutters and centered max-width, stacked with one gap. */
+          <div className="px-4 pt-3 md:px-[44px]">
+            <div className="mx-auto flex w-full max-w-[880px] flex-col gap-2">
+              {!connected && (
+                <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+              )}
+              {statusBanner && (
+                <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+              )}
+            </div>
+          </div>
         )}
 
         {screen === "settings" ? (
