@@ -54,7 +54,8 @@ import {
   RoutineProposalCard,
   type RoutineProposal,
 } from "./components/RoutineProposalCard";
-import { SettingsPage } from "./components/SettingsPage";
+import { SettingsPage, API_KEYS_SECTION_ID } from "./components/SettingsPage";
+import { FirstRunBanner } from "./components/FirstRunBanner";
 import { Banner } from "./components/Banner";
 
 const DEFAULT_ROLE_KEY = "addison.defaultRole";
@@ -98,6 +99,10 @@ export function App() {
   const currentTurnRef = useRef<string | null>(null);
 
   const [roles, setRoles] = useState<RoleOption[]>([]);
+  // Whether we've actually fetched roles at least once this launch. Distinguishes
+  // "not loaded yet" from "loaded, genuinely nothing configured" so the first-run
+  // banner doesn't flash for a configured user during the mount fetch.
+  const [rolesLoaded, setRolesLoaded] = useState(false);
   const [cloudModels, setCloudModels] = useState<CloudModel[]>([]);
   // Multi-provider API keys (owner decision 2026-07-18). Non-secret status only —
   // the keys themselves live in the OS keychain and never reach the webview.
@@ -127,6 +132,20 @@ export function App() {
   const [theme, setThemeState] = useState<Theme>(loadTheme);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
+
+  // First-run experience (design-brief-fern §5). `startedUnconfigured` latches
+  // once — true iff this launch began with nothing configured (or we're in a
+  // disconnected design-review browser, where roles never load) — so connecting
+  // a provider mid-launch advances the banner to step 2 rather than hiding it,
+  // while a launch that began configured never shows it at all. `firstRunDismissed`
+  // is "Skip for now": this launch only, deliberately not persisted.
+  const [startedUnconfigured, setStartedUnconfigured] = useState<boolean | null>(null);
+  const [firstRunDismissed, setFirstRunDismissed] = useState(false);
+  // One-shot Settings scroll request (first-run "Start setup" → API-keys card).
+  const [settingsScrollTarget, setSettingsScrollTarget] = useState<string | null>(null);
+  // Bumped to focus the composer for the "say hello" nudge when first-run reaches
+  // step 2 (a provider connected during this launch).
+  const [composerFocusSignal, setComposerFocusSignal] = useState(0);
 
   // Widgets (declarative specs) + core-computed stats for the rail. Widgets are
   // proposed like routines (draft-in-core, saved only on confirm); the token
@@ -307,6 +326,32 @@ export function App() {
     saveBool(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed);
   }, [sidebarCollapsed]);
 
+  // Whether any model role is set up right now.
+  const anyConfigured = roles.some((r) => r.configured);
+
+  // Latch the first-run signal exactly once. If we're disconnected (a plain
+  // design-review browser, where roles never load) treat it as a fresh launch so
+  // the setup guidance is visible; otherwise wait for the first real roles fetch
+  // and latch on whether anything was configured at startup.
+  useEffect(() => {
+    if (startedUnconfigured !== null) return;
+    if (!connected) {
+      setStartedUnconfigured(true);
+      return;
+    }
+    if (rolesLoaded) setStartedUnconfigured(!anyConfigured);
+  }, [connected, rolesLoaded, anyConfigured, startedUnconfigured]);
+
+  // First-run is "active" until the user configures something OR skips. Once a
+  // provider connects mid-launch (anyConfigured flips true) the banner advances
+  // to step 2 and nudges the user to say hello — focus the composer for them.
+  const firstRunActive = startedUnconfigured === true && !firstRunDismissed;
+  useEffect(() => {
+    if (firstRunActive && anyConfigured) {
+      setComposerFocusSignal((n) => n + 1);
+    }
+  }, [firstRunActive, anyConfigured]);
+
   // Once roles load, make sure the selected role is one that's actually set up.
   useEffect(() => {
     const configured = roles.filter((r) => r.configured);
@@ -349,6 +394,7 @@ export function App() {
       .then((res) => {
         setRoles(normalizeRoles(res));
         setCloudModels(normalizeCloudModels(res));
+        setRolesLoaded(true);
       })
       .catch(() => {
         /* leave the selector on placeholders if we can't read roles */
@@ -860,6 +906,13 @@ export function App() {
     }
   }
 
+  // First-run "Start setup": open Settings scrolled to the API-keys card. The
+  // scroll request is one-shot (SettingsPage clears it via onScrolled).
+  function handleStartSetup() {
+    setScreen("settings");
+    setSettingsScrollTarget(API_KEYS_SECTION_ID);
+  }
+
   // The dashed "＋ Ask Addison to build a widget" seeds the composer (does NOT
   // create anything) and switches to chat if we're on Settings.
   function handleAskBuildWidget() {
@@ -989,6 +1042,25 @@ export function App() {
   const profileLabel =
     profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
 
+  // First-run render pieces. The pine banner rides in the chat column above the
+  // thread while first-run is active; the serif greeting replaces the welcome
+  // message only at step 1 (nothing configured yet) with an otherwise-empty
+  // thread. Once a provider connects (step 2), the normal welcome returns so
+  // Addison "introduces itself" per the step-2 copy.
+  const threadEmpty = messages.length === 1 && messages[0]?.id === "welcome";
+  const showGreeting = firstRunActive && !anyConfigured && threadEmpty;
+  const threadMessages = showGreeting
+    ? messages.filter((m) => m.id !== "welcome")
+    : messages;
+  const firstRunHeader = firstRunActive ? (
+    <FirstRunBanner
+      step={anyConfigured ? 2 : 1}
+      onStartSetup={handleStartSetup}
+      onSkip={() => setFirstRunDismissed(true)}
+      showGreeting={showGreeting}
+    />
+  ) : undefined;
+
   return (
     <div className="flex h-full bg-paper text-ink">
       <Sidebar
@@ -1033,6 +1105,8 @@ export function App() {
             theme={theme}
             onSetTheme={setTheme}
             onBack={() => setScreen("chat")}
+            scrollTarget={settingsScrollTarget}
+            onScrolled={() => setSettingsScrollTarget(null)}
           />
         ) : (
           <>
@@ -1066,11 +1140,12 @@ export function App() {
                 own scroll. */}
             <div className="flex min-h-0 flex-1 justify-center gap-[38px] px-[44px]">
               <ChatThread
-                messages={messages}
+                messages={threadMessages}
                 onRetry={handleRetry}
                 retryAvailable={!isWorking && Boolean(lastUserText)}
                 onRewindTo={handleRewindTo}
                 showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
+                header={firstRunHeader}
                 footer={
                   <>
                     {proposalBlock}
@@ -1110,6 +1185,7 @@ export function App() {
               onSelectEffort={handleSelectEffort}
               draftSeed={composerSeed}
               onDraftSeedUsed={() => setComposerSeed(null)}
+              focusSignal={composerFocusSignal}
             />
           </>
         )}

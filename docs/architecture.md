@@ -47,9 +47,10 @@ flowchart TB
 What each process may and may not do:
 
 - **React webview (lowest trust).** It renders state and turns clicks into typed IPC
-  calls. It reaches the shell through exactly two Tauri commands — `send_to_core` for
-  everything conversational, and a write-only `store_provider_key` for saving a key
-  the user typed. It has no network access, cannot talk to the core directly, and
+  calls. It reaches the shell through exactly three Tauri commands — `send_to_core`
+  for everything conversational, and the write/delete-only pair
+  `store_provider_key` / `delete_provider_key` for saving or removing a key the
+  user typed. It has no network access, cannot talk to the core directly, and
   can never read a key back. The shell rejects any relayed frame whose method is in
   the `shell.*` or `keychain.*` namespace, so the lowest-trust process can never
   drive the OS-level side.

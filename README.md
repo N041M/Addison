@@ -86,7 +86,13 @@ These are hard constraints, enforced in code rather than by convention:
   re-run, with per-run values generalized into variables.
 - Simple and Developer profiles — a surface choice that reshapes onboarding and
   visibility, never the security model.
-- Markdown and Mermaid rendering in a calm, dark, terminal-adjacent interface.
+- Bring keys from multiple providers — Anthropic, OpenAI, Google, or your own
+  OpenAI-compatible server — and pick any of their models from one picker.
+- A widget rail of small, declarative cards — routine run-buttons, a token
+  meter, connection status — proposed by Addison in chat and pinned by you.
+- A redesigned three-column interface ("Fern"): conversation sidebar, a
+  serif correspondence-style chat with Markdown and Mermaid rendering, and the
+  widget rail — warm and calm, light and dark themes, in-window settings.
 
 ## Quickstart
 

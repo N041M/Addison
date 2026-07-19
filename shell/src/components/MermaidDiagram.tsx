@@ -12,7 +12,7 @@
 // A malformed diagram must never break a message row: any parse/render failure
 // falls back to showing the original fenced code as a plain <pre><code> block.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 // Initialize mermaid exactly once per session, no matter how many diagrams
 // render. Guarded at module level so re-mounts don't re-initialize.
@@ -28,14 +28,13 @@ interface Props {
 export function MermaidDiagram({ code }: Props) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  // Render at most once per distinct `code` value — no error flash, no retry
-  // loop on a diagram that simply won't parse.
-  const renderedFor = useRef<string | null>(null);
 
+  // One render per `code` value: the effect re-runs only when `code` changes,
+  // and `cancelled` keeps a stale run from setting state. (No extra "already
+  // rendered" ref guard here — under React 18 StrictMode the first dev effect
+  // run is cancelled on the simulated unmount, and a ref guard would make the
+  // second run bail too, leaving the placeholder up forever.)
   useEffect(() => {
-    if (renderedFor.current === code) return;
-    renderedFor.current = code;
-
     let cancelled = false;
     setSvg(null);
     setFailed(false);
