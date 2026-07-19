@@ -1,0 +1,37 @@
+{
+  "widgets": [
+    {
+      "id": "widget-fixture-0",
+      "spec": {
+        "kind": "routine",
+        "routineId": "routine-morning-brief",
+        "title": "Morning brief"
+      },
+      "pinned": true,
+      "position": 0,
+      "createdInMode": "safe"
+    },
+    {
+      "id": "widget-fixture-1",
+      "spec": {
+        "kind": "stat",
+        "source": "tokens_month",
+        "title": "Tokens this month"
+      },
+      "pinned": false,
+      "position": 1,
+      "createdInMode": "safe"
+    },
+    {
+      "id": "widget-fixture-2",
+      "spec": {
+        "kind": "command",
+        "command": "git status",
+        "title": "Repo status"
+      },
+      "pinned": false,
+      "position": 2,
+      "createdInMode": "open"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "activeProfile": "developer",
+  "mode": "open",
+  "profiles": [
+    {
+      "id": "simple",
+      "label": "Simple",
+      "description": "Simple \u2014 the everyday Addison."
+    },
+    {
+      "id": "developer",
+      "label": "Developer",
+      "description": "Developer \u2014 extra visibility for technical users. Same safety rules."
+    }
+  ],
+  "flags": {
+    "exposeRoutinePlan": true,
+    "rawDiagnostics": true,
+    "headlessCli": true,
+    "byokFirstOnboarding": true
+  }
+}
