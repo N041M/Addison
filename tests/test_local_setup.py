@@ -22,6 +22,7 @@ import json
 import queue
 import threading
 import time
+from typing import Callable
 
 import httpx
 
@@ -107,7 +108,9 @@ class _RecordingProvider:
         return self._response
 
 
-def _ollama_client(routes):
+def _ollama_client(
+    routes: dict[str, Callable[[httpx.Request], httpx.Response] | tuple[int, object]],
+):
     """MockTransport client routing Ollama HTTP by path (see test_ollama_provider)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -291,6 +294,12 @@ def test_start_local_setup_busy_rejects_second_request(tmp_path, monkeypatch):
 
 
 # --- item B: explicit LOCAL model pick threads into resolve() --------------
+def _histories(provider: object) -> list[list]:
+    """The routed provider is always one of our _RecordingProvider fakes here."""
+    assert isinstance(provider, _RecordingProvider)
+    return provider.histories
+
+
 def _router_with_two_local():
     return ModelRouter(
         configured={ModelRole.PRIMARY: _RecordingProvider("cloud")},
@@ -315,9 +324,9 @@ def test_set_role_with_model_id_then_send_resolves_that_model(tmp_path):
         writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
 
         # Only the explicitly-picked local model handled the turn.
-        assert len(router._local_models["m-b"].histories) == 1
-        assert router._local_models["m-a"].histories == []
-        assert router._configured[ModelRole.PRIMARY].histories == []
+        assert len(_histories(router._local_models["m-b"])) == 1
+        assert _histories(router._local_models["m-a"]) == []
+        assert _histories(router._configured[ModelRole.PRIMARY]) == []
     finally:
         _shutdown(reader, thread)
 
@@ -331,8 +340,8 @@ def test_send_message_model_id_param_threads_to_resolve(tmp_path):
              "params": {"text": "hi", "role": "local", "modelId": "m-a"}}
         )
         writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
-        assert len(router._local_models["m-a"].histories) == 1
-        assert router._local_models["m-b"].histories == []
+        assert len(_histories(router._local_models["m-a"])) == 1
+        assert _histories(router._local_models["m-b"]) == []
     finally:
         _shutdown(reader, thread)
 

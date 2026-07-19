@@ -123,17 +123,56 @@ class ExecutionContext:
 
 @runtime_checkable
 class Tool(Protocol):
+    """The registration contract: ``definition`` + ``execute``.
+
+    ``undo()`` is deliberately NOT part of this Protocol even though every
+    MEDIUM+ tool must ship one — LOW read-only tools (calculator) and dev-only
+    registrations legitimately have none, so requiring it structurally would
+    misdescribe them. The mandatory-undo invariant lives where it is enforced:
+    ``ToolRegistry.register()`` raises for a non-LOW tool without a real
+    ``undo``, and ``UndoableTool`` below is the narrowed type for code that
+    actually calls ``undo()``."""
+
     definition: ToolDefinition
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult: ...
 
-    def undo(self, snapshot: ActionSnapshot) -> None:
-        """Required for any tool with risk_tier=MEDIUM or higher.
 
-        A tool that cannot implement this MUST declare risk_tier=LOW and MUST
-        NOT mutate state. Enforced at registration time — see
-        ``ToolRegistry.register()``.
-        """
+@runtime_checkable
+class UndoableTool(Tool, Protocol):
+    """A ``Tool`` with a real ``undo`` — mandatory for risk_tier MEDIUM+.
+
+    Registration enforces membership for every non-LOW, non-dev tool, so any
+    snapshot the UndoManager replays was recorded by a tool that matches this
+    Protocol; ``runtime_checkable`` lets it narrow with one ``isinstance``."""
+
+    def undo(self, snapshot: ActionSnapshot) -> None:
+        """Reverse the action captured in ``snapshot``. A tool that cannot
+        implement this MUST declare risk_tier=LOW and MUST NOT mutate state."""
+        ...
+
+
+@runtime_checkable
+class RedoableTool(Protocol):
+    """A ``Tool`` that also supports re-applying an undone action (§4.5 redo).
+
+    ``redo()`` is OPT-IN, never mandatory — a tool without it can still be undone,
+    it simply can't be re-done (the UndoManager reports that in plain language).
+    Adding redo() never weakens the mandatory-undo invariant. This Protocol is
+    ``runtime_checkable`` so ``UndoManager`` can discover redo support with a single
+    ``isinstance(tool, RedoableTool)`` rather than duck-typing ``getattr``; because
+    it lists execute/undo/redo, only a genuine tool that implements all three
+    matches (SaveFileTool does)."""
+
+    definition: ToolDefinition
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult: ...
+
+    def undo(self, snapshot: ActionSnapshot) -> None: ...
+
+    def redo(self, snapshot: ActionSnapshot) -> None:
+        """Re-apply an action that ``undo()`` reversed. Required to satisfy this
+        Protocol; a tool that can't offer it simply isn't a ``RedoableTool``."""
         ...
 
 

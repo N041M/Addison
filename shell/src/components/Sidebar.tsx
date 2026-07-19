@@ -186,9 +186,13 @@ function ConversationGroup({
             onClick={() => onOpen(c.id)}
             title={c.title}
             className={
-              "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-control max-md:py-3.5 max-md:text-row " +
+              // Weight stays constant across states (a bold swap on select would
+              // shift the truncation point); the active cue is the fern rule +
+              // hair fill + darker ink. The 2px left border is pre-reserved
+              // (transparent when inactive) so selecting never nudges the text.
+              "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-control transition-colors max-md:py-3.5 max-md:text-row " +
               (active
-                ? "border-fern bg-hair font-medium text-ink"
+                ? "border-fern bg-hair text-ink"
                 : "border-transparent bg-transparent text-muted hover:bg-hair/50")
             }
           >

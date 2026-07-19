@@ -14,6 +14,11 @@ streams plus its collaborators so it can be exercised in-process by tests (§9);
 ``main()`` wires the real singletons and runs it on stdin/stdout. stdout carries
 ONLY JSON-RPC frames — every write goes through a single lock — so any logging
 must go to stderr.
+
+``JsonRpcServer`` is the composition root: it owns lifecycle, the read loop, the
+dispatch table, shared state, and the narrowing store/orchestrator/undo/routine
+properties. The §7 handler *bodies* live in per-namespace mixins under
+``agent_core/rpc/`` that this class composes (see ``rpc/base.ServerContext``).
 """
 
 from __future__ import annotations
@@ -26,34 +31,24 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agent_core.memory.store import Store
 from agent_core.models_catalog import (
-    PROVIDER_IDS,
     CatalogFetchError,
     CloudModel,
     default_cloud_model,
     fetch_cloud_catalog,
     find_cloud_model,
     load_cloud_catalog,
-    merge_catalogs,
-    provider_label,
     static_catalog_for,
 )
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import PolicyMode, mode_for_profile
-from agent_core.profiles import (
-    DEVELOPER,
-    SIMPLE,
-    Profile,
-    ProfileId,
-    get_profile,
-    resolve_active_profile,
-)
+from agent_core.profiles import Profile, resolve_active_profile
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
@@ -75,15 +70,26 @@ from agent_core.providers.setup_assistant_provider import (
 from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
-from agent_core.routines.model import RoutineStep
+from agent_core.rpc.constants import (
+    _GENERIC_TURN_ERROR,
+    _LOCAL_SETUP_BUSY_MESSAGE,
+    _METHOD_NOT_FOUND,
+    _NOT_BUILT_MESSAGE,
+    _OLLAMA_NOT_INSTALLED_MESSAGE,
+    _SERVER_ERROR,
+    _BYOK_ONBOARDING_MESSAGE as _BYOK_ONBOARDING_MESSAGE,
+    _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
+)
+from agent_core.rpc.conversation import ConversationMixin
+from agent_core.rpc.models import ModelsMixin
+from agent_core.rpc.profile import ProfileMixin
+from agent_core.rpc.providers import ProvidersMixin
+from agent_core.rpc.routines import RoutinesMixin
+from agent_core.rpc.undo import UndoMixin
+from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import (
-    ActionSnapshot,
-    ExecutionContext,
-    call_is_destructive,
-    call_permission_detail,
-)
+from agent_core.tools.base import ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
@@ -93,46 +99,20 @@ from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.web_search import WebSearchTool
-from agent_core.widgets import MAX_PINNED, validate_widget_spec, widget_summary
 
-# JSON-RPC error codes. -32601 is the reserved "method not found"; the -32000
-# band is the "server error" range we use for provider/tool/not-built failures,
-# each carrying a plain-language message (never a stack trace).
-_METHOD_NOT_FOUND = -32601
-_SERVER_ERROR = -32000
-
-_NOT_BUILT_MESSAGE = "This isn't built yet."
-# Plain-language model-picker refusals (§4.1.1; CLAUDE.md: no jargon).
-_MODEL_UNAVAILABLE_MESSAGE = "That model option isn't available."
-_EFFORT_UNAVAILABLE_MESSAGE = "That answer-style isn't available for this model."
-_GENERIC_TURN_ERROR = (
-    "Addison couldn't finish that just now. Check your internet connection and "
-    "that your API key is still valid, then try again."
-)
-
-# Local-setup (§4.1.2) plain-language messages. Addison does NOT install Ollama
-# in v1 — it points the user at doing that themselves.
-_OLLAMA_NOT_INSTALLED_MESSAGE = (
-    "Ollama isn't running on this computer. Install it from ollama.com (or start "
-    "it if it's already installed), then try again — Addison can't install it for you."
-)
-_LOCAL_SETUP_BUSY_MESSAGE = (
-    "Addison is already setting up a model. Let that one finish before starting another."
-)
-# §4.7 Developer profile is BYOK-first: with no key it asks the user to add their own
-# rather than routing to the Setup Assistant relay (which is the Simple onboarding).
-_BYOK_ONBOARDING_MESSAGE = (
-    "No API key is set up yet. Add your Anthropic API key in Settings."
-)
-_UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
-
-_GB = 1024**3
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from typing import Any
 
 # §4.8 usage-log retention. Keep ~6 months of usage rows; prune opportunistically
 # from the record path so the table can't grow without bound. The prune runs once
 # every _USAGE_PRUNE_EVERY records (a cheap in-process counter, not on every write).
+# These stay module globals of agent_core.main so tests can monkeypatch them and
+# _record_usage still reads the patched value through this module's namespace.
 _USAGE_RETENTION_SECONDS = 183 * 24 * 60 * 60   # ~6 months, in epoch seconds
 _USAGE_PRUNE_EVERY = 50                          # records between opportunistic prunes
+
+_GB = 1024**3
 
 
 def _free_disk_bytes() -> int | None:
@@ -173,19 +153,6 @@ def _pull_progress(update: dict) -> tuple[int | None, str | None]:
         percent = max(0, min(100, int(completed / total * 100)))
         return percent, f"Downloading the model — {percent}%"
     return None, None
-
-
-def _auto_title(text: str) -> str | None:
-    """Derive a conversation title from its first user message: whitespace runs
-    collapsed to single spaces, trimmed to the first 60 characters (with an
-    ellipsis when something was cut). None for an effectively empty message —
-    the history list then falls back to "Untitled"."""
-    collapsed = " ".join(text.split())
-    if not collapsed:
-        return None
-    if len(collapsed) > 60:
-        return collapsed[:60] + "…"
-    return collapsed
 
 
 def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
@@ -370,7 +337,15 @@ def run_cli() -> None:
             )
 
 
-class JsonRpcServer:
+class JsonRpcServer(
+    ConversationMixin,
+    UndoMixin,
+    RoutinesMixin,
+    ProfileMixin,
+    ModelsMixin,
+    ProvidersMixin,
+    WidgetsMixin,
+):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
     Threading model:
@@ -395,6 +370,11 @@ class JsonRpcServer:
     Every outgoing frame — notification, response, or Core -> Shell request —
     goes through ``_write_frame`` under one lock; stdout therefore carries only
     JSON-RPC frames.
+
+    The §7 handler bodies are grouped by Method namespace into the mixins this class
+    composes (``agent_core/rpc/``); this class keeps the shared plumbing they call
+    (``_respond``, ``_mode``, the narrowing properties, ...) plus lifecycle, the read
+    loop, and the dispatch table.
     """
 
     def __init__(
@@ -488,12 +468,15 @@ class JsonRpcServer:
         self._active_profile: Profile | None = None
 
         # Built on the worker thread by _ensure_built (SQLite thread affinity).
-        self.store = None
-        self.undo_manager: UndoManager | None = None
-        self.orchestrator: Orchestrator | None = None
-        self.routine_builder: RoutineBuilder | None = None
-        self.routine_library: RoutineLibrary | None = None
-        self.routine_engine: RoutineEngine | None = None
+        # ``_store`` is the nullable backing field ("not built yet" is a real
+        # state — _record_usage and provider reconnect check it); the ``store``
+        # property narrows to Store for the handlers, which all run post-build.
+        self._store: Store | None = None
+        self._undo_manager: UndoManager | None = None
+        self._orchestrator: Orchestrator | None = None
+        self._routine_builder: RoutineBuilder | None = None
+        self._routine_library: RoutineLibrary | None = None
+        self._routine_engine: RoutineEngine | None = None
 
         # A fresh uuid per launch unless the caller pins an id (tests do). The old
         # fixed "main" id appended every launch's turns to one ever-growing stored
@@ -526,6 +509,73 @@ class JsonRpcServer:
         # rows so _record_usage prunes only once every _USAGE_PRUNE_EVERY writes.
         self._usage_records_since_prune = 0
 
+        # Method -> handler, built once (see _build_dispatch_table). Built last so
+        # every handler it references (and self._queue) already exists.
+        self._dispatch_table = self._build_dispatch_table()
+
+    @property
+    def store(self) -> Store:
+        """The SQLite store, built once on the worker thread (_ensure_built).
+
+        Every handler that touches it runs after the build, so the Optional is
+        narrowed HERE rather than at dozens of call sites; reaching it earlier is
+        a programming error, not a user-visible state. Code that genuinely means
+        "has the store been built yet?" checks ``self._store is None`` instead."""
+        assert self._store is not None, "store accessed before _ensure_built()"
+        return self._store
+
+    @store.setter
+    def store(self, value: Store) -> None:
+        self._store = value
+
+    # The same narrowing pattern for the other worker-built singletons: nullable
+    # backing field, non-Optional property. Setters exist because _ensure_built
+    # (and tests) assign through the public names.
+    @property
+    def undo_manager(self) -> UndoManager:
+        assert self._undo_manager is not None, "undo_manager accessed before _ensure_built()"
+        return self._undo_manager
+
+    @undo_manager.setter
+    def undo_manager(self, value: UndoManager) -> None:
+        self._undo_manager = value
+
+    @property
+    def orchestrator(self) -> Orchestrator:
+        assert self._orchestrator is not None, "orchestrator accessed before _ensure_built()"
+        return self._orchestrator
+
+    @orchestrator.setter
+    def orchestrator(self, value: Orchestrator) -> None:
+        self._orchestrator = value
+
+    @property
+    def routine_builder(self) -> RoutineBuilder:
+        assert self._routine_builder is not None, "routine_builder accessed before _ensure_built()"
+        return self._routine_builder
+
+    @routine_builder.setter
+    def routine_builder(self, value: RoutineBuilder) -> None:
+        self._routine_builder = value
+
+    @property
+    def routine_library(self) -> RoutineLibrary:
+        assert self._routine_library is not None, "routine_library accessed before _ensure_built()"
+        return self._routine_library
+
+    @routine_library.setter
+    def routine_library(self, value: RoutineLibrary) -> None:
+        self._routine_library = value
+
+    @property
+    def routine_engine(self) -> RoutineEngine:
+        assert self._routine_engine is not None, "routine_engine accessed before _ensure_built()"
+        return self._routine_engine
+
+    @routine_engine.setter
+    def routine_engine(self, value: RoutineEngine) -> None:
+        self._routine_engine = value
+
     # --- lifecycle --------------------------------------------------------
     def run(self) -> None:
         worker = threading.Thread(target=self._worker_loop, name="turn-worker", daemon=True)
@@ -535,7 +585,7 @@ class JsonRpcServer:
 
     def _ensure_built(self) -> None:
         """Build the SQLite-backed singletons on the worker thread (once)."""
-        if self.orchestrator is not None:
+        if self._orchestrator is not None:
             return
         self.store = self._store_factory()
         # §4.7: read the persisted profile now that the store exists (SIMPLE if unset).
@@ -637,76 +687,60 @@ class JsonRpcServer:
         request_id = frame.get("id")
         params = frame.get("params") or {}
 
-        # Store-touching requests run on the worker (SQLite thread affinity);
-        # permission answers and store-free reads answer here on the read loop.
-        if method == Method.CONVERSATION_SEND_MESSAGE:
-            self._queue.put(("send", params, request_id))
+        # One dict, built once (_build_dispatch_table), maps every known method to
+        # its handler. An unknown method answers -32601 exactly as before; the
+        # handler call is wrapped so no handler can crash the read loop (-32000 + a
+        # plain sentence). The inline-vs-worker split lives inside the handlers: a
+        # worker-routed method's handler just enqueues the job (same job kinds, same
+        # order behind an in-flight turn), while an inline handler answers here.
+        handler = self._dispatch_table.get(method)
+        if handler is None:
+            self._respond_error(request_id, _METHOD_NOT_FOUND, f"Unknown method: {method}")
             return
-        if method == Method.UNDO_REDO_LAST_ACTION:
-            self._queue.put(("redo", params, request_id))
-            return
-        if method == Method.UNDO_UNDO_LAST_ACTION:
-            self._queue.put(("undo", params, request_id))
-            return
-        if method == Method.UNDO_REWIND_CONVERSATION:
-            self._queue.put(("rewind", params, request_id))
-            return
-        if method == Method.PERMISSION_RESPOND:
-            self._handle_permission_respond(params, request_id)
-            return
-        if method == Method.MODEL_AVAILABLE_ROLES:
-            # On the worker (not here): it may fetch the live cloud-model list, which
-            # does a Core -> Shell key probe + an HTTPS call that must not block the
-            # read loop (see the class docstring's threading model).
-            self._queue.put(("available_roles", params, request_id))
-            return
-        if method in _ROUTINE_JOBS:
-            self._queue.put((_ROUTINE_JOBS[method], params, request_id))
-            return
-        # conversation.new/load/list touch the Store and the worker-owned
-        # conversation state, so they run on the worker like every other
-        # store-backed job (SQLite thread affinity + turn serialization).
-        if method in _CONVERSATION_JOBS:
-            self._queue.put((_CONVERSATION_JOBS[method], params, request_id))
-            return
-        # profile.get/set read/write app_settings, so they run on the worker too.
-        if method == Method.PROFILE_GET:
-            self._queue.put(("profile_get", params, request_id))
-            return
-        if method == Method.PROFILE_SET:
-            self._queue.put(("profile_set", params, request_id))
-            return
-        # provider.list/connect/disconnect touch the Store and the ModelRouter, and
-        # connect makes an outbound HTTPS ping + a Core -> Shell key fetch — all of
-        # which must run on the worker, never the read loop (same rule as
-        # availableRoles; see the class docstring's threading model).
-        if method in _PROVIDER_JOBS:
-            self._queue.put((_PROVIDER_JOBS[method], params, request_id))
-            return
-        # widget.* and stats.get touch the Store (and the routine library / live
-        # conversation), so they run on the worker like every other store-backed job.
-        if method in _WIDGET_JOBS:
-            self._queue.put((_WIDGET_JOBS[method], params, request_id))
-            return
-        if method == Method.STATS_GET:
-            self._queue.put(("stats_get", params, request_id))
-            return
-
         try:
-            if method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
-                self._handle_set_role(params, request_id)
-            elif method == Method.MODEL_START_LOCAL_SETUP:
-                # §4.1.2: pre-flight (reachability + hardware) answers here; the
-                # long pull/verify runs on a background thread and streams progress.
-                self._handle_start_local_setup(params, request_id)
-            elif method in _NOT_BUILT_METHODS:
-                self._respond_error(request_id, _SERVER_ERROR, _NOT_BUILT_MESSAGE)
-            else:
-                self._respond_error(
-                    request_id, _METHOD_NOT_FOUND, f"Unknown method: {method}"
-                )
+            handler(params, request_id)
         except Exception as exc:  # never let a handler crash the read loop
             self._respond_error(request_id, _SERVER_ERROR, _plain(exc))
+
+    def _build_dispatch_table(self) -> dict[str, Callable[[dict, Any], None]]:
+        """Method -> handler, built once in __init__.
+
+        Store-touching requests run on the worker (SQLite thread affinity), so their
+        handler just puts a (kind, params, request_id) job on the queue; permission
+        answers and store-free reads answer inline on the read loop. availableRoles,
+        provider.*, and the routine/conversation/widget jobs go to the worker for the
+        same reason (see the class docstring's threading model): they read the Store or
+        make Core -> Shell / HTTPS round-trips the read loop must stay free to deliver.
+        """
+        def enqueue(kind: str) -> Callable[[dict, Any], None]:
+            return lambda params, request_id: self._queue.put((kind, params, request_id))
+
+        table: dict[str, Callable[[dict, Any], None]] = {
+            Method.CONVERSATION_SEND_MESSAGE: enqueue("send"),
+            Method.UNDO_REDO_LAST_ACTION: enqueue("redo"),
+            Method.UNDO_UNDO_LAST_ACTION: enqueue("undo"),
+            Method.UNDO_REWIND_CONVERSATION: enqueue("rewind"),
+            Method.PERMISSION_RESPOND: self._handle_permission_respond,
+            Method.MODEL_AVAILABLE_ROLES: enqueue("available_roles"),
+            Method.PROFILE_GET: enqueue("profile_get"),
+            Method.PROFILE_SET: enqueue("profile_set"),
+            Method.STATS_GET: enqueue("stats_get"),
+            # Inline on the read loop (store-free; each owns its own response).
+            Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE: self._handle_set_role,
+            Method.MODEL_START_LOCAL_SETUP: self._handle_start_local_setup,
+        }
+        for jobs in (_ROUTINE_JOBS, _CONVERSATION_JOBS, _PROVIDER_JOBS, _WIDGET_JOBS):
+            for method_name, kind in jobs.items():
+                table[method_name] = enqueue(kind)
+        # Reserved-for-later methods answer a plain "not built yet" (empty today).
+        for method_name in _NOT_BUILT_METHODS:
+            table[method_name] = self._respond_not_built
+        return table
+
+    def _respond_not_built(self, params: dict, request_id) -> None:
+        """A §7 method reserved for a later build step: a plain 'not built yet'
+        error rather than a silent failure (see _NOT_BUILT_METHODS)."""
+        self._respond_error(request_id, _SERVER_ERROR, _NOT_BUILT_MESSAGE)
 
     # --- worker thread (all SQLite-backed work) ---------------------------
     def _worker_loop(self) -> None:
@@ -780,121 +814,6 @@ class JsonRpcServer:
                     request_id, _SERVER_ERROR, _GENERIC_TURN_ERROR, self._raw_detail(exc)
                 )
 
-    def _run_send_message(self, params: dict, request_id) -> None:
-        text = params.get("text", "")
-        requested_role = self._role_from(params.get("role")) or self._next_role
-        # §4.1.1 / §6.8: thread the explicit model pick (per-message param or the last
-        # setRole) into resolve(); resolve() picks the named LOCAL/cloud model and
-        # falls back gracefully if the name is unknown. ``effort`` is the per-message
-        # "answer style" — validated against the chosen model, then threaded to send().
-        model_name = params.get("modelId") or self._next_model_name
-        effort = params.get("effort") or self._next_effort
-        self._next_role = None
-        self._next_model_name = None
-        self._next_effort = None
-
-        error = self._selection_error(requested_role, model_name, effort)
-        if error is not None:
-            self._respond_error(request_id, _SERVER_ERROR, error)
-            return
-
-        # Is a real PRIMARY key available right now? Both the BYOK-onboarding refusal
-        # and the §4.6 Setup Assistant handoff below turn on this, so probe it ONCE
-        # here rather than per branch — the probe is a keychain round-trip (§5). Only
-        # a PRIMARY/default turn touches the key path; a LOCAL turn never probes.
-        primary_role = requested_role in (None, ModelRole.PRIMARY)
-        primary_key_available = self._primary_key_available() if primary_role else True
-
-        # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
-        # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the
-        # user to add their own key. Simple keeps the §4.6 relay handoff below,
-        # untouched. This is an onboarding *surface* branch, not a safety branch —
-        # neither path changes the gate/undo/key rules (§8.7).
-        profile = self._active_profile
-        if (
-            primary_role
-            and not primary_key_available
-            and profile is not None
-            and profile.onboarding == "byok_first"
-        ):
-            self._respond_error(request_id, _SERVER_ERROR, _BYOK_ONBOARDING_MESSAGE)
-            return
-
-        self._ensure_conversation()
-        user_msg = Message(role="user", content=text)
-        self.conversation.messages.append(user_msg)
-        user_message_id = self._persist_message(user_msg)
-
-        # Auto-title on the first user message with any content. The store call is
-        # first-write-wins (title IS NULL guard), so the flag is only an
-        # optimization that skips the write on every later turn; a whitespace-only
-        # first message leaves the flag down so the next real one can title it.
-        if not self._conversation_titled:
-            title = _auto_title(text)
-            if title is not None:
-                self.store.set_conversation_title(self.conversation.id, title)
-                self._conversation_titled = True
-
-        # §4.6 handoff: a PRIMARY-bound turn with no key yet routes to the Setup
-        # Assistant, with its system prompt injected FOR THIS TURN ONLY. The prompt
-        # is never persisted and never enters the stored transcript (which also can't
-        # hold a "system" role — messages.role CHECK is user/assistant/tool). Once a
-        # key exists, the probe passes and turns go to PRIMARY, history untouched —
-        # that IS the handoff; no transcript rewrite, no state to flip.
-        system_msg = None
-        if primary_role and not primary_key_available:
-            requested_role = ModelRole.SETUP_ASSISTANT
-            if self._setup_prompt:
-                system_msg = Message(role="system", content=self._setup_prompt)
-                self.conversation.messages.insert(0, system_msg)
-        elif self._primary_prompt:
-            # Every non-setup turn (cloud or local) gets the app-context prompt,
-            # under the same transient rules: this turn only, never persisted.
-            system_msg = Message(role="system", content=self._primary_prompt)
-            self.conversation.messages.insert(0, system_msg)
-
-        pre_turn = len(self.conversation.messages)
-        assistant_message_id: str | None = None
-        try:
-            self.orchestrator.run_turn(
-                self.conversation,
-                requested_role=requested_role,
-                model_name=model_name,
-                effort=effort,
-                mode=self._mode(),
-            )
-            # Full-transcript persistence (§4.8 substrate): every message the turn
-            # appended, in order, so a later rewind can target any of them by id.
-            for msg in self.conversation.messages[pre_turn:]:
-                persisted_id = self._persist_message(msg)
-                if msg.role == "assistant":
-                    assistant_message_id = persisted_id
-        except Exception:
-            # A failed turn must leave NO partial exchange behind: an unpaired
-            # tool_use would make the provider reject every later request (API
-            # 400), and unpersisted entries would break the 1:1 alignment
-            # between conversation.messages and _message_ids that rewind needs.
-            del self.conversation.messages[pre_turn:]
-            raise
-        finally:
-            # Drop the transient system prompt so it never lingers in history and
-            # in-memory messages stay aligned 1:1 with the persisted _message_ids.
-            if system_msg is not None:
-                try:
-                    self.conversation.messages.remove(system_msg)
-                except ValueError:
-                    pass
-        # The persisted ids let the frontend anchor "Rewind to here" on REAL
-        # store ids — its own display ids mean nothing to the core.
-        self._respond(
-            request_id,
-            {
-                "ok": True,
-                "userMessageId": user_message_id,
-                "assistantMessageId": assistant_message_id,
-            },
-        )
-
     def _primary_key_available(self) -> bool:
         probe = self._primary_key_probe
         if probe is None:
@@ -905,30 +824,6 @@ class JsonRpcServer:
             # A wedged/failing keychain probe shouldn't strand onboarding — fall
             # back to the Setup Assistant path rather than erroring the turn.
             return False
-
-    def _ensure_conversation(self) -> None:
-        if self._conversation_created:
-            return
-        self.store.create_conversation(
-            id=self.conversation.id,
-            title=None,
-            provider_id="primary",
-            started_at=int(time.time()),
-        )
-        self._conversation_created = True
-
-    def _persist_message(self, message: Message) -> str:
-        message_id = str(uuid4())
-        self.store.insert_message(
-            id=message_id,
-            conversation_id=self.conversation.id,
-            role=message.role,
-            content=str(message.content),
-            created_at=int(time.time()),
-            tool_call_id=message.tool_call_id,
-        )
-        self._message_ids.append(message_id)
-        return message_id
 
     # --- policy mode ------------------------------------------------------
     def _mode(self) -> PolicyMode:
@@ -979,291 +874,11 @@ class JsonRpcServer:
         tool_id = params.get("toolId")
         allow = bool(params.get("allow"))
         with self._perm_lock:
-            waiter = self._permission_waiters.get(tool_id)
+            waiter = self._permission_waiters.get(tool_id) if isinstance(tool_id, str) else None
             if waiter is not None:
                 waiter["allow"] = allow
                 waiter["event"].set()
         self._respond(request_id, {"ok": True})
-
-    # --- undo / rewind ----------------------------------------------------
-    def _undo_last_action(self) -> dict:
-        results = self.undo_manager.undo_last(1)
-        can_redo = self.undo_manager.can_redo()
-        if not results:
-            return {"ok": False, "detail": "There was nothing to undo.", "canRedo": can_redo}
-        result = results[0]
-        if result.success:
-            return {
-                "ok": True,
-                "detail": f"Undid the last action ({self._label(result.tool_id)}).",
-                "canRedo": can_redo,
-            }
-        return {
-            "ok": False,
-            "detail": "Couldn't undo the last action. You may need to reverse it yourself.",
-            "canRedo": can_redo,
-        }
-
-    def _redo_last_action(self) -> dict:
-        results = self.undo_manager.redo_last(1)
-        can_redo = self.undo_manager.can_redo()
-        if not results:
-            return {"ok": False, "detail": "There was nothing to redo.", "canRedo": can_redo}
-        result = results[0]
-        if result.success:
-            return {
-                "ok": True,
-                "detail": f"Did that again ({self._label(result.tool_id)}).",
-                "canRedo": can_redo,
-            }
-        # The plain reason (e.g. "A file with that name is already there") beats
-        # a generic sentence; redo failures carry user-ready details.
-        return {
-            "ok": False,
-            "detail": result.detail or "Couldn't do that again.",
-            "canRedo": can_redo,
-        }
-
-    def _handle_rewind(self, params: dict, request_id) -> None:
-        to_message_id = params.get("toMessageId")
-        try:
-            # Edit-and-resend semantics: the anchor message is REMOVED too, so
-            # nothing re-runs until the user actually sends again — its text goes
-            # back into the composer on the frontend side.
-            self.undo_manager.rewind_conversation(
-                self.conversation.id, to_message_id, keep_anchor=False
-            )
-        except KeyError:
-            self._respond_error(
-                request_id, _SERVER_ERROR, "Couldn't find that point to rewind to."
-            )
-            return
-        # Mirror the truncation in the in-memory conversation, anchor included.
-        if to_message_id in self._message_ids:
-            idx = self._message_ids.index(to_message_id)
-            del self.conversation.messages[idx:]
-            del self._message_ids[idx:]
-        self._respond(request_id, {"ok": True, "detail": "Rewound the conversation."})
-
-    # --- conversation history (new / load / list) --------------------------
-    def _handle_conversation_new(self, request_id) -> None:
-        """Start a fresh conversation: new uuid, empty in-memory state. NO store
-        row is inserted here — rows stay lazy via ``_ensure_conversation`` (first
-        real turn), so an abandoned empty chat never appears in history."""
-        self.conversation = Conversation(id=str(uuid4()))
-        self._message_ids = []
-        self._conversation_created = False
-        self._conversation_titled = False
-        self._draft_routine = None
-        self._respond(request_id, {"conversationId": self.conversation.id})
-
-    def _handle_conversation_load(self, params: dict, request_id) -> None:
-        """Reopen a stored conversation as the active one.
-
-        The in-memory state is rebuilt from the persisted transcript in one
-        filtered pass that keeps user messages and non-empty assistant messages.
-        Persisted ``tool`` rows (and the empty assistant stubs that requested the
-        tools) are SKIPPED on purpose: ``insert_message`` never persists assistant
-        ``tool_calls``, so replaying persisted tool rows would send unpaired
-        tool_results and the provider would 400 on every subsequent turn — a
-        resumed conversation keeps the assistant's final prose only. Each kept row
-        appends to BOTH the fresh Conversation and the fresh ``_message_ids`` list
-        in the same pass; that 1:1 alignment is the rewind-anchoring invariant
-        (``_handle_rewind`` indexes one list with the other's position)."""
-        self._ensure_built()
-        conversation_id = params.get("conversationId")
-        header = self.store.get_conversation(conversation_id) if conversation_id else None
-        if header is None:
-            self._respond_error(request_id, _SERVER_ERROR, "Couldn't find that conversation.")
-            return
-        conversation = Conversation(id=conversation_id)
-        message_ids: list[str] = []
-        wire_messages: list[dict] = []
-        for row in self.store.messages_for_conversation(conversation_id):
-            keep = row["role"] == "user" or (row["role"] == "assistant" and row["content"])
-            if not keep:
-                continue
-            conversation.messages.append(Message(role=row["role"], content=row["content"]))
-            message_ids.append(row["id"])
-            wire_messages.append({"id": row["id"], "role": row["role"], "content": row["content"]})
-        self.conversation = conversation
-        self._message_ids = message_ids
-        self._conversation_created = True
-        self._conversation_titled = header["title"] is not None
-        self._draft_routine = None
-        self._respond(
-            request_id,
-            {
-                "conversationId": conversation_id,
-                "title": header["title"],
-                "messages": wire_messages,
-            },
-        )
-
-    def _conversation_rows(self) -> list[dict]:
-        """History rows for conversation.list. The title is never null: stored
-        title, else the trimmed first user message (legacy rows that predate
-        auto-titling), else "Untitled"."""
-        rows = []
-        for row in self.store.list_conversations():
-            title = row["title"] or _auto_title(row["first_user_message"] or "") or "Untitled"
-            rows.append(
-                {
-                    "id": row["id"],
-                    "title": title,
-                    "startedAt": row["started_at"],
-                    "messageCount": row["message_count"],
-                }
-            )
-        return rows
-
-    # --- routines (§6) ----------------------------------------------------
-    def _handle_routine_propose(self, request_id) -> None:
-        """§6.3: draft a Routine from the recent conversation and hand the
-        frontend a plain-language preview. NOTHING is saved yet — the draft
-        waits for routine.confirmSave."""
-        try:
-            draft = self.routine_builder.propose_from_recent_actions(self.conversation)
-        except ValueError as exc:
-            self._respond_error(request_id, _SERVER_ERROR, str(exc))
-            return
-        self._draft_routine = draft
-        self._respond(request_id, self.routine_builder.preview(draft, self.tool_registry))
-
-    def _handle_routine_confirm(self, params: dict, request_id) -> None:
-        draft = self._draft_routine
-        if draft is None:
-            self._respond_error(
-                request_id, _SERVER_ERROR, "There's no routine waiting to be saved."
-            )
-            return
-        # The user may rename/redescribe in the confirmation card (§6.3).
-        if params.get("name"):
-            draft.name = str(params["name"])
-        if params.get("description"):
-            draft.description = str(params["description"])
-        # Saved under the current mode; builder.save refuses a command-step routine
-        # in SAFE mode and stamps created_in_mode so SAFE can later hide it.
-        try:
-            self.routine_builder.save(
-                draft, conversation_id=self.conversation.id, mode=self._mode()
-            )
-        except ValueError as exc:
-            self._respond_error(request_id, _SERVER_ERROR, str(exc))
-            return
-        self._draft_routine = None
-        self._respond(request_id, {"ok": True, "routineId": draft.id})
-
-    def _routine_rows(self) -> list[dict]:
-        # §4.7/§6.5: the Developer profile additionally sees a READ-ONLY view of the
-        # declarative plan. This is safe to expose precisely because the plan has no
-        # code field (§6.1) — it is pure data. There is NO editing surface here;
-        # structural step editing stays v2 (§10).
-        profile = self._active_profile
-        expose_plan = profile is not None and profile.expose_routine_plan
-        safe_mode = self._mode() is PolicyMode.SAFE
-        rows = []
-        for entry in self.routine_library.list():
-            # Dev-created routines are hidden while the Simple profile is active
-            # (policy.py) — never listed, and they return untouched in Developer mode.
-            if safe_mode and entry.get("createdInMode") == PolicyMode.OPEN.value:
-                continue
-            routine = entry["routine"]
-            row = {
-                "id": routine.id,
-                "name": routine.name,
-                "description": routine.description,
-                "runCount": entry["runCount"],
-                "lastRunAt": entry["lastRunAt"],
-                # Display-only mode provenance: lets the frontend badge dev-created
-                # routines ("DEV" tag). Never consulted for permissions.
-                "createdInMode": entry.get("createdInMode"),
-                "variables": [
-                    {"name": v.name, "prompt": v.prompt, "default": v.default}
-                    for v in routine.variables
-                ],
-            }
-            if expose_plan:
-                row["planSteps"] = [
-                    {
-                        "stepId": step.step_id,
-                        "toolId": step.tool_id,
-                        "argsTemplate": step.args_template,
-                        "dependsOn": step.depends_on,
-                        "onFailure": step.on_failure,
-                    }
-                    for step in routine.steps
-                ]
-            rows.append(row)
-        return rows
-
-    def _handle_routine_run(self, params: dict, request_id) -> None:
-        routine_id = params.get("routineId")
-        try:
-            routine = self.routine_library.get(routine_id)
-        except KeyError as exc:
-            self._respond_error(request_id, _SERVER_ERROR, str(exc))
-            return
-        # A dev-created routine is REFUSED in SAFE mode — it waits for Developer mode
-        # (policy.py). Switching modes is always allowed, so the routine isn't lost.
-        mode = self._mode()
-        if (
-            mode is PolicyMode.SAFE
-            and self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
-        ):
-            self._respond_error(
-                request_id,
-                _SERVER_ERROR,
-                "That routine uses developer abilities, so it's waiting in "
-                "Developer profile.",
-            )
-            return
-        result = self.routine_engine.run(routine, params.get("variables") or {}, mode=mode)
-        self.routine_library.record_run(routine.id)
-        # Remember the routine just run so a widget proposed right after offers it
-        # (display-only signal — never affects permissions).
-        self._last_run_routine_id = routine.id
-        self._respond(
-            request_id,
-            {
-                "ok": result.status == "completed",
-                "status": result.status,
-                "detail": result.detail,
-                "steps": [
-                    {
-                        "stepId": step_id,
-                        "ok": step_result.success,
-                        "summary": str(step_result.content)[:200],
-                    }
-                    for step_id, step_result in result.step_results.items()
-                ],
-            },
-        )
-
-    def _ask_user_continue(self, step: RoutineStep, run_id: str, message: str) -> bool:
-        """§6.2 on_failure="ask_user": pause the run and ask, reusing the exact
-        permission-card round-trip — the frontend renders label/description and
-        answers via permission.respond with this synthetic toolId."""
-        waiter_key = f"routine-step:{run_id}:{step.step_id}"
-        event = threading.Event()
-        with self._perm_lock:
-            self._permission_waiters[waiter_key] = {"event": event, "allow": False}
-        self._notify(
-            Method.PERMISSION_REQUEST_GRANT,
-            {
-                "toolId": waiter_key,
-                "label": "Keep going with this routine?",
-                "description": (
-                    f"One step didn't work: {message} "
-                    "Addison can keep going with the rest, or stop here."
-                ),
-                "riskTier": "low",
-            },
-        )
-        event.wait()
-        with self._perm_lock:
-            waiter = self._permission_waiters.pop(waiter_key, None)
-        return bool(waiter and waiter["allow"])
 
     # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
     def _record_usage(self, usage, latency_ms, requested_role, model_name) -> None:
@@ -1273,7 +888,7 @@ class JsonRpcServer:
         (Orchestrator.on_usage). NOT a registry tool — this is server machinery
         (§4.8 precedent). A call that reported no usage (``usage`` is None) or the
         onboarding relay is skipped. Never touches key material."""
-        if usage is None or self.store is None:
+        if usage is None or self._store is None:
             return
         if requested_role is ModelRole.SETUP_ASSISTANT:
             return  # the free onboarding relay isn't metered
@@ -1313,564 +928,12 @@ class JsonRpcServer:
             return entry.provider, entry.id
         return "anthropic", (model_name or "default")
 
-    # --- widgets + stats (declarative specs; core-computed sources) -------
-    def _stats_get(self) -> dict:
-        """stats.get -> the three core-computed sources. Carries NO key material:
-        token totals, per-provider latency, and connection status only (§8.3)."""
-        self._ensure_built()
-        totals = self.store.usage_totals_since(_month_start_epoch())
-        latency = self.store.latest_latency_per_provider()
-        return {
-            # No invented limit — v1 has no per-account cap to show (null).
-            "tokensMonth": {"total": totals["total"], "limit": None},
-            "providerLatency": latency,
-            "connections": self._connections(latency),
-        }
-
-    def _connections(self, latency: list[dict]) -> list[dict]:
-        """Ollama (probed live) + each connected cloud provider. Status/detail are
-        plain strings; there is NEVER any key material in this payload (§8.3)."""
-        conns: list[dict] = []
-        try:
-            ollama_up = is_running(self._ollama_base_url, self._ollama_client)
-        except Exception:
-            ollama_up = False
-        conns.append(
-            {
-                "id": "ollama",
-                "label": "Ollama · this computer",
-                "status": "running" if ollama_up else "idle",
-                "detail": "running" if ollama_up else "not running",
-            }
-        )
-        latency_by_provider = {row["provider"]: row["ms"] for row in latency}
-        stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
-        for provider_id in PROVIDER_IDS:
-            cfg = stored.get(provider_id)
-            if cfg is not None:
-                connected = cfg["connected"]
-            else:
-                connected = provider_id != "custom" and self._provider_key_present(provider_id)
-            if not connected:
-                continue
-            ms = latency_by_provider.get(provider_id)
-            label = provider_label(provider_id)
-            conns.append(
-                {
-                    "id": provider_id,
-                    "label": f"{label} API" if provider_id != "custom" else label,
-                    "status": "reachable",
-                    "detail": f"{ms} ms" if ms is not None else "connected",
-                }
-            )
-        return conns
-
-    def _widget_list(self) -> dict:
-        """widget.list -> stored widgets, INVALID specs hidden at render (safety:
-        a spec that fails validate_widget_spec is never surfaced or run)."""
-        self._ensure_built()
-        mode = self._mode()
-        safe_mode = mode is PolicyMode.SAFE
-        widgets: list[dict] = []
-        for row in self.store.list_widgets():
-            # Dev-created widgets are hidden while the Simple profile is active
-            # (policy.py) — and command widgets also fail SAFE-mode validation below.
-            if safe_mode and row.get("created_in_mode") == PolicyMode.OPEN.value:
-                continue
-            try:
-                spec = json.loads(row["spec_json"])
-            except ValueError:
-                continue
-            if validate_widget_spec(spec, mode) is not None:
-                continue
-            widgets.append(
-                {
-                    "id": row["id"],
-                    "spec": spec,
-                    "pinned": row["pinned"],
-                    "position": row["position"],
-                    # Display-only mode provenance for the frontend's "DEV" tag —
-                    # never consulted for permissions (the gate re-checks at run).
-                    "createdInMode": row.get("created_in_mode"),
-                }
-            )
-        return {"widgets": widgets}
-
-    def _widget_set_pinned(self, params: dict) -> dict:
-        self._ensure_built()
-        widget_id = params.get("id")
-        if not widget_id or self.store.get_widget(widget_id) is None:
-            return {"ok": False, "error": "That widget isn't here any more."}
-        pinned = bool(params.get("pinned"))
-        if pinned and self.store.count_pinned_widgets(exclude_id=widget_id) >= MAX_PINNED:
-            return {"ok": False, "error": "You can pin up to six widgets. Unpin one first."}
-        self.store.set_widget_pinned(widget_id, pinned)
-        return {"ok": True}
-
-    def _widget_delete(self, params: dict) -> dict:
-        self._ensure_built()
-        widget_id = params.get("id")
-        if widget_id:
-            self.store.delete_widget(widget_id)
-        return {"ok": True}
-
-    def _handle_widget_run(self, params: dict, request_id) -> None:
-        """widget.run — the rail's Run pill for a COMMAND widget (OPEN mode only).
-
-        Routine and stat widgets refuse here: their actions already have homes
-        (routine.run / stats.get). The command runs through the SAME registry +
-        gate path as a routine command step, so the per-invocation destructive
-        prompt holds — clicking a widget can never skip a card the chat would
-        have shown. SAFE mode refuses before touching the registry (dev-created
-        widgets are already hidden from SAFE lists; this is the belt for a stale
-        frontend or a raced mode switch)."""
-        self._ensure_built()
-        widget_id = params.get("id")
-        row = self.store.get_widget(widget_id) if widget_id else None
-        if row is None:
-            self._respond(request_id, {"ok": False, "error": "That widget isn't here any more."})
-            return
-        try:
-            spec = json.loads(row["spec_json"])
-        except ValueError:
-            self._respond(request_id, {"ok": False, "error": "That widget can't run."})
-            return
-        if spec.get("kind") != "command":
-            self._respond(
-                request_id,
-                {"ok": False, "error": "That widget doesn't run commands."},
-            )
-            return
-        mode = self._mode()
-        if mode is PolicyMode.SAFE:
-            self._respond(
-                request_id,
-                {
-                    "ok": False,
-                    "error": "That widget uses developer abilities, so it's waiting in "
-                    "Developer profile.",
-                },
-            )
-            return
-        tool = self.tool_registry.get("run_command")
-        args = {"command": spec.get("command", "")}
-        status = self.permission_gate.authorize(
-            "run_command",
-            mode=mode,
-            destructive=call_is_destructive(tool, args),
-            detail=call_permission_detail(tool, args),
-        )
-        if status != PermissionStatus.GRANTED:
-            self._respond(
-                request_id,
-                {"ok": False, "error": "You declined a permission it needs."},
-            )
-            return
-        context = ExecutionContext(
-            conversation_id=f"widget:{widget_id}",
-            shell_bridge=self._shell_bridge,
-            policy_mode=mode,
-        )
-        try:
-            result = tool.execute(args, context)
-        except RuntimeError as exc:
-            self._respond(request_id, {"ok": False, "error": str(exc)})
-            return
-        except Exception:
-            self._respond(request_id, {"ok": False, "error": "That widget's command didn't work."})
-            return
-        # run_command truncates its own transcript output, so content passes through.
-        self._respond(
-            request_id,
-            {"ok": result.success, "output": result.content}
-            if result.success
-            else {"ok": False, "error": result.content},
-        )
-
-    def _handle_widget_propose(self, request_id) -> None:
-        """Draft a widget spec from the recent conversation (mirrors routine.propose:
-        draft held in memory, nothing saved yet). v1 only proposes a routine widget
-        (a routine just run or named) or a matching stat widget; otherwise refuses."""
-        draft = self._draft_widget_from_conversation(self._mode())
-        if draft is None:
-            self._respond_error(request_id, _SERVER_ERROR, "I can't make a widget from this yet.")
-            return
-        self._draft_widget = draft
-        self._respond(
-            request_id,
-            {
-                "title": draft["title"],
-                "kind": draft["kind"],
-                "summary": widget_summary(draft),
-                "spec": draft,
-            },
-        )
-
-    def _handle_widget_confirm(self, params: dict, request_id) -> None:
-        """widget.confirmSave {accept}: save the held draft ONLY on explicit accept.
-        Saving a widget is LOW-risk (display-only), so no permission card — but the
-        spec is re-validated here (never trust the held draft blindly)."""
-        draft = self._draft_widget
-        if draft is None:
-            self._respond_error(
-                request_id, _SERVER_ERROR, "There's no widget waiting to be added."
-            )
-            return
-        if not params.get("accept"):
-            self._draft_widget = None
-            self._respond(request_id, {"ok": False, "declined": True})
-            return
-        mode = self._mode()
-        error = validate_widget_spec(draft, mode)
-        if error is not None:
-            self._draft_widget = None
-            self._respond_error(request_id, _SERVER_ERROR, error)
-            return
-        widget_id = str(uuid4())
-        pinned = self.store.count_pinned_widgets() < MAX_PINNED
-        self.store.insert_widget(
-            id=widget_id,
-            spec_json=json.dumps(draft),
-            pinned=pinned,
-            position=self.store.next_widget_position(),
-            created_at=int(time.time()),
-            created_in_mode=mode.value,
-        )
-        self._draft_widget = None
-        self._respond(request_id, {"ok": True, "widgetId": widget_id, "pinned": pinned})
-
-    def _draft_widget_from_conversation(self, mode: PolicyMode) -> dict | None:
-        """The widget heuristic. Returns a valid spec dict or None (a refusal).
-
-        Priority: an explicit ask for token/latency/connection info -> that stat
-        widget; else (OPEN mode only) the last run_command in the recent chat -> a
-        command widget; else the routine just run, or a routine named in the recent
-        chat -> that routine widget; else None."""
-        recent = self.conversation.messages[-10:]
-        if mode is PolicyMode.OPEN:
-            command = self._recent_command(recent)
-            if command is not None:
-                return {"kind": "command", "command": command, "title": command[:60]}
-        joined = " ".join(
-            m.content.lower()
-            for m in recent
-            if m.role == "user" and isinstance(m.content, str)
-        )
-        if any(k in joined for k in ("token", "usage", "how much have i used", "cost")):
-            return {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}
-        if any(k in joined for k in ("latency", "how fast", "response time", "how quick")):
-            return {"kind": "stat", "source": "provider_latency", "title": "Model latency"}
-        if any(k in joined for k in ("connection", "connected", "online", "reachable")):
-            return {"kind": "stat", "source": "connections", "title": "Connections"}
-        if self._last_run_routine_id is not None:
-            try:
-                routine = self.routine_library.get(self._last_run_routine_id)
-                return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
-            except KeyError:
-                pass
-        for entry in self.routine_library.list():
-            routine = entry["routine"]
-            if routine.name and routine.name.lower() in joined:
-                return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
-        return None
-
-    @staticmethod
-    def _recent_command(messages: list) -> str | None:
-        """The most recent run_command invocation in ``messages`` (OPEN mode only),
-        so a command widget can be proposed from it. None if there is no such call."""
-        command: str | None = None
-        for message in messages:
-            for call in getattr(message, "tool_calls", None) or []:
-                if getattr(call, "tool_id", None) == "run_command":
-                    value = (call.args or {}).get("command")
-                    if isinstance(value, str) and value.strip():
-                        command = value
-        return command
-
-    # --- profiles (§4.7) --------------------------------------------------
-    def _profile_get(self) -> dict:
-        """The active profile, the selector's option list, and the feature flags
-        for the ACTIVE profile. Flags are pure surface signals the frontend uses to
-        show/hide Developer-only affordances — they never gate tool execution (§8.7)."""
-        active = self._active_profile or SIMPLE
-        return {
-            "activeProfile": active.id.value,
-            # The policy mode this profile runs under ('safe' | 'open'), derived 1:1
-            # from the profile (policy.py). Consumed by the next (frontend) PR.
-            "mode": mode_for_profile(active).value,
-            "profiles": [
-                {"id": p.id.value, "label": p.label, "description": p.description}
-                for p in (SIMPLE, DEVELOPER)
-            ],
-            "flags": {
-                "exposeRoutinePlan": active.expose_routine_plan,
-                "rawDiagnostics": active.raw_diagnostics,
-                "headlessCli": active.headless_cli,
-                "byokFirstOnboarding": active.onboarding == "byok_first",
-            },
-        }
-
-    def _handle_profile_set(self, params: dict, request_id) -> None:
-        """Persist the chosen profile and re-resolve it for the running server so the
-        switch takes effect immediately (no restart). An unknown id is refused plainly.
-
-        Mode-scoped safety (owner decision 2026-07-19, policy.py): the profile also
-        derives the policy mode — Simple=SAFE, Developer=OPEN — which reshapes the
-        permission gate (OPEN prompts only for destructive actions) and the visible
-        tool set (OPEN surfaces run_command). The two GLOBAL invariants never move:
-        keys stay keychain-only and never reach the webview/SQLite, and there is no
-        scheduling in either mode. Switching modes is always allowed; dev-created
-        routines/widgets simply hide in SAFE and return in OPEN."""
-        try:
-            profile = get_profile(ProfileId(params.get("profileId")))
-        except ValueError:
-            self._respond_error(request_id, _SERVER_ERROR, _UNKNOWN_PROFILE_MESSAGE)
-            return
-        self.store.set_setting("active_profile", profile.id.value)
-        self._active_profile = profile
-        # Mode is derived live from _active_profile (policy.py) — the switch takes
-        # effect immediately and needs no per-mode cache to refresh: the orchestrator
-        # reads visible_tools(mode) per turn and the gate takes mode per call. Return
-        # the new mode for the frontend (next PR).
-        self._respond(request_id, {"ok": True, "mode": mode_for_profile(profile).value})
-
-    # --- model roles ------------------------------------------------------
-    def _maybe_load_catalogs(self) -> None:
-        """First availableRoles: swap in the live Anthropic catalog (if a key is
-        present) and reconnect every other provider the user connected in a previous
-        launch, so the picker's union is whole again after a restart.
-
-        Runs on the worker (never the read loop): the key probe, the Anthropic fetch,
-        and each provider reconnect ping all do round-trips that block on frames the
-        read loop must stay free to deliver. Failures are swallowed and leave the door
-        open to retry (Anthropic) or to a manual reconnect (others)."""
-        self._maybe_load_live_catalog()
-        self._maybe_reconnect_saved_providers()
-
-    def _maybe_load_live_catalog(self) -> None:
-        """First availableRoles once a PRIMARY (Anthropic) key exists: swap the
-        built-in fallback for the live list of every model the key can access, and
-        register a provider per fetched entry so by-name picks resolve to it. Merges
-        into the union (never clobbers other connected providers' models).
-
-        Any failure — no key, offline, a bad response — keeps the fallback and leaves
-        the door open to retry on a later availableRoles call (nothing is marked
-        loaded). Registration is idempotent (dict replace), so repeated calls are safe."""
-        if self._cloud_catalog_loaded or self._cloud_fetcher is None:
-            return
-        if not self._primary_key_available():
-            return
-        try:
-            catalog = self._cloud_fetcher()
-        except Exception:
-            return   # keep the fallback; a later availableRoles may succeed
-        if not catalog:
-            return
-
-        self._set_provider_models("anthropic", catalog)
-        self._cloud_catalog_loaded = True
-        if self._cloud_provider_factory is not None:
-            for entry in catalog:
-                self.model_router.register_primary_model(
-                    entry.id, self._cloud_provider_factory(entry)
-                )
-
-    def _maybe_reconnect_saved_providers(self) -> None:
-        """Reconnect the non-Anthropic providers persisted as connected in a prior
-        launch (their keys are still in the keychain). One-shot per launch: a provider
-        that can't be reached right now simply has no models until the user reconnects
-        it from Settings. Anthropic is handled by the live-catalog path above."""
-        if self._providers_reconnected or self._connect_provider is None or self.store is None:
-            return
-        self._providers_reconnected = True
-        for cfg in self.store.list_provider_configs():
-            provider_id = cfg["provider_id"]
-            if provider_id == "anthropic" or not cfg["connected"]:
-                continue
-            try:
-                models = self._connect_provider(provider_id, cfg["base_url"])
-            except Exception:
-                continue   # transient failure — user can reconnect manually
-            self._set_provider_models(provider_id, models)
-
-    def _set_provider_models(self, provider_id: str, models: list[CloudModel]) -> None:
-        """Replace one provider's slice of the union picker menu with ``models``,
-        keeping a single default across the whole union (merge_catalogs). Other
-        providers' entries are untouched."""
-        others = [m for m in self._cloud_catalog if m.provider != provider_id]
-        self._cloud_catalog = merge_catalogs([others, list(models)])
-
-    # --- provider connections (multi-provider, §4.1.1) --------------------
-    def _provider_key_present(self, provider_id: str) -> bool:
-        probe = self._provider_key_probe
-        if probe is None:
-            return False
-        try:
-            return bool(probe(provider_id))
-        except Exception:
-            return False
-
-    def _provider_list(self) -> dict:
-        """provider.list -> {providers: [...]}. Carries ONLY non-secret status and
-        metadata — NEVER any key material (invariant §8.3): id, plain label, whether
-        it is connected, and (when known) the added date, custom base URL, and the
-        last connect-check result.
-
-        ``connected`` trusts a stored connection row exactly; only when there is NO
-        row does it fall back to 'a key is already in the keychain' — that fallback
-        exists so a legacy/migrated Anthropic key shows connected without a re-connect."""
-        self._ensure_built()
-        stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
-        rows: list[dict] = []
-        for provider_id in PROVIDER_IDS:
-            cfg = stored.get(provider_id)
-            if cfg is not None:
-                connected = cfg["connected"]
-            else:
-                connected = provider_id != "custom" and self._provider_key_present(provider_id)
-            row: dict = {
-                "id": provider_id,
-                "label": provider_label(provider_id),
-                "connected": connected,
-            }
-            if cfg is not None:
-                if cfg["added_at"] is not None:
-                    row["addedAt"] = cfg["added_at"]
-                if provider_id == "custom" and cfg["base_url"]:
-                    row["baseUrl"] = cfg["base_url"]
-                if cfg["last_check_ok"] is not None:
-                    row["lastCheckOk"] = cfg["last_check_ok"]
-            rows.append(row)
-        return {"providers": rows}
-
-    def _provider_connect(self, params: dict) -> dict:
-        """provider.connect {provider, baseUrl?} -> {ok, error?}. The key was already
-        stored by the Rust command; here the core pulls it from the keychain, makes ONE
-        tiny validating request, and — on success — records metadata and folds the
-        provider's models into the picker union. On failure it does NOT mark the provider
-        connected (the card offers Remove to clear the stored key)."""
-        self._ensure_built()
-        provider_id = params.get("provider")
-        base_url = (params.get("baseUrl") or "").strip() or None
-        if provider_id not in PROVIDER_IDS:
-            return {"ok": False, "error": "That provider isn't available."}
-        if provider_id == "custom" and not _valid_http_url(base_url):
-            return {
-                "ok": False,
-                "error": "Enter a web address that starts with http:// or https://.",
-            }
-        if self._connect_provider is None:
-            return {"ok": False, "error": "Connecting a provider needs the desktop app."}
-        try:
-            models = self._connect_provider(provider_id, base_url)
-        except RuntimeError as exc:
-            # Provider errors already carry a plain, user-ready sentence. Record the
-            # failed check WITHOUT marking connected, so provider.list shows it off.
-            self.store.upsert_provider_config(
-                provider_id, connected=False, base_url=base_url, last_check_ok=False
-            )
-            return {"ok": False, "error": str(exc)}
-        except Exception:
-            self.store.upsert_provider_config(
-                provider_id, connected=False, base_url=base_url, last_check_ok=False
-            )
-            return {"ok": False, "error": _GENERIC_TURN_ERROR}
-        self.store.upsert_provider_config(
-            provider_id,
-            connected=True,
-            added_at=int(time.time()),
-            base_url=base_url,
-            last_check_ok=True,
-        )
-        self._set_provider_models(provider_id, models)
-        return {"ok": True}
-
-    def _provider_disconnect(self, params: dict) -> dict:
-        """provider.disconnect {provider} -> {ok}. Forget the connection metadata and
-        drop that provider's models from the picker union and the router pool. The key
-        itself is removed separately by the Rust keychain command (the webview calls it)."""
-        self._ensure_built()
-        provider_id = params.get("provider")
-        if provider_id not in PROVIDER_IDS:
-            return {"ok": False, "error": "That provider isn't available."}
-        self.store.delete_provider_config(provider_id)
-        for model in [m for m in self._cloud_catalog if m.provider == provider_id]:
-            self.model_router.unregister_primary_model(model.id)
-        self._cloud_catalog = [m for m in self._cloud_catalog if m.provider != provider_id]
-        return {"ok": True}
-
-    def _available_roles(self) -> dict:
-        return {
-            # SETUP_ASSISTANT is an internal onboarding role, never a user-selectable
-            # option in the model picker (§4.1.1) — surface only PRIMARY/LOCAL.
-            "roles": [
-                role.value
-                for role in self.model_router.available_roles()
-                if role is not ModelRole.SETUP_ASSISTANT
-            ],
-            "localModels": self.model_router.available_local_models(),
-            # The curated cloud menu the PRIMARY picker renders (§4.1.1, §6.8): each
-            # entry carries its plain-language label/description and its "answer style"
-            # (effort) choices — empty for a model with no effort control.
-            "cloudModels": [model.to_wire() for model in self._cloud_catalog],
-        }
-
-    def _selection_error(
-        self, role: ModelRole | None, model_id: str | None, effort: str | None
-    ) -> str | None:
-        """Validate an explicit model + effort pick for one message. Returns a plain
-        error string, or None when the pick is allowed. A LOCAL pick names a local
-        model and takes no effort; a PRIMARY (or default) pick names a cloud model
-        and its effort must be one the model supports. An unknown id fails plainly
-        HERE (early, explicit) rather than silently falling back at send time — the
-        router keeps its own mid-conversation fallback as a separate safety net."""
-        if role is ModelRole.LOCAL:
-            if model_id is not None and model_id not in self.model_router.available_local_models():
-                return _MODEL_UNAVAILABLE_MESSAGE
-            if effort is not None:
-                return _EFFORT_UNAVAILABLE_MESSAGE
-            return None
-        # PRIMARY, or role unset (which defaults to PRIMARY): a cloud pick.
-        if model_id is not None and self._cloud_catalog:
-            if find_cloud_model(self._cloud_catalog, model_id) is None:
-                return _MODEL_UNAVAILABLE_MESSAGE
-        if effort is not None:
-            model = self._cloud_model_for(model_id)
-            if model is None or effort not in model.supported_effort:
-                return _EFFORT_UNAVAILABLE_MESSAGE
-        return None
-
-    def _cloud_model_for(self, model_id: str | None):
-        """The catalog entry a cloud effort is validated against: the named model, or
-        the catalog default when no model is named. None if there's no catalog or the
-        named id isn't in it."""
-        if not self._cloud_catalog:
-            return None
-        if model_id is None:
-            return default_cloud_model(self._cloud_catalog)
-        return find_cloud_model(self._cloud_catalog, model_id)
-
-    def _handle_set_role(self, params: dict, request_id) -> None:
-        role = self._role_from(params.get("role"))
-        if params.get("role") and role is None:
-            self._respond_error(request_id, _SERVER_ERROR, _MODEL_UNAVAILABLE_MESSAGE)
-            return
-        # An explicit pick may name WHICH model (a LOCAL model, item B, or a cloud
-        # model, §6.8) and an "answer style" (effort). Validate both against the
-        # configured pools/catalog so a stale/typo'd id or unsupported effort fails
-        # plainly here rather than silently falling back at send time.
-        model_id = params.get("modelId") or None
-        effort = params.get("effort") or None
-        error = self._selection_error(role, model_id, effort)
-        if error is not None:
-            self._respond_error(request_id, _SERVER_ERROR, error)
-            return
-        self._next_role = role
-        self._next_model_name = model_id
-        self._next_effort = effort
-        self._respond(request_id, {"ok": True})
-
     # --- local model setup (§4.1.2) ---------------------------------------
+    # These live on the composition root (not the models mixin): they are OS/
+    # threading plumbing — disk/RAM probes and a background pull thread — and the
+    # probe helpers (_free_disk_bytes / _total_ram_bytes / _GB) are module globals
+    # tests monkeypatch on ``agent_core.main``, so _hardware_refusal must resolve
+    # them through THIS module's namespace.
     def _handle_start_local_setup(self, params: dict, request_id) -> None:
         """Steps 1-2 (reachability + hardware) answer via the RPC response; on
         success the pull/verify (steps 3-4) run on a background thread so the
@@ -2023,30 +1086,6 @@ _WIDGET_JOBS = {
 }
 
 
-def _month_start_epoch() -> int:
-    """Unix-epoch seconds for 00:00 on the first of the current month (UTC).
-
-    'This month's tokens' is 'usage since this epoch' — the token meter sums
-    ``usage_log`` rows at or after it. UTC matches how usage rows are stamped
-    (``int(time.time())``)."""
-    now = datetime.now(timezone.utc)
-    start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
-    return int(start.timestamp())
-
-
-def _valid_http_url(url) -> bool:
-    """A custom-server base URL is accepted only when it is an ``http://`` or
-    ``https://`` URL with a host after the scheme. ``http://`` is deliberately
-    permitted — a custom server is the ONE allowed plain-HTTP case (localhost/LAN
-    model hosts). No other scheme (``file:``, ``ftp:``, …) is ever accepted."""
-    if not isinstance(url, str):
-        return False
-    for scheme in ("http://", "https://"):
-        if url.startswith(scheme) and len(url) > len(scheme):
-            return True
-    return False
-
-
 def _plain(exc: Exception) -> str:
     """A user-ready sentence for a handler failure — never the raw exception."""
     if isinstance(exc, RuntimeError) and str(exc):
@@ -2152,6 +1191,8 @@ def main() -> None:
                 )
             return models
         if provider_id == "custom":
+            # provider.connect validates and requires the base URL before we get here.
+            assert base_url is not None
             # GET {base}/v1/models both validates and lists the server's models; an
             # empty/unlistable server falls back to one visible "Custom model" entry.
             ids = openai_list_models(base_url, getter, require_key=False)

@@ -19,7 +19,7 @@ export function WidgetProposalCard({ proposal, onAdd, onCancel }: Props) {
   return (
     <section
       aria-label="Add this widget?"
-      className="border-t border-line bg-surface px-6 py-4"
+      className="animate-[fade-rise_160ms_ease-out] border-t border-line bg-surface px-6 py-4"
     >
       <h3 className="text-base font-semibold text-ink">
         Addison wants to add a widget: {proposal.title}

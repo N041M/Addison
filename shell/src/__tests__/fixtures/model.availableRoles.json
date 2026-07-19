@@ -1,0 +1,54 @@
+{
+  "roles": [
+    "primary",
+    "local"
+  ],
+  "localModels": [
+    "llama3.2:3b"
+  ],
+  "cloudModels": [
+    {
+      "id": "claude-opus-4-8",
+      "label": "Claude Opus 4.8",
+      "description": "",
+      "effortLevels": [
+        {
+          "id": "low",
+          "label": "low",
+          "default": false
+        },
+        {
+          "id": "high",
+          "label": "high",
+          "default": true
+        },
+        {
+          "id": "xhigh",
+          "label": "xhigh",
+          "default": false
+        }
+      ],
+      "default": true,
+      "provider": "anthropic",
+      "providerLabel": "Anthropic"
+    },
+    {
+      "id": "claude-haiku-4-5-20251001",
+      "label": "Claude Haiku 4.5",
+      "description": "",
+      "effortLevels": [],
+      "default": false,
+      "provider": "anthropic",
+      "providerLabel": "Anthropic"
+    },
+    {
+      "id": "gpt-fixture",
+      "label": "Fixture GPT",
+      "description": "",
+      "effortLevels": [],
+      "default": false,
+      "provider": "openai",
+      "providerLabel": "OpenAI"
+    }
+  ]
+}

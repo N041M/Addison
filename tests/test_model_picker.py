@@ -56,6 +56,13 @@ from agent_core.tools.registry import ToolRegistry
 _TEXT_RESPONSE = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
 
 
+def _find(catalog: list[CloudModel], model_id: str) -> CloudModel:
+    """find_cloud_model, narrowed: a missing model is a test failure, not a None."""
+    model = find_cloud_model(catalog, model_id)
+    assert model is not None
+    return model
+
+
 # ===========================================================================
 # Fallback catalog shape (built-in list, real names, raw effort-id labels)
 # ===========================================================================
@@ -66,13 +73,13 @@ def test_fallback_catalog_has_one_default_and_raw_labels():
     assert sum(1 for m in catalog if m.default) == 1
     assert default_cloud_model(catalog).id == "claude-opus-4-8"
     # Real model names, no editorial copy.
-    assert find_cloud_model(catalog, "claude-opus-4-8").label == "Claude Opus 4.8"
+    assert _find(catalog, "claude-opus-4-8").label == "Claude Opus 4.8"
     assert all(m.description == "" for m in catalog)
 
     # Opus and Sonnet: three shared answer styles, exactly one default ("high"),
     # adaptive thinking on. Effort labels are the raw API ids.
     for model_id in ("claude-opus-4-8", "claude-sonnet-5"):
-        model = find_cloud_model(catalog, model_id)
+        model = _find(catalog, model_id)
         assert model.adaptive_thinking is True
         assert [level.id for level in model.effort_levels] == ["low", "high", "xhigh"]
         defaults = [level for level in model.effort_levels if level.default]
@@ -82,7 +89,7 @@ def test_fallback_catalog_has_one_default_and_raw_labels():
 
 
 def test_haiku_has_no_effort_control():
-    haiku = find_cloud_model(load_cloud_catalog(), "claude-haiku-4-5")
+    haiku = _find(load_cloud_catalog(), "claude-haiku-4-5")
     assert haiku.adaptive_thinking is False
     assert haiku.effort_levels == ()
     assert haiku.supported_effort == ()
@@ -90,14 +97,14 @@ def test_haiku_has_no_effort_control():
 
 def test_catalog_wire_shape_matches_contract():
     catalog = load_cloud_catalog()
-    opus = find_cloud_model(catalog, "claude-opus-4-8").to_wire()
+    opus = _find(catalog, "claude-opus-4-8").to_wire()
     assert opus["id"] == "claude-opus-4-8"
     assert opus["label"] == "Claude Opus 4.8"
     assert opus["description"] == ""
     assert opus["default"] is True
     assert {"id": "high", "label": "high", "default": True} in opus["effortLevels"]
 
-    haiku = find_cloud_model(catalog, "claude-haiku-4-5").to_wire()
+    haiku = _find(catalog, "claude-haiku-4-5").to_wire()
     # Empty list = the effort control is hidden for that model.
     assert haiku["effortLevels"] == []
     assert haiku["default"] is False
@@ -108,8 +115,8 @@ def test_addison_model_override_moves_default_to_catalog_entry():
     assert default_cloud_model(catalog).id == "claude-sonnet-5"
     assert sum(1 for m in catalog if m.default) == 1
     # Sonnet keeps its effort levels; opus is no longer the default.
-    assert find_cloud_model(catalog, "claude-sonnet-5").supported_effort == ("low", "high", "xhigh")
-    assert find_cloud_model(catalog, "claude-opus-4-8").default is False
+    assert _find(catalog, "claude-sonnet-5").supported_effort == ("low", "high", "xhigh")
+    assert _find(catalog, "claude-opus-4-8").default is False
 
 
 def test_addison_model_override_appends_bare_entry_for_unknown_model():
@@ -171,7 +178,7 @@ def test_fetch_parses_capabilities_into_effort_and_adaptive():
     client, _calls = _models_client([page])
     catalog = fetch_cloud_catalog(lambda: "sk-test", client=client)
 
-    model = find_cloud_model(catalog, "claude-x")
+    model = _find(catalog, "claude-x")
     # Fixed order, unsupported/absent levels dropped, labels are the raw ids.
     assert [(lvl.id, lvl.label) for lvl in model.effort_levels] == [
         ("low", "low"), ("high", "high"), ("xhigh", "xhigh")
@@ -189,7 +196,7 @@ def test_fetch_is_defensive_when_capabilities_missing():
     client, _calls = _models_client([page])
     catalog = fetch_cloud_catalog(lambda: "sk-test", client=client)
 
-    model = find_cloud_model(catalog, "bare-model")
+    model = _find(catalog, "bare-model")
     assert model.effort_levels == ()
     assert model.adaptive_thinking is False
     assert model.label == "bare-model"        # falls back to the id
@@ -201,7 +208,7 @@ def test_fetch_effort_default_is_middle_when_high_absent():
     client, _calls = _models_client([page])
     catalog = fetch_cloud_catalog(lambda: "sk-test", client=client)
 
-    levels = find_cloud_model(catalog, "m").effort_levels
+    levels = _find(catalog, "m").effort_levels
     assert [lvl.id for lvl in levels] == ["low", "medium", "xhigh", "max"]
     # No "high": the middle supported level (index 2 of 4) is the default.
     assert [lvl.id for lvl in levels if lvl.default] == ["xhigh"]

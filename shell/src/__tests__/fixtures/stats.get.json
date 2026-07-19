@@ -1,0 +1,32 @@
+{
+  "tokensMonth": {
+    "total": 2610,
+    "limit": null
+  },
+  "providerLatency": [
+    {
+      "provider": "openai",
+      "ms": 720,
+      "checkedAt": 4102444802
+    },
+    {
+      "provider": "anthropic",
+      "ms": 640,
+      "checkedAt": 4102444801
+    }
+  ],
+  "connections": [
+    {
+      "id": "ollama",
+      "label": "Ollama \u00b7 this computer",
+      "status": "idle",
+      "detail": "not running"
+    },
+    {
+      "id": "anthropic",
+      "label": "Anthropic API",
+      "status": "reachable",
+      "detail": "640 ms"
+    }
+  ]
+}

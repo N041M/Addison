@@ -25,6 +25,7 @@ from agent_core.providers.base import (
     ProviderCapabilities,
     ToolCallRequest,
     Usage,
+    request_with_retry,
 )
 
 _API_URL = "https://api.anthropic.com/v1/messages"
@@ -135,7 +136,11 @@ class AnthropicProvider:
         injected = self._client
         client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
         try:
-            return client.post(_API_URL, headers=headers, json=body)
+            # POST: retry only when the request never reached the server (§8.3).
+            return request_with_retry(
+                lambda: client.post(_API_URL, headers=headers, json=body),
+                idempotent=False,
+            )
         except httpx.HTTPError:
             # Network/timeout failure. Raise a clean message with no chained
             # exception so nothing about the request (headers included) leaks.

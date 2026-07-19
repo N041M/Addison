@@ -8,6 +8,7 @@ action_snapshots table untouched. A tmp-file DB is used (not ``:memory:``) so th
 commit-per-write durability path is actually exercised.
 """
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,7 @@ from agent_core.tools.base import ActionSnapshot
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> Store:
+def store(tmp_path: Path) -> Iterator[Store]:
     s = Store(tmp_path / "addison.db")
     yield s
     s.close()
@@ -271,6 +272,7 @@ def test_provider_config_upsert_and_get(store: Store):
         "anthropic", connected=True, added_at=1000, last_check_ok=True
     )
     cfg = store.get_provider_config("anthropic")
+    assert cfg is not None
     assert cfg["provider_id"] == "anthropic"
     assert cfg["connected"] is True
     assert cfg["added_at"] == 1000
@@ -282,12 +284,15 @@ def test_provider_config_added_at_is_first_write_wins(store: Store):
     # A later reconnect must NOT reset the original added date.
     store.upsert_provider_config("openai", connected=True, added_at=1000, last_check_ok=True)
     store.upsert_provider_config("openai", connected=True, added_at=9999, last_check_ok=True)
-    assert store.get_provider_config("openai")["added_at"] == 1000
+    cfg = store.get_provider_config("openai")
+    assert cfg is not None
+    assert cfg["added_at"] == 1000
 
 
 def test_provider_config_failed_connect_stays_disconnected(store: Store):
     store.upsert_provider_config("google", connected=False, last_check_ok=False)
     cfg = store.get_provider_config("google")
+    assert cfg is not None
     assert cfg["connected"] is False
     assert cfg["last_check_ok"] is False
     assert cfg["added_at"] is None
@@ -297,7 +302,9 @@ def test_provider_config_custom_base_url_round_trips(store: Store):
     store.upsert_provider_config(
         "custom", connected=True, added_at=5, base_url="http://localhost:1234/v1", last_check_ok=True
     )
-    assert store.get_provider_config("custom")["base_url"] == "http://localhost:1234/v1"
+    cfg = store.get_provider_config("custom")
+    assert cfg is not None
+    assert cfg["base_url"] == "http://localhost:1234/v1"
 
 
 def test_provider_config_list_and_delete(store: Store):
@@ -319,7 +326,10 @@ def test_provider_config_rejects_unknown_provider_id(store: Store):
 # --- usage log (§4.8 substrate) --------------------------------------------
 
 
-def _usage(store: Store, provider="anthropic", model="claude", inp=10, out=5, latency=42, at=1000):
+def _usage(
+    store: Store, provider="anthropic", model="claude", inp=10, out=5, latency: int | None = 42,
+    at=1000,
+):
     import uuid
 
     store.insert_usage(
@@ -417,6 +427,38 @@ def test_reopening_existing_db_is_idempotent(tmp_path: Path):
         second.close()
 
 
+# --- connection pragmas -----------------------------------------------------
+
+
+def test_wal_and_busy_timeout_set_on_open(tmp_path: Path):
+    # A real tmp-file DB (APFS/ext4) can do WAL; ``:memory:`` can't, which is why
+    # the whole suite already uses tmp files. journal_mode should read back "wal"
+    # and busy_timeout should be the 5s we asked for.
+    store = Store(tmp_path / "pragmas.db")
+    try:
+        mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+        assert store._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        store.close()
+
+
+def test_reopening_flips_existing_db_to_wal(tmp_path: Path):
+    # journal_mode is persistent on disk, so reopening an older (pre-WAL) DB flips
+    # it to WAL — intended — and the reopen itself is clean (no data loss).
+    db_path = tmp_path / "reopen-wal.db"
+    first = Store(db_path)
+    _usage(first, at=1000)
+    first.close()
+
+    second = Store(db_path)
+    try:
+        assert second._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert second.usage_totals_since(0)["total"] == 15  # data survived
+    finally:
+        second.close()
+
+
 # --- widgets ----------------------------------------------------------------
 
 
@@ -428,7 +470,9 @@ def test_widget_crud_and_position_ordering(store: Store):
     assert rows[0]["pinned"] is True and rows[1]["pinned"] is False
 
     store.set_widget_pinned("w2", True)
-    assert store.get_widget("w2")["pinned"] is True
+    w2 = store.get_widget("w2")
+    assert w2 is not None
+    assert w2["pinned"] is True
     assert store.count_pinned_widgets() == 2
     assert store.count_pinned_widgets(exclude_id="w2") == 1
 

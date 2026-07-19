@@ -32,6 +32,12 @@ class _FakeProvider:
         raise NotImplementedError
 
 
+def _tag(provider: ModelProvider) -> str:
+    """The resolved provider is always one of our tagged fakes in these tests."""
+    assert isinstance(provider, _FakeProvider)
+    return provider.tag
+
+
 def test_fake_provider_satisfies_protocol():
     assert isinstance(_FakeProvider("x"), ModelProvider)
 
@@ -39,7 +45,7 @@ def test_fake_provider_satisfies_protocol():
 def test_resolve_defaults_to_primary():
     primary = _FakeProvider("cloud")
     router = ModelRouter(configured={ModelRole.PRIMARY: primary})
-    assert router.resolve().tag == "cloud"
+    assert _tag(router.resolve()) == "cloud"
 
 
 def test_multiple_local_models_explicit_pick():
@@ -52,9 +58,9 @@ def test_multiple_local_models_explicit_pick():
     )
 
     # First-added local model is the default selection.
-    assert router.resolve(ModelRole.LOCAL).tag == "ministral-14b"
+    assert _tag(router.resolve(ModelRole.LOCAL)) == "ministral-14b"
     # Explicit per-message pick of a specific local model (item B).
-    assert router.resolve(ModelRole.LOCAL, model_name="deepseek-8b").tag == "deepseek-8b"
+    assert _tag(router.resolve(ModelRole.LOCAL, model_name="deepseek-8b")) == "deepseek-8b"
     # LOCAL shows up as an available role once local models exist.
     assert ModelRole.LOCAL in router.available_roles()
     assert set(router.available_local_models()) == {"ministral-14b", "deepseek-8b"}
@@ -63,7 +69,7 @@ def test_multiple_local_models_explicit_pick():
 def test_select_local_model_switches_default():
     router = ModelRouter(configured={}, local_models={"a": _FakeProvider("a"), "b": _FakeProvider("b")})
     router.select_local_model("b")
-    assert router.resolve(ModelRole.LOCAL).tag == "b"
+    assert _tag(router.resolve(ModelRole.LOCAL)) == "b"
     with pytest.raises(KeyError):
         router.select_local_model("missing")
 

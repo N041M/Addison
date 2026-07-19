@@ -14,8 +14,9 @@
 // "correspondence" voice (Source Serif 4) beside a plain Public Sans UI, blocky
 // live annotations vs. rounded ownable/actionable things, real typographic
 // hierarchy for readers who are 54 and 68 — never a generic AI-chat template,
-// never a model vendor's branding. Theme is class-driven (light default) and
-// persisted in localStorage ("addison.theme").
+// never a model vendor's branding. Theme is class-driven and persisted in
+// localStorage ("addison.theme") as one of "light" | "dark" | "system" (the
+// last follows the OS preference live); light is the fallback for absent values.
 
 import { useEffect, useMemo, useState } from "react";
 import { Method, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
@@ -54,12 +55,11 @@ import { useWidgets } from "./hooks/useWidgets";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
+import { type ThemeChoice, parseThemeChoice, resolveTheme } from "./lib/theme";
 
 const THEME_KEY = "addison.theme";
 const RAIL_OPEN_KEY = "addison.railOpen";
 const SIDEBAR_COLLAPSED_KEY = "addison.sidebarCollapsed";
-
-type Theme = "light" | "dark";
 
 export function App() {
   const connected = useMemo(() => isEngineConnected(), []);
@@ -92,10 +92,12 @@ export function App() {
   const isMobile = useMediaQuery("(max-width: 767.98px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [sheetOpen, setSheetOpen] = useState(false);
-  // Appearance (Fern direction). Light by default; the class on <html> drives the
-  // whole palette. The inline script in index.html sets it before first paint to
-  // avoid a flash; this keeps it in sync and persisted when the user toggles.
-  const [theme, setThemeState] = useState<Theme>(loadTheme);
+  // Appearance (Fern direction). Three choices — "light" | "dark" | "system"
+  // ("Match this computer"); light is the fallback for absent/legacy values. The
+  // class on <html> drives the whole palette. The inline script in index.html
+  // sets the class before first paint to avoid a flash; the effect below keeps it
+  // in sync, persists the CHOICE, and (only while "system") follows the OS live.
+  const [themeChoice, setThemeChoiceState] = useState<ThemeChoice>(loadThemeChoice);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
   // First-run experience (design-brief-fern §5). `startedUnconfigured` latches
@@ -274,21 +276,35 @@ export function App() {
   }, [statusBanner]);
 
   // Reflect the chosen theme onto <html> (the Tailwind `dark:` selector keys off
-  // this class) and persist it. The inline bg matches so a reload paints the
-  // right color before the stylesheet is parsed.
+  // this class) and persist the choice. The inline bg matches so a reload paints
+  // the right color before the stylesheet is parsed. When the choice is "system"
+  // we resolve against the OS preference AND subscribe to its changes, so the app
+  // flips live when the user switches their computer between light and dark; the
+  // listener is torn down (and never attached for explicit light/dark).
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.toggle("dark", theme === "dark");
-    root.style.backgroundColor = theme === "dark" ? "#171D1A" : "#F6F5F1";
+    const mql =
+      typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)")
+        : null;
+    const apply = () => {
+      const resolved = resolveTheme(themeChoice, mql?.matches ?? false);
+      root.classList.toggle("dark", resolved === "dark");
+      root.style.backgroundColor = resolved === "dark" ? "#171D1A" : "#F6F5F1";
+    };
+    apply();
     try {
-      localStorage.setItem(THEME_KEY, theme);
+      localStorage.setItem(THEME_KEY, themeChoice);
     } catch {
       /* non-fatal */
     }
-  }, [theme]);
+    if (themeChoice !== "system" || !mql) return;
+    mql.addEventListener("change", apply);
+    return () => mql.removeEventListener("change", apply);
+  }, [themeChoice]);
 
-  function setTheme(next: Theme) {
-    setThemeState(next);
+  function setThemeChoice(next: ThemeChoice) {
+    setThemeChoiceState(next);
   }
 
   // Persist the app-shell chrome toggles alongside the other prefs.
@@ -617,8 +633,8 @@ export function App() {
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}
             onClearDiagnostics={clearDiagnostics}
-            theme={theme}
-            onSetTheme={setTheme}
+            theme={themeChoice}
+            onSetTheme={setThemeChoice}
             onBack={() => setScreen("chat")}
             scrollTarget={settingsScrollTarget}
             onScrolled={() => setSettingsScrollTarget(null)}
@@ -817,15 +833,15 @@ export function App() {
 // Small pure helpers — defensive parsing of free-form JSON-RPC payloads, since
 // the Python side's result/notification shapes aren't pinned in protocol.ts.
 // ---------------------------------------------------------------------------
-// Appearance persists like the default role. Light unless the user chose dark.
-function loadTheme(): Theme {
+// Appearance persists like the default role. Light unless the user chose dark
+// or "system"; absent/legacy values fall back to light (see lib/theme).
+function loadThemeChoice(): ThemeChoice {
   try {
-    const t = localStorage.getItem(THEME_KEY);
-    if (t === "light" || t === "dark") return t;
+    return parseThemeChoice(localStorage.getItem(THEME_KEY));
   } catch {
     /* localStorage may be unavailable; fall through to the default */
+    return "light";
   }
-  return "light";
 }
 
 // Boolean prefs (rail open / sidebar collapsed) persist as "1"/"0".

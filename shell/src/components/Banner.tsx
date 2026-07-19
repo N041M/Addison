@@ -18,7 +18,7 @@ export function Banner({ message, tone = "notice", onDismiss }: Props) {
   // placement (chat column, settings column) owns the width and stacking gap —
   // that's what keeps every banner flush with the content beneath it.
   return (
-    <div className="flex w-full items-center gap-3 rounded-banner bg-notice-tint px-4 py-2.5">
+    <div className="flex w-full animate-[fade-in_150ms_ease] items-center gap-3 rounded-banner bg-notice-tint px-4 py-2.5">
       <p className="flex-1 text-sm text-notice">{message}</p>
       {onDismiss && (
         <button

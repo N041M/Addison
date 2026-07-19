@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.providers.base import (
+    ModelProvider,
     ModelResponse,
     ModelRole,
     ProviderCapabilities,
@@ -30,7 +31,7 @@ from agent_core.providers.base import (
 )
 from agent_core.providers.router import ModelRouter
 from agent_core.shell_bridge import IpcShellBridge
-from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
+from agent_core.tools.base import ExecutionContext, RiskTier, Tool, ToolDefinition, ToolResult
 from agent_core.tools.registry import ToolRegistry
 
 # Every server in these tests persists to the same file under the test's tmp_path
@@ -122,6 +123,7 @@ class _SpyTool:
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         self.calls.append(args)
         if self._use_bridge:
+            assert context.shell_bridge is not None
             return ToolResult(success=True, content=context.shell_bridge.read_clipboard())
         return ToolResult(success=True, content="spied")
 
@@ -141,8 +143,8 @@ class IpcHarness:
     reader: _PipeReader
     writer: _FrameWriter
     thread: threading.Thread
-    provider: object
-    tool: object | None
+    provider: ModelProvider
+    tool: Tool | None
 
 
 def build_server(

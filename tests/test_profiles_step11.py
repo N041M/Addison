@@ -279,6 +279,7 @@ def test_simple_profile_gate_blocks_and_denial_prevents_execution(tmp_path):
         assert tool.calls == []
         tool_messages = [m for m in server.conversation.messages if m.role == "tool"]
         assert tool_messages and "declined" in tool_messages[0].content
+        assert server._active_profile is not None
         assert server._active_profile.id.value == "simple"
     finally:
         _shutdown(reader, thread)
@@ -304,6 +305,7 @@ def test_developer_profile_auto_allows_non_destructive_tool_no_card(tmp_path):
         assert tool.calls == [{}]
         # The gate ran and recorded the auto-grant (the "activity log").
         assert server.permission_gate.auto_grants == ["spy_tool"]
+        assert server._active_profile is not None
         assert server._active_profile.id.value == "developer"
     finally:
         _shutdown(reader, thread)

@@ -176,6 +176,20 @@ body {
   outline-offset: 2px;
 }
 
+/* Calm interaction motion — a short color/background/border ease on the things
+   you hover, press, or select (buttons, summaries, listbox options). Held to
+   150ms so state changes feel settled rather than flashy. Only color-family
+   properties transition, so nothing ever shifts size. The reduced-motion rule
+   below zeroes every transition/animation, so this is off there too. */
+button,
+summary,
+[role="option"] {
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
 /* Calm, unobtrusive scrollbars in the message thread. Thumb one step off the
    background so it reads without glaring, on either theme. */
 .thread-scroll {
@@ -230,9 +244,27 @@ body {
   }
 }
 
+/* In-place appearances: the model-picker popover, the permission/consent card,
+   and the routine/widget proposal cards settle in with a small opacity + rise
+   (transform/opacity only — no reflow). New chat messages use plain fade-in.
+   Both are ~140–200ms and disabled by the reduced-motion rule below. */
+@keyframes fade-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Respect users who ask the OS for reduced motion. There is no decorative motion
-   anywhere; this only softens the few functional transitions, including the
-   theme cross-fade above and the drawer/sheet slide-ins (they snap open instead). */
+   anywhere; this only softens the few functional transitions — the theme
+   cross-fade, the 150ms interaction color eases, the drawer/sheet slide-ins, the
+   in-place fade-rise on popovers/cards, and the message fade-in. With this on
+   they all snap to their resting state instead (the `*` selector covers every
+   transition and animation, including anything added later). */
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
