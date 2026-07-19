@@ -137,7 +137,11 @@ export function SettingsPage({
               onRemove={models.handleRemoveProvider}
             />
             <Card title="Routines" subtitle="Steps Addison saved for you. Run them here or from a widget.">
-              <RoutineLibrary exposeRoutinePlan={profile?.flags.exposeRoutinePlan} />
+              <RoutineLibrary
+                exposeRoutinePlan={profile?.flags.exposeRoutinePlan}
+                developer={profile?.mode === "open"}
+                refreshKey={profile?.activeProfile}
+              />
             </Card>
           </div>
 
@@ -571,14 +575,25 @@ function ProfileCard({
   theme: "light" | "dark";
   onSetTheme: (theme: "light" | "dark") => void;
 }) {
-  const activeDescription =
-    profile?.profiles.find((p) => p.id === profile.activeProfile)?.description ?? "";
+  // A profile in Simple→Developer confirmation, held until the user confirms or
+  // cancels. Switching BACK (Developer→Simple) reduces what Addison can do, so it
+  // needs no confirmation and never sets this.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const mode = profile?.mode ?? (profile?.activeProfile === "developer" ? "open" : "safe");
+
+  function handlePick(id: string) {
+    if (!profile || id === profile.activeProfile) return;
+    // In SAFE mode the only other profile is Developer/OPEN — a step UP in what
+    // Addison may do, so ask first. Otherwise switch straight away.
+    if (mode === "safe") {
+      setConfirming(id);
+    } else {
+      onSetProfile(id);
+    }
+  }
 
   return (
-    <Card
-      title="Profile"
-      subtitle="Changes what Addison shows you — never what it's allowed to do."
-    >
+    <Card title="Profile" subtitle="How freely Addison can act on this computer.">
       {!connected || !profile || profile.profiles.length === 0 ? (
         <p className="text-hint text-muted">
           {connected
@@ -599,7 +614,7 @@ function ProfileCard({
                   key={p.id}
                   type="button"
                   aria-pressed={active}
-                  onClick={() => onSetProfile(p.id)}
+                  onClick={() => handlePick(p.id)}
                   className={
                     "flex-1 rounded-sm px-0 py-2 text-control max-md:min-h-[44px] " +
                     (active
@@ -612,8 +627,41 @@ function ProfileCard({
               );
             })}
           </div>
-          {activeDescription && (
-            <p className="mt-2.5 text-fine leading-[1.55] text-faint">{activeDescription}</p>
+          {/* Honest, mode-scoped description — the profile now changes what Addison
+              is ALLOWED to do, not just what it shows (owner decision 2026-07-19). */}
+          <p className="mt-2.5 text-fine leading-[1.55] text-faint">
+            {mode === "open"
+              ? "Addison can run commands and scripts on this computer, acts without asking except for destructive actions, and some actions can't be undone."
+              : "Addison asks before anything it does, and everything can be undone."}
+          </p>
+          {/* Simple→Developer confirmation — inline (never a browser confirm()),
+              matching the PermissionCard look. */}
+          {confirming && (
+            <div className="mt-3 rounded-card bg-fern-tint px-[15px] py-[13px]">
+              <p className="text-fine leading-relaxed text-ink-soft">
+                Developer profile lets Addison act more freely on this computer. You can switch
+                back anytime.
+              </p>
+              <div className="mt-2.5 flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSetProfile(confirming);
+                    setConfirming(null);
+                  }}
+                  className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep"
+                >
+                  Switch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirming(null)}
+                  className="text-xs font-medium text-ink-soft hover:text-muted"
+                >
+                  Not now
+                </button>
+              </div>
+            </div>
           )}
           {profile.flags.headlessCli && (
             <p className="mt-2.5 text-fine text-muted">

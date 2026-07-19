@@ -29,40 +29,90 @@ Three processes, three trust levels (spec §1.3):
 
 Shell ↔ Core talk over **JSON-RPC 2.0 over stdio**.
 
-## Non-negotiable safety invariants (spec §8)
+## Mode-scoped safety model (owner decision 2026-07-19, spec §8)
 
-These are hard constraints. If a request appears to conflict with one, **flag it
-rather than working around it silently.**
+The safety model is **mode-scoped**. There are two policy modes, and the mode is
+**derived 1:1 from the active Profile** — the profile is the single source of
+truth, there is no separately-persisted mode (`agent_core/policy.py`,
+`mode_for_profile`):
 
-1. **No arbitrary code/shell execution — ever.** Tools are individual typed
-   functions, not "run command". Routines are *declarative plans* (§6.1), not
-   scripts. Do not add `eval`, a Lua sandbox, or a raw-code field to a Routine.
+- **Simple profile → SAFE mode** — today's behaviour, **byte-for-byte**. Every
+  SAFE-MODE invariant below holds.
+- **Developer profile → OPEN mode** — "nearly completely open." OPEN mode
+  **relaxes** the SAFE-mode invariants as follows: real command execution exists
+  (the `run_command` **dev-only** tool, `tools/run_command.py`); a `dev_only` tool
+  may register at HIGH **without** an `undo()`; routines and widgets may carry a
+  `command` step/kind; and the permission gate **auto-allows non-destructive
+  actions, prompting ONLY for destructive ones**. "Open" means *fewer prompts, not
+  no gate* — the gate still runs (and logs) on every call.
+
+**Destructive-prompt rule (OPEN mode).** The gate auto-grants a call iff it is
+non-destructive; destructive calls raise a permission card **per invocation** —
+no prior grant is consulted and none is recorded, so approving one destructive
+command never silently authorizes a later one (same or different), whether it
+arrives directly, via a routine command step, or via a command widget. The card
+carries the exact command text (truncated ~120 chars) so the user knows precisely
+what they are approving each time; a "Not now" is honoured for the rest of the
+turn (don't-nag), then cleared. Destructiveness is per-call
+(`tools/base.call_is_destructive`): `run_command` classifies its own command via a
+conservative read-only allowlist (see its docstring); any other tool is
+destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
+session-grant model in both modes — per-invocation is specific to destructive dev
+actions.
+
+**Artifact hiding.** Routines/widgets created in OPEN mode (`created_in_mode`
+column) are **hidden and disabled in SAFE mode** — never listed, never runnable —
+and return **untouched** when Developer mode is active again. Switching modes is
+always allowed.
+
+**Two GLOBAL invariants never relax, in EITHER mode** (flag any conflict rather
+than working around it silently):
+
+- **G1 — API keys never reach the frontend/webview or SQLite.** They live in the
+  OS keychain, read by the Rust shell / Agent Core only at the moment of use,
+  never persisted in Agent Core memory beyond one request, never in SQLite. The
+  Rust shell may hold a session-lifetime in-memory cache of provider keys (owner
+  decision 2026-07-19 — one keychain read/prompt per provider per launch; evicted
+  on Remove, gone at exit); the cache never widens where keys can GO (shell
+  process memory only). The Setup Assistant relay's keys never exist in this
+  repo's runtime — they're external and server-side. **Do not touch this
+  machinery.**
+- **G2 — No scheduling / autonomous triggering in v1** (§6.7). This is a v1 scope
+  line, not a mode question — it holds in SAFE *and* OPEN.
+
+### SAFE-MODE invariants (Simple profile — hold byte-for-byte)
+
+These are hard constraints in SAFE mode. If a SAFE-mode request appears to
+conflict with one, **flag it rather than working around it silently.** OPEN mode
+relaxes exactly these four, and only as spelled out above.
+
+1. **No arbitrary code/shell execution.** SAFE-view tools are individual typed
+   functions, not "run command"; SAFE routines are *declarative plans* (§6.1),
+   not scripts. Do not add `eval`, a Lua sandbox, or a raw-code field. (OPEN mode's
+   `run_command` is a single **dev-only** tool, absent from the SAFE registry view
+   — `registry.visible_tools(SAFE)` — and it refuses to run under SAFE as a belt.)
 2. **Every `risk_tier != LOW` tool must have a real `undo()`**, enforced at
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()` — a tool that genuinely can't be undone stays LOW and
    read-only. This registration check is the single most important test in the
-   codebase (spec §9).
-3. **API keys never reach the frontend/webview.** They live in the OS keychain,
-   read by the Rust shell / Agent Core only at the moment of use, never persisted
-   in Agent Core memory beyond one request, never in SQLite. The Rust shell may
-   hold a session-lifetime in-memory cache of provider keys (owner decision
-   2026-07-19 — one OS keychain read/prompt per provider per launch; evicted on
-   Remove, gone at exit). The cache never widens where keys can GO — shell
-   process memory only.
-4. The Setup Assistant relay's keys never exist in this repo's runtime — they're
-   external and server-side.
-5. **A Routine never gets permissions beyond what the user granted live** — no
+   codebase (spec §9). (The ONLY exception is a `dev_only` registration, which is
+   never in the SAFE view; it exists solely for OPEN mode.)
+3. **A Routine never gets permissions beyond what the user granted live** — no
    privilege escalation via automation. It uses the *same* `ToolRegistry` and
-   `PermissionGate` instances as the live orchestrator.
-6. **No scheduling / autonomous triggering in v1** (§6.7).
-7. **Widgets are declarative specs (routine-run or whitelisted stat display) —
-   never code; enforced at save and render.** A widget is one of exactly two
-   fixed shapes (`agent_core/widgets.py`): `{kind: "routine", routineId, title}`
-   runs a saved routine through the *existing* routine.run path (same registry +
-   gate, zero new execution surface), or `{kind: "stat", source, title}` displays
-   a value from a fixed whitelist (`tokens_month`, `provider_latency`,
-   `connections`). No eval, expression, or template field exists; unknown
-   kinds/sources are rejected at save and hidden at render.
+   `PermissionGate` instances as the live orchestrator, in **both** modes: the
+   SAFE/OPEN distinction is a *filtered view* over the one shared registry
+   (`visible_tools(mode)`), never a second registry, so this no-escalation
+   property survives OPEN mode intact.
+4. **Widgets are declarative specs (routine-run or whitelisted stat display) —
+   never code; enforced at save and render.** In SAFE mode a widget is one of
+   exactly two fixed shapes (`agent_core/widgets.py`): `{kind: "routine",
+   routineId, title}` runs a saved routine through the *existing* routine.run path
+   (same registry + gate, zero new execution surface), or `{kind: "stat", source,
+   title}` displays a value from a fixed whitelist (`tokens_month`,
+   `provider_latency`, `connections`). No eval, expression, or template field
+   exists; unknown kinds/sources are rejected at save and hidden at render. (OPEN
+   mode adds a third `{kind: "command", command, title}` shape, valid only in OPEN
+   and hidden in SAFE.)
 
 ## Module boundary rule (spec §2)
 
@@ -120,15 +170,24 @@ is complete through its final PR: multi-provider API keys, the three-column
 app shell + in-window Settings, widgets/tray, class-driven dark mode, the
 **first-run pine banner** (`FirstRunBanner.tsx` — setup steps, launch-only
 skip, serif time-of-day greeting) with the bell favicon bundled from
-`shell/public/`, and a both-themes QA pass (TESTING-CHECKLIST §13).
+`shell/public/`, and a both-themes QA pass (TESTING-CHECKLIST §13). Also shipped:
+the **mode-scoped safety backend** (owner decision 2026-07-19, `agent_core/policy.py`)
+— the SAFE/OPEN split derived 1:1 from the profile, `run_command` (dev-only),
+mode-aware `ToolRegistry.visible_tools` + `PermissionGate.authorize`, routine/widget
+`command` kinds + `created_in_mode` hiding. The **frontend PR is next**: Settings
+copy for the two profiles/modes (honest about what OPEN relaxes and the two GLOBAL
+invariants that never do), the auto-grant/destructive-prompt UI, and rendering the
+`mode` field now carried on `profile.get`/`profile.set`.
 
 Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
 **CLI-only** — get a working chat-with-tools loop before touching the shell.
 Then (5) remaining tools + their `undo()`, (6) `UndoManager`, (7) Tauri shell +
 IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router, (11)
-Profiles — formalize the Simple/Developer split (`profiles.py` exists as scaffold;
-it parameterizes registration/onboarding, never the permission gate — spec §4.7,
-§8.7).
+Profiles — the Simple/Developer split, which now ALSO derives the policy mode
+(policy.py): Developer = OPEN mode reshapes the visible tool set and the gate's
+prompting, but NEVER the two GLOBAL invariants (keys isolation, no scheduling).
+The permission gate is mode-aware (`authorize`), not profile-blind — the earlier
+"never the permission gate" framing is superseded by the mode-scoped model above.
 
 Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.

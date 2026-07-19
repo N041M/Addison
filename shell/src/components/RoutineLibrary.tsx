@@ -30,6 +30,8 @@ interface RoutineRow {
   variables: { name: string; prompt: string; default: string | null }[];
   /** Developer profile only: the declarative plan, for read-only viewing. */
   planSteps?: PlanStep[];
+  /** The mode the routine was saved under ("safe" | "open"), when the core sends it. */
+  createdInMode?: "safe" | "open";
 }
 
 interface RunOutcome {
@@ -43,9 +45,20 @@ interface Props {
    * (READ-ONLY). Off/absent for Simple, so its routine list is byte-identical.
    */
   exposeRoutinePlan?: boolean;
+  /**
+   * OPEN/Developer mode is active — tag dev-created routines (created_in_mode
+   * "open") with the blocky "DEV" annotation. Simple never sees such routines
+   * (core-filtered), so this stays false there.
+   */
+  developer?: boolean;
+  /**
+   * Changes whenever the active profile changes (its id). A mode switch hides or
+   * reveals dev-created routines, so re-fetch the list when this changes.
+   */
+  refreshKey?: string;
 }
 
-export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
+export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, refreshKey }: Props) {
   const connected = isEngineConnected();
   const [routines, setRoutines] = useState<RoutineRow[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -64,7 +77,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
     }
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected]);
+  }, [connected, refreshKey]);
 
   function refresh() {
     ipc
@@ -151,6 +164,11 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
+              {developer && routine.createdInMode === "open" && (
+                <span className="mb-0.5 inline-block border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
+                  Dev
+                </span>
+              )}
               <p className="text-action font-semibold text-ink">{routine.name}</p>
               <p className="mt-px text-fine text-faint">{runSummary(routine)}</p>
             </div>
@@ -313,6 +331,14 @@ function normalizeRoutines(result: unknown): RoutineRow[] {
       variables: normalizeVariables(r.variables),
       // Present only under the Developer profile; absent (undefined) otherwise.
       planSteps: Array.isArray(r.planSteps) ? normalizePlanSteps(r.planSteps) : undefined,
+      // The mode the routine was saved under, when the core forwards it (camel or
+      // snake). Drives the Developer "DEV" tag.
+      createdInMode:
+        r.createdInMode === "open" || r.createdInMode === "safe"
+          ? (r.createdInMode as "open" | "safe")
+          : r.created_in_mode === "open" || r.created_in_mode === "safe"
+            ? (r.created_in_mode as "open" | "safe")
+            : undefined,
     });
   }
   return out;

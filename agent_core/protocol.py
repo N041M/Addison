@@ -84,6 +84,7 @@ class Method:
     WIDGET_DELETE = "widget.delete"            # {id} -> {ok}
     WIDGET_PROPOSE_FROM_CONVERSATION = "widget.proposeFromConversation"  # {} -> {title, kind, summary, spec}
     WIDGET_CONFIRM_SAVE = "widget.confirmSave"  # {accept} -> {ok, widgetId?}
+    WIDGET_RUN = "widget.run"                   # {id} -> {ok, output?, error?}
     # Core-computed, read-only stat sources for the token meter / connections cards.
     STATS_GET = "stats.get"                    # {} -> {tokensMonth, providerLatency, connections}
 

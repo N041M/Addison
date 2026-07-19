@@ -28,6 +28,12 @@ interface Props {
   /** Plain label for the active profile, e.g. "Simple profile". */
   profileLabel: string;
   /**
+   * OPEN/Developer mode only: a dim, mono suffix (e.g. "open") appended to the
+   * profile label — the one quiet acknowledgement that Addison can act more
+   * freely here. Absent (undefined) in SAFE mode.
+   */
+  modeNote?: string;
+  /**
    * "static" is the desktop left column (216px, collapsible). "drawer" is the
    * narrow-window slide-over (fills its 280px MobileDrawer, always full — the
    * collapse `«` control is hidden, and a safe-area top inset is added for a
@@ -47,6 +53,7 @@ export function Sidebar({
   screen,
   onOpenSettings,
   profileLabel,
+  modeNote,
   variant = "static",
 }: Props) {
   const isDrawer = variant === "drawer";
@@ -142,7 +149,10 @@ export function Sidebar({
         >
           Settings
         </button>
-        <p className="p-1 text-xs text-faint">{profileLabel}</p>
+        <p className="p-1 text-xs text-faint">
+          {profileLabel}
+          {modeNote && <span className="ml-1.5 font-mono text-tick text-faint">· {modeNote}</span>}
+        </p>
       </div>
     </aside>
   );

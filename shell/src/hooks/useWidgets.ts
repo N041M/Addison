@@ -165,9 +165,13 @@ function normalizeRailRoutines(result: unknown): RailRoutine[] {
   for (const item of list) {
     const r = asRecord(item);
     if (!r || typeof r.id !== "string" || typeof r.name !== "string") continue;
+    // created_in_mode ("safe" | "open"), camel or snake — drives the Developer
+    // "DEV" tag on dev-created routine widgets.
+    const rawMode = r.createdInMode ?? r.created_in_mode;
     out.push({
       id: r.id,
       name: r.name,
+      createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
       variables: normalizeVariables(r.variables),
     });
   }

@@ -18,7 +18,9 @@ class RoutineLibrary:
         self._store = store
 
     def list(self) -> list[dict]:
-        """Rows for the library UI: routine + run metadata, plan decoded."""
+        """Rows for the library UI: routine + run metadata, plan decoded.
+        ``createdInMode`` lets the caller hide dev-created routines in SAFE mode
+        (policy.py)."""
         rows = []
         for row in self._store.list_routines():
             routine = routine_from_json(row["plan_json"])
@@ -27,6 +29,7 @@ class RoutineLibrary:
                     "routine": routine,
                     "runCount": row["run_count"],
                     "lastRunAt": row["last_run_at"],
+                    "createdInMode": row["created_in_mode"],
                 }
             )
         return rows
@@ -36,6 +39,12 @@ class RoutineLibrary:
         if row is None:
             raise KeyError("That routine doesn't exist any more.")
         return routine_from_json(row["plan_json"])
+
+    def created_in_mode(self, routine_id: str) -> str | None:
+        """The policy mode a routine was saved under ('safe' | 'open'), or None if
+        it no longer exists. Drives the SAFE-mode run refusal in main.py."""
+        row = self._store.get_routine(routine_id)
+        return None if row is None else row["created_in_mode"]
 
     def update_metadata(
         self, routine_id: str, *, name=None, description=None, variable_defaults=None

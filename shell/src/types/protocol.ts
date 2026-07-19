@@ -41,6 +41,7 @@ export const Method = {
   WidgetDelete: "widget.delete",
   WidgetProposeFromConversation: "widget.proposeFromConversation",
   WidgetConfirmSave: "widget.confirmSave",
+  WidgetRun: "widget.run",
   // Core-computed, read-only stat sources for the token meter / connections cards.
   StatsGet: "stats.get",
 

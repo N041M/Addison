@@ -386,6 +386,11 @@ export const ipc = {
     call(Method.WidgetProposeFromConversation).then(parseWidgetProposal),
   confirmWidget: (accept: boolean): Promise<WidgetMutationResult> =>
     call(Method.WidgetConfirmSave, { accept }).then(parseWidgetMutation),
+  // Command widgets only (Developer profile). The core re-checks the mode and
+  // routes through the same gate as a routine command step — a destructive
+  // command raises its per-invocation card before anything runs.
+  runWidget: (id: string): Promise<WidgetRunResult> =>
+    call(Method.WidgetRun, { id }).then(parseWidgetRun),
 
   // Core-computed, read-only stats for the token meter + connections cards. No
   // key material is ever in this payload (§8.3).
@@ -489,6 +494,14 @@ export interface WidgetMutationResult {
   error?: string;
 }
 
+/** widget.run — command widgets only (OPEN mode). `output` is the command's
+ * transcript-capped output on success; `error` a plain sentence otherwise. */
+export interface WidgetRunResult {
+  ok: boolean;
+  output?: string;
+  error?: string;
+}
+
 const STAT_SOURCES: WidgetStatSource[] = ["tokens_month", "provider_latency", "connections"];
 
 function parseWidgetSpec(value: unknown): WidgetSpec | null {
@@ -505,6 +518,13 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
     }
     return { kind: "stat", source: source as WidgetStatSource, title: obj.title };
   }
+  // A command widget (OPEN/Developer mode) is DISPLAY DATA ONLY — never executed
+  // client-side. We keep the command text so the rail can show it; running it is
+  // the core's job (run_command tool + gate), and this build exposes no such path.
+  if (obj.kind === "command") {
+    if (typeof obj.command !== "string" || !obj.command) return null;
+    return { kind: "command", command: obj.command, title: obj.title };
+  }
   return null;
 }
 
@@ -516,11 +536,15 @@ function parseWidgetList(result: unknown): Widget[] {
     const row = asRecord(item);
     if (!row || typeof row.id !== "string") continue;
     const spec = parseWidgetSpec(row.spec);
-    if (!spec) continue; // drop anything not one of the two allowed shapes
+    if (!spec) continue; // drop anything not one of the allowed shapes
+    // created_in_mode ("safe" | "open") when the core forwards it — drives the
+    // Developer "DEV" annotation tag. Accept either camel/snake spelling.
+    const rawMode = row.createdInMode ?? row.created_in_mode;
     out.push({
       id: row.id,
       spec,
       pinned: row.pinned !== false,
+      createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
     });
   }
   return out;
@@ -530,6 +554,15 @@ function parseWidgetMutation(result: unknown): WidgetMutationResult {
   const obj = asRecord(result);
   return {
     ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+function parseWidgetRun(result: unknown): WidgetRunResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    output: typeof obj?.output === "string" ? obj.output : undefined,
     error: typeof obj?.error === "string" ? obj.error : undefined,
   };
 }

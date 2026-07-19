@@ -92,6 +92,7 @@ export default {
         // line-height where none existed and shift layout. The default Tailwind
         // scale (text-xs/sm/base/…) stays untouched and keeps its built-in
         // line-heights.
+        //   tag       9.5px   Developer "DEV" annotation tag (with tracking-caps-wide)
         //   tick      10px    smallest mono details (tray caret, connection detail)
         //   label     10.5px  small-caps section/sender labels (with tracking-caps-*)
         //   fact      11px    mono machine facts, pill captions
@@ -107,6 +108,7 @@ export default {
         //   title     20px    in-window page titles (Settings)
         //   headline  24px    pine-banner serif headline
         //   greeting  32px    serif time-of-day greeting
+        tag: "9.5px",
         tick: "10px",
         label: "10.5px",
         fact: "11px",
