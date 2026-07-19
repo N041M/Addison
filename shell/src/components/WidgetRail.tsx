@@ -40,7 +40,7 @@ interface Props {
    * consent renders inline in the thread, so `consent` is not passed in sheet
    * mode — the sheet shows widgets + Addison's work only.
    */
-  variant?: "rail" | "sheet";
+  variant?: "rail" | "sheet" | "inline";
   /**
    * OPEN/Developer mode is active — surface the small blocky "DEV" annotation on
    * dev-created items (command widgets, and any widget/routine whose
@@ -91,6 +91,9 @@ export function WidgetRail({
 
   const hasUsage = (stats?.tokensMonth.total ?? 0) > 0;
   const isSheet = variant === "sheet";
+  // Inline: flows in the chat thread's own scroll on mobile (no fixed width, no
+  // nested scroll container) so widgets are simply visible on the chat screen.
+  const isInline = variant === "inline";
 
   function toggleTray() {
     setTrayOpen((v) => {
@@ -104,10 +107,12 @@ export function WidgetRail({
     <aside
       aria-label="Your widgets"
       className={
-        "thread-scroll flex flex-col gap-[22px] overflow-y-auto " +
+        "flex flex-col gap-[22px] " +
         (isSheet
-          ? "min-h-0 flex-1 pb-4"
-          : "w-[270px] shrink-0 py-[30px]")
+          ? "thread-scroll min-h-0 flex-1 overflow-y-auto pb-4"
+          : isInline
+            ? "w-full pt-1"
+            : "thread-scroll w-[270px] shrink-0 overflow-y-auto py-[30px]")
       }
     >
       <div>

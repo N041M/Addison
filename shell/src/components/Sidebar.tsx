@@ -23,13 +23,6 @@ interface Props {
   /** Which in-window screen is showing; drives the Settings item's active state. */
   screen: "chat" | "settings";
   onOpenSettings: () => void;
-  /**
-   * Opens the widget sheet. Drawer variant only — on mobile the widget rail has
-   * no persistent home, so it's reached from here (next to Settings) rather than
-   * a separate top-bar control. Undefined on desktop, where the rail is always
-   * visible with its own toggle; the row then doesn't render.
-   */
-  onOpenWidgets?: () => void;
   /** Plain label for the active profile, e.g. "Simple profile". */
   profileLabel: string;
   /**
@@ -61,7 +54,6 @@ export function Sidebar({
   newChatDisabled,
   screen,
   onOpenSettings,
-  onOpenWidgets,
   onCloseDrawer,
   profileLabel,
   modeNote,
@@ -125,20 +117,10 @@ export function Sidebar({
         />
       </nav>
 
-      {/* Pinned bottom: Widgets (drawer only) + Settings + profile label. A
-          hairline separates it from the conversation list; the profile line
-          shares the Settings label's text indent (2px bar + 12px padding) so
-          the block reads as one. */}
+      {/* Pinned bottom: Settings + profile label. A hairline separates it from
+          the conversation list; the profile line shares the Settings label's
+          text indent (2px bar + 12px padding) so the block reads as one. */}
       <div className="mt-auto flex flex-col border-t border-line px-[14px] pb-3.5 pt-2.5">
-        {isDrawer && onOpenWidgets && (
-          <button
-            type="button"
-            onClick={onOpenWidgets}
-            className="flex items-center gap-2 border-l-2 border-transparent bg-transparent px-3 py-2 text-left text-control font-medium text-ink-soft hover:bg-hair/50 max-md:min-h-[44px] max-md:text-row"
-          >
-            Widgets
-          </button>
-        )}
         <button
           type="button"
           onClick={onOpenSettings}
