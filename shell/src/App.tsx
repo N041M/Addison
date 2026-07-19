@@ -1123,11 +1123,15 @@ export function App() {
       )}
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {!connected && (
-          <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-        )}
-        {statusBanner && (
-          <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+        {screen === "settings" && (
+          <>
+            {!connected && (
+              <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+            )}
+            {statusBanner && (
+              <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+            )}
+          </>
         )}
 
         {screen === "settings" ? (
@@ -1206,6 +1210,19 @@ export function App() {
                 <BellLogo size={19} className="text-fern" />
               </button>
             </header>
+
+            {/* Status banners live INSIDE the chat window, pinned below the
+                header (owner request 2026-07-19) — never above the top bar. */}
+            {(!connected || statusBanner) && (
+              <div className="flex flex-col gap-2 px-4 pt-3 md:px-[44px]">
+                {!connected && (
+                  <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+                )}
+                {statusBanner && (
+                  <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+                )}
+              </div>
+            )}
 
             {/* Body: centered chat column + (optional) widget rail, each with its
                 own scroll. Full-bleed side padding below md; 44px gutters at md. */}

@@ -52,6 +52,18 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
+  // Auto-grow the textarea from one line up to ~8 lines, then scroll. Runs on
+  // every draft change (including the rewind prefill and the post-send reset).
+  function autoGrow(el: HTMLTextAreaElement | null) {
+    if (!el) return;
+    el.style.height = "auto";
+    const max = 8 * 24; // ~8 lines at the 24px line box below
+    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+  }
+  useEffect(() => {
+    autoGrow(textareaRef.current);
+  }, [draft]);
+
   // Rewind's edit-and-resend: the rewound message's text lands here, once.
   useEffect(() => {
     if (draftSeed != null && draftSeed !== "") {
@@ -88,19 +100,19 @@ export function Composer({
     // restore at md. The bottom padding folds in the phone safe-area inset
     // (0 on desktop, so it stays the plain 20px there).
     <div className="px-4 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] md:px-[44px]">
-      <div className="mx-auto w-full max-w-[840px] rounded-card border border-line bg-surface px-3.5 pb-2.5 pt-3 shadow-soft focus-within:border-fern">
+      <div className="mx-auto w-full max-w-[840px] rounded-card border border-line bg-surface px-3.5 pb-2 pt-2.5 shadow-soft focus-within:border-fern">
         <textarea
           ref={textareaRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={isWorking}
-          rows={2}
+          rows={1}
           placeholder={connected ? "Write to Addison…" : "Addison's engine isn't connected yet."}
           aria-label="Message to Addison"
-          className="block w-full resize-none bg-transparent px-1 py-0.5 text-[15px] text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
+          className="block max-h-[192px] w-full resize-none overflow-y-auto bg-transparent px-1 py-0.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
         />
-        <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1">
+        <div className="mt-1.5 flex items-center justify-between gap-x-3 px-1">
           <ModelSelector
             roles={roles}
             cloudModels={cloudModels}
