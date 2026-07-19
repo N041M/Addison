@@ -164,11 +164,10 @@ export interface StatWidgetSpec {
 
 /**
  * A command widget (OPEN/Developer mode only — agent_core/widgets.py). DISPLAY
- * DATA ONLY here: the frontend never runs the command itself — a command widget
- * would run through the core's run_command tool + gate, exactly like a live
- * command. In this build the core exposes no widget-run path, so the rail shows
- * the command but its Run pill is inert (see WidgetRail). Present in a widget
- * spec means the widget was created in OPEN mode.
+ * DATA ONLY here: the frontend never runs the command itself — the Run pill
+ * calls the core's widget.run, which routes through the run_command tool + gate
+ * (per-invocation destructive prompt), exactly like a routine command step.
+ * A command kind in a spec means the widget was created in OPEN mode.
  */
 export interface CommandWidgetSpec {
   kind: "command";
