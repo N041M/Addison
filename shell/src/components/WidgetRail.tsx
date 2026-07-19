@@ -14,6 +14,7 @@
 // the typed ipc for actions.
 
 import { useState, type ReactNode } from "react";
+import type { WidgetRunResult } from "../ipc/client";
 import type { Widget, Stats, WidgetStatSource } from "../types/ui";
 
 const TRAY_OPEN_KEY = "addison.trayOpen";
@@ -42,9 +43,10 @@ interface Props {
   variant?: "rail" | "sheet";
   /**
    * OPEN/Developer mode is active — surface the small blocky "DEV" annotation on
-   * dev-created items (command widgets; and routine widgets whose routine was
-   * saved in OPEN mode, once the core forwards created_in_mode). In Simple mode
-   * these items are already filtered out by the core, so this stays false.
+   * dev-created items (command widgets, and any widget/routine whose
+   * createdInMode is "open" — the core forwards it on both list responses). In
+   * Simple mode these items are already filtered out by the core, so this stays
+   * false.
    */
   developer?: boolean;
   /** Stored widgets from `widget.list` (routine/stat/command specs). */
@@ -56,6 +58,9 @@ interface Props {
   onSetPinned: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
   onRunRoutine: (routineId: string, variables: Record<string, string>) => Promise<RunOutcome>;
+  /** widget.run for a command widget (Developer profile) — the core re-checks
+   * the mode and gates the command per invocation; never executed client-side. */
+  onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
   onAskBuildWidget: () => void;
 }
 
@@ -75,6 +80,7 @@ export function WidgetRail({
   onSetPinned,
   onDelete,
   onRunRoutine,
+  onRunCommandWidget,
   onAskBuildWidget,
 }: Props) {
   const [editMode, setEditMode] = useState(false);
@@ -131,6 +137,7 @@ export function WidgetRail({
               onSetPinned={onSetPinned}
               onDelete={onDelete}
               onRunRoutine={onRunRoutine}
+              onRunCommandWidget={onRunCommandWidget}
             />
           ))}
 
@@ -155,6 +162,7 @@ export function WidgetRail({
                     onSetPinned={onSetPinned}
                     onDelete={onDelete}
                     onRunRoutine={onRunRoutine}
+                    onRunCommandWidget={onRunCommandWidget}
                   />
                 ))}
               <div className="relative mt-0.5">
@@ -213,6 +221,7 @@ interface CardProps {
   onSetPinned: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
   onRunRoutine: (routineId: string, variables: Record<string, string>) => Promise<RunOutcome>;
+  onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
 }
 
 function WidgetCard({
@@ -225,6 +234,7 @@ function WidgetCard({
   onSetPinned,
   onDelete,
   onRunRoutine,
+  onRunCommandWidget,
 }: CardProps) {
   const spec = widget.spec;
   const routine = spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
@@ -247,7 +257,11 @@ function WidgetCard({
               onRunRoutine={onRunRoutine}
             />
           ) : spec.kind === "command" ? (
-            <CommandWidgetBody title={spec.title} command={spec.command} />
+            <CommandWidgetBody
+              title={spec.title}
+              command={spec.command}
+              onRun={() => onRunCommandWidget(widget.id)}
+            />
           ) : (
             <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
           )}
@@ -378,22 +392,50 @@ function RoutineWidgetBody({
 }
 
 // A command widget (OPEN/Developer mode): title + the command shown as a machine
-// fact (mono) under it. It would run through the core's run_command tool + gate,
-// exactly like a live command — but THIS build exposes no widget-run path (no
-// widget.run method in agent_core/main.py), so the Run pill is inert and the
-// command runs from chat instead. Rendered display-only; never executed here.
-function CommandWidgetBody({ title, command }: { title: string; command: string }) {
+// fact (mono) under it. Run goes through the core's widget.run — the SAME
+// registry + gate path as a routine command step, so a destructive command
+// raises its per-invocation card before anything executes. The command is never
+// executed client-side; this component only displays it and shows the outcome.
+function CommandWidgetBody({
+  title,
+  command,
+  onRun,
+}: {
+  title: string;
+  command: string;
+  onRun: () => Promise<WidgetRunResult>;
+}) {
+  const [running, setRunning] = useState(false);
+  const [outcome, setOutcome] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  function handleRun() {
+    setRunning(true);
+    setOutcome(null);
+    onRun()
+      .then((res) => {
+        // First output line only — the rail is a glance surface, not a terminal.
+        const firstLine = (res.output ?? "").split("\n", 1)[0].trim();
+        setOutcome(
+          res.ok
+            ? { ok: true, detail: firstLine || "Done." }
+            : { ok: false, detail: res.error || "That didn't work." },
+        );
+      })
+      .catch(() => setOutcome({ ok: false, detail: "That didn't work." }))
+      .finally(() => setRunning(false));
+  }
+
   return (
     <>
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{title}</span>
         <button
           type="button"
-          disabled
-          title="Runs from chat in this build"
-          className="shrink-0 cursor-default rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep opacity-45"
+          disabled={running}
+          onClick={handleRun}
+          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep hover:bg-rule disabled:opacity-45"
         >
-          Run
+          {running ? "Running…" : "Run"}
         </button>
       </div>
       <p
@@ -402,6 +444,17 @@ function CommandWidgetBody({ title, command }: { title: string; command: string 
       >
         {command}
       </p>
+      {outcome && (
+        <p
+          title={outcome.detail}
+          className={
+            "mt-1.5 truncate font-mono text-[11px] " +
+            (outcome.ok ? "text-fern-deep" : "text-danger")
+          }
+        >
+          {outcome.detail}
+        </p>
+      )}
     </>
   );
 }

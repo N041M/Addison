@@ -78,7 +78,12 @@ from agent_core.routines.library import RoutineLibrary
 from agent_core.routines.model import RoutineStep
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import ActionSnapshot
+from agent_core.tools.base import (
+    ActionSnapshot,
+    ExecutionContext,
+    call_is_destructive,
+    call_permission_detail,
+)
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
@@ -752,6 +757,8 @@ class JsonRpcServer:
                     self._handle_widget_propose(request_id)
                 elif kind == "widget_confirm":
                     self._handle_widget_confirm(params, request_id)
+                elif kind == "widget_run":
+                    self._handle_widget_run(params, request_id)
                 elif kind == "stats_get":
                     self._respond(request_id, self._stats_get())
             except RuntimeError as exc:
@@ -1159,6 +1166,9 @@ class JsonRpcServer:
                 "description": routine.description,
                 "runCount": entry["runCount"],
                 "lastRunAt": entry["lastRunAt"],
+                # Display-only mode provenance: lets the frontend badge dev-created
+                # routines ("DEV" tag). Never consulted for permissions.
+                "createdInMode": entry.get("createdInMode"),
                 "variables": [
                     {"name": v.name, "prompt": v.prompt, "default": v.default}
                     for v in routine.variables
@@ -1363,6 +1373,9 @@ class JsonRpcServer:
                     "spec": spec,
                     "pinned": row["pinned"],
                     "position": row["position"],
+                    # Display-only mode provenance for the frontend's "DEV" tag —
+                    # never consulted for permissions (the gate re-checks at run).
+                    "createdInMode": row.get("created_in_mode"),
                 }
             )
         return {"widgets": widgets}
@@ -1384,6 +1397,79 @@ class JsonRpcServer:
         if widget_id:
             self.store.delete_widget(widget_id)
         return {"ok": True}
+
+    def _handle_widget_run(self, params: dict, request_id) -> None:
+        """widget.run — the rail's Run pill for a COMMAND widget (OPEN mode only).
+
+        Routine and stat widgets refuse here: their actions already have homes
+        (routine.run / stats.get). The command runs through the SAME registry +
+        gate path as a routine command step, so the per-invocation destructive
+        prompt holds — clicking a widget can never skip a card the chat would
+        have shown. SAFE mode refuses before touching the registry (dev-created
+        widgets are already hidden from SAFE lists; this is the belt for a stale
+        frontend or a raced mode switch)."""
+        self._ensure_built()
+        widget_id = params.get("id")
+        row = self.store.get_widget(widget_id) if widget_id else None
+        if row is None:
+            self._respond(request_id, {"ok": False, "error": "That widget isn't here any more."})
+            return
+        try:
+            spec = json.loads(row["spec_json"])
+        except ValueError:
+            self._respond(request_id, {"ok": False, "error": "That widget can't run."})
+            return
+        if spec.get("kind") != "command":
+            self._respond(
+                request_id,
+                {"ok": False, "error": "That widget doesn't run commands."},
+            )
+            return
+        mode = self._mode()
+        if mode is PolicyMode.SAFE:
+            self._respond(
+                request_id,
+                {
+                    "ok": False,
+                    "error": "That widget uses developer abilities, so it's waiting in "
+                    "Developer profile.",
+                },
+            )
+            return
+        tool = self.tool_registry.get("run_command")
+        args = {"command": spec.get("command", "")}
+        status = self.permission_gate.authorize(
+            "run_command",
+            mode=mode,
+            destructive=call_is_destructive(tool, args),
+            detail=call_permission_detail(tool, args),
+        )
+        if status != PermissionStatus.GRANTED:
+            self._respond(
+                request_id,
+                {"ok": False, "error": "You declined a permission it needs."},
+            )
+            return
+        context = ExecutionContext(
+            conversation_id=f"widget:{widget_id}",
+            shell_bridge=self._shell_bridge,
+            policy_mode=mode,
+        )
+        try:
+            result = tool.execute(args, context)
+        except RuntimeError as exc:
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+        except Exception:
+            self._respond(request_id, {"ok": False, "error": "That widget's command didn't work."})
+            return
+        # run_command truncates its own transcript output, so content passes through.
+        self._respond(
+            request_id,
+            {"ok": result.success, "output": result.content}
+            if result.success
+            else {"ok": False, "error": result.content},
+        )
 
     def _handle_widget_propose(self, request_id) -> None:
         """Draft a widget spec from the recent conversation (mirrors routine.propose:
@@ -1917,6 +2003,7 @@ _WIDGET_JOBS = {
     Method.WIDGET_DELETE: "widget_delete",
     Method.WIDGET_PROPOSE_FROM_CONVERSATION: "widget_propose",
     Method.WIDGET_CONFIRM_SAVE: "widget_confirm",
+    Method.WIDGET_RUN: "widget_run",
 }
 
 

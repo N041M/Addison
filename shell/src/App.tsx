@@ -1269,6 +1269,7 @@ export function App() {
                   onSetPinned={handleSetWidgetPinned}
                   onDelete={handleDeleteWidget}
                   onRunRoutine={handleRunWidgetRoutine}
+                  onRunCommandWidget={(id) => ipc.runWidget(id)}
                   onAskBuildWidget={handleAskBuildWidget}
                 />
               )}
@@ -1352,6 +1353,7 @@ export function App() {
             onSetPinned={handleSetWidgetPinned}
             onDelete={handleDeleteWidget}
             onRunRoutine={handleRunWidgetRoutine}
+            onRunCommandWidget={(id) => ipc.runWidget(id)}
             onAskBuildWidget={() => {
               closeSheet();
               handleAskBuildWidget();

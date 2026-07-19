@@ -385,6 +385,11 @@ export const ipc = {
     call(Method.WidgetProposeFromConversation).then(parseWidgetProposal),
   confirmWidget: (accept: boolean): Promise<WidgetMutationResult> =>
     call(Method.WidgetConfirmSave, { accept }).then(parseWidgetMutation),
+  // Command widgets only (Developer profile). The core re-checks the mode and
+  // routes through the same gate as a routine command step — a destructive
+  // command raises its per-invocation card before anything runs.
+  runWidget: (id: string): Promise<WidgetRunResult> =>
+    call(Method.WidgetRun, { id }).then(parseWidgetRun),
 
   // Core-computed, read-only stats for the token meter + connections cards. No
   // key material is ever in this payload (§8.3).
@@ -492,6 +497,14 @@ export interface WidgetMutationResult {
   error?: string;
 }
 
+/** widget.run — command widgets only (OPEN mode). `output` is the command's
+ * transcript-capped output on success; `error` a plain sentence otherwise. */
+export interface WidgetRunResult {
+  ok: boolean;
+  output?: string;
+  error?: string;
+}
+
 const STAT_SOURCES: WidgetStatSource[] = ["tokens_month", "provider_latency", "connections"];
 
 function parseWidgetSpec(value: unknown): WidgetSpec | null {
@@ -545,6 +558,15 @@ function parseWidgetMutation(result: unknown): WidgetMutationResult {
   const obj = asRec(result);
   return {
     ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+function parseWidgetRun(result: unknown): WidgetRunResult {
+  const obj = asRec(result);
+  return {
+    ok: obj?.ok === true,
+    output: typeof obj?.output === "string" ? obj.output : undefined,
     error: typeof obj?.error === "string" ? obj.error : undefined,
   };
 }

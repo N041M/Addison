@@ -392,6 +392,14 @@ def _seed_artifacts(db_path: Path) -> None:
         spec_json=json.dumps({"kind": "command", "command": "ls", "title": "List"}),
         pinned=True, position=1, created_at=2, created_in_mode="open",
     )
+    # A DESTRUCTIVE (metachar) but harmless command widget for widget.run cards.
+    store.insert_widget(
+        id="dev-wd",
+        spec_json=json.dumps(
+            {"kind": "command", "command": "true && true", "title": "Chain"}
+        ),
+        pinned=False, position=2, created_at=3, created_in_mode="open",
+    )
     store.close()
 
 
@@ -439,7 +447,7 @@ def test_dev_artifacts_hidden_in_safe_and_returned_in_open_round_trip(tmp_path):
     server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
     try:
         assert _routine_ids(reader, writer, 1) == {"safe-r", "dev-r", "dev-d"}
-        assert _widget_ids(reader, writer, 2) == {"safe-w", "dev-w"}
+        assert _widget_ids(reader, writer, 2) == {"safe-w", "dev-w", "dev-wd"}
 
         # Switch to Simple (SAFE): the dev-created artifacts disappear from lists.
         assert _rpc(reader, writer, 3, Method.PROFILE_SET, {"profileId": "simple"})[
@@ -457,7 +465,7 @@ def test_dev_artifacts_hidden_in_safe_and_returned_in_open_round_trip(tmp_path):
             "result"
         ]["mode"] == "open"
         assert _routine_ids(reader, writer, 8) == {"safe-r", "dev-r", "dev-d"}
-        assert _widget_ids(reader, writer, 9) == {"safe-w", "dev-w"}
+        assert _widget_ids(reader, writer, 9) == {"safe-w", "dev-w", "dev-wd"}
     finally:
         _shutdown(reader, thread)
 
@@ -505,5 +513,96 @@ def test_destructive_dev_routine_card_names_the_command_every_run(tmp_path):
             )
             result = writer.wait_for(lambda f: f.get("id") == rid and "result" in f)
             assert result["result"]["status"] == "completed"
+    finally:
+        _shutdown(reader, thread)
+
+# --- widget.run (command widgets, OPEN mode) --------------------------------
+
+
+def test_widget_and_routine_rows_carry_created_in_mode(tmp_path):
+    """Display-only provenance on the wire: the frontend's DEV tag keys off
+    createdInMode, so both list responses must forward it."""
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
+    try:
+        routines = _rpc(reader, writer, 1, Method.ROUTINE_LIST)["result"]["routines"]
+        assert {r["id"]: r["createdInMode"] for r in routines} == {
+            "safe-r": "safe", "dev-r": "open", "dev-d": "open",
+        }
+        widgets = _rpc(reader, writer, 2, Method.WIDGET_LIST)["result"]["widgets"]
+        assert {w["id"]: w["createdInMode"] for w in widgets} == {
+            "safe-w": "safe", "dev-w": "open", "dev-wd": "open",
+        }
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_run_read_only_command_auto_allows_in_open(tmp_path):
+    """The rail's Run pill on a read-only command widget completes silently —
+    no permission card (OPEN auto-allows non-destructive), output returned."""
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
+    try:
+        result = _rpc(reader, writer, 1, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        assert result["ok"] is True
+        assert isinstance(result["output"], str)
+        cards = [
+            f for f in writer.frames if f.get("method") == Method.PERMISSION_REQUEST_GRANT
+        ]
+        assert cards == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_run_destructive_prompts_per_invocation(tmp_path):
+    """A destructive command widget raises a card naming the command on EVERY
+    click — the first approval never carries over to the second."""
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
+    try:
+        for rid in (1, 2):
+            reader.feed(
+                {"jsonrpc": "2.0", "id": rid,
+                 "method": Method.WIDGET_RUN, "params": {"id": "dev-wd"}}
+            )
+            writer.wait_for(
+                lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT
+                and len([x for x in writer.frames
+                         if x.get("method") == Method.PERMISSION_REQUEST_GRANT]) >= rid
+            )
+            cards = [
+                f for f in writer.frames
+                if f.get("method") == Method.PERMISSION_REQUEST_GRANT
+            ]
+            assert len(cards) == rid
+            assert cards[-1]["params"]["description"] == (
+                "This time it wants to run: true && true"
+            )
+            reader.feed(
+                {"jsonrpc": "2.0", "id": 100 + rid, "method": Method.PERMISSION_RESPOND,
+                 "params": {"toolId": "run_command", "allow": True}}
+            )
+            result = writer.wait_for(lambda f: f.get("id") == rid and "result" in f)
+            assert result["result"]["ok"] is True
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_run_refused_in_safe_mode(tmp_path):
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "simple")
+    try:
+        result = _rpc(reader, writer, 1, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        assert result["ok"] is False
+        assert "waiting in Developer profile" in result["error"]
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_run_refuses_non_command_and_unknown_widgets(tmp_path):
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
+    try:
+        stat = _rpc(reader, writer, 1, Method.WIDGET_RUN, {"id": "safe-w"})["result"]
+        assert stat["ok"] is False
+        assert "doesn't run commands" in stat["error"]
+        gone = _rpc(reader, writer, 2, Method.WIDGET_RUN, {"id": "nope"})["result"]
+        assert gone["ok"] is False
+        assert "isn't here any more" in gone["error"]
     finally:
         _shutdown(reader, thread)
