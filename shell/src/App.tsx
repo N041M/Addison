@@ -670,42 +670,45 @@ export function App() {
               </button>
             </header>
 
-            {/* Status banners live INSIDE the chat window, pinned below the
-                header (owner request 2026-07-19) — never above the top bar. */}
-            {(!connected || statusBanner) && (
-              <div className="flex flex-col gap-2 px-4 pt-3 md:px-[44px]">
-                {!connected && (
-                  <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-                )}
-                {statusBanner && (
-                  <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
-                )}
-              </div>
-            )}
-
             {/* Body: centered chat column + (optional) widget rail, each with its
                 own scroll. Full-bleed side padding below md; 44px gutters at md. */}
             <div className="flex min-h-0 flex-1 justify-center gap-[38px] px-4 md:px-[44px]">
-              <ChatThread
-                messages={threadMessages}
-                onRetry={turn.handleRetry}
-                retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
-                onRewindTo={handleRewindTo}
-                showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
-                header={firstRunHeader}
-                footer={
-                  <>
-                    {proposalBlock}
-                    {widgetProposalBlock}
-                    {/* Consent always renders inline on mobile (the sheet may be
-                        closed); on desktop it goes inline only when the rail is
-                        hidden. The work block stays out of the thread on mobile —
-                        it lives in the sheet. */}
-                    {!isMobile && !railOpen && workBlock}
-                    {(isMobile || !railOpen) && consentBlock}
-                  </>
-                }
-              />
+              {/* The banner wrapper shares the chat column's exact width and
+                  center (owner: banners were centered across column + rail and
+                  read as off-balance). Same geometry as before for the thread:
+                  the column centers in the space beside the rail. */}
+              <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
+                {(!connected || statusBanner) && (
+                  <div className="flex w-full max-w-[580px] flex-col gap-2 pt-3">
+                    {!connected && (
+                      <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+                    )}
+                    {statusBanner && (
+                      <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+                    )}
+                  </div>
+                )}
+                <ChatThread
+                  messages={threadMessages}
+                  onRetry={turn.handleRetry}
+                  retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
+                  onRewindTo={handleRewindTo}
+                  showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
+                  header={firstRunHeader}
+                  footer={
+                    <>
+                      {proposalBlock}
+                      {widgetProposalBlock}
+                      {/* Consent always renders inline on mobile (the sheet may
+                          be closed); on desktop it goes inline only when the
+                          rail is hidden. The work block stays out of the thread
+                          on mobile — it lives in the sheet. */}
+                      {!isMobile && !railOpen && workBlock}
+                      {(isMobile || !railOpen) && consentBlock}
+                    </>
+                  }
+                />
+              </div>
               {!isMobile && railOpen && (
                 <WidgetRail
                   work={workBlock}
