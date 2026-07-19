@@ -13,10 +13,16 @@ import time
 from dataclasses import dataclass, field
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.policy import PolicyMode
 from agent_core.providers.base import Message, ModelRole, ToolCallRequest
 from agent_core.providers.router import ModelRouter
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import ExecutionContext, ToolResult
+from agent_core.tools.base import (
+    ExecutionContext,
+    ToolResult,
+    call_is_destructive,
+    call_permission_detail,
+)
 from agent_core.tools.registry import ToolRegistry
 
 
@@ -81,23 +87,30 @@ class Orchestrator:
         requested_role: ModelRole | None = None,
         model_name: str | None = None,
         effort: str | None = None,
+        mode: PolicyMode = PolicyMode.SAFE,
     ) -> None:
         # Per-turn resolution (§4.1.1). ``model_name`` is an EXPLICIT pick — among
         # several LOCAL models (item B) or several cloud models (§6.8) — a user toggle
         # or a Routine step's model_id; never a choice Addison makes in v1. ``effort``
         # is the per-message "answer style"; providers that don't support it ignore it.
+        # ``mode`` (policy.py) is derived from the active profile: SAFE (default) is
+        # the historical behaviour; OPEN surfaces dev-only tools and thins the gate.
         provider = self.model_router.resolve(requested_role, model_name)
         # A "Not now" from an earlier turn must not silently deny this one:
         # each new user message may ask again (grants, by contrast, persist).
         self.permission_gate.clear_denials()
         context = ExecutionContext(
-            conversation_id=conversation.id, shell_bridge=self.shell_bridge
+            conversation_id=conversation.id,
+            shell_bridge=self.shell_bridge,
+            policy_mode=mode,
         )
         while True:
             started = time.monotonic()
             response = provider.send(
                 messages=conversation.messages,
-                tools=self.tool_registry.list_for_model(),
+                # The model only ever sees the tools visible in this mode — SAFE
+                # hides every dev-only tool, so it can't even request run_command.
+                tools=self.tool_registry.visible_tools(mode),
                 effort=effort,
             )
             latency_ms = int((time.monotonic() - started) * 1000)
@@ -109,9 +122,19 @@ class Orchestrator:
                 # each tool_result pairs with the tool_use it answers (§4.4).
                 conversation.append_assistant_tool_calls(response.text, response.tool_calls)
                 for call in response.tool_calls:
-                    status = self.permission_gate.check(call.tool_id)
-                    if status == PermissionStatus.NOT_YET_ASKED:
-                        status = self.permission_gate.request(call.tool_id)  # blocks for UI
+                    tool = self.tool_registry.get(call.tool_id)
+                    # Mode-aware authorization (policy.py): SAFE prompts for every
+                    # not-yet-granted tool; OPEN auto-allows non-destructive calls and
+                    # prompts PER INVOCATION for destructive ones (the card shows the
+                    # exact command via `detail`). Destructiveness is per-call
+                    # (run_command classifies its own; else HIGH == destructive).
+                    destructive = call_is_destructive(tool, call.args)
+                    status = self.permission_gate.authorize(
+                        call.tool_id,
+                        mode=mode,
+                        destructive=destructive,
+                        detail=call_permission_detail(tool, call.args),
+                    )  # may block for UI
                     if status == PermissionStatus.DENIED:
                         # Steer the model past the refusal: "not now" declines the
                         # STEP, not the request — anything already gathered (search
@@ -125,7 +148,6 @@ class Orchestrator:
                             ),
                         )
                     else:
-                        tool = self.tool_registry.get(call.tool_id)
                         self.on_activity(call.tool_id, tool.definition.label)
                         # A tool/bridge failure is a FAILED STEP, never a crashed
                         # turn: crashing here would leave this tool_use with no

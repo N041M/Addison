@@ -20,10 +20,21 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.policy import PolicyMode
 from agent_core.routines.model import Routine, RoutineStep
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import ExecutionContext, ToolResult
+from agent_core.tools.base import (
+    ExecutionContext,
+    ToolResult,
+    call_is_destructive,
+    call_permission_detail,
+)
 from agent_core.tools.registry import ToolRegistry
+
+# A command step (RoutineStep.command set) runs through this dev-only tool, so it
+# hits the exact same registry + gate path — and destructive-prompt rule — as a
+# live run_command call. No new execution surface is added to the engine itself.
+_RUN_COMMAND_TOOL_ID = "run_command"
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\s*\}\}")
 
@@ -117,12 +128,25 @@ class RoutineEngine:
         self._on_ask_user = on_ask_user or (lambda step, run_id, message: False)
         self._store = store   # optional: writes the routine_runs log (§6.4)
 
-    def run(self, routine: Routine, variable_values: dict[str, str]) -> RoutineRunResult:
+    def run(
+        self,
+        routine: Routine,
+        variable_values: dict[str, str],
+        mode: PolicyMode = PolicyMode.SAFE,
+    ) -> RoutineRunResult:
+        # ``mode`` (policy.py) is the live policy mode: SAFE (default) is the
+        # historical behaviour; OPEN thins the gate to prompt only for destructive
+        # steps and lets command steps run. main.py refuses to run a dev-created
+        # routine in SAFE mode before ever reaching here, so SAFE never sees a
+        # command step. The SAME gate/registry instances as the live loop are used
+        # in both modes — a routine can never out-permission the user (§8.5).
         run_id = str(uuid.uuid4())
         step_results: dict[str, ToolResult] = {}
         step_log: list[dict] = []
         context = ExecutionContext(
-            conversation_id=f"routine:{routine.id}", shell_bridge=self.shell_bridge
+            conversation_id=f"routine:{routine.id}",
+            shell_bridge=self.shell_bridge,
+            policy_mode=mode,
         )
 
         # Variable defaults fill anything the caller didn't supply.
@@ -137,15 +161,33 @@ class RoutineEngine:
             return self._finish(run_id, "failed", step_results, str(exc), step_log)
 
         for index, step in enumerate(ordered):
+            # A command step (OPEN mode only) runs through run_command; an ordinary
+            # step names its own tool. Either way the SAME registry + gate handle it.
+            if step.command is not None:
+                tool_id = _RUN_COMMAND_TOOL_ID
+                args_template = {"command": step.command}
+            else:
+                tool_id = step.tool_id
+                args_template = step.args_template
+
             try:
-                resolved_args = resolve_template(step.args_template, variables, step_results)
+                resolved_args = resolve_template(args_template, variables, step_results)
             except ValueError as exc:
                 return self._finish(run_id, "failed", step_results, str(exc), step_log)
 
-            status = self.permission_gate.check(step.tool_id)
-            if status != PermissionStatus.GRANTED:
-                # Routines NEVER auto-escalate — pause and ask, exactly like §4.3.
-                status = self.permission_gate.request(step.tool_id)
+            tool = self.tool_registry.get(tool_id)
+            # Mode-aware authorization (policy.py): SAFE prompts for every
+            # not-yet-granted step; OPEN auto-allows non-destructive steps and
+            # prompts PER INVOCATION for destructive ones (a destructive command
+            # stops to ask every time, card showing the exact resolved command).
+            # Routines NEVER auto-escalate — same gate as §4.3.
+            destructive = call_is_destructive(tool, resolved_args)
+            status = self.permission_gate.authorize(
+                tool_id,
+                mode=mode,
+                destructive=destructive,
+                detail=call_permission_detail(tool, resolved_args),
+            )
             if status == PermissionStatus.DENIED:
                 step_log.append(self._log_entry(index, step, "permission denied"))
                 return self._finish(
@@ -153,7 +195,6 @@ class RoutineEngine:
                     step_log,
                 )
 
-            tool = self.tool_registry.get(step.tool_id)
             # A tool/bridge failure is a FAILED STEP, never a crashed run — mirror
             # the live orchestrator (§4.4). Letting it propagate would skip the
             # on_failure policy below AND leave the routine_runs log stuck at

@@ -1,12 +1,15 @@
-"""Profiles are a SURFACE layer, never a security boundary (spec §4.7, §8.7).
+"""Profiles reshape surface AND policy mode (spec §4.7; owner decision 2026-07-19).
 
-Build step 11 — the last v1 step. The centerpiece here is the §8.7 invariant:
-switching to the Developer profile changes what is *shown* and which onboarding
-path runs, but changes NONE of the safety machinery — the permission gate still
-blocks and still honours a denial, the undo-at-registration check still raises,
-and key handling is untouched. Around that centerpiece: app_settings round-trip
-persistence, the profile.get/set server surface, the profile-specific onboarding
-routing, raw error diagnostics, and the read-only routine-plan view.
+Build step 11 + the mode-scoped safety restructuring. The profile is the single
+source of truth for the policy mode (policy.py): Simple=SAFE (today's behaviour,
+byte-for-byte), Developer=OPEN (fewer prompts, dev-only tools). What the switch
+must NOT touch — the two GLOBAL invariants — is the centerpiece here: keys stay
+keychain-only (never on the wire), and there is no scheduling. Around that:
+app_settings persistence, the profile.get/set surface (now carrying ``mode``),
+onboarding routing, raw diagnostics, and the read-only routine-plan view. The
+detailed SAFE-vs-OPEN gate/registry/routine/widget behaviour lives in
+tests/test_policy_modes.py; here we pin the profile→mode wiring and the invariants
+that hold regardless of mode.
 
 Server-level harness style mirrors tests/test_ipc_server.py and
 tests/test_setup_assistant.py: the real JsonRpcServer on fake pipes, a scripted
@@ -245,19 +248,16 @@ def _rpc(reader, writer, rid, method, params=None) -> dict:
 
 
 # ============================================================================
-# §8.7 INVARIANT — the centerpiece: Developer changes surface, never safety.
+# Profile -> policy mode: SAFE (Simple) prompts; OPEN (Developer) auto-allows.
 # ============================================================================
-@pytest.mark.parametrize("profile_id", ["simple", "developer"])
-def test_permission_gate_blocks_and_denial_prevents_execution_in_both_profiles(
-    tmp_path, profile_id
-):
-    """The exact same server-level permission scenario under BOTH profiles: a
+def test_simple_profile_gate_blocks_and_denial_prevents_execution(tmp_path):
+    """SAFE mode (Simple profile) is byte-for-byte the historical behaviour: a
     not-yet-asked tool blocks on permission.requestGrant (nothing runs), and a
-    denial keeps it from ever executing. The Developer profile does NOT relax this."""
+    denial keeps it from ever executing."""
     responses = [_tool_call_response(), ModelResponse(text="Okay.", tool_calls=[])]
     tool = _SpyTool()
     server, reader, writer, thread = _server(
-        tmp_path, responses, profile_id=profile_id, tool=tool
+        tmp_path, responses, profile_id="simple", tool=tool
     )
     try:
         reader.feed(
@@ -270,7 +270,7 @@ def test_permission_gate_blocks_and_denial_prevents_execution_in_both_profiles(
         assert tool.calls == []
         assert not any(f.get("id") == 1 and "result" in f for f in writer.frames)
 
-        # A denial still prevents execution — identically in both profiles.
+        # A denial still prevents execution.
         reader.feed(
             {"jsonrpc": "2.0", "id": 2, "method": Method.PERMISSION_RESPOND,
              "params": {"toolId": "spy_tool", "allow": False}}
@@ -279,8 +279,32 @@ def test_permission_gate_blocks_and_denial_prevents_execution_in_both_profiles(
         assert tool.calls == []
         tool_messages = [m for m in server.conversation.messages if m.role == "tool"]
         assert tool_messages and "declined" in tool_messages[0].content
-        # The active profile really is the one under test (surface, not gate).
-        assert server._active_profile.id.value == profile_id
+        assert server._active_profile.id.value == "simple"
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_developer_profile_auto_allows_non_destructive_tool_no_card(tmp_path):
+    """OPEN mode (Developer profile) is the deliberate change: a non-destructive
+    (LOW) tool auto-grants — no permission card is emitted, the tool runs, the turn
+    completes, and the auto-grant is recorded so the UI can show it happened.
+    "Open" means fewer prompts, not no gate — the gate still ran (and logged)."""
+    responses = [_tool_call_response(), ModelResponse(text="Okay.", tool_calls=[])]
+    tool = _SpyTool()
+    server, reader, writer, thread = _server(
+        tmp_path, responses, profile_id="developer", tool=tool
+    )
+    try:
+        result = _rpc(reader, writer, 1, Method.CONVERSATION_SEND_MESSAGE, {"text": "go"})
+        assert result["result"]["ok"] is True
+        # No permission card was ever emitted, and the tool DID run.
+        assert not any(
+            f.get("method") == Method.PERMISSION_REQUEST_GRANT for f in writer.frames
+        )
+        assert tool.calls == [{}]
+        # The gate ran and recorded the auto-grant (the "activity log").
+        assert server.permission_gate.auto_grants == ["spy_tool"]
+        assert server._active_profile.id.value == "developer"
     finally:
         _shutdown(reader, thread)
 
@@ -315,9 +339,10 @@ def test_profile_switch_emits_no_keychain_traffic(tmp_path):
     keychain round-trip or puts a key on the wire (§8.3)."""
     server, reader, writer, thread = _server(tmp_path, [])
     try:
+        # The switch flips the mode (GLOBAL invariant: no keys on the wire, either way).
         assert _rpc(reader, writer, 1, Method.PROFILE_SET, {"profileId": "developer"})[
             "result"
-        ] == {"ok": True}
+        ] == {"ok": True, "mode": "open"}
         _rpc(reader, writer, 2, Method.PROFILE_GET)
         assert not any(
             f.get("method") == Method.KEYCHAIN_GET_PROVIDER_KEY for f in writer.frames
@@ -367,6 +392,7 @@ def test_profile_get_default_then_set_flips_flags_immediately(tmp_path):
     try:
         got = _rpc(reader, writer, 1, Method.PROFILE_GET)["result"]
         assert got["activeProfile"] == "simple"
+        assert got["mode"] == "safe"   # Simple derives SAFE mode (policy.py)
         assert [p["id"] for p in got["profiles"]] == ["simple", "developer"]
         # Selector copy is present and honest about identical safety.
         dev = next(p for p in got["profiles"] if p["id"] == "developer")
@@ -379,12 +405,13 @@ def test_profile_get_default_then_set_flips_flags_immediately(tmp_path):
             "byokFirstOnboarding": False,
         }
 
-        # Switch takes effect immediately — no restart.
+        # Switch takes effect immediately — no restart — and reports the new mode.
         assert _rpc(reader, writer, 2, Method.PROFILE_SET, {"profileId": "developer"})[
             "result"
-        ] == {"ok": True}
+        ] == {"ok": True, "mode": "open"}
         flipped = _rpc(reader, writer, 3, Method.PROFILE_GET)["result"]
         assert flipped["activeProfile"] == "developer"
+        assert flipped["mode"] == "open"   # Developer derives OPEN mode
         assert flipped["flags"] == {
             "exposeRoutinePlan": True,
             "rawDiagnostics": True,
