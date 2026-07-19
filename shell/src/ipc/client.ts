@@ -13,6 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Method, type ModelRole } from "../types/protocol";
+import { asRecord } from "../lib/parse";
 import {
   parseConversationSummaries,
   type ConversationSummary,
@@ -407,10 +408,6 @@ export interface LoadedConversation {
   messages: LoadedConversationRow[];
 }
 
-function asRec(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 // --- provider.list / provider.connect parsers ------------------------------
 export interface ProviderConnectResult {
   ok: boolean;
@@ -418,11 +415,11 @@ export interface ProviderConnectResult {
 }
 
 function parseProviderList(result: unknown): ProviderInfo[] {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   const list = obj && Array.isArray(obj.providers) ? (obj.providers as unknown[]) : [];
   const out: ProviderInfo[] = [];
   for (const item of list) {
-    const row = asRec(item);
+    const row = asRecord(item);
     if (!row || typeof row.id !== "string") continue;
     const info: ProviderInfo = {
       id: row.id,
@@ -438,7 +435,7 @@ function parseProviderList(result: unknown): ProviderInfo[] {
 }
 
 function parseConnectResult(result: unknown): ProviderConnectResult {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   return {
     ok: obj?.ok === true,
     error: typeof obj?.error === "string" ? obj.error : undefined,
@@ -446,7 +443,7 @@ function parseConnectResult(result: unknown): ProviderConnectResult {
 }
 
 function parseConversationId(result: unknown): string {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   const id = obj?.conversationId ?? obj?.id;
   if (typeof id !== "string" || !id) {
     throw new Error("Couldn't start a new conversation.");
@@ -455,7 +452,7 @@ function parseConversationId(result: unknown): string {
 }
 
 function parseLoadedConversation(result: unknown): LoadedConversation {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   if (!obj) throw new Error("Couldn't open that conversation.");
   const conversationId =
     typeof obj.conversationId === "string"
@@ -466,7 +463,7 @@ function parseLoadedConversation(result: unknown): LoadedConversation {
   const rawMessages = Array.isArray(obj.messages) ? obj.messages : [];
   const messages: LoadedConversationRow[] = [];
   for (const item of rawMessages) {
-    const row = asRec(item);
+    const row = asRecord(item);
     if (!row || typeof row.role !== "string") continue;
     messages.push({
       id: typeof row.id === "string" ? row.id : "",
@@ -495,7 +492,7 @@ export interface WidgetMutationResult {
 const STAT_SOURCES: WidgetStatSource[] = ["tokens_month", "provider_latency", "connections"];
 
 function parseWidgetSpec(value: unknown): WidgetSpec | null {
-  const obj = asRec(value);
+  const obj = asRecord(value);
   if (!obj || typeof obj.title !== "string" || !obj.title) return null;
   if (obj.kind === "routine") {
     if (typeof obj.routineId !== "string" || !obj.routineId) return null;
@@ -512,11 +509,11 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
 }
 
 function parseWidgetList(result: unknown): Widget[] {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   const list = obj && Array.isArray(obj.widgets) ? (obj.widgets as unknown[]) : [];
   const out: Widget[] = [];
   for (const item of list) {
-    const row = asRec(item);
+    const row = asRecord(item);
     if (!row || typeof row.id !== "string") continue;
     const spec = parseWidgetSpec(row.spec);
     if (!spec) continue; // drop anything not one of the two allowed shapes
@@ -531,7 +528,7 @@ function parseWidgetList(result: unknown): Widget[] {
 }
 
 function parseWidgetMutation(result: unknown): WidgetMutationResult {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   return {
     ok: obj?.ok === true,
     error: typeof obj?.error === "string" ? obj.error : undefined,
@@ -539,7 +536,7 @@ function parseWidgetMutation(result: unknown): WidgetMutationResult {
 }
 
 function parseWidgetProposal(result: unknown): WidgetProposal {
-  const obj = asRec(result);
+  const obj = asRecord(result);
   const spec = parseWidgetSpec(obj?.spec);
   if (!obj || !spec) {
     throw new Error("Addison couldn't draft a widget from this yet.");
@@ -553,15 +550,15 @@ function parseWidgetProposal(result: unknown): WidgetProposal {
 }
 
 function parseStats(result: unknown): Stats {
-  const obj = asRec(result);
-  const tokens = asRec(obj?.tokensMonth);
+  const obj = asRecord(result);
+  const tokens = asRecord(obj?.tokensMonth);
   const total = typeof tokens?.total === "number" ? tokens.total : 0;
   const limit = typeof tokens?.limit === "number" ? tokens.limit : null;
 
   const latencyRaw = obj && Array.isArray(obj.providerLatency) ? obj.providerLatency : [];
   const providerLatency: ProviderLatencyStat[] = [];
   for (const item of latencyRaw) {
-    const row = asRec(item);
+    const row = asRecord(item);
     if (!row || typeof row.provider !== "string" || typeof row.ms !== "number") continue;
     providerLatency.push({
       provider: row.provider,
@@ -573,7 +570,7 @@ function parseStats(result: unknown): Stats {
   const connRaw = obj && Array.isArray(obj.connections) ? obj.connections : [];
   const connections: ConnectionStat[] = [];
   for (const item of connRaw) {
-    const row = asRec(item);
+    const row = asRecord(item);
     if (!row || typeof row.id !== "string") continue;
     const status = row.status;
     connections.push({

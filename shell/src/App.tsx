@@ -61,6 +61,7 @@ import { BellLogo } from "./components/BellLogo";
 import { MobileDrawer } from "./components/MobileDrawer";
 import { BottomSheet } from "./components/BottomSheet";
 import { useMediaQuery } from "./hooks/useMediaQuery";
+import { asRecord, normalizeVariables } from "./lib/parse";
 
 const DEFAULT_ROLE_KEY = "addison.defaultRole";
 const CLOUD_MODEL_KEY = "addison.cloudModel";
@@ -1455,10 +1456,6 @@ function pickEffort(model: CloudModel | undefined, current: string | undefined):
   return levels[Math.floor(levels.length / 2)].id;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
 function normalizePermission(p: Record<string, unknown>): PermissionRequest {
   const req = asRecord(p.request) ?? p;
   const riskTier = req.riskTier;
@@ -1613,19 +1610,7 @@ function normalizeProposal(result: unknown): RoutineProposal | null {
     steps: Array.isArray(obj.steps)
       ? obj.steps.filter((s): s is string => typeof s === "string")
       : [],
-    variables: Array.isArray(obj.variables)
-      ? obj.variables.flatMap((v) => {
-          const rv = asRecord(v);
-          if (!rv || typeof rv.name !== "string") return [];
-          return [
-            {
-              name: rv.name,
-              prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
-              default: typeof rv.default === "string" ? rv.default : null,
-            },
-          ];
-        })
-      : [],
+    variables: normalizeVariables(obj.variables),
   };
 }
 
@@ -1641,19 +1626,7 @@ function normalizeRailRoutines(result: unknown): RailRoutine[] {
     out.push({
       id: r.id,
       name: r.name,
-      variables: Array.isArray(r.variables)
-        ? r.variables.flatMap((v) => {
-            const rv = asRecord(v);
-            if (!rv || typeof rv.name !== "string") return [];
-            return [
-              {
-                name: rv.name,
-                prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
-                default: typeof rv.default === "string" ? rv.default : null,
-              },
-            ];
-          })
-        : [],
+      variables: normalizeVariables(r.variables),
     });
   }
   return out;

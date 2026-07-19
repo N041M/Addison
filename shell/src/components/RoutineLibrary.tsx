@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
+import { asRecord, normalizeVariables } from "../lib/parse";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
 // `routine.list` ONLY under the Developer profile; they are rendered READ-ONLY
@@ -297,34 +298,19 @@ function runSummary(routine: RoutineRow): string {
 }
 
 function normalizeRoutines(result: unknown): RoutineRow[] {
-  const record =
-    result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const record = asRecord(result);
   const list = record && Array.isArray(record.routines) ? record.routines : [];
   const out: RoutineRow[] = [];
   for (const item of list) {
-    if (!item || typeof item !== "object") continue;
-    const r = item as Record<string, unknown>;
-    if (typeof r.id !== "string" || typeof r.name !== "string") continue;
+    const r = asRecord(item);
+    if (!r || typeof r.id !== "string" || typeof r.name !== "string") continue;
     out.push({
       id: r.id,
       name: r.name,
       description: typeof r.description === "string" ? r.description : "",
       runCount: typeof r.runCount === "number" ? r.runCount : 0,
       lastRunAt: typeof r.lastRunAt === "number" ? r.lastRunAt : null,
-      variables: Array.isArray(r.variables)
-        ? r.variables.flatMap((v) => {
-            if (!v || typeof v !== "object") return [];
-            const rv = v as Record<string, unknown>;
-            if (typeof rv.name !== "string") return [];
-            return [
-              {
-                name: rv.name,
-                prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
-                default: typeof rv.default === "string" ? rv.default : null,
-              },
-            ];
-          })
-        : [],
+      variables: normalizeVariables(r.variables),
       // Present only under the Developer profile; absent (undefined) otherwise.
       planSteps: Array.isArray(r.planSteps) ? normalizePlanSteps(r.planSteps) : undefined,
     });

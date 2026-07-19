@@ -3,6 +3,7 @@
 // process boundary.
 
 import type { ChatMessage, ModelRole } from "./protocol";
+import { asRecord } from "../lib/parse";
 
 /** A message as rendered in the thread, with transient display flags. */
 export interface DisplayMessage extends ChatMessage {
@@ -44,7 +45,7 @@ export interface ConversationSummary {
  * fills sensible fallbacks so a partial payload never crashes the list.
  */
 export function parseConversationSummaries(result: unknown): ConversationSummary[] {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const record = asRecord(result);
   const list = Array.isArray(result)
     ? result
     : record && Array.isArray(record.conversations)
