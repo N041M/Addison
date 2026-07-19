@@ -509,7 +509,14 @@ export function App() {
     if (!isEngineConnected()) return;
     ipc
       .setProfile(profileId)
-      .then(() => refreshProfile())
+      .then(() => {
+        refreshProfile();
+        // A mode switch changes which routines/widgets are visible (dev-created
+        // ones hide in Simple, return in Developer). Re-fetch both so the rail
+        // and library reflect the new mode immediately — and so their empty
+        // states settle cleanly when the lists shrink.
+        refreshWidgets();
+      })
       .catch((err) => {
         setStatusBanner(
           err instanceof Error ? err.message : "I couldn't switch the profile.",
@@ -1078,6 +1085,9 @@ export function App() {
 
   const profileLabel =
     profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
+  // In OPEN (Developer) mode the sidebar appends a dim, mono " · open" — the one
+  // quiet acknowledgement that the safety posture is different. Nothing louder.
+  const profileModeNote = profile?.mode === "open" ? "open" : undefined;
 
   // First-run render pieces. The pine banner rides in the chat column above the
   // thread while first-run is active; the serif greeting replaces the welcome
@@ -1119,6 +1129,7 @@ export function App() {
           screen={screen}
           onOpenSettings={() => setScreen("settings")}
           profileLabel={profileLabel}
+          modeNote={profileModeNote}
         />
       )}
 
@@ -1251,12 +1262,14 @@ export function App() {
                 <WidgetRail
                   work={workBlock}
                   consent={consentBlock}
+                  developer={profileModeNote === "open"}
                   widgets={widgets}
                   stats={stats}
                   routines={railRoutines}
                   onSetPinned={handleSetWidgetPinned}
                   onDelete={handleDeleteWidget}
                   onRunRoutine={handleRunWidgetRoutine}
+                  onRunCommandWidget={(id) => ipc.runWidget(id)}
                   onAskBuildWidget={handleAskBuildWidget}
                 />
               )}
@@ -1309,6 +1322,7 @@ export function App() {
               setScreen("settings");
             }}
             profileLabel={profileLabel}
+            modeNote={profileModeNote}
           />
         </MobileDrawer>
       )}
@@ -1332,12 +1346,14 @@ export function App() {
           <WidgetRail
             variant="sheet"
             work={workBlock}
+            developer={profileModeNote === "open"}
             widgets={widgets}
             stats={stats}
             routines={railRoutines}
             onSetPinned={handleSetWidgetPinned}
             onDelete={handleDeleteWidget}
             onRunRoutine={handleRunWidgetRoutine}
+            onRunCommandWidget={(id) => ipc.runWidget(id)}
             onAskBuildWidget={() => {
               closeSheet();
               handleAskBuildWidget();
@@ -1581,9 +1597,14 @@ function normalizeProfile(result: unknown): ProfileState | null {
       })
     : [];
   const flags = asRecord(obj.flags) ?? {};
+  // The policy mode ("safe" | "open") the active profile runs under (policy.py).
+  // Anything unrecognized falls back to "safe" — an unknown surface never
+  // escalates the safety model.
+  const mode = obj.mode === "open" ? "open" : "safe";
   return {
     activeProfile: typeof obj.activeProfile === "string" ? obj.activeProfile : "simple",
     profiles,
+    mode,
     flags: {
       exposeRoutinePlan: flags.exposeRoutinePlan === true,
       rawDiagnostics: flags.rawDiagnostics === true,
@@ -1638,9 +1659,11 @@ function normalizeRailRoutines(result: unknown): RailRoutine[] {
   for (const item of list) {
     const r = asRecord(item);
     if (!r || typeof r.id !== "string" || typeof r.name !== "string") continue;
+    const rawMode = r.createdInMode ?? r.created_in_mode;
     out.push({
       id: r.id,
       name: r.name,
+      createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
       variables: Array.isArray(r.variables)
         ? r.variables.flatMap((v) => {
             const rv = asRecord(v);

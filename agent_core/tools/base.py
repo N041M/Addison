@@ -11,11 +11,15 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from agent_core.policy import PolicyMode
+
 
 class RiskTier(str, Enum):
     LOW = "low"        # read-only, no undo needed
     MEDIUM = "medium"  # mutating, must have undo()
-    HIGH = "high"      # not permitted in v1's default registry at all
+    HIGH = "high"      # SAFE mode: not permitted at all. OPEN mode: dev-only tools
+                       # (e.g. run_command) register at HIGH via ToolRegistry's
+                       # allow_missing_undo path and are never in the SAFE view.
 
 
 @dataclass
@@ -109,6 +113,12 @@ class ExecutionContext:
     conversation_id: str
     # IPC handle to the Tauri shell — the ShellBridge above; None in CLI/test mode.
     shell_bridge: ShellBridge | None = None
+    # The active policy mode for this execution (policy.py). SAFE by default so a
+    # tool constructed without a mode behaves conservatively; the orchestrator and
+    # routine engine set the live mode. A dev-only tool (run_command) reads this as
+    # a belt-and-suspenders check — it refuses to run under SAFE even though the
+    # SAFE registry view never surfaces it in the first place.
+    policy_mode: PolicyMode = PolicyMode.SAFE
 
 
 @runtime_checkable
@@ -125,3 +135,34 @@ class Tool(Protocol):
         ``ToolRegistry.register()``.
         """
         ...
+
+
+def call_is_destructive(tool: Any, args: dict) -> bool:
+    """Per-call destructiveness for the mode-aware PermissionGate (OPEN mode).
+
+    In OPEN mode the gate auto-allows a non-destructive call and prompts for a
+    destructive one (policy.py, spec §8 SAFE-mode carve-out). A tool may classify
+    its OWN call by implementing ``is_destructive(args) -> bool`` — ``run_command``
+    does this so a read-only command (``ls``, ``git status``) auto-allows while
+    anything that can mutate prompts. With no classifier, a call is destructive iff
+    the tool's tier is HIGH; LOW and MEDIUM tools are non-destructive. (SAFE mode
+    ignores this entirely — it prompts for every not-yet-granted tool as before.)"""
+    classifier = getattr(tool, "is_destructive", None)
+    if callable(classifier):
+        return bool(classifier(args))
+    return tool.definition.risk_tier is RiskTier.HIGH
+
+
+def call_permission_detail(tool: Any, args: dict) -> str | None:
+    """What exactly this call would do, for the per-invocation permission card.
+
+    Destructive OPEN-mode actions prompt on EVERY invocation (gate.authorize), and
+    the card must show the user what they are approving each time — so a tool may
+    implement ``permission_detail(args) -> str`` (run_command returns the command
+    text, truncated). None (the default) leaves the card with just the tool's
+    static label/description, as in SAFE mode."""
+    provider = getattr(tool, "permission_detail", None)
+    if callable(provider):
+        value = provider(args)
+        return str(value) if value else None
+    return None

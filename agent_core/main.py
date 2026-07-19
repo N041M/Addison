@@ -45,6 +45,7 @@ from agent_core.models_catalog import (
 )
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.policy import PolicyMode, mode_for_profile
 from agent_core.profiles import (
     DEVELOPER,
     SIMPLE,
@@ -77,13 +78,19 @@ from agent_core.routines.library import RoutineLibrary
 from agent_core.routines.model import RoutineStep
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import ActionSnapshot
+from agent_core.tools.base import (
+    ActionSnapshot,
+    ExecutionContext,
+    call_is_destructive,
+    call_permission_detail,
+)
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
 from agent_core.tools.read_clipboard import ReadClipboardTool
 from agent_core.tools.read_file import ReadFileTool
 from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.web_search import WebSearchTool
 from agent_core.widgets import MAX_PINNED, validate_widget_spec, widget_summary
@@ -178,10 +185,17 @@ def _auto_title(text: str) -> str | None:
 def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
-    A Profile chooses *which* tools are registered; it never changes *how* safety
-    is enforced — registration still RAISES for any MEDIUM/HIGH tool lacking undo()
-    (that's the safety invariant, not a bug). Defaults to the Simple profile, whose
-    tool set is exactly the v1 §4.2 table.
+    A Profile chooses *which* SAFE-view tools are registered; it never changes *how*
+    safety is enforced — registration still RAISES for any MEDIUM/HIGH tool lacking
+    undo() (that's the safety invariant, not a bug). Defaults to the Simple profile,
+    whose SAFE tool set is exactly the v1 §4.2 table.
+
+    Mode-scoped safety (owner decision 2026-07-19, policy.py): the dev-only
+    ``run_command`` tool is ALWAYS registered here, regardless of profile, but as
+    ``dev_only`` — it is absent from the SAFE view (``visible_tools(SAFE)``) and only
+    surfaces in OPEN mode. There is one shared registry; the SAFE/OPEN split is a
+    filtered view over it (so routines use the same instances — §8.5), never a
+    second registry. A runtime profile switch therefore needs no re-registration.
 
     ``shell_bridge`` is threaded into the constructors of the tools whose ``undo()``
     needs it (save_file, draft_message): undo() gets no ExecutionContext, so its
@@ -201,9 +215,11 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
     }
     registry = ToolRegistry()
     for tool_id in profile.tool_ids:
-        # TODO(step 11): Developer-profile opt-in higher-risk tools will live in
-        # this map too; they register through the same undo check as everything else.
         registry.register(all_tools[tool_id])
+    # OPEN-mode only, dev_only: real command execution. Registered once in the shared
+    # registry; hidden from the SAFE view. Exempt from the undo check BECAUSE it is
+    # dev_only and never reachable from SAFE mode (registry.register / run_command.py).
+    registry.register(RunCommandTool(), dev_only=True)
     return registry
 
 
@@ -271,11 +287,12 @@ def _terminal_permission_handler(registry: ToolRegistry):
     harness we print the tool's plain-language label + description (this app's
     users are non-technical — CLAUDE.md) and read a yes/no from the terminal."""
 
-    def handler(tool_id: str) -> PermissionStatus:
+    def handler(tool_id: str, detail: str | None = None) -> PermissionStatus:
         definition = registry.get(tool_id).definition
         print()
         print(f"Addison would like to: {definition.label}")
-        print(f"  {definition.description}")
+        # The per-invocation destructive card names the exact command each time.
+        print(f"  This time it wants to run: {detail}" if detail else f"  {definition.description}")
         answer = input("Allow this? (y/n) ").strip().lower()
         if answer in ("y", "yes"):
             return PermissionStatus.GRANTED
@@ -448,13 +465,20 @@ class JsonRpcServer:
 
         # The gate's consent prompt IS an IPC round-trip (§4.3): emit the card,
         # then block the worker on a per-tool Event until permission.respond lands.
-        self.permission_gate = PermissionGate(on_request=self._on_permission_request)
+        # In OPEN mode a non-destructive call is auto-granted; ``on_auto_grant``
+        # surfaces that in the activity log so the UI can still show what happened.
+        self.permission_gate = PermissionGate(
+            on_request=self._on_permission_request,
+            on_auto_grant=self._on_auto_grant,
+        )
 
         # The active §4.7 Profile, resolved from the store on the worker thread by
         # _ensure_built and held here so it can be consulted per-use (onboarding path,
-        # raw diagnostics, routine-plan visibility). profile.set updates it in place so
-        # a switch takes effect immediately, no restart. It is a SURFACE choice only —
-        # it never gates tool execution or touches key handling (§8.7).
+        # raw diagnostics, routine-plan visibility) AND the policy mode it derives
+        # (policy.py: Simple=SAFE, Developer=OPEN), which reshapes the visible tool set
+        # and gate prompting. profile.set updates it in place so a switch takes effect
+        # immediately, no restart. The two GLOBAL invariants never move with it: keys
+        # stay keychain-only (never webview/SQLite) and there is no scheduling (§8.3, §6.7).
         self._active_profile: Profile | None = None
 
         # Built on the worker thread by _ensure_built (SQLite thread affinity).
@@ -733,6 +757,8 @@ class JsonRpcServer:
                     self._handle_widget_propose(request_id)
                 elif kind == "widget_confirm":
                     self._handle_widget_confirm(params, request_id)
+                elif kind == "widget_run":
+                    self._handle_widget_run(params, request_id)
                 elif kind == "stats_get":
                     self._respond(request_id, self._stats_get())
             except RuntimeError as exc:
@@ -826,6 +852,7 @@ class JsonRpcServer:
                 requested_role=requested_role,
                 model_name=model_name,
                 effort=effort,
+                mode=self._mode(),
             )
             # Full-transcript persistence (§4.8 substrate): every message the turn
             # appended, in order, so a later rewind can target any of them by id.
@@ -894,10 +921,33 @@ class JsonRpcServer:
         self._message_ids.append(message_id)
         return message_id
 
+    # --- policy mode ------------------------------------------------------
+    def _mode(self) -> PolicyMode:
+        """The live policy mode, derived 1:1 from the active profile (policy.py).
+        SAFE for Simple, OPEN for Developer. Read fresh each time so a profile.set
+        takes effect immediately — no per-mode state is cached anywhere."""
+        return mode_for_profile(self._active_profile)
+
+    def _on_auto_grant(self, tool_id: str) -> None:
+        """OPEN mode auto-allowed a non-destructive call: record it in the activity
+        log so the UI can show it was approved automatically (not a user prompt)."""
+        self._notify(
+            Method.TOOL_ACTIVITY_UPDATE,
+            {"toolId": tool_id, "label": self._label(tool_id), "autoGranted": True},
+        )
+
     # --- permissions ------------------------------------------------------
-    def _on_permission_request(self, tool_id: str) -> PermissionStatus:
-        """Runs on the worker thread: render the card, block for the answer."""
+    def _on_permission_request(self, tool_id: str, detail: str | None = None) -> PermissionStatus:
+        """Runs on the worker thread: render the card, block for the answer.
+
+        ``detail`` is set on the destructive-in-OPEN per-invocation path (the exact
+        command text, already truncated by the tool) — the card's description then
+        names precisely what is being approved this time, because that approval
+        never carries over to the next destructive call."""
         definition = self.tool_registry.get(tool_id).definition
+        description = definition.description
+        if detail:
+            description = f"This time it wants to run: {detail}"
         event = threading.Event()
         with self._perm_lock:
             self._permission_waiters[tool_id] = {"event": event, "allow": False}
@@ -906,7 +956,7 @@ class JsonRpcServer:
             {
                 "toolId": tool_id,
                 "label": definition.label,
-                "description": definition.description,
+                "description": description,
                 "riskTier": definition.risk_tier.value,
             },
         )
@@ -1083,7 +1133,15 @@ class JsonRpcServer:
             draft.name = str(params["name"])
         if params.get("description"):
             draft.description = str(params["description"])
-        self.routine_builder.save(draft, conversation_id=self.conversation.id)
+        # Saved under the current mode; builder.save refuses a command-step routine
+        # in SAFE mode and stamps created_in_mode so SAFE can later hide it.
+        try:
+            self.routine_builder.save(
+                draft, conversation_id=self.conversation.id, mode=self._mode()
+            )
+        except ValueError as exc:
+            self._respond_error(request_id, _SERVER_ERROR, str(exc))
+            return
         self._draft_routine = None
         self._respond(request_id, {"ok": True, "routineId": draft.id})
 
@@ -1094,8 +1152,13 @@ class JsonRpcServer:
         # structural step editing stays v2 (§10).
         profile = self._active_profile
         expose_plan = profile is not None and profile.expose_routine_plan
+        safe_mode = self._mode() is PolicyMode.SAFE
         rows = []
         for entry in self.routine_library.list():
+            # Dev-created routines are hidden while the Simple profile is active
+            # (policy.py) — never listed, and they return untouched in Developer mode.
+            if safe_mode and entry.get("createdInMode") == PolicyMode.OPEN.value:
+                continue
             routine = entry["routine"]
             row = {
                 "id": routine.id,
@@ -1103,6 +1166,9 @@ class JsonRpcServer:
                 "description": routine.description,
                 "runCount": entry["runCount"],
                 "lastRunAt": entry["lastRunAt"],
+                # Display-only mode provenance: lets the frontend badge dev-created
+                # routines ("DEV" tag). Never consulted for permissions.
+                "createdInMode": entry.get("createdInMode"),
                 "variables": [
                     {"name": v.name, "prompt": v.prompt, "default": v.default}
                     for v in routine.variables
@@ -1123,12 +1189,27 @@ class JsonRpcServer:
         return rows
 
     def _handle_routine_run(self, params: dict, request_id) -> None:
+        routine_id = params.get("routineId")
         try:
-            routine = self.routine_library.get(params.get("routineId"))
+            routine = self.routine_library.get(routine_id)
         except KeyError as exc:
             self._respond_error(request_id, _SERVER_ERROR, str(exc))
             return
-        result = self.routine_engine.run(routine, params.get("variables") or {})
+        # A dev-created routine is REFUSED in SAFE mode — it waits for Developer mode
+        # (policy.py). Switching modes is always allowed, so the routine isn't lost.
+        mode = self._mode()
+        if (
+            mode is PolicyMode.SAFE
+            and self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
+        ):
+            self._respond_error(
+                request_id,
+                _SERVER_ERROR,
+                "That routine uses developer abilities, so it's waiting in "
+                "Developer profile.",
+            )
+            return
+        result = self.routine_engine.run(routine, params.get("variables") or {}, mode=mode)
         self.routine_library.record_run(routine.id)
         # Remember the routine just run so a widget proposed right after offers it
         # (display-only signal — never affects permissions).
@@ -1272,13 +1353,19 @@ class JsonRpcServer:
         """widget.list -> stored widgets, INVALID specs hidden at render (safety:
         a spec that fails validate_widget_spec is never surfaced or run)."""
         self._ensure_built()
+        mode = self._mode()
+        safe_mode = mode is PolicyMode.SAFE
         widgets: list[dict] = []
         for row in self.store.list_widgets():
+            # Dev-created widgets are hidden while the Simple profile is active
+            # (policy.py) — and command widgets also fail SAFE-mode validation below.
+            if safe_mode and row.get("created_in_mode") == PolicyMode.OPEN.value:
+                continue
             try:
                 spec = json.loads(row["spec_json"])
             except ValueError:
                 continue
-            if validate_widget_spec(spec) is not None:
+            if validate_widget_spec(spec, mode) is not None:
                 continue
             widgets.append(
                 {
@@ -1286,6 +1373,9 @@ class JsonRpcServer:
                     "spec": spec,
                     "pinned": row["pinned"],
                     "position": row["position"],
+                    # Display-only mode provenance for the frontend's "DEV" tag —
+                    # never consulted for permissions (the gate re-checks at run).
+                    "createdInMode": row.get("created_in_mode"),
                 }
             )
         return {"widgets": widgets}
@@ -1308,11 +1398,84 @@ class JsonRpcServer:
             self.store.delete_widget(widget_id)
         return {"ok": True}
 
+    def _handle_widget_run(self, params: dict, request_id) -> None:
+        """widget.run — the rail's Run pill for a COMMAND widget (OPEN mode only).
+
+        Routine and stat widgets refuse here: their actions already have homes
+        (routine.run / stats.get). The command runs through the SAME registry +
+        gate path as a routine command step, so the per-invocation destructive
+        prompt holds — clicking a widget can never skip a card the chat would
+        have shown. SAFE mode refuses before touching the registry (dev-created
+        widgets are already hidden from SAFE lists; this is the belt for a stale
+        frontend or a raced mode switch)."""
+        self._ensure_built()
+        widget_id = params.get("id")
+        row = self.store.get_widget(widget_id) if widget_id else None
+        if row is None:
+            self._respond(request_id, {"ok": False, "error": "That widget isn't here any more."})
+            return
+        try:
+            spec = json.loads(row["spec_json"])
+        except ValueError:
+            self._respond(request_id, {"ok": False, "error": "That widget can't run."})
+            return
+        if spec.get("kind") != "command":
+            self._respond(
+                request_id,
+                {"ok": False, "error": "That widget doesn't run commands."},
+            )
+            return
+        mode = self._mode()
+        if mode is PolicyMode.SAFE:
+            self._respond(
+                request_id,
+                {
+                    "ok": False,
+                    "error": "That widget uses developer abilities, so it's waiting in "
+                    "Developer profile.",
+                },
+            )
+            return
+        tool = self.tool_registry.get("run_command")
+        args = {"command": spec.get("command", "")}
+        status = self.permission_gate.authorize(
+            "run_command",
+            mode=mode,
+            destructive=call_is_destructive(tool, args),
+            detail=call_permission_detail(tool, args),
+        )
+        if status != PermissionStatus.GRANTED:
+            self._respond(
+                request_id,
+                {"ok": False, "error": "You declined a permission it needs."},
+            )
+            return
+        context = ExecutionContext(
+            conversation_id=f"widget:{widget_id}",
+            shell_bridge=self._shell_bridge,
+            policy_mode=mode,
+        )
+        try:
+            result = tool.execute(args, context)
+        except RuntimeError as exc:
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+        except Exception:
+            self._respond(request_id, {"ok": False, "error": "That widget's command didn't work."})
+            return
+        # run_command truncates its own transcript output, so content passes through.
+        self._respond(
+            request_id,
+            {"ok": result.success, "output": result.content}
+            if result.success
+            else {"ok": False, "error": result.content},
+        )
+
     def _handle_widget_propose(self, request_id) -> None:
         """Draft a widget spec from the recent conversation (mirrors routine.propose:
         draft held in memory, nothing saved yet). v1 only proposes a routine widget
         (a routine just run or named) or a matching stat widget; otherwise refuses."""
-        draft = self._draft_widget_from_conversation()
+        draft = self._draft_widget_from_conversation(self._mode())
         if draft is None:
             self._respond_error(request_id, _SERVER_ERROR, "I can't make a widget from this yet.")
             return
@@ -1341,7 +1504,8 @@ class JsonRpcServer:
             self._draft_widget = None
             self._respond(request_id, {"ok": False, "declined": True})
             return
-        error = validate_widget_spec(draft)
+        mode = self._mode()
+        error = validate_widget_spec(draft, mode)
         if error is not None:
             self._draft_widget = None
             self._respond_error(request_id, _SERVER_ERROR, error)
@@ -1354,17 +1518,23 @@ class JsonRpcServer:
             pinned=pinned,
             position=self.store.next_widget_position(),
             created_at=int(time.time()),
+            created_in_mode=mode.value,
         )
         self._draft_widget = None
         self._respond(request_id, {"ok": True, "widgetId": widget_id, "pinned": pinned})
 
-    def _draft_widget_from_conversation(self) -> dict | None:
-        """The v1 widget heuristic. Returns a valid spec dict or None (a refusal).
+    def _draft_widget_from_conversation(self, mode: PolicyMode) -> dict | None:
+        """The widget heuristic. Returns a valid spec dict or None (a refusal).
 
         Priority: an explicit ask for token/latency/connection info -> that stat
-        widget; else the routine just run, or a routine named in the recent chat ->
-        that routine widget; else None."""
+        widget; else (OPEN mode only) the last run_command in the recent chat -> a
+        command widget; else the routine just run, or a routine named in the recent
+        chat -> that routine widget; else None."""
         recent = self.conversation.messages[-10:]
+        if mode is PolicyMode.OPEN:
+            command = self._recent_command(recent)
+            if command is not None:
+                return {"kind": "command", "command": command, "title": command[:60]}
         joined = " ".join(
             m.content.lower()
             for m in recent
@@ -1388,6 +1558,19 @@ class JsonRpcServer:
                 return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
         return None
 
+    @staticmethod
+    def _recent_command(messages: list) -> str | None:
+        """The most recent run_command invocation in ``messages`` (OPEN mode only),
+        so a command widget can be proposed from it. None if there is no such call."""
+        command: str | None = None
+        for message in messages:
+            for call in getattr(message, "tool_calls", None) or []:
+                if getattr(call, "tool_id", None) == "run_command":
+                    value = (call.args or {}).get("command")
+                    if isinstance(value, str) and value.strip():
+                        command = value
+        return command
+
     # --- profiles (§4.7) --------------------------------------------------
     def _profile_get(self) -> dict:
         """The active profile, the selector's option list, and the feature flags
@@ -1396,6 +1579,9 @@ class JsonRpcServer:
         active = self._active_profile or SIMPLE
         return {
             "activeProfile": active.id.value,
+            # The policy mode this profile runs under ('safe' | 'open'), derived 1:1
+            # from the profile (policy.py). Consumed by the next (frontend) PR.
+            "mode": mode_for_profile(active).value,
             "profiles": [
                 {"id": p.id.value, "label": p.label, "description": p.description}
                 for p in (SIMPLE, DEVELOPER)
@@ -1412,9 +1598,13 @@ class JsonRpcServer:
         """Persist the chosen profile and re-resolve it for the running server so the
         switch takes effect immediately (no restart). An unknown id is refused plainly.
 
-        Switching profile changes ONLY the surface (onboarding path, diagnostics
-        detail, routine-plan visibility). It does NOT touch the permission gate, the
-        undo-at-registration check, or key handling — those hold identically (§8.7)."""
+        Mode-scoped safety (owner decision 2026-07-19, policy.py): the profile also
+        derives the policy mode — Simple=SAFE, Developer=OPEN — which reshapes the
+        permission gate (OPEN prompts only for destructive actions) and the visible
+        tool set (OPEN surfaces run_command). The two GLOBAL invariants never move:
+        keys stay keychain-only and never reach the webview/SQLite, and there is no
+        scheduling in either mode. Switching modes is always allowed; dev-created
+        routines/widgets simply hide in SAFE and return in OPEN."""
         try:
             profile = get_profile(ProfileId(params.get("profileId")))
         except ValueError:
@@ -1422,7 +1612,11 @@ class JsonRpcServer:
             return
         self.store.set_setting("active_profile", profile.id.value)
         self._active_profile = profile
-        self._respond(request_id, {"ok": True})
+        # Mode is derived live from _active_profile (policy.py) — the switch takes
+        # effect immediately and needs no per-mode cache to refresh: the orchestrator
+        # reads visible_tools(mode) per turn and the gate takes mode per call. Return
+        # the new mode for the frontend (next PR).
+        self._respond(request_id, {"ok": True, "mode": mode_for_profile(profile).value})
 
     # --- model roles ------------------------------------------------------
     def _maybe_load_catalogs(self) -> None:
@@ -1809,6 +2003,7 @@ _WIDGET_JOBS = {
     Method.WIDGET_DELETE: "widget_delete",
     Method.WIDGET_PROPOSE_FROM_CONVERSATION: "widget_propose",
     Method.WIDGET_CONFIRM_SAVE: "widget_confirm",
+    Method.WIDGET_RUN: "widget_run",
 }
 
 
@@ -1845,8 +2040,9 @@ def _plain(exc: Exception) -> str:
 
 def main() -> None:
     # §4.7: build the tool registry profile-agnostically — both v1 profiles register
-    # the same §4.2 tool set. The server resolves the *persisted* active profile on its
-    # worker thread (with the store) and consults it per-use; see server.run() below.
+    # the same §4.2 SAFE tool set plus the dev_only run_command (hidden from the SAFE
+    # view). The server resolves the *persisted* active profile on its worker thread
+    # (with the store), derives its policy mode (policy.py), and consults both per-use.
     profile = resolve_active_profile()
     shell_bridge = IpcShellBridge()             # sender bound by the server below
     registry = build_registry(profile, shell_bridge=shell_bridge)

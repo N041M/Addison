@@ -18,7 +18,14 @@ from __future__ import annotations
 import time
 import uuid
 
-from agent_core.routines.model import Routine, RoutineStep, RoutineVariable, routine_to_json
+from agent_core.policy import PolicyMode
+from agent_core.routines.model import (
+    Routine,
+    RoutineStep,
+    RoutineVariable,
+    routine_to_json,
+    routine_uses_dev_abilities,
+)
 
 # Heuristic generalization table (§6.3): argument names that are per-run inputs
 # by nature. A file handle is SESSION-SCOPED (the picker granted it once), so it
@@ -48,17 +55,31 @@ class RoutineBuilder:
                 continue
             for call in getattr(message, "tool_calls", []) or []:
                 step_id = f"step_{len(steps) + 1}"
-                args_template = self._generalize_args(dict(call.args), variables)
-                steps.append(
-                    RoutineStep(
-                        step_id=step_id,
-                        tool_id=call.tool_id,
-                        args_template=args_template,
-                        # Sequential chain: each step waits for the one before it,
-                        # mirroring the order things actually happened live.
-                        depends_on=[previous_step_id] if previous_step_id else [],
+                depends_on = [previous_step_id] if previous_step_id else []
+                if call.tool_id == "run_command":
+                    # A run_command live action becomes a COMMAND step (OPEN mode
+                    # only) — the single dev ability a proposed routine can carry.
+                    steps.append(
+                        RoutineStep(
+                            step_id=step_id,
+                            tool_id="run_command",
+                            args_template={},
+                            depends_on=depends_on,
+                            command=str(dict(call.args).get("command", "")),
+                        )
                     )
-                )
+                else:
+                    args_template = self._generalize_args(dict(call.args), variables)
+                    steps.append(
+                        RoutineStep(
+                            step_id=step_id,
+                            tool_id=call.tool_id,
+                            args_template=args_template,
+                            # Sequential chain: each step waits for the one before it,
+                            # mirroring the order things actually happened live.
+                            depends_on=depends_on,
+                        )
+                    )
                 previous_step_id = step_id
 
         if not steps:
@@ -115,11 +136,25 @@ class RoutineBuilder:
             ],
         }
 
-    def save(self, draft: Routine, conversation_id: str | None = None) -> Routine:
+    def save(
+        self,
+        draft: Routine,
+        conversation_id: str | None = None,
+        mode: PolicyMode = PolicyMode.SAFE,
+    ) -> Routine:
         """Persist to the routines table — only ever called after the user's
-        explicit confirmation (routine.confirmSave), never silently."""
+        explicit confirmation (routine.confirmSave), never silently.
+
+        A routine carrying an OPEN-mode-only ability (a command step) may be saved
+        ONLY in OPEN mode; attempting it in SAFE mode raises ValueError with a plain
+        sentence. ``created_in_mode`` records the mode so SAFE can later hide it."""
         if self._store is None:
             raise RuntimeError("Routines can't be saved in this mode.")
+        if mode is not PolicyMode.OPEN and routine_uses_dev_abilities(draft):
+            raise ValueError(
+                "That routine uses developer abilities, so it can only be saved in "
+                "the Developer profile."
+            )
         self._store.insert_routine(
             id=draft.id,
             name=draft.name,
@@ -127,5 +162,6 @@ class RoutineBuilder:
             plan_json=routine_to_json(draft),
             created_from_conversation_id=conversation_id,
             created_at=int(time.time()),
+            created_in_mode=mode.value,
         )
         return draft

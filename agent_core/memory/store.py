@@ -41,6 +41,22 @@ class Store:
         self._migrate_provider_config()
         self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         self._conn.commit()
+        # Mode-scoped safety (owner decision 2026-07-19): add created_in_mode to
+        # tables that predate it. Guarded like _migrate_provider_config — a fresh DB
+        # already has the column from schema.sql (no-op), an older DB gets it added
+        # with the safe default so existing artifacts stay visible in SAFE mode.
+        self._add_column_if_missing(
+            "routines", "created_in_mode", "TEXT NOT NULL DEFAULT 'safe'"
+        )
+        self._add_column_if_missing(
+            "widgets", "created_in_mode", "TEXT NOT NULL DEFAULT 'safe'"
+        )
+
+    def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
+        cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+        if cols and not any(row["name"] == column for row in cols):
+            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            self._conn.commit()
 
     def _migrate_provider_config(self) -> None:
         """Drop a pre-multi-provider ``provider_config`` so the new per-provider
@@ -288,23 +304,26 @@ class Store:
         plan_json: dict,
         created_from_conversation_id: str | None,
         created_at: int,
+        created_in_mode: str = "safe",
     ) -> None:
         """Persist a confirmed Routine (§6.3 — only ever after explicit user
         confirmation). ``plan_json`` is the §6.2 declarative plan; it is stored
-        as JSON text and never contains code by construction."""
+        as JSON text and never contains code by construction. ``created_in_mode``
+        records the policy mode it was saved under ('safe' | 'open') so SAFE mode
+        can hide dev-created routines (policy.py)."""
         self._conn.execute(
             "INSERT INTO routines "
             "(id, name, description, plan_json, created_from_conversation_id, "
-            " created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            " created_at, updated_at, created_in_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (id, name, description, json.dumps(plan_json),
-             created_from_conversation_id, created_at, created_at),
+             created_from_conversation_id, created_at, created_at, created_in_mode),
         )
         self._conn.commit()
 
     def list_routines(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, name, description, plan_json, run_count, last_run_at "
+            "SELECT id, name, description, plan_json, run_count, last_run_at, created_in_mode "
             "FROM routines ORDER BY created_at ASC, rowid ASC"
         ).fetchall()
         return [
@@ -313,7 +332,7 @@ class Store:
 
     def get_routine(self, routine_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
-            "SELECT id, name, description, plan_json, run_count, last_run_at "
+            "SELECT id, name, description, plan_json, run_count, last_run_at, created_in_mode "
             "FROM routines WHERE id = ?",
             (routine_id,),
         ).fetchone()
@@ -534,19 +553,26 @@ class Store:
 
     # --- widgets (declarative specs — see agent_core/widgets.py) --------------
     def insert_widget(
-        self, *, id: str, spec_json: str, pinned: bool, position: int, created_at: int
+        self,
+        *,
+        id: str,
+        spec_json: str,
+        pinned: bool,
+        position: int,
+        created_at: int,
+        created_in_mode: str = "safe",
     ) -> None:
         self._conn.execute(
-            "INSERT INTO widgets (id, spec_json, pinned, position, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (id, spec_json, int(pinned), int(position), created_at),
+            "INSERT INTO widgets (id, spec_json, pinned, position, created_at, created_in_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id, spec_json, int(pinned), int(position), created_at, created_in_mode),
         )
         self._conn.commit()
 
     def list_widgets(self) -> list[dict[str, Any]]:
         """Every stored widget, in user-visible order (position, then insertion)."""
         rows = self._conn.execute(
-            "SELECT id, spec_json, pinned, position, created_at FROM widgets "
+            "SELECT id, spec_json, pinned, position, created_at, created_in_mode FROM widgets "
             "ORDER BY position ASC, rowid ASC"
         ).fetchall()
         return [
@@ -556,13 +582,15 @@ class Store:
                 "pinned": bool(row["pinned"]),
                 "position": row["position"],
                 "created_at": row["created_at"],
+                "created_in_mode": row["created_in_mode"],
             }
             for row in rows
         ]
 
     def get_widget(self, widget_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
-            "SELECT id, spec_json, pinned, position, created_at FROM widgets WHERE id = ?",
+            "SELECT id, spec_json, pinned, position, created_at, created_in_mode "
+            "FROM widgets WHERE id = ?",
             (widget_id,),
         ).fetchone()
         if row is None:
@@ -573,6 +601,7 @@ class Store:
             "pinned": bool(row["pinned"]),
             "position": row["position"],
             "created_at": row["created_at"],
+            "created_in_mode": row["created_in_mode"],
         }
 
     def set_widget_pinned(self, widget_id: str, pinned: bool) -> None:

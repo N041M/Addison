@@ -86,7 +86,12 @@ CREATE TABLE IF NOT EXISTS routines (
     created_at      INTEGER NOT NULL,
     updated_at      INTEGER NOT NULL,
     run_count       INTEGER NOT NULL DEFAULT 0,
-    last_run_at     INTEGER
+    last_run_at     INTEGER,
+    -- Mode-scoped safety (owner decision 2026-07-19, policy.py): the policy mode
+    -- this routine was SAVED under ('safe' | 'open'). A routine created in OPEN
+    -- (Developer) mode is HIDDEN and REFUSED in SAFE mode — never listed, never
+    -- runnable — and returns untouched when Developer mode is active again.
+    created_in_mode TEXT NOT NULL DEFAULT 'safe'
 );
 
 CREATE TABLE IF NOT EXISTS routine_runs (
@@ -117,7 +122,11 @@ CREATE TABLE IF NOT EXISTS widgets (
     spec_json       TEXT NOT NULL,           -- a DECLARATIVE widget spec (see agent_core/widgets.py)
     pinned          INTEGER NOT NULL DEFAULT 1,   -- boolean: shown as a card vs. behind the tray
     position        INTEGER NOT NULL DEFAULT 0,   -- user-visible order
-    created_at      INTEGER NOT NULL
+    created_at      INTEGER NOT NULL,
+    -- Mode-scoped safety (owner decision 2026-07-19): the policy mode this widget
+    -- was saved under ('safe' | 'open'). Widgets created in OPEN mode (e.g. a
+    -- command widget, or a widget wrapping a dev routine) are hidden in SAFE mode.
+    created_in_mode TEXT NOT NULL DEFAULT 'safe'
 );
 -- Widgets are DECLARATIVE specs only — a saved-routine Run pill or a whitelisted
 -- stat display. NEVER code, expressions, or templates; validated at save AND at

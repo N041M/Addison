@@ -14,6 +14,7 @@
 // the typed ipc for actions.
 
 import { useState, type ReactNode } from "react";
+import type { WidgetRunResult } from "../ipc/client";
 import type { Widget, Stats, WidgetStatSource } from "../types/ui";
 
 const TRAY_OPEN_KEY = "addison.trayOpen";
@@ -23,6 +24,8 @@ export interface RailRoutine {
   id: string;
   name: string;
   variables: { name: string; prompt: string; default: string | null }[];
+  /** The mode the routine was saved under ("safe" | "open"), when the core sends it. */
+  createdInMode?: "safe" | "open";
 }
 
 interface Props {
@@ -38,7 +41,15 @@ interface Props {
    * mode — the sheet shows widgets + Addison's work only.
    */
   variant?: "rail" | "sheet";
-  /** Stored widgets from `widget.list` (routine/stat specs). */
+  /**
+   * OPEN/Developer mode is active — surface the small blocky "DEV" annotation on
+   * dev-created items (command widgets, and any widget/routine whose
+   * createdInMode is "open" — the core forwards it on both list responses). In
+   * Simple mode these items are already filtered out by the core, so this stays
+   * false.
+   */
+  developer?: boolean;
+  /** Stored widgets from `widget.list` (routine/stat/command specs). */
   widgets: Widget[];
   /** Core-computed stats for the token meter + connections cards. */
   stats: Stats | null;
@@ -47,6 +58,9 @@ interface Props {
   onSetPinned: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
   onRunRoutine: (routineId: string, variables: Record<string, string>) => Promise<RunOutcome>;
+  /** widget.run for a command widget (Developer profile) — the core re-checks
+   * the mode and gates the command per invocation; never executed client-side. */
+  onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
   onAskBuildWidget: () => void;
 }
 
@@ -59,12 +73,14 @@ export function WidgetRail({
   work,
   consent,
   variant = "rail",
+  developer = false,
   widgets,
   stats,
   routines,
   onSetPinned,
   onDelete,
   onRunRoutine,
+  onRunCommandWidget,
   onAskBuildWidget,
 }: Props) {
   const [editMode, setEditMode] = useState(false);
@@ -117,9 +133,11 @@ export function WidgetRail({
               stats={stats}
               routines={routines}
               editMode={editMode}
+              developer={developer}
               onSetPinned={onSetPinned}
               onDelete={onDelete}
               onRunRoutine={onRunRoutine}
+              onRunCommandWidget={onRunCommandWidget}
             />
           ))}
 
@@ -139,10 +157,12 @@ export function WidgetRail({
                     stats={stats}
                     routines={routines}
                     editMode={editMode}
+                    developer={developer}
                     inTray
                     onSetPinned={onSetPinned}
                     onDelete={onDelete}
                     onRunRoutine={onRunRoutine}
+                    onRunCommandWidget={onRunCommandWidget}
                   />
                 ))}
               <div className="relative mt-0.5">
@@ -196,10 +216,12 @@ interface CardProps {
   stats: Stats | null;
   routines: RailRoutine[];
   editMode: boolean;
+  developer?: boolean;
   inTray?: boolean;
   onSetPinned: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
   onRunRoutine: (routineId: string, variables: Record<string, string>) => Promise<RunOutcome>;
+  onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
 }
 
 function WidgetCard({
@@ -207,22 +229,38 @@ function WidgetCard({
   stats,
   routines,
   editMode,
+  developer = false,
   inTray = false,
   onSetPinned,
   onDelete,
   onRunRoutine,
+  onRunCommandWidget,
 }: CardProps) {
   const spec = widget.spec;
+  const routine = spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
+  // A dev-created item: a command widget (inherently OPEN), or anything the core
+  // marked created_in_mode="open" (the widget itself, or the routine it runs).
+  const isDev =
+    spec.kind === "command" ||
+    widget.createdInMode === "open" ||
+    routine?.createdInMode === "open";
   return (
     <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
+          {developer && isDev && <DevTag />}
           {spec.kind === "routine" ? (
             <RoutineWidgetBody
               title={spec.title}
-              routine={routines.find((r) => r.id === spec.routineId)}
+              routine={routine}
               routineId={spec.routineId}
               onRunRoutine={onRunRoutine}
+            />
+          ) : spec.kind === "command" ? (
+            <CommandWidgetBody
+              title={spec.title}
+              command={spec.command}
+              onRun={() => onRunCommandWidget(widget.id)}
             />
           ) : (
             <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
@@ -350,6 +388,86 @@ function RoutineWidgetBody({
         </p>
       )}
     </>
+  );
+}
+
+// A command widget (OPEN/Developer mode): title + the command shown as a machine
+// fact (mono) under it. Run goes through the core's widget.run — the SAME
+// registry + gate path as a routine command step, so a destructive command
+// raises its per-invocation card before anything executes. The command is never
+// executed client-side; this component only displays it and shows the outcome.
+function CommandWidgetBody({
+  title,
+  command,
+  onRun,
+}: {
+  title: string;
+  command: string;
+  onRun: () => Promise<WidgetRunResult>;
+}) {
+  const [running, setRunning] = useState(false);
+  const [outcome, setOutcome] = useState<{ ok: boolean; detail: string } | null>(null);
+
+  function handleRun() {
+    setRunning(true);
+    setOutcome(null);
+    onRun()
+      .then((res) => {
+        // First output line only — the rail is a glance surface, not a terminal.
+        const firstLine = (res.output ?? "").split("\n", 1)[0].trim();
+        setOutcome(
+          res.ok
+            ? { ok: true, detail: firstLine || "Done." }
+            : { ok: false, detail: res.error || "That didn't work." },
+        );
+      })
+      .catch(() => setOutcome({ ok: false, detail: "That didn't work." }))
+      .finally(() => setRunning(false));
+  }
+
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{title}</span>
+        <button
+          type="button"
+          disabled={running}
+          onClick={handleRun}
+          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep hover:bg-rule disabled:opacity-45"
+        >
+          {running ? "Running…" : "Run"}
+        </button>
+      </div>
+      <p
+        title={command}
+        className="mt-1.5 truncate rounded-sm bg-paper px-2 py-1 font-mono text-[11.5px] text-ink-soft"
+      >
+        {command}
+      </p>
+      {outcome && (
+        <p
+          title={outcome.detail}
+          className={
+            "mt-1.5 truncate font-mono text-[11px] " +
+            (outcome.ok ? "text-fern-deep" : "text-danger")
+          }
+        >
+          {outcome.detail}
+        </p>
+      )}
+    </>
+  );
+}
+
+// The blocky "DEV" annotation (design-brief-fern shape rule: blocky = a live
+// annotation Addison is showing you). Square edges, 2px left fern rule, small-
+// caps — marks an item created with developer abilities. Shown in Developer
+// profile only; Simple never sees these items at all (core-filtered).
+function DevTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-fern pl-1.5 text-[9.5px] font-semibold uppercase tracking-[0.09em] text-fern-deep">
+      Dev
+    </span>
   );
 }
 

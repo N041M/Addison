@@ -8,6 +8,7 @@ constant the server enforces.
 
 from __future__ import annotations
 
+from agent_core.policy import PolicyMode
 from agent_core.widgets import (
     MAX_PINNED,
     MAX_TITLE_LEN,
@@ -80,3 +81,43 @@ def test_pinned_cap_is_six():
 def test_widget_summary_is_plain_language():
     assert widget_summary({"kind": "routine", "routineId": "a", "title": "x"})
     assert "token" in widget_summary({"kind": "stat", "source": "tokens_month", "title": "x"}).lower()
+
+
+# --- command widget kind: OPEN-mode only (owner decision 2026-07-19) ---------
+
+def test_command_widget_rejected_in_safe_mode():
+    spec = {"kind": "command", "command": "ls -la", "title": "List files"}
+    # Default mode is SAFE, and SAFE mode never accepts a command widget.
+    assert validate_widget_spec(spec) is not None
+    assert validate_widget_spec(spec, PolicyMode.SAFE) is not None
+
+
+def test_command_widget_accepts_in_open_mode():
+    spec = {"kind": "command", "command": "ls -la", "title": "List files"}
+    assert validate_widget_spec(spec, PolicyMode.OPEN) is None
+
+
+def test_command_widget_needs_a_command_and_no_extra_fields_even_in_open_mode():
+    assert validate_widget_spec({"kind": "command", "title": "x"}, PolicyMode.OPEN) is not None
+    assert validate_widget_spec(
+        {"kind": "command", "command": "  ", "title": "x"}, PolicyMode.OPEN
+    ) is not None
+    assert validate_widget_spec(
+        {"kind": "command", "command": "ls", "title": "x", "shell": "bash"}, PolicyMode.OPEN
+    ) is not None
+
+
+def test_stat_and_routine_widgets_still_valid_in_open_mode():
+    # OPEN mode is a superset — the two SAFE shapes remain valid.
+    assert validate_widget_spec(
+        {"kind": "stat", "source": "connections", "title": "x"}, PolicyMode.OPEN
+    ) is None
+    assert validate_widget_spec(
+        {"kind": "routine", "routineId": "abc", "title": "x"}, PolicyMode.OPEN
+    ) is None
+
+
+def test_command_widget_summary_is_plain_language():
+    assert "command" in widget_summary(
+        {"kind": "command", "command": "ls", "title": "x"}
+    ).lower()

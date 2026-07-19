@@ -50,10 +50,16 @@ sequenceDiagram
 
 ## 2. Permission grant round-trip
 
-The gate's consent prompt is an IPC round-trip. The worker thread parks an event
+The orchestrator (and routine engine) call the mode-aware `authorize(tool_id, mode,
+destructive, detail)` before every call (`policy.py`). In SAFE mode this prompts for
+every not-yet-granted tool; in OPEN mode it auto-allows a non-destructive call
+(recorded in the activity log) and prompts **per invocation** for a destructive one —
+no prior grant carries over, and the card's description names the exact command being
+approved this time (`detail`) — "open" is fewer prompts, not no gate. When a prompt is
+needed, the consent prompt is an IPC round-trip: the worker thread parks an event
 keyed by the tool id, emits the card, and blocks; the answering frame arrives on the
-read loop and wakes the worker. A grant is remembered; a "Not now" only lasts the
-rest of the current turn.
+read loop and wakes the worker. A SAFE grant is remembered (destructive-OPEN approvals
+are not); a "Not now" only lasts the rest of the current turn.
 
 ```mermaid
 sequenceDiagram
@@ -62,15 +68,20 @@ sequenceDiagram
     participant SRV as Core server
     participant WV as React webview
 
-    ORC->>PG: request(tool_id)
-    PG->>SRV: _on_permission_request(tool_id)
-    Note over SRV: park a threading.Event keyed by tool_id
-    SRV-->>WV: permission.requestGrant, toolId label description riskTier
-    Note over WV: user taps Allow or Not now
-    WV->>SRV: permission.respond, toolId and allow
-    SRV->>SRV: _handle_permission_respond sets the event
-    PG-->>ORC: GRANTED or DENIED
-    Note over PG: GRANTED is remembered, DENIED clears at the next user turn
+    ORC->>PG: authorize(tool_id, mode, destructive, detail)
+    alt OPEN mode and not destructive
+        Note over PG: auto-grant, record in activity log
+        PG-->>ORC: GRANTED (no card)
+    else SAFE mode, or a destructive OPEN call
+        PG->>SRV: _on_permission_request(tool_id, detail)
+        Note over SRV: park a threading.Event keyed by tool_id;<br/>destructive-OPEN: description = the exact command text
+        SRV-->>WV: permission.requestGrant, toolId label description riskTier
+        Note over WV: user taps Allow or Not now
+        WV->>SRV: permission.respond, toolId and allow
+        SRV->>SRV: _handle_permission_respond sets the event
+        PG-->>ORC: GRANTED or DENIED
+        Note over PG: a SAFE grant is remembered; a destructive-OPEN approval is<br/>per-invocation (never remembered); DENIED clears at the next user turn
+    end
 ```
 
 ## 3. Conversation history
@@ -142,7 +153,11 @@ sequenceDiagram
 
 A routine is a shortcut for re-issuing a sequence of tool calls. The engine runs on
 the same `ToolRegistry`, `PermissionGate`, and `UndoManager` instances as the live
-loop, so it can never gain permissions the user has not already granted live.
+loop, so it can never gain permissions the user has not already granted live. The run
+carries the current policy mode (`policy.py`): a dev-created routine is refused before
+this flow starts when in SAFE mode; an OPEN-mode `command` step runs through the
+`run_command` dev-only tool on those same instances, so a destructive command still
+stops to ask.
 
 ```mermaid
 sequenceDiagram
@@ -160,7 +175,8 @@ sequenceDiagram
     SRV->>RE: run(routine, variables)
     Note over RE: topologically_sorted, then resolve_template per step
     loop each step
-        RE->>PG: check(tool_id), then request if not granted
+        RE->>PG: authorize(tool_id, mode, destructive)
+        Note over PG: SAFE prompts; OPEN auto-allows non-destructive, prompts destructive
         PG-->>RE: GRANTED or DENIED
         RE->>TL: execute(resolved_args, context)
         TL-->>RE: ToolResult
@@ -236,9 +252,12 @@ sequenceDiagram
 Addison proposes widgets the same way it proposes routines: a draft is held in the
 core and nothing is saved until an explicit confirm. A widget is a **declarative**
 spec (`agent_core/widgets.py`) — a saved-routine Run pill or a whitelisted stat
-display — never code, validated at save and at render. Saving is display-only
-(LOW-risk), so there is no permission card; a routine widget's routine keeps its own
-gates when it is actually run.
+display — never code, validated at save and at render **against the current policy
+mode**. In OPEN mode a third `command` kind is valid (it runs `run_command` on click,
+so the destructive-prompt rule still applies when clicked); it is rejected in SAFE
+mode, and OPEN-created widgets are hidden from `widget.list` while the Simple profile
+is active (`created_in_mode`). Saving is display-only (LOW-risk), so there is no
+permission card; a routine/command widget keeps its own gates when it is actually run.
 
 ```mermaid
 sequenceDiagram

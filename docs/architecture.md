@@ -130,10 +130,23 @@ Component by component:
 - **ToolRegistry** — holds the typed tools and enforces the central invariant at
   registration: a tool whose risk tier is not LOW must implement a real `undo()`, or
   registration raises. This single check is the mechanical backbone of the safety
-  model.
+  model. Mode-scoped safety (owner decision 2026-07-19, `policy.py`): a `dev_only`
+  tool (only `run_command` today) is exempt from that check and lives in the ONE
+  shared registry, but is filtered out of the SAFE view — `visible_tools(mode)`
+  returns it only in OPEN mode, so the Simple profile can neither see nor run it,
+  while routines still share the same registry instance (no second registry).
 - **PermissionGate** — consulted before every tool execution, not just the first, so
-  a revoked grant takes effect immediately. It tracks coarse grant and denial state;
-  the consent prompt itself is an IPC round-trip to the webview.
+  a revoked grant takes effect immediately. It is mode-aware (`authorize`): in SAFE
+  mode it prompts for every not-yet-granted tool exactly as before; in OPEN mode it
+  auto-allows non-destructive calls (recording them in the activity log) and prompts
+  **per invocation** for destructive ones — no prior grant is consulted and none is
+  recorded, so approving one destructive command never authorizes a later one, and
+  the card names the exact command text each time (`detail`, truncated ~120 chars).
+  The gate still runs on every call in both modes. Destructiveness is per-call
+  (`run_command` classifies its own command via a read-only allowlist; any other
+  tool is destructive iff its tier is HIGH). Non-dev tools keep the coarse
+  session-grant model it tracks; the consent prompt itself is an IPC round-trip to
+  the webview.
 - **UndoManager** — records an action snapshot per mutating tool call and reverses
   the most recent ones on request, and separately truncates message history for a
   conversational rewind. The two mechanisms are independent.
@@ -156,16 +169,23 @@ Component by component:
   `provider.list`/`connect`/`disconnect` responses never carry key material.
 - **RoutineBuilder / RoutineLibrary / RoutineEngine** — build a declarative plan from
   a recent conversation, store and list saved routines, and replay a plan's steps
-  through the shared gate and registry.
+  through the shared gate and registry. Mode-scoped safety (`policy.py`): a plan step
+  may carry an OPEN-mode-only `command` (run through the `run_command` dev-only tool,
+  same gate + registry, so a destructive command still prompts). A routine's
+  `created_in_mode` column records the mode it was saved under; routines created in
+  OPEN mode are hidden from `routine.list` and refused by `routine.run` in SAFE mode,
+  and return untouched in OPEN. Command routines can only be saved in OPEN mode.
 - **Widgets and usage** — server/orchestrator machinery, not registry tools. After
   each provider call the orchestrator's `on_usage` hook records a `usage_log` row
   (tokens + latency) at that single choke point; `stats.get` derives the token meter
   and per-provider latency from it. Widgets themselves are **declarative specs**
   (`agent_core/widgets.py`) — a saved-routine Run pill (which runs through the existing
   `routine.run` path, adding no execution surface) or a whitelisted stat display —
-  validated at save *and* at render, never code. They are proposed like routines
-  (draft held in the core, saved only on an explicit confirm) and stored in the
-  `widgets` table.
+  validated at save *and* at render, never code. In OPEN mode a third `command` kind
+  is valid (runs `run_command` on click, same gate); it is rejected in SAFE mode, and
+  like routines a widget's `created_in_mode` hides OPEN-created widgets while the
+  Simple profile is active. They are proposed like routines (draft held in the core,
+  saved only on an explicit confirm) and stored in the `widgets` table.
 - **Store** — the SQLite access layer. It reads and writes the transcript, action
   snapshots, routines, usage, widgets, and settings; it holds no secrets, since keys
   live only in the keychain.
