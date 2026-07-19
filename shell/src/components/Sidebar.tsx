@@ -2,8 +2,8 @@
 // README §1, handoff §1). `side` background, a 1px `line` right border, full
 // height. Holds the wordmark, the "New chat" button, the grouped conversation
 // list (TODAY / EARLIER), and — pinned to the bottom — Settings and the current
-// profile label. Collapses to a slim bar (bell + expand affordance); the
-// collapsed state persists in localStorage ("addison.sidebarCollapsed").
+// profile label. Always present above md (no desktop hide/collapse — owner
+// request 2026-07-19); below md it appears only as the slide-over drawer.
 //
 // This is the permanent home of the conversation list — it replaces the old
 // full-window HistoryView. Selecting a row loads that conversation; the active
@@ -14,8 +14,6 @@ import type { ConversationSummary } from "../types/ui";
 import { BellLogo } from "./BellLogo";
 
 interface Props {
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
   conversations: ConversationSummary[];
   /** The open conversation, or null for the not-yet-listed launch conversation. */
   currentConversationId: string | null;
@@ -43,8 +41,6 @@ interface Props {
 }
 
 export function Sidebar({
-  collapsed,
-  onToggleCollapsed,
   conversations,
   currentConversationId,
   onOpenConversation,
@@ -58,26 +54,6 @@ export function Sidebar({
 }: Props) {
   const isDrawer = variant === "drawer";
 
-  // Collapsed: a slim rail with just the mark and an expand affordance. Nothing
-  // else competes for the ~48px of width. (The drawer is always full — it never
-  // collapses — so this path is skipped in drawer mode.)
-  if (collapsed && !isDrawer) {
-    return (
-      <aside className="flex w-12 shrink-0 flex-col items-center border-r border-line bg-side py-4">
-        <BellLogo size={17} className="text-fern" />
-        <button
-          type="button"
-          onClick={onToggleCollapsed}
-          aria-label="Expand sidebar"
-          title="Show sidebar"
-          className="mt-4 text-sm text-faint hover:text-ink-soft"
-        >
-          »
-        </button>
-      </aside>
-    );
-  }
-
   const { today, earlier } = groupConversations(conversations);
 
   return (
@@ -89,23 +65,12 @@ export function Sidebar({
           : "w-[216px] shrink-0")
       }
     >
-      {/* Wordmark + collapse (the collapse control is hidden in the drawer). */}
-      <div className="flex items-center justify-between px-[18px] pb-[14px]">
+      {/* Wordmark. */}
+      <div className="flex items-center px-[18px] pb-[14px]">
         <span className="flex items-center gap-2 text-ink">
           <BellLogo size={17} className="text-fern" />
           <span className="text-base font-bold tracking-logo">Addison</span>
         </span>
-        {!isDrawer && (
-          <button
-            type="button"
-            onClick={onToggleCollapsed}
-            aria-label="Hide sidebar"
-            title="Hide sidebar"
-            className="text-sm text-faint hover:text-ink-soft"
-          >
-            «
-          </button>
-        )}
       </div>
 
       {/* New chat — outlined, ownable/actionable (6px radius). */}
