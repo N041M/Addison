@@ -28,7 +28,7 @@ export function RoutineProposalCard({ proposal, onSave, onCancel }: Props) {
   return (
     <section
       aria-label="Save these steps as a routine?"
-      className="border-t border-line bg-surface px-6 py-4"
+      className="animate-[fade-rise_160ms_ease-out] border-t border-line bg-surface px-6 py-4"
     >
       <h3 className="text-base font-semibold text-ink">Save these steps as a routine?</h3>
       <p className="mt-1 text-sm text-muted">

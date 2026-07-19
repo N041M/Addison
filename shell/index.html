@@ -7,16 +7,24 @@
     <title>Addison</title>
     <script>
       // Theme bootstrap — runs before the stylesheet loads so there's no flash
-      // of the wrong theme. Reads "addison.theme" ("light" | "dark", default
-      // light), sets the class the Tailwind palette keys off, and paints the
-      // background immediately. App.tsx keeps localStorage in sync afterwards.
+      // of the wrong theme. Reads "addison.theme" ("light" | "dark" | "system",
+      // default light), resolves "system" against the OS preference, sets the
+      // class the Tailwind palette keys off, and paints the background
+      // immediately. App.tsx keeps localStorage in sync (and follows OS changes
+      // live while "system" is chosen) afterwards. Mirror of lib/theme.ts — this
+      // runs before the bundle loads, so it can't import it; keep them in step.
       (function () {
         try {
           var t = localStorage.getItem("addison.theme");
-          if (t !== "light" && t !== "dark") t = "light";
+          if (t !== "light" && t !== "dark" && t !== "system") t = "light";
+          var dark =
+            t === "dark" ||
+            (t === "system" &&
+              typeof window.matchMedia === "function" &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
           var root = document.documentElement;
-          if (t === "dark") root.classList.add("dark");
-          root.style.backgroundColor = t === "dark" ? "#171D1A" : "#F6F5F1";
+          if (dark) root.classList.add("dark");
+          root.style.backgroundColor = dark ? "#171D1A" : "#F6F5F1";
         } catch (e) {
           document.documentElement.style.backgroundColor = "#F6F5F1";
         }

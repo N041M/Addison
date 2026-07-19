@@ -33,7 +33,7 @@ function splitCommand(description: string): { lead: string; command: string | nu
 export function PermissionCard({ request, onRespond }: Props) {
   const { lead, command } = splitCommand(request.description);
   return (
-    <div className="rounded-card bg-fern-tint px-[15px] py-[13px]">
+    <div className="animate-[fade-rise_160ms_ease-out] rounded-card bg-fern-tint px-[15px] py-[13px]">
       <p className="text-meta font-semibold leading-snug text-ink">{request.label}</p>
       <p className="mt-1 text-fine leading-relaxed text-ink-soft">{lead}</p>
       {command && (

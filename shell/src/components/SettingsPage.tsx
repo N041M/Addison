@@ -20,6 +20,7 @@ import type { ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
+import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -40,8 +41,8 @@ interface Props {
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
   onClearDiagnostics: () => void;
-  theme: "light" | "dark";
-  onSetTheme: (theme: "light" | "dark") => void;
+  theme: ThemeChoice;
+  onSetTheme: (theme: ThemeChoice) => void;
   onBack: () => void;
   /**
    * A DOM id to scroll into view once, when the page opens (the first-run
@@ -606,8 +607,8 @@ function ProfileCard({
   connected: boolean;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
-  theme: "light" | "dark";
-  onSetTheme: (theme: "light" | "dark") => void;
+  theme: ThemeChoice;
+  onSetTheme: (theme: ThemeChoice) => void;
 }) {
   // A profile in Simple→Developer confirmation, held until the user confirms or
   // cancels. Switching BACK (Developer→Simple) reduces what Addison can do, so it
@@ -650,10 +651,12 @@ function ProfileCard({
                   aria-pressed={active}
                   onClick={() => handlePick(p.id)}
                   className={
-                    "flex-1 rounded-sm px-0 py-2 text-control max-md:min-h-[44px] " +
+                    // Constant font-medium in both states so selecting never
+                    // re-flows the label width; the active cue is bg + color.
+                    "flex-1 rounded-sm px-0 py-2 text-control font-medium transition-colors max-md:min-h-[44px] " +
                     (active
-                      ? "bg-fern-tint font-semibold text-fern-deep"
-                      : "bg-transparent font-medium text-muted hover:text-ink-soft")
+                      ? "bg-fern-tint text-fern-deep"
+                      : "bg-transparent text-muted hover:text-ink-soft")
                   }
                 >
                   {p.label}
@@ -707,24 +710,39 @@ function ProfileCard({
         </>
       )}
 
-      {/* Appearance — below a hair divider, moved here from the old drawer. */}
-      <div className="mt-4 flex items-center justify-between border-t border-hair pt-3.5">
+      {/* Appearance — below a hair divider, moved here from the old drawer. Three
+          choices; "Match this computer" follows the OS light/dark preference and
+          tracks it live. The label sits above a full-width segmented control (the
+          third label is too long to sit inline), matching the Profile control. */}
+      <div className="mt-4 border-t border-hair pt-3.5">
         <span className="text-control text-ink-soft">Appearance</span>
-        <div role="group" aria-label="Appearance" className="flex gap-px rounded-sm border border-line bg-paper p-0.5">
-          {(["light", "dark"] as const).map((t) => {
-            const active = theme === t;
+        <div
+          role="group"
+          aria-label="Appearance"
+          className="mt-2 flex gap-0.5 rounded border border-line bg-paper p-[3px]"
+        >
+          {(
+            [
+              ["light", "Light"],
+              ["dark", "Dark"],
+              ["system", "Match this computer"],
+            ] as const
+          ).map(([value, label]) => {
+            const active = theme === value;
             return (
               <button
-                key={t}
+                key={value}
                 type="button"
                 aria-pressed={active}
-                onClick={() => onSetTheme(t)}
+                onClick={() => onSetTheme(value)}
                 className={
-                  "rounded-[5px] px-3.5 py-[5px] text-hint font-medium capitalize max-md:min-h-[44px] max-md:px-5 " +
+                  // Constant font-medium so the label never re-flows when
+                  // selected; state is carried by bg + color, eased calmly.
+                  "flex-1 rounded-sm px-2 py-1.5 text-hint font-medium leading-tight transition-colors max-md:min-h-[44px] " +
                   (active ? "bg-fern-tint text-fern-deep" : "bg-transparent text-muted hover:text-ink-soft")
                 }
               >
-                {t}
+                {label}
               </button>
             );
           })}

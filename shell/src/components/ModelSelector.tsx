@@ -288,7 +288,7 @@ export function ModelSelector({
 
       {open && (
         <div
-          className="absolute bottom-full left-0 z-20 mb-1.5 min-w-[240px] max-w-[320px] overflow-hidden rounded-card border border-line bg-surface shadow-soft"
+          className="absolute bottom-full left-0 z-20 mb-1.5 min-w-[240px] max-w-[320px] animate-[fade-rise_140ms_ease-out] overflow-hidden rounded-card border border-line bg-surface shadow-soft"
           role="presentation"
         >
           <div

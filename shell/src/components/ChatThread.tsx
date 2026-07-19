@@ -111,7 +111,9 @@ function MessageRow({
   const showRaw = showTechnicalDetails && message.failed && Boolean(message.raw);
 
   return (
-    <div className="group">
+    // A gentle opacity fade as each turn arrives (opacity only — never shifts
+    // layout). Disabled wholesale under prefers-reduced-motion (styles.css).
+    <div className="group animate-[fade-in_200ms_ease]">
       <div className="flex items-baseline justify-between gap-3">
         <span
           className={
