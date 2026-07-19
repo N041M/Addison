@@ -17,24 +17,19 @@
 
 import { useEffect, useState } from "react";
 import type { ModelRole } from "../types/protocol";
-import type { CloudModel, LocalSetupState, ProfileState, RoleOption } from "../types/ui";
+import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
+import type { ModelSelection } from "../hooks/useModelSelection";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
   connected: boolean;
-  roles: RoleOption[];
-  cloudModels: CloudModel[];
-  defaultRole: ModelRole;
-  defaultCloudModel?: string;
-  onChangeDefaultRole: (role: ModelRole) => void;
-  onChangeDefaultCloudModel: (modelId: string) => void;
-  providers: ProviderInfo[];
-  onConnectProvider: (provider: string, key: string, baseUrl?: string) => Promise<void>;
-  onRemoveProvider: (provider: string) => Promise<void>;
-  localSetup: LocalSetupState | null;
-  onStartLocalSetup: (modelId: string) => void;
+  /**
+   * The model-selection bundle (useModelSelection): roles + cloud catalog, the
+   * default role/model picks, provider connections, and the local-setup flow.
+   */
+  models: ModelSelection;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -84,17 +79,7 @@ function formatAdded(addedAt?: number): string {
 
 export function SettingsPage({
   connected,
-  roles,
-  cloudModels,
-  defaultRole,
-  defaultCloudModel,
-  onChangeDefaultRole,
-  onChangeDefaultCloudModel,
-  providers,
-  onConnectProvider,
-  onRemoveProvider,
-  localSetup,
-  onStartLocalSetup,
+  models,
   profile,
   onSetProfile,
   diagnostics,
@@ -138,18 +123,18 @@ export function SettingsPage({
           <div className="flex w-full min-w-0 flex-1 flex-col gap-4">
             <WhereAddisonThinks
               connected={connected}
-              roles={roles}
-              cloudModels={cloudModels}
-              defaultRole={defaultRole}
-              defaultCloudModel={defaultCloudModel}
-              onChangeDefaultRole={onChangeDefaultRole}
-              onChangeDefaultCloudModel={onChangeDefaultCloudModel}
+              roles={models.roles}
+              cloudModels={models.cloudModels}
+              defaultRole={models.selectedRole}
+              defaultCloudModel={models.selectedCloudModel}
+              onChangeDefaultRole={models.handleChangeDefaultRole}
+              onChangeDefaultCloudModel={models.handleChangeDefaultCloudModel}
             />
             <ApiKeys
               connected={connected}
-              providers={providers}
-              onConnect={onConnectProvider}
-              onRemove={onRemoveProvider}
+              providers={models.providers}
+              onConnect={models.handleConnectProvider}
+              onRemove={models.handleRemoveProvider}
             />
             <Card title="Routines" subtitle="Steps Addison saved for you. Run them here or from a widget.">
               <RoutineLibrary exposeRoutinePlan={profile?.flags.exposeRoutinePlan} />
@@ -161,9 +146,9 @@ export function SettingsPage({
             <Card title="Run a model on this computer">
               <LocalModelSetup
                 connected={connected}
-                roles={roles}
-                setup={localSetup}
-                onStartSetup={onStartLocalSetup}
+                roles={models.roles}
+                setup={models.localSetup}
+                onStartSetup={models.handleStartLocalSetup}
               />
             </Card>
             <ProfileCard

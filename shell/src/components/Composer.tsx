@@ -8,23 +8,16 @@
 // header and this fixed composer.
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import type { ModelRole } from "../types/protocol";
-import type { CloudModel, RoleOption } from "../types/ui";
+import type { ModelSelection } from "../hooks/useModelSelection";
+import type { TurnState } from "../hooks/useTurn";
 import { ModelSelector } from "./ModelSelector";
 
 interface Props {
   connected: boolean;
-  isWorking: boolean;
-  onSend: (text: string) => void;
-  onStop: () => void;
-  roles: RoleOption[];
-  cloudModels: CloudModel[];
-  selectedRole: ModelRole;
-  selectedCloudModel?: string;
-  selectedLocalModel?: string;
-  selectedEffort?: string;
-  onSelectModel: (role: ModelRole, modelId: string) => void;
-  onSelectEffort: (effort: string) => void;
+  /** The turn-lifecycle bundle (useTurn): isWorking + Send/Stop handlers. */
+  turn: TurnState;
+  /** The model-picker bundle (useModelSelection) for the model pill. */
+  models: ModelSelection;
   /** One-shot prefill from a rewind's edit-and-resend; nothing runs until Send. */
   draftSeed?: string | null;
   onDraftSeedUsed?: () => void;
@@ -34,21 +27,13 @@ interface Props {
 
 export function Composer({
   connected,
-  isWorking,
-  onSend,
-  onStop,
-  roles,
-  cloudModels,
-  selectedRole,
-  selectedCloudModel,
-  selectedLocalModel,
-  selectedEffort,
-  onSelectModel,
-  onSelectEffort,
+  turn,
+  models,
   draftSeed,
   onDraftSeedUsed,
   focusSignal,
 }: Props) {
+  const { isWorking, handleSend, handleStop } = turn;
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -85,7 +70,7 @@ export function Composer({
     const text = draft.trim();
     if (!text || isWorking) return;
     setDraft("");
-    onSend(text);
+    handleSend(text);
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -114,21 +99,21 @@ export function Composer({
         />
         <div className="mt-1.5 flex items-center justify-between gap-x-3 px-1">
           <ModelSelector
-            roles={roles}
-            cloudModels={cloudModels}
-            selectedRole={selectedRole}
-            selectedCloudModel={selectedCloudModel}
-            selectedLocalModel={selectedLocalModel}
-            selectedEffort={selectedEffort}
-            onSelectModel={onSelectModel}
-            onSelectEffort={onSelectEffort}
+            roles={models.roles}
+            cloudModels={models.cloudModels}
+            selectedRole={models.selectedRole}
+            selectedCloudModel={models.selectedCloudModel}
+            selectedLocalModel={models.selectedLocalModel}
+            selectedEffort={models.selectedEffort}
+            onSelectModel={models.handleSelectModel}
+            onSelectEffort={models.handleSelectEffort}
             disabled={isWorking}
           />
           <div className="ml-auto">
             {isWorking ? (
               <button
                 type="button"
-                onClick={onStop}
+                onClick={handleStop}
                 className="rounded-sm border border-line bg-surface px-5 py-2 text-[13.5px] font-semibold text-ink-soft hover:border-danger hover:text-danger max-md:min-h-[44px] max-md:px-6"
               >
                 Stop
