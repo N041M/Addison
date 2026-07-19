@@ -122,7 +122,7 @@ export function SettingsPage({
         <button
           type="button"
           onClick={onOpenMenu}
-          aria-label="Chats"
+          aria-label="Menu"
           className="flex h-11 w-11 shrink-0 items-center justify-center text-glyph text-ink-soft"
         >
           ☰
