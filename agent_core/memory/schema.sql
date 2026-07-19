@@ -131,3 +131,15 @@ CREATE TABLE IF NOT EXISTS widgets (
 -- Widgets are DECLARATIVE specs only — a saved-routine Run pill or a whitelisted
 -- stat display. NEVER code, expressions, or templates; validated at save AND at
 -- render (agent_core/widgets.py). See CLAUDE.md invariants.
+
+-- Indexes -------------------------------------------------------------------
+-- All IF NOT EXISTS so this script stays idempotent on every open (store.py
+-- runs it via executescript on both fresh and existing databases). These back
+-- the hot read paths: transcript replay (messages_for_conversation) and the
+-- §4.8 usage widgets (usage_totals_since, latest_latency_per_provider).
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
+    ON messages(conversation_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_log_created
+    ON usage_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_usage_log_provider_created
+    ON usage_log(provider, created_at);

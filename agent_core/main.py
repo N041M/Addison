@@ -128,6 +128,12 @@ _UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
 
 _GB = 1024**3
 
+# §4.8 usage-log retention. Keep ~6 months of usage rows; prune opportunistically
+# from the record path so the table can't grow without bound. The prune runs once
+# every _USAGE_PRUNE_EVERY records (a cheap in-process counter, not on every write).
+_USAGE_RETENTION_SECONDS = 183 * 24 * 60 * 60   # ~6 months, in epoch seconds
+_USAGE_PRUNE_EVERY = 50                          # records between opportunistic prunes
+
 
 def _free_disk_bytes() -> int | None:
     """Free disk space in the user's home volume, or None if it can't be read."""
@@ -516,6 +522,9 @@ class JsonRpcServer:
         # from pre-flight through the background pull/verify.
         self._local_setup_lock = threading.Lock()
         self._local_setup_active = False
+        # Opportunistic usage-log pruning throttle (§4.8): counts recorded usage
+        # rows so _record_usage prunes only once every _USAGE_PRUNE_EVERY writes.
+        self._usage_records_since_prune = 0
 
     # --- lifecycle --------------------------------------------------------
     def run(self) -> None:
@@ -1269,6 +1278,7 @@ class JsonRpcServer:
         if requested_role is ModelRole.SETUP_ASSISTANT:
             return  # the free onboarding relay isn't metered
         provider_id, model = self._usage_identity(requested_role, model_name)
+        now = int(time.time())
         self.store.insert_usage(
             id=str(uuid4()),
             conversation_id=self.conversation.id,
@@ -1277,8 +1287,14 @@ class JsonRpcServer:
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             latency_ms=latency_ms,
-            created_at=int(time.time()),
+            created_at=now,
         )
+        # Opportunistic retention: prune once every _USAGE_PRUNE_EVERY records
+        # rather than on every write, so a bounded ~6-month window is kept cheaply.
+        self._usage_records_since_prune += 1
+        if self._usage_records_since_prune >= _USAGE_PRUNE_EVERY:
+            self._usage_records_since_prune = 0
+            self.store.prune_usage_log(now - _USAGE_RETENTION_SECONDS)
 
     def _usage_identity(self, requested_role, model_name) -> tuple[str, str]:
         """Best-effort (provider_id, model) for a usage row. A LOCAL turn is an
