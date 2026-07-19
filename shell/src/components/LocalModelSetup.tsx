@@ -70,7 +70,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
 
   return (
     <div>
-      <p className="text-[12.5px] text-muted">
+      <p className="text-meta text-muted">
         Nothing you say leaves your machine. One-time download, runs through Ollama —{" "}
         <button
           type="button"
@@ -82,7 +82,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
         </button>
       </p>
       {ollamaOpen && (
-        <p className="mt-2 border-l-2 border-line pl-3 text-[12px] text-ink-soft">
+        <p className="mt-2 border-l-2 border-line pl-3 text-hint text-ink-soft">
           Ollama is a small, free program that downloads and runs models on your
           own computer. Addison uses it behind the scenes — if it isn't installed
           or running, Addison will tell you plainly and can't set up a local model
@@ -91,7 +91,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
       )}
 
       {!connected && (
-        <p className="mt-2 text-[12px] text-muted">
+        <p className="mt-2 text-hint text-muted">
           Setting up a local model needs the desktop app. You can look over the
           choices here, but downloading starts once Addison is connected.
         </p>
@@ -109,8 +109,8 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
             <li key={choice.id} className="rounded border border-line bg-paper px-[14px] py-2.5">
               <div className="flex items-center justify-between gap-2.5">
                 <div className="min-w-0">
-                  <p className="text-[13.5px] font-semibold text-ink">{choice.name}</p>
-                  <p className="mt-px text-[11.5px] text-faint">{choice.metaLabel}</p>
+                  <p className="text-action font-semibold text-ink">{choice.name}</p>
+                  <p className="mt-px text-fine text-faint">{choice.metaLabel}</p>
                 </div>
 
                 <div className="shrink-0 text-right">
@@ -134,7 +134,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
               {/* Live progress — plain stage line + a 5px fern bar on `hair`. */}
               {running && (
                 <div className="mt-2.5">
-                  <p className="text-[12px] text-ink-soft">
+                  <p className="text-hint text-ink-soft">
                     {setup?.message ?? setup?.stage ?? "Getting ready…"}
                   </p>
                   {typeof setup?.percent === "number" && (
@@ -152,7 +152,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                           style={{ width: `${clampPercent(setup.percent)}%` }}
                         />
                       </div>
-                      <span className="w-9 text-right text-[11px] tabular-nums text-muted">
+                      <span className="w-9 text-right text-fact tabular-nums text-muted">
                         {Math.round(clampPercent(setup.percent))}%
                       </span>
                     </div>
@@ -162,7 +162,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
 
               {/* Just-finished confirmation (installed rows already read as done). */}
               {isThis && setup?.status === "done" && !isInstalled && (
-                <p className="mt-2.5 text-[12px] text-fern-deep">
+                <p className="mt-2.5 text-hint text-fern-deep">
                   Ready to use. Pick "On this computer" beside the message box to use it.
                 </p>
               )}
@@ -171,11 +171,11 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                   (e.g. Ollama isn't running, or the machine is too small). */}
               {errored && (
                 <div className="mt-2.5">
-                  <p className="text-[12px] text-danger">
+                  <p className="text-hint text-danger">
                     {setup?.error ?? "Setting this up didn't work. Please try again."}
                   </p>
                   {mentionsOllama(setup?.error) && (
-                    <p className="mt-1 text-[12px] text-muted">
+                    <p className="mt-1 text-hint text-muted">
                       Addison needs Ollama installed and running first — see
                       "what's Ollama?" above.
                     </p>
@@ -184,7 +184,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                     type="button"
                     onClick={() => onStartSetup(choice.id)}
                     disabled={!connected || anyRunning}
-                    className="mt-2 text-[12px] font-medium text-fern-deep hover:text-fern disabled:opacity-50"
+                    className="mt-2 text-hint font-medium text-fern-deep hover:text-fern disabled:opacity-50"
                   >
                     Try again
                   </button>

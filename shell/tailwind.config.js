@@ -85,6 +85,59 @@ export default {
           "monospace",
         ],
       },
+      fontSize: {
+        // Fern type scale (docs/design-brief-fern). Each token is a PLAIN string
+        // — never the [size, lineHeight] tuple — because these replaced arbitrary
+        // text-[Npx] utilities that set only font-size; a tuple would introduce a
+        // line-height where none existed and shift layout. The default Tailwind
+        // scale (text-xs/sm/base/…) stays untouched and keeps its built-in
+        // line-heights.
+        //   tick      10px    smallest mono details (tray caret, connection detail)
+        //   label     10.5px  small-caps section/sender labels (with tracking-caps-*)
+        //   fact      11px    mono machine facts, pill captions
+        //   fine      11.5px  fine print — helper text, consequence lines
+        //   hint      12px    dim hints, small controls, mono key inputs
+        //   meta      12.5px  meta text — work-list steps, subtitles, text buttons
+        //   control   13px    controls, chat items, header titles
+        //   action    13.5px  action buttons (Send), item names
+        //   row       14px    prominent rows / mobile touch targets
+        //   body      15px    Public Sans UI body
+        //   message   17px    Source Serif message text (pairs with leading-[1.7])
+        //   glyph     19px    icon-glyph characters (mobile ☰)
+        //   title     20px    in-window page titles (Settings)
+        //   headline  24px    pine-banner serif headline
+        //   greeting  32px    serif time-of-day greeting
+        tick: "10px",
+        label: "10.5px",
+        fact: "11px",
+        fine: "11.5px",
+        hint: "12px",
+        meta: "12.5px",
+        control: "13px",
+        action: "13.5px",
+        row: "14px",
+        body: "15px",
+        message: "17px",
+        glyph: "19px",
+        title: "20px",
+        headline: "24px",
+        greeting: "32px",
+      },
+      letterSpacing: {
+        // Fern tracking tokens (plain em strings; defaults tight/wide/… untouched).
+        //   logo       -0.02em  "Addison" wordmark tighten
+        //   display    -0.01em  serif greeting/headline tighten
+        //   emphasis    0.02em  semibold titles, slight opening
+        //   caps        0.06em  compact uppercase labels
+        //   caps-wide   0.09em  small-caps section labels
+        //   caps-wider  0.11em  small-caps eyebrow/sender labels
+        logo: "-0.02em",
+        display: "-0.01em",
+        emphasis: "0.02em",
+        caps: "0.06em",
+        "caps-wide": "0.09em",
+        "caps-wider": "0.11em",
+      },
       borderRadius: {
         // 6 small buttons/selects · 8 inputs/rows · 10 cards/composer ·
         // 12 banners · 999 pills.

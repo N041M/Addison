@@ -95,7 +95,7 @@ export function Composer({
           rows={1}
           placeholder={connected ? "Write to Addison…" : "Addison's engine isn't connected yet."}
           aria-label="Message to Addison"
-          className="block max-h-[192px] w-full resize-none overflow-y-auto bg-transparent px-1 py-0.5 text-[15px] leading-6 text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
+          className="block max-h-[192px] w-full resize-none overflow-y-auto bg-transparent px-1 py-0.5 text-body leading-6 text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
         />
         <div className="mt-1.5 flex items-center justify-between gap-x-3 px-1">
           <ModelSelector
@@ -114,7 +114,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={handleStop}
-                className="rounded-sm border border-line bg-surface px-5 py-2 text-[13.5px] font-semibold text-ink-soft hover:border-danger hover:text-danger max-md:min-h-[44px] max-md:px-6"
+                className="rounded-sm border border-line bg-surface px-5 py-2 text-action font-semibold text-ink-soft hover:border-danger hover:text-danger max-md:min-h-[44px] max-md:px-6"
               >
                 Stop
               </button>
@@ -123,7 +123,7 @@ export function Composer({
                 type="button"
                 onClick={submit}
                 disabled={!draft.trim()}
-                className="rounded-sm bg-fern px-[26px] py-[9px] text-[13.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-7"
+                className="rounded-sm bg-fern px-[26px] py-[9px] text-action font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-7"
               >
                 Send
               </button>

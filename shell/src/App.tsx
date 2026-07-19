@@ -611,7 +611,7 @@ export function App() {
             {/* Desktop chat header — active title left; undo (when undoable) +
                 rail toggle right (design-brief-fern §2). Hidden below md. */}
             <header className="hidden items-baseline justify-between gap-4 border-b border-line px-[44px] py-3.5 md:flex">
-              <span className="min-w-0 truncate text-[13px] font-semibold tracking-[0.02em] text-ink-soft">
+              <span className="min-w-0 truncate text-control font-semibold tracking-emphasis text-ink-soft">
                 {conversationsState.conversationTitle || "New conversation"}
               </span>
               <div className="flex shrink-0 items-baseline gap-[18px]">
@@ -619,7 +619,7 @@ export function App() {
                   <button
                     type="button"
                     onClick={handleUndoLastAction}
-                    className="text-[12.5px] font-medium text-muted hover:text-ink-soft"
+                    className="text-meta font-medium text-muted hover:text-ink-soft"
                   >
                     <span aria-hidden="true">↺</span> Undo last action
                   </button>
@@ -627,7 +627,7 @@ export function App() {
                 <button
                   type="button"
                   onClick={() => setRailOpen((v) => !v)}
-                  className="text-[12.5px] font-medium text-fern-deep hover:text-fern"
+                  className="text-meta font-medium text-fern-deep hover:text-fern"
                 >
                   {railOpen ? "Hide widgets »" : "« Show widgets"}
                 </button>
@@ -642,11 +642,11 @@ export function App() {
                 type="button"
                 onClick={() => setDrawerOpen(true)}
                 aria-label="Chats"
-                className="flex h-11 w-11 shrink-0 items-center justify-center text-[19px] text-ink-soft"
+                className="flex h-11 w-11 shrink-0 items-center justify-center text-glyph text-ink-soft"
               >
                 ☰
               </button>
-              <span className="min-w-0 flex-1 truncate text-center text-[13px] font-semibold text-ink-soft">
+              <span className="min-w-0 flex-1 truncate text-center text-control font-semibold text-ink-soft">
                 {conversationsState.conversationTitle || "New conversation"}
               </span>
               <button
@@ -762,7 +762,7 @@ export function App() {
               <button
                 type="button"
                 onClick={handleUndoLastAction}
-                className="min-h-[44px] text-[12.5px] font-medium text-muted hover:text-ink-soft"
+                className="min-h-[44px] text-meta font-medium text-muted hover:text-ink-soft"
               >
                 <span aria-hidden="true">↺</span> Undo last action
               </button>

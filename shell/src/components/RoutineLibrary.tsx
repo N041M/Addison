@@ -128,12 +128,12 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
   }
 
   if (!loaded) {
-    return <p className="text-[12.5px] text-muted">Looking for your routines…</p>;
+    return <p className="text-meta text-muted">Looking for your routines…</p>;
   }
 
   if (routines.length === 0) {
     return (
-      <p className="text-[12.5px] text-muted">
+      <p className="text-meta text-muted">
         {connected
           ? "None yet. After Addison does something for you, look for " +
             "“Save these steps as a routine” — saved ones appear here."
@@ -151,8 +151,8 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
         >
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-[13.5px] font-semibold text-ink">{routine.name}</p>
-              <p className="mt-px text-[11.5px] text-faint">{runSummary(routine)}</p>
+              <p className="text-action font-semibold text-ink">{routine.name}</p>
+              <p className="mt-px text-fine text-faint">{runSummary(routine)}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <button

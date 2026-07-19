@@ -18,8 +18,8 @@ interface Props {
 export function PermissionCard({ request, onRespond }: Props) {
   return (
     <div className="rounded-card bg-fern-tint px-[15px] py-[13px]">
-      <p className="text-[12.5px] font-semibold leading-snug text-ink">{request.label}</p>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-soft">{request.description}</p>
+      <p className="text-meta font-semibold leading-snug text-ink">{request.label}</p>
+      <p className="mt-1 text-fine leading-relaxed text-ink-soft">{request.description}</p>
       <div className="mt-2.5 flex flex-wrap items-center gap-3">
         <button
           type="button"

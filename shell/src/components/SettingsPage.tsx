@@ -107,11 +107,11 @@ export function SettingsPage({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-screen="settings">
       <header className="flex items-baseline justify-between border-b border-line px-4 py-3.5 pt-[calc(env(safe-area-inset-top)+0.875rem)] md:px-[44px] md:pt-3.5">
-        <h2 className="font-serif text-[20px] font-medium text-ink">Settings</h2>
+        <h2 className="font-serif text-title font-medium text-ink">Settings</h2>
         <button
           type="button"
           onClick={onBack}
-          className="text-[12.5px] font-medium text-fern-deep hover:text-fern"
+          className="text-meta font-medium text-fern-deep hover:text-fern"
         >
           Back to chat
         </button>
@@ -185,10 +185,10 @@ function Card({
   return (
     <section id={id} className="scroll-mt-4 rounded-card border border-line bg-surface px-[22px] py-5">
       <div className="flex items-baseline justify-between gap-3">
-        <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
+        <h3 className="text-body font-semibold text-ink">{title}</h3>
         {action}
       </div>
-      {subtitle && <p className="mt-1 text-[12.5px] text-muted">{subtitle}</p>}
+      {subtitle && <p className="mt-1 text-meta text-muted">{subtitle}</p>}
       <div className="mt-3.5">{children}</div>
     </section>
   );
@@ -253,14 +253,14 @@ function WhereAddisonThinks({
           model-change wiring is preserved; shown only when there's a real choice. */}
       {cloudConfigured && cloudModels.length > 1 && (
         <div className="mt-3">
-          <label htmlFor="default-cloud-model" className="block text-[11.5px] font-medium text-muted">
+          <label htmlFor="default-cloud-model" className="block text-fine font-medium text-muted">
             Cloud model
           </label>
           <select
             id="default-cloud-model"
             value={cloudValue}
             onChange={(e) => onChangeDefaultCloudModel(e.target.value)}
-            className="mt-1 block w-full rounded-sm border border-line bg-paper px-3 py-2 text-[13px] text-ink"
+            className="mt-1 block w-full rounded-sm border border-line bg-paper px-3 py-2 text-control text-ink"
           >
             {cloudModels.map((m) => (
               <option key={m.id} value={m.id}>
@@ -271,7 +271,7 @@ function WhereAddisonThinks({
         </div>
       )}
 
-      <p className="mt-3.5 text-[11.5px] text-faint">
+      <p className="mt-3.5 text-fine text-faint">
         {connected
           ? "Cloud models come from the providers under "
           : "Once Addison's engine is connected, cloud models come from the providers under "}
@@ -299,7 +299,7 @@ function SelectableRow({
       disabled={disabled}
       aria-pressed={selected}
       className={
-        "flex items-center justify-between rounded border px-3.5 py-[11px] text-left text-[14px] font-medium max-md:min-h-[44px] " +
+        "flex items-center justify-between rounded border px-3.5 py-[11px] text-left text-row font-medium max-md:min-h-[44px] " +
         (selected
           ? "border-fern bg-fern-tint text-fern-deep"
           : "border-line bg-paper text-ink hover:border-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line")
@@ -342,7 +342,7 @@ function ApiKeys({
           />
         ))}
       </div>
-      <p className="mt-3 text-[11.5px] text-faint">
+      <p className="mt-3 text-fine text-faint">
         Addison uses whichever provider the model you pick belongs to. Models from
         every connected provider appear together in the picker by the message box.
       </p>
@@ -429,17 +429,17 @@ function ProviderRow({
     <div className="rounded-[8px] border border-line bg-paper px-[14px] py-2.5">
       <div className="flex items-center justify-between gap-2.5">
         <div className="min-w-0">
-          <p className="text-[13.5px] font-semibold text-ink">{def.label}</p>
+          <p className="text-action font-semibold text-ink">{def.label}</p>
           {isConnected ? (
-            <p className="mt-px text-[11.5px] text-fern-deep">
+            <p className="mt-px text-fine text-fern-deep">
               ✓ Key saved{info?.addedAt ? ` · added ${formatAdded(info.addedAt)}` : ""}
             </p>
           ) : kind === "custom" ? (
-            <p className="mt-px font-mono text-[10.5px] text-faint">
+            <p className="mt-px font-mono text-label text-faint">
               OpenAI-compatible · {info?.baseUrl || "http://…"}
             </p>
           ) : (
-            <p className="mt-px text-[11.5px] text-faint">Not connected</p>
+            <p className="mt-px text-fine text-faint">Not connected</p>
           )}
         </div>
         {isConnected && (
@@ -448,7 +448,7 @@ function ProviderRow({
               type="button"
               onClick={() => setEditing(true)}
               disabled={working}
-              className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[12.5px] font-semibold text-ink hover:border-muted disabled:opacity-50 max-md:min-h-[44px] max-md:px-4"
+              className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-meta font-semibold text-ink hover:border-muted disabled:opacity-50 max-md:min-h-[44px] max-md:px-4"
             >
               Replace
             </button>
@@ -491,7 +491,7 @@ function ProviderRow({
               placeholder="http://localhost:1234/v1"
               disabled={!connected || working}
               className={
-                "min-w-0 rounded-sm border bg-surface px-3 py-2 font-mono text-[12px] text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
+                "min-w-0 rounded-sm border bg-surface px-3 py-2 font-mono text-hint text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
                 (baseUrl ? focusBorder : "border-line")
               }
             />
@@ -511,7 +511,7 @@ function ProviderRow({
               }
               disabled={!connected || working}
               className={
-                "min-w-0 flex-1 rounded-sm border bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
+                "min-w-0 flex-1 rounded-sm border bg-surface px-3 py-2 text-control text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
                 (key ? focusBorder : "border-line")
               }
             />
@@ -524,14 +524,14 @@ function ProviderRow({
                 (needsKey && !key.trim()) ||
                 (kind === "custom" && !baseUrl.trim())
               }
-              className="shrink-0 rounded-sm bg-fern px-4 py-2 text-[12.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-5"
+              className="shrink-0 rounded-sm bg-fern px-4 py-2 text-meta font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-5"
             >
               {working ? "Checking…" : kind === "custom" ? "Connect" : "Save"}
             </button>
           </div>
-          {status === "error" && <p className="text-[11.5px] text-danger">{error}</p>}
+          {status === "error" && <p className="text-fine text-danger">{error}</p>}
           {status !== "error" && (isConnected || removable) && (
-            <p className="text-[11.5px] text-faint">
+            <p className="text-fine text-faint">
               Checked with one tiny request, then locked away in the keychain.
             </p>
           )}
@@ -541,13 +541,13 @@ function ProviderRow({
               type="button"
               onClick={() => void remove()}
               disabled={working}
-              className="self-start text-[11.5px] font-medium text-muted hover:text-danger disabled:opacity-50"
+              className="self-start text-fine font-medium text-muted hover:text-danger disabled:opacity-50"
             >
               Remove the saved key
             </button>
           )}
           {!connected && (
-            <p className="text-[11.5px] text-muted">
+            <p className="text-fine text-muted">
               You can add a key once Addison's engine is connected.
             </p>
           )}
@@ -580,7 +580,7 @@ function ProfileCard({
       subtitle="Changes what Addison shows you — never what it's allowed to do."
     >
       {!connected || !profile || profile.profiles.length === 0 ? (
-        <p className="text-[12px] text-muted">
+        <p className="text-hint text-muted">
           {connected
             ? "Profile options will appear here in a moment."
             : "Your profile choices appear here once Addison's engine is connected."}
@@ -601,7 +601,7 @@ function ProfileCard({
                   aria-pressed={active}
                   onClick={() => onSetProfile(p.id)}
                   className={
-                    "flex-1 rounded-sm px-0 py-2 text-[13px] max-md:min-h-[44px] " +
+                    "flex-1 rounded-sm px-0 py-2 text-control max-md:min-h-[44px] " +
                     (active
                       ? "bg-fern-tint font-semibold text-fern-deep"
                       : "bg-transparent font-medium text-muted hover:text-ink-soft")
@@ -613,12 +613,12 @@ function ProfileCard({
             })}
           </div>
           {activeDescription && (
-            <p className="mt-2.5 text-[11.5px] leading-[1.55] text-faint">{activeDescription}</p>
+            <p className="mt-2.5 text-fine leading-[1.55] text-faint">{activeDescription}</p>
           )}
           {profile.flags.headlessCli && (
-            <p className="mt-2.5 text-[11.5px] text-muted">
+            <p className="mt-2.5 text-fine text-muted">
               For scripts: Addison's engine speaks JSON-RPC on stdio — run{" "}
-              <code className="font-mono text-[10.5px] text-ink-soft">python -m agent_core.main</code>{" "}
+              <code className="font-mono text-label text-ink-soft">python -m agent_core.main</code>{" "}
               from the repo.
             </p>
           )}
@@ -627,7 +627,7 @@ function ProfileCard({
 
       {/* Appearance — below a hair divider, moved here from the old drawer. */}
       <div className="mt-4 flex items-center justify-between border-t border-hair pt-3.5">
-        <span className="text-[13px] text-ink-soft">Appearance</span>
+        <span className="text-control text-ink-soft">Appearance</span>
         <div role="group" aria-label="Appearance" className="flex gap-px rounded-sm border border-line bg-paper p-0.5">
           {(["light", "dark"] as const).map((t) => {
             const active = theme === t;
@@ -638,7 +638,7 @@ function ProfileCard({
                 aria-pressed={active}
                 onClick={() => onSetTheme(t)}
                 className={
-                  "rounded-[5px] px-3.5 py-[5px] text-[12px] font-medium capitalize max-md:min-h-[44px] max-md:px-5 " +
+                  "rounded-[5px] px-3.5 py-[5px] text-hint font-medium capitalize max-md:min-h-[44px] max-md:px-5 " +
                   (active ? "bg-fern-tint text-fern-deep" : "bg-transparent text-muted hover:text-ink-soft")
                 }
               >
@@ -677,18 +677,18 @@ function Diagnostics({
       }
     >
       {diagnostics.length === 0 ? (
-        <p className="text-[12px] text-muted">Nothing to show yet.</p>
+        <p className="text-hint text-muted">Nothing to show yet.</p>
       ) : (
         <ul className="flex flex-col gap-3">
           {diagnostics.map((d, i) => (
             <li key={`${d.at}-${i}`} className="rounded border border-line bg-paper p-3">
               <div className="flex items-baseline justify-between gap-3">
-                <span className="text-[12.5px] font-medium text-ink">{d.message}</span>
-                <span className="shrink-0 font-mono text-[10.5px] text-muted">
+                <span className="text-meta font-medium text-ink">{d.message}</span>
+                <span className="shrink-0 font-mono text-label text-muted">
                   {new Date(d.at).toLocaleTimeString()}
                 </span>
               </div>
-              <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-[10.5px] text-ink-soft">
+              <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-label text-ink-soft">
                 {d.raw}
               </pre>
             </li>
