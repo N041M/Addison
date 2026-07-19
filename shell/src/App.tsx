@@ -591,6 +591,17 @@ export function App() {
   // conversation / Settings / New chat also closes the drawer (handoff §1).
   const closeDrawer = () => setDrawerOpen(false);
   const closeSheet = () => setSheetOpen(false);
+  // Opening a conversation or starting a new chat always returns to the chat
+  // screen — picked from Settings, either would otherwise load invisibly
+  // behind it. Used by the desktop sidebar AND the drawer.
+  const openConversationFromNav = (id: string) => {
+    setScreen("chat");
+    conversationsState.handleOpenConversation(id);
+  };
+  const newChatFromNav = () => {
+    setScreen("chat");
+    conversationsState.handleNewChat();
+  };
 
   return (
     <div className="flex h-full bg-paper text-ink">
@@ -602,8 +613,8 @@ export function App() {
           onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
           conversations={conversationsState.conversations}
           currentConversationId={conversationsState.currentConversationId}
-          onOpenConversation={conversationsState.handleOpenConversation}
-          onNewChat={conversationsState.handleNewChat}
+          onOpenConversation={openConversationFromNav}
+          onNewChat={newChatFromNav}
           newChatDisabled={!connected || controlsBusy}
           screen={screen}
           onOpenSettings={() => setScreen("settings")}
@@ -635,7 +646,7 @@ export function App() {
             onClearDiagnostics={clearDiagnostics}
             theme={themeChoice}
             onSetTheme={setThemeChoice}
-            onBack={() => setScreen("chat")}
+            onOpenMenu={() => setDrawerOpen(true)}
             scrollTarget={settingsScrollTarget}
             onScrolled={() => setSettingsScrollTarget(null)}
           />
@@ -773,11 +784,11 @@ export function App() {
             currentConversationId={conversationsState.currentConversationId}
             onOpenConversation={(id) => {
               closeDrawer();
-              conversationsState.handleOpenConversation(id);
+              openConversationFromNav(id);
             }}
             onNewChat={() => {
               closeDrawer();
-              conversationsState.handleNewChat();
+              newChatFromNav();
             }}
             newChatDisabled={!connected || controlsBusy}
             screen={screen}

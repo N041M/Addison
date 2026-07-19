@@ -43,7 +43,8 @@ interface Props {
   onClearDiagnostics: () => void;
   theme: ThemeChoice;
   onSetTheme: (theme: ThemeChoice) => void;
-  onBack: () => void;
+  /** Opens the mobile navigation drawer (the ☰ in the below-md top bar). */
+  onOpenMenu: () => void;
   /**
    * A DOM id to scroll into view once, when the page opens (the first-run
    * "Start setup" button routes here focused on the API-keys card). Cleared by
@@ -94,7 +95,7 @@ export function SettingsPage({
   onClearDiagnostics,
   theme,
   onSetTheme,
-  onBack,
+  onOpenMenu,
   scrollTarget,
   onScrolled,
 }: Props) {
@@ -114,15 +115,28 @@ export function SettingsPage({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-screen="settings">
-      <header className="flex items-baseline justify-between border-b border-line px-4 py-3.5 pt-[calc(env(safe-area-inset-top)+0.875rem)] md:px-[44px] md:pt-3.5">
-        <h2 className="font-serif text-title font-medium text-ink">Settings</h2>
+      {/* Below md: the same top-bar idiom as the chat screen — ☰ opens the
+          drawer, centered title, balancing spacer. One navigation language
+          across sibling screens (no separate "Back to chat" affordance). */}
+      <header className="flex items-center gap-2 border-b border-line px-4 pt-[env(safe-area-inset-top)] md:hidden">
         <button
           type="button"
-          onClick={onBack}
-          className="text-meta font-medium text-fern-deep hover:text-fern"
+          onClick={onOpenMenu}
+          aria-label="Chats"
+          className="flex h-11 w-11 shrink-0 items-center justify-center text-glyph text-ink-soft"
         >
-          Back to chat
+          ☰
         </button>
+        <span className="min-w-0 flex-1 truncate text-center text-control font-semibold text-ink-soft">
+          Settings
+        </span>
+        <span aria-hidden className="h-11 w-11 shrink-0" />
+      </header>
+      {/* md+: serif title only — the always-visible sidebar is the way back
+          (its Settings row is lit; any conversation or ＋ New chat returns to
+          the chat screen, and Escape does too). */}
+      <header className="hidden items-baseline border-b border-line px-4 py-3.5 md:flex md:px-[44px]">
+        <h2 className="font-serif text-title font-medium text-ink">Settings</h2>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-[44px] md:py-[30px]">
