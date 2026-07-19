@@ -59,7 +59,6 @@ import { type ThemeChoice, parseThemeChoice, resolveTheme } from "./lib/theme";
 
 const THEME_KEY = "addison.theme";
 const RAIL_OPEN_KEY = "addison.railOpen";
-const SIDEBAR_COLLAPSED_KEY = "addison.sidebarCollapsed";
 
 export function App() {
   const connected = useMemo(() => isEngineConnected(), []);
@@ -75,12 +74,10 @@ export function App() {
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   // In-window screen: the live chat, or the Settings page (replaces the drawer).
   const [screen, setScreen] = useState<"chat" | "settings">("chat");
-  // Fern app-shell chrome, both persisted. Rail hosts the widget column + the
-  // "Addison's work"/consent blocks; hiding it moves those inline (§3–§4).
+  // Fern app-shell chrome, persisted. Rail hosts the widget column + the
+  // "Addison's work"/consent blocks; hiding it moves those inline (§3–§4). The
+  // sidebar has no desktop hide/collapse — it is always present above md.
   const [railOpen, setRailOpen] = useState<boolean>(() => loadBool(RAIL_OPEN_KEY, true));
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() =>
-    loadBool(SIDEBAR_COLLAPSED_KEY, false),
-  );
 
   // Narrow-window (mobile) layout. Below the md breakpoint (768px — the same one
   // Tailwind's `md:` uses) the sidebar becomes a slide-over drawer and the widget
@@ -307,13 +304,10 @@ export function App() {
     setThemeChoiceState(next);
   }
 
-  // Persist the app-shell chrome toggles alongside the other prefs.
+  // Persist the app-shell chrome toggle alongside the other prefs.
   useEffect(() => {
     saveBool(RAIL_OPEN_KEY, railOpen);
   }, [railOpen]);
-  useEffect(() => {
-    saveBool(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed);
-  }, [sidebarCollapsed]);
 
   // Growing the window past the breakpoint reveals the static sidebar + rail, so
   // any open mobile overlay must not linger (and mustn't pop back if the window
@@ -609,8 +603,6 @@ export function App() {
           drawer (rendered at the end of this tree). */}
       {!isMobile && (
         <Sidebar
-          collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed((v) => !v)}
           conversations={conversationsState.conversations}
           currentConversationId={conversationsState.currentConversationId}
           onOpenConversation={openConversationFromNav}
@@ -778,8 +770,6 @@ export function App() {
         <MobileDrawer onClose={closeDrawer}>
           <Sidebar
             variant="drawer"
-            collapsed={false}
-            onToggleCollapsed={() => {}}
             conversations={conversationsState.conversations}
             currentConversationId={conversationsState.currentConversationId}
             onOpenConversation={(id) => {
@@ -855,7 +845,7 @@ function loadThemeChoice(): ThemeChoice {
   }
 }
 
-// Boolean prefs (rail open / sidebar collapsed) persist as "1"/"0".
+// Boolean prefs (rail open) persist as "1"/"0".
 function loadBool(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);
