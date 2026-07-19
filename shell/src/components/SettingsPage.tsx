@@ -124,13 +124,15 @@ export function SettingsPage({
         </button>
       </header>
 
-      {notice && (
-        <div className="px-4 pt-3 md:px-[44px]">
-          <div className="mx-auto flex w-full max-w-[880px] flex-col gap-2">{notice}</div>
-        </div>
-      )}
-
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-[44px] md:py-[30px]">
+        {/* The notice shares the cards' scroll container — same coordinate
+            space, same scrollbar — so its margins match the card row exactly
+            (outside the container it ran wider by the scrollbar width). */}
+        {notice && (
+          <div className="mx-auto mb-4 flex w-full max-w-[880px] flex-col gap-2 md:-mt-2.5">
+            {notice}
+          </div>
+        )}
         <div className="mx-auto flex max-w-[880px] flex-col items-start gap-4 min-[900px]:flex-row">
           {/* Column A */}
           <div className="flex w-full min-w-0 flex-1 flex-col gap-4">
