@@ -88,6 +88,16 @@ class Method:
     # Core-computed, read-only stat sources for the token meter / connections cards.
     STATS_GET = "stats.get"                    # {} -> {tokensMonth, providerLatency, connections}
 
+    # Guidance skills — DECLARATIVE plain-text notes (agent_core/skills.py) that steer
+    # HOW Addison approaches tasks; enabled skills append to the transient per-turn
+    # system prompt. NEVER executable and NEVER widen permissions (the gate stays sole
+    # authority). Available in both SAFE and OPEN modes. Local content only (no sharing).
+    SKILL_LIST = "skill.list"                  # {} -> {skills: [{id, name, instructions, enabled}]}
+    SKILL_CREATE = "skill.create"              # {name, instructions} -> {ok, id} | {ok:false, error}
+    SKILL_UPDATE = "skill.update"              # {id, name, instructions} -> {ok, error?}
+    SKILL_SET_ENABLED = "skill.setEnabled"     # {id, enabled} -> {ok}
+    SKILL_DELETE = "skill.delete"              # {id} -> {ok}
+
     # Core -> Shell (handled in Rust, NEVER exposed to or callable from the
     # webview — §1.3, §5). Listed here and mirrored in protocol.ts only so the
     # golden-file drift test (§9) covers the full method surface. These carry

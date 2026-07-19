@@ -488,3 +488,33 @@ def test_widget_position_orders_by_position_not_insertion(store: Store):
     assert [r["id"] for r in store.list_widgets()] == ["early", "late"]
     # next position is one past the highest existing position.
     assert store.next_widget_position() == 6
+
+
+# --- guidance skills --------------------------------------------------------
+
+
+def test_skill_crud_and_enabled_filter(store: Store):
+    store.insert_skill(id="s1", name="Be brief", instructions="Short.", enabled=True, created_at=1)
+    store.insert_skill(id="s2", name="Formal", instructions="Formal tone.", enabled=False, created_at=2)
+
+    rows = store.list_skills()
+    assert [r["id"] for r in rows] == ["s1", "s2"]        # oldest first
+    assert rows[0]["enabled"] is True and rows[1]["enabled"] is False
+
+    # list_enabled_skills returns only enabled rows, as Skill dataclasses.
+    enabled = store.list_enabled_skills()
+    assert [s.id for s in enabled] == ["s1"]
+    assert enabled[0].name == "Be brief" and enabled[0].enabled is True
+
+    store.update_skill("s1", "Be very brief", "One sentence.")
+    updated = store.get_skill("s1")
+    assert updated is not None
+    assert updated["name"] == "Be very brief" and updated["instructions"] == "One sentence."
+    assert updated["enabled"] is True                     # update leaves enabled untouched
+
+    store.set_skill_enabled("s2", True)
+    assert {s.id for s in store.list_enabled_skills()} == {"s1", "s2"}
+
+    store.delete_skill("s1")
+    assert store.get_skill("s1") is None
+    assert [r["id"] for r in store.list_skills()] == ["s2"]

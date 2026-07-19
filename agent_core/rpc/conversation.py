@@ -10,6 +10,7 @@ from agent_core.orchestrator import Conversation
 from agent_core.providers.base import Message, ModelRole
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _BYOK_ONBOARDING_MESSAGE, _SERVER_ERROR
+from agent_core.skills import compose_skills_prompt
 
 
 def _auto_title(text: str) -> str | None:
@@ -93,11 +94,21 @@ class ConversationMixin(ServerContext):
             if self._setup_prompt:
                 system_msg = Message(role="system", content=self._setup_prompt)
                 self.conversation.messages.insert(0, system_msg)
-        elif self._primary_prompt:
-            # Every non-setup turn (cloud or local) gets the app-context prompt,
-            # under the same transient rules: this turn only, never persisted.
-            system_msg = Message(role="system", content=self._primary_prompt)
-            self.conversation.messages.insert(0, system_msg)
+        else:
+            # Every non-setup turn (cloud or local) gets the app-context prompt PLUS
+            # any ENABLED guidance skills (agent_core/skills.py), under the same
+            # transient rules: this turn only, never persisted. A skill's text can only
+            # STEER Addison — it can NEVER widen what Addison may DO (the ToolRegistry +
+            # PermissionGate stay the sole authority; every tool call still hits the
+            # gate). Skills are plain declarative text, so they compose in BOTH SAFE and
+            # OPEN modes. With no enabled skills compose_skills_prompt returns "", so the
+            # effective prompt is byte-identical to today's.
+            effective_prompt = (self._primary_prompt or "") + compose_skills_prompt(
+                self.store.list_enabled_skills()
+            )
+            if effective_prompt:
+                system_msg = Message(role="system", content=effective_prompt)
+                self.conversation.messages.insert(0, system_msg)
 
         pre_turn = len(self.conversation.messages)
         assistant_message_id: str | None = None

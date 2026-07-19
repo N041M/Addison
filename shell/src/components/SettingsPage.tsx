@@ -20,8 +20,10 @@ import type { ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
+import type { SkillsState } from "../hooks/useSkills";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
+import { SkillsSection } from "./SkillsSection";
 import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
@@ -37,6 +39,8 @@ interface Props {
    * default role/model picks, provider connections, and the local-setup flow.
    */
   models: ModelSelection;
+  /** The skills bundle (useSkills): the list + create/edit/toggle/remove handlers. */
+  skills: SkillsState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -89,6 +93,7 @@ export function SettingsPage({
   connected,
   notice,
   models,
+  skills,
   profile,
   onSetProfile,
   diagnostics,
@@ -191,6 +196,14 @@ export function SettingsPage({
                 setup={models.localSetup}
                 onStartSetup={models.handleStartLocalSetup}
               />
+            </Card>
+          </CardSlot>
+          <CardSlot>
+            <Card
+              title="Skills"
+              subtitle="Short notes telling Addison how you like things done. Turn one on and Addison keeps it in mind."
+            >
+              <SkillsSection connected={connected} skills={skills} />
             </Card>
           </CardSlot>
           <CardSlot>
