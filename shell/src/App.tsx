@@ -46,7 +46,6 @@ import {
 import { SettingsPage, API_KEYS_SECTION_ID } from "./components/SettingsPage";
 import { FirstRunBanner } from "./components/FirstRunBanner";
 import { Banner } from "./components/Banner";
-import { BellLogo } from "./components/BellLogo";
 import { MobileDrawer } from "./components/MobileDrawer";
 import { BottomSheet } from "./components/BottomSheet";
 import { useMediaQuery } from "./hooks/useMediaQuery";
@@ -671,13 +670,15 @@ export function App() {
             </header>
 
             {/* Mobile top bar (below md): ☰ opens the drawer · centered title ·
-                bell opens the widget sheet. "Undo last action" moves into the
-                sheet header. Safe-area top inset for a phone status bar. */}
+                balancing spacer. Widgets moved into the drawer (next to
+                Settings), so the drawer is the one nav surface — no second
+                right-side control. "Undo last action" lives in the sheet
+                header. Safe-area top inset for a phone status bar. */}
             <header className="flex items-center gap-2 border-b border-line px-4 pt-[env(safe-area-inset-top)] md:hidden">
               <button
                 type="button"
                 onClick={() => setDrawerOpen(true)}
-                aria-label="Chats"
+                aria-label="Menu"
                 className="flex h-11 w-11 shrink-0 items-center justify-center text-glyph text-ink-soft"
               >
                 ☰
@@ -685,14 +686,7 @@ export function App() {
               <span className="min-w-0 flex-1 truncate text-center text-control font-semibold text-ink-soft">
                 {conversationsState.conversationTitle || "New conversation"}
               </span>
-              <button
-                type="button"
-                onClick={() => setSheetOpen(true)}
-                aria-label="Widgets"
-                className="flex h-11 w-11 shrink-0 items-center justify-center"
-              >
-                <BellLogo size={19} className="text-fern" />
-              </button>
+              <span aria-hidden className="h-11 w-11 shrink-0" />
             </header>
 
             {/* Body: centered chat column + (optional) widget rail, each with its
@@ -785,6 +779,12 @@ export function App() {
             onOpenSettings={() => {
               closeDrawer();
               setScreen("settings");
+            }}
+            onOpenWidgets={() => {
+              // The sheet renders on the chat screen only, so return there first.
+              closeDrawer();
+              setScreen("chat");
+              setSheetOpen(true);
             }}
             profileLabel={profileLabel}
             modeNote={profileModeNote}
