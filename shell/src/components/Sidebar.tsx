@@ -135,8 +135,10 @@ export function Sidebar({
         />
       </nav>
 
-      {/* Pinned bottom: Settings + profile label. */}
-      <div className="mt-auto flex flex-col gap-0.5 px-[14px] pt-2">
+      {/* Pinned bottom: Settings + profile label. A hairline separates it from
+          the conversation list; the profile line shares the Settings label's
+          text indent (2px bar + 12px padding) so the two read as one block. */}
+      <div className="mt-auto flex flex-col border-t border-line px-[14px] pb-3.5 pt-2.5">
         <button
           type="button"
           onClick={onOpenSettings}
@@ -149,7 +151,7 @@ export function Sidebar({
         >
           Settings
         </button>
-        <p className="p-1 text-xs text-faint">
+        <p className="pl-[14px] pr-3 pt-1 text-xs leading-relaxed text-faint">
           {profileLabel}
           {modeNote && <span className="ml-1.5 font-mono text-tick text-faint">· {modeNote}</span>}
         </p>
