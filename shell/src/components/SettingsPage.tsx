@@ -121,7 +121,7 @@ export function SettingsPage({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-screen="settings">
-      <header className="flex items-baseline justify-between border-b border-line px-[44px] py-3.5">
+      <header className="flex items-baseline justify-between border-b border-line px-4 py-3.5 pt-[calc(env(safe-area-inset-top)+0.875rem)] md:px-[44px] md:pt-3.5">
         <h2 className="font-serif text-[20px] font-medium text-ink">Settings</h2>
         <button
           type="button"
@@ -132,7 +132,7 @@ export function SettingsPage({
         </button>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-[44px] py-[30px]">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-6 md:px-[44px] md:py-[30px]">
         <div className="mx-auto flex max-w-[880px] flex-col items-start gap-4 min-[900px]:flex-row">
           {/* Column A */}
           <div className="flex w-full min-w-0 flex-1 flex-col gap-4">
@@ -314,7 +314,7 @@ function SelectableRow({
       disabled={disabled}
       aria-pressed={selected}
       className={
-        "flex items-center justify-between rounded border px-3.5 py-[11px] text-left text-[14px] font-medium " +
+        "flex items-center justify-between rounded border px-3.5 py-[11px] text-left text-[14px] font-medium max-md:min-h-[44px] " +
         (selected
           ? "border-fern bg-fern-tint text-fern-deep"
           : "border-line bg-paper text-ink hover:border-muted disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-line")
@@ -463,7 +463,7 @@ function ProviderRow({
               type="button"
               onClick={() => setEditing(true)}
               disabled={working}
-              className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[12.5px] font-semibold text-ink hover:border-muted disabled:opacity-50"
+              className="rounded-sm border border-line bg-surface px-3.5 py-1.5 text-[12.5px] font-semibold text-ink hover:border-muted disabled:opacity-50 max-md:min-h-[44px] max-md:px-4"
             >
               Replace
             </button>
@@ -483,7 +483,7 @@ function ProviderRow({
             type="button"
             onClick={() => setEditing(true)}
             disabled={!connected}
-            className="shrink-0 rounded-sm border border-line bg-transparent px-3.5 py-1.5 text-xs font-medium text-ink-soft hover:border-muted disabled:opacity-50"
+            className="shrink-0 rounded-sm border border-line bg-transparent px-3.5 py-1.5 text-xs font-medium text-ink-soft hover:border-muted disabled:opacity-50 max-md:min-h-[44px] max-md:px-4"
           >
             Add key
           </button>
@@ -506,7 +506,7 @@ function ProviderRow({
               placeholder="http://localhost:1234/v1"
               disabled={!connected || working}
               className={
-                "min-w-0 rounded-sm border bg-surface px-3 py-2 font-mono text-[12px] text-ink placeholder:text-faint disabled:opacity-60 " +
+                "min-w-0 rounded-sm border bg-surface px-3 py-2 font-mono text-[12px] text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
                 (baseUrl ? focusBorder : "border-line")
               }
             />
@@ -526,7 +526,7 @@ function ProviderRow({
               }
               disabled={!connected || working}
               className={
-                "min-w-0 flex-1 rounded-sm border bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint disabled:opacity-60 " +
+                "min-w-0 flex-1 rounded-sm border bg-surface px-3 py-2 text-[13px] text-ink placeholder:text-faint disabled:opacity-60 max-md:min-h-[44px] " +
                 (key ? focusBorder : "border-line")
               }
             />
@@ -539,7 +539,7 @@ function ProviderRow({
                 (needsKey && !key.trim()) ||
                 (kind === "custom" && !baseUrl.trim())
               }
-              className="shrink-0 rounded-sm bg-fern px-4 py-2 text-[12.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
+              className="shrink-0 rounded-sm bg-fern px-4 py-2 text-[12.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-5"
             >
               {working ? "Checking…" : kind === "custom" ? "Connect" : "Save"}
             </button>
@@ -616,7 +616,7 @@ function ProfileCard({
                   aria-pressed={active}
                   onClick={() => onSetProfile(p.id)}
                   className={
-                    "flex-1 rounded-sm px-0 py-2 text-[13px] " +
+                    "flex-1 rounded-sm px-0 py-2 text-[13px] max-md:min-h-[44px] " +
                     (active
                       ? "bg-fern-tint font-semibold text-fern-deep"
                       : "bg-transparent font-medium text-muted hover:text-ink-soft")
@@ -653,7 +653,7 @@ function ProfileCard({
                 aria-pressed={active}
                 onClick={() => onSetTheme(t)}
                 className={
-                  "rounded-[5px] px-3.5 py-[5px] text-[12px] font-medium capitalize " +
+                  "rounded-[5px] px-3.5 py-[5px] text-[12px] font-medium capitalize max-md:min-h-[44px] max-md:px-5 " +
                   (active ? "bg-fern-tint text-fern-deep" : "bg-transparent text-muted hover:text-ink-soft")
                 }
               >

@@ -84,7 +84,10 @@ export function Composer({
   }
 
   return (
-    <div className="px-[44px] pb-5 pt-3.5">
+    // Full-width with 16px side padding below md; the desktop 44px gutters
+    // restore at md. The bottom padding folds in the phone safe-area inset
+    // (0 on desktop, so it stays the plain 20px there).
+    <div className="px-4 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] md:px-[44px]">
       <div className="mx-auto w-full max-w-[840px] rounded-card border border-line bg-surface px-3.5 pb-2.5 pt-3 shadow-soft focus-within:border-fern">
         <textarea
           ref={textareaRef}
@@ -114,7 +117,7 @@ export function Composer({
               <button
                 type="button"
                 onClick={onStop}
-                className="rounded-sm border border-line bg-surface px-5 py-2 text-[13.5px] font-semibold text-ink-soft hover:border-danger hover:text-danger"
+                className="rounded-sm border border-line bg-surface px-5 py-2 text-[13.5px] font-semibold text-ink-soft hover:border-danger hover:text-danger max-md:min-h-[44px] max-md:px-6"
               >
                 Stop
               </button>
@@ -123,7 +126,7 @@ export function Composer({
                 type="button"
                 onClick={submit}
                 disabled={!draft.trim()}
-                className="rounded-sm bg-fern px-[26px] py-[9px] text-[13.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-sm bg-fern px-[26px] py-[9px] text-[13.5px] font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-7"
               >
                 Send
               </button>
@@ -131,7 +134,8 @@ export function Composer({
           </div>
         </div>
       </div>
-      <p className="mx-auto mt-2 max-w-[840px] text-xs text-faint">
+      {/* The hint line is hidden below md (the mobile shots show none). */}
+      <p className="mx-auto mt-2 hidden max-w-[840px] text-xs text-faint md:block">
         Press Enter to send. Shift+Enter starts a new line. Addison asks first, and
         anything it does can be undone.
       </p>

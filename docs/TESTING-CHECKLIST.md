@@ -197,6 +197,62 @@ falls back to plain code without breaking the row.
 
 ---
 
+## 14. Narrow window / mobile layout
+
+Addison is a desktop app, so "mobile" = the **narrow-window layout** below the
+**768px** breakpoint (the same one Tailwind's `md:` uses; it also future-proofs
+a phone shell). Resize the window under 768px (or use a 375-wide device preset).
+The desktop three-column layout at ≥768px must be **unchanged**.
+
+**Top bar.** Below 768px the desktop chat header is replaced by a 3-element top
+bar: **☰** (left, 44px), the **centered conversation title** (13px/600,
+truncates), and the **bell** (right, 44px). No "Undo last action" or rail toggle
+up here — those move into the widget sheet.
+
+**Sidebar → slide-over drawer.** ☰ opens the sidebar as a **left slide-over**
+(280px, `side` bg, scrim behind, 250ms slide). The collapse `«` control is gone
+in drawer mode (the drawer is always full). It closes on: **scrim tap**,
+**Escape**, and **picking** a conversation / Settings / New chat. Grow the window
+back past 768px — the drawer is gone and the static 216px sidebar is back.
+
+**Widget rail → bottom sheet.** The rail column is hidden below 768px; the
+**bell** opens a **bottom sheet** (rounded top, `surface` bg, scrim, a 36×4px
+drag handle, max-height ~70vh, its own scroll). It holds the SAME rail content —
+YOUR WIDGETS + Edit, widget cards, token meter, connections, tray, the dashed
+"Ask Addison to build a widget", and the "Addison's work" block — plus **Undo
+last action** (right-aligned, above the widgets) when something is undoable.
+Closes on: **scrim tap**, **Escape**, and **dragging the handle down**. Its open
+state is **not persisted** (reopen = closed).
+
+**Consent inline.** Below 768px a permission request **always renders inline in
+the thread** (fern-tint card, Allow + Not now), never in the sheet — so a prompt
+is never hidden behind the bell even with the sheet closed.
+
+**Settings one column.** Below 768px the two columns stack into one flowing
+column (unchanged from the ≤900px stack) and rows grow: selectable rows, provider
+rows + inputs + Save/Add-key, and the Profile/Appearance segmented controls are
+all **≥44px** tall.
+
+**Hit targets ≥44px.** Spot-check with a ruler / devtools: drawer conversation
+rows, New chat, Settings; composer **Send**/Stop; widget **Run** pills, the tray
+"N more widgets" row, and the dashed add-widget button. (These use `max-md:`
+utilities, so desktop keeps its compact sizes.)
+
+**Safe area + no overflow.** In the DOM the top bar carries
+`padding-top: env(safe-area-inset-top)` and the composer + sheet carry
+`padding-bottom: env(safe-area-inset-bottom)` (both 0 on desktop, so harmless).
+At **375px** there is **no horizontal scroll** anywhere, and the first-run pine
+banner sits within ~16px side margins without overflowing.
+
+**Reduced motion.** With the OS "reduce motion" setting on, the drawer and sheet
+**appear instantly** (no slide) — same as the theme cross-fade.
+
+**Both themes.** Walk the drawer, the sheet, the inline consent card, and
+single-column Settings in **light and dark**: surfaces, borders, and text all
+read correctly, focus rings visible.
+
+---
+
 ## After the pass
 
 For each failed step: screenshot + stderr → diagnose → fix → **add an
