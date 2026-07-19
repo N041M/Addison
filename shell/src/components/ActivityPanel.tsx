@@ -56,12 +56,12 @@ export function ActivityPanel({
       {steps.length > 0 && (
         // Blocky "live annotation": a 2px rule wrapping ONLY the label + list.
         <div className="border-l-2 border-rule pl-3.5">
-          <p className="text-[10.5px] font-semibold uppercase tracking-[0.11em] text-faint">
+          <p className="text-label font-semibold uppercase tracking-caps-wider text-faint">
             Addison's work
           </p>
           <ul className="mt-2.5 space-y-[7px]">
             {steps.map((s, i) => (
-              <li key={i} className="flex items-baseline gap-2 text-[12.5px] text-ink-soft">
+              <li key={i} className="flex items-baseline gap-2 text-meta text-ink-soft">
                 <span aria-hidden="true" className="shrink-0 -translate-y-[1px]">
                   {s.done ? (
                     <span className="block h-[6px] w-[6px] rounded-pill bg-fern" />
@@ -92,13 +92,13 @@ export function ActivityPanel({
             <button
               type="button"
               onClick={onRedoLastAction}
-              className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted hover:text-ink-soft"
+              className="inline-flex w-fit items-center gap-1.5 text-control font-medium text-muted hover:text-ink-soft"
             >
               <span aria-hidden="true">↻</span>
               Do it again
             </button>
           )}
-          {lastUndoDetail && <p className="text-[13px] text-muted">{lastUndoDetail}</p>}
+          {lastUndoDetail && <p className="text-control text-muted">{lastUndoDetail}</p>}
         </div>
       )}
     </section>

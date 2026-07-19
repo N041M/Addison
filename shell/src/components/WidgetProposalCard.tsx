@@ -27,7 +27,7 @@ export function WidgetProposalCard({ proposal, onAdd, onCancel }: Props) {
       {proposal.summary && (
         <p className="mt-1 text-sm text-muted">{proposal.summary}</p>
       )}
-      <p className="mt-2 font-mono text-[11px] text-faint">
+      <p className="mt-2 font-mono text-fact text-faint">
         {proposal.kind === "routine" ? "runs a saved routine" : "shows a value from Addison"}
       </p>
 

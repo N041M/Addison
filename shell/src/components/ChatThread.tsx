@@ -115,7 +115,7 @@ function MessageRow({
       <div className="flex items-baseline justify-between gap-3">
         <span
           className={
-            "text-[10.5px] font-semibold uppercase tracking-[0.11em] " +
+            "text-label font-semibold uppercase tracking-caps-wider " +
             (isAddison ? "text-fern-deep" : "text-faint")
           }
         >
@@ -133,7 +133,7 @@ function MessageRow({
       </div>
 
       {showWriting ? (
-        <p className="mt-1.5 font-serif text-[17px] italic leading-[1.7] text-muted">
+        <p className="mt-1.5 font-serif text-message italic leading-[1.7] text-muted">
           Addison is writing…
         </p>
       ) : isAddison && !message.failed ? (
@@ -141,13 +141,13 @@ function MessageRow({
         // The markdown body inherits the serif "correspondence" voice. User input
         // and failed turns stay plain text — never markdown-render what the user
         // typed, and keep error copy verbatim.
-        <div className="mt-1.5 font-serif text-[17px] leading-[1.7] text-ink">
+        <div className="mt-1.5 font-serif text-message leading-[1.7] text-ink">
           <Markdown content={message.content} pending={message.pending} />
         </div>
       ) : (
         <p
           className={
-            "mt-1.5 whitespace-pre-wrap font-serif text-[17px] leading-[1.7] " +
+            "mt-1.5 whitespace-pre-wrap font-serif text-message leading-[1.7] " +
             (message.failed ? "text-danger" : "text-ink")
           }
         >

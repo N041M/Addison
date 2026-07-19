@@ -3,6 +3,7 @@
 // process boundary.
 
 import type { ChatMessage, ModelRole } from "./protocol";
+import { asRecord } from "../lib/parse";
 
 /** A message as rendered in the thread, with transient display flags. */
 export interface DisplayMessage extends ChatMessage {
@@ -35,7 +36,6 @@ export interface ConversationSummary {
   id: string;
   title: string;
   startedAt: number;
-  messageCount: number;
 }
 
 /**
@@ -44,7 +44,7 @@ export interface ConversationSummary {
  * fills sensible fallbacks so a partial payload never crashes the list.
  */
 export function parseConversationSummaries(result: unknown): ConversationSummary[] {
-  const record = result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const record = asRecord(result);
   const list = Array.isArray(result)
     ? result
     : record && Array.isArray(record.conversations)
@@ -60,7 +60,6 @@ export function parseConversationSummaries(result: unknown): ConversationSummary
       id: obj.id,
       title: typeof obj.title === "string" && obj.title ? obj.title : "Untitled conversation",
       startedAt: typeof obj.startedAt === "number" ? obj.startedAt : 0,
-      messageCount: typeof obj.messageCount === "number" ? obj.messageCount : 0,
     });
   }
   return out;
@@ -90,14 +89,12 @@ export interface EffortLevel {
 /**
  * One cloud model choice from `model.availableRoles`' `cloudModels` list. The
  * plain `label` (e.g. "Most capable", "Balanced", "Fast") is what the personas
- * see; `description` is a one-line plain explainer shown unobtrusively. When
- * `effortLevels` is empty the effort control is hidden for that model. Exactly
- * one entry in the catalog has `default: true`.
+ * see. When `effortLevels` is empty the effort control is hidden for that
+ * model. Exactly one entry in the catalog has `default: true`.
  */
 export interface CloudModel {
   id: string;
   label: string;
-  description: string;
   effortLevels: EffortLevel[];
   default: boolean;
   /**
@@ -167,11 +164,10 @@ export interface StatWidgetSpec {
 
 /**
  * A command widget (OPEN/Developer mode only — agent_core/widgets.py). DISPLAY
- * DATA ONLY here: the frontend never runs the command itself — a command widget
- * would run through the core's run_command tool + gate, exactly like a live
- * command. In this build the core exposes no widget-run path, so the rail shows
- * the command but its Run pill is inert (see WidgetRail). Present in a widget
- * spec means the widget was created in OPEN mode.
+ * DATA ONLY here: the frontend never runs the command itself — the Run pill
+ * calls the core's widget.run, which routes through the run_command tool + gate
+ * (per-invocation destructive prompt), exactly like a routine command step.
+ * A command kind in a spec means the widget was created in OPEN mode.
  */
 export interface CommandWidgetSpec {
   kind: "command";
@@ -181,12 +177,15 @@ export interface CommandWidgetSpec {
 
 export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec | CommandWidgetSpec;
 
-/** One stored widget from `widget.list`: id + declarative spec + pin/order state. */
+/**
+ * One stored widget from `widget.list`: id + declarative spec + pin state. The
+ * core returns the list already in user-visible order (ORDER BY position in
+ * MemoryStore.list_widgets), so the frontend renders it as received.
+ */
 export interface Widget {
   id: string;
   spec: WidgetSpec;
   pinned: boolean;
-  position: number;
   /**
    * The policy mode the widget was saved under ("safe" | "open"), when the core
    * forwards it. Drives the Developer-profile "DEV" annotation tag. A command
@@ -215,7 +214,6 @@ export interface ConnectionStat {
 export interface ProviderLatencyStat {
   provider: string;
   ms: number;
-  checkedAt: number;
 }
 
 /** The full `stats.get` picture backing the token meter + connections cards. */

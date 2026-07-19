@@ -34,12 +34,12 @@ export function PermissionCard({ request, onRespond }: Props) {
   const { lead, command } = splitCommand(request.description);
   return (
     <div className="rounded-card bg-fern-tint px-[15px] py-[13px]">
-      <p className="text-[12.5px] font-semibold leading-snug text-ink">{request.label}</p>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-soft">{lead}</p>
+      <p className="text-meta font-semibold leading-snug text-ink">{request.label}</p>
+      <p className="mt-1 text-fine leading-relaxed text-ink-soft">{lead}</p>
       {command && (
         <p
           title={command}
-          className="mt-1.5 truncate rounded-sm bg-surface px-2 py-1 font-mono text-[12px] text-ink"
+          className="mt-1.5 truncate rounded-sm bg-surface px-2 py-1 font-mono text-hint text-ink"
         >
           {command}
         </p>

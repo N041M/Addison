@@ -34,19 +34,19 @@ export function FirstRunBanner({ step, onStartSetup, onSkip, showGreeting }: Pro
         className="rounded-banner bg-pine px-7 py-6 text-cream shadow-banner"
       >
         <div className="flex items-baseline justify-between gap-3">
-          <p className="text-[10.5px] font-semibold uppercase tracking-[0.11em] text-pine-soft">
+          <p className="text-label font-semibold uppercase tracking-caps-wider text-pine-soft">
             First-time setup · step {step} of 2
           </p>
           <button
             type="button"
             onClick={onSkip}
-            className="text-[12.5px] font-medium text-pine-muted hover:text-cream"
+            className="text-meta font-medium text-pine-muted hover:text-cream"
           >
             Skip for now
           </button>
         </div>
 
-        <h2 className="mt-2.5 font-serif text-[24px] font-medium text-pine-ink">
+        <h2 className="mt-2.5 font-serif text-headline font-medium text-pine-ink">
           {step === 1 ? "Let's get Addison ready." : "You're set up. Say hello to Addison."}
         </h2>
 
@@ -67,7 +67,7 @@ export function FirstRunBanner({ step, onStartSetup, onSkip, showGreeting }: Pro
           <button
             type="button"
             onClick={onStartSetup}
-            className="mt-[18px] rounded-[7px] bg-cream px-6 py-2.5 text-[14px] font-semibold text-pine hover:bg-pine-ink"
+            className="mt-[18px] rounded-[7px] bg-cream px-6 py-2.5 text-row font-semibold text-pine hover:bg-pine-ink"
           >
             Start setup
           </button>
@@ -76,10 +76,10 @@ export function FirstRunBanner({ step, onStartSetup, onSkip, showGreeting }: Pro
 
       {showGreeting && (
         <div>
-          <h1 className="font-serif text-[32px] font-medium tracking-[-0.01em] text-ink">
+          <h1 className="font-serif text-greeting font-medium tracking-display text-ink">
             {greeting()}
           </h1>
-          <p className="mt-2 text-[15px] text-muted">
+          <p className="mt-2 text-body text-muted">
             Tell me what you'd like help with — I'll ask before doing anything, and
             you can always undo.
           </p>
@@ -109,13 +109,13 @@ function StepRow({
     <div className="flex items-start gap-3">
       <span
         className={
-          "flex h-6 w-6 shrink-0 items-center justify-center rounded-pill text-[12.5px] font-semibold " +
+          "flex h-6 w-6 shrink-0 items-center justify-center rounded-pill text-meta font-semibold " +
           circle
         }
       >
         {state === "done" ? "✓" : n}
       </span>
-      <p className={"mt-px text-[14px] " + bodyColor}>{text}</p>
+      <p className={"mt-px text-row " + bodyColor}>{text}</p>
     </div>
   );
 }

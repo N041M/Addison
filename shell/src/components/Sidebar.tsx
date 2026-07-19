@@ -93,7 +93,7 @@ export function Sidebar({
       <div className="flex items-center justify-between px-[18px] pb-[14px]">
         <span className="flex items-center gap-2 text-ink">
           <BellLogo size={17} className="text-fern" />
-          <span className="text-base font-bold tracking-[-0.02em]">Addison</span>
+          <span className="text-base font-bold tracking-logo">Addison</span>
         </span>
         {!isDrawer && (
           <button
@@ -113,7 +113,7 @@ export function Sidebar({
         type="button"
         onClick={onNewChat}
         disabled={newChatDisabled}
-        className="mx-[14px] flex items-center gap-[7px] rounded-sm border border-line bg-surface px-3 py-2 text-left text-[13px] font-semibold text-fern-deep hover:border-muted disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:text-[14px]"
+        className="mx-[14px] flex items-center gap-[7px] rounded-sm border border-line bg-surface px-3 py-2 text-left text-control font-semibold text-fern-deep hover:border-muted disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:text-row"
       >
         ＋ New chat
       </button>
@@ -135,13 +135,15 @@ export function Sidebar({
         />
       </nav>
 
-      {/* Pinned bottom: Settings + profile label. */}
-      <div className="mt-auto flex flex-col gap-0.5 px-[14px] pt-2">
+      {/* Pinned bottom: Settings + profile label. A hairline separates it from
+          the conversation list; the profile line shares the Settings label's
+          text indent (2px bar + 12px padding) so the two read as one block. */}
+      <div className="mt-auto flex flex-col border-t border-line px-[14px] pb-3.5 pt-2.5">
         <button
           type="button"
           onClick={onOpenSettings}
           className={
-            "flex items-center gap-2 border-l-2 px-3 py-2 text-left text-[13px] font-medium text-ink-soft max-md:min-h-[44px] max-md:text-[14px] " +
+            "flex items-center gap-2 border-l-2 px-3 py-2 text-left text-control font-medium text-ink-soft max-md:min-h-[44px] max-md:text-row " +
             (screen === "settings"
               ? "border-fern bg-hair"
               : "border-transparent bg-transparent hover:bg-hair/50")
@@ -149,9 +151,9 @@ export function Sidebar({
         >
           Settings
         </button>
-        <p className="p-1 text-xs text-faint">
+        <p className="pl-[14px] pr-3 pt-1 text-xs leading-relaxed text-faint">
           {profileLabel}
-          {modeNote && <span className="ml-1.5 font-mono text-[10px] text-faint">· {modeNote}</span>}
+          {modeNote && <span className="ml-1.5 font-mono text-tick text-faint">· {modeNote}</span>}
         </p>
       </div>
     </aside>
@@ -172,7 +174,7 @@ function ConversationGroup({
   if (rows.length === 0) return null;
   return (
     <div>
-      <p className="mx-[18px] mb-1.5 mt-4 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint">
+      <p className="mx-[18px] mb-1.5 mt-4 text-label font-semibold uppercase tracking-caps-wide text-faint">
         {label}
       </p>
       {rows.map((c) => {
@@ -184,7 +186,7 @@ function ConversationGroup({
             onClick={() => onOpen(c.id)}
             title={c.title}
             className={
-              "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-[13px] max-md:py-3.5 max-md:text-[14px] " +
+              "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-control max-md:py-3.5 max-md:text-row " +
               (active
                 ? "border-fern bg-hair font-medium text-ink"
                 : "border-transparent bg-transparent text-muted hover:bg-hair/50")

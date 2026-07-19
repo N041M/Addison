@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
+import { asRecord, normalizeVariables } from "../lib/parse";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
 // `routine.list` ONLY under the Developer profile; they are rendered READ-ONLY
@@ -140,12 +141,12 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   }
 
   if (!loaded) {
-    return <p className="text-[12.5px] text-muted">Looking for your routines…</p>;
+    return <p className="text-meta text-muted">Looking for your routines…</p>;
   }
 
   if (routines.length === 0) {
     return (
-      <p className="text-[12.5px] text-muted">
+      <p className="text-meta text-muted">
         {connected
           ? "None yet. After Addison does something for you, look for " +
             "“Save these steps as a routine” — saved ones appear here."
@@ -164,12 +165,12 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               {developer && routine.createdInMode === "open" && (
-                <span className="mb-0.5 inline-block border-l-2 border-fern pl-1.5 text-[9.5px] font-semibold uppercase tracking-[0.09em] text-fern-deep">
+                <span className="mb-0.5 inline-block border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
                   Dev
                 </span>
               )}
-              <p className="text-[13.5px] font-semibold text-ink">{routine.name}</p>
-              <p className="mt-px text-[11.5px] text-faint">{runSummary(routine)}</p>
+              <p className="text-action font-semibold text-ink">{routine.name}</p>
+              <p className="mt-px text-fine text-faint">{runSummary(routine)}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <button
@@ -315,34 +316,19 @@ function runSummary(routine: RoutineRow): string {
 }
 
 function normalizeRoutines(result: unknown): RoutineRow[] {
-  const record =
-    result && typeof result === "object" ? (result as Record<string, unknown>) : null;
+  const record = asRecord(result);
   const list = record && Array.isArray(record.routines) ? record.routines : [];
   const out: RoutineRow[] = [];
   for (const item of list) {
-    if (!item || typeof item !== "object") continue;
-    const r = item as Record<string, unknown>;
-    if (typeof r.id !== "string" || typeof r.name !== "string") continue;
+    const r = asRecord(item);
+    if (!r || typeof r.id !== "string" || typeof r.name !== "string") continue;
     out.push({
       id: r.id,
       name: r.name,
       description: typeof r.description === "string" ? r.description : "",
       runCount: typeof r.runCount === "number" ? r.runCount : 0,
       lastRunAt: typeof r.lastRunAt === "number" ? r.lastRunAt : null,
-      variables: Array.isArray(r.variables)
-        ? r.variables.flatMap((v) => {
-            if (!v || typeof v !== "object") return [];
-            const rv = v as Record<string, unknown>;
-            if (typeof rv.name !== "string") return [];
-            return [
-              {
-                name: rv.name,
-                prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
-                default: typeof rv.default === "string" ? rv.default : null,
-              },
-            ];
-          })
-        : [],
+      variables: normalizeVariables(r.variables),
       // Present only under the Developer profile; absent (undefined) otherwise.
       planSteps: Array.isArray(r.planSteps) ? normalizePlanSteps(r.planSteps) : undefined,
       // The mode the routine was saved under, when the core forwards it (camel or

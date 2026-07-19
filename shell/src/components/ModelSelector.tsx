@@ -50,7 +50,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-opus-4-8",
     label: "Claude Opus 4.8",
-    description: "",
     effortLevels: [
       { id: "low", label: "low" },
       { id: "high", label: "high" },
@@ -61,7 +60,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-sonnet-5",
     label: "Claude Sonnet 5",
-    description: "",
     effortLevels: [
       { id: "low", label: "low" },
       { id: "high", label: "high" },
@@ -72,7 +70,6 @@ const PLACEHOLDER_CLOUD: CloudModel[] = [
   {
     id: "claude-haiku-4-5",
     label: "Claude Haiku 4.5",
-    description: "",
     effortLevels: [],
     default: false,
   },
@@ -273,7 +270,7 @@ export function ModelSelector({
         }
         onClick={() => !blockOpen && setOpen((v) => !v)}
         className={[
-          "flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-[12px] transition-colors",
+          "flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-hint transition-colors",
           "text-muted hover:text-ink-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-fern/40",
           "max-md:min-h-[44px] max-md:px-1.5",
           dimmed ? "opacity-60" : "",
@@ -306,7 +303,7 @@ export function ModelSelector({
             {options.map((o, i) => (
               <div key={`${o.role}:${o.id}`}>
                 {i === firstLocalIndex && (
-                  <div className="px-3 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint">
+                  <div className="px-3 pb-1 pt-2 text-label font-semibold uppercase tracking-caps-wide text-faint">
                     On this computer
                   </div>
                 )}
@@ -317,7 +314,7 @@ export function ModelSelector({
                   onClick={() => pickModel(o)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={[
-                    "mx-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 font-mono text-[12px]",
+                    "mx-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 font-mono text-hint",
                     o.current ? "bg-fern-tint text-fern-deep" : "text-ink-soft",
                     i === activeIndex && !o.current ? "bg-hair" : "",
                   ].join(" ")}
@@ -333,7 +330,7 @@ export function ModelSelector({
 
           {effortLevels.length > 0 && (
             <div className="border-t border-line px-2.5 py-2">
-              <div className="px-0.5 pb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.09em] text-faint">
+              <div className="px-0.5 pb-1.5 text-label font-semibold uppercase tracking-caps-wide text-faint">
                 Effort
               </div>
               <div role="group" aria-label="How thorough Addison should be" className="flex gap-1">
@@ -348,7 +345,7 @@ export function ModelSelector({
                         if (!usingPlaceholder) onSelectEffort(level.id);
                       }}
                       className={[
-                        "rounded-sm px-2.5 py-1 text-[12px] font-medium transition-colors",
+                        "rounded-sm px-2.5 py-1 text-hint font-medium transition-colors",
                         active
                           ? "bg-fern-tint text-fern-deep"
                           : "text-muted hover:bg-hair hover:text-ink",
