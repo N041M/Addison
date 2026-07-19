@@ -31,6 +31,7 @@ from agent_core.providers.base import (
     ProviderCapabilities,
     ToolCallRequest,
     Usage,
+    request_with_retry,
 )
 
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -126,7 +127,11 @@ class OpenAIProvider:
         client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
         url = f"{self._base_url}/chat/completions"
         try:
-            return client.post(url, headers=headers, json=body)
+            # POST: retry only when the request never reached the server (§8.3).
+            return request_with_retry(
+                lambda: client.post(url, headers=headers, json=body),
+                idempotent=False,
+            )
         except httpx.HTTPError:
             # Network/timeout failure. Raise a clean message with no chained
             # exception so nothing about the request (headers included) leaks.
@@ -268,7 +273,11 @@ def list_models(
     injected = client
     http = injected if injected is not None else httpx.Client(timeout=10.0)
     try:
-        response = http.get(url, headers=headers)
+        # GET model listing has no side effects — retry on any connection/read
+        # hiccup or a transient 5xx.
+        response = request_with_retry(
+            lambda: http.get(url, headers=headers), idempotent=True
+        )
     except httpx.HTTPError:
         raise RuntimeError(
             "Couldn't reach that server. Check the address and that it's running."

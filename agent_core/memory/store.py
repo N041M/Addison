@@ -35,6 +35,16 @@ class Store:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
+        # WAL pairs cleanly with our commit-per-write convention: each write is still
+        # durable (fsync on commit), but readers no longer block the writer (and the
+        # writer no longer blocks readers), so the widget/history reads never contend
+        # with a turn's writes. busy_timeout lets a momentarily-locked write wait
+        # rather than raise "database is locked". journal_mode is persistent on disk,
+        # so an older DB flips to WAL on first reopen — intended. (WAL needs a real
+        # file; on the rare filesystem that can't do it sqlite silently keeps the old
+        # journal mode, which is safe — the convention above still holds.)
+        self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute("PRAGMA busy_timeout=5000;")
         self._apply_schema()
 
     def _apply_schema(self) -> None:

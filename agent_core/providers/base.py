@@ -7,9 +7,62 @@ branches on the concrete provider. Capability differences are handled via
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
+
+import httpx
+
+# --- one conservative HTTP retry (shared by every provider) -----------------
+_RETRY_SLEEP_SECONDS = 0.5  # a short fixed pause; no backoff/jitter — this codebase is minimal
+
+# Connection-level failures where the request PROVABLY never reached the server,
+# so replaying it can neither duplicate work nor double-bill. Safe to retry for
+# any method, POST included.
+_CONNECT_ERRORS: tuple[type[Exception], ...] = (httpx.ConnectError, httpx.ConnectTimeout)
+# Read/transport hiccups that are safe to retry ONLY for an idempotent GET: a
+# ReadTimeout means the request DID reach the server (it just didn't answer in
+# time), so on a POST it may already have been processed/billed and must never be
+# resent — but on a side-effect-free GET a resend is harmless.
+_IDEMPOTENT_ERRORS: tuple[type[Exception], ...] = _CONNECT_ERRORS + (
+    httpx.ReadTimeout,
+    httpx.RemoteProtocolError,
+)
+
+
+def request_with_retry(
+    send: Callable[[], httpx.Response], *, idempotent: bool
+) -> httpx.Response:
+    """Run ``send()`` (returns an ``httpx.Response``) with at most ONE retry after
+    a short fixed pause. Invisible to callers: it returns the same Response or
+    re-raises the same ``httpx`` error the caller's ``except httpx.HTTPError``
+    already turns into a plain-language message — the only observable effect is
+    latency.
+
+    The idempotent split is the whole point (§8.3 no-double-billing reasoning):
+
+    - ``idempotent=True`` — a GET (key validation / model listing) has no side
+      effects, so retry it on any connection- OR read-level failure and on a 5xx
+      (a transient server blip).
+    - ``idempotent=False`` — a POST (send a message, cost tokens/money) is retried
+      ONLY when the failure proves the request never arrived (ConnectError /
+      ConnectTimeout). A ReadTimeout, a 5xx, or any received response means it MAY
+      have been processed, so we never resend it.
+
+    Both attempts reuse the caller's client, so the injected-client / per-call
+    construct-and-close pattern at each call site is unchanged.
+    """
+    retryable = _IDEMPOTENT_ERRORS if idempotent else _CONNECT_ERRORS
+    try:
+        response = send()
+    except retryable:
+        time.sleep(_RETRY_SLEEP_SECONDS)
+        return send()  # second and final attempt; a re-raise propagates to the caller
+    if idempotent and response.status_code >= 500:
+        time.sleep(_RETRY_SLEEP_SECONDS)
+        return send()
+    return response
 
 
 class ModelRole(str, Enum):

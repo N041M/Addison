@@ -137,6 +137,30 @@ class Tool(Protocol):
         ...
 
 
+@runtime_checkable
+class RedoableTool(Protocol):
+    """A ``Tool`` that also supports re-applying an undone action (§4.5 redo).
+
+    ``redo()`` is OPT-IN, never mandatory — a tool without it can still be undone,
+    it simply can't be re-done (the UndoManager reports that in plain language).
+    Adding redo() never weakens the mandatory-undo invariant. This Protocol is
+    ``runtime_checkable`` so ``UndoManager`` can discover redo support with a single
+    ``isinstance(tool, RedoableTool)`` rather than duck-typing ``getattr``; because
+    it lists execute/undo/redo, only a genuine tool that implements all three
+    matches (SaveFileTool does)."""
+
+    definition: ToolDefinition
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult: ...
+
+    def undo(self, snapshot: ActionSnapshot) -> None: ...
+
+    def redo(self, snapshot: ActionSnapshot) -> None:
+        """Re-apply an action that ``undo()`` reversed. Required to satisfy this
+        Protocol; a tool that can't offer it simply isn't a ``RedoableTool``."""
+        ...
+
+
 def call_is_destructive(tool: Any, args: dict) -> bool:
     """Per-call destructiveness for the mode-aware PermissionGate (OPEN mode).
 

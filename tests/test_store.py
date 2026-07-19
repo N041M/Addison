@@ -417,6 +417,38 @@ def test_reopening_existing_db_is_idempotent(tmp_path: Path):
         second.close()
 
 
+# --- connection pragmas -----------------------------------------------------
+
+
+def test_wal_and_busy_timeout_set_on_open(tmp_path: Path):
+    # A real tmp-file DB (APFS/ext4) can do WAL; ``:memory:`` can't, which is why
+    # the whole suite already uses tmp files. journal_mode should read back "wal"
+    # and busy_timeout should be the 5s we asked for.
+    store = Store(tmp_path / "pragmas.db")
+    try:
+        mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+        assert store._conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+    finally:
+        store.close()
+
+
+def test_reopening_flips_existing_db_to_wal(tmp_path: Path):
+    # journal_mode is persistent on disk, so reopening an older (pre-WAL) DB flips
+    # it to WAL — intended — and the reopen itself is clean (no data loss).
+    db_path = tmp_path / "reopen-wal.db"
+    first = Store(db_path)
+    _usage(first, at=1000)
+    first.close()
+
+    second = Store(db_path)
+    try:
+        assert second._conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert second.usage_totals_since(0)["total"] == 15  # data survived
+    finally:
+        second.close()
+
+
 # --- widgets ----------------------------------------------------------------
 
 

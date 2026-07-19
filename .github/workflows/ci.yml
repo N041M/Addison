@@ -1,0 +1,98 @@
+# CI — the enforcement layer for conventions that were previously local-only
+# (2026-07-19 maintainability review, "do all" wave). Three independent jobs
+# mirror the three local gates exactly:
+#
+#   python    → ruff + pyright + pytest   (safety-invariant tests live here)
+#   frontend  → eslint + tsc + vitest + vite build
+#   rust      → cargo test in the Tauri shell
+#
+# A convention is only as strong as its enforcement; before this workflow every
+# gate depended on someone remembering to run it before merging.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: python (ruff · pyright · pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent_core/pyproject.toml
+      # Editable install so `import agent_core` resolves the checked-out tree
+      # (pyproject lives inside agent_core/ and maps the package onto ".").
+      - name: Install agent core (editable, with dev extras) + type checker
+        run: |
+          pip install -e "agent_core[dev]"
+          pip install pyright
+      - name: Ruff (lint, line length 100)
+        run: ruff check agent_core/ tests/
+      # Config lives in pyrightconfig.json at the repo root. The strict
+      # annotations in this codebase are only worth anything if something
+      # checks them — this is that something.
+      - name: Pyright (type check)
+        run: pyright
+      # PYTHONPATH mirrors how the suite runs locally (repo root on sys.path);
+      # the editable install covers `agent_core.*`, the root covers `tests.*`.
+      - name: Pytest (includes the safety-invariant tests)
+        run: pytest tests/ -q
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+  frontend:
+    name: frontend (eslint · tsc · vitest · build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shell
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: shell/package-lock.json
+      - name: Install
+        run: npm ci
+      - name: ESLint (react-hooks rules + the lib/parse.ts import guard)
+        run: npm run lint
+      - name: Typecheck (tsc --noEmit is the type authority; eslint stays syntactic)
+        run: npx tsc --noEmit
+      - name: Vitest (defensive parsers + useTurn race guard)
+        run: npm test
+      - name: Build (tsc && vite build)
+        run: npm run build
+
+  rust:
+    name: rust (cargo test, Tauri shell)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Tauri 2.x Linux build prerequisites (webkit2gtk 4.1 era). Needed even
+      # for `cargo test` because the tauri crate links against them.
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shell/src-tauri
+      # `tauri::generate_context!` embeds frontendDist (../dist) at compile
+      # time, so the directory must exist; its contents don't matter for tests.
+      - name: Stub frontend dist
+        run: mkdir -p shell/dist
+      - name: Cargo test (keychain asymmetry, IPC frame rejection, path allowlists)
+        run: cargo test
+        working-directory: shell/src-tauri

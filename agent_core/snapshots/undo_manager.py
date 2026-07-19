@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from agent_core.tools.base import ActionSnapshot
+from agent_core.tools.base import ActionSnapshot, RedoableTool
 from agent_core.tools.registry import ToolRegistry
 
 
@@ -63,7 +63,8 @@ class UndoManager:
 
     def redo_last(self, n: int = 1) -> list[UndoResult]:
         """Re-applies the most recently undone actions (LIFO), calling the
-        tool's OPTIONAL ``redo(snapshot)``. A tool without redo() fails that
+        tool's OPTIONAL ``redo(snapshot)``. Redo support is the formalized
+        ``RedoableTool`` Protocol (tools/base.py): a tool that isn't one fails that
         step in plain language — redo is opt-in per tool and never weakens the
         mandatory-undo invariant. A re-applied snapshot is live (reverted=0)
         and undoable again."""
@@ -71,15 +72,14 @@ class UndoManager:
         for _ in range(min(n, len(self._redo_stack))):
             snapshot = self._redo_stack.pop()
             tool = self._tool_registry.get(snapshot.tool_id)
-            redo = getattr(tool, "redo", None)
-            if redo is None:
+            if not isinstance(tool, RedoableTool):
                 results.append(UndoResult(
                     snapshot.id, snapshot.tool_id, False,
                     "That action can't be re-done — only undone.",
                 ))
                 continue
             try:
-                redo(snapshot)
+                tool.redo(snapshot)
                 self._store.mark_snapshot_unreverted(snapshot.id)
                 results.append(UndoResult(snapshot.id, snapshot.tool_id, True))
             except Exception as exc:

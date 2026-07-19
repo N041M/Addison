@@ -37,6 +37,7 @@ from agent_core.providers.base import (
     Message,
     ModelResponse,
     ProviderCapabilities,
+    request_with_retry,
 )
 from agent_core.providers.tool_call_parser import parse_tool_call
 
@@ -125,7 +126,11 @@ class SetupAssistantProvider:
         injected = self._client
         client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
         try:
-            return client.post(self._relay_url, headers=headers, json=body)
+            # POST: retry only when the request never reached the relay (§8.3).
+            return request_with_retry(
+                lambda: client.post(self._relay_url, headers=headers, json=body),
+                idempotent=False,
+            )
         except httpx.HTTPError:
             # Network/timeout failure. Clean message, no chained exception, so
             # nothing about the request (signature included) can leak.

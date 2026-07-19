@@ -25,6 +25,7 @@ from agent_core.providers.base import (
     ProviderCapabilities,
     ToolCallRequest,
     Usage,
+    request_with_retry,
 )
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
@@ -93,7 +94,11 @@ class GoogleProvider:
         client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
         url = f"{_BASE_URL}/models/{self._model}:generateContent"
         try:
-            return client.post(url, headers=headers, json=body)
+            # POST: retry only when the request never reached the server (§8.3).
+            return request_with_retry(
+                lambda: client.post(url, headers=headers, json=body),
+                idempotent=False,
+            )
         except httpx.HTTPError:
             raise RuntimeError(
                 "Couldn't reach Google. Check your internet connection and try again."
@@ -239,7 +244,12 @@ def list_models(api_key_getter, client=None) -> list[str]:
     injected = client
     http = injected if injected is not None else httpx.Client(timeout=10.0)
     try:
-        response = http.get(f"{_BASE_URL}/models", headers={"x-goog-api-key": key})
+        # GET model listing has no side effects — retry on any connection/read
+        # hiccup or a transient 5xx.
+        response = request_with_retry(
+            lambda: http.get(f"{_BASE_URL}/models", headers={"x-goog-api-key": key}),
+            idempotent=True,
+        )
     except httpx.HTTPError:
         raise RuntimeError(
             "Couldn't reach Google. Check your internet connection and try again."

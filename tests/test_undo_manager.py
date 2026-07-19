@@ -208,6 +208,19 @@ class _RedoableTool(_RecordingTool):
         self._log.append(f"redo:{snapshot.id}")
 
 
+def test_redoable_protocol_membership_matches_redo_support():
+    # The UndoManager now discovers redo via isinstance(tool, RedoableTool) instead
+    # of duck-typed getattr; this pins the Protocol so a tool with execute+undo+redo
+    # is a member and one with only execute+undo is not. SaveFileTool is the real
+    # RedoableTool in the tree.
+    from agent_core.tools.base import RedoableTool
+    from agent_core.tools.save_file import SaveFileTool
+
+    assert isinstance(SaveFileTool(), RedoableTool)          # real redo() -> member
+    assert isinstance(_RedoableTool("rec", []), RedoableTool)
+    assert not isinstance(_RecordingTool("rec", []), RedoableTool)  # undo only -> not
+
+
 def test_redo_reapplies_in_reverse_undo_order_and_is_undoable_again(store: Store):
     log: list[str] = []
     registry = ToolRegistry()

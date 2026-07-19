@@ -31,7 +31,6 @@ export function useWidgets({ connected, railOpen, setStatusBanner }: UseWidgetsA
     if (!connected || !railOpen) return;
     const t = setInterval(() => refreshStats(), 60_000);
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, railOpen]);
 
   function refreshWidgets() {

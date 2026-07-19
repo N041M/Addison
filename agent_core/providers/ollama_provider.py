@@ -37,6 +37,7 @@ from agent_core.providers.base import (
     ProviderCapabilities,
     ToolCallRequest,
     Usage,
+    request_with_retry,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
 
@@ -138,7 +139,13 @@ class OllamaProvider:
         injected = self._client
         client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
         try:
-            return client.post(f"{self._base_url}{path}", json=body)
+            # POST: retry only on a connection failure. On localhost that is
+            # connection-refused (ConnectError) — a single harmless retry rides
+            # out a race with an Ollama that is just finishing starting up.
+            return request_with_retry(
+                lambda: client.post(f"{self._base_url}{path}", json=body),
+                idempotent=False,
+            )
         except httpx.HTTPError:
             # Connection refused / timeout: almost always "Ollama isn't running".
             # No chained exception, so nothing about the request can leak.

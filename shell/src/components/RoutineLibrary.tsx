@@ -76,7 +76,6 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
       return;
     }
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected, refreshKey]);
 
   function refresh() {
