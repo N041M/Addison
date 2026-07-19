@@ -508,6 +508,13 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
     }
     return { kind: "stat", source: source as WidgetStatSource, title: obj.title };
   }
+  // A command widget (OPEN/Developer mode) is DISPLAY DATA ONLY — never executed
+  // client-side. We keep the command text so the rail can show it; running it is
+  // the core's job (run_command tool + gate), and this build exposes no such path.
+  if (obj.kind === "command") {
+    if (typeof obj.command !== "string" || !obj.command) return null;
+    return { kind: "command", command: obj.command, title: obj.title };
+  }
   return null;
 }
 
@@ -519,12 +526,16 @@ function parseWidgetList(result: unknown): Widget[] {
     const row = asRec(item);
     if (!row || typeof row.id !== "string") continue;
     const spec = parseWidgetSpec(row.spec);
-    if (!spec) continue; // drop anything not one of the two allowed shapes
+    if (!spec) continue; // drop anything not one of the allowed shapes
+    // created_in_mode ("safe" | "open") when the core forwards it — drives the
+    // Developer "DEV" annotation tag. Accept either camel/snake spelling.
+    const rawMode = row.createdInMode ?? row.created_in_mode;
     out.push({
       id: row.id,
       spec,
       pinned: row.pinned !== false,
       position: typeof row.position === "number" ? row.position : 0,
+      createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
     });
   }
   return out;

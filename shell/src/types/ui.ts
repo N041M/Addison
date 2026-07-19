@@ -165,7 +165,21 @@ export interface StatWidgetSpec {
   title: string;
 }
 
-export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec;
+/**
+ * A command widget (OPEN/Developer mode only — agent_core/widgets.py). DISPLAY
+ * DATA ONLY here: the frontend never runs the command itself — a command widget
+ * would run through the core's run_command tool + gate, exactly like a live
+ * command. In this build the core exposes no widget-run path, so the rail shows
+ * the command but its Run pill is inert (see WidgetRail). Present in a widget
+ * spec means the widget was created in OPEN mode.
+ */
+export interface CommandWidgetSpec {
+  kind: "command";
+  command: string;
+  title: string;
+}
+
+export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec | CommandWidgetSpec;
 
 /** One stored widget from `widget.list`: id + declarative spec + pin/order state. */
 export interface Widget {
@@ -173,6 +187,12 @@ export interface Widget {
   spec: WidgetSpec;
   pinned: boolean;
   position: number;
+  /**
+   * The policy mode the widget was saved under ("safe" | "open"), when the core
+   * forwards it. Drives the Developer-profile "DEV" annotation tag. A command
+   * widget is inherently OPEN-created even when this is absent.
+   */
+  createdInMode?: "safe" | "open";
 }
 
 /** A drafted widget from `widget.proposeFromConversation`, awaiting confirm. */
@@ -217,4 +237,12 @@ export interface ProfileState {
   activeProfile: string;
   profiles: ProfileOption[];
   flags: ProfileFlags;
+  /**
+   * The policy mode this profile runs under (agent_core/policy.py): "safe" for
+   * Simple, "open" for Developer. Unlike a ProfileFlag, the mode reshapes what
+   * Addison is ALLOWED to do (OPEN prompts only for destructive actions and can
+   * run commands), so the surface must speak honestly about it. Absent on an old
+   * core → treated as "safe" (never over-permissive).
+   */
+  mode?: "safe" | "open";
 }

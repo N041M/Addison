@@ -15,11 +15,35 @@ interface Props {
   onRespond: (allow: boolean) => void;
 }
 
+// Per-invocation destructive cards (OPEN/Developer mode) describe the exact
+// command each time, phrased by the core as "…run: <command>". When we see that
+// shape we split the command off and set it as a machine fact (mono, inset chip)
+// so it reads as data, not prose. SAFE-mode cards have no "run: " and render
+// exactly as before.
+const RUN_PREFIX = "run: ";
+
+function splitCommand(description: string): { lead: string; command: string | null } {
+  const at = description.indexOf(RUN_PREFIX);
+  if (at === -1) return { lead: description, command: null };
+  const command = description.slice(at + RUN_PREFIX.length).trim();
+  if (!command) return { lead: description, command: null };
+  return { lead: description.slice(0, at + RUN_PREFIX.length).trimEnd(), command };
+}
+
 export function PermissionCard({ request, onRespond }: Props) {
+  const { lead, command } = splitCommand(request.description);
   return (
     <div className="rounded-card bg-fern-tint px-[15px] py-[13px]">
       <p className="text-[12.5px] font-semibold leading-snug text-ink">{request.label}</p>
-      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-soft">{request.description}</p>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-soft">{lead}</p>
+      {command && (
+        <p
+          title={command}
+          className="mt-1.5 truncate rounded-sm bg-surface px-2 py-1 font-mono text-[12px] text-ink"
+        >
+          {command}
+        </p>
+      )}
       <div className="mt-2.5 flex flex-wrap items-center gap-3">
         <button
           type="button"

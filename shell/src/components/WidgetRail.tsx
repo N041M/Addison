@@ -23,6 +23,8 @@ export interface RailRoutine {
   id: string;
   name: string;
   variables: { name: string; prompt: string; default: string | null }[];
+  /** The mode the routine was saved under ("safe" | "open"), when the core sends it. */
+  createdInMode?: "safe" | "open";
 }
 
 interface Props {
@@ -38,7 +40,14 @@ interface Props {
    * mode — the sheet shows widgets + Addison's work only.
    */
   variant?: "rail" | "sheet";
-  /** Stored widgets from `widget.list` (routine/stat specs). */
+  /**
+   * OPEN/Developer mode is active — surface the small blocky "DEV" annotation on
+   * dev-created items (command widgets; and routine widgets whose routine was
+   * saved in OPEN mode, once the core forwards created_in_mode). In Simple mode
+   * these items are already filtered out by the core, so this stays false.
+   */
+  developer?: boolean;
+  /** Stored widgets from `widget.list` (routine/stat/command specs). */
   widgets: Widget[];
   /** Core-computed stats for the token meter + connections cards. */
   stats: Stats | null;
@@ -59,6 +68,7 @@ export function WidgetRail({
   work,
   consent,
   variant = "rail",
+  developer = false,
   widgets,
   stats,
   routines,
@@ -117,6 +127,7 @@ export function WidgetRail({
               stats={stats}
               routines={routines}
               editMode={editMode}
+              developer={developer}
               onSetPinned={onSetPinned}
               onDelete={onDelete}
               onRunRoutine={onRunRoutine}
@@ -139,6 +150,7 @@ export function WidgetRail({
                     stats={stats}
                     routines={routines}
                     editMode={editMode}
+                    developer={developer}
                     inTray
                     onSetPinned={onSetPinned}
                     onDelete={onDelete}
@@ -196,6 +208,7 @@ interface CardProps {
   stats: Stats | null;
   routines: RailRoutine[];
   editMode: boolean;
+  developer?: boolean;
   inTray?: boolean;
   onSetPinned: (id: string, pinned: boolean) => void;
   onDelete: (id: string) => void;
@@ -207,23 +220,34 @@ function WidgetCard({
   stats,
   routines,
   editMode,
+  developer = false,
   inTray = false,
   onSetPinned,
   onDelete,
   onRunRoutine,
 }: CardProps) {
   const spec = widget.spec;
+  const routine = spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
+  // A dev-created item: a command widget (inherently OPEN), or anything the core
+  // marked created_in_mode="open" (the widget itself, or the routine it runs).
+  const isDev =
+    spec.kind === "command" ||
+    widget.createdInMode === "open" ||
+    routine?.createdInMode === "open";
   return (
     <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
+          {developer && isDev && <DevTag />}
           {spec.kind === "routine" ? (
             <RoutineWidgetBody
               title={spec.title}
-              routine={routines.find((r) => r.id === spec.routineId)}
+              routine={routine}
               routineId={spec.routineId}
               onRunRoutine={onRunRoutine}
             />
+          ) : spec.kind === "command" ? (
+            <CommandWidgetBody title={spec.title} command={spec.command} />
           ) : (
             <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
           )}
@@ -350,6 +374,47 @@ function RoutineWidgetBody({
         </p>
       )}
     </>
+  );
+}
+
+// A command widget (OPEN/Developer mode): title + the command shown as a machine
+// fact (mono) under it. It would run through the core's run_command tool + gate,
+// exactly like a live command — but THIS build exposes no widget-run path (no
+// widget.run method in agent_core/main.py), so the Run pill is inert and the
+// command runs from chat instead. Rendered display-only; never executed here.
+function CommandWidgetBody({ title, command }: { title: string; command: string }) {
+  return (
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 truncate text-[12.5px] font-semibold text-ink">{title}</span>
+        <button
+          type="button"
+          disabled
+          title="Runs from chat in this build"
+          className="shrink-0 cursor-default rounded-pill bg-fern-tint px-3 py-1 text-[11px] font-semibold text-fern-deep opacity-45"
+        >
+          Run
+        </button>
+      </div>
+      <p
+        title={command}
+        className="mt-1.5 truncate rounded-sm bg-paper px-2 py-1 font-mono text-[11.5px] text-ink-soft"
+      >
+        {command}
+      </p>
+    </>
+  );
+}
+
+// The blocky "DEV" annotation (design-brief-fern shape rule: blocky = a live
+// annotation Addison is showing you). Square edges, 2px left fern rule, small-
+// caps — marks an item created with developer abilities. Shown in Developer
+// profile only; Simple never sees these items at all (core-filtered).
+function DevTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-fern pl-1.5 text-[9.5px] font-semibold uppercase tracking-[0.09em] text-fern-deep">
+      Dev
+    </span>
   );
 }
 
