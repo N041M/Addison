@@ -117,11 +117,15 @@ def widget_summary(spec: dict) -> str:
     if kind == "routine":
         return "Runs your saved routine with one tap."
     if kind == "stat":
-        return {
+        descriptions = {
             "tokens_month": "Shows how many tokens you've used this month.",
             "provider_latency": "Shows how quickly your models are responding.",
             "connections": "Shows which models and services are connected.",
-        }.get(spec.get("source"), "Shows a value from Addison.")
+        }
+        source = spec.get("source")
+        if isinstance(source, str) and source in descriptions:
+            return descriptions[source]
+        return "Shows a value from Addison."
     if kind == "command":
         return "Runs a command on this computer with one tap."
     return ""

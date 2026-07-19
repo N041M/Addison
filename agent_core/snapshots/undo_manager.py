@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from agent_core.tools.base import ActionSnapshot, RedoableTool
+from agent_core.tools.base import ActionSnapshot, RedoableTool, UndoableTool
 from agent_core.tools.registry import ToolRegistry
 
 
@@ -49,6 +49,10 @@ class UndoManager:
         results: list[UndoResult] = []
         for snapshot in self._store.recent_unreverted_snapshots(limit=n):
             tool = self._tool_registry.get(snapshot.tool_id)
+            # Registration guarantees every snapshot-recording tool has a real
+            # undo (registry.py) — the isinstance narrows the static type to
+            # match that runtime invariant.
+            assert isinstance(tool, UndoableTool)
             try:
                 tool.undo(snapshot)
                 self._store.mark_snapshot_reverted(snapshot.id)

@@ -488,12 +488,15 @@ class JsonRpcServer:
         self._active_profile: Profile | None = None
 
         # Built on the worker thread by _ensure_built (SQLite thread affinity).
-        self.store = None
-        self.undo_manager: UndoManager | None = None
-        self.orchestrator: Orchestrator | None = None
-        self.routine_builder: RoutineBuilder | None = None
-        self.routine_library: RoutineLibrary | None = None
-        self.routine_engine: RoutineEngine | None = None
+        # ``_store`` is the nullable backing field ("not built yet" is a real
+        # state — _record_usage and provider reconnect check it); the ``store``
+        # property narrows to Store for the handlers, which all run post-build.
+        self._store: Store | None = None
+        self._undo_manager: UndoManager | None = None
+        self._orchestrator: Orchestrator | None = None
+        self._routine_builder: RoutineBuilder | None = None
+        self._routine_library: RoutineLibrary | None = None
+        self._routine_engine: RoutineEngine | None = None
 
         # A fresh uuid per launch unless the caller pins an id (tests do). The old
         # fixed "main" id appended every launch's turns to one ever-growing stored
@@ -526,6 +529,69 @@ class JsonRpcServer:
         # rows so _record_usage prunes only once every _USAGE_PRUNE_EVERY writes.
         self._usage_records_since_prune = 0
 
+    @property
+    def store(self) -> Store:
+        """The SQLite store, built once on the worker thread (_ensure_built).
+
+        Every handler that touches it runs after the build, so the Optional is
+        narrowed HERE rather than at dozens of call sites; reaching it earlier is
+        a programming error, not a user-visible state. Code that genuinely means
+        "has the store been built yet?" checks ``self._store is None`` instead."""
+        assert self._store is not None, "store accessed before _ensure_built()"
+        return self._store
+
+    @store.setter
+    def store(self, value: Store) -> None:
+        self._store = value
+
+    # The same narrowing pattern for the other worker-built singletons: nullable
+    # backing field, non-Optional property. Setters exist because _ensure_built
+    # (and tests) assign through the public names.
+    @property
+    def undo_manager(self) -> UndoManager:
+        assert self._undo_manager is not None, "undo_manager accessed before _ensure_built()"
+        return self._undo_manager
+
+    @undo_manager.setter
+    def undo_manager(self, value: UndoManager) -> None:
+        self._undo_manager = value
+
+    @property
+    def orchestrator(self) -> Orchestrator:
+        assert self._orchestrator is not None, "orchestrator accessed before _ensure_built()"
+        return self._orchestrator
+
+    @orchestrator.setter
+    def orchestrator(self, value: Orchestrator) -> None:
+        self._orchestrator = value
+
+    @property
+    def routine_builder(self) -> RoutineBuilder:
+        assert self._routine_builder is not None, "routine_builder accessed before _ensure_built()"
+        return self._routine_builder
+
+    @routine_builder.setter
+    def routine_builder(self, value: RoutineBuilder) -> None:
+        self._routine_builder = value
+
+    @property
+    def routine_library(self) -> RoutineLibrary:
+        assert self._routine_library is not None, "routine_library accessed before _ensure_built()"
+        return self._routine_library
+
+    @routine_library.setter
+    def routine_library(self, value: RoutineLibrary) -> None:
+        self._routine_library = value
+
+    @property
+    def routine_engine(self) -> RoutineEngine:
+        assert self._routine_engine is not None, "routine_engine accessed before _ensure_built()"
+        return self._routine_engine
+
+    @routine_engine.setter
+    def routine_engine(self, value: RoutineEngine) -> None:
+        self._routine_engine = value
+
     # --- lifecycle --------------------------------------------------------
     def run(self) -> None:
         worker = threading.Thread(target=self._worker_loop, name="turn-worker", daemon=True)
@@ -535,7 +601,7 @@ class JsonRpcServer:
 
     def _ensure_built(self) -> None:
         """Build the SQLite-backed singletons on the worker thread (once)."""
-        if self.orchestrator is not None:
+        if self._orchestrator is not None:
             return
         self.store = self._store_factory()
         # §4.7: read the persisted profile now that the store exists (SIMPLE if unset).
@@ -979,7 +1045,7 @@ class JsonRpcServer:
         tool_id = params.get("toolId")
         allow = bool(params.get("allow"))
         with self._perm_lock:
-            waiter = self._permission_waiters.get(tool_id)
+            waiter = self._permission_waiters.get(tool_id) if isinstance(tool_id, str) else None
             if waiter is not None:
                 waiter["allow"] = allow
                 waiter["event"].set()
@@ -1026,6 +1092,11 @@ class JsonRpcServer:
 
     def _handle_rewind(self, params: dict, request_id) -> None:
         to_message_id = params.get("toMessageId")
+        if not isinstance(to_message_id, str):
+            self._respond_error(
+                request_id, _SERVER_ERROR, "Couldn't find that point to rewind to."
+            )
+            return
         try:
             # Edit-and-resend semantics: the anchor message is REMOVED too, so
             # nothing re-runs until the user actually sends again — its text goes
@@ -1072,8 +1143,12 @@ class JsonRpcServer:
         (``_handle_rewind`` indexes one list with the other's position)."""
         self._ensure_built()
         conversation_id = params.get("conversationId")
-        header = self.store.get_conversation(conversation_id) if conversation_id else None
-        if header is None:
+        header = (
+            self.store.get_conversation(conversation_id)
+            if isinstance(conversation_id, str) and conversation_id
+            else None
+        )
+        if header is None or not isinstance(conversation_id, str):
             self._respond_error(request_id, _SERVER_ERROR, "Couldn't find that conversation.")
             return
         conversation = Conversation(id=conversation_id)
@@ -1199,6 +1274,8 @@ class JsonRpcServer:
 
     def _handle_routine_run(self, params: dict, request_id) -> None:
         routine_id = params.get("routineId")
+        if not isinstance(routine_id, str):
+            routine_id = ""  # unknown id — falls into the same KeyError refusal below
         try:
             routine = self.routine_library.get(routine_id)
         except KeyError as exc:
@@ -1273,7 +1350,7 @@ class JsonRpcServer:
         (Orchestrator.on_usage). NOT a registry tool — this is server machinery
         (§4.8 precedent). A call that reported no usage (``usage`` is None) or the
         onboarding relay is skipped. Never touches key material."""
-        if usage is None or self.store is None:
+        if usage is None or self._store is None:
             return
         if requested_role is ModelRole.SETUP_ASSISTANT:
             return  # the free onboarding relay isn't metered
@@ -1680,7 +1757,7 @@ class JsonRpcServer:
         launch (their keys are still in the keychain). One-shot per launch: a provider
         that can't be reached right now simply has no models until the user reconnects
         it from Settings. Anthropic is handled by the live-catalog path above."""
-        if self._providers_reconnected or self._connect_provider is None or self.store is None:
+        if self._providers_reconnected or self._connect_provider is None or self._store is None:
             return
         self._providers_reconnected = True
         for cfg in self.store.list_provider_configs():
@@ -2152,6 +2229,8 @@ def main() -> None:
                 )
             return models
         if provider_id == "custom":
+            # provider.connect validates and requires the base URL before we get here.
+            assert base_url is not None
             # GET {base}/v1/models both validates and lists the server's models; an
             # empty/unlistable server falls back to one visible "Custom model" entry.
             ids = openai_list_models(base_url, getter, require_key=False)

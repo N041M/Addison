@@ -10,9 +10,15 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Callable, Protocol, runtime_checkable
 
 import httpx
+
+if TYPE_CHECKING:
+    # Type-only, erased at runtime — the module-boundary rule (no runtime
+    # providers -> tools import; tests/test_module_boundaries.py) still holds,
+    # the same stance the frontend takes with allowTypeImports on lib/parse.ts.
+    from agent_core.tools.base import ToolDefinition
 
 # --- one conservative HTTP retry (shared by every provider) -----------------
 _RETRY_SLEEP_SECONDS = 0.5  # a short fixed pause; no backoff/jitter — this codebase is minimal
@@ -136,6 +142,6 @@ class ModelProvider(Protocol):
     def send(
         self,
         messages: list[Message],
-        tools: list["ToolDefinition"],  # noqa: F821
+        tools: list["ToolDefinition"],
         effort: str | None = None,
     ) -> ModelResponse: ...

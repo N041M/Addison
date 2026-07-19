@@ -149,7 +149,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
         if m.role == "system":
             continue  # carried by systemInstruction
         if m.role == "tool":
-            name = call_names.get(m.tool_call_id, m.tool_call_id or "tool")
+            name = call_names.get(m.tool_call_id or "", m.tool_call_id or "tool")
             pending_results.append(
                 {
                     "functionResponse": {

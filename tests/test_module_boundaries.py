@@ -61,10 +61,35 @@ def _resolve_relative(importer_module: str, node: ast.ImportFrom) -> str | None:
     return ".".join(base) if base else None
 
 
+def _type_checking_lines(tree: ast.AST) -> set[int]:
+    """Line numbers inside ``if TYPE_CHECKING:`` blocks. Imports there are
+    type-only and erased at runtime, so they don't create the runtime coupling
+    this test guards against — the same stance the frontend lint takes with
+    ``allowTypeImports`` on lib/parse.ts. (providers/base.py uses one for the
+    ToolDefinition annotation.)"""
+    lines: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        name = (
+            test.id
+            if isinstance(test, ast.Name)
+            else test.attr if isinstance(test, ast.Attribute) else None
+        )
+        if name == "TYPE_CHECKING" and node.end_lineno is not None:
+            lines.update(range(node.lineno, node.end_lineno + 1))
+    return lines
+
+
 def _imported_targets(tree: ast.AST, importer_module: str) -> list[tuple[str, int]]:
-    """Every absolute module string this file imports, with the source line."""
+    """Every absolute module string this file imports AT RUNTIME, with the
+    source line (type-only ``if TYPE_CHECKING:`` imports excluded — see above)."""
+    type_only = _type_checking_lines(tree)
     targets: list[tuple[str, int]] = []
     for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and node.lineno in type_only:
+            continue
         if isinstance(node, ast.Import):
             for alias in node.names:
                 targets.append((alias.name, node.lineno))
