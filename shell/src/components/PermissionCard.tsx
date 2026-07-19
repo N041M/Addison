@@ -15,26 +15,28 @@ interface Props {
 
 export function PermissionCard({ request, onRespond }: Props) {
   return (
-    <div className="my-2 border border-accent/40 bg-accent-tint p-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-accent-dark">
+    <div className="rounded-card bg-fern-tint p-4">
+      <p className="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-fern-deep">
         Addison is asking
       </p>
-      <h3 className="mt-1 text-lg font-semibold text-ink">{request.label}</h3>
-      <p className="mt-1 text-base leading-relaxed text-ink-soft">
+      <h3 className="mt-1.5 text-[12.5px] font-semibold leading-snug text-ink">
+        {request.label}
+      </h3>
+      <p className="mt-1 text-[11.5px] leading-relaxed text-ink-soft">
         {request.description}
       </p>
-      <div className="mt-4 flex flex-wrap gap-3">
+      <div className="mt-3.5 flex flex-wrap items-center gap-3">
         <button
           type="button"
           onClick={() => onRespond(true)}
-          className="bg-accent px-5 py-2.5 text-base font-semibold text-accent-fg hover:bg-accent-dark"
+          className="rounded-pill bg-fern px-5 py-1.5 text-[13px] font-semibold text-on-accent hover:bg-fern-deep"
         >
           Allow
         </button>
         <button
           type="button"
           onClick={() => onRespond(false)}
-          className="border border-line bg-surface px-5 py-2.5 text-base font-medium text-ink-soft hover:border-muted"
+          className="text-[13px] font-medium text-muted hover:text-ink-soft"
         >
           Not now
         </button>

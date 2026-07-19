@@ -2,13 +2,136 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Base document styling. Compact like a terminal UI (16px root) but still
-   comfortably legible for the primary personas (54 and 68) — high contrast on a
-   dark surface, roomy line-height. No external fonts (strict CSP): plain system
-   stacks only. */
+/* ==========================================================================
+   Fonts — bundled woff2, NEVER hotlinked (strict CSP: default-src 'self').
+   The three OFL families of the Fern direction, subset to latin + latin-ext so
+   Czech diacritics render in the serif body. See assets/fonts/OFL-NOTICE.txt.
+   Vite fingerprints and copies these into dist/ via the url() references below.
+   ========================================================================== */
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/SourceSerif4-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./assets/fonts/SourceSerif4-Medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Serif 4";
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/SourceSerif4-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/PublicSans-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./assets/fonts/PublicSans-Medium.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./assets/fonts/PublicSans-SemiBold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./assets/fonts/PublicSans-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./assets/fonts/IBMPlexMono-Regular.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./assets/fonts/IBMPlexMono-Medium.woff2") format("woff2");
+}
+
+/* ==========================================================================
+   Color tokens (Fern direction). Declared as space-separated RGB channels so
+   Tailwind's `rgb(var(--c-x) / <alpha-value>)` mapping keeps opacity utilities
+   (bg-x/60, border-x/70) working. :root = light values; .dark overrides them,
+   so the whole theme flips with one class on <html>. Hex equivalents are in the
+   handoff token tables (docs/design-brief-fern/README.md).
+   ========================================================================== */
+:root {
+  color-scheme: light;
+
+  --c-paper: 246 245 241; /* #F6F5F1 */
+  --c-side: 242 241 236; /* #F2F1EC */
+  --c-surface: 253 252 250; /* #FDFCFA */
+  --c-line: 227 225 216; /* #E3E1D8 */
+  --c-hair: 236 234 226; /* #ECEAE2 */
+  --c-ink: 34 38 31; /* #22261F */
+  --c-ink-soft: 77 81 71; /* #4D5147 */
+  --c-muted: 107 111 100; /* #6B6F64 */
+  --c-faint: 154 157 146; /* #9A9D92 */
+  --c-fern: 51 96 79; /* #33604F */
+  --c-fern-deep: 42 81 66; /* #2A5142 */
+  --c-fern-tint: 228 237 232; /* #E4EDE8 */
+  --c-rule: 216 229 222; /* #D8E5DE */
+  --c-dash: 201 204 190; /* #C9CCBE */
+  --c-pine: 30 43 37; /* #1E2B25 */
+  --c-danger: 143 58 68; /* #8F3A44 */
+  --c-on-accent: 255 255 255; /* #FFFFFF */
+  --c-notice: 110 87 32; /* #6E5720 */
+  --c-notice-tint: 244 236 216; /* #F4ECD8 */
+}
+
+.dark {
+  color-scheme: dark;
+
+  --c-paper: 23 29 26; /* #171D1A */
+  --c-side: 19 24 21; /* #131815 */
+  --c-surface: 31 39 35; /* #1F2723 */
+  --c-line: 46 58 51; /* #2E3A33 */
+  --c-hair: 36 48 41; /* #243029 */
+  --c-ink: 231 235 231; /* #E7EBE7 */
+  --c-ink-soft: 195 205 198; /* #C3CDC6 */
+  --c-muted: 146 160 153; /* #92A099 */
+  --c-faint: 111 125 117; /* #6F7D75 */
+  --c-fern: 127 181 154; /* #7FB59A */
+  --c-fern-deep: 169 203 185; /* #A9CBB9 */
+  --c-fern-tint: 34 50 41; /* #223229 */
+  --c-rule: 51 73 61; /* #33493D */
+  --c-dash: 59 74 65; /* #3B4A41 */
+  --c-pine: 30 43 37; /* #1E2B25 */
+  --c-danger: 219 141 149; /* #DB8D95 */
+  --c-on-accent: 20 32 26; /* #14201A */
+  --c-notice: 212 180 106; /* #D4B46A */
+  --c-notice-tint: 43 38 25; /* #2B2619 */
+}
+
+/* Base document. Public Sans 15px/1.55 on warm paper, comfortably legible for
+   the primary personas (54 and 68). The 16px root keeps rem utilities familiar;
+   body text sits one notch smaller at 15px per the brand. */
 :root {
   font-size: 16px;
-  color-scheme: dark;
 }
 
 html,
@@ -19,38 +142,46 @@ body,
 
 body {
   margin: 0;
-  background-color: theme("colors.paper");
-  color: theme("colors.ink");
-  font-family: theme("fontFamily.sans");
-  line-height: 1.5;
+  background-color: rgb(var(--c-paper));
+  color: rgb(var(--c-ink));
+  font-family:
+    "Public Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  /* Calm theme cross-fade when Appearance flips (softened below for reduced
+     motion). Nothing else animates. */
+  transition:
+    background-color 250ms ease,
+    color 250ms ease;
 }
 
-/* A clear, non-flashy focus ring — keyboard users (and older eyes) should
-   always be able to see where they are. Accent-based so it stays visible on the
-   dark surface. */
+/* A clear, non-flashy focus ring — keyboard users (and older eyes) should always
+   be able to see where they are. Fern-based, visible on both themes. */
 :focus-visible {
-  outline: 2px solid theme("colors.accent");
+  outline: 2px solid rgb(var(--c-fern));
   outline-offset: 2px;
 }
 
-/* Calm, unobtrusive scrollbars in the message thread, re-derived for dark: a
-   thumb one step lighter than the background so it reads without glaring. */
+/* Calm, unobtrusive scrollbars in the message thread. Thumb one step off the
+   background so it reads without glaring, on either theme. */
 .thread-scroll {
   scrollbar-width: thin;
-  scrollbar-color: theme("colors.line") transparent;
+  scrollbar-color: rgb(var(--c-line)) transparent;
 }
 .thread-scroll::-webkit-scrollbar {
   width: 10px;
 }
 .thread-scroll::-webkit-scrollbar-thumb {
-  background-color: theme("colors.line");
-  border: 3px solid theme("colors.paper");
+  background-color: rgb(var(--c-line));
+  border: 3px solid rgb(var(--c-paper));
 }
 
-/* Respect users who ask the OS for reduced motion. There is no decorative
-   motion anywhere; this only softens the few functional transitions. */
+/* Respect users who ask the OS for reduced motion. There is no decorative motion
+   anywhere; this only softens the few functional transitions, including the
+   theme cross-fade above. */
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;
@@ -59,14 +190,15 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   Rendered markdown in assistant messages (Markdown.tsx). Authored entirely
-   against the token names, so the dark restyle mostly rode along for free.
-   Compact spacing, hairline borders, sharp corners — matches the rest of the
-   app; no rounded anything. Inline code and fenced blocks get a dedicated inset
-   shade (one step off `surface`) so they read on dark against either a paper or
-   a surface parent.
+   Rendered markdown in assistant messages (Markdown.tsx). Retuned to the Fern
+   palette: the body inherits the serif "correspondence" voice, headings are
+   serif 500, code/pre stay IBM Plex Mono on `surface` with a hairline border and
+   an 8px radius. Authored against the tokens so it rides the theme flip for free.
    -------------------------------------------------------------------------- */
 @layer components {
+  .markdown-body {
+    font-family: "Source Serif 4", Georgia, ui-serif, serif;
+  }
   .markdown-body > :first-child {
     margin-top: 0;
   }
@@ -82,7 +214,7 @@ body {
     margin-top: 0.75em;
   }
 
-  /* Headings: a modest scale (h1 ~1.25em … h3 ~1em), semibold, roomy above. */
+  /* Headings: serif, medium weight, roomy above. */
   .markdown-body h1,
   .markdown-body h2,
   .markdown-body h3,
@@ -90,18 +222,19 @@ body {
   .markdown-body h5,
   .markdown-body h6 {
     margin: 1.2em 0 0.4em;
-    font-weight: 600;
+    font-family: "Source Serif 4", Georgia, ui-serif, serif;
+    font-weight: 500;
     line-height: 1.3;
-    color: theme("colors.ink");
+    color: rgb(var(--c-ink));
   }
   .markdown-body h1 {
-    font-size: 1.25em;
+    font-size: 1.35em;
   }
   .markdown-body h2 {
-    font-size: 1.12em;
+    font-size: 1.18em;
   }
   .markdown-body h3 {
-    font-size: 1em;
+    font-size: 1.05em;
   }
   .markdown-body h4,
   .markdown-body h5,
@@ -109,9 +242,9 @@ body {
     font-size: 1em;
   }
 
-  /* Links: accent, underlined. They are inert (Markdown.tsx) — display only. */
+  /* Links: fern-deep, underlined. Inert (Markdown.tsx) — display only. */
   .markdown-body a {
-    color: theme("colors.accent");
+    color: rgb(var(--c-fern-deep));
     text-decoration: underline;
     cursor: pointer;
   }
@@ -132,37 +265,38 @@ body {
     margin-top: 0.25em;
   }
 
-  /* Blockquote: a quiet left rule, softened text. */
+  /* Blockquote: a quiet fern rule, softened text. */
   .markdown-body blockquote {
     margin: 0.75em 0;
     padding-left: 0.9em;
-    border-left: 3px solid theme("colors.line");
-    color: theme("colors.muted");
+    border-left: 3px solid rgb(var(--c-rule));
+    color: rgb(var(--c-muted));
   }
 
-  /* Inline code: subtle chip. font-mono isn't wired app-wide yet, so the mono
-     stack is spelled out directly here for now. */
+  /* Inline code + fenced blocks: IBM Plex Mono on `surface`, hairline border,
+     8px radius. The mono family is spelled out here since these aren't Tailwind
+     nodes. */
   .markdown-body code {
-    font-family: theme("fontFamily.mono");
-    font-size: 0.9em;
-    background-color: #23272e;
-    border: 1px solid theme("colors.line");
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 12px;
+    background-color: rgb(var(--c-surface));
+    border: 1px solid rgb(var(--c-line));
+    border-radius: 6px;
     padding: 0.05em 0.35em;
   }
-
-  /* Fenced blocks: a bordered panel that scrolls sideways rather than wrapping
-     wide code. The inner <code> drops the inline chip styling. */
   .markdown-body pre {
     margin: 0.75em 0;
     padding: 0.75em 0.9em;
-    background-color: #23272e;
-    border: 1px solid theme("colors.line");
+    background-color: rgb(var(--c-surface));
+    border: 1px solid rgb(var(--c-line));
+    border-radius: 8px;
     overflow-x: auto;
   }
   .markdown-body pre code {
-    font-size: 0.85em;
+    font-size: 12px;
     background: transparent;
     border: 0;
+    border-radius: 0;
     padding: 0;
   }
 
@@ -176,7 +310,7 @@ body {
     height: auto;
   }
 
-  /* GFM tables: collapsed hairline grid, quiet uppercase headers. */
+  /* GFM tables: collapsed hairline grid, quiet small-caps headers. */
   .markdown-body table {
     margin: 0.75em 0;
     border-collapse: collapse;
@@ -184,67 +318,96 @@ body {
   }
   .markdown-body th,
   .markdown-body td {
-    border: 1px solid theme("colors.line");
+    border: 1px solid rgb(var(--c-line));
     padding: 0.35em 0.6em;
     text-align: left;
     vertical-align: top;
   }
   .markdown-body th {
-    font-size: 0.85em;
+    font-family: "Public Sans", system-ui, sans-serif;
+    font-size: 0.8em;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: theme("colors.muted");
+    letter-spacing: 0.06em;
+    color: rgb(var(--c-muted));
   }
 }
 
-/* highlight.js token colors, retuned for the dark `pre` background (#23272e).
-   Mid-saturation, AA-ish contrast on that inset — a calm, desaturated palette of
-   blues, greens and ambers. Kept deliberately restrained — code, not confetti,
-   and no neon. */
+/* highlight.js token colors, retuned to the Fern palette for BOTH themes on the
+   `surface` code background. Calm, low-saturation — greens, ferns, warm ambers,
+   and quiet blues; AA on `surface` in each theme. Light values live on :root;
+   .dark lifts them for the darker inset. Code, not confetti. */
+:root {
+  --hl-comment: 107 111 100; /* muted */
+  --hl-keyword: 42 81 66; /* fern-deep */
+  --hl-string: 60 106 74; /* calm green */
+  --hl-number: 138 96 40; /* warm amber-brown */
+  --hl-title: 45 84 120; /* quiet blue */
+  --hl-attr: 122 92 30; /* ochre */
+  --hl-builtin: 46 106 108; /* teal */
+  --hl-type: 90 84 140; /* muted violet */
+  --hl-name: 143 58 68; /* danger-ish rose */
+  --hl-link: 42 81 66;
+  --hl-addition: 42 106 66;
+  --hl-deletion: 143 58 68;
+}
+.dark {
+  --hl-comment: 146 160 153; /* muted */
+  --hl-keyword: 169 203 185; /* fern-deep(dark) */
+  --hl-string: 143 191 159;
+  --hl-number: 210 181 122;
+  --hl-title: 138 178 220;
+  --hl-attr: 208 176 122;
+  --hl-builtin: 121 184 176;
+  --hl-type: 174 165 220;
+  --hl-name: 219 141 149;
+  --hl-link: 169 203 185;
+  --hl-addition: 143 191 159;
+  --hl-deletion: 219 141 149;
+}
 .markdown-body .hljs-comment,
 .markdown-body .hljs-quote {
-  color: #7d8795;
+  color: rgb(var(--hl-comment));
   font-style: italic;
 }
 .markdown-body .hljs-keyword,
 .markdown-body .hljs-selector-tag,
 .markdown-body .hljs-doctag {
-  color: #cb92b1;
+  color: rgb(var(--hl-keyword));
 }
 .markdown-body .hljs-string,
 .markdown-body .hljs-regexp {
-  color: #8fbf9f;
+  color: rgb(var(--hl-string));
 }
 .markdown-body .hljs-number,
 .markdown-body .hljs-literal {
-  color: #d9b57e;
+  color: rgb(var(--hl-number));
 }
 .markdown-body .hljs-title,
 .markdown-body .hljs-title.function_,
 .markdown-body .hljs-section {
-  color: #7fb0e0;
+  color: rgb(var(--hl-title));
 }
 .markdown-body .hljs-attr,
 .markdown-body .hljs-attribute {
-  color: #d0b06a;
+  color: rgb(var(--hl-attr));
 }
 .markdown-body .hljs-built_in,
 .markdown-body .hljs-class .hljs-title {
-  color: #79b8c9;
+  color: rgb(var(--hl-builtin));
 }
 .markdown-body .hljs-type,
 .markdown-body .hljs-symbol,
 .markdown-body .hljs-bullet {
-  color: #a99adb;
+  color: rgb(var(--hl-type));
 }
 .markdown-body .hljs-variable,
 .markdown-body .hljs-template-variable,
 .markdown-body .hljs-name {
-  color: #d290a0;
+  color: rgb(var(--hl-name));
 }
 .markdown-body .hljs-meta {
-  color: #7d8795;
+  color: rgb(var(--hl-comment));
 }
 .markdown-body .hljs-emphasis {
   font-style: italic;
@@ -253,12 +416,12 @@ body {
   font-weight: 600;
 }
 .markdown-body .hljs-link {
-  color: #8db4de;
+  color: rgb(var(--hl-link));
   text-decoration: underline;
 }
 .markdown-body .hljs-deletion {
-  color: #e08791;
+  color: rgb(var(--hl-deletion));
 }
 .markdown-body .hljs-addition {
-  color: #8fbf9f;
+  color: rgb(var(--hl-addition));
 }

@@ -15,7 +15,7 @@ interface Props {
 export function Banner({ message, tone = "notice", onDismiss }: Props) {
   void tone; // single tone today; kept for future quiet variants.
   return (
-    <div className="flex items-center gap-3 border-b border-line bg-notice-tint px-6 py-2.5">
+    <div className="mx-4 mt-3 flex items-center gap-3 rounded-banner bg-notice-tint px-4 py-2.5">
       <p className="flex-1 text-sm text-notice">{message}</p>
       {onDismiss && (
         <button

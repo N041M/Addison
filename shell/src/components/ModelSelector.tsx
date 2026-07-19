@@ -13,9 +13,10 @@
 // A one-line plain description of the chosen model rides along in the dropdown's
 // title, so it's there on hover/read-out without cluttering the row.
 //
-// Visual direction is binding (CLAUDE.md): dark terminal-adjacent surfaces, sharp
-// corners, one restrained steel-blue accent, system-monospace for the model name,
-// plain language for readers who are 54 and 68 — never a generic AI-chat look.
+// Visual direction is binding (CLAUDE.md; Fern direction, docs/design-brief-fern):
+// warm paper surfaces, one fern-green accent, the model name/tag in IBM Plex Mono
+// (a "machine fact"), plain language for readers who are 54 and 68 — never a
+// generic AI-chat look. In the composer this reads as a muted text pill.
 
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
@@ -144,7 +145,7 @@ export function ModelSelector({
           value={currentValue}
           title={description || undefined}
           onChange={(e) => handlePick(e.target.value)}
-          className="border border-line bg-surface px-2.5 py-1.5 font-mono text-sm text-ink disabled:opacity-60"
+          className="rounded-pill bg-transparent px-2 py-1 font-mono text-[13px] text-muted hover:text-ink-soft disabled:opacity-60"
         >
           {cloud.map((m) => (
             <option key={m.id} value={encode("primary", m.id)}>
@@ -167,7 +168,7 @@ export function ModelSelector({
         <div
           role="group"
           aria-label="How thorough Addison should be"
-          className="inline-flex border border-line bg-surface p-0.5"
+          className="inline-flex rounded-pill border border-line bg-surface p-0.5"
         >
           {effortLevels.map((level) => {
             const active = activeEffort === level.id;
@@ -179,10 +180,8 @@ export function ModelSelector({
                 aria-pressed={active}
                 onClick={() => onSelectEffort(level.id)}
                 className={[
-                  "px-2.5 py-1 text-sm font-medium transition-colors",
-                  active
-                    ? "bg-accent-tint text-accent-dark"
-                    : "text-muted hover:text-ink",
+                  "rounded-pill px-2.5 py-1 text-[13px] font-medium transition-colors",
+                  active ? "bg-fern-tint text-fern-deep" : "text-muted hover:text-ink",
                   isDisabled ? "cursor-not-allowed opacity-60" : "",
                 ].join(" ")}
               >

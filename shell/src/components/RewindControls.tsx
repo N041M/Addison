@@ -32,12 +32,12 @@ export function RewindControls({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap gap-4">
         {hasUndoableActions && (
           <button
             type="button"
             onClick={onUndoLastAction}
-            className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+            className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted hover:text-ink-soft"
           >
             <span aria-hidden="true">↺</span>
             Undo last action
@@ -47,16 +47,14 @@ export function RewindControls({
           <button
             type="button"
             onClick={onRedoLastAction}
-            className="inline-flex w-fit items-center gap-2 border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+            className="inline-flex w-fit items-center gap-1.5 text-[13px] font-medium text-muted hover:text-ink-soft"
           >
             <span aria-hidden="true">↻</span>
             Do it again
           </button>
         )}
       </div>
-      {lastUndoDetail && (
-        <p className="text-sm text-muted">{lastUndoDetail}</p>
-      )}
+      {lastUndoDetail && <p className="text-[13px] text-muted">{lastUndoDetail}</p>}
     </div>
   );
 }

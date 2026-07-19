@@ -128,7 +128,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
 
   if (!loaded) {
     return (
-      <div className="border border-line bg-surface p-4">
+      <div className="rounded-card border border-line bg-surface p-4">
         <h3 className="text-base font-semibold text-ink">Saved routines</h3>
         <p className="mt-1 text-sm text-muted">Looking for your routines…</p>
       </div>
@@ -137,7 +137,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
 
   if (routines.length === 0) {
     return (
-      <div className="border border-line bg-surface p-4">
+      <div className="rounded-card border border-line bg-surface p-4">
         <h3 className="text-base font-semibold text-ink">Saved routines</h3>
         <p className="mt-1 text-sm text-muted">
           {connected
@@ -150,7 +150,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
   }
 
   return (
-    <div className="border border-line bg-surface p-4">
+    <div className="rounded-card border border-line bg-surface p-4">
       <h3 className="text-base font-semibold text-ink">Saved routines</h3>
       <ul className="mt-3 space-y-4">
         {routines.map((routine) => (
@@ -166,14 +166,14 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
                   type="button"
                   disabled={running === routine.id}
                   onClick={() => startRun(routine)}
-                  className="bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-dark disabled:opacity-60"
+                  className="rounded-sm bg-fern px-3 py-1.5 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-60"
                 >
                   {running === routine.id ? "Running…" : "Run now"}
                 </button>
                 <button
                   type="button"
                   onClick={() => removeRoutine(routine.id)}
-                  className="border border-line bg-paper px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
+                  className="rounded-sm border border-line bg-paper px-3 py-1.5 text-sm font-medium text-ink-soft hover:border-muted"
                 >
                   {confirmingDelete === routine.id ? "Really remove?" : "Remove"}
                 </button>
@@ -181,7 +181,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
             </div>
 
             {filling === routine.id && (
-              <div className="mt-3 border border-line bg-paper p-3">
+              <div className="mt-3 rounded border border-line bg-paper p-3">
                 {routine.variables
                   .filter((v) => !v.default)
                   .map((v) => (
@@ -193,7 +193,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
                         onChange={(e) =>
                           setValues((prev) => ({ ...prev, [v.name]: e.target.value }))
                         }
-                        className="mt-1 w-full border border-line bg-surface px-3 py-2 text-base text-ink"
+                        className="mt-1 w-full rounded border border-line bg-surface px-3 py-2 text-base text-ink"
                       />
                     </label>
                   ))}
@@ -201,14 +201,14 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
                   <button
                     type="button"
                     onClick={() => void executeRun(routine)}
-                    className="bg-accent px-3 py-1.5 text-sm font-semibold text-accent-fg hover:bg-accent-dark"
+                    className="rounded-sm bg-fern px-3 py-1.5 text-sm font-semibold text-on-accent hover:bg-fern-deep"
                   >
                     Start
                   </button>
                   <button
                     type="button"
                     onClick={() => setFilling(null)}
-                    className="border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft"
+                    className="rounded-sm border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft"
                   >
                     Cancel
                   </button>
@@ -220,7 +220,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
               <p
                 className={
                   "mt-2 text-sm " +
-                  (outcome[routine.id].ok ? "text-accent-dark" : "text-ink-soft")
+                  (outcome[routine.id].ok ? "text-fern-deep" : "text-ink-soft")
                 }
               >
                 {outcome[routine.id].detail}
@@ -256,7 +256,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false }: Props) {
 // the plan is legible to a developer.
 function PlanView({ steps }: { steps: PlanStep[] }) {
   return (
-    <ol className="mt-2 space-y-2 border border-line bg-paper p-3 font-mono text-xs text-ink-soft">
+    <ol className="mt-2 space-y-2 rounded border border-line bg-paper p-3 font-mono text-xs text-ink-soft">
       {steps.map((step, i) => (
         <li
           key={step.stepId || i}

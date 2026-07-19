@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body{margin:0;background:#f6f5f1;font-family:"Public Sans",system-ui,sans-serif}
+  a{color:#2a5142}a:hover{color:#33604f}
+</style>
+</helmet>
+<div style="display:flex;height:100vh;background:{{ c.bg }};color:{{ c.ink }};font-family:'Public Sans',system-ui,sans-serif;font-size:15px;line-height:1.55;transition:background .25s,color .25s" data-screen-label="Addison">
+  <aside style="display:flex;flex-direction:column;width:216px;flex-shrink:0;border-right:1px solid {{ c.line }};background:{{ c.side }};padding:16px 0;box-sizing:border-box;transition:background .25s">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 18px 14px">
+      <span style="display:flex;align-items:center;gap:8px"><svg width="17" height="17" viewBox="0 0 64 64"><circle cx="32" cy="15" r="4" fill="{{ c.accent }}"></circle><path d="M13 42 A19 19 0 0 1 51 42 Z" fill="{{ c.accent }}"></path><rect x="9" y="45" width="46" height="7" rx="3.5" fill="{{ c.accent }}"></rect></svg><span style="font-weight:700;font-size:16px;letter-spacing:-0.02em">Addison</span></span>
+      <span style="color:{{ c.dim }};font-size:14px;cursor:pointer" title="Hide sidebar">«</span>
+    </div>
+    <button style="margin:0 14px;display:flex;align-items:center;gap:7px;border:1px solid {{ c.line }};background:transparent;color:{{ c.accentText }};font:600 13px 'Public Sans',sans-serif;padding:8px 12px;border-radius:6px;cursor:pointer;text-align:left" style-hover="opacity:.8">＋ New chat</button>
+    <p style="margin:20px 18px 6px;font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:{{ c.dim }}">Today</p>
+    <button onClick="{{ goChat }}" style="border:none;border-left:2px solid {{ chatBarColor }};background:{{ chatBarBg }};color:{{ c.ink }};font:500 13px 'Public Sans',sans-serif;padding:8px 16px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Weather note for tomorrow</button>
+    <button style="border:none;border-left:2px solid transparent;background:transparent;color:{{ c.muted }};font:400 13px 'Public Sans',sans-serif;padding:8px 16px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" style-hover="opacity:.75">Reply to the landlord</button>
+    <p style="margin:16px 18px 6px;font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:{{ c.dim }}">Earlier</p>
+    <button style="border:none;border-left:2px solid transparent;background:transparent;color:{{ c.muted }};font:400 13px 'Public Sans',sans-serif;padding:8px 16px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" style-hover="opacity:.75">Summary of the lease PDF</button>
+    <button style="border:none;border-left:2px solid transparent;background:transparent;color:{{ c.muted }};font:400 13px 'Public Sans',sans-serif;padding:8px 16px;cursor:pointer;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" style-hover="opacity:.75">Holiday budget totals</button>
+    <div style="margin-top:auto;padding:0 14px;display:flex;flex-direction:column;gap:2px">
+      <button onClick="{{ goSettings }}" style="display:flex;align-items:center;gap:8px;border:none;border-left:2px solid {{ settingsBarColor }};background:{{ settingsBarBg }};color:{{ c.soft }};font:500 13px 'Public Sans',sans-serif;padding:8px 12px;cursor:pointer;text-align:left" style-hover="opacity:.8">Settings</button>
+      <p style="margin:0;padding:4px;font-size:12px;color:{{ c.dim }}">Simple profile</p>
+    </div>
+  </aside>
+
+  <sc-if value="{{ isChat }}" hint-placeholder-val="{{ true }}">
+  <main style="display:flex;flex-direction:column;flex:1;min-width:0" data-screen-label="Chat">
+    <header style="display:flex;align-items:baseline;justify-content:space-between;padding:14px 44px;border-bottom:1px solid {{ c.line }}">
+      <span style="font-size:13px;font-weight:600;letter-spacing:.02em;color:{{ c.soft }}">Weather note for tomorrow</span>
+      <div style="display:flex;align-items:baseline;gap:18px">
+        <button style="border:none;background:none;font:500 12.5px 'Public Sans',sans-serif;color:{{ c.muted }};cursor:pointer" style-hover="opacity:.75"><span aria-hidden="true">↺</span> Undo last action</button>
+        <button onClick="{{ toggleRail }}" style="border:none;background:none;font:500 12.5px 'Public Sans',sans-serif;color:{{ c.accentText }};cursor:pointer" style-hover="opacity:.75">{{ railToggleLabel }}</button>
+      </div>
+    </header>
+    <div style="flex:1;min-height:0;padding:0 44px;display:flex;justify-content:center;gap:38px">
+      <div style="flex:1;max-width:580px;display:flex;flex-direction:column;gap:26px;padding:30px 0 16px;overflow-y:auto;scrollbar-width:none;min-height:0">
+        <div>
+          <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:{{ c.dim }}">You</p>
+          <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Look up tomorrow's weather in Brno and save a short note about it in my Documents folder.</p>
+        </div>
+        <div>
+          <p style="margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:{{ c.accentText }}">Addison</p>
+          <p style="margin:0;font-family:'Source Serif 4',Georgia,serif;font-size:17px;line-height:1.7">Tomorrow in Brno looks mild — around 24 °C with sunshine in the afternoon and a light breeze. I'll write that up as a short note in your Documents folder now.</p>
+        </div>
+      </div>
+      <sc-if value="{{ railOpen }}" hint-placeholder-val="{{ true }}">
+      <div style="width:270px;flex-shrink:0;display:flex;flex-direction:column;gap:22px;padding:30px 0 16px;overflow-y:auto;min-height:0;scrollbar-width:thin;scrollbar-color:{{ c.line }} transparent">
+        <div>
+          <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:10px">
+            <p style="margin:0;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:{{ c.dim }}">Your widgets</p>
+            <button style="border:none;background:none;padding:0;font:500 11.5px 'Public Sans',sans-serif;color:{{ c.muted }};cursor:pointer" style-hover="opacity:.75">Edit</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:12.5px;font-weight:600">Morning weather note</span><button style="border:none;background:{{ c.tint }};color:{{ c.accentText }};font:600 11px 'Public Sans',sans-serif;padding:4px 12px;border-radius:999px;cursor:pointer" style-hover="opacity:.85">Run</button></div>
+            </div>
+            <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px">
+              <div style="display:flex;align-items:baseline;justify-content:space-between">
+                <span style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:{{ c.dim }}">Tokens · July</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:{{ c.soft }}">412k / 1M</span>
+              </div>
+              <div style="margin-top:8px;height:5px;border-radius:999px;background:{{ c.hair }};overflow:hidden"><div style="width:41%;height:100%;background:{{ c.accent }};border-radius:999px"></div></div>
+            </div>
+            <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px;display:flex;flex-direction:column;gap:5px">
+              <div style="display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:999px;background:{{ c.accent }}"></span><span style="font-size:12px">Ollama · this computer</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ c.dim }}">running</span></div>
+              <div style="display:flex;align-items:center;gap:7px"><span style="width:6px;height:6px;border-radius:999px;background:{{ c.accent }}"></span><span style="font-size:12px">Anthropic API</span><span style="margin-left:auto;font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ c.dim }}">42 ms</span></div>
+            </div>
+            <sc-if value="{{ trayOpen }}" hint-placeholder-val="{{ false }}">
+              <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:12.5px;color:{{ c.soft }}">Peak usage hours</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ c.dim }}">18:00</span></div>
+              <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:12.5px;color:{{ c.soft }}">Summarize new PDFs</span><button style="border:none;background:{{ c.tint }};color:{{ c.accentText }};font:600 11px 'Public Sans',sans-serif;padding:4px 12px;border-radius:999px;cursor:pointer">Run</button></div>
+              <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:12.5px;color:{{ c.soft }}">Agent · batch-rename</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ c.dim }}">idle</span></div>
+              <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:11px 13px;display:flex;align-items:center;justify-content:space-between;gap:8px"><span style="font-size:12.5px;color:{{ c.soft }}">Disk space watcher</span><span style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:{{ c.dim }}">82%</span></div>
+            </sc-if>
+            <div style="position:relative;margin-top:2px">
+              <div style="position:absolute;left:10px;right:10px;top:-4px;height:8px;background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:8px 8px 0 0"></div>
+              <div style="position:absolute;left:5px;right:5px;top:-8px;height:8px;background:{{ c.hair }};border:1px solid {{ c.line }};border-radius:8px 8px 0 0"></div>
+              <button onClick="{{ toggleTray }}" style="position:relative;width:100%;background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:9px 13px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-family:inherit" style-hover="opacity:.85">
+                <span style="font-size:12.5px;font-weight:600;color:{{ c.accentText }}">{{ trayLabel }}</span>
+                <span style="font-size:10px;color:{{ c.dim }}">{{ trayChevron }}</span>
+              </button>
+            </div>
+            <button style="border:1px dashed {{ c.dash }};background:transparent;color:{{ c.muted }};font:500 11.5px 'Public Sans',sans-serif;padding:8px 10px;border-radius:10px;cursor:pointer;text-align:center" style-hover="opacity:.8">＋ Ask Addison to build a widget</button>
+          </div>
+        </div>
+        <div>
+          <div style="border-left:2px solid {{ c.rule }};padding-left:14px">
+            <p style="margin:0 0 10px;font-size:10.5px;font-weight:600;letter-spacing:.11em;text-transform:uppercase;color:{{ c.dim }}">Addison's work</p>
+            <div style="display:flex;flex-direction:column;gap:7px">
+              <div style="display:flex;gap:8px;align-items:baseline"><span style="width:6px;height:6px;border-radius:999px;background:{{ c.accent }};flex-shrink:0;transform:translateY(-1px)"></span><span style="font-size:12.5px;color:{{ c.soft }}">Searched the web — Brno forecast</span></div>
+              <div style="display:flex;gap:8px;align-items:baseline"><span style="width:6px;height:6px;border-radius:999px;border:1.5px solid {{ c.accent }};box-sizing:border-box;flex-shrink:0;transform:translateY(-1px)"></span><span style="font-size:12.5px;color:{{ c.soft }}">Writing "Weather note.txt"…</span></div>
+            </div>
+            <button style="margin-top:10px;border:none;background:none;padding:0;font:500 12px 'Public Sans',sans-serif;color:{{ c.accentText }};text-decoration:underline;text-underline-offset:2px;cursor:pointer" style-hover="opacity:.8">Save these steps as a routine</button>
+          </div>
+          <div style="margin-top:14px;background:{{ c.tint }};border-radius:10px;padding:13px 15px">
+            <p style="margin:0;font-size:12.5px;font-weight:600">Allow Addison to save "Weather note.txt" in Documents?</p>
+            <p style="margin:4px 0 0;font-size:11.5px;color:{{ c.soft }}">One new file. You can undo it afterwards.</p>
+            <div style="display:flex;align-items:center;gap:12px;margin-top:10px">
+              <button style="border:none;background:{{ c.accent }};color:{{ c.onAccent }};font:600 12px 'Public Sans',sans-serif;padding:7px 18px;border-radius:999px;cursor:pointer" style-hover="opacity:.9">Allow</button>
+              <button style="border:none;background:none;font:500 12px 'Public Sans',sans-serif;color:{{ c.soft }};cursor:pointer" style-hover="opacity:.75">Not now</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+    </div>
+    <div style="padding:14px 44px 20px">
+      <div style="max-width:840px;margin:0 auto;background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:12px 14px 10px;box-shadow:0 1px 4px rgba(34,38,31,.05)">
+        <p style="margin:0 0 22px;font-size:15px;color:{{ c.dim }}">Write to Addison…</p>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <button style="border:none;background:none;padding:0;font:500 12.5px 'Public Sans',sans-serif;color:{{ c.muted }};cursor:pointer" style-hover="opacity:.75">Claude Opus 4.8 · thorough ▾</button>
+          <button style="border:none;background:{{ c.accent }};color:{{ c.onAccent }};font:600 13.5px 'Public Sans',sans-serif;padding:9px 26px;border-radius:6px;cursor:pointer" style-hover="opacity:.9">Send</button>
+        </div>
+      </div>
+      <p style="margin:9px auto 0;max-width:840px;font-size:12px;color:{{ c.dim }}">Press Enter to send. Shift+Enter starts a new line. Addison asks first, and anything it does can be undone.</p>
+    </div>
+  </main>
+  </sc-if>
+
+  <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+  <main style="display:flex;flex-direction:column;flex:1;min-width:0" data-screen-label="Settings">
+    <header style="display:flex;align-items:baseline;justify-content:space-between;padding:14px 44px;border-bottom:1px solid {{ c.line }}">
+      <span style="font-size:13px;font-weight:600;letter-spacing:.02em;color:{{ c.soft }}">Settings</span>
+      <button onClick="{{ goChat }}" style="border:none;background:none;font:500 12.5px 'Public Sans',sans-serif;color:{{ c.muted }};cursor:pointer" style-hover="opacity:.75">Back to chat</button>
+    </header>
+    <div style="flex:1;overflow-y:auto;padding:30px 44px">
+      <div style="max-width:880px;margin:0 auto;display:flex;gap:16px;align-items:flex-start">
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+        <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:20px 22px">
+          <h3 style="margin:0;font-size:15px;font-weight:600">Where Addison thinks</h3>
+          <p style="margin:4px 0 0;font-size:12.5px;color:{{ c.muted }}">The default. You can still switch per message from the box where you type.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+            <button style="display:flex;align-items:center;justify-content:space-between;border:1px solid {{ c.accent }};background:{{ c.tint }};color:{{ c.accentText }};font:500 14px 'Public Sans',sans-serif;padding:11px 14px;border-radius:8px;cursor:pointer;text-align:left"><span>Cloud — Claude Opus 4.8</span><span aria-hidden="true">✓</span></button>
+            <button style="display:flex;align-items:center;justify-content:space-between;border:1px solid {{ c.line }};background:{{ c.bg }};color:{{ c.ink }};font:500 14px 'Public Sans',sans-serif;padding:11px 14px;border-radius:8px;cursor:pointer;text-align:left" style-hover="opacity:.8"><span>On this computer — Balanced</span></button>
+          </div>
+          <p style="margin:14px 0 0;font-size:11.5px;color:{{ c.dim }}">Cloud models come from the providers under <strong>API keys</strong>, below.</p>
+        </div>
+        <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:20px 22px">
+          <h3 style="margin:0;font-size:15px;font-weight:600">API keys</h3>
+          <p style="margin:4px 0 0;font-size:12.5px;color:{{ c.muted }}">Connect any provider. Keys go straight to your computer's keychain and are never shown again — not even here.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+            <div style="border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div><p style="margin:0;font-size:13.5px;font-weight:600">Anthropic</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.accentText }}">✓ Key saved · added Jul 12</p></div>
+                <div style="display:flex;gap:6px;flex-shrink:0">
+                  <button style="border:1px solid {{ c.line }};background:transparent;color:{{ c.soft }};font:500 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:6px;cursor:pointer" style-hover="opacity:.8">Replace</button>
+                  <button style="border:none;background:none;color:{{ c.dim }};font:500 12px 'Public Sans',sans-serif;padding:6px 4px;cursor:pointer" style-hover="opacity:.75">Remove</button>
+                </div>
+              </div>
+            </div>
+            <div style="border:1px solid {{ c.accent }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div><p style="margin:0;font-size:13.5px;font-weight:600">OpenAI</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">Not connected</p></div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:10px">
+                <input type="password" placeholder="Paste your OpenAI key…" style="flex:1;border:1px solid {{ c.line }};background:{{ c.surface }};padding:8px 12px;font-size:13px;color:{{ c.ink }};font-family:inherit;border-radius:6px;box-sizing:border-box"></input>
+                <button style="border:none;background:{{ c.accent }};color:{{ c.onAccent }};font:600 12.5px 'Public Sans',sans-serif;padding:8px 16px;border-radius:6px;cursor:pointer" style-hover="opacity:.9">Save</button>
+              </div>
+              <p style="margin:7px 0 0;font-size:11px;color:{{ c.dim }}">Checked with one tiny request, then locked away in the keychain.</p>
+            </div>
+            <div style="border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div><p style="margin:0;font-size:13.5px;font-weight:600">Google</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">Not connected</p></div>
+                <button style="border:1px solid {{ c.line }};background:transparent;color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0" style-hover="opacity:.8">Add key</button>
+              </div>
+            </div>
+            <div style="border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                <div><p style="margin:0;font-size:13.5px;font-weight:600">Your own server</p><p style="margin:1px 0 0;font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:{{ c.dim }}">OpenAI-compatible · http://…</p></div>
+                <button style="border:1px solid {{ c.line }};background:transparent;color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0" style-hover="opacity:.8">Connect</button>
+              </div>
+            </div>
+          </div>
+          <p style="margin:12px 0 0;font-size:11.5px;color:{{ c.dim }}">Addison uses whichever provider the model you pick belongs to. Models from every connected provider appear together in the picker by the message box.</p>
+        </div>
+        <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:20px 22px">
+          <h3 style="margin:0;font-size:15px;font-weight:600">Routines</h3>
+          <p style="margin:4px 0 0;font-size:12.5px;color:{{ c.muted }}">Steps Addison saved for you. Run them here or from a widget.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div><p style="margin:0;font-size:13.5px;font-weight:600">Morning weather note</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">Run 12 times — last on Jul 17</p></div>
+              <div style="display:flex;gap:6px;flex-shrink:0">
+                <button style="border:none;background:{{ c.tint }};color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:999px;cursor:pointer" style-hover="opacity:.85">Run</button>
+                <button style="border:none;background:none;color:{{ c.dim }};font:500 12px 'Public Sans',sans-serif;padding:6px 4px;cursor:pointer" style-hover="opacity:.75">Remove</button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div><p style="margin:0;font-size:13.5px;font-weight:600">Summarize new PDFs</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">Run once — last on Jul 14</p></div>
+              <div style="display:flex;gap:6px;flex-shrink:0">
+                <button style="border:none;background:{{ c.tint }};color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:999px;cursor:pointer" style-hover="opacity:.85">Run</button>
+                <button style="border:none;background:none;color:{{ c.dim }};font:500 12px 'Public Sans',sans-serif;padding:6px 4px;cursor:pointer" style-hover="opacity:.75">Remove</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+        <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:20px 22px">
+          <h3 style="margin:0;font-size:15px;font-weight:600">Run a model on this computer</h3>
+          <p style="margin:4px 0 0;font-size:12.5px;color:{{ c.muted }}">Nothing you say leaves your machine. One-time download, runs through Ollama — <button style="border:none;background:none;padding:0;font:500 12.5px 'Public Sans',sans-serif;color:{{ c.accentText }};text-decoration:underline;text-underline-offset:2px;cursor:pointer">what's Ollama?</button></p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:14px">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div><p style="margin:0;font-size:13.5px;font-weight:600">Light and quick</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">2 GB download · needs 8 GB memory</p></div>
+              <button style="border:1px solid {{ c.line }};background:transparent;color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0" style-hover="opacity:.8">Set up</button>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div><p style="margin:0;font-size:13.5px;font-weight:600">Balanced</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">4.7 GB download · needs 16 GB memory</p></div>
+              <span style="font-size:12px;font-weight:500;color:{{ c.accentText }};flex-shrink:0">✓ On this computer</span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid {{ c.line }};background:{{ c.bg }};border-radius:8px;padding:10px 14px">
+              <div><p style="margin:0;font-size:13.5px;font-weight:600">Most capable</p><p style="margin:1px 0 0;font-size:11.5px;color:{{ c.dim }}">9 GB download · needs 32 GB memory</p></div>
+              <button style="border:1px solid {{ c.line }};background:transparent;color:{{ c.accentText }};font:600 12px 'Public Sans',sans-serif;padding:6px 14px;border-radius:6px;cursor:pointer;flex-shrink:0" style-hover="opacity:.8">Set up</button>
+            </div>
+          </div>
+        </div>
+        <div style="background:{{ c.surface }};border:1px solid {{ c.line }};border-radius:10px;padding:20px 22px">
+          <h3 style="margin:0;font-size:15px;font-weight:600">Profile</h3>
+          <p style="margin:4px 0 0;font-size:12.5px;color:{{ c.muted }}">Changes what Addison shows you — never what it's allowed to do.</p>
+          <div role="group" style="display:flex;border:1px solid {{ c.line }};border-radius:8px;padding:3px;gap:2px;background:{{ c.bg }};margin-top:14px">
+            <button style="flex:1;border:none;background:{{ c.tint }};color:{{ c.accentText }};font:600 13px 'Public Sans',sans-serif;padding:8px 0;border-radius:6px;cursor:pointer">Simple</button>
+            <button style="flex:1;border:none;background:transparent;color:{{ c.muted }};font:500 13px 'Public Sans',sans-serif;padding:8px 0;border-radius:6px;cursor:pointer" style-hover="opacity:.75">Developer</button>
+          </div>
+          <p style="margin:10px 0 0;font-size:11.5px;line-height:1.55;color:{{ c.dim }}">Simple — the everyday Addison. Developer adds raw diagnostics, routine plans, technical widgets, and a scripting entry point. Same safety rules in both.</p>
+          <div style="margin-top:16px;padding-top:14px;border-top:1px solid {{ c.hair }};display:flex;align-items:center;justify-content:space-between">
+            <span style="font-size:13px;color:{{ c.soft }}">Appearance</span>
+            <div role="group" style="display:flex;border:1px solid {{ c.line }};border-radius:6px;padding:2px;gap:1px;background:{{ c.bg }}">
+              <button onClick="{{ setLight }}" style="border:none;background:{{ lightBtnBg }};color:{{ lightBtnColor }};font:500 12px 'Public Sans',sans-serif;padding:5px 14px;border-radius:5px;cursor:pointer">Light</button>
+              <button onClick="{{ setDark }}" style="border:none;background:{{ darkBtnBg }};color:{{ darkBtnColor }};font:500 12px 'Public Sans',sans-serif;padding:5px 14px;border-radius:5px;cursor:pointer">Dark</button>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </div>
+  </main>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1280,&quot;height&quot;:800}}">
+class Component extends DCLogic {
+  state = { screen: "chat", railOpen: true, trayOpen: false, dark: false };
+  renderVals() {
+    const dark = this.state.dark;
+    const c = dark ? {
+      bg: "#171d1a", side: "#131815", surface: "#1f2723", line: "#2e3a33", hair: "#243029",
+      ink: "#e7ebe7", soft: "#c3cdc6", muted: "#92a099", dim: "#6f7d75",
+      accent: "#7fb59a", accentText: "#a9cbb9", onAccent: "#14201a",
+      tint: "#223229", rule: "#33493d", dash: "#3b4a41",
+    } : {
+      bg: "#f6f5f1", side: "#f2f1ec", surface: "#fdfcfa", line: "#e3e1d8", hair: "#eceae2",
+      ink: "#22261f", soft: "#4d5147", muted: "#6b6f64", dim: "#9a9d92",
+      accent: "#33604f", accentText: "#2a5142", onAccent: "#ffffff",
+      tint: "#e4ede8", rule: "#d8e5de", dash: "#c9ccbe",
+    };
+    const { screen, railOpen, trayOpen } = this.state;
+    const isChat = screen === "chat";
+    return {
+      c, isChat, isSettings: !isChat,
+      railOpen, railClosed: !railOpen, trayOpen,
+      railToggleLabel: railOpen ? "Hide widgets »" : "« Show widgets",
+      trayLabel: trayOpen ? "Show fewer" : "4 more widgets",
+      trayChevron: trayOpen ? "▴" : "▾",
+      chatBarColor: isChat ? c.accent : "transparent",
+      chatBarBg: isChat ? c.hair : "transparent",
+      settingsBarColor: isChat ? "transparent" : c.accent,
+      settingsBarBg: isChat ? "transparent" : c.hair,
+      lightBtnBg: dark ? "transparent" : c.tint, lightBtnColor: dark ? c.muted : c.accentText,
+      darkBtnBg: dark ? c.tint : "transparent", darkBtnColor: dark ? c.accentText : c.muted,
+      goChat: () => this.setState({ screen: "chat" }),
+      goSettings: () => this.setState({ screen: "settings" }),
+      toggleRail: () => this.setState(s => ({ railOpen: !s.railOpen })),
+      toggleTray: () => this.setState(s => ({ trayOpen: !s.trayOpen })),
+      setLight: () => this.setState({ dark: false }),
+      setDark: () => this.setState({ dark: true }),
+    };
+  }
+}
+</script>
+</body>
+</html>

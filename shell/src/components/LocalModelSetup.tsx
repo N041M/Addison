@@ -9,9 +9,9 @@
 // a simple linear percent — no spinner theatrics, no shimmer). On success the
 // roles refresh and the model shows up in the chat's model selector.
 //
-// Visual direction is binding (CLAUDE.md): dark terminal-adjacent surfaces, sharp
-// corners, one restrained steel-blue accent, plain language for readers who are 54
-// and 68.
+// Visual direction is binding (CLAUDE.md; Fern direction, docs/design-brief-fern):
+// warm paper surfaces, one fern-green accent, rounded ownable/actionable controls,
+// plain language for readers who are 54 and 68.
 
 import { useState } from "react";
 import type { LocalSetupState, RoleOption } from "../types/ui";
@@ -90,7 +90,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
           type="button"
           onClick={() => setOllamaOpen((v) => !v)}
           aria-expanded={ollamaOpen}
-          className="font-medium text-accent-dark underline underline-offset-2 hover:text-accent"
+          className="font-medium text-fern-deep underline underline-offset-2 hover:text-fern"
         >
           What's Ollama?
         </button>
@@ -120,7 +120,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
           const errored = isThis && setup?.status === "error";
 
           return (
-            <li key={choice.id} className="border border-line bg-surface px-4 py-3">
+            <li key={choice.id} className="rounded-card border border-line bg-surface px-4 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-base font-medium text-ink">{choice.name}</p>
@@ -133,7 +133,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
 
                 <div className="shrink-0 text-right">
                   {done ? (
-                    <span className="inline-flex items-center gap-1 text-sm font-medium text-accent-dark">
+                    <span className="inline-flex items-center gap-1 text-sm font-medium text-fern-deep">
                       <span aria-hidden="true">✓</span> On this computer
                     </span>
                   ) : (
@@ -141,7 +141,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                       type="button"
                       onClick={() => onStartSetup(choice.id)}
                       disabled={!connected || anyRunning}
-                      className="bg-accent px-4 py-2 text-sm font-semibold text-accent-fg hover:bg-accent-dark disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-sm bg-fern px-4 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {running ? "Setting up…" : "Download and set up"}
                     </button>
@@ -158,7 +158,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                   {typeof setup?.percent === "number" && (
                     <div className="mt-2 flex items-center gap-2">
                       <div
-                        className="h-2 flex-1 border border-line bg-paper"
+                        className="h-[5px] flex-1 overflow-hidden rounded-pill bg-hair"
                         role="progressbar"
                         aria-valuenow={Math.round(setup.percent)}
                         aria-valuemin={0}
@@ -166,7 +166,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                         aria-label={`${choice.name} download progress`}
                       >
                         <div
-                          className="h-full bg-accent"
+                          className="h-full rounded-pill bg-fern"
                           style={{ width: `${clampPercent(setup.percent)}%` }}
                         />
                       </div>
@@ -180,7 +180,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
 
               {/* Just-finished confirmation (installed rows already read as done). */}
               {isThis && setup?.status === "done" && !isInstalled && (
-                <p className="mt-3 text-sm text-accent-dark">
+                <p className="mt-3 text-sm text-fern-deep">
                   Ready to use. Pick "On this computer" beside the message box to
                   use it.
                 </p>
@@ -203,7 +203,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
                     type="button"
                     onClick={() => onStartSetup(choice.id)}
                     disabled={!connected || anyRunning}
-                    className="mt-2 text-sm font-medium text-accent-dark hover:text-accent disabled:opacity-50"
+                    className="mt-2 text-sm font-medium text-fern-deep hover:text-fern disabled:opacity-50"
                   >
                     Try again
                   </button>
