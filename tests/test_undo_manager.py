@@ -10,6 +10,7 @@ isolation without blocking the rest. The fakes are MEDIUM-risk with genuine
 """
 
 import time
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -74,7 +75,7 @@ class _FailingTool:
 
 
 @pytest.fixture
-def store(tmp_path: Path) -> Store:
+def store(tmp_path: Path) -> Iterator[Store]:
     s = Store(tmp_path / "undo.db")
     yield s
     s.close()

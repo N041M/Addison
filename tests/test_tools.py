@@ -114,6 +114,7 @@ def test_save_file_redo_restores_the_exact_file():
     tool = SaveFileTool(shell_bridge=bridge)
     result = tool.execute({"filename": "notes.txt", "content": "hi"}, _ctx(bridge))
 
+    assert result.snapshot is not None
     tool.undo(result.snapshot)
     tool.redo(result.snapshot)
 
@@ -259,6 +260,8 @@ def test_build_registry_threads_bridge_into_medium_tool_undo():
     registry = build_registry(shell_bridge=bridge)
 
     save_tool = registry.get("save_file")
+    assert isinstance(save_tool, SaveFileTool)
     result = save_tool.execute({"filename": "r.txt", "content": "z"}, _ctx(bridge))
+    assert result.snapshot is not None
     save_tool.undo(result.snapshot)
     assert bridge.deleted == ["/Users/test/Desktop/r.txt"]

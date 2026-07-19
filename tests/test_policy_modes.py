@@ -287,7 +287,9 @@ def test_builder_default_mode_is_safe_and_stamps_safe(tmp_path):
         steps=[RoutineStep("s1", "calculator", {"expression": "1+1"})],
     )
     builder.save(routine)
-    assert store.get_routine("r-2")["created_in_mode"] == "safe"
+    saved = store.get_routine("r-2")
+    assert saved is not None
+    assert saved["created_in_mode"] == "safe"
 
 
 # ============================================================================

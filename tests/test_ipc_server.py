@@ -21,9 +21,9 @@ import httpx
 
 from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
-from agent_core.providers.base import ModelResponse, Usage
+from agent_core.providers.base import ModelProvider, ModelResponse, Usage
 from agent_core.shell_bridge import IpcShellBridge
-from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
+from agent_core.tools.base import ExecutionContext, RiskTier, Tool, ToolDefinition, ToolResult
 from tests.conftest import (
     IPC_DB_NAME,
     _FrameWriter,
@@ -35,6 +35,18 @@ from tests.conftest import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _scripted(provider: ModelProvider) -> _ScriptedProvider:
+    """The provider in these tests is always the conftest scripted double."""
+    assert isinstance(provider, _ScriptedProvider)
+    return provider
+
+
+def _spy(tool: Tool | None) -> _SpyTool:
+    """The registered tool is the conftest spy tool wherever calls are asserted."""
+    assert isinstance(tool, _SpyTool)
+    return tool
 
 
 def _server(tmp_path, responses, tool=None, bridge=None):
@@ -103,7 +115,7 @@ def test_tool_refusal_fails_the_step_not_the_turn_and_next_turn_is_clean(tmp_pat
         done = writer.wait_for(lambda f: f.get("id") == 1)
         assert done.get("result", {}).get("ok") is True, done.get("error")
         # The model saw the refusal as a failed tool step, in plain language.
-        failed_step = next(m for m in provider.histories[1] if m.role == "tool")
+        failed_step = next(m for m in _scripted(provider).histories[1] if m.role == "tool")
         assert "already there" in failed_step.content
 
         # Turn 2 must run on clean history: every tool message pairs with a call.
@@ -347,7 +359,7 @@ def test_load_restores_history_and_next_turn_replays_it(tmp_path):
         )
         done = writer.wait_for(lambda f: f.get("id") == 5)
         assert done.get("result", {}).get("ok") is True, done.get("error")
-        replayed = [(m.role, m.content) for m in provider.histories[2]]
+        replayed = [(m.role, m.content) for m in _scripted(provider).histories[2]]
         assert replayed == [
             ("user", "A question"),
             ("assistant", "A answer."),
@@ -469,7 +481,7 @@ def test_tool_turn_blocks_on_permission_then_runs(tmp_path):
         assert card["params"]["label"] == "Check something for you"
         assert card["params"]["riskTier"] == "low"
         # The turn must be blocked: no completion, and the tool has not run.
-        assert tool.calls == []
+        assert _spy(tool).calls == []
         assert not any(f.get("id") == 2 for f in writer.frames)
 
         reader.feed(
@@ -477,7 +489,7 @@ def test_tool_turn_blocks_on_permission_then_runs(tmp_path):
              "params": {"toolId": "spy_tool", "allow": True}}
         )
         writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
-        assert tool.calls == [{}]
+        assert _spy(tool).calls == [{}]
         activity = writer.wait_for(lambda f: f.get("method") == Method.TOOL_ACTIVITY_UPDATE)
         assert activity["params"] == {"toolId": "spy_tool", "label": "Check something for you"}
     finally:
@@ -498,7 +510,7 @@ def test_denied_permission_never_executes_tool(tmp_path):
              "params": {"toolId": "spy_tool", "allow": False}}
         )
         writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)
-        assert tool.calls == []
+        assert _spy(tool).calls == []
         tool_messages = [m for m in server.conversation.messages if m.role == "tool"]
         assert tool_messages and "declined" in tool_messages[0].content
     finally:
@@ -609,7 +621,7 @@ def test_routine_propose_confirm_list_run_round_trip(tmp_path):
                      "params": {"routineId": routine_id, "variables": {}}})
         run = writer.wait_for(lambda f: f.get("id") == 25 and "result" in f)["result"]
         assert run["ok"] and run["status"] == "completed"
-        assert len(tool.calls) == 2  # once live, once from the routine
+        assert len(_spy(tool).calls) == 2  # once live, once from the routine
         cards = [f for f in writer.frames
                  if f.get("method") == Method.PERMISSION_REQUEST_GRANT]
         assert len(cards) == 1
@@ -787,6 +799,7 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
             "ADDISON_DB_PATH": str(tmp_path / "smoke.sqlite3"),
         },
     )
+    assert proc.stdin is not None and proc.stdout is not None
     watchdog = threading.Timer(15, proc.kill)
     watchdog.start()
     try:

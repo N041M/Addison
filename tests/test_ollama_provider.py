@@ -15,6 +15,7 @@ No real Ollama and no network anywhere — the HTTP boundary is an
 from __future__ import annotations
 
 import json
+from typing import Callable
 
 import httpx
 import pytest
@@ -38,7 +39,9 @@ class _StubTool:
         self.parameters_schema = parameters_schema
 
 
-def _client(routes):
+def _client(
+    routes: dict[str, Callable[[httpx.Request], httpx.Response] | tuple[int, object]],
+):
     """Build an httpx.Client on a MockTransport that dispatches by URL path.
 
     ``routes`` maps a path to either ``(status, json_payload)`` or a callable
@@ -249,8 +252,11 @@ def test_http_error_status_gives_plain_language_no_stack_trace():
 # --- shared parser: prefix contract preserved for both callers -------------
 def test_shared_parser_prefixes_ids_per_caller():
     fenced = '```json\n{"tool": "web_search", "args": {"q": "x"}}\n```'
-    assert parse_tool_call(fenced, id_prefix="setup").id.startswith("setup-")
-    assert parse_tool_call(fenced, id_prefix="ollama").id.startswith("ollama-")
+    setup_call = parse_tool_call(fenced, id_prefix="setup")
+    ollama_call = parse_tool_call(fenced, id_prefix="ollama")
+    assert setup_call is not None and ollama_call is not None
+    assert setup_call.id.startswith("setup-")
+    assert ollama_call.id.startswith("ollama-")
     # Non-tool prose degrades to None (never raises) — unchanged behavior.
     assert parse_tool_call("just prose", id_prefix="ollama") is None
 

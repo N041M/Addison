@@ -125,6 +125,7 @@ def test_at_cap_returns_plain_wrapup_not_exception():
     resp = provider.send([Message(role="user", content="more")], [])
     assert resp.tool_calls == []
     assert resp.finish_reason == "at_cap"
+    assert resp.text is not None
     assert "add your key" in resp.text
 
 
@@ -132,6 +133,7 @@ def test_at_cap_without_text_uses_default_wrapup():
     provider, _, _ = _make({"at_cap": True})
     resp = provider.send([Message(role="user", content="x")], [])
     assert resp.finish_reason == "at_cap"
+    assert resp.text is not None
     assert "Settings" in resp.text  # default wrap-up points at adding a key
 
 
