@@ -47,7 +47,6 @@ import { SettingsPage, API_KEYS_SECTION_ID } from "./components/SettingsPage";
 import { FirstRunBanner } from "./components/FirstRunBanner";
 import { Banner } from "./components/Banner";
 import { MobileDrawer } from "./components/MobileDrawer";
-import { BottomSheet } from "./components/BottomSheet";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useModelSelection } from "./hooks/useModelSelection";
 import { useWidgets } from "./hooks/useWidgets";
@@ -80,14 +79,12 @@ export function App() {
 
   // Narrow-window (mobile) layout. Below the md breakpoint (768px — the same one
   // Tailwind's `md:` uses) the sidebar becomes a slide-over drawer and the widget
-  // rail becomes a bottom sheet behind the top bar's bell. Both overlays are
-  // ephemeral — deliberately NOT persisted (the drawer never is; the sheet's open
-  // state is per-session). `isMobile` drives the structural swaps that CSS alone
-  // can't express (which overlay exists, where consent cards render); purely
-  // visual mobile tweaks stay in Tailwind `max-md:` variants.
+  // rail moves inline to the foot of the chat thread (no side column fits). The
+  // drawer is ephemeral — deliberately NOT persisted. `isMobile` drives the
+  // structural swaps that CSS alone can't express (which overlay exists, where
+  // the widgets render); purely visual mobile tweaks stay in Tailwind `max-md:`.
   const isMobile = useMediaQuery("(max-width: 767.98px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [sheetOpen, setSheetOpen] = useState(false);
   // Appearance (Fern direction). Three choices — "light" | "dark" | "system"
   // ("Match this computer"); light is the fallback for absent/legacy values. The
   // class on <html> drives the whole palette. The inline script in index.html
@@ -309,12 +306,11 @@ export function App() {
   }, [railOpen]);
 
   // Growing the window past the breakpoint reveals the static sidebar + rail, so
-  // any open mobile overlay must not linger (and mustn't pop back if the window
-  // shrinks again).
+  // the mobile drawer must not linger (and mustn't pop back if the window shrinks
+  // again).
   useEffect(() => {
     if (!isMobile) {
       setDrawerOpen(false);
-      setSheetOpen(false);
     }
   }, [isMobile]);
 
@@ -492,14 +488,10 @@ export function App() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        // A mobile overlay takes Escape first (drawer, then sheet), before it
-        // would fall through to leaving Settings.
+        // The mobile drawer takes Escape first, before it would fall through to
+        // leaving Settings.
         if (drawerOpen) {
           setDrawerOpen(false);
-          return;
-        }
-        if (sheetOpen) {
-          setSheetOpen(false);
           return;
         }
         if (screen === "settings") {
@@ -517,7 +509,7 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, connected, controlsBusy, drawerOpen, sheetOpen]);
+  }, [screen, connected, controlsBusy, drawerOpen]);
 
   // --- Render ---------------------------------------------------------------
   // The two movable blocks (design-brief-fern §3–§4): the "Addison's work"
@@ -583,7 +575,6 @@ export function App() {
   // Wrap the sidebar's pick handlers so, in the mobile drawer, choosing a
   // conversation / Settings / New chat also closes the drawer (handoff §1).
   const closeDrawer = () => setDrawerOpen(false);
-  const closeSheet = () => setSheetOpen(false);
   // Opening a conversation or starting a new chat always returns to the chat
   // screen — picked from Settings, either would otherwise load invisibly
   // behind it. Used by the desktop sidebar AND the drawer.
@@ -670,10 +661,10 @@ export function App() {
             </header>
 
             {/* Mobile top bar (below md): ☰ opens the drawer · centered title ·
-                balancing spacer. Widgets moved into the drawer (next to
-                Settings), so the drawer is the one nav surface — no second
-                right-side control. "Undo last action" lives in the sheet
-                header. Safe-area top inset for a phone status bar. */}
+                undo (when there's something to undo, mirroring the desktop
+                header) or a balancing spacer. Widgets are visible inline at the
+                foot of the thread, so there's no widget control here. Safe-area
+                top inset for a phone status bar. */}
             <header className="flex items-center gap-2 border-b border-line px-4 pt-[env(safe-area-inset-top)] md:hidden">
               <button
                 type="button"
@@ -686,7 +677,18 @@ export function App() {
               <span className="min-w-0 flex-1 truncate text-center text-control font-semibold text-ink-soft">
                 {conversationsState.conversationTitle || "New conversation"}
               </span>
-              <span aria-hidden className="h-11 w-11 shrink-0" />
+              {hasUndoableActions ? (
+                <button
+                  type="button"
+                  onClick={handleUndoLastAction}
+                  aria-label="Undo last action"
+                  className="flex h-11 shrink-0 items-center px-1 text-meta font-medium text-muted transition-colors hover:text-ink-soft"
+                >
+                  <span aria-hidden="true">↺</span>
+                </button>
+              ) : (
+                <span aria-hidden className="h-11 w-11 shrink-0" />
+              )}
             </header>
 
             {/* Body: centered chat column + (optional) widget rail, each with its
@@ -718,12 +720,34 @@ export function App() {
                     <>
                       {proposalBlock}
                       {widgetProposalBlock}
-                      {/* Consent always renders inline on mobile (the sheet may
-                          be closed); on desktop it goes inline only when the
-                          rail is hidden. The work block stays out of the thread
-                          on mobile — it lives in the sheet. */}
-                      {!isMobile && !railOpen && workBlock}
-                      {(isMobile || !railOpen) && consentBlock}
+                      {/* Mobile: there's no side rail, so the widgets live inline
+                          at the foot of the thread — visible on the chat screen,
+                          carrying the work + consent blocks with them. Desktop:
+                          work/consent go inline only when the rail is hidden
+                          (otherwise they're in the rail). */}
+                      {isMobile ? (
+                        <WidgetRail
+                          variant="inline"
+                          work={workBlock}
+                          consent={consentBlock}
+                          developer={profileModeNote === "open"}
+                          widgets={widgetsState.widgets}
+                          stats={widgetsState.stats}
+                          routines={widgetsState.railRoutines}
+                          onSetPinned={widgetsState.handleSetWidgetPinned}
+                          onDelete={widgetsState.handleDeleteWidget}
+                          onRunRoutine={widgetsState.handleRunWidgetRoutine}
+                          onRunCommandWidget={(id) => ipc.runWidget(id)}
+                          onAskBuildWidget={handleAskBuildWidget}
+                        />
+                      ) : (
+                        !railOpen && (
+                          <>
+                            {workBlock}
+                            {consentBlock}
+                          </>
+                        )
+                      )}
                     </>
                   }
                 />
@@ -782,12 +806,6 @@ export function App() {
               closeDrawer();
               setScreen("settings");
             }}
-            onOpenWidgets={() => {
-              // The sheet renders on the chat screen only, so return there first.
-              closeDrawer();
-              setScreen("chat");
-              setSheetOpen(true);
-            }}
             onCloseDrawer={closeDrawer}
             profileLabel={profileLabel}
             modeNote={profileModeNote}
@@ -795,40 +813,6 @@ export function App() {
         </MobileDrawer>
       )}
 
-      {/* Mobile widget bottom sheet (chat screen only): the same WidgetRail
-          content, in sheet mode, with "Undo last action" moved into its header.
-          Consent cards never appear here — they render inline in the thread. */}
-      {isMobile && sheetOpen && screen === "chat" && (
-        <BottomSheet onClose={closeSheet}>
-          {hasUndoableActions && (
-            <div className="flex shrink-0 justify-end pb-2 pt-1">
-              <button
-                type="button"
-                onClick={handleUndoLastAction}
-                className="min-h-[44px] text-meta font-medium text-muted hover:text-ink-soft"
-              >
-                <span aria-hidden="true">↺</span> Undo last action
-              </button>
-            </div>
-          )}
-          <WidgetRail
-            variant="sheet"
-            work={workBlock}
-            developer={profileModeNote === "open"}
-            widgets={widgetsState.widgets}
-            stats={widgetsState.stats}
-            routines={widgetsState.railRoutines}
-            onSetPinned={widgetsState.handleSetWidgetPinned}
-            onDelete={widgetsState.handleDeleteWidget}
-            onRunRoutine={widgetsState.handleRunWidgetRoutine}
-            onRunCommandWidget={(id) => ipc.runWidget(id)}
-            onAskBuildWidget={() => {
-              closeSheet();
-              handleAskBuildWidget();
-            }}
-          />
-        </BottomSheet>
-      )}
     </div>
   );
 }
