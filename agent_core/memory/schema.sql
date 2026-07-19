@@ -132,6 +132,22 @@ CREATE TABLE IF NOT EXISTS widgets (
 -- stat display. NEVER code, expressions, or templates; validated at save AND at
 -- render (agent_core/widgets.py). See CLAUDE.md invariants.
 
+CREATE TABLE IF NOT EXISTS skills (
+    id              TEXT PRIMARY KEY,        -- uuid4
+    name            TEXT NOT NULL,           -- user-facing, e.g. "Answer briefly"
+    instructions    TEXT NOT NULL,           -- plain-text guidance appended to the system prompt
+    enabled         INTEGER NOT NULL DEFAULT 1,   -- boolean: on => steers the next turns
+    created_at      INTEGER NOT NULL
+);
+-- Guidance skills (owner-directed 2026-07-20) are a DECLARATIVE primitive: a named
+-- plain-text note the person writes to steer HOW Addison approaches tasks. When
+-- enabled, the text is appended to the TRANSIENT per-turn system prompt (never
+-- persisted into the transcript). A skill is NOT executable — not a tool, not a
+-- routine, no code/eval field — so it respects SAFE-mode invariant 1, and its text
+-- can NEVER widen what Addison may DO: the ToolRegistry + PermissionGate stay the
+-- sole authority (mirrors the Routine no-escalation rule). Skills therefore apply in
+-- BOTH SAFE and OPEN modes and carry no created_in_mode column. See agent_core/skills.py.
+
 -- Indexes -------------------------------------------------------------------
 -- All IF NOT EXISTS so this script stays idempotent on every open (store.py
 -- runs it via executescript on both fresh and existing databases). These back
@@ -143,3 +159,6 @@ CREATE INDEX IF NOT EXISTS idx_usage_log_created
     ON usage_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_log_provider_created
     ON usage_log(provider, created_at);
+-- Backs list_enabled_skills (the hot read path: every non-setup turn composes the
+-- enabled skills into its system prompt).
+CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);

@@ -45,6 +45,15 @@ export const Method = {
   // Core-computed, read-only stat sources for the token meter / connections cards.
   StatsGet: "stats.get",
 
+  // Skills — user-authored, plain-text guidance notes the person can toggle on;
+  // when enabled, Addison follows them. PURE TEXT, no execution surface (unlike
+  // routines/widgets there is no command/tool step) — the same in both modes.
+  SkillList: "skill.list",
+  SkillCreate: "skill.create",
+  SkillUpdate: "skill.update",
+  SkillSetEnabled: "skill.setEnabled",
+  SkillDelete: "skill.delete",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.

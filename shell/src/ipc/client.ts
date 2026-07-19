@@ -17,6 +17,7 @@ import { asRecord } from "../lib/parse";
 import {
   parseConversationSummaries,
   type ConversationSummary,
+  type Skill,
   type Widget,
   type WidgetProposal,
   type WidgetSpec,
@@ -395,6 +396,20 @@ export const ipc = {
   // Core-computed, read-only stats for the token meter + connections cards. No
   // key material is ever in this payload (§8.3).
   getStats: (): Promise<Stats> => call(Method.StatsGet).then(parseStats),
+
+  // Skills — user-authored, plain-text guidance notes (pure text, no execution).
+  // `list` returns every saved skill with its on/off state; the mutators persist
+  // a create/edit/toggle/remove and resolve to {ok, id?, error?} so a create can
+  // surface the new id and any failure shows a plain line instead of throwing.
+  listSkills: (): Promise<Skill[]> => call(Method.SkillList).then(parseSkillList),
+  createSkill: (name: string, instructions: string): Promise<SkillMutationResult> =>
+    call(Method.SkillCreate, { name, instructions }).then(parseSkillMutation),
+  updateSkill: (id: string, name: string, instructions: string): Promise<SkillMutationResult> =>
+    call(Method.SkillUpdate, { id, name, instructions }).then(parseSkillMutation),
+  setSkillEnabled: (id: string, enabled: boolean): Promise<SkillMutationResult> =>
+    call(Method.SkillSetEnabled, { id, enabled }).then(parseSkillMutation),
+  deleteSkill: (id: string): Promise<SkillMutationResult> =>
+    call(Method.SkillDelete, { id }).then(parseSkillMutation),
 };
 
 // ---------------------------------------------------------------------------
@@ -616,6 +631,51 @@ export function parseStats(result: unknown): Stats {
   }
 
   return { tokensMonth: { total, limit }, providerLatency, connections };
+}
+
+// ---------------------------------------------------------------------------
+// Skill result shapes + defensive parsers. Like the other core payloads these
+// aren't pinned in protocol.ts, so we coerce carefully — and fail CLOSED: a row
+// without a usable string id or name is DROPPED, never rendered.
+// ---------------------------------------------------------------------------
+
+/** skill.create/update/setEnabled/delete → {ok, id?, error?}. `id` rides only
+ * on a successful create; a failed mutation is a resolved {ok:false} carrying a
+ * plain-language `error`, never a reject. */
+export interface SkillMutationResult {
+  ok: boolean;
+  id?: string;
+  error?: string;
+}
+
+export function parseSkillList(result: unknown): Skill[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.skills) ? (obj.skills as unknown[]) : [];
+  const out: Skill[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    // Fail closed: a skill with no usable id or name can't be listed or acted on.
+    if (!row || typeof row.id !== "string" || !row.id) continue;
+    if (typeof row.name !== "string" || !row.name) continue;
+    out.push({
+      id: row.id,
+      name: row.name,
+      instructions: typeof row.instructions === "string" ? row.instructions : "",
+      // Default ON when absent (the core defaults enabled=1); only an explicit
+      // `false` turns it off. Mirrors parseWidgetList's `pinned !== false`.
+      enabled: row.enabled !== false,
+    });
+  }
+  return out;
+}
+
+function parseSkillMutation(result: unknown): SkillMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    id: typeof obj?.id === "string" ? obj.id : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
 }
 
 // ---------------------------------------------------------------------------

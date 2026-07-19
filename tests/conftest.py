@@ -159,6 +159,7 @@ def build_server(
     connect_provider=None,
     provider_key_probe=None,
     ollama_client=None,
+    seed_widgets: bool = False,
 ) -> IpcHarness:
     """Stand up a real JsonRpcServer on fake pipes and start its run loop.
 
@@ -172,6 +173,10 @@ def build_server(
     - ``bridge``, ``cloud_catalog``, ``connect_provider``, ``provider_key_probe``,
       ``ollama_client``: forwarded straight to the server (each defaults to the
       server's own default when left as None).
+    - ``seed_widgets``: whether first-run default-widget seeding runs. Defaults to
+      False (the harness pre-sets the 'widgets_seeded' flag so the rail starts empty),
+      keeping the widget-mechanics tests isolated from the seeded defaults; the
+      seeding tests pass True to exercise it.
 
     The caller owns teardown via :func:`_shutdown` (kept explicit because a few
     tests relaunch on the same database and must stop one server before the next).
@@ -184,11 +189,19 @@ def build_server(
         provider = _ScriptedProvider(responses or [])
     reader = _PipeReader()
     writer = _FrameWriter()
+
+    def _store_factory() -> Store:
+        store = Store(tmp_path / IPC_DB_NAME)
+        if not seed_widgets:
+            # Suppress first-run seeding so tests start with an empty rail.
+            store.set_setting("widgets_seeded", "1")
+        return store
+
     server = JsonRpcServer(
         reader=reader,
         writer=writer,
         tool_registry=registry,
-        store_factory=lambda: Store(tmp_path / IPC_DB_NAME),
+        store_factory=_store_factory,
         model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
         shell_bridge=bridge,
         cloud_catalog=cloud_catalog,

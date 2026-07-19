@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent_core.skills import Skill
 from agent_core.tools.base import ActionSnapshot
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -657,6 +658,95 @@ class Store:
 
     def delete_widget(self, widget_id: str) -> None:
         self._conn.execute("DELETE FROM widgets WHERE id = ?", (widget_id,))
+        self._conn.commit()
+
+    # --- guidance skills (declarative steering text — see agent_core/skills.py) ---
+    # A skill is plain TEXT appended to the transient per-turn system prompt; it never
+    # executes and never widens permissions (the gate stays the sole authority). No
+    # created_in_mode column — skills apply in both SAFE and OPEN modes.
+    def insert_skill(
+        self,
+        *,
+        id: str,
+        name: str,
+        instructions: str,
+        enabled: bool,
+        created_at: int,
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO skills (id, name, instructions, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (id, name, instructions, int(enabled), created_at),
+        )
+        self._conn.commit()
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        """Every stored skill, oldest first (created_at, then rowid tiebreak)."""
+        rows = self._conn.execute(
+            "SELECT id, name, instructions, enabled, created_at FROM skills "
+            "ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "instructions": row["instructions"],
+                "enabled": bool(row["enabled"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def list_enabled_skills(self) -> list[Skill]:
+        """The ENABLED skills as ``Skill`` dataclasses, oldest first — the exact
+        order they are composed into the system prompt (compose_skills_prompt)."""
+        rows = self._conn.execute(
+            "SELECT id, name, instructions, enabled, created_at FROM skills "
+            "WHERE enabled = 1 ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            Skill(
+                id=row["id"],
+                name=row["name"],
+                instructions=row["instructions"],
+                enabled=bool(row["enabled"]),
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
+
+    def get_skill(self, skill_id: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT id, name, instructions, enabled, created_at FROM skills WHERE id = ?",
+            (skill_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "instructions": row["instructions"],
+            "enabled": bool(row["enabled"]),
+            "created_at": row["created_at"],
+        }
+
+    def update_skill(self, id: str, name: str, instructions: str) -> None:
+        """Edit a skill's name/guidance in place (enabled state is left untouched —
+        set_skill_enabled owns that toggle)."""
+        self._conn.execute(
+            "UPDATE skills SET name = ?, instructions = ? WHERE id = ?",
+            (name, instructions, id),
+        )
+        self._conn.commit()
+
+    def set_skill_enabled(self, id: str, enabled: bool) -> None:
+        self._conn.execute(
+            "UPDATE skills SET enabled = ? WHERE id = ?", (int(enabled), id)
+        )
+        self._conn.commit()
+
+    def delete_skill(self, skill_id: str) -> None:
+        self._conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
         self._conn.commit()
 
     def close(self) -> None:

@@ -19,6 +19,7 @@ from pathlib import Path
 
 import httpx
 
+from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
 from agent_core.providers.base import ModelProvider, ModelResponse, Usage
@@ -992,6 +993,80 @@ def test_usage_recorded_after_turn_and_stats_get_shape(tmp_path):
         # NON-secret payload only — no key material, no unexpected fields.
         for c in stats["connections"]:
             assert set(c) == {"id", "label", "status", "detail"}
+    finally:
+        _shutdown(reader, thread)
+
+
+# ===========================================================================
+# In-house premade widgets seeded on first run (so a fresh rail isn't empty).
+# Seeds are ordinary whitelisted stat widgets — no new source/execution surface —
+# and the 'widgets_seeded' flag makes seeding strictly first-run.
+# ===========================================================================
+def _list_widgets(reader, writer, req_id: int) -> list[dict]:
+    reader.feed({"jsonrpc": "2.0", "id": req_id, "method": Method.WIDGET_LIST})
+    return writer.wait_for(lambda f: f.get("id") == req_id and "result" in f)["result"]["widgets"]
+
+
+def test_fresh_install_seeds_two_default_widgets_and_sets_flag(tmp_path):
+    h = build_server(tmp_path, register_tool=False, seed_widgets=True)
+    reader, writer, thread = h.reader, h.writer, h.thread
+    try:
+        widgets = _list_widgets(reader, writer, 1)
+        sources = [w["spec"]["source"] for w in widgets]
+        assert sources == ["connections", "tokens_month"]
+        assert all(w["spec"]["kind"] == "stat" for w in widgets)
+        assert all(w["pinned"] for w in widgets)
+        # The flag was set so deleting the seeds never brings them back.
+        with sqlite3.connect(tmp_path / IPC_DB_NAME) as conn:
+            flag = conn.execute(
+                "SELECT value FROM app_settings WHERE key = 'widgets_seeded'"
+            ).fetchone()
+        assert flag is not None
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_second_launch_does_not_reseed_and_deleting_seeds_is_permanent(tmp_path):
+    # First launch seeds two; delete them both.
+    h = build_server(tmp_path, register_tool=False, seed_widgets=True)
+    reader, writer, thread = h.reader, h.writer, h.thread
+    try:
+        widgets = _list_widgets(reader, writer, 1)
+        for i, w in enumerate(widgets):
+            reader.feed({"jsonrpc": "2.0", "id": 10 + i, "method": Method.WIDGET_DELETE,
+                         "params": {"id": w["id"]}})
+            writer.wait_for(lambda f: f.get("id") == 10 + i and "result" in f)
+        assert _list_widgets(reader, writer, 2) == []
+    finally:
+        _shutdown(reader, thread)
+
+    # Second launch on the same DB must NOT re-seed (flag is set).
+    h = build_server(tmp_path, register_tool=False, seed_widgets=True)
+    reader, writer, thread = h.reader, h.writer, h.thread
+    try:
+        assert _list_widgets(reader, writer, 1) == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_seeding_is_flag_gated_over_a_preexisting_widget(tmp_path):
+    # A store that already has a widget but no 'widgets_seeded' flag (e.g. an install
+    # from before seeding existed) gets the defaults added on the next build — the
+    # rule is purely flag-gated.
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.insert_widget(
+        id="user-widget", spec_json='{"kind": "stat", "source": "connections", "title": "Mine"}',
+        pinned=True, position=0, created_at=1,
+    )
+    store.close()
+
+    h = build_server(tmp_path, register_tool=False, seed_widgets=True)
+    reader, writer, thread = h.reader, h.writer, h.thread
+    try:
+        widgets = _list_widgets(reader, writer, 1)
+        ids = {w["id"] for w in widgets}
+        assert "user-widget" in ids
+        assert len(widgets) == 3  # the user's one + the two seeded defaults
     finally:
         _shutdown(reader, thread)
 

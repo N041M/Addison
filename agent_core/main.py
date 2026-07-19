@@ -85,6 +85,7 @@ from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
 from agent_core.rpc.providers import ProvidersMixin
 from agent_core.rpc.routines import RoutinesMixin
+from agent_core.rpc.skills import SkillsMixin
 from agent_core.rpc.undo import UndoMixin
 from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.shell_bridge import IpcShellBridge
@@ -345,6 +346,7 @@ class JsonRpcServer(
     ModelsMixin,
     ProvidersMixin,
     WidgetsMixin,
+    SkillsMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -588,6 +590,9 @@ class JsonRpcServer(
         if self._orchestrator is not None:
             return
         self.store = self._store_factory()
+        # Seed the in-house default widgets on a fresh install so the rail isn't empty
+        # (flag-gated — deleting them never re-seeds).
+        self._seed_default_widgets()
         # §4.7: read the persisted profile now that the store exists (SIMPLE if unset).
         self._active_profile = resolve_active_profile(self.store)
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
@@ -614,6 +619,31 @@ class JsonRpcServer(
             on_ask_user=self._ask_user_continue,
             store=self.store,
         )
+
+    # In-house premade widgets seeded on first run, so a fresh install's rail isn't
+    # empty. These are ordinary DECLARATIVE stat widgets (invariant 4) built ONLY from
+    # existing whitelisted stat sources — no new source, no new execution surface. The
+    # 'widgets_seeded' flag makes it strictly first-run: once set, deleting the seeds
+    # never brings them back.
+    _DEFAULT_WIDGETS = (
+        {"kind": "stat", "source": "connections", "title": "Connections"},
+        {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"},
+    )
+
+    def _seed_default_widgets(self) -> None:
+        if self.store.get_setting("widgets_seeded") is not None:
+            return
+        now = int(time.time())
+        for position, spec in enumerate(self._DEFAULT_WIDGETS):
+            self.store.insert_widget(
+                id=str(uuid4()),
+                spec_json=json.dumps(spec),
+                pinned=True,
+                position=position,
+                created_at=now,
+                created_in_mode=PolicyMode.SAFE.value,
+            )
+        self.store.set_setting("widgets_seeded", "1")
 
     def _read_loop(self) -> None:
         while True:
@@ -729,7 +759,7 @@ class JsonRpcServer(
             Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE: self._handle_set_role,
             Method.MODEL_START_LOCAL_SETUP: self._handle_start_local_setup,
         }
-        for jobs in (_ROUTINE_JOBS, _CONVERSATION_JOBS, _PROVIDER_JOBS, _WIDGET_JOBS):
+        for jobs in (_ROUTINE_JOBS, _CONVERSATION_JOBS, _PROVIDER_JOBS, _WIDGET_JOBS, _SKILL_JOBS):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
         # Reserved-for-later methods answer a plain "not built yet" (empty today).
@@ -804,6 +834,16 @@ class JsonRpcServer(
                     self._handle_widget_run(params, request_id)
                 elif kind == "stats_get":
                     self._respond(request_id, self._stats_get())
+                elif kind == "skill_list":
+                    self._respond(request_id, self._skill_list())
+                elif kind == "skill_create":
+                    self._respond(request_id, self._skill_create(params))
+                elif kind == "skill_update":
+                    self._respond(request_id, self._skill_update(params))
+                elif kind == "skill_set_enabled":
+                    self._respond(request_id, self._skill_set_enabled(params))
+                elif kind == "skill_delete":
+                    self._respond(request_id, self._skill_delete(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1083,6 +1123,17 @@ _WIDGET_JOBS = {
     Method.WIDGET_PROPOSE_FROM_CONVERSATION: "widget_propose",
     Method.WIDGET_CONFIRM_SAVE: "widget_confirm",
     Method.WIDGET_RUN: "widget_run",
+}
+
+# skill.* run on the worker like every other store op (SQLite thread affinity):
+# the sqlite3 connection is bound to the worker thread, so these can't answer
+# inline on the read loop. Method -> worker job kind.
+_SKILL_JOBS = {
+    Method.SKILL_LIST: "skill_list",
+    Method.SKILL_CREATE: "skill_create",
+    Method.SKILL_UPDATE: "skill_update",
+    Method.SKILL_SET_ENABLED: "skill_set_enabled",
+    Method.SKILL_DELETE: "skill_delete",
 }
 
 

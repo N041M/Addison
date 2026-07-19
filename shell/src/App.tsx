@@ -50,6 +50,7 @@ import { MobileDrawer } from "./components/MobileDrawer";
 import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useModelSelection } from "./hooks/useModelSelection";
 import { useWidgets } from "./hooks/useWidgets";
+import { useSkills } from "./hooks/useSkills";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -118,6 +119,7 @@ export function App() {
   // --- The four extracted state clusters (mechanical moves from this file) ---
   const models = useModelSelection();
   const widgetsState = useWidgets({ connected, railOpen, setStatusBanner });
+  const skillsState = useSkills({ connected, setStatusBanner });
   const turn = useTurn({
     connected,
     setStatusBanner,
@@ -237,6 +239,7 @@ export function App() {
           conversationsState.refreshConversations();
           widgetsState.refreshWidgets();
           widgetsState.refreshStats();
+          skillsState.refreshSkills();
         }
       }),
     );
@@ -256,6 +259,7 @@ export function App() {
     conversationsState.refreshConversations();
     widgetsState.refreshWidgets();
     widgetsState.refreshStats();
+    skillsState.refreshSkills();
 
     return () => unsubs.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -622,6 +626,7 @@ export function App() {
               )
             }
             models={models}
+            skills={skillsState}
             profile={profile}
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}

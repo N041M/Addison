@@ -223,6 +223,19 @@ export interface Stats {
   connections: ConnectionStat[];
 }
 
+// ---------------------------------------------------------------------------
+// Skills — user-authored, plain-text guidance notes (skill.list). A skill is
+// PURE TEXT: a name + free-form instructions the person writes, toggled on/off.
+// When enabled, Addison follows it. There is no code, tool step, or execution
+// surface — so, unlike routines/widgets, a skill carries no mode/command field.
+// ---------------------------------------------------------------------------
+export interface Skill {
+  id: string;
+  name: string;
+  instructions: string;
+  enabled: boolean;
+}
+
 /** One selectable profile, with label + description authored by the core. */
 export interface ProfileOption {
   id: string;

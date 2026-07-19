@@ -356,6 +356,9 @@ def _rpc(reader, writer, rid, method, params=None) -> dict:
 
 def _seed_artifacts(db_path: Path) -> None:
     store = Store(db_path)
+    # Suppress first-run default-widget seeding so these tests keep exactly the
+    # artifacts they seed below (the mode-hiding assertions check exact id sets).
+    store.set_setting("widgets_seeded", "1")
     # A safe routine + an open (dev) routine with a command step.
     safe = Routine(
         id="safe-r", name="Safe routine", description="", variables=[],

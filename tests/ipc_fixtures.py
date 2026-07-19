@@ -62,6 +62,9 @@ class _StubProvider:
 def _seeded_store(db_path: Path) -> Store:
     """A Store holding one deterministic row of everything the handlers read."""
     store = Store(db_path)
+    # Suppress first-run widget seeding (_seed_default_widgets) so this fixture keeps
+    # exactly its three explicit widgets and the committed widget.list.json stays at 3.
+    store.set_setting("widgets_seeded", "1")
     # Developer profile → OPEN mode: the richest payloads (command widget visible,
     # profile.get shows the relaxed mode). The parsers' SAFE fallbacks are covered
     # by the junk-input tests; the fixtures pin the fullest real shape.
