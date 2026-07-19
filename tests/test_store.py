@@ -253,6 +253,20 @@ def test_set_conversation_title_first_write_wins(store: Store):
     assert row["title"] == "First title"
 
 
+def test_rename_conversation_overwrites_unconditionally(store: Store):
+    # A user rename must overwrite an existing title (unlike the NULL-guarded
+    # auto-title above), including a set one.
+    store.create_conversation("c1", title=None, provider_id="anthropic", started_at=0)
+    store.insert_message(id="m1", conversation_id="c1", role="user",
+                         content="x", created_at=1)
+    store.set_conversation_title("c1", "Auto title")
+
+    store.rename_conversation("c1", "My name")
+
+    (row,) = store.list_conversations()
+    assert row["title"] == "My name"
+
+
 def test_continued_from_lineage_column_is_persisted(store: Store):
     # §4.8 substrate: v1 only stores lineage, never reads/acts on it.
     store.create_conversation("c1", title="orig", provider_id="anthropic", started_at=0)

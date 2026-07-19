@@ -11,9 +11,40 @@
 // check.
 
 import { describe, it, expect } from "vitest";
-import { parseStats, parseWidgetList } from "../ipc/client";
+import { parseStats, parseWidgetList, parseConversationRename } from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
 import { normalizeRoles, normalizeCloudModels } from "../hooks/useModelSelection";
+
+// ---------------------------------------------------------------------------
+// parseConversationRename — mirrors rpc/conversation._handle_rename_conversation.
+// ---------------------------------------------------------------------------
+describe("parseConversationRename", () => {
+  it("reads a success payload with the canonical title", () => {
+    expect(parseConversationRename({ ok: true, title: "My chat" })).toEqual({
+      ok: true,
+      title: "My chat",
+      error: undefined,
+    });
+  });
+
+  it("reads a failure payload with a plain-language error", () => {
+    expect(parseConversationRename({ ok: false, error: "Give the chat a name." })).toEqual({
+      ok: false,
+      title: undefined,
+      error: "Give the chat a name.",
+    });
+  });
+
+  it("fails closed on null / junk / wrong-typed fields", () => {
+    expect(parseConversationRename(null)).toEqual({ ok: false, title: undefined, error: undefined });
+    expect(parseConversationRename("nope")).toEqual({ ok: false, title: undefined, error: undefined });
+    expect(parseConversationRename({ ok: "yes", title: 7, error: 1 })).toEqual({
+      ok: false,
+      title: undefined,
+      error: undefined,
+    });
+  });
+});
 
 // ---------------------------------------------------------------------------
 // parseStats — mirrors main.py `_stats_get` + `_connections`.

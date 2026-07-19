@@ -373,6 +373,11 @@ export const ipc = {
   loadConversation: (conversationId: string): Promise<LoadedConversation> =>
     call(Method.ConversationLoad, { conversationId }).then(parseLoadedConversation),
 
+  // Rename a chat (double-click its title in the sidebar). Returns the canonical
+  // stored title (trimmed/capped by the core) so the frontend adopts exactly it.
+  renameConversation: (conversationId: string, title: string): Promise<ConversationRenameResult> =>
+    call(Method.ConversationRename, { conversationId, title }).then(parseConversationRename),
+
   // Widgets — DECLARATIVE specs only (see agent_core/widgets.py). `list` returns
   // stored widgets (invalid specs already hidden by the core); `setPinned`/`delete`
   // persist edit-mode changes. Proposing mirrors routines: a draft is held in the
@@ -426,6 +431,24 @@ export interface LoadedConversation {
   conversationId: string;
   title: string | null;
   messages: LoadedConversationRow[];
+}
+
+export interface ConversationRenameResult {
+  ok: boolean;
+  /** The canonical stored title (trimmed/capped by the core), when ok. */
+  title?: string;
+  error?: string;
+}
+
+// Fails closed, like the other mutation parsers: a missing/garbled result is
+// simply `{ ok: false }`, so the caller reverts the optimistic rename.
+export function parseConversationRename(result: unknown): ConversationRenameResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    title: typeof obj?.title === "string" ? obj.title : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
 }
 
 // --- provider.list / provider.connect parsers ------------------------------

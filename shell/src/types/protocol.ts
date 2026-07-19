@@ -8,6 +8,7 @@ export const Method = {
   ConversationNew: "conversation.new",
   ConversationLoad: "conversation.load",
   ConversationList: "conversation.list",
+  ConversationRename: "conversation.rename",
   ConversationStreamChunk: "conversation.streamChunk",
   PermissionRequestGrant: "permission.requestGrant",
   PermissionRespond: "permission.respond",

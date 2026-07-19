@@ -814,6 +814,8 @@ class JsonRpcServer(
                 elif kind == "conversation_list":
                     self._ensure_built()
                     self._respond(request_id, {"conversations": self._conversation_rows()})
+                elif kind == "conversation_rename":
+                    self._handle_rename_conversation(params, request_id)
                 elif kind == "provider_list":
                     self._respond(request_id, self._provider_list())
                 elif kind == "provider_connect":
@@ -1106,6 +1108,7 @@ _CONVERSATION_JOBS = {
     Method.CONVERSATION_NEW: "conversation_new",
     Method.CONVERSATION_LOAD: "conversation_load",
     Method.CONVERSATION_LIST: "conversation_list",
+    Method.CONVERSATION_RENAME: "conversation_rename",
 }
 
 # provider.list/connect/disconnect run on the worker (Store + router + connect ping).

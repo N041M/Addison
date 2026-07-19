@@ -600,6 +600,7 @@ export function App() {
           conversations={conversationsState.conversations}
           currentConversationId={conversationsState.currentConversationId}
           onOpenConversation={openConversationFromNav}
+          onRenameConversation={conversationsState.handleRenameConversation}
           onNewChat={newChatFromNav}
           newChatDisabled={!connected || controlsBusy}
           screen={screen}
@@ -801,6 +802,7 @@ export function App() {
               closeDrawer();
               openConversationFromNav(id);
             }}
+            onRenameConversation={conversationsState.handleRenameConversation}
             onNewChat={() => {
               closeDrawer();
               newChatFromNav();
