@@ -230,3 +230,32 @@ sequenceDiagram
     SRV-->>UI: {ok: true} or {ok: false, error}
     UI->>SRV: provider.list + model.availableRoles (refresh)
 ```
+
+## 8. Widget propose and confirm
+
+Addison proposes widgets the same way it proposes routines: a draft is held in the
+core and nothing is saved until an explicit confirm. A widget is a **declarative**
+spec (`agent_core/widgets.py`) — a saved-routine Run pill or a whitelisted stat
+display — never code, validated at save and at render. Saving is display-only
+(LOW-risk), so there is no permission card; a routine widget's routine keeps its own
+gates when it is actually run.
+
+```mermaid
+sequenceDiagram
+    participant WV as React webview
+    participant SRV as Core server
+    participant W as widgets.validate_widget_spec
+    participant DB as Store (widgets)
+
+    Note over WV: user sends "Build me a widget that …" (composer seed)
+    WV->>SRV: widget.proposeFromConversation
+    Note over SRV: draft from recent chat — a routine just run/named,<br/>or a token/latency/connections stat; else a plain refusal
+    SRV-->>WV: {title, kind, summary, spec}  (held in memory, nothing saved)
+    Note over WV: WidgetProposalCard — "Add widget" / "Not now"
+    WV->>SRV: widget.confirmSave {accept: true}
+    SRV->>W: validate_widget_spec(draft)
+    W-->>SRV: None (valid) — reject otherwise
+    SRV->>DB: insert_widget (pinned if under the 6-pin cap)
+    SRV-->>WV: {ok: true, widgetId}
+    WV->>SRV: widget.list (refresh the rail)
+```

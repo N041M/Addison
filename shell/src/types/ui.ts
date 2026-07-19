@@ -146,6 +146,65 @@ export interface ProfileFlags {
   byokFirstOnboarding: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Widgets — DECLARATIVE specs mirrored from the core (agent_core/widgets.py).
+// Exactly two shapes: a saved-routine Run pill, or a whitelisted stat display.
+// NEVER code. The frontend renders these; it never constructs or evaluates one.
+// ---------------------------------------------------------------------------
+export type WidgetStatSource = "tokens_month" | "provider_latency" | "connections";
+
+export interface RoutineWidgetSpec {
+  kind: "routine";
+  routineId: string;
+  title: string;
+}
+
+export interface StatWidgetSpec {
+  kind: "stat";
+  source: WidgetStatSource;
+  title: string;
+}
+
+export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec;
+
+/** One stored widget from `widget.list`: id + declarative spec + pin/order state. */
+export interface Widget {
+  id: string;
+  spec: WidgetSpec;
+  pinned: boolean;
+  position: number;
+}
+
+/** A drafted widget from `widget.proposeFromConversation`, awaiting confirm. */
+export interface WidgetProposal {
+  title: string;
+  kind: string;
+  summary: string;
+  spec: WidgetSpec;
+}
+
+/** One connection row from `stats.get`. Status drives the dot color. */
+export interface ConnectionStat {
+  id: string;
+  label: string;
+  status: "running" | "reachable" | "idle" | "unreachable";
+  detail: string;
+}
+
+/** One provider's most-recent latency from `stats.get`. */
+export interface ProviderLatencyStat {
+  provider: string;
+  ms: number;
+  checkedAt: number;
+}
+
+/** The full `stats.get` picture backing the token meter + connections cards. */
+export interface Stats {
+  tokensMonth: { total: number; limit: number | null };
+  providerLatency: ProviderLatencyStat[];
+  connections: ConnectionStat[];
+}
+
 /** One selectable profile, with label + description authored by the core. */
 export interface ProfileOption {
   id: string;

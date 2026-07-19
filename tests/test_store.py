@@ -314,3 +314,79 @@ def test_provider_config_rejects_unknown_provider_id(store: Store):
     # The CHECK constraint guards the four known provider ids.
     with pytest.raises(Exception):
         store.upsert_provider_config("bogus", connected=True)
+
+
+# --- usage log (§4.8 substrate) --------------------------------------------
+
+
+def _usage(store: Store, provider="anthropic", model="claude", inp=10, out=5, latency=42, at=1000):
+    import uuid
+
+    store.insert_usage(
+        id=str(uuid.uuid4()),
+        conversation_id="conv-1",
+        provider=provider,
+        model=model,
+        input_tokens=inp,
+        output_tokens=out,
+        latency_ms=latency,
+        created_at=at,
+    )
+
+
+def test_usage_totals_since_sums_input_and_output(store: Store):
+    _usage(store, inp=100, out=40, at=1000)
+    _usage(store, inp=10, out=5, at=2000)
+    totals = store.usage_totals_since(0)
+    assert totals == {"input": 110, "output": 45, "total": 155}
+
+
+def test_usage_totals_since_respects_month_boundary(store: Store):
+    _usage(store, inp=100, out=40, at=500)   # before the boundary
+    _usage(store, inp=10, out=5, at=1500)    # at/after the boundary
+    totals = store.usage_totals_since(1000)
+    assert totals == {"input": 10, "output": 5, "total": 15}
+
+
+def test_usage_totals_empty_is_zero(store: Store):
+    assert store.usage_totals_since(0) == {"input": 0, "output": 0, "total": 0}
+
+
+def test_latest_latency_per_provider_keeps_newest(store: Store):
+    _usage(store, provider="anthropic", latency=100, at=1000)
+    _usage(store, provider="anthropic", latency=42, at=2000)   # newer -> wins
+    _usage(store, provider="openai", latency=88, at=1500)
+    _usage(store, provider="ollama", latency=None, at=1600)    # no latency -> ignored
+    rows = {r["provider"]: r for r in store.latest_latency_per_provider()}
+    assert rows["anthropic"]["ms"] == 42
+    assert rows["openai"]["ms"] == 88
+    assert "ollama" not in rows
+
+
+# --- widgets ----------------------------------------------------------------
+
+
+def test_widget_crud_and_position_ordering(store: Store):
+    store.insert_widget(id="w1", spec_json='{"kind":"stat"}', pinned=True, position=0, created_at=1)
+    store.insert_widget(id="w2", spec_json='{"kind":"routine"}', pinned=False, position=1, created_at=2)
+    rows = store.list_widgets()
+    assert [r["id"] for r in rows] == ["w1", "w2"]
+    assert rows[0]["pinned"] is True and rows[1]["pinned"] is False
+
+    store.set_widget_pinned("w2", True)
+    assert store.get_widget("w2")["pinned"] is True
+    assert store.count_pinned_widgets() == 2
+    assert store.count_pinned_widgets(exclude_id="w2") == 1
+
+    assert store.next_widget_position() == 2
+    store.delete_widget("w1")
+    assert [r["id"] for r in store.list_widgets()] == ["w2"]
+    assert store.get_widget("w1") is None
+
+
+def test_widget_position_orders_by_position_not_insertion(store: Store):
+    store.insert_widget(id="late", spec_json="{}", pinned=True, position=5, created_at=1)
+    store.insert_widget(id="early", spec_json="{}", pinned=True, position=1, created_at=2)
+    assert [r["id"] for r in store.list_widgets()] == ["early", "late"]
+    # next position is one past the highest existing position.
+    assert store.next_widget_position() == 6

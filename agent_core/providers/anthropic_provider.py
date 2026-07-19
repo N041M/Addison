@@ -24,6 +24,7 @@ from agent_core.providers.base import (
     ModelResponse,
     ProviderCapabilities,
     ToolCallRequest,
+    Usage,
 )
 
 _API_URL = "https://api.anthropic.com/v1/messages"
@@ -238,7 +239,20 @@ def _translate_response(data: dict) -> ModelResponse:
         text=text,
         tool_calls=tool_calls,
         finish_reason=data.get("stop_reason", "stop"),
+        usage=_translate_usage(data.get("usage")),
     )
+
+
+def _translate_usage(usage) -> Usage | None:
+    """Map the Messages API ``usage`` block ({input_tokens, output_tokens}) to
+    Addison's ``Usage``. None when absent or unreadable — never guessed."""
+    if not isinstance(usage, dict):
+        return None
+    inp = usage.get("input_tokens")
+    out = usage.get("output_tokens")
+    if isinstance(inp, int) and isinstance(out, int):
+        return Usage(input_tokens=inp, output_tokens=out)
+    return None
 
 
 def _http_error_message(status_code: int) -> str:

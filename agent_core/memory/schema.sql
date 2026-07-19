@@ -97,3 +97,28 @@ CREATE TABLE IF NOT EXISTS routine_runs (
     status          TEXT NOT NULL CHECK(status IN ('running','completed','failed','cancelled')),
     step_log_json   TEXT                     -- array of {step_index, tool_id, result_summary}
 );
+
+CREATE TABLE IF NOT EXISTS usage_log (
+    id              TEXT PRIMARY KEY,        -- uuid4
+    conversation_id TEXT,                    -- which conversation the call belonged to (nullable)
+    provider        TEXT NOT NULL,           -- 'anthropic' | 'openai' | 'google' | 'ollama' | 'custom'
+    model           TEXT NOT NULL,           -- raw model id used for the call
+    input_tokens    INTEGER NOT NULL,
+    output_tokens   INTEGER NOT NULL,
+    latency_ms      INTEGER,                 -- wall-clock ms of the provider call
+    created_at      INTEGER NOT NULL         -- unix epoch seconds
+);
+-- §4.8 usage substrate: one row per provider call that reported token usage.
+-- Written by ORCHESTRATOR MACHINERY (main.py after each turn's model calls),
+-- never by a registry tool. Backs the token-meter and provider-latency widgets.
+
+CREATE TABLE IF NOT EXISTS widgets (
+    id              TEXT PRIMARY KEY,        -- uuid4
+    spec_json       TEXT NOT NULL,           -- a DECLARATIVE widget spec (see agent_core/widgets.py)
+    pinned          INTEGER NOT NULL DEFAULT 1,   -- boolean: shown as a card vs. behind the tray
+    position        INTEGER NOT NULL DEFAULT 0,   -- user-visible order
+    created_at      INTEGER NOT NULL
+);
+-- Widgets are DECLARATIVE specs only — a saved-routine Run pill or a whitelisted
+-- stat display. NEVER code, expressions, or templates; validated at save AND at
+-- render (agent_core/widgets.py). See CLAUDE.md invariants.

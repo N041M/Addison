@@ -51,6 +51,14 @@ rather than working around it silently.**
    privilege escalation via automation. It uses the *same* `ToolRegistry` and
    `PermissionGate` instances as the live orchestrator.
 6. **No scheduling / autonomous triggering in v1** (§6.7).
+7. **Widgets are declarative specs (routine-run or whitelisted stat display) —
+   never code; enforced at save and render.** A widget is one of exactly two
+   fixed shapes (`agent_core/widgets.py`): `{kind: "routine", routineId, title}`
+   runs a saved routine through the *existing* routine.run path (same registry +
+   gate, zero new execution surface), or `{kind: "stat", source, title}` displays
+   a value from a fixed whitelist (`tokens_month`, `provider_latency`,
+   `connections`). No eval, expression, or template field exists; unknown
+   kinds/sources are rejected at save and hidden at render.
 
 ## Module boundary rule (spec §2)
 
@@ -100,7 +108,10 @@ replay tool calls through the exact same registry + gate as the live loop.
 ## Build order (spec §11 — build in sequence, each independently testable)
 
 Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
-(3) `PermissionGate`.
+(3) `PermissionGate`. Also shipped past the numbered sequence: the Fern UI
+redesign, and the **widget rail** — declarative routine/stat widgets
+(`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
+substrate (§4.8) that feeds the token meter + connections cards.
 
 Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
 **CLI-only** — get a working chat-with-tools loop before touching the shell.

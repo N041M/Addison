@@ -19,6 +19,8 @@ import threading
 import time
 from pathlib import Path
 
+import httpx
+
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel
@@ -28,6 +30,7 @@ from agent_core.providers.base import (
     ModelRole,
     ProviderCapabilities,
     ToolCallRequest,
+    Usage,
 )
 from agent_core.providers.router import ModelRouter
 from agent_core.shell_bridge import IpcShellBridge
@@ -969,3 +972,193 @@ def test_stdio_entrypoint_subprocess_smoke(tmp_path):
         watchdog.cancel()
         proc.kill()
         proc.wait(timeout=5)
+
+
+# ===========================================================================
+# Widgets + stats. Widgets are DECLARATIVE specs (a routine Run pill or a
+# whitelisted stat display) proposed like routines and saved LOW-risk. stats.get
+# reports token totals, per-provider latency, and connection status — NEVER keys.
+# ===========================================================================
+def _widget_server(tmp_path, responses=None, ollama_status=200, key_probe=None):
+    registry = ToolRegistry()
+    provider = _ScriptedProvider(responses or [])
+    reader = _PipeReader()
+    writer = _FrameWriter()
+
+    def _ollama_handler(request):  # deterministic — no real Ollama, no network
+        return httpx.Response(ollama_status, json={"models": []})
+
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=registry,
+        store_factory=lambda: Store(tmp_path / "ipc-test.sqlite3"),
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+        ollama_client=httpx.Client(transport=httpx.MockTransport(_ollama_handler)),
+        provider_key_probe=key_probe,
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return server, reader, writer, thread
+
+
+def test_widget_propose_confirm_list_round_trip(tmp_path):
+    # A message asking about token usage drafts a stat widget; confirming saves it.
+    responses = [ModelResponse(text="You've used a bit.", tool_calls=[])]
+    server, reader, writer, thread = _widget_server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+             "params": {"text": "how many tokens have I used this month?"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        # Propose: a plain preview, nothing saved yet.
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        preview = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert preview["kind"] == "stat"
+        assert preview["spec"] == {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}
+        assert preview["summary"]
+
+        # widget.list is still empty until the explicit confirm.
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_LIST})
+        assert writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]["widgets"] == []
+
+        # Confirm -> saved and listed.
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": True}})
+        saved = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        assert saved["ok"] is True and isinstance(saved["widgetId"], str)
+
+        reader.feed({"jsonrpc": "2.0", "id": 5, "method": Method.WIDGET_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 5 and "result" in f)["result"]["widgets"]
+        assert len(listed) == 1
+        assert listed[0]["spec"]["source"] == "tokens_month"
+        assert listed[0]["pinned"] is True
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_confirm_decline_saves_nothing(tmp_path):
+    responses = [ModelResponse(text="ok", tool_calls=[])]
+    server, reader, writer, thread = _widget_server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+             "params": {"text": "show my connection status"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": False}})
+        res = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        assert res["ok"] is False and res.get("declined") is True
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_LIST})
+        assert writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]["widgets"] == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_propose_refuses_when_nothing_matches(tmp_path):
+    responses = [ModelResponse(text="hello", tool_calls=[])]
+    server, reader, writer, thread = _widget_server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+             "params": {"text": "tell me a story about a cat"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        err = writer.wait_for(lambda f: f.get("id") == 2 and "error" in f)
+        assert err["error"]["message"] == "I can't make a widget from this yet."
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_widget_set_pinned_and_delete(tmp_path):
+    responses = [ModelResponse(text="ok", tool_calls=[])]
+    server, reader, writer, thread = _widget_server(tmp_path, responses)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+             "params": {"text": "how fast are my models, latency wise?"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": True}})
+        widget_id = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]["widgetId"]
+
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_SET_PINNED,
+                     "params": {"id": widget_id, "pinned": False}})
+        assert writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]["ok"] is True
+        reader.feed({"jsonrpc": "2.0", "id": 5, "method": Method.WIDGET_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 5 and "result" in f)["result"]["widgets"]
+        assert listed[0]["pinned"] is False
+
+        reader.feed({"jsonrpc": "2.0", "id": 6, "method": Method.WIDGET_DELETE,
+                     "params": {"id": widget_id}})
+        assert writer.wait_for(lambda f: f.get("id") == 6 and "result" in f)["result"]["ok"] is True
+        reader.feed({"jsonrpc": "2.0", "id": 7, "method": Method.WIDGET_LIST})
+        assert writer.wait_for(lambda f: f.get("id") == 7 and "result" in f)["result"]["widgets"] == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_usage_recorded_after_turn_and_stats_get_shape(tmp_path):
+    # A scripted provider that reports usage => a usage_log row => stats.get totals.
+    responses = [
+        ModelResponse(text="Hello.", tool_calls=[], usage=Usage(input_tokens=100, output_tokens=40))
+    ]
+    server, reader, writer, thread = _widget_server(
+        tmp_path, responses, key_probe=lambda pid: pid == "anthropic"
+    )
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+             "params": {"text": "hi"}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        # The usage row landed in the store (fresh connection: worker owns its own).
+        with sqlite3.connect(tmp_path / "ipc-test.sqlite3") as conn:
+            rows = conn.execute(
+                "SELECT provider, input_tokens, output_tokens, latency_ms FROM usage_log"
+            ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == "anthropic"
+        assert rows[0][1] == 100 and rows[0][2] == 40
+        assert isinstance(rows[0][3], int)  # latency recorded
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.STATS_GET})
+        stats = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert stats["tokensMonth"] == {"total": 140, "limit": None}
+        latency = {r["provider"]: r for r in stats["providerLatency"]}
+        assert "anthropic" in latency and isinstance(latency["anthropic"]["ms"], int)
+
+        # Connections: Ollama (probed 200 => running) + connected Anthropic.
+        conns = {c["id"]: c for c in stats["connections"]}
+        assert conns["ollama"]["status"] == "running"
+        assert conns["anthropic"]["status"] == "reachable"
+        # NON-secret payload only — no key material, no unexpected fields.
+        for c in stats["connections"]:
+            assert set(c) == {"id", "label", "status", "detail"}
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_stats_get_empty_has_clean_shape(tmp_path):
+    # No usage yet: token total 0, no latency rows, Ollama probed as idle (500).
+    server, reader, writer, thread = _widget_server(tmp_path, ollama_status=500)
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.STATS_GET})
+        stats = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert stats["tokensMonth"] == {"total": 0, "limit": None}
+        assert stats["providerLatency"] == []
+        conns = {c["id"]: c for c in stats["connections"]}
+        # The Connections card always has the Ollama row (core-provided, not stored).
+        assert conns["ollama"]["status"] == "idle"
+    finally:
+        _shutdown(reader, thread)

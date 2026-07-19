@@ -245,3 +245,22 @@ def test_network_error_raises_runtimeerror_without_leaking_key():
     with pytest.raises(RuntimeError) as excinfo:
         provider.send([Message(role="user", content="hi")], [])
     assert "sk-net-secret" not in str(excinfo.value)
+
+
+def test_response_carries_usage_when_reported():
+    provider, _, _ = _make(
+        {
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 12, "output_tokens": 7},
+        }
+    )
+    res = provider.send([Message(role="user", content="hi")], [])
+    assert res.usage is not None
+    assert res.usage.input_tokens == 12
+    assert res.usage.output_tokens == 7
+
+
+def test_response_usage_none_when_absent():
+    provider, _, _ = _make({"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"})
+    assert provider.send([Message(role="user", content="hi")], []).usage is None

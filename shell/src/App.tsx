@@ -24,6 +24,9 @@ import type {
   LocalSetupState,
   ProfileState,
   RoleOption,
+  Widget,
+  WidgetProposal,
+  Stats,
 } from "./types/ui";
 import {
   ipc,
@@ -43,7 +46,8 @@ import {
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
-import { WidgetRail } from "./components/WidgetRail";
+import { WidgetRail, type RailRoutine, type RunOutcome } from "./components/WidgetRail";
+import { WidgetProposalCard } from "./components/WidgetProposalCard";
 import { Composer } from "./components/Composer";
 import { PermissionCard } from "./components/PermissionCard";
 import {
@@ -123,6 +127,14 @@ export function App() {
   const [theme, setThemeState] = useState<Theme>(loadTheme);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
+
+  // Widgets (declarative specs) + core-computed stats for the rail. Widgets are
+  // proposed like routines (draft-in-core, saved only on confirm); the token
+  // meter + connections cards read `stats`, refreshed on a light schedule.
+  const [widgets, setWidgets] = useState<Widget[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [railRoutines, setRailRoutines] = useState<RailRoutine[]>([]);
+  const [widgetProposal, setWidgetProposal] = useState<WidgetProposal | null>(null);
 
   // Conversations. The core mints a conversation per launch, but the frontend
   // doesn't learn its id until it starts or loads one — `null` means "the launch
@@ -226,6 +238,8 @@ export function App() {
           refreshProviders();
           refreshProfile();
           refreshConversations();
+          refreshWidgets();
+          refreshStats();
         }
       }),
     );
@@ -243,10 +257,22 @@ export function App() {
     refreshProviders();
     refreshProfile();
     refreshConversations();
+    refreshWidgets();
+    refreshStats();
 
     return () => unsubs.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
+
+  // Refresh stats on a 60s interval WHILE the rail is open (cleared on hide /
+  // unmount). No websockets, no busywork — the rail also refreshes on mount and
+  // after each completed turn.
+  useEffect(() => {
+    if (!connected || !railOpen) return;
+    const t = setInterval(() => refreshStats(), 60_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, railOpen]);
 
   // Transient shell notices fade out on their own so they don't linger.
   useEffect(() => {
@@ -378,6 +404,34 @@ export function App() {
       });
   }
 
+  function refreshWidgets() {
+    if (!isEngineConnected()) return;
+    ipc
+      .listWidgets()
+      .then(setWidgets)
+      .catch(() => {
+        /* leave the rail on its last-known widgets if we can't read them */
+      });
+    // A routine widget needs its routine's variables to prompt on Run — keep a
+    // light copy of the library alongside the widgets.
+    ipc
+      .listRoutines()
+      .then((res) => setRailRoutines(normalizeRailRoutines(res)))
+      .catch(() => {
+        /* leave the routine metadata as-is */
+      });
+  }
+
+  function refreshStats() {
+    if (!isEngineConnected()) return;
+    ipc
+      .getStats()
+      .then(setStats)
+      .catch(() => {
+        /* leave the token meter / connections on their last-known values */
+      });
+  }
+
   // Switching a profile takes effect immediately (no restart). Re-fetch so the
   // new flags reshape the surface right away; quietly no-op if the switch fails.
   function handleSetProfile(profileId: string) {
@@ -445,6 +499,9 @@ export function App() {
           return m;
         }),
       );
+      // Composer path: if the user asked Addison to build a widget, draft one from
+      // the just-finished conversation (nothing is saved until they confirm).
+      maybeProposeWidget(text);
     } catch (err) {
       // Same guard on the failure path: an abandoned turn's error must not
       // replace the stopped message or a newer turn's content.
@@ -479,8 +536,9 @@ export function App() {
         setCurrentActivity(null);
         // A turn just landed: refresh the sidebar so a new chat's auto-title
         // appears, and adopt the launch conversation as current if we didn't
-        // know its id yet.
+        // know its id yet. Usage changed too, so refresh the token meter.
         refreshConversations(true);
+        refreshStats();
       }
     }
   }
@@ -726,6 +784,89 @@ export function App() {
       });
   }
 
+  // --- Widgets (declarative specs): propose -> card -> explicit save ---------
+  // Called after a turn whose user message mentioned a widget: draft one from the
+  // conversation. A refusal (the core can't make one yet) is silent — no card.
+  function maybeProposeWidget(userText: string) {
+    if (!isEngineConnected() || !/widget/i.test(userText)) return;
+    ipc
+      .proposeWidget()
+      .then((proposal) => setWidgetProposal(proposal))
+      .catch(() => {
+        /* refusal / nothing to propose — stay quiet */
+      });
+  }
+
+  function handleAddWidget() {
+    setWidgetProposal(null);
+    ipc
+      .confirmWidget(true)
+      .then((res) => {
+        if (res.ok) {
+          setStatusBanner("Added the widget — it's in your rail.");
+          refreshWidgets();
+        } else if (res.error) {
+          setStatusBanner(res.error);
+        }
+      })
+      .catch((err) => {
+        setStatusBanner(err instanceof Error ? err.message : "I couldn't add that widget.");
+      });
+  }
+
+  function handleDismissWidgetProposal() {
+    setWidgetProposal(null);
+    // Let the core drop its held draft too (accept:false).
+    ipc.confirmWidget(false).catch(() => {});
+  }
+
+  function handleSetWidgetPinned(id: string, pinned: boolean) {
+    ipc
+      .setWidgetPinned(id, pinned)
+      .then((res) => {
+        if (!res.ok && res.error) setStatusBanner(res.error);
+        refreshWidgets();
+      })
+      .catch(() => setStatusBanner("Couldn't change that widget just now."));
+  }
+
+  function handleDeleteWidget(id: string) {
+    ipc
+      .deleteWidget(id)
+      .then(() => refreshWidgets())
+      .catch(() => setStatusBanner("Couldn't remove that widget just now."));
+  }
+
+  // Run a routine straight from its widget (§6.5 variable prompts happen in the
+  // card). Returns the plain outcome for the card to show; refreshes stats since
+  // a run may have used the model.
+  async function handleRunWidgetRoutine(
+    routineId: string,
+    variables: Record<string, string>,
+  ): Promise<RunOutcome> {
+    try {
+      const res = (await ipc.runRoutine(routineId, variables)) as Record<string, unknown>;
+      const ok = res?.ok === true;
+      const detail =
+        typeof res?.detail === "string" && res.detail
+          ? res.detail
+          : ok
+            ? "Done — every step finished."
+            : "It didn't finish. Nothing else was changed.";
+      refreshStats();
+      return { ok, detail };
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : "That routine couldn't run." };
+    }
+  }
+
+  // The dashed "＋ Ask Addison to build a widget" seeds the composer (does NOT
+  // create anything) and switches to chat if we're on Settings.
+  function handleAskBuildWidget() {
+    setScreen("chat");
+    setComposerSeed("Build me a widget that ");
+  }
+
   // --- Conversations --------------------------------------------------------
   // Sidebar controls are held while a turn is running or a permission prompt is
   // open — switching conversations mid-turn would strand in-flight work.
@@ -837,6 +978,13 @@ export function App() {
       onCancel={() => setRoutineProposal(null)}
     />
   ) : null;
+  const widgetProposalBlock = widgetProposal ? (
+    <WidgetProposalCard
+      proposal={widgetProposal}
+      onAdd={handleAddWidget}
+      onCancel={handleDismissWidgetProposal}
+    />
+  ) : null;
 
   const profileLabel =
     profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
@@ -926,12 +1074,25 @@ export function App() {
                 footer={
                   <>
                     {proposalBlock}
+                    {widgetProposalBlock}
                     {!railOpen && workBlock}
                     {!railOpen && consentBlock}
                   </>
                 }
               />
-              {railOpen && <WidgetRail work={workBlock} consent={consentBlock} />}
+              {railOpen && (
+                <WidgetRail
+                  work={workBlock}
+                  consent={consentBlock}
+                  widgets={widgets}
+                  stats={stats}
+                  routines={railRoutines}
+                  onSetPinned={handleSetWidgetPinned}
+                  onDelete={handleDeleteWidget}
+                  onRunRoutine={handleRunWidgetRoutine}
+                  onAskBuildWidget={handleAskBuildWidget}
+                />
+              )}
             </div>
 
             <Composer
@@ -1235,6 +1396,36 @@ function normalizeProposal(result: unknown): RoutineProposal | null {
         })
       : [],
   };
+}
+
+// Light copy of the routine library for the rail: just enough to prompt for a
+// routine widget's variables on Run. Mirrors RoutineLibrary's normalizer.
+function normalizeRailRoutines(result: unknown): RailRoutine[] {
+  const record = asRecord(result);
+  const list = record && Array.isArray(record.routines) ? record.routines : [];
+  const out: RailRoutine[] = [];
+  for (const item of list) {
+    const r = asRecord(item);
+    if (!r || typeof r.id !== "string" || typeof r.name !== "string") continue;
+    out.push({
+      id: r.id,
+      name: r.name,
+      variables: Array.isArray(r.variables)
+        ? r.variables.flatMap((v) => {
+            const rv = asRecord(v);
+            if (!rv || typeof rv.name !== "string") return [];
+            return [
+              {
+                name: rv.name,
+                prompt: typeof rv.prompt === "string" ? rv.prompt : `Value for ${rv.name}?`,
+                default: typeof rv.default === "string" ? rv.default : null,
+              },
+            ];
+          })
+        : [],
+    });
+  }
+  return out;
 }
 
 function extractDetail(result: unknown): string | null {

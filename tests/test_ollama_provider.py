@@ -294,3 +294,30 @@ def test_approx_requirements_scales_and_has_safe_fallback():
     # A name with no readable size still yields a positive, non-crashing estimate.
     unknown = approx_requirements("some-model")
     assert unknown["disk_gb"] > 0 and unknown["ram_gb"] > 0
+
+
+def test_response_carries_usage_when_reported():
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (
+                200,
+                {"message": {"content": "ok"}, "prompt_eval_count": 30, "eval_count": 12},
+            ),
+        }
+    )
+    res = OllamaProvider("m:8b", client=client).send([Message(role="user", content="hi")], [])
+    assert res.usage is not None
+    assert res.usage.input_tokens == 30
+    assert res.usage.output_tokens == 12
+
+
+def test_response_usage_none_when_counts_absent():
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (200, {"message": {"content": "ok"}}),
+        }
+    )
+    res = OllamaProvider("m:8b", client=client).send([Message(role="user", content="hi")], [])
+    assert res.usage is None

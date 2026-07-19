@@ -53,10 +53,24 @@ class Message:
 
 
 @dataclass
+class Usage:
+    """Token counts for ONE provider call (§4.8 usage substrate). Populated from
+    each API's own usage report and mapped honestly; a provider that reports no
+    usage leaves ``ModelResponse.usage`` as None (no row is recorded for it)."""
+
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
 class ModelResponse:
     text: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
     finish_reason: str = "stop"
+    # Token usage for the call that produced this response, when the provider
+    # reports it (None otherwise). Orchestrator machinery records it into
+    # ``usage_log`` — it is NEVER a registry tool (§4.8 precedent).
+    usage: Usage | None = None
 
 
 @runtime_checkable

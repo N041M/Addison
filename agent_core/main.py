@@ -26,6 +26,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -85,6 +86,7 @@ from agent_core.tools.read_file import ReadFileTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.web_search import WebSearchTool
+from agent_core.widgets import MAX_PINNED, validate_widget_spec, widget_summary
 
 # JSON-RPC error codes. -32601 is the reserved "method not found"; the -32000
 # band is the "server error" range we use for provider/tool/not-built failures,
@@ -477,6 +479,11 @@ class JsonRpcServer:
         self._next_model_name: str | None = None   # explicit LOCAL/cloud pick, §4.1.1, §6.8
         self._next_effort: str | None = None       # explicit "answer style" for next msg
         self._draft_routine = None             # pending §6.3 proposal awaiting confirmSave
+        self._draft_widget = None              # pending widget proposal awaiting confirmSave
+        # The most recently RUN saved routine this session — a widget proposed
+        # right after a run offers that routine (mirrors "the last turn ran a
+        # saved routine" heuristic; display-only signal, never a permission input).
+        self._last_run_routine_id: str | None = None
 
         self._queue: queue.Queue = queue.Queue()
         self._perm_lock = threading.Lock()
@@ -508,6 +515,7 @@ class JsonRpcServer:
             undo_manager=self.undo_manager,
             stream_to_frontend=self._emit_stream_chunk,
             on_activity=self._emit_activity,
+            on_usage=self._record_usage,
             shell_bridge=self._shell_bridge,
         )
         self.routine_builder = RoutineBuilder(store=self.store)
@@ -642,6 +650,14 @@ class JsonRpcServer:
         if method in _PROVIDER_JOBS:
             self._queue.put((_PROVIDER_JOBS[method], params, request_id))
             return
+        # widget.* and stats.get touch the Store (and the routine library / live
+        # conversation), so they run on the worker like every other store-backed job.
+        if method in _WIDGET_JOBS:
+            self._queue.put((_WIDGET_JOBS[method], params, request_id))
+            return
+        if method == Method.STATS_GET:
+            self._queue.put(("stats_get", params, request_id))
+            return
 
         try:
             if method == Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE:
@@ -707,6 +723,18 @@ class JsonRpcServer:
                     self._respond(request_id, self._provider_connect(params))
                 elif kind == "provider_disconnect":
                     self._respond(request_id, self._provider_disconnect(params))
+                elif kind == "widget_list":
+                    self._respond(request_id, self._widget_list())
+                elif kind == "widget_set_pinned":
+                    self._respond(request_id, self._widget_set_pinned(params))
+                elif kind == "widget_delete":
+                    self._respond(request_id, self._widget_delete(params))
+                elif kind == "widget_propose":
+                    self._handle_widget_propose(request_id)
+                elif kind == "widget_confirm":
+                    self._handle_widget_confirm(params, request_id)
+                elif kind == "stats_get":
+                    self._respond(request_id, self._stats_get())
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1102,6 +1130,9 @@ class JsonRpcServer:
             return
         result = self.routine_engine.run(routine, params.get("variables") or {})
         self.routine_library.record_run(routine.id)
+        # Remember the routine just run so a widget proposed right after offers it
+        # (display-only signal — never affects permissions).
+        self._last_run_routine_id = routine.id
         self._respond(
             request_id,
             {
@@ -1143,6 +1174,219 @@ class JsonRpcServer:
         with self._perm_lock:
             waiter = self._permission_waiters.pop(waiter_key, None)
         return bool(waiter and waiter["allow"])
+
+    # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
+    def _record_usage(self, usage, latency_ms, requested_role, model_name) -> None:
+        """Record one provider call's token usage + latency into ``usage_log``.
+
+        The single choke point every turn's model calls flow through
+        (Orchestrator.on_usage). NOT a registry tool — this is server machinery
+        (§4.8 precedent). A call that reported no usage (``usage`` is None) or the
+        onboarding relay is skipped. Never touches key material."""
+        if usage is None or self.store is None:
+            return
+        if requested_role is ModelRole.SETUP_ASSISTANT:
+            return  # the free onboarding relay isn't metered
+        provider_id, model = self._usage_identity(requested_role, model_name)
+        self.store.insert_usage(
+            id=str(uuid4()),
+            conversation_id=self.conversation.id,
+            provider=provider_id,
+            model=model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            latency_ms=latency_ms,
+            created_at=int(time.time()),
+        )
+
+    def _usage_identity(self, requested_role, model_name) -> tuple[str, str]:
+        """Best-effort (provider_id, model) for a usage row. A LOCAL turn is an
+        Ollama model; a cloud/default turn resolves against the catalog, falling
+        back to a plain default when there's no catalog (CLI/tests)."""
+        if requested_role is ModelRole.LOCAL:
+            return "ollama", (model_name or "local")
+        entry = None
+        if self._cloud_catalog:
+            entry = (
+                find_cloud_model(self._cloud_catalog, model_name)
+                if model_name
+                else default_cloud_model(self._cloud_catalog)
+            )
+        if entry is not None:
+            return entry.provider, entry.id
+        return "anthropic", (model_name or "default")
+
+    # --- widgets + stats (declarative specs; core-computed sources) -------
+    def _stats_get(self) -> dict:
+        """stats.get -> the three core-computed sources. Carries NO key material:
+        token totals, per-provider latency, and connection status only (§8.3)."""
+        self._ensure_built()
+        totals = self.store.usage_totals_since(_month_start_epoch())
+        latency = self.store.latest_latency_per_provider()
+        return {
+            # No invented limit — v1 has no per-account cap to show (null).
+            "tokensMonth": {"total": totals["total"], "limit": None},
+            "providerLatency": latency,
+            "connections": self._connections(latency),
+        }
+
+    def _connections(self, latency: list[dict]) -> list[dict]:
+        """Ollama (probed live) + each connected cloud provider. Status/detail are
+        plain strings; there is NEVER any key material in this payload (§8.3)."""
+        conns: list[dict] = []
+        try:
+            ollama_up = is_running(self._ollama_base_url, self._ollama_client)
+        except Exception:
+            ollama_up = False
+        conns.append(
+            {
+                "id": "ollama",
+                "label": "Ollama · this computer",
+                "status": "running" if ollama_up else "idle",
+                "detail": "running" if ollama_up else "not running",
+            }
+        )
+        latency_by_provider = {row["provider"]: row["ms"] for row in latency}
+        stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
+        for provider_id in PROVIDER_IDS:
+            cfg = stored.get(provider_id)
+            if cfg is not None:
+                connected = cfg["connected"]
+            else:
+                connected = provider_id != "custom" and self._provider_key_present(provider_id)
+            if not connected:
+                continue
+            ms = latency_by_provider.get(provider_id)
+            label = provider_label(provider_id)
+            conns.append(
+                {
+                    "id": provider_id,
+                    "label": f"{label} API" if provider_id != "custom" else label,
+                    "status": "reachable",
+                    "detail": f"{ms} ms" if ms is not None else "connected",
+                }
+            )
+        return conns
+
+    def _widget_list(self) -> dict:
+        """widget.list -> stored widgets, INVALID specs hidden at render (safety:
+        a spec that fails validate_widget_spec is never surfaced or run)."""
+        self._ensure_built()
+        widgets: list[dict] = []
+        for row in self.store.list_widgets():
+            try:
+                spec = json.loads(row["spec_json"])
+            except ValueError:
+                continue
+            if validate_widget_spec(spec) is not None:
+                continue
+            widgets.append(
+                {
+                    "id": row["id"],
+                    "spec": spec,
+                    "pinned": row["pinned"],
+                    "position": row["position"],
+                }
+            )
+        return {"widgets": widgets}
+
+    def _widget_set_pinned(self, params: dict) -> dict:
+        self._ensure_built()
+        widget_id = params.get("id")
+        if not widget_id or self.store.get_widget(widget_id) is None:
+            return {"ok": False, "error": "That widget isn't here any more."}
+        pinned = bool(params.get("pinned"))
+        if pinned and self.store.count_pinned_widgets(exclude_id=widget_id) >= MAX_PINNED:
+            return {"ok": False, "error": "You can pin up to six widgets. Unpin one first."}
+        self.store.set_widget_pinned(widget_id, pinned)
+        return {"ok": True}
+
+    def _widget_delete(self, params: dict) -> dict:
+        self._ensure_built()
+        widget_id = params.get("id")
+        if widget_id:
+            self.store.delete_widget(widget_id)
+        return {"ok": True}
+
+    def _handle_widget_propose(self, request_id) -> None:
+        """Draft a widget spec from the recent conversation (mirrors routine.propose:
+        draft held in memory, nothing saved yet). v1 only proposes a routine widget
+        (a routine just run or named) or a matching stat widget; otherwise refuses."""
+        draft = self._draft_widget_from_conversation()
+        if draft is None:
+            self._respond_error(request_id, _SERVER_ERROR, "I can't make a widget from this yet.")
+            return
+        self._draft_widget = draft
+        self._respond(
+            request_id,
+            {
+                "title": draft["title"],
+                "kind": draft["kind"],
+                "summary": widget_summary(draft),
+                "spec": draft,
+            },
+        )
+
+    def _handle_widget_confirm(self, params: dict, request_id) -> None:
+        """widget.confirmSave {accept}: save the held draft ONLY on explicit accept.
+        Saving a widget is LOW-risk (display-only), so no permission card — but the
+        spec is re-validated here (never trust the held draft blindly)."""
+        draft = self._draft_widget
+        if draft is None:
+            self._respond_error(
+                request_id, _SERVER_ERROR, "There's no widget waiting to be added."
+            )
+            return
+        if not params.get("accept"):
+            self._draft_widget = None
+            self._respond(request_id, {"ok": False, "declined": True})
+            return
+        error = validate_widget_spec(draft)
+        if error is not None:
+            self._draft_widget = None
+            self._respond_error(request_id, _SERVER_ERROR, error)
+            return
+        widget_id = str(uuid4())
+        pinned = self.store.count_pinned_widgets() < MAX_PINNED
+        self.store.insert_widget(
+            id=widget_id,
+            spec_json=json.dumps(draft),
+            pinned=pinned,
+            position=self.store.next_widget_position(),
+            created_at=int(time.time()),
+        )
+        self._draft_widget = None
+        self._respond(request_id, {"ok": True, "widgetId": widget_id, "pinned": pinned})
+
+    def _draft_widget_from_conversation(self) -> dict | None:
+        """The v1 widget heuristic. Returns a valid spec dict or None (a refusal).
+
+        Priority: an explicit ask for token/latency/connection info -> that stat
+        widget; else the routine just run, or a routine named in the recent chat ->
+        that routine widget; else None."""
+        recent = self.conversation.messages[-10:]
+        joined = " ".join(
+            m.content.lower()
+            for m in recent
+            if m.role == "user" and isinstance(m.content, str)
+        )
+        if any(k in joined for k in ("token", "usage", "how much have i used", "cost")):
+            return {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}
+        if any(k in joined for k in ("latency", "how fast", "response time", "how quick")):
+            return {"kind": "stat", "source": "provider_latency", "title": "Model latency"}
+        if any(k in joined for k in ("connection", "connected", "online", "reachable")):
+            return {"kind": "stat", "source": "connections", "title": "Connections"}
+        if self._last_run_routine_id is not None:
+            try:
+                routine = self.routine_library.get(self._last_run_routine_id)
+                return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
+            except KeyError:
+                pass
+        for entry in self.routine_library.list():
+            routine = entry["routine"]
+            if routine.name and routine.name.lower() in joined:
+                return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
+        return None
 
     # --- profiles (§4.7) --------------------------------------------------
     def _profile_get(self) -> dict:
@@ -1557,6 +1801,26 @@ _PROVIDER_JOBS = {
     Method.PROVIDER_CONNECT: "provider_connect",
     Method.PROVIDER_DISCONNECT: "provider_disconnect",
 }
+
+# widget.* run on the worker (Store + routine library + live conversation).
+_WIDGET_JOBS = {
+    Method.WIDGET_LIST: "widget_list",
+    Method.WIDGET_SET_PINNED: "widget_set_pinned",
+    Method.WIDGET_DELETE: "widget_delete",
+    Method.WIDGET_PROPOSE_FROM_CONVERSATION: "widget_propose",
+    Method.WIDGET_CONFIRM_SAVE: "widget_confirm",
+}
+
+
+def _month_start_epoch() -> int:
+    """Unix-epoch seconds for 00:00 on the first of the current month (UTC).
+
+    'This month's tokens' is 'usage since this epoch' — the token meter sums
+    ``usage_log`` rows at or after it. UTC matches how usage rows are stamped
+    (``int(time.time())``)."""
+    now = datetime.now(timezone.utc)
+    start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+    return int(start.timestamp())
 
 
 def _valid_http_url(url) -> bool:

@@ -156,6 +156,15 @@ Component by component:
 - **RoutineBuilder / RoutineLibrary / RoutineEngine** — build a declarative plan from
   a recent conversation, store and list saved routines, and replay a plan's steps
   through the shared gate and registry.
+- **Widgets and usage** — server/orchestrator machinery, not registry tools. After
+  each provider call the orchestrator's `on_usage` hook records a `usage_log` row
+  (tokens + latency) at that single choke point; `stats.get` derives the token meter
+  and per-provider latency from it. Widgets themselves are **declarative specs**
+  (`agent_core/widgets.py`) — a saved-routine Run pill (which runs through the existing
+  `routine.run` path, adding no execution surface) or a whitelisted stat display —
+  validated at save *and* at render, never code. They are proposed like routines
+  (draft held in the core, saved only on an explicit confirm) and stored in the
+  `widgets` table.
 - **Store** — the SQLite access layer. It reads and writes the transcript, action
-  snapshots, routines, and settings; it holds no secrets, since keys live only in the
-  keychain.
+  snapshots, routines, usage, widgets, and settings; it holds no secrets, since keys
+  live only in the keychain.

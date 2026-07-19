@@ -137,3 +137,42 @@ erDiagram
   stored in this table.
 - **app_settings** — a generic non-secret key/value store. Notably it holds
   `active_profile` (`simple` or `developer`, default `simple`). Never holds secrets.
+
+## Widgets and usage tables
+
+These back the widget rail (§3 of the Fern brief). Neither holds secrets.
+
+```mermaid
+erDiagram
+    usage_log {
+        TEXT id PK
+        TEXT conversation_id
+        TEXT provider
+        TEXT model
+        INTEGER input_tokens
+        INTEGER output_tokens
+        INTEGER latency_ms
+        INTEGER created_at
+    }
+    widgets {
+        TEXT id PK
+        TEXT spec_json
+        INTEGER pinned
+        INTEGER position
+        INTEGER created_at
+    }
+```
+
+- **usage_log** — the §4.8 usage substrate. One row per provider call that reported
+  token usage, written by orchestrator machinery (`main.py`, `Orchestrator.on_usage`)
+  after each model call — never by a registry tool. `latency_ms` is the wall-clock
+  duration of that call. Backs two derived stats: `tokens_month` (sum of tokens since
+  the first of the month) and `provider_latency` (the newest latency per provider).
+  Carries no key material.
+- **widgets** — user-owned rail widgets. `spec_json` is a **declarative** widget spec
+  (`agent_core/widgets.py`), one of exactly two shapes: `{kind:"routine", routineId,
+  title}` or `{kind:"stat", source, title}` — never code. The spec is validated at
+  save *and* at render (an invalid stored spec is hidden, never run). `pinned` decides
+  whether the widget shows as a card or behind the overflow tray (at most six pinned);
+  `position` is the user-visible order. The token meter and connections cards are
+  core-provided and implicit — they are *not* stored here.

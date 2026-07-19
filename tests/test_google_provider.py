@@ -210,3 +210,21 @@ def test_list_models_401_is_plain_key_error():
 def test_list_models_missing_key_raises():
     with pytest.raises(RuntimeError, match="No API key"):
         list_models(lambda: "")
+
+
+def test_response_carries_usage_when_reported():
+    provider, _, _ = _make(
+        {
+            "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+            "usageMetadata": {"promptTokenCount": 15, "candidatesTokenCount": 6, "totalTokenCount": 21},
+        }
+    )
+    res = provider.send([Message(role="user", content="hi")], [])
+    assert res.usage is not None
+    assert res.usage.input_tokens == 15
+    assert res.usage.output_tokens == 6
+
+
+def test_response_usage_none_when_absent():
+    provider, _, _ = _make({"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+    assert provider.send([Message(role="user", content="hi")], []).usage is None
