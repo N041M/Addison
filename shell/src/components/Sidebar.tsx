@@ -10,6 +10,7 @@
 // row (currentConversationId, or Settings when the settings screen is open) gets
 // a `hair` background and a 2px fern left bar.
 
+import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary } from "../types/ui";
 import { BellLogo } from "./BellLogo";
 
@@ -18,6 +19,8 @@ interface Props {
   /** The open conversation, or null for the not-yet-listed launch conversation. */
   currentConversationId: string | null;
   onOpenConversation: (id: string) => void;
+  /** Rename a chat — double-clicking its title opens an inline editor. */
+  onRenameConversation: (id: string, title: string) => void;
   onNewChat: () => void;
   newChatDisabled: boolean;
   /** Which in-window screen is showing; drives the Settings item's active state. */
@@ -50,6 +53,7 @@ export function Sidebar({
   conversations,
   currentConversationId,
   onOpenConversation,
+  onRenameConversation,
   onNewChat,
   newChatDisabled,
   screen,
@@ -108,12 +112,14 @@ export function Sidebar({
           rows={today}
           currentConversationId={currentConversationId}
           onOpen={onOpenConversation}
+          onRename={onRenameConversation}
         />
         <ConversationGroup
           label="Earlier"
           rows={earlier}
           currentConversationId={currentConversationId}
           onOpen={onOpenConversation}
+          onRename={onRenameConversation}
         />
       </nav>
 
@@ -147,11 +153,13 @@ function ConversationGroup({
   rows,
   currentConversationId,
   onOpen,
+  onRename,
 }: {
   label: string;
   rows: ConversationSummary[];
   currentConversationId: string | null;
   onOpen: (id: string) => void;
+  onRename: (id: string, title: string) => void;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -159,30 +167,99 @@ function ConversationGroup({
       <p className="mx-[18px] mb-1.5 mt-4 text-label font-semibold uppercase tracking-caps-wide text-faint">
         {label}
       </p>
-      {rows.map((c) => {
-        const active = currentConversationId != null && c.id === currentConversationId;
-        return (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => onOpen(c.id)}
-            title={c.title}
-            className={
-              // Weight stays constant across states (a bold swap on select would
-              // shift the truncation point); the active cue is the fern rule +
-              // hair fill + darker ink. The 2px left border is pre-reserved
-              // (transparent when inactive) so selecting never nudges the text.
-              "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-control transition-colors max-md:py-3.5 max-md:text-row " +
-              (active
-                ? "border-fern bg-hair text-ink"
-                : "border-transparent bg-transparent text-muted hover:bg-hair/50")
-            }
-          >
-            {c.title}
-          </button>
-        );
-      })}
+      {rows.map((c) => (
+        <ConversationRow
+          key={c.id}
+          conversation={c}
+          active={currentConversationId != null && c.id === currentConversationId}
+          onOpen={onOpen}
+          onRename={onRename}
+        />
+      ))}
     </div>
+  );
+}
+
+// One conversation row. Single-click opens it; double-clicking the title swaps
+// it for an inline editor (Enter/blur commits, Escape cancels). The editor keeps
+// the row's exact geometry (same border/padding/text) so nothing shifts.
+function ConversationRow({
+  conversation: c,
+  active,
+  onOpen,
+  onRename,
+}: {
+  conversation: ConversationSummary;
+  active: boolean;
+  onOpen: (id: string) => void;
+  onRename: (id: string, title: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(c.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  function startEditing() {
+    setDraft(c.title);
+    setEditing(true);
+  }
+  function commit() {
+    setEditing(false);
+    onRename(c.id, draft); // the hook no-ops on blank/unchanged
+  }
+  function cancel() {
+    setEditing(false);
+    setDraft(c.title);
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        maxLength={120}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        aria-label="Rename chat"
+        className="block w-full border-l-2 border-fern bg-surface px-4 py-2 text-left text-control text-ink outline-none max-md:py-3.5 max-md:text-row"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(c.id)}
+      onDoubleClick={startEditing}
+      title={c.title}
+      className={
+        // Weight stays constant across states (a bold swap on select would
+        // shift the truncation point); the active cue is the fern rule +
+        // hair fill + darker ink. The 2px left border is pre-reserved
+        // (transparent when inactive) so selecting never nudges the text.
+        "block w-full overflow-hidden text-ellipsis whitespace-nowrap border-l-2 px-4 py-2 text-left text-control transition-colors max-md:py-3.5 max-md:text-row " +
+        (active
+          ? "border-fern bg-hair text-ink"
+          : "border-transparent bg-transparent text-muted hover:bg-hair/50")
+      }
+    >
+      {c.title}
+    </button>
   );
 }
 

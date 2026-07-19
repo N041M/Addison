@@ -51,6 +51,7 @@ class Method:
     CONVERSATION_NEW = "conversation.new"    # {} -> {conversationId}
     CONVERSATION_LOAD = "conversation.load"  # {conversationId} -> {conversationId, title, messages}
     CONVERSATION_LIST = "conversation.list"  # {} -> {conversations}
+    CONVERSATION_RENAME = "conversation.rename"  # {conversationId, title} -> {ok, title?, error?}
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"

@@ -235,6 +235,33 @@ class ConversationMixin(ServerContext):
             },
         )
 
+    def _handle_rename_conversation(self, params: dict, request_id) -> None:
+        """conversation.rename — the person renamed a chat (double-click its title).
+
+        Unconditional overwrite (store.rename_conversation, unlike the NULL-guarded
+        auto-title). If it's the OPEN conversation, also latch ``_conversation_titled``
+        so this turn's auto-title path can't clobber the chosen name. The title is
+        trimmed and length-capped; the (canonical) value is echoed back so the
+        frontend adopts exactly what was stored."""
+        self._ensure_built()
+        conversation_id = params.get("conversationId")
+        title = params.get("title")
+        if not isinstance(conversation_id, str) or not conversation_id:
+            self._respond(request_id, {"ok": False, "error": "Couldn't rename that chat."})
+            return
+        title = title.strip() if isinstance(title, str) else ""
+        if not title:
+            self._respond(request_id, {"ok": False, "error": "Give the chat a name."})
+            return
+        title = title[:120]
+        if self.store.get_conversation(conversation_id) is None:
+            self._respond(request_id, {"ok": False, "error": "That chat isn't here any more."})
+            return
+        self.store.rename_conversation(conversation_id, title)
+        if conversation_id == self.conversation.id:
+            self._conversation_titled = True
+        self._respond(request_id, {"ok": True, "title": title})
+
     def _conversation_rows(self) -> list[dict]:
         """History rows for conversation.list. The title is never null: stored
         title, else the trimmed first user message (legacy rows that predate

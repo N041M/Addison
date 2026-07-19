@@ -116,6 +116,35 @@ export function useConversations({
       });
   }
 
+  // Rename a chat (double-click its title in the sidebar). Optimistic: update the
+  // row (and the header, if it's the open chat) immediately, then persist. On
+  // failure, revert to the pre-rename title and surface the plain-language reason.
+  function handleRenameConversation(id: string, rawTitle: string) {
+    const title = rawTitle.trim();
+    const before = conversations.find((c) => c.id === id);
+    if (!title || (before && title === before.title)) return; // blank or unchanged → no-op
+    setConversations((list) => list.map((c) => (c.id === id ? { ...c, title } : c)));
+    if (currentConversationIdRef.current === id) setConversationTitle(title);
+    ipc
+      .renameConversation(id, title)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.error || "Couldn't rename that chat.");
+        // Adopt the core's canonical (trimmed/capped) title if it differs.
+        if (res.title && res.title !== title) {
+          const canonical = res.title;
+          setConversations((list) => list.map((c) => (c.id === id ? { ...c, title: canonical } : c)));
+          if (currentConversationIdRef.current === id) setConversationTitle(canonical);
+        }
+      })
+      .catch((err) => {
+        setConversations((list) =>
+          list.map((c) => (c.id === id && before ? { ...c, title: before.title } : c)),
+        );
+        if (currentConversationIdRef.current === id) setConversationTitle(before ? before.title : null);
+        setStatusBanner(err instanceof Error ? err.message : "Couldn't rename that chat.");
+      });
+  }
+
   return {
     conversations,
     currentConversationId,
@@ -123,6 +152,7 @@ export function useConversations({
     refreshConversations,
     handleNewChat,
     handleOpenConversation,
+    handleRenameConversation,
   };
 }
 

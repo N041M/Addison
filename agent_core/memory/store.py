@@ -306,6 +306,16 @@ class Store:
         )
         self._conn.commit()
 
+    def rename_conversation(self, conversation_id: str, title: str) -> None:
+        """User rename — UNCONDITIONAL, unlike ``set_conversation_title``'s
+        first-write-wins auto-title guard. The person is explicitly renaming the
+        chat, so this overwrites whatever title it currently has."""
+        self._conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ?",
+            (title, conversation_id),
+        )
+        self._conn.commit()
+
     # --- routines (RoutineBuilder / RoutineLibrary / RoutineEngine, §6) -----
     def insert_routine(
         self,
