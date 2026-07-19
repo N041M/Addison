@@ -758,10 +758,12 @@ export function App() {
       </main>
 
       {/* Mobile slide-over drawer: the same Sidebar, in drawer mode. Picking a
-          conversation / Settings / New chat closes it; so does the scrim (in
-          MobileDrawer) and Escape (handled above). */}
-      {isMobile && drawerOpen && (
-        <MobileDrawer onClose={closeDrawer}>
+          conversation / Settings / New chat / the close arrow closes it; so does
+          the scrim (in MobileDrawer) and Escape (handled above). Every path just
+          flips `drawerOpen` false — MobileDrawer plays the slide-out either way,
+          which is why it stays mounted here (open-prop, not a conditional). */}
+      {isMobile && (
+        <MobileDrawer open={drawerOpen} onClose={closeDrawer}>
           <Sidebar
             variant="drawer"
             conversations={conversationsState.conversations}
@@ -786,6 +788,7 @@ export function App() {
               setScreen("chat");
               setSheetOpen(true);
             }}
+            onCloseDrawer={closeDrawer}
             profileLabel={profileLabel}
             modeNote={profileModeNote}
           />

@@ -243,6 +243,26 @@ summary,
     transform: translateY(0);
   }
 }
+/* Exit counterparts: the drawer slides back out and its scrim fades before it
+   unmounts (MobileDrawer plays these on close — arrow, scrim tap, Escape, or a
+   nav pick — then removes itself on animationend). Reduced motion skips them,
+   so close stays instant there. */
+@keyframes drawer-out {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-100%);
+  }
+}
+@keyframes fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
 
 /* In-place appearances: the model-picker popover, the permission/consent card,
    and the routine/widget proposal cards settle in with a small opacity + rise

@@ -39,10 +39,16 @@ interface Props {
    */
   modeNote?: string;
   /**
-   * "static" is the desktop left column (216px, collapsible). "drawer" is the
-   * narrow-window slide-over (fills its 280px MobileDrawer, always full — the
-   * collapse `«` control is hidden, and a safe-area top inset is added for a
-   * phone status bar). Same component either way — never a fork.
+   * Closes the mobile drawer (the `«` arrow in its header). Drawer variant only;
+   * undefined on desktop, where the sidebar is always present and the arrow
+   * doesn't render.
+   */
+  onCloseDrawer?: () => void;
+  /**
+   * "static" is the desktop left column (216px, always present). "drawer" is the
+   * narrow-window slide-over (fills its 280px MobileDrawer, with a `«` close
+   * arrow and a safe-area top inset for a phone status bar). Same component
+   * either way — never a fork.
    */
   variant?: "static" | "drawer";
 }
@@ -56,6 +62,7 @@ export function Sidebar({
   screen,
   onOpenSettings,
   onOpenWidgets,
+  onCloseDrawer,
   profileLabel,
   modeNote,
   variant = "static",
@@ -73,12 +80,22 @@ export function Sidebar({
           : "w-[216px] shrink-0")
       }
     >
-      {/* Wordmark. */}
-      <div className="flex items-center px-[18px] pb-[14px]">
+      {/* Wordmark, and — in the drawer — a `«` arrow to slide it closed. */}
+      <div className="flex items-center justify-between px-[18px] pb-[14px]">
         <span className="flex items-center gap-2 text-ink">
           <BellLogo size={17} className="text-fern" />
           <span className="text-base font-bold tracking-logo">Addison</span>
         </span>
+        {isDrawer && onCloseDrawer && (
+          <button
+            type="button"
+            onClick={onCloseDrawer}
+            aria-label="Close menu"
+            className="-mr-2 flex h-11 w-11 items-center justify-center text-glyph text-ink-soft transition-colors hover:text-ink"
+          >
+            «
+          </button>
+        )}
       </div>
 
       {/* New chat — outlined, ownable/actionable (6px radius). */}
