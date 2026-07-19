@@ -84,6 +84,19 @@ export interface DiagnosticEntry {
   at: number; // epoch ms
 }
 
+// One provider row from `provider.list` (multi-provider, owner decision
+// 2026-07-18). NON-secret status/metadata ONLY — the key itself never crosses
+// this boundary (it lives in the OS keychain). `addedAt` is epoch SECONDS;
+// `baseUrl` is present for the custom "your own server" provider only.
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  connected: boolean;
+  addedAt?: number;
+  baseUrl?: string;
+  lastCheckOk?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Internal state: pending requests keyed by id, notification subscribers keyed
 // by method, and status subscribers. Listeners are wired exactly once.
@@ -314,6 +327,19 @@ export const ipc = {
   availableRoles: () => call(Method.ModelAvailableRoles),
   setRoleForNextMessage: (role: ModelRole, modelId?: string, effort?: string) =>
     call(Method.ModelSetRoleForNextMessage, { role, modelId, effort }),
+
+  // Multi-provider API keys (owner decision 2026-07-18). These carry only
+  // non-secret status/metadata; the key itself was already stored in the OS
+  // keychain by `storeProviderKey` before `connectProvider` is called.
+  listProviders: (): Promise<ProviderInfo[]> =>
+    call(Method.ProviderList).then(parseProviderList),
+  // Validates the just-stored key with one tiny request through the core, then
+  // records the connection. Resolves to {ok, error?} — a failed connect is a
+  // resolved {ok:false}, not a reject, so the card can show the plain error line.
+  connectProvider: (provider: string, baseUrl?: string): Promise<ProviderConnectResult> =>
+    call(Method.ProviderConnect, { provider, baseUrl }).then(parseConnectResult),
+  disconnectProvider: (provider: string) =>
+    call(Method.ProviderDisconnect, { provider }),
   // Kicks off the one-time local-model download/verify for `modelName` (the
   // curated Ollama tag). Resolves when the model is set up and has appeared in
   // `availableRoles`; rejects with a plain-language error (e.g. Ollama not
@@ -354,6 +380,40 @@ export interface LoadedConversation {
 
 function asRec(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+// --- provider.list / provider.connect parsers ------------------------------
+export interface ProviderConnectResult {
+  ok: boolean;
+  error?: string;
+}
+
+function parseProviderList(result: unknown): ProviderInfo[] {
+  const obj = asRec(result);
+  const list = obj && Array.isArray(obj.providers) ? (obj.providers as unknown[]) : [];
+  const out: ProviderInfo[] = [];
+  for (const item of list) {
+    const row = asRec(item);
+    if (!row || typeof row.id !== "string") continue;
+    const info: ProviderInfo = {
+      id: row.id,
+      label: typeof row.label === "string" ? row.label : row.id,
+      connected: row.connected === true,
+    };
+    if (typeof row.addedAt === "number") info.addedAt = row.addedAt;
+    if (typeof row.baseUrl === "string") info.baseUrl = row.baseUrl;
+    if (typeof row.lastCheckOk === "boolean") info.lastCheckOk = row.lastCheckOk;
+    out.push(info);
+  }
+  return out;
+}
+
+function parseConnectResult(result: unknown): ProviderConnectResult {
+  const obj = asRec(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
 }
 
 function parseConversationId(result: unknown): string {
@@ -398,13 +458,18 @@ function parseLoadedConversation(result: unknown): LoadedConversation {
 // keychain; they are write-only from here and never read back, never persisted
 // in the webview, never sent to the Agent Core memory (invariant §8.3).
 // ---------------------------------------------------------------------------
-export async function storeProviderKey(
-  role: string,
-  provider: string,
-  key: string,
-): Promise<void> {
+export async function storeProviderKey(provider: string, key: string): Promise<void> {
   if (!isEngineConnected()) {
     throw new Error(NOT_CONNECTED_MESSAGE);
   }
-  await invoke("store_provider_key", { role, provider, key });
+  await invoke("store_provider_key", { provider, key });
+}
+
+// The "Remove" action: delete a provider's stored key from the OS keychain. Like
+// the write, this goes straight to the highest-trust Rust process, never the core.
+export async function deleteProviderKey(provider: string): Promise<void> {
+  if (!isEngineConnected()) {
+    throw new Error(NOT_CONNECTED_MESSAGE);
+  }
+  await invoke("delete_provider_key", { provider });
 }

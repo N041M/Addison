@@ -86,7 +86,7 @@ flowchart TB
     end
     subgraph providers["providers/"]
         MR["ModelRouter: resolve provider per turn"]
-        Prov["AnthropicProvider, OllamaProvider, SetupAssistantProvider"]
+        Prov["AnthropicProvider, OpenAIProvider, GoogleProvider, OllamaProvider, SetupAssistantProvider"]
     end
     subgraph routines["routines/"]
         RE["RoutineEngine: replays a declarative plan"]
@@ -140,10 +140,19 @@ Component by component:
   (PRIMARY, LOCAL, SETUP_ASSISTANT) and an optional model name. Multiple roles and
   several models per role can be configured and reachable at once; the choice is
   always explicit in v1.
-- **Providers** — one adapter per backend. `AnthropicProvider` is the cloud primary,
-  `OllamaProvider` runs local models, and `SetupAssistantProvider` fills the
-  onboarding relay role. The orchestrator never branches on the concrete provider; it
-  reads capabilities instead.
+- **Providers** — one adapter per backend. `AnthropicProvider`, `OpenAIProvider`, and
+  `GoogleProvider` are cloud providers (multi-provider, owner decision 2026-07-18);
+  `OpenAIProvider` also backs an OpenAI-compatible **custom server** via a `base_url`
+  override and an optional key. `OllamaProvider` runs local models, and
+  `SetupAssistantProvider` fills the onboarding relay role. Each connected cloud
+  provider contributes models to one picker union; a by-name pick resolves to that
+  provider's instance in the router. The orchestrator never branches on the concrete
+  provider; it reads capabilities instead.
+- **Provider connections** — keys are stored per provider id (`anthropic | openai |
+  google | custom`) in the OS keychain; `provider.connect` validates a saved key with
+  one tiny request, then registers the provider's models. Non-secret connection
+  metadata (connected, added date, custom base URL) lives in `provider_config`;
+  `provider.list`/`connect`/`disconnect` responses never carry key material.
 - **RoutineBuilder / RoutineLibrary / RoutineEngine** — build a declarative plan from
   a recent conversation, store and list saved routines, and replay a plan's steps
   through the shared gate and registry.

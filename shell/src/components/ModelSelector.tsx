@@ -136,6 +136,14 @@ export function ModelSelector({
     onSelectModel(role, id);
   }
 
+  // Attribute each model to its provider ("GPT-4.1 — OpenAI") only when more than
+  // one provider is connected — with a single provider the suffix is just noise.
+  const providerCount = new Set(
+    cloud.map((m) => m.provider).filter((p): p is string => Boolean(p)),
+  ).size;
+  const cloudOptionLabel = (m: CloudModel) =>
+    providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label;
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       <label className="flex items-center gap-1.5">
@@ -149,7 +157,7 @@ export function ModelSelector({
         >
           {cloud.map((m) => (
             <option key={m.id} value={encode("primary", m.id)}>
-              {m.label}
+              {cloudOptionLabel(m)}
             </option>
           ))}
           {locals.length > 0 && (
