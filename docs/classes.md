@@ -1,5 +1,13 @@
 # Class diagrams
 
+> **Amended 2026-07-20** — see [Scope Amendment](addison-scope-amendment-2026-07.md).
+> Adds the `SnapshotManager` (global floor **G3**, guaranteed rollback), the
+> Simple/Developer/**Custom** mode-and-guard model with capability tiers, a
+> `RoutingStrategy` abstraction (four named strategies + custom, with graceful
+> fallback), and an `McpClient` external-tool surface over the existing registry +
+> gate. Members marked *(Phase-2)* describe shape the amendment implies but that is
+> not yet in code.
+
 The core in three views: orchestration, providers, and routines. Attributes and
 methods are the real ones from the code, trimmed to the load-bearing members. The
 `tools/`, `providers/`, and `routines/` packages do not import one another; the
@@ -106,13 +114,143 @@ classDiagram
     UndoManager ..> ActionSnapshot
 ```
 
+## Modes, guards, and snapshots
+
+The scope amendment layers three things onto the safety machinery above: a third
+**Custom** profile whose *prompting* guards are user-tunable, **capability tiers** that
+gate what a tool or widget may do per mode, and the **SnapshotManager** that makes
+global floor **G3** (guaranteed rollback) real. The mode is still derived from the
+active profile; Custom is a tuned overlay whose *floors* are fixed. The
+`SnapshotManager` captures app-state snapshots (config/DB rows — never keys, so G1
+holds), marks a configuration verified-working after a turn completes, and restores to
+the last verified-working state. Turning a guard off in Custom mode mints an
+**undeletable anchor** that also captures the app binary. `WorkspaceTrust` scopes the
+gate's OPEN-mode auto-grant to a user-granted project directory.
+
+```mermaid
+classDiagram
+    class Profile {
+        <<enumeration>>
+        SIMPLE
+        DEVELOPER
+        CUSTOM
+    }
+    class PolicyMode {
+        <<enumeration>>
+        SAFE
+        OPEN
+    }
+    class CapabilityTier {
+        <<enumeration>>
+        NON_DESTRUCTIVE
+        CODE_BACKED
+        SYSTEM_CAPABLE
+    }
+    class GuardConfig {
+        +destructive_card
+        +auto_grant_scope
+        +workspace_trust
+        +keyword_gate_strictness
+        +mode_for_profile(profile) PolicyMode
+    }
+    class WorkspaceTrust {
+        +root_dir
+        +granted_at
+        +contains(path) bool
+        +revoke()
+    }
+    class SnapshotManager {
+        +snapshot(reason) Snapshot
+        +mark_verified_working(config_id)
+        +restore(snapshot_id) RestoreResult
+        +mint_anchor(reason) Snapshot
+        +list()
+        +delete(snapshot_id)
+    }
+    class Snapshot {
+        +id
+        +created_at
+        +reason
+        +verified_working
+        +undeletable
+        +captures_binary
+        +payload
+    }
+
+    Profile --> PolicyMode
+    GuardConfig ..> Profile
+    GuardConfig ..> PolicyMode
+    GuardConfig --> WorkspaceTrust
+    PermissionGate ..> GuardConfig
+    PermissionGate ..> CapabilityTier
+    SnapshotManager ..> Snapshot
+    SnapshotManager --> Store
+```
+
+`GuardConfig.mode_for_profile` keeps today's 1:1 derivation (Simple→SAFE,
+Developer→OPEN); Custom carries the tunable guard fields. `CapabilityTier` is what the
+gate and the widget validator consult to decide whether a tool/widget's requested
+capability is admissible in the active mode — SAFE admits only `NON_DESTRUCTIVE`.
+Neither `Snapshot.undeletable` anchors nor the four floors (G1, G2, G3, the anchor
+rule) are reachable from `GuardConfig`. All members here are *(Phase-2)*; exact module
+and class names are not fixed yet.
+
+## External tools via MCP
+
+Addison is an MCP **client** — it consumes external MCP servers — never a server or
+gateway. `McpClient` adapts each remote tool into the *existing* `ToolRegistry`, so an
+MCP tool is registered, gated, logged, and undo-checked exactly like a native tool
+(§ Core orchestration). Because a mutating tool with no `undo()` cannot be LOW-risk,
+invariant 2 automatically keeps such an MCP tool out of the SAFE view. Connecting a
+server is reversible, snapshotted config, sharing the add-an-endpoint plumbing.
+
+```mermaid
+classDiagram
+    class McpClient {
+        +connect(server_config) McpConnection
+        +disconnect(server_id)
+        +list_connections()
+        +adapt_tools(registry)
+    }
+    class McpConnection {
+        +server_id
+        +transport
+        +connected
+        +tools
+    }
+    class McpToolAdapter {
+        +definition
+        +execute(args, context) ToolResult
+        +undo(snapshot)
+        +declares_undo
+    }
+
+    McpClient ..> McpConnection
+    McpClient ..> McpToolAdapter
+    McpToolAdapter ..|> Tool
+    McpClient ..> ToolRegistry
+```
+
+`McpToolAdapter` satisfies the same `Tool` protocol as native tools, which is what lets
+it flow through the one shared registry + gate. All members here are *(Phase-2)*.
+
 ## Providers and routing
 
 The orchestrator is written against the `ModelProvider` protocol and never branches on
 the concrete provider; capability differences are read from `ProviderCapabilities`.
-The three concrete providers satisfy the protocol structurally (duck-typed, shown here
-as realization). `ModelRouter` resolves a provider per turn from a role and an optional
+The concrete providers satisfy the protocol structurally (duck-typed, shown here as
+realization). `ModelRouter` resolves a provider per turn from a role and an optional
 model name, with several models reachable per role.
+
+The amendment adds a bounded **routing strategy** layer *(Phase-2)*. A `RoutingStrategy`
+picks, within the resolved role, which of the reachable models to try first and how to
+degrade: **quality-first** (default — strongest capable model, degrade down on
+unavailability/rate-limit/budget), **cost-first**, **local-only** (never leaves the
+machine), **balanced**, plus a Developer-only **custom** builder. The companion surface
+exposes only a "prefer quality / prefer free" toggle over these. On failure the router
+degrades gracefully — a plain-language note, a light per-provider **cooldown** instead
+of hammering a failing endpoint, and an "answered with a free model" disclaimer
+whenever a free model responds.
 
 ```mermaid
 classDiagram
@@ -132,6 +270,12 @@ classDiagram
     class AnthropicProvider {
         +send(messages, tools, effort) ModelResponse
     }
+    class OpenAIProvider {
+        +send(messages, tools, effort) ModelResponse
+    }
+    class GoogleProvider {
+        +send(messages, tools, effort) ModelResponse
+    }
     class OllamaProvider {
         +send(messages, tools, effort) ModelResponse
     }
@@ -144,6 +288,14 @@ classDiagram
         LOCAL
         SETUP_ASSISTANT
     }
+    class RoutingStrategy {
+        <<enumeration>>
+        QUALITY_FIRST
+        COST_FIRST
+        LOCAL_ONLY
+        BALANCED
+        CUSTOM
+    }
     class ModelRouter {
         +resolve(requested_role, model_name) ModelProvider
         +register(role, provider)
@@ -151,6 +303,9 @@ classDiagram
         +register_primary_model(name, provider)
         +available_roles()
         +available_local_models()
+        +set_strategy(strategy)
+        +next_candidate(role, exclude) ModelProvider
+        +cooldown(provider_id, until)
     }
     class ModelResponse {
         +text
@@ -164,6 +319,8 @@ classDiagram
     }
 
     ModelProvider <|.. AnthropicProvider
+    ModelProvider <|.. OpenAIProvider
+    ModelProvider <|.. GoogleProvider
     ModelProvider <|.. OllamaProvider
     ModelProvider <|.. SetupAssistantProvider
     ModelProvider ..> ProviderCapabilities
@@ -171,14 +328,23 @@ classDiagram
     ModelResponse --> ToolCallRequest
     ModelRouter o-- ModelProvider
     ModelRouter ..> ModelRole
+    ModelRouter ..> RoutingStrategy
 ```
+
+`set_strategy` / `next_candidate` / `cooldown` are the *(Phase-2)* strategy + graceful
+fallback surface; the `resolve`/`register*`/`available*` members are today's code.
 
 ## Routines
 
 A routine is a declarative plan: an ordered, DAG-shaped list of tool calls with
 templated arguments and no code field anywhere. The builder drafts one from a recent
 conversation, the library stores and lists them, and the engine replays a plan through
-the same permission gate, tool registry, and undo manager as the live loop.
+the same permission gate, tool registry, and undo manager as the live loop. Saved
+routines are declarative artifacts, so they are part of the app state the
+`SnapshotManager` captures (§ Modes, guards, and snapshots) and are restored with a
+rollback. Under the amendment, an OPEN-mode `command` step still raises the gate's
+per-invocation destructive card unless it runs inside a trusted workspace, and any
+routine that arms OS-run automation is subject to the keyword gate.
 
 ```mermaid
 classDiagram

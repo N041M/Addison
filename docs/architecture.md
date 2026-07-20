@@ -1,5 +1,11 @@
 # Architecture
 
+> **Amended 2026-07-20** — see [Scope Amendment](addison-scope-amendment-2026-07.md).
+> Adds the snapshot/restore subsystem (global floor **G3**, guaranteed rollback), a
+> third **Custom** profile, a **workspace-trust** boundary for the coding-agent
+> harness, an **MCP client** surface over the existing registry + gate, and named
+> **routing strategies**. The three-process trust model below is unchanged.
+
 Addison is one desktop application made of three processes held at three trust
 levels, so the security model is enforced by the process boundary rather than by
 convention. This document covers the trust boundaries between the processes and the
@@ -31,6 +37,7 @@ flowchart TB
         direction TB
         Server["JsonRpcServer: read loop and turn worker"]
         Engine["Orchestrator, tools, permission gate, routines"]
+        Snapshots["SnapshotManager: app-state snapshots and restore (G3)"]
         Store["SQLite store, on device"]
     end
 
@@ -39,6 +46,9 @@ flowchart TB
     SendCmd -->|"one JSON-RPC line to core stdin"| Server
     Server -.->|"core-message and core-status events"| UIrender
     Engine -.->|"shell.* and keychain.* requests over stdout"| Supervisor
+    Engine --> Snapshots
+    Snapshots -->|"config/DB rows only — never keys (G1)"| Store
+    Snapshots -.->|"Custom anchor: app-binary capture via shell.*"| Supervisor
     Supervisor --> Keychain
     Supervisor --> Filesystem
     StoreKeyCmd --> Keychain
@@ -64,9 +74,36 @@ What each process may and may not do:
   minted this session, so the core structurally cannot wander outside the user's live
   selection.
 - **Agent Core (orchestration, no OS permissions).** It runs the conversation loop,
-  the typed tools, the permission gate, the routine engine, and the SQLite store.
-  Every filesystem, clipboard, external-app, or keychain effect leaves the core as a
-  Core-to-Shell request; the core never makes a raw syscall.
+  the typed tools, the permission gate, the routine engine, the snapshot manager, and
+  the SQLite store. Every filesystem, clipboard, external-app, or keychain effect
+  leaves the core as a Core-to-Shell request; the core never makes a raw syscall.
+
+### Snapshot and restore (G3 — guaranteed rollback)
+
+The scope amendment adds a fourth global floor, **G3**: neither the user nor the
+model can drive Addison into an unrecoverable configuration — at all times there is a
+one-action restore to a **last verified-working** state, and the restore path is
+itself unbreakable. It is realised by the **SnapshotManager**, which takes
+point-in-time copies of Addison's *mutable state* — settings, active profile/mode,
+routing choice and guard toggles, provider configuration metadata, and the
+declarative skills/widgets/routines rows. A snapshot is taken **automatically** before
+any risky or sweeping change (a guard toggle, a provider/endpoint change, a bulk
+"make it cheaper" reconfiguration, a mode switch) and can also be taken **on command**
+from Settings or by asking Addison. Restore always targets the last state that
+actually completed a turn, not merely the state before the last edit.
+
+Two boundaries keep this consistent with the trust model:
+
+- **Keys are excluded (G1 holds).** A snapshot never contains key material; restoring
+  config leaves the OS keychain untouched, so a rollback can never move, expose, or
+  clobber a key. A restored provider config re-binds to whatever keys are in the
+  keychain by provider id.
+- **Deletable, except the anchor.** Ordinary snapshots are housekeeping and the user
+  may clear them. The moment a safety guard is **turned off in Custom mode** and saved,
+  an **undeletable anchor** of the last verified-working state is minted — neither user
+  nor model can remove it. Unlike an ordinary snapshot (state only), the anchor **also
+  captures the app binary** via the shell, giving a complete known-good build + config
+  to fall back to (keys still excluded).
 
 ## Agent Core components
 
@@ -84,9 +121,10 @@ flowchart TB
     subgraph tools["tools/"]
         TR["ToolRegistry: undo check at registration"]
         Tool["Typed tools: calculator, read_file, save_file, ..."]
+        MCP["McpClient: external MCP tools, adapted into the registry"]
     end
     subgraph providers["providers/"]
-        MR["ModelRouter: resolve provider per turn"]
+        MR["ModelRouter: resolve provider per turn + routing strategy"]
         Prov["AnthropicProvider, OpenAIProvider, GoogleProvider, OllamaProvider, SetupAssistantProvider"]
     end
     subgraph routines["routines/"]
@@ -94,22 +132,26 @@ flowchart TB
         RBL["RoutineBuilder and RoutineLibrary"]
     end
 
-    PG["PermissionGate"]
+    PG["PermissionGate: mode-aware + workspace-trust"]
     UM["UndoManager"]
+    SM["SnapshotManager: app-state snapshots + restore (G3)"]
     Store["Store: SQLite"]
 
     Server --> Orch
     Server --> RE
+    Server --> SM
     Orch --> MR
     MR --> Prov
     Orch --> TR
     TR --> Tool
+    TR --> MCP
     Orch --> PG
     Orch --> UM
     RE --> TR
     RE --> PG
     RE --> UM
     UM --> Store
+    SM --> Store
     RBL --> Store
     Server --> Store
 ```
@@ -146,14 +188,31 @@ Component by component:
   (`run_command` classifies its own command via a read-only allowlist; any other
   tool is destructive iff its tier is HIGH). Non-dev tools keep the coarse
   session-grant model it tracks; the consent prompt itself is an IPC round-trip to
-  the webview.
+  the webview. The amendment extends the gate along two axes without changing its
+  "runs and logs on every call" guarantee. **Workspace-trust** (Phase-2): when the
+  user grants a project directory, OPEN mode stops *prompting* for destructive calls
+  *inside* that scope (the gate still runs and logs); calls outside the workspace
+  still raise the per-invocation card exactly as today. **Custom mode** (the third
+  profile) makes the gate's *prompting* guards — the destructive card, the auto-grant
+  scope, the workspace boundary, the keyword-gate strictness — user-tunable deep in
+  Settings; the four global floors (G1, G2, G3, undeletable-anchor) are never in that
+  panel. A powerful or *armed* action additionally requires a **user-typed keyword
+  prefix** on the message; because it is user-typed, observed content can never supply
+  it, so the keyword gate doubles as a prompt-injection barrier.
 - **UndoManager** — records an action snapshot per mutating tool call and reverses
   the most recent ones on request, and separately truncates message history for a
   conversational rewind. The two mechanisms are independent.
 - **ModelRouter** — resolves which provider handles a request from an explicit role
   (PRIMARY, LOCAL, SETUP_ASSISTANT) and an optional model name. Multiple roles and
-  several models per role can be configured and reachable at once; the choice is
-  always explicit in v1.
+  several models per role can be configured and reachable at once. The amendment adds a
+  bounded **routing strategy** layer over this substrate (Phase-2): four named
+  strategies — **quality-first** (default; strongest capable model, degrade down on
+  unavailability/rate-limit/budget), **cost-first**, **local-only** (never leaves the
+  machine), and **balanced** — plus a Developer-only **custom** builder. The companion
+  surface exposes only a single "prefer quality / prefer free" toggle. Routing is
+  strong-first by default, degrades gracefully with a plain-language note and a light
+  per-provider cooldown instead of hammering a failing endpoint, and shows an
+  "answered with a free model" disclaimer whenever a free model responds.
 - **Providers** — one adapter per backend. `AnthropicProvider`, `OpenAIProvider`, and
   `GoogleProvider` are cloud providers (multi-provider, owner decision 2026-07-18);
   `OpenAIProvider` also backs an OpenAI-compatible **custom server** via a `base_url`
@@ -179,13 +238,33 @@ Component by component:
   each provider call the orchestrator's `on_usage` hook records a `usage_log` row
   (tokens + latency) at that single choke point; `stats.get` derives the token meter
   and per-provider latency from it. Widgets themselves are **declarative specs**
-  (`agent_core/widgets.py`) — a saved-routine Run pill (which runs through the existing
-  `routine.run` path, adding no execution surface) or a whitelisted stat display —
-  validated at save *and* at render, never code. In OPEN mode a third `command` kind
-  is valid (runs `run_command` on click, same gate); it is rejected in SAFE mode, and
-  like routines a widget's `created_in_mode` hides OPEN-created widgets while the
-  Simple profile is active. They are proposed like routines (draft held in the core,
-  saved only on an explicit confirm) and stored in the `widgets` table.
+  (`agent_core/widgets.py`), validated at save *and* at render, never eval'd. The
+  amendment makes widgets **buildable in every mode** and gates the *capability* a
+  widget may use rather than whether one can be built (Phase-2). SAFE draws from a
+  **non-destructive vocabulary** — the existing launchers (routine / stat / command)
+  plus interactive display kinds (to-do/checklist, note, counter, timer) rendered by
+  trusted Addison components over safe backing storage, with no arbitrary code, so
+  SAFE-1 and the webview CSP still hold. Higher tiers (Developer / Custom) add
+  code-backed / system-capable widgets governed by workspace-trust, per-tool `undo()`,
+  the snapshot floor, and the keyword gate. A widget can never exceed its mode's
+  capability tier; `created_in_mode` continues to hide higher-tier widgets under the
+  Simple profile. They are proposed like routines (draft held in the core, saved only
+  on an explicit confirm) and stored in the `widgets` table.
+- **McpClient** — Addison as an MCP **client**, not a server or gateway (Phase-2). It
+  connects to external MCP servers and surfaces their tools through the **existing
+  ToolRegistry and PermissionGate** — never a side channel, so MCP tools are gated,
+  logged, and undo-aware like any native tool. It is mode-scoped: OPEN runs them under
+  workspace-trust, while SAFE admits only read-only or genuinely undo-able tools (a
+  mutating MCP tool with no `undo()` cannot be LOW-risk, so invariant 2 keeps it out of
+  the SAFE view automatically). Connecting an MCP server is reversible, snapshotted
+  provider-style config, addable by prompting, sharing the add-an-endpoint plumbing.
+- **SnapshotManager** — the G3 machinery described above: it captures app-state
+  snapshots (config/DB rows, keys excluded) automatically before risky changes and on
+  command, marks a configuration verified-working after a turn completes against it,
+  and restores to the last verified-working state. It mints the undeletable Custom-mode
+  anchor (which additionally captures the app binary via the shell). It is wired
+  directly under the `JsonRpcServer` alongside the routine engine, and reads/writes its
+  own snapshot rows through the Store.
 - **Store** — the SQLite access layer. It reads and writes the transcript, action
-  snapshots, routines, usage, widgets, and settings; it holds no secrets, since keys
-  live only in the keychain.
+  snapshots, routines, usage, widgets, settings, and app-state snapshots; it holds no
+  secrets, since keys live only in the keychain.
