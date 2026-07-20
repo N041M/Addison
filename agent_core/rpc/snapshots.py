@@ -73,7 +73,7 @@ class SnapshotsMixin(ServerContext):
     def _snapshot_create(self) -> dict:
         """snapshot.create -> {ok, snapshotId} | {ok:false, error}.
 
-        The Settings "Save a snapshot now" control. A successful save also clears
+        The Settings "Save a restore point now" control. A successful save also clears
         the sticky warning: the user has just proved for themselves that restore
         points are being written again, so keeping the notice up would be noise."""
         self._ensure_built()

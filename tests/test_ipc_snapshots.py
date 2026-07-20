@@ -692,7 +692,7 @@ def test_snapshot_list_surfaces_the_warning_after_a_failed_auto_capture(tmp_path
 def test_the_snapshot_warning_is_sticky_until_dismissed(tmp_path):
     # A later successful AUTO capture must not quietly erase the notice — a
     # degraded floor that clears itself is a degraded floor nobody sees. Only the
-    # user's own "Save a snapshot now" clears it, because that is them seeing it.
+    # user's own "Save a restore point now" clears it, because that is them seeing it.
     h = build_server(tmp_path, register_tool=False)
     try:
         _call(h, Method.SNAPSHOT_LIST, request_id=1)

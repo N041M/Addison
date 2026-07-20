@@ -244,7 +244,7 @@ describe("the save control", () => {
     const { SaveSnapshotButton } = await import("../components/SnapshotsCard");
     render(createElement(SaveSnapshotButton, { connected: true, snapshots: state }));
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save a snapshot now" }));
+      fireEvent.click(screen.getByRole("button", { name: "Save a restore point now" }));
     });
     expect(state.handleCreateSnapshot).toHaveBeenCalledTimes(1);
   });

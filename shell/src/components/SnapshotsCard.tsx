@@ -67,7 +67,7 @@ export function SaveSnapshotButton({
       onClick={() => void state.handleCreateSnapshot()}
       className="shrink-0 rounded-sm border border-line bg-transparent px-3 py-1.5 text-xs font-medium text-ink-soft hover:border-muted disabled:opacity-50"
     >
-      Save a snapshot now
+      Save a restore point now
     </button>
   );
 }
