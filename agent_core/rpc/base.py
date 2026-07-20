@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import threading
     from collections.abc import Callable
+    from pathlib import Path
     from typing import Any
 
     from agent_core.memory.store import Store
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     from agent_core.routines.library import RoutineLibrary
     from agent_core.routines.model import Routine
     from agent_core.shell_bridge import IpcShellBridge
+    from agent_core.snapshots.snapshot_manager import SnapshotManager
     from agent_core.snapshots.undo_manager import UndoManager
     from agent_core.tools.registry import ToolRegistry
 
@@ -53,6 +55,8 @@ class ServerContext:
         def store(self) -> Store: ...
         @property
         def undo_manager(self) -> UndoManager: ...
+        @property
+        def snapshot_manager(self) -> SnapshotManager: ...
         @property
         def orchestrator(self) -> Orchestrator: ...
         @property
@@ -94,6 +98,16 @@ class ServerContext:
         _permission_waiters: dict[str, dict]
         _local_setup_lock: threading.Lock
         _local_setup_active: bool
+        # --- G3 (guaranteed rollback) ---
+        _snapshot_manager: SnapshotManager | None
+        _build_error: str | None
+        _build_error_detail: dict | None
+        _snapshot_warning: str | None      # sticky; surfaced on snapshot.list (§7.3)
+        # Derived from db_path at __init__ — NOT from the Store — so the
+        # cold-start rebuild (contract §6.4c) exists even when the Store does not.
+        # None only where no db_path was supplied (CLI-ish tests): sidecars are
+        # then off and the cold-start path answers an honest failure.
+        _snapshot_dir: Path | None
 
         # --- shared plumbing (implemented on JsonRpcServer) ---
         def _respond(self, request_id, result) -> None: ...
@@ -115,3 +129,11 @@ class ServerContext:
         ) -> str | None: ...
         def _set_provider_models(self, provider_id: str, models: list[CloudModel]) -> None: ...
         def _connections(self, latency: list[dict]) -> list[dict]: ...
+
+        # --- G3 hooks called from OTHER namespace mixins (profile/providers/
+        #     skills/widgets/conversation) and from the worker loop. Declared here
+        #     so both sides type-check. _snapshot_auto returns False when the
+        #     capture failed, so a caller whose change is IRRECOVERABLE can refuse
+        #     rather than proceed blind (contract §8).
+        def _snapshot_auto(self, reason: str) -> bool: ...
+        def _mark_verified_working(self) -> None: ...

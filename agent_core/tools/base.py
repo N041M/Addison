@@ -192,16 +192,57 @@ def call_is_destructive(tool: Any, args: dict) -> bool:
     return tool.definition.risk_tier is RiskTier.HIGH
 
 
-def call_permission_detail(tool: Any, args: dict) -> str | None:
-    """What exactly this call would do, for the per-invocation permission card.
+# The User-Agent every outbound tool request carries. One string, because two
+# copies drift and the day they do, one tool starts getting a different page than
+# the other for reasons nobody will connect to a header. A plain desktop browser
+# UA: several sites serve a stripped-down layout to anything else, and a page with
+# its text stripped out is a page this app cannot answer from.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
-    Destructive OPEN-mode actions prompt on EVERY invocation (gate.authorize), and
-    the card must show the user what they are approving each time — so a tool may
-    implement ``permission_detail(args) -> str`` (run_command returns the command
-    text, truncated). None (the default) leaves the card with just the tool's
-    static label/description, as in SAFE mode."""
+
+# How much of a permission detail may be shown, and the shape of the cut. Capped
+# HERE, at the one place a detail is constructed, rather than at each surface that
+# renders one: the card and the Activity Panel are two renderings of a single value,
+# and two independent truncations could describe the same call differently.
+#
+# There is a cap at all because a detail is attacker-influenced by construction —
+# read_web_page's is the host out of a URL the model chose, and that URL normally
+# arrived FROM a web page — so an uncapped string could push the rest of the work
+# list off the screen, which defeats the visibility the field exists to provide.
+MAX_PERMISSION_DETAIL_CHARS = 120
+
+
+def call_permission_detail(tool: Any, args: dict) -> str | None:
+    """What exactly this call would do, in words the person will see.
+
+    A tool may implement ``permission_detail(args) -> str``; None (the default)
+    leaves the surface with just the tool's static label/description.
+
+    TWO CONSUMERS, and the second one is the reason this needs reading carefully:
+
+      * the per-invocation permission card for destructive OPEN-mode actions
+        (gate.authorize), which shows what is being approved each time —
+        ``run_command`` returns the command text here;
+      * the Activity Panel, on EVERY granted call in BOTH modes
+        (orchestrator -> ``main._emit_activity`` -> ``tool.activityUpdate``).
+
+    So the contract is not "text for a rare confirmation dialog". **A detail is
+    user-visible on every call, and it leaves the Agent Core for the webview — the
+    lowest-trust process.** It must therefore never contain a secret, a filesystem
+    path, or a full URL: ``read_web_page`` deliberately returns the HOST only,
+    because a query string can carry whatever a page hid in it and would land in
+    the panel, and in any screenshot of it. Return the least that still tells the
+    person what is being touched."""
     provider = getattr(tool, "permission_detail", None)
     if callable(provider):
         value = provider(args)
-        return str(value) if value else None
+        if not value:
+            return None
+        text = str(value)
+        if len(text) > MAX_PERMISSION_DETAIL_CHARS:
+            text = text[:MAX_PERMISSION_DETAIL_CHARS] + "…"
+        return text
     return None

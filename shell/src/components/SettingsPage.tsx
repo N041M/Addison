@@ -10,7 +10,8 @@
 // changed is layout and styling to the Fern card language.
 //
 //   Column A: Where Addison thinks · API keys · Routines
-//   Column B: Run a model on this computer · Profile (+ Appearance) · Diagnostics
+//   Column B: Run a model on this computer · Skills · Profile (+ Appearance) ·
+//             Restore points · Diagnostics
 //
 // API keys is multi-provider (owner decision 2026-07-18): one mapped row each
 // for anthropic | openai | google | custom (an OpenAI-compatible server).
@@ -21,9 +22,11 @@ import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
+import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
+import { SnapshotsCard, SaveSnapshotButton } from "./SnapshotsCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
@@ -41,6 +44,8 @@ interface Props {
   models: ModelSelection;
   /** The skills bundle (useSkills): the list + create/edit/toggle/remove handlers. */
   skills: SkillsState;
+  /** The restore-points bundle (useSnapshots) — the G3 floor's Settings face. */
+  snapshots: SnapshotsState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -94,6 +99,7 @@ export function SettingsPage({
   notice,
   models,
   skills,
+  snapshots,
   profile,
   onSetProfile,
   diagnostics,
@@ -214,6 +220,18 @@ export function SettingsPage({
               theme={theme}
               onSetTheme={onSetTheme}
             />
+          </CardSlot>
+          {/* Restore points sit directly after Profile on purpose: the person who
+              has just changed how freely Addison may act should see the way back
+              in the same breath (G3). */}
+          <CardSlot>
+            <Card
+              title="Restore points"
+              subtitle="Addison saves one before anything risky, so you can always go back to a setup that worked."
+              action={<SaveSnapshotButton connected={connected} snapshots={snapshots} />}
+            >
+              <SnapshotsCard connected={connected} snapshots={snapshots} />
+            </Card>
           </CardSlot>
           {profile?.flags.rawDiagnostics && (
             <CardSlot>

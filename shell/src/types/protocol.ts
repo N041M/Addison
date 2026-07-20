@@ -55,6 +55,16 @@ export const Method = {
   SkillSetEnabled: "skill.setEnabled",
   SkillDelete: "skill.delete",
 
+  // Snapshots — the G3 guaranteed-rollback floor. A snapshot copies Addison's
+  // settings/providers/skills/widgets/routines; it never contains your saved
+  // keys (they stay in the system keychain) and never touches your chats.
+  // "Restore" always goes back to the last setup that actually worked.
+  SnapshotList: "snapshot.list",
+  SnapshotCreate: "snapshot.create",
+  SnapshotRestore: "snapshot.restore",
+  SnapshotRestoreLastWorking: "snapshot.restoreLastWorking",
+  SnapshotDelete: "snapshot.delete",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.
@@ -67,6 +77,7 @@ export const Method = {
   ShellOpenExternal: "shell.openExternal",
   ShellPickFile: "shell.pickFile",
   ShellReadScopedFile: "shell.readScopedFile",
+  ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
   KeychainSignRelayRequest: "keychain.signRelayRequest",
@@ -109,4 +120,15 @@ export interface PermissionRequest {
 export interface ActivityUpdate {
   label: string; // e.g. "Searching the web…", "Reading invoice_march.pdf…"
   toolId: string;
+  // What this step is about to touch, when the tool can say — read_web_page sends
+  // the SITE it is reaching. Absent for the tools that have nothing to name.
+  // Not decoration: a permission grant is keyed by tool id, so once the person has
+  // allowed one page read, every later read is ungated and its address is chosen by
+  // the model. This line is where they see it (owner decision 2026-07-20).
+  //
+  // It names the site, NOT the payload. The core deliberately sends the host only —
+  // a full URL would put the query string, and anything a page hid in it, on screen
+  // and into any screenshot — so a familiar host here is not evidence that the read
+  // was innocent, only that the destination was not a surprise.
+  detail?: string;
 }

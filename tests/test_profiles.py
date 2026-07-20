@@ -14,6 +14,7 @@ _V1_TOOLS = [
     "open_link",
     "read_clipboard",
     "read_file",
+    "read_web_page",
     "save_file",
     "web_search",
 ]

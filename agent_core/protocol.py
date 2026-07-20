@@ -55,6 +55,11 @@ class Method:
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
+    # {toolId, label, detail?} -> notification only. `detail` is the tool's own
+    # permission_detail for that call (read_web_page: the site it is about to reach)
+    # and is OMITTED for the tools that have none. It is what tells the person WHERE
+    # a call is going after the first grant makes later calls of that tool ungated —
+    # visibility instead of per-site grant scoping (owner decision 2026-07-20).
     TOOL_ACTIVITY_UPDATE = "tool.activityUpdate"
     UNDO_REWIND_CONVERSATION = "undo.rewindConversation"
     UNDO_UNDO_LAST_ACTION = "undo.undoLastAction"
@@ -99,6 +104,22 @@ class Method:
     SKILL_SET_ENABLED = "skill.setEnabled"     # {id, enabled} -> {ok}
     SKILL_DELETE = "skill.delete"              # {id} -> {ok}
 
+    # Snapshots — GLOBAL FLOOR G3 (guaranteed rollback; amendment §3, spec §4.9).
+    # An app-state snapshot is a point-in-time copy of Addison's mutable CONFIG
+    # (settings, providers, skills, widgets, routines) — NEVER keys (they
+    # stay in the OS keychain, G1) and NEVER the transcript. Taken automatically
+    # before any risky change and on command. Restore always targets the last
+    # VERIFIED-WORKING config. These are RPC methods, never registry tools: the
+    # permission gate must never be able to deny a restore. Snapshots are visible
+    # and restorable in EVERY mode — artifact hiding does not apply to them.
+    SNAPSHOT_LIST = "snapshot.list"                    # {} -> {snapshots: [...], warning?}
+    SNAPSHOT_CREATE = "snapshot.create"                # {} -> {ok, snapshotId} | {ok:false, error}
+    # {id} -> {ok, detail?, error?, binaryMismatch?}
+    SNAPSHOT_RESTORE = "snapshot.restore"
+    # {} -> {ok, snapshotId?, detail?, error?}
+    SNAPSHOT_RESTORE_LAST_WORKING = "snapshot.restoreLastWorking"
+    SNAPSHOT_DELETE = "snapshot.delete"                # {id} -> {ok, error?}
+
     # Core -> Shell (handled in Rust, NEVER exposed to or callable from the
     # webview — §1.3, §5). Listed here and mirrored in protocol.ts only so the
     # golden-file drift test (§9) covers the full method surface. These carry
@@ -112,9 +133,15 @@ class Method:
     SHELL_OPEN_EXTERNAL = "shell.openExternal"         # {url} -> {}
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
-    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"      # {} -> {deviceId, publicKey}; public half ONLY
-    KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"  # {provider} -> {key}; per-call, never cached
+    # {} -> {deviceId, publicKey}; the public half ONLY
+    KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
+    # {provider} -> {key}; read per-call at the moment of use, never cached (G1)
+    KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"
     # {payload} -> {signature, deviceId}. The shell signs relay requests with the
     # device private key, which never leaves the OS keychain (§5) — the core sends
     # bytes to sign, never sees key material.
     KEYCHAIN_SIGN_RELAY_REQUEST = "keychain.signRelayRequest"
+    # {} -> {version, identifier}. The build the app is running, recorded on a G4
+    # anchor so a restore can SAY when the build has moved on. A reference string,
+    # never bytes and never a path — nothing in the codebase replaces a binary.
+    SHELL_APP_BUILD_REF = "shell.appBuildRef"

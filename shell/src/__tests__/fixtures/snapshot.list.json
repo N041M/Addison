@@ -1,0 +1,40 @@
+{
+  "snapshots": [
+    {
+      "id": "snapshot-fixture-2",
+      "createdAt": 4102444802,
+      "trigger": "auto",
+      "reason": "guard_weakened",
+      "reasonLabel": "Before turning a guard off",
+      "verifiedWorking": true,
+      "undeletable": true,
+      "capturesBinary": true,
+      "createdInMode": "safe"
+    },
+    {
+      "id": "snapshot-fixture-1",
+      "createdAt": 4102444801,
+      "trigger": "on_command",
+      "reason": "user_request",
+      "reasonLabel": "You saved this",
+      "verifiedWorking": true,
+      "undeletable": false,
+      "capturesBinary": false,
+      "createdInMode": "safe"
+    },
+    {
+      "id": "snapshot-fixture-0",
+      "createdAt": 4102444800,
+      "trigger": "auto",
+      "reason": "mode_switch",
+      "reasonLabel": "Before switching profile",
+      "verifiedWorking": false,
+      "undeletable": false,
+      "capturesBinary": false,
+      "createdInMode": "safe"
+    }
+  ],
+  "lastWorkingId": "snapshot-fixture-2",
+  "lastWorkingLabel": "Before turning a guard off",
+  "lastWorkingProfileChange": null
+}

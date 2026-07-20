@@ -51,6 +51,66 @@ in Prague right now?" or a current-events question).
 panel, then an answer grounded in the results. Check the expanded steps name
 the search plainly.
 
+## 4a. Read a web page
+
+**Do:** ask for something that needs the *contents* of a page, not a link — e.g.
+"What does the front page of bbc.co.uk say right now?" or, after a search,
+"read the first result and tell me what it says."
+**Expect:** permission card → Allow → **"Read a web page"** in the activity
+panel, then an answer that quotes or paraphrases what is actually on the page.
+Addison should answer *from* the page, never fall back to "here's a link, go and
+look" — that behaviour is what this tool exists to replace.
+
+**Do:** ask it to read something that isn't words — a PDF, an image, a download
+link.
+**Expect:** a plain refusal in ordinary language ("that isn't a page I can read
+as words", or similar). **No stack trace, no error code, no mojibake**, and no
+wall of control characters presented as page content.
+
+**Do:** ask it to read `http://localhost` (or your router's address, or
+`http://169.254.169.254`).
+**Expect:** a plain refusal. Addison must never reach inside the machine or the
+home network on an address the model chose. If any of these returns page
+content, **stop the pass and file it first** — it outranks everything else in
+this document.
+
+**Do:** ask for a very long page.
+**Expect:** the answer arrives in reasonable time and, if the page was
+shortened, Addison **says so** rather than quietly answering from a fragment.
+
+## 4b. Activity panel — the site being reached
+
+The owner's chosen mitigation for silent outward reach (2026-07-20) is
+**visibility, not extra prompts**: once you have allowed one page read, every
+later read in the session is ungated, so the panel naming the destination is the
+only thing standing between the person and a read they never asked for. Treat a
+missing host line as a safety failure, not a cosmetic one.
+
+**Do:** run a page read (step 4a) and watch the activity panel.
+**Expect:** under the **"Read a web page"** step, a second line naming the
+**site** — the host only (`bbc.co.uk`), in **mono**, one step dimmer than the
+label above it. Confirm it appears on **every** read, not only the first one
+that showed a permission card.
+
+**Do:** ask Addison to read a page whose address is long, or one that redirects.
+**Expect:** the line shows the **host**, never the full address — no path, no
+query string, no `?utm_...` tail. A long host **wraps onto a second line**; it
+must not be truncated with an ellipsis, because the end of an address is the
+part that says whose site it really is.
+
+**Do:** repeat one read in **Developer** mode.
+**Expect:** identical — the host line is not a Simple-only affordance.
+
+**Do:** run a routine that reads a page.
+**Expect:** the host still appears; the routine path is not a way around
+visibility.
+
+**Both themes.** Toggle light and dark and re-read the line in each. It must be
+comfortably readable against the page background at its small size — dimmer than
+the step label, but never so faint you have to lean in. A line nobody can read
+is not visibility. Check it at the narrow-window width too (§14): the host wraps
+inside the panel and never pushes the layout sideways.
+
 ## 5. Save a file (native dialog)
 
 **Do:** "Write a two-line thank-you note and save it as a file."
@@ -194,6 +254,80 @@ code highlights with the calm palette on the inset `surface` background, the
 table gets hairline borders + small-caps headers. Ask for a small mermaid
 flowchart — it renders as an SVG matching the theme; a **malformed** fence
 falls back to plain code without breaking the row.
+
+---
+
+## 13a. Restore points (the G3 rollback floor)
+
+The Settings card that makes global floor **G3** visible. Everything here is
+recovery machinery, so a failure in this section outranks a failure anywhere
+else in this document — file it first.
+
+**Where.** Settings → **Restore points**, directly under Profile (deliberate:
+the person who just changed their profile is one row away from undoing it).
+The card is called "Restore points" everywhere in the UI, never "Snapshots".
+
+**The list.** Rows are 8px `ProviderRow` shells: a plain-language label
+("Working setup", "Before switching profile", "Before deleting a note",
+"You saved this") in the semibold UI face, and its timestamp below in **mono**
+(machine facts only). On a fresh profile there is exactly one row, **"Addison as
+first installed"**, and it is marked **Permanent**.
+
+**Automatic capture.** Do each of these and re-open the card — a new row appears
+for each, and its label names the change: switch profile (Simple ⇄ Developer),
+connect a provider key, remove a provider key, delete a routine, delete a widget,
+delete a note (skill), edit a note. Then send one ordinary chat message and
+re-open: a **"Working setup"** row appears. Send a second message without
+changing anything — **no second row** (identical configs dedupe).
+
+**Save a snapshot now.** The outlined button in the card's header (Diagnostics
+"Clear" style, never fern-filled). One click adds a **"You saved this"** row
+immediately.
+
+**Restore, the two-step.** Click **Restore to the last working state** (fern
+filled, rounded — a recovery is never styled as a destruction, so it must not
+carry the rose `danger` token). Expect an inline fern-tint confirm block —
+**never** a system `window.confirm` — reading *"Your settings, services, notes,
+widgets and routines go back to how they were. Your chats and your saved keys
+aren't touched."* The **target must be named above the buttons** with its
+timestamp: Restore is never a click into the dark. **Not now** backs out and
+leaves everything unchanged.
+
+**The two extra sentences.** Make a change in Developer, switch to Simple, then
+open the confirm: a second sentence must say Addison will switch back to
+Developer — a restore can move you between profiles, and therefore between
+safety modes, and the base sentence never said so. On a fresh install where the
+only target is genesis, the second sentence must instead warn that services,
+notes, widgets and routines are cleared.
+
+**Restore actually restores.** Add a note, restore past it, and confirm the note
+is gone, the widget rail matches, and **the chat history is untouched** — a
+rollback restores configuration, it never erases chats. Re-open the API keys
+card: a provider whose key is still in the keychain reconnects on its own; one
+whose key was removed is **named in the result message**, not silently shown as
+connected.
+
+**Permanent rows refuse deletion.** The genesis row (and, from step 2, any
+Custom-mode anchor) shows a blocky **PERMANENT** tag — square, 2px fern left
+rule, small caps: it is something Addison is telling you about the record, not a
+control — and has **no Remove control at all**. Ordinary rows do.
+
+**Mode never hides a row.** Create a routine and a snapshot in Developer, switch
+to Simple, open Restore points: **every row is still listed and still
+restorable.** Routines and widgets made in Developer are hidden in Simple;
+snapshots are the deliberate exception, because hiding them would hide the way
+back from the person most likely to need it. An empty or shortened list here is
+a **G3 failure**, not a cosmetic one.
+
+**Both themes.** Walk the card in **light and dark**: row borders and the mono
+timestamps read correctly, the **fern-tint confirm block** has enough contrast
+against the card in dark, the **`text-fern-deep` PERMANENT tag** stays legible in
+dark (it is the one place that token sits on a row background), the fern-filled
+Restore button's label passes contrast, and Tab focus rings are visible on the
+save button, the restore button, both confirm buttons, and every Remove.
+
+**Narrow window.** Under 768px the card stacks into the single Settings column
+and the save / restore / confirm buttons are all **≥44px** tall.
 
 ---
 

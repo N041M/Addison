@@ -38,3 +38,24 @@ _BYOK_ONBOARDING_MESSAGE = (
     "No API key is set up yet. Add your Anthropic API key in Settings."
 )
 _UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
+
+# G3: the store could not be opened. Plain, actionable, no stack trace. It names
+# Restore because Restore genuinely works in this state — snapshot.list and
+# snapshot.restoreLastWorking are exempt from the build-failure short-circuit and
+# are served store-free from the sidecar files (main.py, contract §6.4c/§6.5).
+_STORE_UNAVAILABLE_MESSAGE = (
+    "Addison couldn't open its settings file. Restart Addison — if it happens "
+    "again, use Restore in Settings to go back to your last working setup."
+)
+# The cold-start rebuild succeeded: the damaged file was renamed aside (never
+# deleted) and a fresh one was built from the last working setup on disk.
+_REBUILT_MESSAGE = (
+    "Addison's settings file was damaged, so I rebuilt it from your last working "
+    "setup. Your chats and saved keys are untouched."
+)
+# ...and when there is nothing on disk to rebuild from. An honest failure beats a
+# silent one — this is the one place the floor can genuinely not deliver.
+_NOTHING_TO_REBUILD_FROM = (
+    "Addison couldn't open its settings file, and there's no saved restore point "
+    "to rebuild from."
+)

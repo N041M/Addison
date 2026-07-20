@@ -236,6 +236,49 @@ export interface Skill {
   enabled: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Restore points (snapshot.list) — the G3 guaranteed-rollback floor. One row is
+// a point-in-time copy of Addison's settings, services, notes, widgets and
+// routines. It never holds a saved key (those stay in the system keychain) and
+// never holds a chat, so nothing here is sensitive and nothing here is large:
+// `capturesBinary` is a boolean, and the copy itself never crosses the wire.
+// ---------------------------------------------------------------------------
+export interface Snapshot {
+  id: string;
+  /** Unix seconds, as the core stores it. */
+  createdAt: number;
+  /** "auto" (Addison saved it before a risky change) or "on_command" (you did). */
+  trigger: string;
+  /** The closed reason slug; `reasonLabel` is the sentence to actually show. */
+  reason: string;
+  reasonLabel: string;
+  /** True once a message was answered against this configuration. */
+  verifiedWorking: boolean;
+  /**
+   * G4: a permanent row. Minted when a safety guard is turned off, plus the
+   * very first snapshot — the bottom of the restore walk. It has no Remove
+   * control anywhere in the UI, because the core refuses to delete it.
+   */
+  undeletable: boolean;
+  /** Whether the row records which build of Addison it was saved on. */
+  capturesBinary: boolean;
+  /** Recorded for display only — a restore point is NEVER hidden by mode. */
+  createdInMode?: "safe" | "open" | "custom";
+}
+
+/** The whole `snapshot.list` picture: the rows, what "Restore to the last
+ * working state" would actually do right now, and a sticky warning when an
+ * automatic restore point couldn't be saved. */
+export interface SnapshotList {
+  snapshots: Snapshot[];
+  lastWorkingId?: string;
+  lastWorkingLabel?: string;
+  /** Present only when the restore would also change profile — and therefore
+   * how freely Addison may act. Named before the click, never after. */
+  lastWorkingProfileChange?: string;
+  warning?: string;
+}
+
 /** One selectable profile, with label + description authored by the core. */
 export interface ProfileOption {
   id: string;

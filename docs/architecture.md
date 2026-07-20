@@ -48,7 +48,7 @@ flowchart TB
     Engine -.->|"shell.* and keychain.* requests over stdout"| Supervisor
     Engine --> Snapshots
     Snapshots -->|"config/DB rows only — never keys (G1)"| Store
-    Snapshots -.->|"Custom anchor: app-binary capture via shell.*"| Supervisor
+    Snapshots -.->|"Custom anchor: app build reference via shell.appBuildRef"| Supervisor
     Supervisor --> Keychain
     Supervisor --> Filesystem
     StoreKeyCmd --> Keychain
@@ -80,6 +80,9 @@ What each process may and may not do:
 
 ### Snapshot and restore (G3 — guaranteed rollback)
 
+*Built in Phase-2 step 1 — `agent_core/snapshots/`, the `config_snapshots` table, the
+`snapshot.*` RPC namespace, and the Settings "Restore points" card.*
+
 The scope amendment adds a fourth global floor, **G3**: neither the user nor the
 model can drive Addison into an unrecoverable configuration — at all times there is a
 one-action restore to a **last verified-working** state, and the restore path is
@@ -89,21 +92,47 @@ routing choice and guard toggles, provider configuration metadata, and the
 declarative skills/widgets/routines rows. A snapshot is taken **automatically** before
 any risky or sweeping change (a guard toggle, a provider/endpoint change, a bulk
 "make it cheaper" reconfiguration, a mode switch) and can also be taken **on command**
-from Settings or by asking Addison. Restore always targets the last state that
-actually completed a turn, not merely the state before the last edit.
+from the Settings card. *(**Asking Addison** for one is step-2 work: it needs a LOW,
+capture-only `snapshot_now` registry tool, which is not written and not registered.
+Step 1 ships the Settings control and the RPC method only.)* Restore always targets
+the last state that actually completed a turn, not merely the state before the last
+edit.
 
 Two boundaries keep this consistent with the trust model:
 
 - **Keys are excluded (G1 holds).** A snapshot never contains key material; restoring
   config leaves the OS keychain untouched, so a rollback can never move, expose, or
   clobber a key. A restored provider config re-binds to whatever keys are in the
-  keychain by provider id.
+  keychain by provider id — and if that key is gone, the restore names the affected
+  service in plain language rather than pretending it reconnected.
 - **Deletable, except the anchor.** Ordinary snapshots are housekeeping and the user
   may clear them. The moment a safety guard is **turned off in Custom mode** and saved,
   an **undeletable anchor** of the last verified-working state is minted — neither user
-  nor model can remove it. Unlike an ordinary snapshot (state only), the anchor **also
-  captures the app binary** via the shell, giving a complete known-good build + config
-  to fall back to (keys still excluded).
+  nor model can remove it, and the refusal is enforced by database triggers, not by a
+  `WHERE` clause. Unlike an ordinary snapshot, the anchor also **records the app build
+  it was minted on** — a short `{"version", "identifier"}` reference fetched from the
+  shell via `shell.appBuildRef`, never bytes and never a path (keys still excluded).
+  *(Owner decision 2026-07-20: this corrects the earlier "captures the app binary /
+  complete known-good build + config" wording. **Restoring a previous binary is not
+  implemented**; a restore whose build differs says so plainly and changes settings
+  only. Re-installing a prior build belongs to the Tauri updater and is tracked as a
+  **Phase-3** item — putting a second binary-replacement mechanism inside the recovery
+  floor would collide with the updater and would be the one piece of the floor that
+  could itself brick the app.)*
+
+Two more properties are structural rather than boundaries, and they are why this
+subsystem is described here at all:
+
+- **The restore path holds no dependencies it could lose.** `SnapshotManager` reaches
+  the Store and nothing else — no provider, router, profile, policy mode, tool registry
+  or permission gate. Restore is an RPC path, **never a registry tool and never gated**:
+  a gate that could deny a restore would make "the restore path is itself unbreakable"
+  false.
+- **Every payload is written twice** — into the row, and into a `0600` JSON sidecar
+  beside the database. If SQLite itself will not open, `snapshot.list` and
+  `snapshot.restoreLastWorking` are answered from those files with no Store at all; the
+  restore renames the damaged database **aside** (never deletes it) and rebuilds in the
+  same session. That is the answer to "the database is the broken thing".
 
 ## Agent Core components
 
@@ -195,7 +224,8 @@ Component by component:
   still raise the per-invocation card exactly as today. **Custom mode** (the third
   profile) makes the gate's *prompting* guards — the destructive card, the auto-grant
   scope, the workspace boundary, the keyword-gate strictness — user-tunable deep in
-  Settings; the four global floors (G1, G2, G3, undeletable-anchor) are never in that
+  Settings; the four global floors (G1, G2, G3, and the undeletable-anchor rule —
+  **G4** in `CLAUDE.md` and in code; the two names are the same rule) are never in that
   panel. A powerful or *armed* action additionally requires a **user-typed keyword
   prefix** on the message; because it is user-typed, observed content can never supply
   it, so the keyword gate doubles as a prompt-injection barrier.
@@ -262,9 +292,12 @@ Component by component:
   snapshots (config/DB rows, keys excluded) automatically before risky changes and on
   command, marks a configuration verified-working after a turn completes against it,
   and restores to the last verified-working state. It mints the undeletable Custom-mode
-  anchor (which additionally captures the app binary via the shell). It is wired
-  directly under the `JsonRpcServer` alongside the routine engine, and reads/writes its
-  own snapshot rows through the Store.
+  anchor (which additionally records the app build reference, fetched via the shell).
+  It is wired directly under the `JsonRpcServer` alongside the routine engine, and
+  reads/writes its own snapshot rows through the Store. Not to be confused with the
+  `UndoManager` in the same package: that reverses one tool call; this restores the
+  whole configuration. They are complementary and never call each other, which is why
+  the verbs differ — capture / restore / mint_anchor / prune, never record / undo_last.
 - **Store** — the SQLite access layer. It reads and writes the transcript, action
   snapshots, routines, usage, widgets, settings, and app-state snapshots; it holds no
   secrets, since keys live only in the keychain.

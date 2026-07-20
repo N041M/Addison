@@ -46,6 +46,10 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.readScopedFile" => read_scoped_file(app, params),
         "shell.openExternal" => open_external(params),
         "shell.readClipboard" => read_clipboard(),
+        // Which build of Addison this is — recorded on a permanent restore point
+        // so a later restore can say honestly that it came from another version
+        // (G4; app_build.rs). Reads no user data and touches no file.
+        "shell.appBuildRef" => crate::app_build::app_build_ref(app),
         // Mail/messaging draft handoff (shell.openDraft/discardDraft) needs a real,
         // reversible compose surface to satisfy draft_message's undo contract; it
         // is not built in this step. Fail cleanly rather than pretend.

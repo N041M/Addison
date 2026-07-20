@@ -8,12 +8,18 @@ action_snapshots table untouched. A tmp-file DB is used (not ``:memory:``) so th
 commit-per-write durability path is actually exercised.
 """
 
+import sqlite3
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+from agent_core import live_db_guard
 from agent_core.memory.store import Store
+from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.tools.base import ActionSnapshot
 
 
@@ -417,6 +423,8 @@ def test_expected_indexes_exist_after_open(store: Store):
         "idx_messages_conversation_created",
         "idx_usage_log_created",
         "idx_usage_log_provider_created",
+        "idx_config_snapshots_created",
+        "idx_config_snapshots_verified_created",
     } <= _index_names(store)
 
 
@@ -434,6 +442,8 @@ def test_reopening_existing_db_is_idempotent(tmp_path: Path):
             "idx_messages_conversation_created",
             "idx_usage_log_created",
             "idx_usage_log_provider_created",
+            "idx_config_snapshots_created",
+            "idx_config_snapshots_verified_created",
         } <= _index_names(second)
         # Existing data is intact and still queryable through the indexed paths.
         assert second.usage_totals_since(0)["total"] == 15
@@ -532,3 +542,588 @@ def test_skill_crud_and_enabled_filter(store: Store):
     store.delete_skill("s1")
     assert store.get_skill("s1") is None
     assert [r["id"] for r in store.list_skills()] == ["s2"]
+
+
+# --- config snapshots (GLOBAL FLOOR G3) --------------------------------------
+# The SQL half of guaranteed rollback. These tests are about one sentence:
+# "restore always works, even from a broken config" — so most of them prove a
+# failure mode CANNOT happen rather than that a happy path does.
+
+
+def _config_snap(
+    snap_id: str,
+    created_at: int,
+    *,
+    reason: str = "on_command",
+    trigger: str = "on_command",
+    blob: str = '{"version": 1, "tables": {}}',
+    fingerprint: str | None = None,
+    verified: bool = False,
+    undeletable: bool = False,
+    created_in_mode: str = "safe",
+) -> ConfigSnapshot:
+    return ConfigSnapshot(
+        id=snap_id,
+        created_at=created_at,
+        trigger=trigger,
+        reason=reason,
+        payload_version=1,
+        state_blob=blob,
+        state_fingerprint=fingerprint if fingerprint is not None else f"fp-{snap_id}",
+        verified_working=verified,
+        undeletable=undeletable,
+        created_in_mode=created_in_mode,
+    )
+
+
+def test_config_snapshot_insert_get_and_list_newest_first(store: Store):
+    store.insert_config_snapshot(_config_snap("a", created_at=100))
+    store.insert_config_snapshot(_config_snap("b", created_at=100))  # same second
+    store.insert_config_snapshot(_config_snap("c", created_at=99))
+
+    # created_at DESC, then rowid DESC as the same-second tiebreak: b was inserted
+    # after a, so it is the newer of the pair.
+    assert [r["id"] for r in store.list_config_snapshots()] == ["b", "a", "c"]
+
+    loaded = store.get_config_snapshot("a")
+    assert loaded is not None
+    assert loaded.state_blob == '{"version": 1, "tables": {}}'
+    assert loaded.payload_version == 1
+    assert loaded.verified_working is False and loaded.undeletable is False
+    assert loaded.binary_ref is None and loaded.created_in_mode == "safe"
+
+
+def test_list_config_snapshots_omits_the_state_blob(store: Store):
+    store.insert_config_snapshot(_config_snap("a", created_at=1))
+    (row,) = store.list_config_snapshots()
+    assert "state_blob" not in row
+    assert row["state_fingerprint"] == "fp-a"
+
+
+def test_get_config_snapshot_returns_none_for_unknown_id(store: Store):
+    assert store.get_config_snapshot("nope") is None
+
+
+def test_verified_config_snapshot_refs_ignores_unverified_rows(store: Store):
+    store.insert_config_snapshot(_config_snap("good", created_at=1, verified=True))
+    store.insert_config_snapshot(_config_snap("unproven", created_at=2))
+    assert [r["id"] for r in store.verified_config_snapshot_refs()] == ["good"]
+
+    store.set_config_snapshot_verified("unproven")
+    store.set_config_snapshot_verified("unproven")  # idempotent
+    assert [r["id"] for r in store.verified_config_snapshot_refs()] == ["unproven", "good"]
+
+
+def test_verified_config_snapshot_refs_carries_no_blob_and_no_limit(store: Store):
+    # Genesis is the OLDEST row, so a capped walk would put it out of reach. 30
+    # verified rows above it must not hide it.
+    store.insert_config_snapshot(
+        _config_snap("genesis", created_at=1, reason="genesis", verified=True, undeletable=True)
+    )
+    for i in range(30):
+        store.insert_config_snapshot(_config_snap(f"s{i}", created_at=100 + i, verified=True))
+
+    refs = store.verified_config_snapshot_refs()
+    assert len(refs) == 31
+    assert refs[-1]["id"] == "genesis"
+    assert set(refs[0]) == {"id", "state_fingerprint", "reason", "created_at", "created_in_mode"}
+
+
+def test_delete_config_snapshot_refuses_an_undeletable_row(store: Store):
+    store.insert_config_snapshot(_config_snap("anchor", created_at=1, undeletable=True))
+    store.insert_config_snapshot(_config_snap("ordinary", created_at=2))
+
+    assert store.delete_config_snapshot("anchor") is False
+    assert store.get_config_snapshot("anchor") is not None
+    assert store.delete_config_snapshot("ordinary") is True
+    assert store.delete_config_snapshot("ordinary") is False   # already gone
+
+
+def test_raw_sql_delete_of_an_anchor_is_refused_by_the_database(store: Store):
+    # G4: the statement a future contributor writes without knowing the rule —
+    # no WHERE clause at all — must still leave the anchor standing.
+    store.insert_config_snapshot(_config_snap("anchor", created_at=1, undeletable=True))
+    store.insert_config_snapshot(_config_snap("ordinary", created_at=2))
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute("DELETE FROM config_snapshots")
+    store._conn.rollback()
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute("DELETE FROM config_snapshots WHERE id = 'anchor'")
+    store._conn.rollback()
+
+    assert store.get_config_snapshot("anchor") is not None
+
+
+def test_raw_sql_cannot_clear_the_undeletable_flag(store: Store):
+    store.insert_config_snapshot(_config_snap("anchor", created_at=1, undeletable=True))
+    with pytest.raises(sqlite3.IntegrityError):
+        store._conn.execute("UPDATE config_snapshots SET undeletable = 0")
+    store._conn.rollback()
+
+    anchor = store.get_config_snapshot("anchor")
+    assert anchor is not None and anchor.undeletable is True
+
+
+def test_prune_keeps_recent_or_young_whichever_keeps_more(store: Store):
+    for i in range(5):
+        store.insert_config_snapshot(_config_snap(f"s{i}", created_at=100 + i))
+
+    # Everything is older than the cutoff, so only the recency floor keeps rows.
+    store.prune_config_snapshots(cutoff=1000, keep_last=2)
+    assert [r["id"] for r in store.list_config_snapshots()] == ["s4", "s3"]
+
+    # And a row newer than the cutoff survives regardless of the recency floor.
+    store.prune_config_snapshots(cutoff=0, keep_last=0)
+    assert [r["id"] for r in store.list_config_snapshots()] == ["s4", "s3"]
+
+
+def test_prune_never_removes_an_anchor(store: Store):
+    store.insert_config_snapshot(
+        _config_snap("anchor", created_at=1, reason="guard_weakened", undeletable=True)
+    )
+    for i in range(5):
+        store.insert_config_snapshot(_config_snap(f"s{i}", created_at=100 + i))
+
+    store.prune_config_snapshots(cutoff=10_000, keep_last=1)
+    assert "anchor" in {r["id"] for r in store.list_config_snapshots()}
+
+
+def test_prune_never_removes_genesis(store: Store):
+    # Genesis is the bottom of the restore walk. 50 newer snapshots and a 30-day
+    # age cutoff must not prune it out from under the floor.
+    store.insert_config_snapshot(
+        _config_snap("genesis", created_at=1, reason="genesis", verified=True, undeletable=True)
+    )
+    for i in range(50):
+        store.insert_config_snapshot(_config_snap(f"s{i}", created_at=100 + i))
+
+    store.prune_config_snapshots(cutoff=10_000, keep_last=10)
+    assert "genesis" in {r["id"] for r in store.list_config_snapshots()}
+
+
+def test_prune_never_removes_the_newest_two_verified_rows(store: Store):
+    store.insert_config_snapshot(_config_snap("v1", created_at=10, verified=True))
+    store.insert_config_snapshot(_config_snap("v2", created_at=20, verified=True))
+    store.insert_config_snapshot(_config_snap("v3", created_at=30, verified=True))
+    for i in range(5):
+        store.insert_config_snapshot(_config_snap(f"s{i}", created_at=40 + i))
+
+    store.prune_config_snapshots(cutoff=10_000, keep_last=0)
+    survivors = {r["id"] for r in store.list_config_snapshots()}
+    # v3 and v2 are exempt; v1 is not, and the ordinary rows are gone.
+    assert survivors == {"v3", "v2"}
+
+
+# --- the capture / apply state primitives ------------------------------------
+
+
+def _seed_config(store: Store) -> None:
+    """A small but complete config: one of each captured table."""
+    store.set_setting("active_profile", "developer")
+    store.upsert_provider_config("anthropic", connected=True, added_at=5)
+    store.insert_skill(
+        id="sk1", name="Be brief", instructions="Short.", enabled=True, created_at=7
+    )
+    store.insert_widget(
+        id="w1", spec_json='{"kind":"stat"}', pinned=True, position=0, created_at=8
+    )
+    store.insert_routine(
+        id="r1",
+        name="Weekly summary",
+        description="Sums the week up.",
+        plan_json={"steps": []},
+        created_from_conversation_id=None,
+        created_at=9,
+    )
+
+
+def test_read_config_state_captures_exactly_the_declared_tables(store: Store):
+    _seed_config(store)
+    state = store.read_config_state()
+    assert set(state) == {
+        "app_settings", "provider_config", "skills", "widgets", "routines"
+    }
+    assert state["skills"][0]["name"] == "Be brief"
+    assert set(state["skills"][0]) == {
+        "id", "name", "instructions", "enabled", "created_at"
+    }
+
+
+def test_read_config_state_excludes_transcript_usage_and_undo_tables(store: Store):
+    _seed_config(store)
+    _seed_conversation(store, "c1", ["m1"])
+    _usage(store, at=1)
+    store.insert_action_snapshot(_snap("a", created_at=1))
+
+    state = store.read_config_state()
+    for excluded in (
+        "conversations", "messages", "usage_log", "action_snapshots",
+        "memory_facts", "device_identity", "routine_runs", "config_snapshots",
+        "tool_grants",
+    ):
+        assert excluded not in state
+
+
+def test_read_config_state_preserves_raw_sqlite_values(store: Store):
+    store.upsert_provider_config("custom", connected=False, base_url=None)
+    (row,) = store.read_config_state()["provider_config"]
+    assert row["connected"] == 0 and isinstance(row["connected"], int)
+    assert row["base_url"] is None                    # NULL stays None
+    assert isinstance(row["provider_id"], str)
+
+
+def test_apply_config_state_is_replace_all_within_scope(store: Store):
+    _seed_config(store)
+    state = store.read_config_state()
+
+    # The "make it cheaper" shape: the bad change ADDS a skill and flips a setting.
+    store.insert_skill(
+        id="sk2", name="Cheapest", instructions="Use the cheapest model.",
+        enabled=True, created_at=20,
+    )
+    store.set_setting("active_profile", "simple")
+
+    store.apply_config_state(state)
+
+    assert [r["id"] for r in store.list_skills()] == ["sk1"]   # removed, not merged
+    assert store.get_setting("active_profile") == "developer"
+
+
+def test_apply_config_state_leaves_conversations_and_messages_untouched(store: Store):
+    _seed_config(store)
+    _seed_conversation(store, "c1", ["m1", "m2"])
+    state = store.read_config_state()
+
+    store.apply_config_state(state)
+
+    assert [m["id"] for m in store.messages_for_conversation("c1")] == ["m1", "m2"]
+    assert store.get_conversation("c1") is not None
+
+
+def test_apply_config_state_leaves_config_snapshots_untouched(store: Store):
+    _seed_config(store)
+    state = store.read_config_state()
+    store.insert_config_snapshot(_config_snap("the-way-back", created_at=1, verified=True))
+
+    store.apply_config_state(state)
+
+    assert store.get_config_snapshot("the-way-back") is not None
+
+
+def test_apply_config_state_succeeds_when_routines_have_run_history(store: Store):
+    # THE restore-breaking case. The routine SURVIVES the restore, so its run rows
+    # survive too — and those surviving rows are exactly what makes the DELETE FROM
+    # routines fail without PRAGMA defer_foreign_keys.
+    _seed_config(store)
+    store.insert_routine_run(id="run1", routine_id="r1", started_at=11)
+    state = store.read_config_state()
+
+    store.apply_config_state(state)     # must not raise IntegrityError
+
+    assert [r["id"] for r in store.list_routines()] == ["r1"]
+    rows = store._conn.execute("SELECT id FROM routine_runs").fetchall()
+    assert [r["id"] for r in rows] == ["run1"]
+
+
+def test_apply_config_state_clears_orphaned_routine_runs(store: Store):
+    _seed_config(store)
+    state = store.read_config_state()      # captured while only r1 exists
+
+    store.insert_routine(
+        id="r2", name="Later", description="Added after the snapshot.",
+        plan_json={"steps": []}, created_from_conversation_id=None, created_at=30,
+    )
+    store.insert_routine_run(id="run2", routine_id="r2", started_at=31)
+
+    store.apply_config_state(state)
+
+    assert [r["id"] for r in store.list_routines()] == ["r1"]
+    assert store._conn.execute("SELECT COUNT(*) FROM routine_runs").fetchone()[0] == 0
+
+
+def test_restore_of_a_routine_whose_conversation_is_gone_succeeds(store: Store):
+    # The outbound FK, in the §6.4(c) shape: a payload rebuilt into a database
+    # that has no conversations at all. The provenance pointer is cosmetic; a
+    # restore that aborts is the floor failing.
+    state = {
+        "app_settings": [],
+        "provider_config": [],
+        "skills": [],
+        "widgets": [],
+        "routines": [{
+            "id": "r1", "name": "Orphan", "description": "Its chat is gone.",
+            "plan_json": "{}", "created_from_conversation_id": "vanished",
+            "created_at": 1, "updated_at": 1, "run_count": 0, "last_run_at": None,
+            "created_in_mode": "safe",
+        }],
+    }
+    assert store._conn.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] == 0
+
+    store.apply_config_state(state)       # must not raise
+
+    row = store._conn.execute(
+        "SELECT created_from_conversation_id FROM routines WHERE id = 'r1'"
+    ).fetchone()
+    assert row["created_from_conversation_id"] is None
+
+
+def test_apply_config_state_preserves_one_way_setting_latches(store: Store):
+    # A payload that predates the flag must not un-set it, or the next launch
+    # re-seeds default widgets the person deleted on purpose.
+    state = store.read_config_state()          # captured before the latch was set
+    store.set_setting("widgets_seeded", "1")
+
+    store.apply_config_state(state)
+
+    assert store.get_setting("widgets_seeded") == "1"
+
+
+def test_a_payload_missing_a_later_added_column_still_restores(store: Store):
+    # Stands in for a payload written before created_in_mode existed. Rejecting it
+    # would evaporate the user's whole rollback history at upgrade time.
+    state = {
+        "app_settings": [], "provider_config": [], "skills": [], "routines": [],
+        "widgets": [{
+            "id": "w1", "spec_json": '{"kind":"stat"}', "pinned": 1,
+            "position": 0, "created_at": 1,
+        }],
+    }
+    store.apply_config_state(state)
+
+    (widget,) = store.list_widgets()
+    assert widget["id"] == "w1"
+    assert widget["created_in_mode"] == "safe"      # the schema default applied
+
+
+def test_apply_config_state_rolls_back_completely_on_failure(store: Store):
+    _seed_config(store)
+    before = _config_fingerprint(store)
+
+    bad = store.read_config_state()
+    bad["widgets"].append({          # spec_json is NOT NULL
+        "id": "broken", "spec_json": None, "pinned": 1, "position": 9,
+        "created_at": 1, "created_in_mode": "safe",
+    })
+    bad["skills"] = []               # would have landed before the failing row
+
+    with pytest.raises(sqlite3.Error):
+        store.apply_config_state(bad)
+
+    assert _config_fingerprint(store) == before
+    assert not store._conn.in_transaction
+
+
+def test_apply_config_state_survives_a_failing_rollback(store: Store):
+    # A ROLLBACK that itself fails must not replace the real error, and must not
+    # strand the single worker connection inside an open transaction — every later
+    # write in the process would fail.
+    _seed_config(store)
+    before = _config_fingerprint(store)
+    real_conn = store._conn
+    store._conn = _RollbackBreaker(real_conn)   # type: ignore[assignment]
+
+    bad = store.read_config_state()
+    bad["widgets"].append({"id": "broken", "spec_json": None, "pinned": 1,
+                           "position": 9, "created_at": 1, "created_in_mode": "safe"})
+
+    with pytest.raises(sqlite3.IntegrityError):   # the ORIGINAL error, not the rollback's
+        store.apply_config_state(bad)
+
+    assert store._conn is not real_conn           # reconnected, not poisoned
+    assert not store._conn.in_transaction
+    assert _config_fingerprint(store) == before
+    store.set_setting("still_writable", "yes")    # the connection genuinely works
+
+
+class _RollbackBreaker:
+    """A connection whose ROLLBACK fails — the full-disk / I-O-error case."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str):
+        return getattr(self._conn, name)
+
+    def execute(self, sql: str, *args):
+        if sql.strip().upper().startswith("ROLLBACK"):
+            raise sqlite3.OperationalError("disk I/O error")
+        return self._conn.execute(sql, *args)
+
+
+def _config_fingerprint(store: Store) -> str:
+    """A cheap byte-level image of the captured tables, for atomicity asserts."""
+    return repr(store.read_config_state())
+
+
+def test_reopening_never_drops_config_snapshots(tmp_path: Path):
+    # G4 against a future drop-and-recreate migration: an anchor written, the DB
+    # closed, the DB reopened (which re-runs the whole schema script) — the anchor
+    # is still there, because dropping this table would destroy the way back.
+    db_path = tmp_path / "anchors.db"
+    first = Store(db_path)
+    first.insert_config_snapshot(
+        _config_snap("anchor", created_at=1, reason="guard_weakened", undeletable=True)
+    )
+    first.close()
+
+    second = Store(db_path)
+    try:
+        anchor = second.get_config_snapshot("anchor")
+        assert anchor is not None and anchor.undeletable is True
+    finally:
+        second.close()
+
+
+def test_the_live_database_guard_is_not_escapable_by_a_relative_path(tmp_path: Path):
+    """The guard must resolve the path before judging it.
+
+    It exists because a build agent once constructed a real ``Store`` against the
+    default path and wrote an undeletable row into the owner's live database — a row
+    the recovery machinery then refused to remove, by design. The guard compared
+    ``expanduser()``'d parents, and ``Path.parents`` walks the LITERAL components, so
+    a path that only resolves into ``~/.addison`` slipped past: ``~/Desktop/../.addison``
+    has no ``~/.addison`` component at all.
+
+    Deliberately not asserting on the ``..`` spelling alone — ``~/.addison/../.addison``
+    was caught by the old guard too, which is what made the hole easy to miss.
+    """
+    escaping = Path.home() / "Desktop" / ".." / ".addison" / "should-never-open.sqlite3"
+
+    # This test aims at the real directory, so when it FAILS it does the very thing
+    # it forbids. That is not hypothetical: a 151 KB database of exactly this name
+    # was found sitting in the owner's live directory, and it reappeared the moment
+    # the guard was weakened to check the failure was detected. Clean up regardless
+    # of outcome, and say so if a file was made.
+    try:
+        with pytest.raises(AssertionError, match="live database"):
+            Store(escaping)
+        assert not escaping.resolve().exists(), (
+            "the guard let the file through before raising — check ~/.addison"
+        )
+    finally:
+        # "" plus the WAL pair: Store turns on journal_mode=WAL, so a leaked database
+        # is three files, and deleting only the first leaves a 300 KB -wal behind.
+        landed = escaping.resolve()
+        for suffix in ("", "-wal", "-shm"):
+            landed.with_name(landed.name + suffix).unlink(missing_ok=True)
+
+    # The guard still lets an ordinary test path through, so it cannot pass by
+    # refusing everything.
+    ordinary = Store(tmp_path / "fine.sqlite3")
+    ordinary.close()
+
+
+@pytest.fixture
+def fake_live_dir(tmp_path: Path, monkeypatch) -> Path:
+    """Point the guard's live-data directory at a throwaway tree.
+
+    Lets the allow/deny logic be exercised in both directions without a test ever
+    aiming at the owner's real ``~/.addison``. The end-to-end proof that the REAL
+    directory is covered is
+    ``test_the_guard_is_armed_outside_pytest_by_importing_agent_core`` below.
+    """
+    live = tmp_path / "pretend-home" / ".addison"
+    live.mkdir(parents=True)
+    monkeypatch.setattr(live_db_guard, "_LIVE_DATA_DIR", live)
+    return live
+
+
+def test_a_bare_sqlite3_connect_cannot_reach_the_live_directory(fake_live_dir: Path):
+    """Bypass 1: code that never imports ``Store`` at all.
+
+    The guard this replaced wrapped ``Store.__init__``, so four lines of stdlib
+    walked straight around it. ``sqlite3.connect`` is the choke point every route
+    to the file shares, which is why the check moved there.
+    """
+    target = fake_live_dir / "bare-connect.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        sqlite3.connect(target)
+
+    assert not target.exists(), "the guard raised but sqlite3 had already made the file"
+
+
+def test_a_store_subclass_that_skips_super_init_is_still_blocked(fake_live_dir: Path):
+    """Bypass 2: a ``Store`` subclass that never calls ``super().__init__``.
+
+    It inherits every Store method, so it is a working Store for all practical
+    purposes — it just skips the one place the old guard was patched into.
+    """
+
+    class _RogueStore(Store):
+        def __init__(self, db_path) -> None:  # deliberately no super().__init__()
+            self.db_path = str(db_path)
+            self._conn = sqlite3.connect(self.db_path)
+
+    target = fake_live_dir / "subclass.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        _RogueStore(target)
+
+    assert not target.exists()
+
+
+def test_the_running_app_may_open_its_own_live_database(fake_live_dir: Path):
+    """The guard must not break the one process that is SUPPOSED to open this path.
+
+    This is the whole difficulty: the app opens exactly the path everything else is
+    refused. It gets through by saying so — ``main()`` calls ``allow_live_database()``
+    on itself — rather than by looking like the app to a heuristic, which a probe
+    could satisfy by accident.
+    """
+    target = fake_live_dir / "addison.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        sqlite3.connect(target)
+
+    live_db_guard.allow_live_database()
+    connection = sqlite3.connect(target)
+    try:
+        connection.execute("CREATE TABLE t (x INTEGER)")
+    finally:
+        connection.close()
+    assert target.exists()
+
+
+def test_the_guard_is_armed_outside_pytest_by_importing_agent_core():
+    """The gap that actually fired: an ad-hoc probe script, with no pytest anywhere.
+
+    A 151 KB Addison-schema database was found in the owner's live directory,
+    written by a one-off probe an hour before the old pytest-fixture guard was
+    committed. Probe scripts are how this project is developed, so the guard has to
+    be armed by importing the package, not by collecting a conftest.
+
+    Deliberately a subprocess aimed at the REAL ``~/.addison``: every other test
+    here uses a stand-in directory, so without this one nothing proves the path
+    that matters is covered. The probe filename is unique and unlinked afterwards
+    in case the guard is broken and the file is actually created.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    probe = Path.home() / ".addison" / f"guard-check-{uuid4().hex}.sqlite3"
+    source = (
+        "import sys, sqlite3\n"
+        "import agent_core  # arming the guard is this import's whole job\n"
+        "try:\n"
+        f"    sqlite3.connect({str(probe)!r})\n"
+        "except AssertionError as exc:\n"
+        "    print(exc)\n"
+        "    sys.exit(3)\n"
+        "sys.exit(0)\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 3, (
+            "a plain python process opened the live directory unchallenged; "
+            f"exit={result.returncode} stdout={result.stdout} stderr={result.stderr}"
+        )
+        assert "live database" in result.stdout
+        assert not probe.exists()
+    finally:
+        probe.unlink(missing_ok=True)

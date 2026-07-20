@@ -1,4 +1,15 @@
-"""Shared JsonRpcServer test harness for tests/test_ipc_server.py.
+"""Shared JsonRpcServer test harness — and the per-test half of the live-database guard.
+
+Two unrelated things live here, both of them global to the test run:
+
+1. `_never_touch_the_live_database` (autouse) — the per-test half of the guard that
+   keeps anything in this repo from opening the owner's real `~/.addison` database.
+   The half that does the actual blocking is NOT here: it is armed by
+   `import agent_core` (see agent_core/live_db_guard.py), because a pytest fixture
+   protects only pytest, and the accident it was written for was an ad-hoc probe
+   script. What remains here is test-run housekeeping — pointing ADDISON_DB_PATH at
+   the test's tmp dir, and re-arming the guard between tests.
+2. The IPC harness described below.
 
 The IPC round-trip tests run the real server in-process on fake pipes: frames
 go in through a blocking reader, every outgoing frame is captured, and a
@@ -20,6 +31,9 @@ import threading
 import time
 from dataclasses import dataclass
 
+import pytest
+
+from agent_core import live_db_guard
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.providers.base import (
@@ -38,6 +52,35 @@ from agent_core.tools.registry import ToolRegistry
 # (each test gets a fresh tmp_path); some assertions reopen it with a plain
 # sqlite3 connection, so the name is shared here.
 IPC_DB_NAME = "ipc-test.sqlite3"
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_live_database(monkeypatch, tmp_path):
+    """Keep every test off the owner's real ``~/.addison`` database.
+
+    The blocking itself is not here and cannot be — it belongs to any process that
+    imports ``agent_core`` (``agent_core/live_db_guard.py``), because the accident
+    that prompted all of this was a one-off probe script, which pytest never sees.
+    This fixture supplies the two things that are genuinely per-test:
+
+    1. ``ADDISON_DB_PATH`` points at the test's own tmp dir, so code that resolves
+       the *default* path lands somewhere harmless instead of merely being refused.
+    2. The app's opt-in is reset. ``allow_live_database()`` is process-wide by
+       design, so a test that exercises it must not leave the guard disarmed for
+       every test that follows.
+
+    The assertion is not ceremony: if the import-time install ever stops running,
+    every test in the suite silently loses its protection, and this is the one
+    place that would notice.
+    """
+    assert live_db_guard.is_installed(), (
+        "The live-database guard is not armed. It installs on `import agent_core` "
+        "(agent_core/live_db_guard.py); without it nothing stops a test from writing "
+        "to the owner's real database."
+    )
+    monkeypatch.setattr(live_db_guard, "_app_has_declared_itself", False)
+    monkeypatch.setenv("ADDISON_DB_PATH", str(tmp_path / "addison-under-test.sqlite3"))
+    yield
 
 
 class _PipeReader:
@@ -160,6 +203,7 @@ def build_server(
     provider_key_probe=None,
     ollama_client=None,
     seed_widgets: bool = False,
+    store_factory=None,
 ) -> IpcHarness:
     """Stand up a real JsonRpcServer on fake pipes and start its run loop.
 
@@ -177,6 +221,11 @@ def build_server(
       False (the harness pre-sets the 'widgets_seeded' flag so the rail starts empty),
       keeping the widget-mechanics tests isolated from the seeded defaults; the
       seeding tests pass True to exercise it.
+    - ``store_factory``: replaces the default file-backed factory. Exists for the
+      G3 tests, whose whole premise is a factory that RAISES — a store that will
+      not open is the situation the snapshot floor exists for, and it has to be
+      expressible here to be testable at all. The db_path is passed to the server
+      either way, so the sidecar directory still lands in the test's tmp tree.
 
     The caller owns teardown via :func:`_shutdown` (kept explicit because a few
     tests relaunch on the same database and must stop one server before the next).
@@ -190,7 +239,7 @@ def build_server(
     reader = _PipeReader()
     writer = _FrameWriter()
 
-    def _store_factory() -> Store:
+    def _default_store_factory() -> Store:
         store = Store(tmp_path / IPC_DB_NAME)
         if not seed_widgets:
             # Suppress first-run seeding so tests start with an empty rail.
@@ -201,7 +250,8 @@ def build_server(
         reader=reader,
         writer=writer,
         tool_registry=registry,
-        store_factory=_store_factory,
+        store_factory=store_factory or _default_store_factory,
+        db_path=tmp_path / IPC_DB_NAME,
         model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
         shell_bridge=bridge,
         cloud_catalog=cloud_catalog,

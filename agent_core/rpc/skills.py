@@ -73,6 +73,16 @@ class SkillsMixin(ServerContext):
         if error is not None:
             return {"ok": False, "error": error}
         assert isinstance(name, str) and isinstance(instructions, str)  # validate_skill ensured
+        # Hook H7 (G3): an in-place overwrite of the note's text, with no other copy
+        # anywhere — the old guidance is unrecoverable once this write lands, so a
+        # failed snapshot refuses the edit. Placed AFTER validation: a rejected edit
+        # changes nothing and must not mint a restore point.
+        if not self._snapshot_auto("skill_update"):
+            return {
+                "ok": False,
+                "error": "Addison couldn't save a restore point just now, so it "
+                "didn't change the note. Try again in a moment.",
+            }
         self.store.update_skill(skill_id, name.strip(), instructions.strip())
         return {"ok": True}
 
@@ -87,9 +97,20 @@ class SkillsMixin(ServerContext):
         return {"ok": True}
 
     def _skill_delete(self, params: dict) -> dict:
-        """skill.delete {id} -> {ok}. Idempotent — deleting an absent skill is fine."""
+        """skill.delete {id} -> {ok}. Idempotent — deleting an absent skill is fine.
+
+        Hook H6 (G3): the snapshot comes FIRST, and a failed snapshot REFUSES the
+        delete — the note's text exists nowhere else afterwards. The existence
+        check keeps a delete of an absent id from minting a restore point while
+        leaving the handler idempotent."""
         self._ensure_built()
         skill_id = params.get("id")
-        if isinstance(skill_id, str) and skill_id:
+        if isinstance(skill_id, str) and skill_id and self.store.get_skill(skill_id) is not None:
+            if not self._snapshot_auto("skill_delete"):
+                return {
+                    "ok": False,
+                    "error": "Addison couldn't save a restore point just now, so it "
+                    "didn't delete anything. Try again in a moment.",
+                }
             self.store.delete_skill(skill_id)
         return {"ok": True}

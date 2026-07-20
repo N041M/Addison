@@ -139,6 +139,19 @@ class IpcShellBridge:
         result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, {"provider": provider})
         return result.get("key", "")
 
+    # --- app build reference (G4) -----------------------------------------
+    def get_app_build_ref(self) -> dict:
+        """The running build, as ``{"version", "identifier"}``.
+
+        Recorded on a G4 anchor so a later restore can SAY plainly that the app
+        itself has moved on since the anchor was minted. A reference only — never
+        bytes, never a path (a path goes stale on any move and usually embeds the
+        user's account name, which would then land in a plaintext sidecar). This
+        is also the ONE shell call the snapshot subsystem makes, and its failure
+        is caught by the caller: an anchor mints with or without it, because
+        undeletability is the floor and the build reference is the bonus."""
+        return self._call(Method.SHELL_APP_BUILD_REF, {})
+
     # --- device identity & relay signing (§5) -----------------------------
     def get_device_key(self) -> dict:
         """Public device identity from the shell/keychain.

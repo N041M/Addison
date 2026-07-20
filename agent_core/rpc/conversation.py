@@ -141,6 +141,15 @@ class ConversationMixin(ServerContext):
                     self.conversation.messages.remove(system_msg)
                 except ValueError:
                     pass
+        # Hook H8 (G3): this configuration just answered a message end to end —
+        # run_turn returned normally AND every message persisted — so it is provably
+        # working. Deliberately NOT in the finally above (that runs on the error path
+        # too) and not at function exit (the early returns are refusals, neither
+        # successes nor failures). It will happily mark a just-broken config working;
+        # the correction for that lives in restore_last_working()'s fingerprint skip,
+        # because a predicate that has to observe the future could not be cheap,
+        # idempotent and non-raising, which this one must be.
+        self._mark_verified_working()
         # The persisted ids let the frontend anchor "Rewind to here" on REAL
         # store ids — its own display ids mean nothing to the core.
         self._respond(

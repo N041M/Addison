@@ -10,8 +10,9 @@ one artifact both sides share:
 - tests/test_ipc_fixture_drift.py regenerates live and fails if a handler's
   shape drifts from the committed files (regenerate: ``python tests/ipc_fixtures.py``
   from the repo root, then re-run the vitest suite);
-- the vitest suite (shell/src/__tests__/parsers.fixtures.test.ts) parses the
-  same files and pins the parsed output.
+- the vitest suites consume the same files: parsers.fixtures.test.ts pins what
+  each parser makes of a request result, and activityPanel.test.tsx renders the
+  tool.activityUpdate notification through the real component.
 
 So a core change that would break the frontend parsers fails CI on whichever
 side runs first — the method-name drift test covers *names*, this covers *shapes*.
@@ -33,6 +34,11 @@ from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel, EffortLevel
 from agent_core.providers.base import ModelResponse, ModelRole, ProviderCapabilities
 from agent_core.providers.router import ModelRouter
+from agent_core.snapshots.model import ConfigSnapshot
+from agent_core.snapshots.scope import _CAPTURED_TABLES
+from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
+from agent_core.tools.base import call_permission_detail
+from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -41,6 +47,63 @@ FIXTURE_DIR = _REPO_ROOT / "shell" / "src" / "__tests__" / "fixtures"
 # Fixed epoch timestamps (2100-01-01 + offsets): always inside the current
 # month-window queries, never pruned, byte-stable in the emitted payloads.
 _T0 = 4102444800
+
+# Every captured table present and empty — the smallest payload that genuinely
+# DECODES, which it has to, because `lastWorkingId` is only filled in when the
+# restore walk can actually read the candidate it would target. A blob the
+# decoder rejects would silently drop those three fields out of the fixture and
+# pin the frontend against a payload the real one never has.
+_FIXTURE_TABLES: dict[str, list] = {table: [] for table in _CAPTURED_TABLES}
+# Rows holding identical tables share a fingerprint — exactly what two real
+# captures of an unchanged config produce, since the fingerprint is over
+# `tables` alone (contract §5.5 item 6).
+_FIXTURE_FINGERPRINT = _fingerprint(_FIXTURE_TABLES)
+
+
+def _fixture_payload(
+    *,
+    snapshot_id: str,
+    created_at: int,
+    trigger: str,
+    reason: str,
+    verified: bool,
+    undeletable: bool,
+    binary_ref: str | None,
+) -> str:
+    """One snapshot payload in the shape ``SnapshotManager._write_row`` produces.
+
+    Built through the real serialiser and the real fingerprint rather than
+    hand-written, and carrying the FULL `meta` block, because `meta` is not
+    decoration — it is the row's only backup (contract §5.5 item 7). A fixture
+    whose meta is `{}` is not a payload this system can produce, and it cannot
+    catch the regression it is here to catch: `rebuild_rows_from_payloads` reads
+    `meta["id"]` and skips any payload without one, so a cold rebuild from such
+    a fixture writes zero rows — the G4 anchor included — and the fixture stays
+    green throughout.
+
+    Timestamps are fixed rather than clock-read so the emitted JSON is
+    byte-stable; real captures stamp `time.time_ns()`, which is only there to
+    break same-second ties and would make this file flap on every regeneration.
+    """
+    return _canonical(
+        {
+            "version": 1,
+            "captured_at": created_at,
+            "captured_at_ns": created_at * 1_000_000_000,
+            "meta": {
+                "id": snapshot_id,
+                "trigger": trigger,
+                "reason": reason,
+                "created_in_mode": "safe",
+                "state_fingerprint": _FIXTURE_FINGERPRINT,
+                "verified_working": int(verified),
+                "undeletable": int(undeletable),
+                "captures_binary": int(binary_ref is not None),
+                "binary_ref": binary_ref,
+            },
+            "tables": _FIXTURE_TABLES,
+        }
+    )
 
 
 class _StubProvider:
@@ -98,6 +161,45 @@ def _seeded_store(db_path: Path) -> Store:
             created_at=_T0 + i,
             created_in_mode=mode,
         )
+    # G3 snapshots. Seeded HERE, before the server builds, because the genesis
+    # snapshot is only written when the table is empty — so seeding first is what
+    # keeps this fixture at exactly these three rows. One ordinary auto row, one
+    # on-command verified row (the restore target), one permanent G4 anchor.
+    for i, (trigger, reason, verified, undeletable, binary_ref) in enumerate(
+        [
+            ("auto", "mode_switch", False, False, None),
+            ("on_command", "user_request", True, False, None),
+            ("auto", "guard_weakened", True, True, '{"version": "0.1.0"}'),
+        ]
+    ):
+        snapshot_id = f"snapshot-fixture-{i}"
+        store.insert_config_snapshot(
+            ConfigSnapshot(
+                id=snapshot_id,
+                created_at=_T0 + i,
+                trigger=trigger,
+                reason=reason,
+                payload_version=1,
+                state_blob=_fixture_payload(
+                    snapshot_id=snapshot_id,
+                    created_at=_T0 + i,
+                    trigger=trigger,
+                    reason=reason,
+                    verified=verified,
+                    undeletable=undeletable,
+                    binary_ref=binary_ref,
+                ),
+                # The real fingerprint of the real tables, matching the payload's
+                # own `meta`. It is a fixed value in practice because the tables
+                # are, so the emitted fixture stays byte-stable.
+                state_fingerprint=_FIXTURE_FINGERPRINT,
+                verified_working=verified,
+                undeletable=undeletable,
+                captures_binary=binary_ref is not None,
+                binary_ref=binary_ref,
+                created_in_mode="safe",
+            )
+        )
     return store
 
 
@@ -130,8 +232,51 @@ def _catalog() -> list[CloudModel]:
     ]
 
 
+# A page read with a query string on it. The committed fixture is the proof of the
+# property that matters: what reaches the frontend is `en.wikipedia.org` and NOT this
+# whole string. A full URL on screen would be its own leak — the query is where an
+# injected instruction would put whatever it wanted carried out of the machine, and a
+# panel is a thing people screenshot.
+_ACTIVITY_FIXTURE_URL = "https://en.wikipedia.org/wiki/Fern?utm_source=addison&note=hello"
+
+
+def _activity_notification(server: JsonRpcServer) -> dict:
+    """The ``tool.activityUpdate`` params emitted for a call that names a destination.
+
+    This one is a notification, not a request result: there is no handler to call and
+    the fixture server has no writer, so the frame is captured by standing in for
+    ``_write_frame``. That is deliberate — it keeps the fixture coming from the
+    shipping emit path (``_emit_activity`` -> ``_notify`` -> the frame) instead of a
+    dict hand-written to match it, which is the failure this whole module exists to
+    prevent.
+
+    The detail is asked for exactly the way ``orchestrator.py`` asks — through
+    ``call_permission_detail``, with no mention of which tool this is — so the fixture
+    also pins the general path, not a read_web_page special case. Using the real tool
+    means the day its ``permission_detail`` stops returning just the host, this
+    fixture changes and the drift test says so out loud.
+    """
+    tool = ReadWebPageTool()
+    captured: list[dict] = []
+    original = server._write_frame
+    server._write_frame = captured.append  # type: ignore[method-assign]
+    try:
+        server._emit_activity(
+            tool.definition.id,
+            tool.definition.label,
+            call_permission_detail(tool, {"url": _ACTIVITY_FIXTURE_URL}),
+        )
+    finally:
+        server._write_frame = original  # type: ignore[method-assign]
+    return captured[0]["params"]
+
+
 def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
-    """Method name -> the exact result payload its handler returns today."""
+    """Method name -> the exact payload the core puts on the wire for it today.
+
+    Mostly request results, read straight off their handlers; ``tool.activityUpdate``
+    is a Core -> Frontend notification and carries its ``params`` instead.
+    """
     router = ModelRouter(configured={ModelRole.PRIMARY: _StubProvider()})
     router.register_local_model("llama3.2:3b", _StubProvider())
 
@@ -157,6 +302,8 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "widget.list": server._widget_list(),
         "profile.get": server._profile_get(),
         "model.availableRoles": server._available_roles(),
+        "snapshot.list": server._snapshot_list(),
+        "tool.activityUpdate": _activity_notification(server),
     }
 
 
