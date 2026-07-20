@@ -1,77 +1,49 @@
 """run_command — the dev-only shell tool (owner decision 2026-07-19).
 
-Covers the read-only classification table that feeds the PermissionGate (each
-allowlisted form is non-destructive, each metachar/unknown is destructive), the
-SAFE-mode belt refusal, and a real end-to-end execution in OPEN mode.
+Every command cards (owner decision 2026-07-20). These tests pin that: there is
+no command — however innocent-looking — that ``is_destructive`` calls safe enough
+to skip the permission card. The list below is not an allowlist being checked; it
+is a set of vectors that a classifier WOULD have to get right and that this design
+deliberately no longer tries to, because getting one wrong runs an unprompted
+``rm -rf`` outside the G3 rollback floor. If any of these ever returns
+non-destructive again, a classifier has crept back in.
 """
 
 from __future__ import annotations
 
 from agent_core.policy import PolicyMode
 from agent_core.tools.base import ExecutionContext, RiskTier, call_is_destructive
-from agent_core.tools.run_command import RunCommandTool, is_read_only_command
+from agent_core.tools.run_command import RunCommandTool
 
-# (command, expected read_only?) — the vetted allowlist AND its exclusions.
-_READ_ONLY = [
-    "ls",
-    "ls -la",
-    "cat file.txt",
-    "head -n 5 file",
-    "tail file",
-    "grep foo file",
-    "rg pattern",
-    "find . -name x",
-    "pwd",
-    "echo hello",
-    "which python",
-    "file thing",
-    "wc -l file",
-    "du -sh .",
-    "df -h",
-    "uname -a",
-    "ps aux",
+# Every one of these must card. The first group is the obviously-mutating; the
+# rest are the exact vectors that defeated the old classifier, kept as named
+# regressions so the reasoning survives even though the code that failed is gone.
+_MUST_ALL_CARD = [
+    "ls",                            # the most innocent read imaginable — still cards
     "git status",
-    "git log --oneline",
-    "git diff HEAD",
-    "git show HEAD",
-]
-
-_DESTRUCTIVE = [
-    "rm -rf /",                     # not on the allowlist
-    "mv a b",                       # not on the allowlist
-    "git push",                     # git, but a mutating subcommand
-    "git commit -m x",              # git, but a mutating subcommand
-    "ls; rm x",                     # metachar: ;
-    "ls && rm x",                   # metachar: &&
-    "ls || rm x",                   # metachar: ||
-    "cat a | sh",                   # metachar: |
-    "echo x > file",                # metachar: >
-    "cat < file",                   # metachar: <
-    "echo `whoami`",                # metachar: backtick
-    "echo $(whoami)",               # metachar: $(
-    "",                             # empty -> not provably read-only
-    "   ",                          # whitespace only
-    "sudo ls",                      # first token not allowlisted
+    "cat file.txt",
+    "rm -rf /",
+    "git push",
+    "ls; rm x",                      # shell operator
+    "ls\nrm -rf /tmp/x",             # newline: shlex treats it as whitespace
+    "ls & rm -rf /tmp/x",            # bare & — the old metachar list missed it
+    "find . -delete",                # allowlisted reader, deleting primary
+    "find . -exec rm {} +",          # allowlisted reader, exec primary
+    "grep -rf /etc/passwd .",        # bundled short flag: arbitrary-file read
+    "grep -f/etc/passwd x",          # attached short flag
+    "file -Cm /tmp/x",               # allowlisted reader that WRITES a .mgc file
+    "wc --files0-from=/etc/shadow",  # read the file-list from a secret path
+    "",                              # empty
+    "   ",                           # whitespace only
 ]
 
 
-def test_read_only_classification_table():
-    for command in _READ_ONLY:
-        assert is_read_only_command(command) is True, command
-    for command in _DESTRUCTIVE:
-        assert is_read_only_command(command) is False, command
-
-
-def test_is_destructive_is_the_inverse_and_drives_the_gate_helper():
+def test_every_command_cards_including_the_innocent_ones():
     tool = RunCommandTool()
-    for command in _READ_ONLY:
-        args = {"command": command}
-        assert tool.is_destructive(args) is False, command
-        # The gate helper (tools.base) honours the tool's own classifier.
-        assert call_is_destructive(tool, args) is False, command
-    for command in _DESTRUCTIVE:
+    for command in _MUST_ALL_CARD:
         args = {"command": command}
         assert tool.is_destructive(args) is True, command
+        # The gate helper (tools.base) is what the PermissionGate actually calls.
         assert call_is_destructive(tool, args) is True, command
 
 
