@@ -183,20 +183,55 @@ and rebuilds in the same session.
   the walk has a guaranteed floor from before the first turn ever runs. On an
   **upgraded install** (any database predating this subsystem: `config_snapshots`
   is empty, but the config is not) the bottom row is **`pre_upgrade`** instead,
-  and it is deliberately **not** verified. Nothing has run against it under this
+  and it is **captured unverified**. Nothing has run against it under this
   subsystem's own eyes, and it is a copy of whatever the user has *right now* —
   up to and including the broken setup they may be about to need rescuing from.
-  Marking it verified would make it a **target of the restore walk** — silently,
-  dressed up in the ordinary "put you back on your last working setup" copy — and
-  that sentence is what the user's trust in the button rests on. So the walk never
-  reaches it, and the two honest consequences are:
-  - **The walk has no target until the first turn completes.** Once verified rows
-    exist and are exhausted, the walk stops *above* `pre_upgrade` and **names** it
-    rather than restoring it (`_OLDER_IN_THE_LIST`) — the row is on the user's
-    screen, so claiming there is nothing further back would be false.
+  So it starts out unreachable by the one-action button, and there is exactly one
+  way for that to change:
+
+  **The rule (amended 2026-07-20 by `4c7ae78`, and this paragraph is the
+  authority — earlier wording said the opposite).** `verified_working` means *a
+  turn demonstrably answered against these exact bytes*, and nothing else.
+  `mark_verified_working()` ordinarily writes a **new** `turn_verified` row. It
+  flips the flag on an existing row in **one** narrowed case: a **permanent**
+  (`undeletable`) row whose payload fingerprint matches the current config **byte
+  for byte** (`_permanent_row_matching`). That match is evidence, not a guess —
+  the turn ran against precisely that content — so a fingerprint-proven
+  `pre_upgrade` **does** become a one-action target. Ordinary pre-change rows are
+  never flagged after the fact, in any circumstance; widening past `undeletable`
+  would make "restore lands somewhere that actually ran" false, which is the
+  failure G3 exists to prevent.
+
+  **Why this is honest rather than a weakening.** The old rule denied the flag to
+  the one row retention can never prune and the triggers refuse to delete — so the
+  row most worth returning to was the only row that could never be proven, however
+  many turns ran against its exact contents. It did not protect the user, because
+  the very next line wrote a `turn_verified` **clone holding identical bytes**,
+  and the button restored that instead: the user got the same configuration either
+  way, and the only difference was which row was named. Meanwhile the refusal copy
+  — *"Addison never saw that one working"* — had become false in the production
+  case. The two protections that actually carry the weight are untouched: (1) the
+  flag still requires a **completed turn** against those bytes, and (2)
+  `restore_last_working()` **skips any row whose fingerprint matches the current
+  config**, so this row can never hand back the setup the user is sitting on. The
+  restore copy also stays `pre_upgrade`-specific (`_RESTORED_DETAIL`), never the
+  generic "last working setup" sentence, so the honesty concern above is answered
+  by the copy rather than by keeping the row unprovable.
+
+  Two consequences follow:
+  - **On an upgraded install the walk still has no target until the first turn
+    completes** — and after that first turn the target may be the `pre_upgrade`
+    row itself. Once verified rows exist and are exhausted, the walk stops *above*
+    any remaining unverified row and **names** it rather than restoring it
+    (`_OLDER_IN_THE_LIST`) — the row is on the user's screen, so claiming there is
+    nothing further back would be false. Note that `_OLDER_IN_THE_LIST` is now
+    **rarely reached on an upgraded install**: once the permanent bottom row is
+    verified, nothing sits below it and the walk ends on the honest
+    `_AT_THE_BOTTOM` instead. Both branches are still correct; only the traffic
+    moved.
   - **The disk arm will still apply it, as an explicitly-labelled last resort.**
-    Before any verified row exists (walk outcome `'none'` — the state every
-    upgraded install is in at its first click) `restore_last_working()` restores
+    Before any verified row exists (walk outcome `'none'` — the state an upgraded
+    install is in until a turn completes) `restore_last_working()` restores
     `pre_upgrade` and says exactly that: *"Addison couldn't find a setup it had
     seen working, so it went back to the most recent settings it had saved
     instead. Have a look and check things are how you want them."*

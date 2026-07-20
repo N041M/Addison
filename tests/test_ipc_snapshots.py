@@ -135,6 +135,33 @@ def _populate_sidecars_ending_in_an_unproven_one(tmp_path: Path) -> tuple[str, s
     return good.id, broken.id
 
 
+def _populate_sidecars_after_an_escape(tmp_path: Path) -> None:
+    """Sidecars left behind by a disk-arm restore, database then destroyed.
+
+    An upgraded install whose first click never reaches the walk: no verified row
+    exists yet, so ``restore_last_working()`` hands over to the sidecars, saves a
+    ``pre_restore`` point holding the setup being escaped, and applies the older
+    one. That ``pre_restore`` payload is now the NEWEST unverified file on disk,
+    which is exactly what makes it dangerous to the cold-start path."""
+    db_path = tmp_path / IPC_DB_NAME
+    store = Store(db_path)
+    store.set_setting("widgets_seeded", "1")
+    store.set_setting("model_choice", "GOOD")
+    clock = [1000]
+    manager = SnapshotManager(
+        store=store,
+        snapshot_dir=tmp_path / "snapshots",
+        clock=lambda: clock[0],
+        created_the_database=False,
+    )
+    store.set_setting("model_choice", "BROKEN")
+    clock[0] += 10
+    assert manager.restore_last_working().ok
+    assert store.get_setting("model_choice") == "GOOD"
+    store.close()
+    db_path.unlink()
+
+
 def _strip_the_verified_sidecars(tmp_path: Path) -> None:
     """Leave only payloads no turn ever completed against — the state a user
     reaches when their very first setup attempt never produced a working turn."""
@@ -593,6 +620,27 @@ def test_the_cold_start_rebuild_applies_the_restore_point_the_list_just_named(tm
         rebuilt = Store(tmp_path / IPC_DB_NAME)
         try:
             # The configuration the user was trying to escape did NOT come back.
+            assert rebuilt.get_setting("model_choice") == "GOOD"
+        finally:
+            rebuilt.close()
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_cold_start_rebuild_never_puts_back_the_setup_the_user_escaped(tmp_path):
+    # The other end of the way back the disk arm now saves. That `pre_restore`
+    # point is a genuine restore point — it is how the user undoes a restore — but
+    # it is also the newest unverified file on disk, so as a GUESS it would win
+    # every time. Months later the database fails to open, the rebuild picks the
+    # newest thing it has, and the person is put back into precisely the setup
+    # they escaped, under copy saying "the most recent settings I had".
+    _populate_sidecars_after_an_escape(tmp_path)
+    h = build_server(tmp_path, register_tool=False, store_factory=_fail_once_then_open(tmp_path))
+    try:
+        result = _call(h, Method.SNAPSHOT_RESTORE_LAST_WORKING, request_id=1)
+        assert result["ok"] is True
+        rebuilt = Store(tmp_path / IPC_DB_NAME)
+        try:
             assert rebuilt.get_setting("model_choice") == "GOOD"
         finally:
             rebuilt.close()

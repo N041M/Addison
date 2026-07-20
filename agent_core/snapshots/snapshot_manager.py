@@ -106,9 +106,13 @@ _AT_THE_BOTTOM = (
     "You're back at the oldest setup Addison saved, so there's nothing further back to go to."
 )
 # The other bottom. On an UPGRADED install the permanent bottom row is
-# `pre_upgrade` and is deliberately NOT verified (see _ensure_genesis), so the
-# walk can never target it — but it is older, it is saved, and it is sitting in
-# the restore list the user is looking at. _AT_THE_BOTTOM was being said there,
+# `pre_upgrade` and is minted UNVERIFIED (see _ensure_genesis), so the walk
+# cannot target it until a turn proves it — which `mark_verified_working` then
+# does in place, once the fingerprint shows a turn ran against those exact bytes.
+# So this branch is reachable in the window before that first turn, and on any
+# install where the config moved before one completed. In that window the row is
+# older, saved, and sitting in the restore list the user is looking at.
+# _AT_THE_BOTTOM was being said there,
 # and it is simply false: telling somebody the way back does not exist while it
 # is on their screen is the shape of failure this floor exists to prevent.
 #
@@ -257,7 +261,19 @@ def select_payload_to_restore(
     The unverified fallback exists because "nothing at all" is a worse answer
     than "the most recent settings I had, and I said so". It is never silently
     dressed up as the verified case — that dishonesty is the failure this floor
-    was written against."""
+    was written against.
+
+    ONE payload is barred from being that fallback: ``pre_restore``. It holds the
+    configuration the user pressed Restore to get AWAY from, and it is written
+    moments before the escape, so it is the newest thing on disk and would win
+    the fallback every time. A later cold-start rebuild would then hand back
+    exactly what they escaped while saying "the most recent settings I had" —
+    the same sentence, now false in the one direction that matters. It is barred
+    HERE, in the one chooser every restore path shares, rather than at any single
+    call site, so the property holds for the manager's sidecar arm, the cold-start
+    rebuild in ``main.py`` and the listing that names the target alike. A verified
+    payload is still returned whatever its reason: barring it is about the guess,
+    never about the evidence."""
     fallback: dict | None = None
     for payload in payloads:
         meta = payload.get("meta")
@@ -273,7 +289,7 @@ def select_payload_to_restore(
             continue
         if meta.get("verified_working"):
             return payload, True
-        if fallback is None:
+        if fallback is None and meta.get("reason") != "pre_restore":
             fallback = payload
     return fallback, False
 
@@ -704,10 +720,26 @@ class SnapshotManager:
     def mark_verified_working(self) -> ConfigSnapshot | None:
         """Record that the CURRENT configuration provably works.
 
-        It does NOT flip a flag on an older row: the pre-change snapshot holds a
-        config the turn never ran against, and marking it verified would make
-        "restore lands somewhere that actually ran" false. Instead this captures
-        the current config as a new ``verified_working`` row.
+        Ordinarily it CAPTURES the current config as a new ``verified_working``
+        row. It does not flip a flag on some older row: a pre-change snapshot
+        holds a config the turn never ran against, and marking that verified
+        would make "restore lands somewhere that actually ran" false. The single
+        exception is a PERMANENT row whose fingerprint matches byte for byte —
+        that is evidence rather than a guess, and see ``_permanent_row_matching``
+        for why it is narrowed to the permanent row alone.
+
+        A permanent row that is ALREADY verified deliberately falls through to a
+        fresh row instead of returning early, and what that preserves is the
+        RECENCY of the proof. The walk orders by ``created_at`` and the permanent
+        row's is boot time, so without the fresh row a user who returns to their
+        at-upgrade config — connect a service, think better of it, disconnect it,
+        keep chatting — and then breaks something would have the button step past
+        the configuration they were running a minute ago onto an older one.
+        "Each click steps back one distinct proven configuration" is the promise
+        the button is read against. The fresh row also re-arms the short-circuit
+        below: with the flag already set and no new row, ``refs[0]`` never matches
+        again, and every later turn pays for a full scan of the restore points for
+        as long as the user sits on that config.
 
         Idempotence comes from the fingerprint, not from a dirty flag — the
         current state is compared with the newest verified row's fingerprint, so
@@ -730,10 +762,9 @@ class SnapshotManager:
             if refs and refs[0].get("state_fingerprint") == fingerprint:
                 return None
             permanent = self._permanent_row_matching(fingerprint)
-            if permanent is not None:
-                if permanent["verified_working"]:
-                    return None
+            if permanent is not None and not permanent["verified_working"]:
                 self._store.set_config_snapshot_verified(permanent["id"])
+                self._mirror_verified_into_sidecar(permanent["id"])
                 return self._store.get_config_snapshot(permanent["id"])
             return self._write_row(
                 tables=tables,
@@ -770,6 +801,29 @@ class SnapshotManager:
             if row.get("undeletable") and row.get("state_fingerprint") == fingerprint:
                 return row
         return None
+
+    def _mirror_verified_into_sidecar(self, snapshot_id: str) -> None:
+        """Carry a flag set on an EXISTING row into that row's sidecar copy.
+
+        Every payload is written twice, and until this the two copies could only
+        ever disagree by being absent. ``set_config_snapshot_verified`` is a
+        column UPDATE, so the row says proven while the sidecar written at capture
+        time still says 0 — and the sidecar is the copy that survives the database.
+        A cold-start rebuild reads the flag straight out of ``meta``
+        (``rebuild_rows_from_payloads``), so without this the rebuilt table comes
+        back with the proof dropped: the permanent row is unreachable by the walk
+        again, and the user is told Addison could not find a setup it had seen
+        working when it demonstrably had.
+
+        Best effort, like every other sidecar write. The row is the primary copy
+        and this must never fail a turn — an unwritable snapshots directory costs
+        the belt, not the trousers."""
+        payload = self._load_payload(snapshot_id)
+        meta = payload.get("meta") if isinstance(payload, dict) else None
+        if payload is None or not isinstance(meta, dict):
+            return
+        meta["verified_working"] = 1
+        self._write_sidecar(snapshot_id, _canonical(payload))
 
     # --- restore -----------------------------------------------------------
 
@@ -893,7 +947,15 @@ class SnapshotManager:
         # surface AND that provably ran is worth overriding it with.
         if why != "bottom":
             recovered = self._restore_from_sidecars(
-                require_verified=(why == "identical"), position=position
+                require_verified=(why == "identical"),
+                position=position,
+                # The way back from THIS restore, on the one arm that used to
+                # leave without one — see _restore_from_sidecars. Only on the two
+                # outcomes where the refs query ANSWERED: those prove the database
+                # is healthy enough to take an INSERT, whereas 'unreadable' is the
+                # damaged-table case where a capture cannot land and trying is
+                # noise on the flagship recovery.
+                take_pre_restore=(why in ("none", "identical")),
             )
             if recovered is not None:
                 return recovered
@@ -1220,7 +1282,11 @@ class SnapshotManager:
         return self._read_sidecar(snapshot_id)
 
     def _restore_from_sidecars(
-        self, *, require_verified: bool = False, position: str | None = None
+        self,
+        *,
+        require_verified: bool = False,
+        position: str | None = None,
+        take_pre_restore: bool = False,
     ) -> RestoreResult | None:
         """Restore from the sidecar files with no usable ``config_snapshots``
         table at all. None when there is nothing on disk worth applying.
@@ -1242,6 +1308,19 @@ class SnapshotManager:
         ordinary success sentence while doing it. Now an unverified payload is a
         last resort AND says so — see ``_RESTORED_UNVERIFIED``.
 
+        ``take_pre_restore`` gives this arm the same way back that ``restore()``
+        has always written. Without it, an arm restore was the ONE restore in the
+        subsystem that could not be undone — and on an upgraded install it is not
+        an exotic path but the ordinary first click, so the person most likely to
+        want their old setup back was the one person who could not have it. It is
+        taken here rather than at the call site so the row only exists when a
+        restore actually happened: this arm answers None more often than it
+        applies anything, and a "Before restoring" point appearing in the list
+        after "there's nothing to go back to" would be a puzzle, not a rescue.
+        Wrapped, because recovery outranks the reversibility of the recovery —
+        exactly as in ``restore()`` — and ``prune=False``, because pruning here
+        could delete the very payload about to be applied.
+
         A payload that fails to apply is dropped and the choice is made again, so
         one bad payload still cannot strand the floor."""
         if self._snapshot_dir is None:
@@ -1259,13 +1338,33 @@ class SnapshotManager:
             )
             if payload is None or (require_verified and not is_verified):
                 return None
+            meta = payload.get("meta")
+            snapshot_id = meta.get("id") if isinstance(meta, dict) else None
+            if take_pre_restore:
+                # Once, however many payloads this loop has to try: they all
+                # replace the same current config, so one row records it. It
+                # carries `restored_to` for the same reason `restore()`'s does —
+                # it is the second copy of the walk position, and the first copy
+                # (the note beside the sidecars) needs a writable directory this
+                # arm cannot assume it has. A `restored_to` naming a payload that
+                # then failed to apply is inert rather than wrong: the position
+                # expires the moment the current config does not fingerprint-match
+                # the row it names, and here it never would.
+                take_pre_restore = False
+                try:
+                    self._capture(
+                        trigger="auto",
+                        reason="pre_restore",
+                        prune=False,
+                        restored_to=snapshot_id if isinstance(snapshot_id, str) else None,
+                    )
+                except Exception:
+                    pass
             try:
                 self._store.apply_config_state(payload["tables"])
             except Exception:
                 remaining = [p for p in remaining if p is not payload]
                 continue
-            meta = payload.get("meta")
-            snapshot_id = meta.get("id") if isinstance(meta, dict) else None
             if isinstance(snapshot_id, str):
                 self._note_restored(snapshot_id)
             reason = _payload_reason(payload)

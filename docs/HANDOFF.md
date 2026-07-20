@@ -20,12 +20,14 @@ at the bottom, including a ledger of everything step 1 deliberately left behind.
   Simple = an all-in-one **companion**; a new **Custom** profile tunes prompting
   guards. Safety is redefined as **guaranteed rollback**, and as of this session
   that redefinition has code and tests behind it.
-- **Gates, all green:** **643 pytest + 1 xfail** (was 385), **pyright 0 errors**
-  (repo-wide; the remaining diagnostics are `reportMissingImports` for
-  `pytest`/`httpx`, pre-existing — pyright has no venv), ruff clean, **72 vitest**
-  across 8 files (was 48), ESLint clean, `tsc --noEmit` + `vite build` clean,
-  **31 Rust tests** (was 30). Numbers observed by running each gate on
-  2026-07-20; re-run them rather than trusting the number. **Green gates are not the bar — see "How step 1 was verified" below.**
+- **Gates, all green:** pytest (several hundred tests + 1 xfail, and climbing
+  every round), **pyright 0 errors** (repo-wide; the remaining diagnostics are
+  `reportMissingImports` for `pytest`/`httpx`, pre-existing — pyright has no
+  venv), ruff clean, vitest across 8 files, ESLint clean, `tsc --noEmit` +
+  `vite build` clean, Rust `cargo test` clean. **Exact counts are deliberately
+  not written down here** — they went stale twice in one day and a stale number
+  reads as a claim. Run the gates; the commands are under "Environment facts".
+  **Green gates are not the bar — see "How step 1 was verified" below.**
 - **CI exists** — `.github/workflows/ci.yml`, three jobs (python:
   ruff·pyright·pytest / frontend: eslint·tsc·vitest·build / rust: cargo test) on
   every PR and push to `master`. Keep it green.
@@ -53,8 +55,8 @@ explicit column list, so an uncaptured new column would be silently reset to its
 default **by the recovery path** — a restore would wipe the routing strategy or
 the Custom guard toggles you are about to add.
 
-**The manager.** `agent_core/snapshots/snapshot_manager.py` (~1,560 lines, of which
-roughly 700 are comment and docstring) —
+**The manager.** `agent_core/snapshots/snapshot_manager.py` (large, and roughly
+half of it comment and docstring — that ratio is intentional here) —
 `capture` / `mark_verified_working` / `restore` / `restore_last_working` /
 `last_working_target` / `list` / `delete` / `mint_anchor` / `prune`, plus two
 store-free module functions for disk recovery. It imports stdlib plus the two
@@ -122,10 +124,10 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
   **module-boundary test**; **payload-shape drift fixtures** (Python generates
   real core payloads, vitest parses the same files); one conservative provider
   retry; WAL + busy_timeout; the `Tool`/`UndoableTool`/`RedoableTool` protocol
-  split; **`main.py` decomposed** 2,318 → 1,279 lines into `agent_core/rpc/`
-  mixins + a dispatch table. (It has grown back past **1,700** since, as step 1's
-  snapshot RPC surface and the activity-detail path landed — the mixin structure
-  is what that pass was for, and it held.)
+  split; **`main.py` decomposed** — roughly halved, into `agent_core/rpc/` mixins
+  + a dispatch table. (It has grown a long way back since, as step 1's snapshot
+  RPC surface and the activity-detail path landed — the mixin structure is what
+  that pass was for, and it held.)
 - **Frontend UX**: system-following theme (light/dark/**system**) + no-jump
   interactions + calm animations; Settings uses the ☰ drawer idiom (#35);
   sidebar always present on desktop (#36); mobile bell removed and **widgets
@@ -301,6 +303,51 @@ What closed it, and what steps 2–8 should repeat:
 
 For a floor, budget for this explicitly. It cost roughly as much as the build.
 
+### Step-1 amendment ledger — every commit after the build commit
+
+Step 1 did not land in one commit, and each follow-up changed behaviour a doc
+somewhere still described. Keep adding rows here; a commit that changes a
+documented rule and does not amend the doc is the defect this project shipped
+twice in one day, once by re-adding the sentence its own changeset falsified.
+
+| Commit | What it changed | Docs it obliged |
+|---|---|---|
+| `5d11958` | The subsystem itself (schema, manager, RPC, frontend, hooks). | The step-1 section above. |
+| `1587f4e` | Step-1 residuals; `read_web_page`; visible tool egress; the measured fresh-vs-upgraded flag replacing `_looks_like_a_fresh_install`. | `data-model.md` install-classification bullets; the ledger below. |
+| `4c7ae78` | **`mark_verified_working()` now flips `verified_working` on a permanent row whose fingerprint matches the current config, instead of writing an identical clone.** A fingerprint-proven `pre_upgrade` / `genesis` / anchor is therefore a one-action restore target. | **CLAUDE.md and `data-model.md` said the exact opposite and were not amended by the commit.** Both are now rewritten — CLAUDE.md's "bottom of the restore walk" bullet is the authority on the current rule. |
+| `9642ce1` | User-facing wording: "restore point", never "snapshot", in the one place that still said snapshot. | Copy rule already stated in the step-1 section. |
+| *(this round, uncommitted at the time of writing — confirm against `git log`)* | **Recovery-path fixes**: the sidecar arm now writes its own `pre_restore` row on the `'none'` / `'identical'` outcomes; `select_payload_to_restore` refuses to hand a `pre_restore` payload back as the unverified fallback; `_mirror_verified_into_sidecar()` carries a retroactively-set flag into the sidecar `meta`; an already-verified permanent row falls through to a fresh `turn_verified` row, restoring walk **recency** and re-arming the `refs[0]` short-circuit. | The `pre_restore` table and the "when a permanent row becomes verified" bullet in `data-model.md`, both written this pass. |
+| *(same round)* | **The live-database guard moved out of pytest**: armed by `import agent_core`, wrapping `sqlite3.connect` rather than `Store.__init__`, default-deny with one explicit grant (`live_db_guard.allow_live_database()`, called only by `main.main()`). | "Known gaps" / environment notes; see the guard's own module docstring, which is the authority on why no ambient signal was used. |
+
+**Two live warnings for whoever works here next.**
+
+- **A build agent's probe script once wrote a real Addison database into the
+  owner's `~/.addison`** — an undeletable row in it, permanent by design. That is
+  what the guard above exists for, and the residual gap it deliberately does not
+  close (a process importing no Addison code at all) is documented in the module.
+  Never point a probe or a test at the default data directory.
+- **Two agents shared this checkout during the round above.** One ran `git stash`
+  to measure a baseline and stashed the other's in-flight work; `stash pop`
+  restored it, but do not repeat that while a tree is shared.
+
+**Recommended, not built: a second source-level lock.** Exactly one invariant in
+this subsystem has now been silently inverted by a commit while every gate stayed
+green, and it is the narrowing in `_permanent_row_matching` — *only* an
+`undeletable` row may have `verified_working` set after the fact. That narrowing
+is what keeps "restore lands somewhere that actually ran" true, and a behavioural
+test only proves today's behaviour: someone widening the predicate next quarter
+gets a green run, because a wider rule still passes every test that asserts the
+narrow one *works*. `test_no_snapshot_query_filters_on_created_in_mode` exists for
+precisely this shape of risk and has held.
+
+The recommendation: a source-level test beside it, in `tests/test_snapshots.py`,
+that reads `snapshot_manager.py` and asserts **`set_config_snapshot_verified` is
+called from exactly one place, and that call site is guarded by an `undeletable`
+check**. Worth it — it is a handful of lines against the one rule whose violation
+is invisible to the suite, and the prose guarding it has now failed twice. Do
+**not** generalise it into a linter; the value is in pinning one named rule, and a
+broad source-shape test rots faster than the prose it replaces.
+
 ### Residual walk-position defects (N-1 / N-3 / N-4)
 
 The rollback walk's *position* — how far back repeated clicks have got — was the
@@ -398,6 +445,7 @@ Nothing here is forgotten; each line names where it lands and why it waited.
 | **Data-dir permanent distrust** | Workspace-trust doesn't exist until step 5, but the rule must be fixed *before* it does, or `run_command` inside a trusted parent directory can `rm -rf` the floor's own storage with no card. | **Step 5**. Write `test_the_addison_data_dir_can_never_be_workspace_trusted` **now, as an `xfail`**, so the rule exists before the capability does |
 | **`_valid_http_url` credential hardening** | **Pulled forward from step 4 and landed in step 1** — see the G1 note below. A `base_url` carrying a secret lands in a plaintext sidecar *forever* via any permanent row, so it could not wait. Userinfo, any query string or fragment, and key-shaped path segments are now refused by `_base_url_problem` at the moment the person types the address, not stripped on capture — stripping would make a restore write back a *different* address and silently break their server. | **Landed (step 1).** Residual: the path check's composition gate and entropy bar let some token shapes through (a UUID, an all-letter or all-digit segment) — see the G1 note above |
 | **Fresh-vs-upgraded install flag** | ~~Scheduled for step 2.~~ **Done in step 1** — pulled forward when a review measured the heuristic misclassifying the *target persona*: a companion with tuned settings, widgets and months of chats but no provider row was called a fresh install, minting a permanent undeletable row that handed their broken config back under copy promising it was cleared. `main.py` now measures whether it created the database and passes the fact to `SnapshotManager(created_the_database=...)`; `_looks_like_a_fresh_install` is deleted rather than kept as a fallback, since its only distinctive answer was the dangerous one. | **Landed (step 1)** |
+| **`LiveDatabaseBlocked` should probably be a `BaseException`** | It subclasses `AssertionError`, so a broad `except Exception` swallows it — `JsonRpcServer._rebuild_into` against a guarded path reports "rebuild failed" rather than naming the guard. The block still HOLDS (nothing is written); what is lost is the loud message, in the one place a loud message is the entire point. `BaseException` makes it true, but changes how every existing handler behaves, so it was not slipped into a docstring correction at merge time. | **Next session**, with its own verification pass |
 | **Binary restore** | Owner-descoped — collides with the unwired `updater.rs`, and would be the one piece of the recovery floor that could itself brick the app. | **Phase 3**, as an updater work item |
 | **`mcp_servers` / workspace-trust capture** | The tables don't exist. `test_capture_scope_covers_every_schema_table` forces the decision the moment they land. | **Steps 5 and 7** |
 | **Routing-strategy + "make it cheaper" + add-endpoint hooks** | Those flows don't exist yet; the `reason` slugs are already reserved in `REASONS` so the vocabulary won't churn. | **Steps 3 and 4** |

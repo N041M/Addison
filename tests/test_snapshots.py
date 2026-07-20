@@ -19,6 +19,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -584,8 +585,12 @@ def test_the_bottom_message_does_not_deny_a_restore_point_the_user_can_see(
     nothing further back to go to" — while that older row sat in the Settings
     list, saved, permanent, and visible on the same screen.
 
-    The fix is to the SENTENCE, not the walk: the row must still not be a
-    one-click target, and the person must still be told where it is."""
+    The fix is to the SENTENCE, not the walk: in THIS state — no turn has proven
+    the row — it must not be a one-click target, and the person must still be told
+    where it is. That is a statement about an unverified row, not about
+    `pre_upgrade` forever: once a turn runs against those exact bytes,
+    `mark_verified_working` verifies the row in place and the button reaches it,
+    which `test_the_verified_permanent_row_is_a_real_restore_target` asserts."""
     store, manager = _upgraded_install(tmp_path)
     for theme in ("dark", "light"):
         store.set_setting("theme", theme)
@@ -730,6 +735,100 @@ def test_the_first_click_on_an_upgraded_install_restores_and_says_it_is_unproven
         "how you want them. Your chats and your saved keys weren't touched."
     )
     assert "last working setup" not in (result.detail or "")
+    store.close()
+
+
+def test_the_disk_arm_leaves_a_way_back_from_its_own_restore(tmp_path: Path) -> None:
+    """The one restore in the subsystem that used to be one-way.
+
+    ``restore()`` has always captured a ``pre_restore`` point before applying, so
+    clicking Restore is itself reversible. The disk arm did not — and it is not an
+    exotic path: on an upgraded install there is no verified row yet, so the very
+    FIRST click goes through it. The person most likely to want a look at their
+    old setup again was the one person who could not have it, however many times
+    they clicked.
+
+    Asserting the row exists would prove almost nothing (a row with the wrong
+    contents is worse than none), so the test spends the way back: restore it, and
+    require the configuration the click moved away from to come back exactly."""
+    store = Store(tmp_path / "addison.sqlite3")
+    store.set_setting("selected_model", "the-one-from-before")
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    store.set_setting("selected_model", "the-one-they-tried-next")
+
+    assert manager.restore_last_working().ok
+    assert store.get_setting("selected_model") == "the-one-from-before"
+
+    way_back = [row for row in manager.list() if row["reason"] == "pre_restore"]
+    assert len(way_back) == 1, f"the disk arm's restore left no way back: {manager.list()}"
+    assert manager.restore(way_back[0]["id"]).ok
+    assert store.get_setting("selected_model") == "the-one-they-tried-next"
+    store.close()
+
+
+def test_the_disk_arm_does_not_save_a_way_back_it_never_used(tmp_path: Path) -> None:
+    """The other half: the arm answers "nothing to apply" far more often than it
+    applies anything, and a "Before restoring" point appearing in the list right
+    after Addison said there was nothing to go back to would be a puzzle rather
+    than a rescue. So the capture rides with the apply, not with the attempt."""
+    store = Store(tmp_path / "addison.sqlite3")
+    store.set_setting("selected_model", "the-only-setup-there-is")
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+
+    # Nothing has changed since the permanent row was written, so every payload on
+    # disk is the config already running and the arm has nothing to offer.
+    result = manager.restore_last_working()
+
+    assert result.ok is False
+    assert [row["reason"] for row in manager.list()] == ["pre_upgrade"]
+    store.close()
+
+
+class _InsertRefusingStore:
+    """A store that will not take another row — a full disk, mid-recovery. The
+    manager duck-types its store (contract §5.2), so a wrapper is all it takes."""
+
+    def __init__(self, inner: Store) -> None:
+        self._inner = inner
+        self.refusing = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def insert_config_snapshot(self, snapshot: Any) -> None:
+        if self.refusing:
+            raise sqlite3.OperationalError("database or disk is full")
+        self._inner.insert_config_snapshot(snapshot)
+
+
+def test_a_disk_arm_restore_still_happens_when_the_way_back_cannot_be_saved(
+    tmp_path: Path,
+) -> None:
+    """Recovery outranks the reversibility of the recovery — the same rule
+    ``restore()`` has always followed, and the reason the new capture is wrapped.
+
+    Unwrapped, it raises straight out of ``restore_last_working()``, and nothing
+    above catches it: ``rpc/snapshots.py`` hands the result to the wire without a
+    try. So a capture that cannot land would take the flagship recovery with it,
+    in the one situation this arm exists for. Saving the way back is worth having;
+    it is never worth the way back itself."""
+    store = Store(tmp_path / "addison.sqlite3")
+    store.set_setting("selected_model", "the-one-from-before")
+    refusing = _InsertRefusingStore(store)
+    manager = SnapshotManager(store=refusing, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    store.set_setting("selected_model", "the-one-they-tried-next")
+    refusing.refusing = True
+
+    result = manager.restore_last_working()
+
+    assert result.ok, result.error
+    assert store.get_setting("selected_model") == "the-one-from-before"
+    # Nothing was saved, and the user is not told otherwise: the restore is simply
+    # not undoable this once. That is the trade, and it is the right way round.
+    assert [row["reason"] for row in manager.list()] == ["pre_upgrade"]
     store.close()
 
 
@@ -1817,6 +1916,32 @@ def test_selecting_a_payload_admits_when_nothing_was_ever_proven() -> None:
     assert select_payload_to_restore([]) == (None, False)
 
 
+def test_selecting_a_payload_never_guesses_at_the_setup_the_user_escaped() -> None:
+    """A ``pre_restore`` payload holds the configuration somebody pressed Restore
+    to get AWAY from, and it is written moments before the escape — so it is the
+    newest file on disk and would win the unverified fallback every single time.
+    The caller would then put them back into exactly what they escaped, while
+    saying "the most recent settings I had".
+
+    Barred in the chooser rather than at any one call site, so the property holds
+    for the manager's disk arm, the cold-start rebuild and the listing that names
+    the target alike."""
+    payloads = [
+        _sidecar("pre_restore", verified=False, fingerprint="f-escaped", marker="escaped"),
+        _sidecar("pre_upgrade", verified=False, fingerprint="f-older", marker="older"),
+    ]
+
+    chosen, is_verified = select_payload_to_restore(payloads)
+
+    assert is_verified is False
+    assert chosen is not None and chosen["meta"]["id"] == "id-older"
+    # And when it is the ONLY thing saved, the answer is nothing rather than the
+    # setup they walked away from. That is the one place this rule costs
+    # something, and it is the right side to be on: a restore point recorded as
+    # "what you were escaping" is never a guess worth making for somebody.
+    assert select_payload_to_restore([payloads[0]]) == (None, False)
+
+
 def test_restore_reports_a_build_mismatch_in_plain_language(store: Store) -> None:
     running = {"version": "0.1.0", "identifier": "app.addison.desktop"}
     manager = _manager(store, app_build_ref=lambda: running)
@@ -2131,3 +2256,136 @@ def test_an_ordinary_snapshot_is_never_flagged_after_the_fact(store: Store) -> N
 
     after = {row["id"]: row for row in manager.list()}
     assert after[ordinary[0]["id"]]["verified_working"] is False
+
+
+def _with_keeper(tmp_path: Path) -> Store:
+    """An upgraded install holding one note.
+
+    Notes rather than settings throughout this section, because
+    ``app_settings.updated_at`` moves with the wall clock: writing the same value
+    twice does NOT reproduce the same configuration, while adding a note and
+    deleting it again leaves the remaining rows byte-identical. "The same
+    configuration again" has to be a fact here, not a race on the second hand."""
+    store = Store(tmp_path / "addison.sqlite3")
+    store.insert_skill(id="keeper", name="Keeper", instructions="Keep this one.",
+                       enabled=True, created_at=100)
+    return store
+
+
+def test_the_button_lands_on_the_most_recent_proven_setup_after_a_return(
+    tmp_path: Path,
+) -> None:
+    """Going back to a configuration you have run before is ordinary — connect a
+    service, think better of it, disconnect it, keep chatting — and the button
+    must not step PAST it.
+
+    Verifying the permanent row in place records the proof but not WHEN it was
+    proven: that row is stamped with boot time. The walk orders by time, so the
+    click after something breaks skipped the setup the user was actually running a
+    minute ago and landed on whatever they happened to be on before the return.
+    "Each click steps back one distinct proven configuration" is the promise the
+    button is read against, and this is the sequence that broke it."""
+    store = _with_keeper(tmp_path)
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    manager.mark_verified_working()          # H8, on the setup they upgraded with
+
+    store.insert_skill(id="extra", name="Extra", instructions="Try this one too.",
+                       enabled=True, created_at=200)
+    manager.mark_verified_working()          # a turn against the second setup
+    store.delete_skill("extra")              # ... and back to the first
+    manager.mark_verified_working()          # a turn against it again
+    store.insert_skill(id="broken", name="Cheapest", instructions="Use the cheapest model.",
+                       enabled=True, created_at=300)
+    manager.mark_verified_working()          # the broken setup answered a turn too
+
+    assert manager.restore_last_working().ok
+
+    assert [skill["id"] for skill in store.list_skills()] == ["keeper"], (
+        "the button stepped past the setup the user was running a minute ago"
+    )
+    store.close()
+
+
+class _CountingStore:
+    """A store that counts how often the whole restore-point list gets read. The
+    manager duck-types its store (contract §5.2), so a wrapper is all it takes."""
+
+    def __init__(self, inner: Store) -> None:
+        self._inner = inner
+        self.scans = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def list_config_snapshots(self) -> list[dict[str, Any]]:
+        self.scans += 1
+        return self._inner.list_config_snapshots()
+
+
+def test_a_settled_configuration_stops_costing_a_scan_on_every_turn(tmp_path: Path) -> None:
+    """Contract §5.3: after an ordinary completed turn this costs a read of six
+    small tables, one sha256 and no write.
+
+    Verifying the permanent row in place broke that for anyone sitting on the
+    configuration it holds: the newest-verified check could never match again, so
+    every single turn re-read the entire restore-point list looking for the row it
+    had already flagged. Bounded by retention, but paid forever, in a state a
+    person can stay in indefinitely. The fresh row that fixes the walk is also
+    what re-arms the cheap check."""
+    store = _with_keeper(tmp_path)
+    counting = _CountingStore(store)
+    manager = SnapshotManager(store=counting, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    manager.mark_verified_working()
+    store.insert_skill(id="extra", name="Extra", instructions="Try this one too.",
+                       enabled=True, created_at=200)
+    manager.mark_verified_working()
+    store.delete_skill("extra")              # back on the permanent row's configuration
+
+    counting.scans = 0
+    for _ in range(5):
+        manager.mark_verified_working()
+
+    assert counting.scans == 1, "every turn is re-reading the whole restore-point list"
+    store.close()
+
+
+def test_a_row_verified_after_the_fact_survives_a_rebuild_from_its_sidecar(
+    tmp_path: Path,
+) -> None:
+    """Every payload is written twice, and until the permanent row could be
+    flagged in place the two copies could only ever differ by being absent.
+
+    Flagging it is a column UPDATE, so the sidecar — the copy that outlives the
+    database — still said 0. A cold-start rebuild reads that flag straight out of
+    ``meta``, so the proof evaporated in the one situation the sidecars exist for:
+    the rebuilt table came back with no verified row at all, the permanent row was
+    unreachable by the walk again, and the user was told Addison could not find a
+    setup it had seen working when it demonstrably had."""
+    store = _with_keeper(tmp_path)
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    proven = manager.mark_verified_working()
+    assert proven is not None and proven.reason == "pre_upgrade"
+    store.close()
+
+    # The database is gone; the sidecars are all that is left (§6.4c).
+    payloads = recover_payloads_from_disk(tmp_path / "snapshots")
+    rebuilt = Store(tmp_path / "rebuilt.sqlite3")
+    try:
+        rebuild_rows_from_payloads(rebuilt, payloads)
+        assert [row["verified_working"] for row in rebuilt.list_config_snapshots()] == [True]
+
+        after = SnapshotManager(store=rebuilt, snapshot_dir=tmp_path / "snapshots",
+                                clock=_Clock(), created_the_database=False)
+        rebuilt.delete_skill("keeper")       # something to go back FROM
+        result = after.restore_last_working()
+
+        assert result.ok, result.error
+        assert [skill["id"] for skill in rebuilt.list_skills()] == ["keeper"]
+        # The walk found it, so the ordinary sentence for that row — not the last
+        # resort one that says Addison never saw this setup working.
+        assert result.detail == sm._RESTORED_PRE_UPGRADE
+    finally:
+        rebuilt.close()

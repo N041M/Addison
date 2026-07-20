@@ -229,12 +229,37 @@ erDiagram
     empty, and that is true for every install that predates this subsystem, not only a new
     one. On a **fresh install** the bottom row is `reason='genesis'`, `verified_working = 1`
     — a new install is a configuration that works. On an **upgraded install** it is
-    `reason='pre_upgrade'` and deliberately **not** verified: it is a copy of whatever config
-    the user happens to have at that moment, which may be the broken one they are about to
-    need rescuing from, and nothing has run against it under this subsystem's observation.
-    Marking it verified would let the one-action restore hand that config straight back. The
-    accepted consequence is that on an upgraded install `restore_last_working()` has **no
-    target until the first turn completes**, and says so in plain language.
+    `reason='pre_upgrade'` and **captured unverified**: it is a copy of whatever config the
+    user happens to have at that moment, which may be the broken one they are about to need
+    rescuing from, and nothing has run against it under this subsystem's observation. So on an
+    upgraded install `restore_last_working()` has **no target until the first turn completes**,
+    and says so in plain language.
+  - **When a permanent row becomes verified** *(amended 2026-07-20, `4c7ae78` — this
+    supersedes an earlier claim here that nothing ever flips the flag on an existing row)*.
+    `verified_working` records one fact: *a turn demonstrably answered against these exact
+    bytes.* `mark_verified_working()` ordinarily writes a **new** `turn_verified` row, and
+    flips the flag on an existing row in exactly one narrowed case — an **`undeletable`** row
+    whose `state_fingerprint` matches the current config byte for byte
+    (`_permanent_row_matching`). Fingerprint equality is evidence rather than a guess, so a
+    proven `pre_upgrade` (or `genesis`, or a G4 anchor) **is** a legitimate one-action target
+    from that point on. Ordinary pre-change rows are never flagged after the fact — they hold
+    a config no turn ran against, and flagging one would make "restore lands somewhere that
+    actually ran" false.
+    - *Why this is not a weakening.* The rule it replaces left the one row retention can never
+      prune permanently unprovable, while the same call wrote a `turn_verified` **clone with
+      identical bytes** that the button restored instead — the user received the same
+      configuration either way. What the flag buys is that the guaranteed row is the one the
+      button names. The two real protections are unchanged: the flag still requires a
+      **completed turn**, and the walk **skips any row fingerprint-matching the current
+      config**, so a proven permanent row can never hand back what the user is sitting on.
+      Restore copy stays reason-specific (`_RESTORED_DETAIL`), so a `pre_upgrade` restore is
+      never dressed in the generic "last working setup" sentence.
+    - *Two writes, with one exception that is closed.* Because this is the only path that
+      mutates a flag **after** the payload is written twice, the row-only `UPDATE` would leave
+      the sidecar saying `0` — and the sidecar is the copy that survives the database, so a
+      cold-start rebuild would silently drop the proof. `_mirror_verified_into_sidecar()`
+      writes the flag through to `meta`. It is best-effort like every sidecar write: the row is
+      the primary copy, and an unwritable snapshots directory must never fail a turn.
   - Which install it is is **measured, not inferred**. `main.py` checks whether the database
     file existed in the instant before it opened it, and passes the answer to
     `SnapshotManager(created_the_database=...)`. The snapshot module cannot find this out for
@@ -271,6 +296,34 @@ erDiagram
       had just escaped. `_recorded_restore_target` reads the newest `pre_restore` row's
       payload to recover it. Additive by construction — an ordinary payload keeps the exact
       bytes it has always had, and every existing reader ignores the key.
+    - **Which restores write a `pre_restore` row, and which cannot** *(stated with its
+      exceptions — the earlier text claimed the guarantee flat)*. "Clicking Restore is itself
+      reversible" holds wherever a database can take an `INSERT`, and the exceptions are
+      exactly the paths where one cannot:
+
+      | Path | Writes `pre_restore`? |
+      |---|---|
+      | `restore(snapshot_id)` — the Settings list row, the anchor path, and the walk arm of `restore_last_working()` (which delegates straight to it) | **Yes**, always attempted |
+      | The sidecar arm, walk outcome `'none'` or `'identical'` | **Yes** — the refs query answered, which proves the database is healthy enough to take the row |
+      | The sidecar arm, walk outcome `'unreadable'` | **No** — that is the damaged-table case; the `INSERT` cannot land, and attempting it is noise on the flagship recovery path |
+      | The cold-start rebuild in `main.py` (`_rebuild_into`) | **No** — there is no openable database to capture the current config *from* or write the row *into*. The way back on this path is a different mechanism: the damaged file is **renamed aside**, never deleted (`<db>.damaged-<epoch>`) |
+
+      Two further properties of the row itself. It is taken **inside** the sidecar arm, after a
+      payload is chosen and before the apply, rather than at the call site — that arm answers
+      "nothing to do" far more often than it applies anything, and a "Before restoring" entry
+      appearing right after *there's nothing to go back to* would be a puzzle, not a rescue.
+      And the capture is **wrapped and `prune=False`** on every path that takes it: a failure to
+      record the way back must not abort the recovery (recovery outranks the reversibility of
+      the recovery), and pruning here could delete the very payload about to be applied.
+    - **A `pre_restore` payload is never the unverified fallback** (`select_payload_to_restore`).
+      It holds the configuration the user pressed Restore to get *away* from, and it is written
+      moments before the escape — so it is the newest thing on disk and would win the fallback
+      every time, handing back exactly what they escaped under the sentence "the most recent
+      settings I had". It is barred in the one chooser every restore path shares, so the
+      property holds for the sidecar arm, the cold-start rebuild, and the listing that names
+      the target alike. A **verified** payload is still returned whatever its reason: the bar
+      is on the guess, never on the evidence. Deliberate trade: when a `pre_restore` payload is
+      the only thing on disk, the rebuild reports failure rather than applying it.
   - **Keys never enter a snapshot** (G1): the captured tables cannot hold key material, and
     the keychain is untouched by capture *and* restore, so a rollback can never move, expose,
     or clobber a key. A restored provider config re-binds to whatever key is in the keychain

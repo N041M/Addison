@@ -9,11 +9,15 @@ commit-per-write durability path is actually exercised.
 """
 
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
+from agent_core import live_db_guard
 from agent_core.memory.store import Store
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.tools.base import ActionSnapshot
@@ -972,7 +976,7 @@ def test_reopening_never_drops_config_snapshots(tmp_path: Path):
 
 
 def test_the_live_database_guard_is_not_escapable_by_a_relative_path(tmp_path: Path):
-    """``tests/conftest.py``'s autouse guard must resolve the path before judging it.
+    """The guard must resolve the path before judging it.
 
     It exists because a build agent once constructed a real ``Store`` against the
     default path and wrote an undeletable row into the owner's live database — a row
@@ -986,10 +990,140 @@ def test_the_live_database_guard_is_not_escapable_by_a_relative_path(tmp_path: P
     """
     escaping = Path.home() / "Desktop" / ".." / ".addison" / "should-never-open.sqlite3"
 
-    with pytest.raises(AssertionError, match="live database"):
-        Store(escaping)
+    # This test aims at the real directory, so when it FAILS it does the very thing
+    # it forbids. That is not hypothetical: a 151 KB database of exactly this name
+    # was found sitting in the owner's live directory, and it reappeared the moment
+    # the guard was weakened to check the failure was detected. Clean up regardless
+    # of outcome, and say so if a file was made.
+    try:
+        with pytest.raises(AssertionError, match="live database"):
+            Store(escaping)
+        assert not escaping.resolve().exists(), (
+            "the guard let the file through before raising — check ~/.addison"
+        )
+    finally:
+        # "" plus the WAL pair: Store turns on journal_mode=WAL, so a leaked database
+        # is three files, and deleting only the first leaves a 300 KB -wal behind.
+        landed = escaping.resolve()
+        for suffix in ("", "-wal", "-shm"):
+            landed.with_name(landed.name + suffix).unlink(missing_ok=True)
 
     # The guard still lets an ordinary test path through, so it cannot pass by
     # refusing everything.
     ordinary = Store(tmp_path / "fine.sqlite3")
     ordinary.close()
+
+
+@pytest.fixture
+def fake_live_dir(tmp_path: Path, monkeypatch) -> Path:
+    """Point the guard's live-data directory at a throwaway tree.
+
+    Lets the allow/deny logic be exercised in both directions without a test ever
+    aiming at the owner's real ``~/.addison``. The end-to-end proof that the REAL
+    directory is covered is
+    ``test_the_guard_is_armed_outside_pytest_by_importing_agent_core`` below.
+    """
+    live = tmp_path / "pretend-home" / ".addison"
+    live.mkdir(parents=True)
+    monkeypatch.setattr(live_db_guard, "_LIVE_DATA_DIR", live)
+    return live
+
+
+def test_a_bare_sqlite3_connect_cannot_reach_the_live_directory(fake_live_dir: Path):
+    """Bypass 1: code that never imports ``Store`` at all.
+
+    The guard this replaced wrapped ``Store.__init__``, so four lines of stdlib
+    walked straight around it. ``sqlite3.connect`` is the choke point every route
+    to the file shares, which is why the check moved there.
+    """
+    target = fake_live_dir / "bare-connect.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        sqlite3.connect(target)
+
+    assert not target.exists(), "the guard raised but sqlite3 had already made the file"
+
+
+def test_a_store_subclass_that_skips_super_init_is_still_blocked(fake_live_dir: Path):
+    """Bypass 2: a ``Store`` subclass that never calls ``super().__init__``.
+
+    It inherits every Store method, so it is a working Store for all practical
+    purposes — it just skips the one place the old guard was patched into.
+    """
+
+    class _RogueStore(Store):
+        def __init__(self, db_path) -> None:  # deliberately no super().__init__()
+            self.db_path = str(db_path)
+            self._conn = sqlite3.connect(self.db_path)
+
+    target = fake_live_dir / "subclass.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        _RogueStore(target)
+
+    assert not target.exists()
+
+
+def test_the_running_app_may_open_its_own_live_database(fake_live_dir: Path):
+    """The guard must not break the one process that is SUPPOSED to open this path.
+
+    This is the whole difficulty: the app opens exactly the path everything else is
+    refused. It gets through by saying so — ``main()`` calls ``allow_live_database()``
+    on itself — rather than by looking like the app to a heuristic, which a probe
+    could satisfy by accident.
+    """
+    target = fake_live_dir / "addison.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        sqlite3.connect(target)
+
+    live_db_guard.allow_live_database()
+    connection = sqlite3.connect(target)
+    try:
+        connection.execute("CREATE TABLE t (x INTEGER)")
+    finally:
+        connection.close()
+    assert target.exists()
+
+
+def test_the_guard_is_armed_outside_pytest_by_importing_agent_core():
+    """The gap that actually fired: an ad-hoc probe script, with no pytest anywhere.
+
+    A 151 KB Addison-schema database was found in the owner's live directory,
+    written by a one-off probe an hour before the old pytest-fixture guard was
+    committed. Probe scripts are how this project is developed, so the guard has to
+    be armed by importing the package, not by collecting a conftest.
+
+    Deliberately a subprocess aimed at the REAL ``~/.addison``: every other test
+    here uses a stand-in directory, so without this one nothing proves the path
+    that matters is covered. The probe filename is unique and unlinked afterwards
+    in case the guard is broken and the file is actually created.
+    """
+    repo_root = Path(__file__).resolve().parents[1]
+    probe = Path.home() / ".addison" / f"guard-check-{uuid4().hex}.sqlite3"
+    source = (
+        "import sys, sqlite3\n"
+        "import agent_core  # arming the guard is this import's whole job\n"
+        "try:\n"
+        f"    sqlite3.connect({str(probe)!r})\n"
+        "except AssertionError as exc:\n"
+        "    print(exc)\n"
+        "    sys.exit(3)\n"
+        "sys.exit(0)\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", source],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 3, (
+            "a plain python process opened the live directory unchallenged; "
+            f"exit={result.returncode} stdout={result.stdout} stderr={result.stderr}"
+        )
+        assert "live database" in result.stdout
+        assert not probe.exists()
+    finally:
+        probe.unlink(missing_ok=True)

@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from agent_core import live_db_guard
 from agent_core.memory.store import Store
 from agent_core.models_catalog import (
     CatalogFetchError,
@@ -1552,6 +1553,12 @@ def _plain(exc: Exception) -> str:
 
 
 def main() -> None:
+    # This process IS the app, so it is the one thing allowed to open ~/.addison.
+    # Importing agent_core armed a default-deny guard over sqlite3.connect; every
+    # launch route (env override, bundled binary, `-m agent_core.main`) ends here,
+    # and nothing else calls this. See agent_core/live_db_guard.py.
+    live_db_guard.allow_live_database()
+
     # §4.7: build the tool registry profile-agnostically — both v1 profiles register
     # the same §4.2 SAFE tool set plus the dev_only run_command (hidden from the SAFE
     # view). The server resolves the *persisted* active profile on its worker thread

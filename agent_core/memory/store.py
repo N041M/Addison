@@ -893,13 +893,12 @@ class Store:
         delete. Before this it could never become a target however many turns ran
         against it, and a byte-identical clone was written beside it instead.
 
-        It is kept because the flag is a column any later caller may legitimately
-        need to set (a step-2 anchor promoted by copy, a repair path rebuilding
-        rows from sidecar payloads), and re-deriving the statement then is a
-        worse trade than one documented method with only test callers today. If
-        you are about to call it from a new "the turn worked" hook, read
-        ``mark_verified_working()`` first — that hook is the thing this method is
-        NOT for."""
+        Further callers are legitimate for the same reason — a step-2 anchor
+        promoted by copy, a repair path rebuilding rows from sidecar payloads —
+        provided each carries its own proof. If you are about to call it from a
+        new "the turn worked" hook, read ``mark_verified_working()`` first: that
+        hook is where the proof is computed, and calling this directly from
+        another one would be flagging a row without it."""
         self._conn.execute(
             "UPDATE config_snapshots SET verified_working = 1 WHERE id = ?",
             (snapshot_id,),

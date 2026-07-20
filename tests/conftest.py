@@ -1,4 +1,15 @@
-"""Shared JsonRpcServer test harness for tests/test_ipc_server.py.
+"""Shared JsonRpcServer test harness — and the per-test half of the live-database guard.
+
+Two unrelated things live here, both of them global to the test run:
+
+1. `_never_touch_the_live_database` (autouse) — the per-test half of the guard that
+   keeps anything in this repo from opening the owner's real `~/.addison` database.
+   The half that does the actual blocking is NOT here: it is armed by
+   `import agent_core` (see agent_core/live_db_guard.py), because a pytest fixture
+   protects only pytest, and the accident it was written for was an ad-hoc probe
+   script. What remains here is test-run housekeeping — pointing ADDISON_DB_PATH at
+   the test's tmp dir, and re-arming the guard between tests.
+2. The IPC harness described below.
 
 The IPC round-trip tests run the real server in-process on fake pipes: frames
 go in through a blocking reader, every outgoing frame is captured, and a
@@ -19,10 +30,10 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
+from agent_core import live_db_guard
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.providers.base import (
@@ -42,48 +53,33 @@ from agent_core.tools.registry import ToolRegistry
 # sqlite3 connection, so the name is shared here.
 IPC_DB_NAME = "ipc-test.sqlite3"
 
-# The user's real database. Nothing under tests/ may ever open it.
-_LIVE_DATA_DIR = Path.home() / ".addison"
-
 
 @pytest.fixture(autouse=True)
 def _never_touch_the_live_database(monkeypatch, tmp_path):
-    """Fail loudly if a test — or an agent running one — opens ``~/.addison``.
+    """Keep every test off the owner's real ``~/.addison`` database.
 
-    Written after a build agent constructed a real ``Store`` against the default
-    path instead of a tmp_path and wrote an undeletable snapshot row into the
-    owner's live database. Nothing was lost, but the row was permanent by design
-    (schema.sql's RAISE(ABORT) triggers), so the recovery machinery made its own
-    accident unremovable through the app.
+    The blocking itself is not here and cannot be — it belongs to any process that
+    imports ``agent_core`` (``agent_core/live_db_guard.py``), because the accident
+    that prompted all of this was a one-off probe script, which pytest never sees.
+    This fixture supplies the two things that are genuinely per-test:
 
-    Two layers, because either alone is escapable:
+    1. ``ADDISON_DB_PATH`` points at the test's own tmp dir, so code that resolves
+       the *default* path lands somewhere harmless instead of merely being refused.
+    2. The app's opt-in is reset. ``allow_live_database()`` is process-wide by
+       design, so a test that exercises it must not leave the guard disarmed for
+       every test that follows.
 
-    1. ``ADDISON_DB_PATH`` is pointed at the test's own tmp dir, so any code that
-       resolves the default path lands somewhere harmless.
-    2. ``Store.__init__`` is wrapped to raise on any path under ``~/.addison``,
-       which catches the code that ignores the env var and passes a path directly
-       — the exact mistake that happened.
-
-    Deliberately autouse and unconditional: a guard you have to remember to apply
-    is a guard that is missing on the day it matters.
+    The assertion is not ceremony: if the import-time install ever stops running,
+    every test in the suite silently loses its protection, and this is the one
+    place that would notice.
     """
+    assert live_db_guard.is_installed(), (
+        "The live-database guard is not armed. It installs on `import agent_core` "
+        "(agent_core/live_db_guard.py); without it nothing stops a test from writing "
+        "to the owner's real database."
+    )
+    monkeypatch.setattr(live_db_guard, "_app_has_declared_itself", False)
     monkeypatch.setenv("ADDISON_DB_PATH", str(tmp_path / "addison-under-test.sqlite3"))
-    original_init = Store.__init__
-
-    def guarded_init(self, db_path, *args, **kwargs):
-        # resolve(), not just expanduser(): without it "~/.addison/../.addison/x" and
-        # a symlink pointing into the live directory both walk straight past a
-        # parents check. A guard whose own docstring says either layer alone is
-        # escapable should not be escapable by a "..".
-        resolved = Path(str(db_path)).expanduser().resolve()
-        if str(db_path) != ":memory:" and _LIVE_DATA_DIR.resolve() in resolved.parents:
-            raise AssertionError(
-                f"A test tried to open the live database at {resolved}. Use tmp_path. "
-                "See tests/conftest.py::_never_touch_the_live_database."
-            )
-        return original_init(self, db_path, *args, **kwargs)
-
-    monkeypatch.setattr(Store, "__init__", guarded_init)
     yield
 
 
