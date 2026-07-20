@@ -288,6 +288,14 @@ _SECRET = "sk-live-SECRET123"
 _CREDENTIALLED_ADDRESSES = [
     ("userinfo", f"https://user:{_SECRET}@api.example.com/v1"),
     ("userinfo-no-password", f"https://{_SECRET}@api.example.com/v1"),
+    # The password half of the userinfo check, on its own. Every other userinfo
+    # vector here has a non-empty USERNAME, so all of them survive `or
+    # parts.password` being deleted — this is the only case that fails when it
+    # goes, and the shape is not exotic: an empty user with the key as the
+    # password is what a "https://:KEY@host" copy-paste produces. Without it the
+    # check's second half is untested, and a key lands in provider_config,
+    # every snapshot blob and every plaintext sidecar (G1).
+    ("userinfo-password-only", f"https://:{_SECRET}@api.example.com/v1"),
     ("query api_key", f"https://api.example.com/v1?api_key={_SECRET}"),
     ("query apikey", f"https://api.example.com/v1?apikey={_SECRET}"),
     ("query APIKEY uppercase", f"https://api.example.com/v1?APIKEY={_SECRET}"),

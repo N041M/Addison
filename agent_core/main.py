@@ -100,12 +100,13 @@ from agent_core.snapshots.snapshot_manager import (
     select_payload_to_restore,
 )
 from agent_core.snapshots.undo_manager import UndoManager
-from agent_core.tools.base import ActionSnapshot
+from agent_core.tools.base import MAX_PERMISSION_DETAIL_CHARS, ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
 from agent_core.tools.read_clipboard import ReadClipboardTool
 from agent_core.tools.read_file import ReadFileTool
+from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
@@ -190,6 +191,7 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
     profile = profile or resolve_active_profile()
     all_tools = {
         "web_search": WebSearchTool(),
+        "read_web_page": ReadWebPageTool(),
         "read_file": ReadFileTool(),
         "read_clipboard": ReadClipboardTool(),
         "calculator": CalculatorTool(),
@@ -654,10 +656,57 @@ class JsonRpcServer(
         self._read_loop()
         self._queue.put(None)   # stop the worker once stdin closes
 
+    def _database_created_by_this_launch(self) -> bool | None:
+        """Did the database file come into existence on THIS launch? None when we
+        cannot tell.
+
+        The single fact ``SnapshotManager`` needs to decide whether this database
+        gets a ``genesis`` bottom row (a permanent, one-click restore target) or
+        the cautious ``pre_upgrade`` one. It is asked here, and only from the
+        filesystem.
+
+        WHY IT CANNOT BE FOOLED. It is a property of the file, not of anything
+        written inside it, so nothing the user or the model can do through
+        Addison moves it. The alternative — inferring "fresh" from the contents —
+        is what this replaced, and it was wrong for the DEFAULT state of the
+        people this app is for: someone who never connects a service, never
+        writes a note, never saves a routine and never leaves Simple looks
+        byte-identical to a new install no matter how many months of settings,
+        widgets and chats they have. Their file, however, has been on disk since
+        the day they installed Addison.
+
+        WHY IT IS ASKED HERE and not next to the manager: ``Store.__init__``
+        creates the file and applies the schema, so from the first line of the
+        build onward the answer is always "it existed". This runs in the last
+        instant before anything opens it.
+
+        WHEN IT IS ABSENT: no configured path (CLI-ish callers and tests that
+        wire a store factory without one), or a path we cannot even stat. Both
+        answer None — "could not find out" — and the manager then writes
+        ``pre_upgrade``. That is the cheap direction: being wrongly told your
+        setup predates the update costs one honest sentence, while being wrongly
+        told your install is brand new hands back the configuration you were
+        trying to escape, from a row that cannot be deleted."""
+        if self._db_path is None:
+            return None
+        try:
+            os.stat(self._db_path)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            # An unreadable parent, a path component that is not a directory, a
+            # name the filesystem rejects: we have learned nothing, so say so
+            # rather than reading "no file" out of "no answer".
+            return None
+        return False
+
     def _ensure_built(self) -> None:
         """Build the SQLite-backed singletons on the worker thread (once)."""
         if self._orchestrator is not None:
             return
+        # G3: measured BEFORE the store opens (which creates the file), and
+        # re-measured on a rebuild-and-retry — see _database_created_by_this_launch.
+        created_the_database = self._database_created_by_this_launch()
         self.store = self._store_factory()
         # Seed the in-house default widgets on a fresh install so the rail isn't empty
         # (flag-gated — deleting them never re-seeds).
@@ -666,11 +715,18 @@ class JsonRpcServer(
         self._active_profile = resolve_active_profile(self.store)
         # GLOBAL FLOOR G3: built before the orchestration machinery so a restore
         # target exists from the first moment the store does. Construction writes
-        # the genesis snapshot on a fresh database — after widget seeding above, so
-        # genesis holds the real first-run state.
+        # the permanent bottom row on a database that has none.
+        #
+        # ORDERING, LOAD-BEARING: this MUST stay below _seed_default_widgets()
+        # above. Genesis is a snapshot of the state at this line, so constructed
+        # first it would capture an empty rail — and 'widgets_seeded' is a
+        # one-way latch that survives a restore (scope._PRESERVED_SETTING_KEYS),
+        # so restoring that genesis would empty the rail permanently, with
+        # re-seeding already latched off. There is a test on this order.
         self.snapshot_manager = SnapshotManager(
             store=self.store,
             snapshot_dir=self._snapshot_dir,
+            created_the_database=created_the_database,
             app_build_ref=(
                 self._shell_bridge.get_app_build_ref if self._shell_bridge else None
             ),
@@ -699,6 +755,9 @@ class JsonRpcServer(
             shell_bridge=self._shell_bridge,
             on_ask_user=self._ask_user_continue,
             store=self.store,
+            # The same Activity Panel the live turn drives. A routine reaches the
+            # web through the same tools, so it must name where it went too.
+            on_activity=self._emit_activity,
         )
         # The build worked, so a remembered failure is stale — clear it rather than
         # answering "couldn't open its settings file" for the rest of the session.
@@ -784,8 +843,43 @@ class JsonRpcServer(
     def _emit_stream_chunk(self, text: str | None) -> None:
         self._notify(Method.CONVERSATION_STREAM_CHUNK, {"text": text or ""})
 
-    def _emit_activity(self, tool_id: str, label: str) -> None:
-        self._notify(Method.TOOL_ACTIVITY_UPDATE, {"toolId": tool_id, "label": label})
+    def _emit_activity(self, tool_id: str, label: str, detail: str | None = None) -> None:
+        """Which step is running, and — when the tool can say — WHAT it is reaching.
+
+        WHY THE DETAIL IS HERE AT ALL. ``read_web_page`` is the first SAFE-view tool
+        that sends a request to an address the MODEL chose, with no window opening
+        where anyone would see it. ``PermissionGate._grants`` is keyed by tool id
+        alone, so once the person has allowed one page read, every later read in the
+        session is ungated and goes wherever the model points it — and page text is
+        exactly what points it, so injected content can name an address that carries
+        what Addison just read out inside the URL. The owner's answer (2026-07-20) is
+        VISIBILITY, not per-site grant scoping: showing the destination adds no
+        prompts (being asked too often is the complaint that started this work), and
+        a person who sees a site they never asked about can stop the turn.
+
+        It is deliberately not read_web_page-shaped. The value is whatever the tool's
+        own ``permission_detail`` returns — the same string the permission card
+        already uses — so any tool that can name what it is about to touch is
+        surfaced here, and nothing in this method knows one tool from another.
+
+        The key is omitted, not sent as null, when a tool has no detail to give: most
+        tools don't, and the frontend treats the field as optional.
+
+        The length cap lives in ``tools.base.call_permission_detail``, where the
+        value is built, so the panel and the permission card cannot show different
+        strings for the same call. The re-cap below is a belt on the boundary itself
+        — this method hands a string to the webview, and it should not depend on
+        every future caller having gone through that constructor — and it uses the
+        same constant so there is one number, not two that have to be kept equal.
+        """
+        params: dict = {"toolId": tool_id, "label": label}
+        if detail:
+            params["detail"] = (
+                detail
+                if len(detail) <= MAX_PERMISSION_DETAIL_CHARS
+                else detail[:MAX_PERMISSION_DETAIL_CHARS] + "…"
+            )
+        self._notify(Method.TOOL_ACTIVITY_UPDATE, params)
 
     # --- dispatch ---------------------------------------------------------
     def _dispatch(self, frame: dict) -> None:

@@ -23,8 +23,31 @@ class ProfileId(str, Enum):
 
 
 # The v1 tool set (spec §4.2). The Simple profile exposes exactly these.
+#
+# ``read_web_page`` is not in the spec's §4.2 table — it was added later, on the
+# owner's finding that a search whose snippet lacks the answer left Addison with
+# nothing to offer but "open this and read it yourself". It sits here rather than
+# in a Developer-only list on purpose: reading a page and answering from it is the
+# companion's core job, so the Simple personas get it too. LOW and read-only, so it
+# needs no undo (CLAUDE.md SAFE invariants 1 and 2).
+#
+# What it DOES widen, stated plainly because "read-only" invites the wrong reading:
+# it is the first SAFE tool that sends a request to an address the MODEL picks.
+# ``web_search`` reaches one fixed host; ``open_link`` reaches anywhere but opens a
+# visible browser tab. So a page whose text steers the model can cause a request to
+# an arbitrary public URL, and the SAFE permission grant is per tool id — one card,
+# then every later read is ungated. It mutates nothing; it is not free of outward
+# reach.
+#
+# The destination is at least SHOWN: ``permission_detail`` names the site and the
+# Activity Panel renders it on every call, in both modes (owner decision
+# 2026-07-20). That is visibility, not a grant — the panel shows the host, so it
+# cannot tell an honest read from one carrying data outward in the query string.
+# Narrowing the grant to a site is a permission-gate change and is still open; see
+# the ledger in ``docs/HANDOFF.md``.
 _V1_TOOL_IDS = [
     "web_search",
+    "read_web_page",
     "read_file",
     "read_clipboard",
     "calculator",

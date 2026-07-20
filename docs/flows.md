@@ -332,7 +332,7 @@ sequenceDiagram
     SM-->>SRV: RestoreResult
     SRV-->>WV: {ok, snapshotId, detail, binaryMismatch?}
 
-    Note over WV,SRV: the targeted path — a specific row, or an anchor
+    Note over WV,SRV: staged for step 2 — no caller yet, see below
     WV->>SRV: snapshot.restore {id}
     SRV->>SM: restore(snapshot_id)
 ```
@@ -342,8 +342,14 @@ Three things the diagram cannot show:
 - **`restore_last_working()` skips a candidate identical to the present config.** A
   restore that changes zero bytes is a no-op dressed as a recovery — the friend's dead
   end again. So **each click steps back one distinct proven configuration**; two bad
-  changes deep, the user clicks twice. The Settings list is the way to jump straight to
-  a specific point (`snapshot.restore {id}`).
+  changes deep, the user clicks twice.
+- **Per-row restore is not a shipped surface.** The `snapshot.restore {id}` method
+  and its `ipc.restoreSnapshot` wrapper exist and are tested, but **nothing calls
+  them**: the Restore points card offers save, restore-to-last-working, and remove,
+  and no per-row restore. Jumping straight to a chosen point is step-2 work, which
+  is also what needs the targeted path (the anchor). Until then the one-action
+  button is the only way back, by design — see `docs/HANDOFF.md`, where this is
+  tracked as an open residual.
 - **A restore is an RPC path, never a registry tool, and never passes the permission
   gate** — a gate that could deny a restore would make "the restore path is itself
   unbreakable" false.

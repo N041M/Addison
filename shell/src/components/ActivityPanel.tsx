@@ -41,14 +41,15 @@ export function ActivityPanel({
   // in progress (1.5px outlined ring) while Addison is still working. When there
   // are no steps yet but a turn is running, show the live headline as the single
   // in-progress line.
-  const steps: { label: string; done: boolean }[] =
+  const steps: { label: string; detail?: string; done: boolean }[] =
     activities.length > 0
       ? activities.map((a, i) => ({
           label: a.label,
+          detail: a.detail,
           done: !(isWorking && i === activities.length - 1),
         }))
       : isWorking
-        ? [{ label: current?.label ?? "Working…", done: false }]
+        ? [{ label: current?.label ?? "Working…", detail: current?.detail, done: false }]
         : [];
 
   return (
@@ -69,7 +70,33 @@ export function ActivityPanel({
                     <span className="block h-[6px] w-[6px] rounded-pill border-[1.5px] border-fern" />
                   )}
                 </span>
-                <span>{s.label}</span>
+                <span className="min-w-0">
+                  {s.label}
+                  {s.detail && (
+                    // What the step is reaching — the site, for a page read. A
+                    // machine fact, so mono (design-brief-fern: mono is for facts
+                    // only, never for prose). It sits inside the 2px rule because
+                    // it is part of the same live annotation: Addison telling you
+                    // what it is doing, not something you act on.
+                    //
+                    // It WRAPS rather than truncating, which looks worse and is
+                    // the point: an address is read from the right — the last
+                    // labels are the ones that say whose site this really is — so
+                    // an ellipsis would hide the half that matters. The core caps
+                    // the string, so this can never be more than a line or two.
+                    //
+                    // `text-muted`, not the `text-faint` the other mono captions
+                    // use: measured against `bg-paper` at this size, faint is
+                    // 2.5:1 in light and 4.0:1 in dark, both under the 4.5:1 AA
+                    // floor for 11px text (design-doc §7.1 accessibility, readers
+                    // of 54 and 68). Muted measures 4.7:1 and 6.3:1 and is still a
+                    // step below the label, so the hierarchy survives. A line
+                    // nobody can read is not visibility.
+                    <span className="mt-0.5 block break-all font-mono text-fact text-muted">
+                      {s.detail}
+                    </span>
+                  )}
+                </span>
               </li>
             ))}
           </ul>

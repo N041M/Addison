@@ -190,12 +190,15 @@ CREATE TABLE IF NOT EXISTS config_snapshots (
 --     Restore ALWAYS targets the newest USABLE verified_working row, never
 --     merely "the state before the last edit" (amendment §3.2).
 --   * undeletable = 1 names the GUARANTEE THE DELETE PATH ENFORCES, not the
---     provenance (provenance is `reason`). Two kinds of row carry it: the G4
+--     provenance (provenance is `reason`). THREE kinds of row carry it: the G4
 --     anchor minted when a safety guard is turned OFF in Custom mode and saved
---     (reason='guard_weakened'), and the genesis row (reason='genesis'), which is
---     the bottom of the restore walk and must therefore outlive every retention
---     rule. Removable by NEITHER user NOR model; an anchor survives the guard
---     being switched back on; retention pruning skips both. Enforcement is in the
+--     (reason='guard_weakened'), and the two possible bottom rows of the restore
+--     walk — genesis (reason='genesis') on a fresh install, pre_upgrade
+--     (reason='pre_upgrade') on a database predating this subsystem. _ensure_genesis
+--     writes the flag in BOTH of those branches, because whichever one this install
+--     got is the floor the walk rests on and must outlive every retention rule.
+--     Removable by NEITHER user NOR model; an anchor survives the guard being
+--     switched back on; retention pruning skips all three. Enforcement is in the
 --     DATABASE (the triggers below), not only in a WHERE clause.
 --   * created_in_mode is RECORDED FOR DISPLAY ONLY. Unlike routines and widgets,
 --     snapshots are NEVER hidden by mode — a user who breaks things in Developer

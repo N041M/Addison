@@ -116,12 +116,20 @@ class RoutineEngine:
         shell_bridge=None,
         on_ask_user: Callable[[RoutineStep, str, str], bool] | None = None,
         store=None,
+        on_activity=None,
     ) -> None:
         # SAME instances as the live orchestrator — never private copies (§6.4).
         self.tool_registry = tool_registry
         self.permission_gate = permission_gate
         self.undo_manager = undo_manager
         self.shell_bridge = shell_bridge
+        # Same signature and same consumer as the orchestrator's (tool_id, label,
+        # detail) — the Activity Panel. A routine runs the same tools through the
+        # same gate, so a saved routine containing a page-read step reaches a site
+        # exactly as a live turn does; without this it did so with nothing on screen
+        # naming it, which would leave the destination visible on the path the user
+        # is watching and invisible on the path that runs by itself.
+        self.on_activity = on_activity or (lambda tool_id, label, detail=None: None)
         # on_ask_user(step, run_id, message) -> True to continue past the failed
         # step, False to stop. Rendered by the frontend with the same card
         # pattern as a permission request (§6.2). Default: stop.
@@ -182,11 +190,14 @@ class RoutineEngine:
             # stops to ask every time, card showing the exact resolved command).
             # Routines NEVER auto-escalate — same gate as §4.3.
             destructive = call_is_destructive(tool, resolved_args)
+            # Asked once and used twice, exactly as the live loop does it: the
+            # permission card and the Activity Panel must describe the SAME step.
+            detail = call_permission_detail(tool, resolved_args)
             status = self.permission_gate.authorize(
                 tool_id,
                 mode=mode,
                 destructive=destructive,
-                detail=call_permission_detail(tool, resolved_args),
+                detail=detail,
             )
             if status == PermissionStatus.DENIED:
                 step_log.append(self._log_entry(index, step, "permission denied"))
@@ -202,6 +213,9 @@ class RoutineEngine:
             # save_file's "A file with that name is already there") raises
             # RuntimeError with a plain user-ready sentence; anything else collapses
             # to one plain message.
+            # Announced only once the step is actually granted, so a declined step
+            # is never reported as something Addison did.
+            self.on_activity(tool_id, tool.definition.label, detail)
             try:
                 result = tool.execute(resolved_args, context)
             except RuntimeError as exc:

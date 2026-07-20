@@ -969,3 +969,27 @@ def test_reopening_never_drops_config_snapshots(tmp_path: Path):
         assert anchor is not None and anchor.undeletable is True
     finally:
         second.close()
+
+
+def test_the_live_database_guard_is_not_escapable_by_a_relative_path(tmp_path: Path):
+    """``tests/conftest.py``'s autouse guard must resolve the path before judging it.
+
+    It exists because a build agent once constructed a real ``Store`` against the
+    default path and wrote an undeletable row into the owner's live database — a row
+    the recovery machinery then refused to remove, by design. The guard compared
+    ``expanduser()``'d parents, and ``Path.parents`` walks the LITERAL components, so
+    a path that only resolves into ``~/.addison`` slipped past: ``~/Desktop/../.addison``
+    has no ``~/.addison`` component at all.
+
+    Deliberately not asserting on the ``..`` spelling alone — ``~/.addison/../.addison``
+    was caught by the old guard too, which is what made the hole easy to miss.
+    """
+    escaping = Path.home() / "Desktop" / ".." / ".addison" / "should-never-open.sqlite3"
+
+    with pytest.raises(AssertionError, match="live database"):
+        Store(escaping)
+
+    # The guard still lets an ordinary test path through, so it cannot pass by
+    # refusing everything.
+    ordinary = Store(tmp_path / "fine.sqlite3")
+    ordinary.close()

@@ -186,13 +186,37 @@ and rebuilds in the same session.
   and it is deliberately **not** verified. Nothing has run against it under this
   subsystem's own eyes, and it is a copy of whatever the user has *right now* —
   up to and including the broken setup they may be about to need rescuing from.
-  Marking it verified would make the one-action button hand that setup straight
-  back, which is exactly the harm the floor exists to prevent. The honest
-  consequence, and it is the right trade: on an upgraded install
-  `restore_last_working()` has **no target until the first turn completes**, and
-  it says so plainly rather than pretending it restored something. Which install
-  this is gets **inferred, not signalled** — see `_looks_like_a_fresh_install`
-  and the ledger item in `docs/HANDOFF.md`.
+  Marking it verified would make it a **target of the restore walk** — silently,
+  dressed up in the ordinary "put you back on your last working setup" copy — and
+  that sentence is what the user's trust in the button rests on. So the walk never
+  reaches it, and the two honest consequences are:
+  - **The walk has no target until the first turn completes.** Once verified rows
+    exist and are exhausted, the walk stops *above* `pre_upgrade` and **names** it
+    rather than restoring it (`_OLDER_IN_THE_LIST`) — the row is on the user's
+    screen, so claiming there is nothing further back would be false.
+  - **The disk arm will still apply it, as an explicitly-labelled last resort.**
+    Before any verified row exists (walk outcome `'none'` — the state every
+    upgraded install is in at its first click) `restore_last_working()` restores
+    `pre_upgrade` and says exactly that: *"Addison couldn't find a setup it had
+    seen working, so it went back to the most recent settings it had saved
+    instead. Have a look and check things are how you want them."*
+    (`_RESTORED_UNVERIFIED`). This is deliberate — see the rationale on
+    `select_payload_to_restore`: *"nothing at all" is a worse answer than "the most
+    recent settings I had, and I said so."* An unverified restore is never
+    presented as a verified one; that dishonesty is the failure the floor was
+    written against, not the restore itself.
+
+  Which install this is is **measured, not inferred**. `main.py` checks whether
+  the database file existed immediately before opening it and passes the answer
+  to `SnapshotManager(created_the_database=...)`. Three outcomes, not two: `True`,
+  `False`, and `None` for "couldn't find out" — and only `True` mints a verified
+  `genesis`, so an unknown can never produce a permanent, undeletable restore
+  point that claims to be a fresh install. An earlier heuristic inferred this
+  from the config row-image and was **deleted**: it read only providers, skills,
+  routines and a non-default profile, so a companion with tuned settings, widgets
+  and months of chats — the ordinary state of a user who never opens Settings —
+  was classified fresh, and the floor handed their broken config back under copy
+  promising it had been cleared.
 - **`reason` is a closed slug vocabulary** (`REASONS`), never free text — it is
   written by auto-hooks and, later, by model-orchestrated flows, and free text
   would let model-authored prose into the config store. Unknown slugs collapse to
@@ -342,6 +366,17 @@ framing is superseded by the mode-scoped model above.
 
 Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.
+
+Also shipped alongside step 1: **`read_web_page`** (`agent_core/tools/read_web_page.py`)
+— LOW, read-only, in the **Simple** tool set, because answering *from* a page rather
+than handing over a link is the companion's core job. It is the first SAFE tool that
+sends a request to an address the **model** picks, so every URL and every redirect hop
+is vetted by **resolved IP** and the connection is **pinned** to the address that was
+vetted (SSRF + DNS-rebinding closed). Outward reach is bounded by **visibility, not
+per-site grants** (owner decision 2026-07-20): `permission_detail` names the site and
+the Activity Panel shows it on every granted call, in both modes and on the routine
+path as well. The grant is still per tool id, and the panel names the *requested*
+host — both are tracked in `docs/HANDOFF.md`, not silently accepted.
 
 **Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
 dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem**

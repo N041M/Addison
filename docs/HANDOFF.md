@@ -20,13 +20,12 @@ at the bottom, including a ledger of everything step 1 deliberately left behind.
   Simple = an all-in-one **companion**; a new **Custom** profile tunes prompting
   guards. Safety is redefined as **guaranteed rollback**, and as of this session
   that redefinition has code and tests behind it.
-- **Gates, all green:** **520+ pytest + 1 xfail** (was 385; the final closing
-  fixes were still landing tests as this was written — run the suite, don't trust
-  the number), **pyright 0 errors**
+- **Gates, all green:** **643 pytest + 1 xfail** (was 385), **pyright 0 errors**
   (repo-wide; the remaining diagnostics are `reportMissingImports` for
-  `pytest`/`httpx`, pre-existing — pyright has no venv), ruff clean, **65 vitest**
-  (was 48), ESLint clean, `tsc --noEmit` + `vite build` clean, **31 Rust tests**
-  (was 30). **Green gates are not the bar — see "How step 1 was verified" below.**
+  `pytest`/`httpx`, pre-existing — pyright has no venv), ruff clean, **72 vitest**
+  across 8 files (was 48), ESLint clean, `tsc --noEmit` + `vite build` clean,
+  **31 Rust tests** (was 30). Numbers observed by running each gate on
+  2026-07-20; re-run them rather than trusting the number. **Green gates are not the bar — see "How step 1 was verified" below.**
 - **CI exists** — `.github/workflows/ci.yml`, three jobs (python:
   ruff·pyright·pytest / frontend: eslint·tsc·vitest·build / rust: cargo test) on
   every PR and push to `master`. Keep it green.
@@ -54,7 +53,8 @@ explicit column list, so an uncaptured new column would be silently reset to its
 default **by the recovery path** — a restore would wipe the routing strategy or
 the Custom guard toggles you are about to add.
 
-**The manager.** `agent_core/snapshots/snapshot_manager.py` (920 lines) —
+**The manager.** `agent_core/snapshots/snapshot_manager.py` (~1,560 lines, of which
+roughly 700 are comment and docstring) —
 `capture` / `mark_verified_working` / `restore` / `restore_last_working` /
 `last_working_target` / `list` / `delete` / `mint_anchor` / `prune`, plus two
 store-free module functions for disk recovery. It imports stdlib plus the two
@@ -123,7 +123,9 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
   real core payloads, vitest parses the same files); one conservative provider
   retry; WAL + busy_timeout; the `Tool`/`UndoableTool`/`RedoableTool` protocol
   split; **`main.py` decomposed** 2,318 → 1,279 lines into `agent_core/rpc/`
-  mixins + a dispatch table.
+  mixins + a dispatch table. (It has grown back past **1,700** since, as step 1's
+  snapshot RPC surface and the activity-detail path landed — the mixin structure
+  is what that pass was for, and it held.)
 - **Frontend UX**: system-following theme (light/dark/**system**) + no-jump
   interactions + calm animations; Settings uses the ☰ drawer idiom (#35);
   sidebar always present on desktop (#36); mobile bell removed and **widgets
@@ -224,10 +226,15 @@ depth (Q5), MCP-in-SAFE constraint (Q6), widget capability declaration (Q7).
 - **Q2, retention.** Keep **50 snapshots or 30 days, whichever keeps more** — the
   same idiom as the undo window, so there is one retention concept in the
   codebase — with two exemptions written **into the SQL**, not left to a caller:
-  permanent rows, and **the newest verified-working row**. Retention here is not
-  housekeeping; a rule that can prune the last verified row leaves the one-action
-  restore with no target, i.e. G3 silently off with no error anywhere — the
-  friend's failure reintroduced by the recovery machinery itself. **Anchors never
+  permanent rows, and **the newest TWO verified-working rows**. Retention here is
+  not housekeeping; a rule that can prune the last verified rows leaves the
+  one-action restore with no target, i.e. G3 silently off with no error anywhere —
+  the friend's failure reintroduced by the recovery machinery itself. **Two, not
+  one, and the second is not slack:** the restore walk skips any verified row
+  whose fingerprint matches the current config, because restoring it would change
+  zero bytes. If only the newest verified row were exempt, that one surviving row
+  could be exactly the row the walk skips — leaving the floor with nothing to
+  land on. See the docstring on `Store.prune_config_snapshots`. **Anchors never
   prune and never count against the budget.** The amendment's alternative ("the
   single most-recent working anchor") was rejected because it needs to *replace*
   an undeletable row, creating the codebase's only `DELETE … WHERE undeletable =
@@ -317,10 +324,24 @@ suite is green; verify against the code, not this paragraph:
   the walk and the next click starts from the top. That also cleans up after a
   restore whose apply failed: the marker was written before the apply, the config
   never moved, the fingerprints disagree, the marker is inert.
-- **The sidecar arm is gated on the walk having started at the top**
-  (`sidecars_ok`). The sidecar path has no notion of walk position, so letting it
-  run after the walk deliberately stepped past newer rows would re-apply one of
-  them — the recovery path undoing the user's own rollback.
+- **The sidecar arm runs mid-walk, and is given the walk position rather than
+  being switched off.** An earlier design gated the arm on the walk having
+  started at the top; that was rejected, because the one situation the arm exists
+  for is the database being the damaged part, and a user two clicks into a
+  rollback is exactly who needs it. So `restore_last_working()` skips the arm on
+  only one outcome — `'bottom'`, where verified rows exist and the user has
+  already walked through them, so stepping past their own proven configs into an
+  unproven one is a choice that belongs to them. On every other outcome the arm
+  runs, and the position is passed down into `_restore_from_sidecars`, which
+  filters the directory through `_payloads_below`: only payloads strictly OLDER
+  than the row the last restore landed on are candidates. Without that filter the
+  arm reads the whole directory and happily applies one of the newer payloads the
+  walk deliberately stepped past — the user presses "go back", gets sent forward
+  into the setup they were escaping, and is told the ordinary success sentence
+  while it happens. The position expires the same way the database walk's does:
+  it holds only while the user is still sitting on the config that row restored,
+  so any change ends the walk and the whole list is fair game again. Read the
+  docstring on `_payloads_below` before touching this.
 
 Tests to look at first: `test_repeated_restores_walk_further_back`,
 `test_a_configuration_the_user_returned_to_does_not_trap_the_walk`,
@@ -376,11 +397,47 @@ Nothing here is forgotten; each line names where it lands and why it waited.
 | **`tool_grants` capture** | Excluded, and correctly so. The table is inert today (nothing reads or writes it; `PermissionGate` keeps grants in memory). More important: once grants persist, restoring a snapshot taken *before* the user revoked a grant would **reinstate** it — a privilege grant delivered by a deliberately ungated one-action button with no permission card in the path. A floor must not be a privilege-escalation vector. | **Step 2**, if grants ever persist — and then as an **INTERSECT**, never a replace |
 | **Data-dir permanent distrust** | Workspace-trust doesn't exist until step 5, but the rule must be fixed *before* it does, or `run_command` inside a trusted parent directory can `rm -rf` the floor's own storage with no card. | **Step 5**. Write `test_the_addison_data_dir_can_never_be_workspace_trusted` **now, as an `xfail`**, so the rule exists before the capability does |
 | **`_valid_http_url` credential hardening** | **Pulled forward from step 4 and landed in step 1** — see the G1 note below. A `base_url` carrying a secret lands in a plaintext sidecar *forever* via any permanent row, so it could not wait. Userinfo, any query string or fragment, and key-shaped path segments are now refused by `_base_url_problem` at the moment the person types the address, not stripped on capture — stripping would make a restore write back a *different* address and silently break their server. | **Landed (step 1).** Residual: the path check's composition gate and entropy bar let some token shapes through (a UUID, an all-letter or all-digit segment) — see the G1 note above |
-| **Fresh-vs-upgraded install flag** | `_looks_like_a_fresh_install` *infers* which install this is from the config row-image, because the module may not import anything or read a setting. It is a heuristic, and a deliberately biased one. A one-line first-run flag written by `main.py` (which knows the answer for certain, and may read whatever it likes) and passed to the manager as a constructor argument would replace inference with fact. | **Step 2**, alongside the other `main.py` wiring — cheap, and it retires a guess from the floor |
+| **Fresh-vs-upgraded install flag** | ~~Scheduled for step 2.~~ **Done in step 1** — pulled forward when a review measured the heuristic misclassifying the *target persona*: a companion with tuned settings, widgets and months of chats but no provider row was called a fresh install, minting a permanent undeletable row that handed their broken config back under copy promising it was cleared. `main.py` now measures whether it created the database and passes the fact to `SnapshotManager(created_the_database=...)`; `_looks_like_a_fresh_install` is deleted rather than kept as a fallback, since its only distinctive answer was the dangerous one. | **Landed (step 1)** |
 | **Binary restore** | Owner-descoped — collides with the unwired `updater.rs`, and would be the one piece of the recovery floor that could itself brick the app. | **Phase 3**, as an updater work item |
 | **`mcp_servers` / workspace-trust capture** | The tables don't exist. `test_capture_scope_covers_every_schema_table` forces the decision the moment they land. | **Steps 5 and 7** |
 | **Routing-strategy + "make it cheaper" + add-endpoint hooks** | Those flows don't exist yet; the `reason` slugs are already reserved in `REASONS` so the vocabulary won't churn. | **Steps 3 and 4** |
 | **"Reset Addison" reconciliation** | Design-doc §9 describes a pre-amendment "Reset Addison" control that "clears corrupted app state". Read literally that could delete anchors. **Whatever Reset ends up doing, it must never be able to delete an anchor** — and the database triggers currently make that a hard failure rather than a silent one, which is the right way round but will surface as an error someone has to design for. | **Flag to the owner in the next doc pass**; decide before Reset is implemented |
+
+### `read_web_page` + destination visibility (shipped alongside step 1)
+
+A new SAFE-view tool, `agent_core/tools/read_web_page.py`. It was added on the owner's finding that a search whose snippet
+lacks the answer left Addison with nothing to offer but "open this and read it
+yourself", which is backwards for the personas. LOW, read-only, no `undo()`, in
+`_V1_TOOL_IDS`, so the **Simple** profile gets it: reading a page and answering
+from it is the companion's core job, not a developer affordance.
+
+What it widens, stated plainly: it is the **first SAFE tool that sends a request
+to an address the MODEL picks**. `web_search` reaches one fixed host; `open_link`
+reaches anywhere but opens a visible browser tab. Every URL — the first and every
+redirect hop — is vetted by **resolved IP** and the connection is **pinned** to the
+address that was vetted (`_vet` / `_pinned_url`), so SSRF and DNS rebinding are
+closed. What is not closed is *outward reach*: nothing here mutates anything, but
+read-only is not the same as "cannot carry data outward".
+
+The owner's answer (2026-07-20) is **visibility, not per-site grants**: the tool's
+`permission_detail` names the site, and the Activity Panel renders it on every
+granted call in both modes (`tool.activityUpdate` gains an optional `detail`).
+Adding prompts was rejected — being asked too often is the complaint that started
+this work.
+
+**Open items, all real, none silently accepted:**
+
+| Item | Why it is open | Where it lands |
+|---|---|---|
+| **Grant scoping is per tool id, not per site** | A SAFE grant is keyed by tool id, so after the first permission card every later read is ungated and model-addressed. Visibility is the mitigation that shipped; narrowing the grant to a site is a **permission-gate** change, not a tool change. | A gate change — size it before Phase-2 step 5 |
+| **The panel names the REQUESTED host, not the reached one** | `on_activity` fires *before* `tool.execute`, so a 302 from `innocent.example` to `attacker.example` is announced as the former. Every hop is re-vetted, so nothing unsafe is *reached* — but the visibility guarantee has a redirect-shaped gap, and a model steered by page text is exactly the actor who would use one. Closing it means emitting after execution carrying `_Fetched.url`, i.e. a real orchestrator↔tool contract change. | Next tool-loop change; do not let it live only in a docstring |
+| **The detail names the site, never the payload** | Deliberate — a full URL would put the query string, and anything a page hid in it, on screen and into any screenshot. The consequence is that an exfiltrating read of a *familiar* host looks exactly like an honest one. Real untrusted-content **screening** is the v2 item that covers this (design-doc §11), and this tool materially enlarges its surface: snippet-sized untrusted text becomes page-sized. | **v2**, with screening |
+
+Bounded in this pass, so they are not open: the turn's tool loop is capped on
+**both** axes — `_MAX_TOOL_ROUNDS` (chaining: a page ending "now read …/2") and
+`_MAX_TOOL_CALLS` (fan-out: one response carrying hundreds of `tool_use` blocks).
+The routine engine emits `on_activity` too, so a saved routine containing a page
+read is not the one path where the destination goes unnamed.
 
 ## Environment facts
 

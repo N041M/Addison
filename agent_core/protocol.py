@@ -55,6 +55,11 @@ class Method:
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
+    # {toolId, label, detail?} -> notification only. `detail` is the tool's own
+    # permission_detail for that call (read_web_page: the site it is about to reach)
+    # and is OMITTED for the tools that have none. It is what tells the person WHERE
+    # a call is going after the first grant makes later calls of that tool ungated —
+    # visibility instead of per-site grant scoping (owner decision 2026-07-20).
     TOOL_ACTIVITY_UPDATE = "tool.activityUpdate"
     UNDO_REWIND_CONVERSATION = "undo.rewindConversation"
     UNDO_UNDO_LAST_ACTION = "undo.undoLastAction"

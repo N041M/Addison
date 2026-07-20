@@ -112,8 +112,14 @@ export function SnapshotsCard({
         <div className="mb-3">
           <p className="text-meta text-ink-soft">
             Going back to <span className="font-semibold text-ink">{targetName}</span>
+            {/* `text-muted`, not `text-faint`: measured against `bg-paper`, faint is
+                2.5:1 in light and 4.0:1 in dark, both under the 4.5:1 AA floor — and
+                this is 10.5px, for readers of 54 and 68 (design-doc §7.1). Muted
+                measures 4.7:1 and 6.3:1 and still sits below the label, so the
+                hierarchy survives. This is the line that says WHICH setup the button
+                is about to restore; unreadable is not an option on it. */}
             {target && (
-              <span className="ml-1.5 font-mono text-label text-faint">
+              <span className="ml-1.5 font-mono text-label text-muted">
                 {formatWhen(target.createdAt)}
               </span>
             )}
@@ -184,18 +190,26 @@ export function SnapshotsCard({
                   {/* G4: a permanent row says so, blockily. */}
                   {snap.undeletable && <PermanentTag />}
                   <p className="text-action font-semibold text-ink">{snap.reasonLabel}</p>
-                  <p className="mt-0.5 font-mono text-label text-faint">
+                  {/* Same AA reasoning as the destination line above. This is the
+                      field a person reads to choose WHICH restore point to click —
+                      "Working setup, yesterday 14:02" — so it is the last place in
+                      the app that should be set at 2.5:1. */}
+                  <p className="mt-0.5 font-mono text-label text-muted">
                     {formatWhen(snap.createdAt)}
                   </p>
                 </div>
                 {/* No Remove control on a permanent row — the core refuses to
                     delete it, and offering a button that can only fail would
-                    make the guarantee look like a bug. */}
+                    make the guarantee look like a bug.
+
+                    `text-muted` rather than `text-faint` for the same AA reason as
+                    the timestamps: quiet is right for the only control that deletes
+                    something, unreadable at 2.5:1 is not. */}
                 {!snap.undeletable && (
                   <button
                     type="button"
                     onClick={() => void handleDeleteSnapshot(snap.id)}
-                    className="shrink-0 text-xs font-medium text-faint hover:text-danger"
+                    className="shrink-0 text-xs font-medium text-muted hover:text-danger"
                   >
                     Remove
                   </button>

@@ -139,10 +139,21 @@ def _base_url_problem(url) -> str | None:
         return _BAD_SCHEME
     if not parts.hostname:
         return _BAD_SCHEME
-    # "@" anywhere in the authority is userinfo, whether or not it parsed into a
-    # username — checked on the raw authority so nothing slips past on a parse
-    # quirk.
-    if "@" in parts.netloc or parts.username or parts.password:
+    # ``urlsplit`` splits the authority on its LAST "@", so ANY userinfo at all
+    # lands in ``username`` (and, past the first ":", in ``password``) — there is
+    # no arrangement of "@" that hides material from both.
+    #
+    # A raw ``"@" in parts.netloc`` belt used to sit alongside this, justified as
+    # catching "a parse quirk". It was deleted once somebody checked for the
+    # quirk: brute-forced over every authority up to five characters, the raw test
+    # fired ALONE for exactly two userinfo strings, "" and ":" — i.e.
+    # https://@host/v1 and https://:@host/v1, which carry no credential and which
+    # httpx resolves to the same host, with no Authorization header, as the plain
+    # form. It stopped nothing this line does not. Those two shapes are now
+    # accepted, which costs nothing, and the belt is gone rather than left as an
+    # untested branch in a G1 check — a guard that defends nothing is worse than
+    # no guard, because the next reader budgets for protection that isn't there.
+    if parts.username or parts.password:
         return _CREDENTIAL_IN_URL
     # Read off the RAW text after the scheme rather than the parsed fields, so a
     # "?" or "#" can never reach the store on a parsing quirk.

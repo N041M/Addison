@@ -19,6 +19,7 @@ from agent_core.tools.save_file import SaveFileTool
 
 _V1_TABLE = {
     "web_search": RiskTier.LOW,
+    "read_web_page": RiskTier.LOW,   # read-only, so LOW and no undo (invariant 2)
     "read_file": RiskTier.LOW,
     "read_clipboard": RiskTier.LOW,
     "calculator": RiskTier.LOW,

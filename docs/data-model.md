@@ -235,16 +235,22 @@ erDiagram
     Marking it verified would let the one-action restore hand that config straight back. The
     accepted consequence is that on an upgraded install `restore_last_working()` has **no
     target until the first turn completes**, and says so in plain language.
-  - Which install it is comes from a **heuristic**, `_looks_like_a_fresh_install`: true only
-    when there are no providers, no notes/skills, and no routines, *and* no profile has been
-    chosen away from the default. Widgets and settings are not evidence either way — Addison
-    seeds its own default widgets and writes its own first-run rows before this runs. It is
-    **inferred rather than signalled** because the module is forbidden from importing
-    anything or reading a setting (that import ban is the unbreakability argument). Every
-    tie-break, including an unreadable config, leans toward `pre_upgrade`: mislabelling an
-    established install as fresh is the severe direction — it mints a permanent row that lies
-    about what it holds, marks it proven when nothing was proven, and can drop the user into
-    Developer from the bottom of the walk. The cleaner fix is tracked in `docs/HANDOFF.md`.
+  - Which install it is is **measured, not inferred**. `main.py` checks whether the database
+    file existed in the instant before it opened it, and passes the answer to
+    `SnapshotManager(created_the_database=...)`. The snapshot module cannot find this out for
+    itself — it is forbidden from importing anything or reading a setting, and that import ban
+    is the unbreakability argument — so the fact is handed in from the one place that knows.
+    Three outcomes, not two: `True`, `False`, and `None` for "couldn't find out", with `None`
+    and `False` sharing the safe branch. **Only `True` writes a verified `genesis`**, so an
+    unknown can never mint a permanent row claiming to be a fresh install.
+  - *An earlier draft inferred this from the config row-image and was deleted.* It read only
+    providers, skills, routines and a non-default profile — widgets and settings were invisible
+    to it, and chats are not in the payload at all. So a companion with tuned settings, widgets
+    and months of use, but no provider row (the ordinary state of anyone who never opens
+    Settings → Services, since a keyless install runs on the Setup Assistant relay), was
+    classified **fresh**: a permanent, undeletable, verified row that handed their broken
+    config back under copy promising it had been cleared. Mislabelling an established install
+    as fresh is the severe direction, which is why the replacement fails toward `pre_upgrade`.
   - `captures_binary` / `binary_ref` hold a short **build reference** — `{"version",
     "identifier"}`, obtained via `shell.appBuildRef` — **never bytes and never a path**.
     *(Owner decision 2026-07-20:* the anchor **records** the build it was minted on; it is

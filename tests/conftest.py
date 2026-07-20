@@ -19,6 +19,9 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
+
+import pytest
 
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
@@ -38,6 +41,50 @@ from agent_core.tools.registry import ToolRegistry
 # (each test gets a fresh tmp_path); some assertions reopen it with a plain
 # sqlite3 connection, so the name is shared here.
 IPC_DB_NAME = "ipc-test.sqlite3"
+
+# The user's real database. Nothing under tests/ may ever open it.
+_LIVE_DATA_DIR = Path.home() / ".addison"
+
+
+@pytest.fixture(autouse=True)
+def _never_touch_the_live_database(monkeypatch, tmp_path):
+    """Fail loudly if a test — or an agent running one — opens ``~/.addison``.
+
+    Written after a build agent constructed a real ``Store`` against the default
+    path instead of a tmp_path and wrote an undeletable snapshot row into the
+    owner's live database. Nothing was lost, but the row was permanent by design
+    (schema.sql's RAISE(ABORT) triggers), so the recovery machinery made its own
+    accident unremovable through the app.
+
+    Two layers, because either alone is escapable:
+
+    1. ``ADDISON_DB_PATH`` is pointed at the test's own tmp dir, so any code that
+       resolves the default path lands somewhere harmless.
+    2. ``Store.__init__`` is wrapped to raise on any path under ``~/.addison``,
+       which catches the code that ignores the env var and passes a path directly
+       — the exact mistake that happened.
+
+    Deliberately autouse and unconditional: a guard you have to remember to apply
+    is a guard that is missing on the day it matters.
+    """
+    monkeypatch.setenv("ADDISON_DB_PATH", str(tmp_path / "addison-under-test.sqlite3"))
+    original_init = Store.__init__
+
+    def guarded_init(self, db_path, *args, **kwargs):
+        # resolve(), not just expanduser(): without it "~/.addison/../.addison/x" and
+        # a symlink pointing into the live directory both walk straight past a
+        # parents check. A guard whose own docstring says either layer alone is
+        # escapable should not be escapable by a "..".
+        resolved = Path(str(db_path)).expanduser().resolve()
+        if str(db_path) != ":memory:" and _LIVE_DATA_DIR.resolve() in resolved.parents:
+            raise AssertionError(
+                f"A test tried to open the live database at {resolved}. Use tmp_path. "
+                "See tests/conftest.py::_never_touch_the_live_database."
+            )
+        return original_init(self, db_path, *args, **kwargs)
+
+    monkeypatch.setattr(Store, "__init__", guarded_init)
+    yield
 
 
 class _PipeReader:

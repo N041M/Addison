@@ -204,10 +204,7 @@ export function App() {
 
     unsubs.push(
       subscribe(Method.ToolActivityUpdate, (p) => {
-        const update: ActivityUpdate = {
-          label: typeof p.label === "string" ? p.label : "Working…",
-          toolId: typeof p.toolId === "string" ? p.toolId : "",
-        };
+        const update = normalizeActivity(p);
         turn.setCurrentActivity(update);
         turn.setActivities((prev) => [...prev, update]);
         // Any tool step means something may be undoable; the core reports back
@@ -890,6 +887,24 @@ function normalizePermission(p: Record<string, unknown>): PermissionRequest {
         ? req.description
         : "Addison is asking for your permission to continue.",
     riskTier: riskTier === "medium" || riskTier === "high" ? riskTier : "low",
+  };
+}
+
+// Exported only so it can be tested directly. This is the single point where a
+// tool.activityUpdate frame becomes an ActivityUpdate, and `detail` — the site a
+// page read is reaching — is the one security-visible field crossing here: after
+// the first grant, later calls of an allowed tool are ungated, so this line is
+// where the person finds out where one went (protocol.ts, owner decision
+// 2026-07-20). Silently dropping it here would leave every other piece of the
+// pipeline correct and the person still blind, which is why it is worth a test.
+export function normalizeActivity(p: Record<string, unknown>): ActivityUpdate {
+  // Kept only when it is a non-empty string, so an absent or null field becomes an
+  // absent property rather than the word "undefined" under a step.
+  const detail = typeof p.detail === "string" ? p.detail.trim() : "";
+  return {
+    label: typeof p.label === "string" ? p.label : "Working…",
+    toolId: typeof p.toolId === "string" ? p.toolId : "",
+    ...(detail ? { detail } : {}),
   };
 }
 

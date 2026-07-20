@@ -92,8 +92,11 @@ routing choice and guard toggles, provider configuration metadata, and the
 declarative skills/widgets/routines rows. A snapshot is taken **automatically** before
 any risky or sweeping change (a guard toggle, a provider/endpoint change, a bulk
 "make it cheaper" reconfiguration, a mode switch) and can also be taken **on command**
-from Settings or by asking Addison. Restore always targets the last state that
-actually completed a turn, not merely the state before the last edit.
+from the Settings card. *(**Asking Addison** for one is step-2 work: it needs a LOW,
+capture-only `snapshot_now` registry tool, which is not written and not registered.
+Step 1 ships the Settings control and the RPC method only.)* Restore always targets
+the last state that actually completed a turn, not merely the state before the last
+edit.
 
 Two boundaries keep this consistent with the trust model:
 

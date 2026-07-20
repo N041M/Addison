@@ -69,9 +69,12 @@ def _side_store(tmp_path) -> Store:
 
 def _side_manager(tmp_path, store: Store) -> SnapshotManager:
     """A manager over the side connection, pointed at the same sidecar directory
-    the server uses. Genesis is already written by then, so constructing this one
-    adds nothing."""
-    return SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots")
+    the server uses. The bottom row is already written by then, so constructing
+    this one adds nothing — ``created_the_database=False`` states the fact
+    anyway, because the server created that file, not this test."""
+    return SnapshotManager(
+        store=store, snapshot_dir=tmp_path / "snapshots", created_the_database=False
+    )
 
 
 def _raising_store_factory():
@@ -90,7 +93,9 @@ def _populate_sidecars(tmp_path: Path) -> str:
     store = Store(db_path)
     store.set_setting("widgets_seeded", "1")
     store.set_setting("active_profile", "simple")
-    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots")
+    manager = SnapshotManager(
+        store=store, snapshot_dir=tmp_path / "snapshots", created_the_database=True
+    )
     snapshot = manager.capture(trigger="on_command", reason="user_request", verified_working=True)
     store.close()
     # The database is now gone; only the sidecars remain.
@@ -113,7 +118,10 @@ def _populate_sidecars_ending_in_an_unproven_one(tmp_path: Path) -> tuple[str, s
     store.set_setting("active_profile", "simple")
     clock = [1000]
     manager = SnapshotManager(
-        store=store, snapshot_dir=tmp_path / "snapshots", clock=lambda: clock[0]
+        store=store,
+        snapshot_dir=tmp_path / "snapshots",
+        clock=lambda: clock[0],
+        created_the_database=True,
     )
     store.set_setting("model_choice", "GOOD")
     clock[0] += 10
@@ -185,6 +193,166 @@ def _fail_once_then_open(tmp_path: Path):
         return store
 
     return factory
+
+
+# --- which bottom row the SERVER writes, end to end -------------------------
+#
+# The manager takes the fresh-vs-established fact as an argument; these are the
+# tests that it is supplied CORRECTLY, which is the half that lives in main.py.
+# A manager-level test cannot catch a server that reads the fact after the store
+# has already created the file, or one that stops reading it at all.
+
+
+def _an_established_database(tmp_path) -> None:
+    """A database at the server's own path, holding what a companion user
+    accumulates and NONE of the four signals the old inference looked for: no
+    service (no key means turns run on the relay), no note, no routine, still on
+    Simple. Only settings, widgets and chats — all of which it was blind to."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.set_setting("widgets_seeded", "1")
+    store.set_setting("active_profile", "simple")
+    store.set_setting("theme", "dark")
+    store.set_setting("selected_model", "claude-model-that-was-retired")
+    store.insert_widget(id="mine", spec_json='{"kind":"stat","source":"provider_latency"}',
+                        pinned=True, position=0, created_at=100)
+    store.create_conversation(id="c1", title="Recipes", provider_id="anthropic",
+                              started_at=100)
+    store.insert_message(id="m1", conversation_id="c1", role="user",
+                         content="hello", created_at=100)
+    store.close()
+
+
+def test_an_established_database_is_never_labelled_as_first_installed(tmp_path):
+    """The database was already on disk when this launch started, so the bottom
+    row must be the honest one — whatever is inside it.
+
+    This is the defect at the boundary the frontend speaks to. Classified
+    ``genesis`` the row is verified, so it becomes a legitimate target of the
+    one-action Restore; it is rendered "Addison as first installed"; and it
+    cannot be deleted. The person's way back would hand them the retired model
+    they were trying to escape, and say it had cleared their widgets while
+    putting them back."""
+    _an_established_database(tmp_path)
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        listed = _call(h, Method.SNAPSHOT_LIST, request_id=1)
+        bottom = listed["snapshots"][-1]
+        assert bottom["reason"] == "pre_upgrade"
+        assert bottom["verifiedWorking"] is False
+        assert bottom["reasonLabel"] == "Your setup before this update"
+        assert "genesis" not in [row["reason"] for row in listed["snapshots"]]
+        # Not verified means not a one-click target: the walk has nothing to
+        # offer yet, and says so rather than offering this row.
+        assert "lastWorkingId" not in listed
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_database_this_launch_created_still_gets_genesis(tmp_path):
+    """The other half. Nothing at the path beforehand, so the row is genuinely
+    "Addison as first installed" and is a legitimate restore target from before
+    the first turn — which is what G3 asks for."""
+    assert not (tmp_path / IPC_DB_NAME).exists()
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        listed = _call(h, Method.SNAPSHOT_LIST, request_id=1)
+        bottom = listed["snapshots"][-1]
+        assert bottom["reason"] == "genesis"
+        assert bottom["verifiedWorking"] is True
+        assert bottom["undeletable"] is True
+
+        # Verified means it is a real one-click target — which shows the moment
+        # the config moves off it. (Sitting exactly ON genesis, the walk skips it:
+        # restoring it would change nothing.)
+        store = _side_store(tmp_path)
+        try:
+            store.insert_skill(id="s1", name="Note", instructions="Be brief.",
+                               enabled=True, created_at=10)
+            after = _call(h, Method.SNAPSHOT_LIST, request_id=2)
+        finally:
+            store.close()
+        assert after["lastWorkingId"] == bottom["id"]
+        assert after["lastWorkingLabel"] == "Addison as first installed"
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_genesis_holds_the_widgets_addison_seeds_on_first_run(tmp_path):
+    """The build order, asserted where it can actually break.
+
+    ``_ensure_built`` seeds the default widget rail and THEN constructs the
+    manager, so genesis is a snapshot of the seeded state. Reverse those two
+    lines and genesis captures an empty rail — and because ``widgets_seeded`` is
+    a one-way latch that survives a restore (``scope._PRESERVED_SETTING_KEYS``),
+    restoring genesis would empty the rail for good, with re-seeding already
+    switched off. Nothing else in the suite would notice."""
+    h = build_server(tmp_path, register_tool=False, seed_widgets=True)
+    try:
+        listed = _call(h, Method.SNAPSHOT_LIST, request_id=1)
+        genesis = listed["snapshots"][-1]
+        assert genesis["reason"] == "genesis"
+        store = _side_store(tmp_path)
+        try:
+            row = store.get_config_snapshot(genesis["id"])
+            assert row is not None
+            payload = json.loads(row.state_blob)
+            seeded = {json.loads(w["spec_json"])["source"] for w in payload["tables"]["widgets"]}
+        finally:
+            store.close()
+        # Exactly what main.py._DEFAULT_WIDGETS seeds, captured by genesis.
+        assert seeded == {"connections", "tokens_month"}
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_cold_start_rebuild_does_not_mint_a_second_bottom_row(tmp_path):
+    """The rebuild reopens the database, so the bottom-row decision runs a second
+    time — on a database holding the user's real restored configuration.
+
+    Nothing new may be written there. ``rebuild_rows_from_payloads`` puts the
+    saved rows back first, so the table is not empty and the decision returns
+    early; and the fact is re-read after the swap, so even if the table WERE
+    empty the file is now on disk and the cautious row is the worst that can
+    happen. The failure this guards is the recovery path stamping a fresh
+    permanent row over somebody's recovered setup."""
+    _populate_sidecars(tmp_path)
+    h = build_server(
+        tmp_path, register_tool=False, store_factory=_fail_once_then_open(tmp_path)
+    )
+    try:
+        before = _call(h, Method.SNAPSHOT_LIST, request_id=1)
+        assert _call(h, Method.SNAPSHOT_RESTORE_LAST_WORKING, request_id=2)["ok"] is True
+        after = _call(h, Method.SNAPSHOT_LIST, request_id=3)
+        # The rows that came back are the rows that were saved — same ids, same
+        # reasons, and no bottom row minted on top of them.
+        assert [row["id"] for row in after["snapshots"]] == [
+            row["id"] for row in before["snapshots"]
+        ]
+        assert "pre_upgrade" not in [row["reason"] for row in after["snapshots"]]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_path_that_cannot_be_stat_ed_takes_the_cautious_road(tmp_path):
+    """"Could not find out" must never be read as "brand new".
+
+    The check asks the filesystem, and the filesystem can decline to answer — an
+    unreadable parent directory, a path component that is not a directory. A
+    plain existence test reports "no file" for all of them, which is the severe
+    direction: a permanent, undeletable, verified row claiming an established
+    install is brand new."""
+    blocker = tmp_path / "blocker"
+    blocker.write_text("not a directory", encoding="utf-8")
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        # The real db_path is fine; point the fact-finder at one that is not.
+        h.server._db_path = blocker / "addison.sqlite3"
+        assert h.server._database_created_by_this_launch() is None
+        # ...and an ordinary missing file still answers "yes, this launch made it".
+        h.server._db_path = tmp_path / "not-there.sqlite3"
+        assert h.server._database_created_by_this_launch() is True
+    finally:
+        _shutdown(h.reader, h.thread)
 
 
 def test_snapshot_create_list_and_delete_roundtrip(tmp_path):

@@ -42,9 +42,10 @@ PAYLOAD_VERSION = 1
 REASONS: dict[str, str] = {
     # step 1, live
     "genesis": "Addison as first installed",
-    # The genesis row's honest twin. This subsystem's first run against an
-    # EXISTING install cannot truthfully call that install's config "as first
-    # installed" — see _ensure_genesis and _looks_like_a_fresh_install.
+    # The genesis row's honest twin, and the one written whenever we are not
+    # CERTAIN this launch created the database. This subsystem's first run
+    # against an EXISTING install cannot truthfully call that install's config
+    # "as first installed" — see _ensure_genesis.
     "pre_upgrade": "Your setup before this update",
     "turn_verified": "Working setup",
     "pre_restore": "Before restoring",
@@ -100,8 +101,30 @@ _WALK_UNREADABLE = (
 )
 # Reaching the oldest saved setup is a success story, not "there is nothing" —
 # the user has walked all the way back and there is genuinely no older step.
+# Said ONLY when the restore list agrees; when it does not, see _OLDER_IN_THE_LIST.
 _AT_THE_BOTTOM = (
     "You're back at the oldest setup Addison saved, so there's nothing further back to go to."
+)
+# The other bottom. On an UPGRADED install the permanent bottom row is
+# `pre_upgrade` and is deliberately NOT verified (see _ensure_genesis), so the
+# walk can never target it — but it is older, it is saved, and it is sitting in
+# the restore list the user is looking at. _AT_THE_BOTTOM was being said there,
+# and it is simply false: telling somebody the way back does not exist while it
+# is on their screen is the shape of failure this floor exists to prevent.
+#
+# Naming the row instead of targeting it keeps both halves honest. The one-action
+# button still refuses to hand back a configuration nothing was ever proven
+# against — that refusal is the whole point of _ensure_genesis and must not be
+# traded away for a tidier message — while the person is told exactly where the
+# older setup is and that choosing it is theirs to do.
+# "Your restore points", not "the list below": the manager depends on nothing, and
+# it must not start depending on where a React component happens to put a <p>. The
+# same sentence has to stay true wherever it is rendered — including beside the
+# per-row Restore control step 2 adds, which is not below anything.
+_OLDER_IN_THE_LIST = (
+    "That's as far back as Addison can go on its own. Your restore points go back "
+    'further — the oldest one is "{label}". Addison never saw that one working, so it '
+    "won't choose it for you, but you can pick it yourself."
 )
 _APPLY_FAILED = "Addison couldn't put your settings back. Try an earlier restore point."
 _PERMANENT_GUARD = (
@@ -148,11 +171,6 @@ _RESTORED_DETAIL: dict[str, str] = {
 # sentence — never to resolve one. An id we do not recognise is shown verbatim,
 # which is honest and cannot fail.
 _PROFILE_NAMES = {"simple": "Simple", "developer": "Developer", "custom": "Custom"}
-# Same reasoning, one use: telling a profile somebody CHOSE from the default
-# written down (see _looks_like_a_fresh_install). If this ever drifted from
-# profiles.py the cost is a first-run row labelled "your setup before this
-# update" instead of "as first installed" — the harmless direction.
-_DEFAULT_PROFILE_ID = "simple"
 
 
 def _canonical(payload: dict) -> str:
@@ -407,6 +425,7 @@ class SnapshotManager:
         *,
         store,
         snapshot_dir: Path | None = None,
+        created_the_database: bool | None = None,
         app_build_ref: Callable[[], dict] | None = None,
         mode_ref: Callable[[], str] | None = None,
         clock: Callable[[], int] = lambda: int(time.time()),
@@ -422,11 +441,21 @@ class SnapshotManager:
         restore path reads exactly two things" still holds literally. ``clock``
         is injected only so tests get deterministic timestamps.
 
+        ``created_the_database`` is the one fact that decides which permanent
+        bottom row this database gets (see ``_ensure_genesis``): True only when
+        the CALLER KNOWS this launch created the database file. It is passed in
+        rather than worked out here because this module may not import anything
+        that could tell it and may not read a setting — and because the answer
+        is not in the database at all. ``main.py`` knows it for certain; every
+        other caller (the CLI, tests, a duck-typed double) leaves it None, which
+        is read as "could not find out" and takes the cautious road.
+
         Construction is side-effecting exactly once: on an empty table it writes
-        the genesis snapshot, because G3 says a restore target exists AT ALL
+        the permanent bottom row, because G3 says a restore target exists AT ALL
         TIMES — including before the first turn."""
         self._store = store
         self._clock = clock
+        self._created_the_database = created_the_database
         self._app_build_ref = app_build_ref
         self._mode_ref = mode_ref
         self._snapshot_dir = self._resolve_snapshot_dir(snapshot_dir)
@@ -454,27 +483,48 @@ class SnapshotManager:
     def _ensure_genesis(self) -> None:
         """Write the permanent bottom row on a database that has none.
 
-        On a genuinely fresh install that is ``genesis``: ``undeletable = 1``
-        because it is the bottom of the restore walk — neither retention nor a
-        delete may reach it — and ``verified_working = 1`` because a fresh
-        install is a configuration that works. It is deliberately captured AFTER
-        default-widget seeding (main.py wires it there) so it holds the real
-        first-run state.
+        When this launch CREATED the database that is ``genesis``:
+        ``undeletable = 1`` because it is the bottom of the restore walk —
+        neither retention nor a delete may reach it — and ``verified_working = 1``
+        because a brand-new install is a configuration that works. It is
+        deliberately captured AFTER default-widget seeding (main.py wires it
+        there) so it holds the real first-run state.
 
-        On an EXISTING install it is ``pre_upgrade`` instead, and the difference
-        matters more than the slug. This method fires whenever the table is
-        empty, which is true for every install that predates the subsystem, the
-        first time it launches — so on that path the row is a copy of whatever
-        config the user happens to have RIGHT NOW, up to and including the broken
-        one they are about to need rescuing from. Written as genesis it would be
-        a permanent, undeletable row labelled "Addison as first installed" that
-        restores services, notes and a Developer profile, and whose restore copy
-        promises to clear exactly the things it puts back. Marked
-        ``verified_working`` it would also become a legitimate target of the
-        one-action button, so the guaranteed bottom of the walk could hand the
-        user back the config they were escaping. So: honest slug, honest label,
-        honest restore copy, and NOT verified — nothing has run against it and
-        this subsystem has watched nothing run against it."""
+        Otherwise it is ``pre_upgrade``, and the difference matters more than the
+        slug. This method fires whenever the table is empty, which is true for
+        every install that predates the subsystem, the first time it launches —
+        so on that path the row is a copy of whatever config the user happens to
+        have RIGHT NOW, up to and including the broken one they are about to need
+        rescuing from. Written as genesis it would be a permanent, undeletable
+        row labelled "Addison as first installed" that restores services, notes
+        and a Developer profile, and whose restore copy promises to clear exactly
+        the things it puts back. Marked ``verified_working`` it would also become
+        a legitimate target of the one-action button, so the guaranteed bottom of
+        the walk could hand the user back the config they were escaping. So:
+        honest slug, honest label, honest restore copy, and NOT verified —
+        nothing has run against it and this subsystem has watched nothing run
+        against it.
+
+        THE CHOICE IS A FACT FROM THE CALLER, NEVER AN INFERENCE FROM THE
+        CONTENTS. It used to be inferred here, from whether the payload held any
+        provider, note, routine or non-default profile — and an install with
+        none of those is not a fresh install, it is the DEFAULT STATE of the two
+        people this app is for. Mira and Petr never open Settings > Services (no
+        key means turns run on the Setup Assistant relay), never write a note,
+        never save a routine and never leave Simple; months of tuned settings,
+        widgets and chats left no trace in any of the four signals, so their
+        established install was minting a permanent, undeletable, ``verified``
+        row promising to be "Addison as first installed" while holding the very
+        configuration they would be clicking Restore to escape.
+
+        ``is True``, not truthiness, is the whole guard: None means the caller
+        could not find out, and an unknown install must land exactly where a
+        known-established one does. The two share this single branch rather than
+        each getting their own, because there is only one safe answer and a
+        second branch is somewhere to put a guess. Being wrongly told your setup
+        predates the update costs one honest sentence and one completed turn;
+        being wrongly told your install is brand new hands back the config you
+        were escaping, and the row cannot be deleted afterwards."""
         try:
             if self._store.list_config_snapshots():
                 return
@@ -484,13 +534,7 @@ class SnapshotManager:
             # grade of damage, and failing construction would take the whole
             # process down with it.
             return
-        try:
-            fresh = _looks_like_a_fresh_install(self._store.read_config_state())
-        except Exception:
-            # Unreadable config: assume the cautious side. A row that only claims
-            # to be "your setup before this update" is true either way; one that
-            # claims to be a fresh install is not.
-            fresh = False
+        fresh = self._created_the_database is True
         try:
             self._capture(
                 trigger="auto",
@@ -796,6 +840,22 @@ class SnapshotManager:
         # there is nothing older among the setups it has seen working. The other
         # outcomes all mean the database's answer was absent or incomplete.
         #
+        # 'none' DELIBERATELY reaches the arm below with require_verified=False,
+        # and it is worth being explicit because the two branches look
+        # inconsistent side by side. 'none' means no verified row exists at all —
+        # the state every upgraded install is in before its first turn — so there
+        # is no proven config to prefer and nothing to step past. Refusing there
+        # would leave the one-action button dead on the most common upgraded
+        # install, with a perfectly good `pre_upgrade` payload on disk. So it
+        # restores, and `_RESTORED_UNVERIFIED` says plainly that this was not a
+        # setup Addison had seen working. 'bottom' is the opposite case: verified
+        # rows DO exist and the user has already walked back through them, so
+        # stepping them past their own proven configs into an unproven one is a
+        # choice that belongs to them — hence naming the row instead
+        # (_OLDER_IN_THE_LIST). See `select_payload_to_restore` for the governing
+        # rule: an unverified restore is fine, an unverified restore *dressed up
+        # as a verified one* is the failure this floor was written against.
+        #
         # `require_verified` when the walk itself was healthy and merely had
         # nothing to offer: in that state the database is readable and the
         # sidecars hold the same story, so only a payload the DB failed to
@@ -811,6 +871,14 @@ class SnapshotManager:
         if why == "identical":
             return RestoreResult(ok=False, error=_ALREADY_THERE)
         if why == "bottom":
+            # "Nothing further back" is a claim about the LIST, so the list is
+            # what gets asked. It disagrees on every upgraded install, where the
+            # unverified `pre_upgrade` row sits below anything the walk can
+            # reach. See _OLDER_IN_THE_LIST for why this names that row rather
+            # than restoring it.
+            older = self._oldest_restore_point_below(position)
+            if older is not None:
+                return RestoreResult(ok=False, error=_OLDER_IN_THE_LIST.format(label=older))
             return RestoreResult(ok=False, error=_AT_THE_BOTTOM)
         return RestoreResult(ok=False, error=_NO_TARGET)
 
@@ -975,23 +1043,13 @@ class SnapshotManager:
         proven configuration" is the promise and one click that goes the other way
         breaks it.
 
-        The position is located in the FULL row list, which
-        ``list_config_snapshots()`` returns in exactly the same
-        ``created_at DESC, rowid DESC`` order as the verified refs. Comparing
-        ``created_at`` directly would not do: several rows share a second
-        constantly — a hook's pre-change capture and the verified row after it
-        land in the same one — so a timestamp comparison either keeps a row it
-        should skip or skips one it should keep. Position within the shared
-        ordering has no such ambiguity."""
-        try:
-            rows = self._store.list_config_snapshots()
-        except Exception:
-            return 0
+        The position is located by ``_locate_in_full_list``; see it for why the full
+        list and not the verified refs, and why position rather than ``created_at``."""
+        located = self._locate_in_full_list(marker)
+        if located is None:
+            return 0            # unreadable, pruned, or from another database
+        rows, at = located
         ids = [row.get("id") for row in rows]
-        try:
-            at = ids.index(marker)
-        except ValueError:
-            return 0            # pruned, or from another database: genuinely inert
         if rows[at].get("state_fingerprint") != current_fingerprint:
             return 0            # the user has moved on; the position expired
         older = set(ids[at + 1 :])
@@ -1001,6 +1059,69 @@ class SnapshotManager:
         # Every verified row is NEWER than where the user is standing, so there is
         # nothing further back to offer — which is 'bottom', not 'start at the top'.
         return len(refs)
+
+    def _oldest_restore_point_below(self, position: str | None) -> str | None:
+        """The plain-language label of the OLDEST restore point sitting below the
+        walk's position, or None when the list really does end where the walk did.
+
+        Shares ``_locate_in_full_list`` with ``_start_below_the_full_list``: same
+        question of the same list, asked for the MESSAGE rather than the walk. The
+        full list is the right one to ask because it is what the user can see and
+        click — the sentence this feeds is a promise about their screen.
+
+        Every row below the position is guaranteed UNVERIFIED whenever the caller
+        is on the ``'bottom'`` outcome, which is what entitles the message to say
+        Addison never saw it working without checking each one: reaching
+        ``'bottom'`` means ``refs[start:]`` was empty, i.e. no verified row sits
+        below the marker at all.
+
+        Returns None rather than raising on anything unexpected — the store is
+        duck-typed, so a damaged one can answer strangely here. A sentence that
+        cannot be substantiated is simply not said, and the caller falls back to
+        the plain bottom message, which is the safe direction: it claims less."""
+        located = self._locate_in_full_list(position)
+        if located is None:
+            return None
+        rows, at = located
+        below = rows[at + 1 :]
+        if not below:
+            return None
+        return REASONS[_choice(below[-1].get("reason"), REASONS, "other")]
+
+    def _locate_in_full_list(self, marker: str | None) -> tuple[list[dict], int] | None:
+        """``(all rows, index of ``marker``)``, or None when it cannot be placed.
+
+        The one place that asks "where is this id among ALL the restore points". Two
+        callers need exactly that and for related reasons — ``_start_below_the_full_list``
+        so the walk does not step forward past a row the user chose by hand, and
+        ``_oldest_restore_point_below`` so the bottom message can name what is under
+        it — and they had the lookup written out twice, character for character apart
+        from the fallback value.
+
+        The FULL list, not the verified refs: both are ordered ``created_at DESC,
+        rowid DESC``, so "below" means the same thing in each, but only the full list
+        contains the unverified rows these two callers are reasoning about. Position
+        within that shared ordering is what gets compared, never ``created_at``
+        itself — several rows share a second constantly (a hook's pre-change capture
+        and the verified row after it land in the same one), so a timestamp
+        comparison either keeps a row it should skip or skips one it should keep.
+
+        None covers all three ways this can fail to mean anything — an unreadable
+        store, a marker that was pruned, a marker from another database — because
+        every caller's answer to them is the same: fall back, claim less. Each keeps
+        its OWN fallback value, which is why this returns None rather than choosing
+        one."""
+        if not marker:
+            return None
+        try:
+            rows = self._store.list_config_snapshots()
+        except Exception:
+            return None
+        ids = [row.get("id") for row in rows]
+        try:
+            return rows, ids.index(marker)
+        except ValueError:
+            return None
 
     def _recorded_restore_target(self) -> str | None:
         """The id the last restore landed on, read back off disk.
@@ -1410,34 +1531,6 @@ def _permanent_message(reason: str) -> str:
     if reason == "pre_upgrade":
         return _PERMANENT_PRE_UPGRADE
     return _PERMANENT_GENESIS
-
-
-def _looks_like_a_fresh_install(tables: dict) -> bool:
-    """True when nothing a person could have set up exists yet.
-
-    ``_ensure_genesis`` fires whenever ``config_snapshots`` is empty, and that is
-    true for EVERY install that predates this subsystem, the first time it
-    launches — not only for a brand-new one. So "the table is empty" cannot mean
-    "this is a fresh install"; the payload has to be asked directly.
-
-    Widgets and settings are not evidence either way: Addison seeds its own
-    default widgets and writes its own first-run rows before this runs. Services,
-    notes, routines and a profile somebody actually chose are only ever there
-    because somebody put them there.
-
-    Wrong in one direction costs far more than wrong in the other, so the
-    tie-breaks all lean the same way. Calling an established install "fresh"
-    mints a permanent row that lies about what it holds, marks it proven when
-    nothing was proven, and can drop the user into Developer from the bottom of
-    the rollback walk. Calling a fresh install "established" costs a slightly
-    odd label on day one."""
-    for table in ("provider_config", "skills", "routines"):
-        if tables.get(table):
-            return False
-    # The default profile written down is not a choice — it is the default. Only
-    # a profile somebody moved off Simple says "there has been a user here".
-    profile = _profile_from_tables(tables)
-    return profile is None or profile == _DEFAULT_PROFILE_ID
 
 
 def _payload_reason(payload: dict) -> str:

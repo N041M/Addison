@@ -51,6 +51,66 @@ in Prague right now?" or a current-events question).
 panel, then an answer grounded in the results. Check the expanded steps name
 the search plainly.
 
+## 4a. Read a web page
+
+**Do:** ask for something that needs the *contents* of a page, not a link — e.g.
+"What does the front page of bbc.co.uk say right now?" or, after a search,
+"read the first result and tell me what it says."
+**Expect:** permission card → Allow → **"Read a web page"** in the activity
+panel, then an answer that quotes or paraphrases what is actually on the page.
+Addison should answer *from* the page, never fall back to "here's a link, go and
+look" — that behaviour is what this tool exists to replace.
+
+**Do:** ask it to read something that isn't words — a PDF, an image, a download
+link.
+**Expect:** a plain refusal in ordinary language ("that isn't a page I can read
+as words", or similar). **No stack trace, no error code, no mojibake**, and no
+wall of control characters presented as page content.
+
+**Do:** ask it to read `http://localhost` (or your router's address, or
+`http://169.254.169.254`).
+**Expect:** a plain refusal. Addison must never reach inside the machine or the
+home network on an address the model chose. If any of these returns page
+content, **stop the pass and file it first** — it outranks everything else in
+this document.
+
+**Do:** ask for a very long page.
+**Expect:** the answer arrives in reasonable time and, if the page was
+shortened, Addison **says so** rather than quietly answering from a fragment.
+
+## 4b. Activity panel — the site being reached
+
+The owner's chosen mitigation for silent outward reach (2026-07-20) is
+**visibility, not extra prompts**: once you have allowed one page read, every
+later read in the session is ungated, so the panel naming the destination is the
+only thing standing between the person and a read they never asked for. Treat a
+missing host line as a safety failure, not a cosmetic one.
+
+**Do:** run a page read (step 4a) and watch the activity panel.
+**Expect:** under the **"Read a web page"** step, a second line naming the
+**site** — the host only (`bbc.co.uk`), in **mono**, one step dimmer than the
+label above it. Confirm it appears on **every** read, not only the first one
+that showed a permission card.
+
+**Do:** ask Addison to read a page whose address is long, or one that redirects.
+**Expect:** the line shows the **host**, never the full address — no path, no
+query string, no `?utm_...` tail. A long host **wraps onto a second line**; it
+must not be truncated with an ellipsis, because the end of an address is the
+part that says whose site it really is.
+
+**Do:** repeat one read in **Developer** mode.
+**Expect:** identical — the host line is not a Simple-only affordance.
+
+**Do:** run a routine that reads a page.
+**Expect:** the host still appears; the routine path is not a way around
+visibility.
+
+**Both themes.** Toggle light and dark and re-read the line in each. It must be
+comfortably readable against the page background at its small size — dimmer than
+the step label, but never so faint you have to lean in. A line nobody can read
+is not visibility. Check it at the narrow-window width too (§14): the host wraps
+inside the panel and never pushes the layout sideways.
+
 ## 5. Save a file (native dialog)
 
 **Do:** "Write a two-line thank-you note and save it as a file."

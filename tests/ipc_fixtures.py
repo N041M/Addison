@@ -10,8 +10,9 @@ one artifact both sides share:
 - tests/test_ipc_fixture_drift.py regenerates live and fails if a handler's
   shape drifts from the committed files (regenerate: ``python tests/ipc_fixtures.py``
   from the repo root, then re-run the vitest suite);
-- the vitest suite (shell/src/__tests__/parsers.fixtures.test.ts) parses the
-  same files and pins the parsed output.
+- the vitest suites consume the same files: parsers.fixtures.test.ts pins what
+  each parser makes of a request result, and activityPanel.test.tsx renders the
+  tool.activityUpdate notification through the real component.
 
 So a core change that would break the frontend parsers fails CI on whichever
 side runs first — the method-name drift test covers *names*, this covers *shapes*.
@@ -36,6 +37,8 @@ from agent_core.providers.router import ModelRouter
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
+from agent_core.tools.base import call_permission_detail
+from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -229,8 +232,51 @@ def _catalog() -> list[CloudModel]:
     ]
 
 
+# A page read with a query string on it. The committed fixture is the proof of the
+# property that matters: what reaches the frontend is `en.wikipedia.org` and NOT this
+# whole string. A full URL on screen would be its own leak — the query is where an
+# injected instruction would put whatever it wanted carried out of the machine, and a
+# panel is a thing people screenshot.
+_ACTIVITY_FIXTURE_URL = "https://en.wikipedia.org/wiki/Fern?utm_source=addison&note=hello"
+
+
+def _activity_notification(server: JsonRpcServer) -> dict:
+    """The ``tool.activityUpdate`` params emitted for a call that names a destination.
+
+    This one is a notification, not a request result: there is no handler to call and
+    the fixture server has no writer, so the frame is captured by standing in for
+    ``_write_frame``. That is deliberate — it keeps the fixture coming from the
+    shipping emit path (``_emit_activity`` -> ``_notify`` -> the frame) instead of a
+    dict hand-written to match it, which is the failure this whole module exists to
+    prevent.
+
+    The detail is asked for exactly the way ``orchestrator.py`` asks — through
+    ``call_permission_detail``, with no mention of which tool this is — so the fixture
+    also pins the general path, not a read_web_page special case. Using the real tool
+    means the day its ``permission_detail`` stops returning just the host, this
+    fixture changes and the drift test says so out loud.
+    """
+    tool = ReadWebPageTool()
+    captured: list[dict] = []
+    original = server._write_frame
+    server._write_frame = captured.append  # type: ignore[method-assign]
+    try:
+        server._emit_activity(
+            tool.definition.id,
+            tool.definition.label,
+            call_permission_detail(tool, {"url": _ACTIVITY_FIXTURE_URL}),
+        )
+    finally:
+        server._write_frame = original  # type: ignore[method-assign]
+    return captured[0]["params"]
+
+
 def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
-    """Method name -> the exact result payload its handler returns today."""
+    """Method name -> the exact payload the core puts on the wire for it today.
+
+    Mostly request results, read straight off their handlers; ``tool.activityUpdate``
+    is a Core -> Frontend notification and carries its ``params`` instead.
+    """
     router = ModelRouter(configured={ModelRole.PRIMARY: _StubProvider()})
     router.register_local_model("llama3.2:3b", _StubProvider())
 
@@ -257,6 +303,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "profile.get": server._profile_get(),
         "model.availableRoles": server._available_roles(),
         "snapshot.list": server._snapshot_list(),
+        "tool.activityUpdate": _activity_notification(server),
     }
 
 

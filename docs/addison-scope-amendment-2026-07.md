@@ -538,10 +538,13 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
 2. ~~**Snapshot retention**~~ — **RESOLVED (Phase-2 step 1).** Keep the most recent
    **50 or 30 days, whichever keeps more** (the same idiom as the undo window), with
    two exemptions written into the SQL rather than left to a caller: permanent rows,
-   and **the newest verified-working row**. Retention here is not housekeeping — a
-   rule that can prune the last verified row leaves the one-action restore with no
+   and **the newest TWO verified-working rows**. Retention here is not housekeeping —
+   a rule that can prune the last verified rows leaves the one-action restore with no
    target, i.e. G3 silently off with no error anywhere, which is the friend's failure
-   reintroduced by the recovery machinery itself. **Every weakening mints a new
+   reintroduced by the recovery machinery itself. Two rather than one, and the second
+   is load-bearing: the restore walk skips any verified row whose fingerprint matches
+   the current config, so with only one exempt row that row could be exactly the one
+   the walk skips, leaving nothing to restore to. **Every weakening mints a new
    anchor; anchors never prune and never count against the budget.** The alternative
    ("the single most-recent working anchor") was rejected: it requires *replacing* an
    undeletable row, which would create the codebase's only

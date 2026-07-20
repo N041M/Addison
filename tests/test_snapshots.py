@@ -81,8 +81,16 @@ def store(tmp_path: Path) -> Iterator[Store]:
 def _manager(store: Any, **kwargs) -> SnapshotManager:
     """``store`` is deliberately untyped: the manager duck-types it (contract
     §5.2) so a test can hand it a double that fails the way a damaged database
-    fails, which is the only way to exercise the paths that matter here."""
+    fails, which is the only way to exercise the paths that matter here.
+
+    ``created_the_database`` defaults to True because it is TRUE here: every
+    store these tests build sits on a database the test itself created a line
+    earlier, so the helper states the fact the same way ``main.py`` does rather
+    than leaving the manager to take the cautious road. The tests about an
+    upgraded install pass False, and the classification matrix passes both
+    explicitly — see ``_bottom_row``."""
     kwargs.setdefault("clock", _Clock())
+    kwargs.setdefault("created_the_database", True)
     return SnapshotManager(store=store, **kwargs)
 
 
@@ -548,6 +556,183 @@ def test_a_configuration_the_user_returned_to_does_not_trap_the_walk(store: Stor
     )
 
 
+def _upgraded_install(tmp_path: Path) -> tuple[Store, SnapshotManager]:
+    """An install that predates this subsystem: config already in place, and
+    ``config_snapshots`` empty. Its permanent bottom row is ``pre_upgrade``.
+
+    ``created_the_database=False`` is what makes it one — the same fact
+    ``main.py`` reads off the filesystem. The config below is here so the tests
+    have something to restore, not to signal anything: nothing about the
+    contents decides the bottom row any more."""
+    store = Store(tmp_path / "addison.sqlite3")
+    store.set_setting("active_profile", "simple")
+    store.insert_skill(id="from-before", name="From before", instructions="an older note",
+                       enabled=True, created_at=1)
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    return store, manager
+
+
+def test_the_bottom_message_does_not_deny_a_restore_point_the_user_can_see(
+    tmp_path: Path,
+) -> None:
+    """The walk's bottom sentence was FALSE on every upgraded install.
+
+    There the permanent bottom row is ``pre_upgrade``, deliberately unverified so
+    the one-action button can never hand back the possibly-broken setup the person
+    upgraded with. The walk therefore stops above it and used to say "there's
+    nothing further back to go to" — while that older row sat in the Settings
+    list, saved, permanent, and visible on the same screen.
+
+    The fix is to the SENTENCE, not the walk: the row must still not be a
+    one-click target, and the person must still be told where it is."""
+    store, manager = _upgraded_install(tmp_path)
+    for theme in ("dark", "light"):
+        store.set_setting("theme", theme)
+        manager.mark_verified_working()
+
+    assert manager.restore_last_working().ok
+    result = manager.restore_last_working()
+
+    assert result.ok is False
+    # The exact label the Settings list renders for that row, so "the oldest one
+    # there" names something the person can actually find and click.
+    oldest = manager.list()[-1]
+    assert oldest["reason"] == "pre_upgrade"
+    assert oldest["reason_label"] in result.error
+    assert result.error == (
+        "That's as far back as Addison can go on its own. Your restore points go back "
+        'further — the oldest one is "Your setup before this update". Addison never saw '
+        "that one working, so it won't choose it for you, but you can pick it yourself."
+    )
+    # The old sentence, and any descendant of it, is now a falsehood on this path.
+    assert "nothing further back" not in result.error
+    # And it points at the restore points, not at a position on a screen: the manager
+    # must not encode where the frontend puts its list.
+    assert "below" not in result.error
+    store.close()
+
+
+def test_the_bottom_message_still_says_nothing_older_when_that_is_true(
+    tmp_path: Path,
+) -> None:
+    """The other half, and the reason the fix is a branch rather than new wording.
+
+    On a FRESH install the bottom row is genesis, it is verified, the walk lands
+    ON it, and there is genuinely nothing below it in the list. Rewording the
+    bottom sentence for everyone would swap one falsehood for another: this person
+    would be sent looking down a list that ends where they are standing."""
+    store = Store(tmp_path / "addison.sqlite3")
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=True)
+    for theme in ("dark", "light"):
+        store.set_setting("theme", theme)
+        manager.mark_verified_working()
+
+    while manager.restore_last_working().ok:
+        pass
+    result = manager.restore_last_working()
+
+    assert manager.list()[-1]["reason"] == "genesis"
+    assert result.ok is False
+    assert result.error == (
+        "You're back at the oldest setup Addison saved, so there's nothing further "
+        "back to go to."
+    )
+    store.close()
+
+
+def test_the_disk_arm_does_not_second_guess_the_bottom_of_the_walk(tmp_path: Path) -> None:
+    """The sidecar arm is skipped on ``'bottom'``, and that gate is load-bearing.
+
+    Every other non-ok outcome means the database's answer was absent or
+    incomplete, so the disk is worth consulting. ``'bottom'`` is the one outcome
+    that means the database answered COMPLETELY: there is nothing older among the
+    setups it has seen working.
+
+    Let the arm run there and it reads the whole sidecar directory, finds the
+    ``pre_upgrade`` payload sitting below the walk's position, and — since nothing
+    below is verified — applies it as a last resort.
+
+    What makes that wrong HERE, and not on ``'none'`` (see
+    ``test_the_first_click_on_an_upgraded_install_restores_and_says_it_is_unproven``,
+    where the same arm applying the same payload is the intended behaviour): on
+    ``'bottom'`` the user has proven configurations and has already walked back
+    through them. Stepping them past their own proven setups into an unproven one,
+    without asking, is a choice that belongs to them — so the row is named
+    (``_OLDER_IN_THE_LIST``) rather than applied. On ``'none'`` there are no proven
+    configurations to step past and refusing would leave the button dead."""
+    store, manager = _upgraded_install(tmp_path)
+    for theme in ("dark", "light"):
+        store.set_setting("theme", theme)
+        manager.mark_verified_working()
+    assert manager.restore_last_working().ok
+    settled = store.get_setting("theme")
+
+    # The payload IS on disk and IS readable, so nothing but the gate is stopping
+    # it — otherwise this test would pass for the wrong reason.
+    on_disk = recover_payloads_from_disk(_sidecar_dir(manager))
+    pre_upgrade = [p for p in on_disk if p["meta"]["reason"] == "pre_upgrade"]
+    assert len(pre_upgrade) == 1
+    assert pre_upgrade[0]["meta"]["verified_working"] in (0, False)
+
+    result = manager.restore_last_working()
+
+    assert result.ok is False
+    # Untouched: the config the user walked back to is still the config they have.
+    assert store.get_setting("theme") == settled
+    store.close()
+
+
+def test_the_first_click_on_an_upgraded_install_restores_and_says_it_is_unproven(
+    tmp_path: Path,
+) -> None:
+    """The ``'none'`` outcome — the state EVERY upgraded install is in at its first
+    click — restores ``pre_upgrade`` rather than refusing, and labels it honestly.
+
+    This is the branch CLAUDE.md used to describe as having "no target until the
+    first turn completes"; the walk has none, but the disk arm runs with
+    ``require_verified=False`` and applies the payload. The behaviour is deliberate
+    (``select_payload_to_restore``: *"nothing at all" is a worse answer than "the
+    most recent settings I had, and I said so"*), and it had no test at all — so
+    the next reader reconciling the doc with the code could have "fixed" it into a
+    dead button on the commonest path and broken nothing.
+
+    The load-bearing half is the SENTENCE. Restoring an unverified config is fine;
+    reporting it in the ordinary "put you back on your last working setup" copy is
+    the dishonesty this floor was written against.
+    """
+    # Built inline rather than through _upgraded_install: the settings have to be
+    # in place BEFORE the manager exists, because `pre_upgrade` is captured during
+    # construction and is a copy of whatever the user already had.
+    store = Store(tmp_path / "addison.sqlite3")
+    store.set_setting("active_profile", "simple")
+    store.set_setting("theme", "light")
+    store.insert_skill(id="from-before", name="From before", instructions="an older note",
+                       enabled=True, created_at=1)
+    # What makes this an upgraded install is the fact, not the note: this launch
+    # did not create the database. Same as _upgraded_install.
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    assert [(r["reason"], bool(r["verified_working"])) for r in manager.list()] == [
+        ("pre_upgrade", False)
+    ]
+
+    store.set_setting("theme", "dark")       # the change the user wants undone
+    result = manager.restore_last_working()
+
+    assert result.ok is True
+    assert store.get_setting("theme") == "light"
+    # Never dressed up as a verified restore.
+    assert result.detail == (
+        "Addison couldn't find a setup it had seen working, so it went back to the "
+        "most recent settings it had saved instead. Have a look and check things are "
+        "how you want them. Your chats and your saved keys weren't touched."
+    )
+    assert "last working setup" not in (result.detail or "")
+    store.close()
+
+
 def test_the_walk_remembers_where_it_got_to_across_a_restart(tmp_path: Path) -> None:
     """Held in memory alone, the walk's position dies with the process — and the
     next launch hands the user back the config they escaped an hour earlier. So
@@ -770,7 +955,7 @@ def test_an_established_install_is_not_told_it_is_a_fresh_one(tmp_path: Path) ->
                        enabled=True, created_at=1)
 
     manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
-                              clock=_Clock())
+                              clock=_Clock(), created_the_database=False)
 
     row = manager.list()[0]
     assert row["reason"] == "pre_upgrade"
@@ -798,9 +983,8 @@ def test_an_established_install_is_not_told_it_is_a_fresh_one(tmp_path: Path) ->
 
 def test_a_genuinely_fresh_install_still_gets_genesis(tmp_path: Path) -> None:
     """The other half of the same decision. Addison seeds its own default widgets
-    and writes its own first-run rows before the bottom row is taken, so neither
-    is evidence that a person has been here; and the default profile written down
-    is not a choice."""
+    and writes its own first-run rows before the bottom row is taken, so a
+    database that already holds them is still the one this launch created."""
     store = Store(tmp_path / "addison.sqlite3")
     store.set_setting("widgets_seeded", "1")
     store.set_setting("active_profile", "simple")
@@ -808,11 +992,255 @@ def test_a_genuinely_fresh_install_still_gets_genesis(tmp_path: Path) -> None:
                         pinned=True, position=0, created_at=100)
 
     manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
-                              clock=_Clock())
+                              clock=_Clock(), created_the_database=True)
 
     row = manager.list()[0]
     assert row["reason"] == "genesis"
     assert row["verified_working"] in (True, 1)
+    store.close()
+
+
+# --- the classification matrix ---------------------------------------------
+#
+# Which permanent bottom row a database gets, across the states a real install
+# can actually be in. It is one bit with three consequences, none of them
+# recoverable by the person it happens to: `genesis` is verified, so it is a
+# legitimate one-click restore TARGET; its copy promises to clear services,
+# notes, widgets and routines; and the row is undeletable three deep (the
+# message check, the store's `AND undeletable = 0`, and a RAISE(ABORT) trigger).
+# Get it wrong toward `genesis` and the floor hands back the configuration the
+# person is escaping, says something false about it in both directions, and
+# leaves a permanent restore point that lies.
+#
+# It used to be INFERRED from the payload — true only when provider_config,
+# skills and routines were all empty and the profile was still Simple. Every
+# scenario below whose name says "months of use" passed that test: all of
+# app_settings and all of widgets were invisible to it, and conversations and
+# messages are not in the payload at all. That is not an exotic install. It is
+# the default state of the two people this app is for, who never connect a
+# service (with no key, turns run on the Setup Assistant relay), never write a
+# note, never save a routine and never leave Simple.
+#
+# So the matrix is driven by the FACT — did this launch create the database —
+# and each case states which fact main.py would have read off the filesystem.
+
+
+def _bottom_row(tmp_path: Path, *, created_the_database: bool | None, arrange=None) -> dict:
+    """Build a store, let ``arrange`` put the scenario's state in it, construct a
+    manager, and return the single permanent bottom row it wrote."""
+    store = Store(tmp_path / "addison.sqlite3")
+    if arrange is not None:
+        arrange(store)
+    manager = SnapshotManager(
+        store=store,
+        snapshot_dir=tmp_path / "snapshots",
+        clock=_Clock(),
+        created_the_database=created_the_database,
+    )
+    rows = manager.list()
+    store.close()
+    assert len(rows) == 1, "the bottom row is written exactly once"
+    return rows[0]
+
+
+def _setup_assistant_ran(store: Store) -> None:
+    """§4.6: with no key at all, the first turns run on the relay. They leave a
+    conversation and messages — and NO provider row, because
+    ``upsert_provider_config`` has exactly one caller, ``provider.connect``."""
+    store.create_conversation(id="c1", title="Getting started",
+                              provider_id="setup_assistant", started_at=100)
+    store.insert_message(id="m1", conversation_id="c1", role="user",
+                         content="hello", created_at=100)
+
+
+def _default_widgets_seeded(store: Store) -> None:
+    """What ``main.py._seed_default_widgets`` leaves behind, in the order the
+    real one writes it — Addison's own first-run state, not a person's."""
+    for position, spec in enumerate(
+        ({"kind": "stat", "source": "connections", "title": "Connections"},
+         {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}),
+    ):
+        store.insert_widget(id=f"seed-{position}", spec_json=json.dumps(spec),
+                            pinned=True, position=position, created_at=100)
+    store.set_setting("widgets_seeded", "1")
+
+
+def _months_of_quiet_use(store: Store) -> None:
+    """THE DEFECT CASE. Everything a companion user accumulates and nothing the
+    old inference could see: tuned settings, a widget they added, chats — no
+    service, no note, no routine, still on Simple."""
+    _default_widgets_seeded(store)
+    _setup_assistant_ran(store)
+    store.set_setting("active_profile", "simple")
+    store.set_setting("theme", "dark")
+    store.set_setting("selected_model", "claude-model-that-was-retired")
+    store.insert_widget(id="mine", spec_json=json.dumps(
+        {"kind": "stat", "source": "provider_latency", "title": "My latency card"}),
+        pinned=True, position=2, created_at=200)
+
+
+def test_a_truly_fresh_install_gets_genesis(tmp_path: Path) -> None:
+    """Nothing in the database, and the file did not exist a moment ago."""
+    row = _bottom_row(tmp_path, created_the_database=True)
+    assert (row["reason"], bool(row["verified_working"])) == ("genesis", True)
+    assert row["undeletable"] in (True, 1)
+
+
+def test_a_fresh_install_whose_first_turns_ran_on_the_relay_gets_genesis(
+    tmp_path: Path,
+) -> None:
+    """Chats are not configuration. A first-run conversation on the Setup
+    Assistant relay is still the install this launch created."""
+    row = _bottom_row(tmp_path, created_the_database=True, arrange=_setup_assistant_ran)
+    assert (row["reason"], bool(row["verified_working"])) == ("genesis", True)
+
+
+def test_a_fresh_install_with_the_seeded_widgets_gets_genesis(tmp_path: Path) -> None:
+    """Addison seeds its own rail before the bottom row is taken (see
+    ``test_genesis_holds_the_widgets_addison_seeds_on_first_run``), so the seeds
+    are part of the first-run state, never evidence of a person."""
+    row = _bottom_row(tmp_path, created_the_database=True, arrange=_default_widgets_seeded)
+    assert (row["reason"], bool(row["verified_working"])) == ("genesis", True)
+
+
+def test_months_of_quiet_use_is_never_called_a_fresh_install(tmp_path: Path) -> None:
+    """THE DEFECT, as a regression test.
+
+    An established companion install carrying none of the four signals the old
+    inference looked for. It was classified ``genesis``, ``verified_working``,
+    undeletable — a permanent one-click restore target promising to be "Addison
+    as first installed" while holding the retired model and the widgets the
+    person would be clicking Restore to get away from.
+
+    The three failures the one bit caused are asserted here together, because
+    fixing the slug alone would leave two of them: it must not be the walk's
+    target, and the copy must not promise to clear what it puts back."""
+    row = _bottom_row(tmp_path, created_the_database=False, arrange=_months_of_quiet_use)
+
+    assert row["reason"] == "pre_upgrade"
+    assert row["verified_working"] in (False, 0)
+    assert row["reason_label"] == "Your setup before this update"
+    # Still permanent — the way back does not depend on getting the label right.
+    assert row["undeletable"] in (True, 1)
+
+
+def test_an_install_the_user_emptied_is_not_a_fresh_one(tmp_path: Path) -> None:
+    """Deleting your services, notes and routines does not roll the clock back to
+    the day you installed Addison, and the row that says otherwise cannot be
+    deleted afterwards. The old inference read this database as brand new."""
+
+    def emptied(store: Store) -> None:
+        _months_of_quiet_use(store)
+        store.upsert_provider_config("anthropic", connected=True, added_at=1)
+        store.insert_skill(id="s1", name="Tone", instructions="Be brief.",
+                           enabled=True, created_at=1)
+        # ...and then removes every one of them from the UI.
+        store.delete_provider_config("anthropic")
+        store.delete_skill("s1")
+
+    row = _bottom_row(tmp_path, created_the_database=False, arrange=emptied)
+    assert (row["reason"], bool(row["verified_working"])) == ("pre_upgrade", False)
+
+
+def test_a_database_copied_from_a_backup_is_not_a_fresh_install(tmp_path: Path) -> None:
+    """Restoring a backup, or moving to a new machine, puts an established
+    database somewhere Addison has never run. The app is new here; the
+    configuration is not, and it is the configuration this row holds."""
+    row = _bottom_row(tmp_path, created_the_database=False, arrange=_months_of_quiet_use)
+    assert (row["reason"], bool(row["verified_working"])) == ("pre_upgrade", False)
+
+
+def test_an_install_we_cannot_classify_takes_the_cautious_road(tmp_path: Path) -> None:
+    """No fact supplied — the CLI, a test, any caller that cannot know. There is
+    exactly one safe answer and it is not ``genesis``: an unknown install must
+    land where a known-established one does, or "could not find out" becomes a
+    way to mint a verified, undeletable, permanently wrong restore target."""
+    row = _bottom_row(tmp_path, created_the_database=None, arrange=_months_of_quiet_use)
+    assert (row["reason"], bool(row["verified_working"])) == ("pre_upgrade", False)
+
+    # And the same for a database with nothing in it at all: absent the fact, an
+    # empty database is not evidence of a fresh install either.
+    second = tmp_path / "second"
+    second.mkdir()
+    empty = _bottom_row(second, created_the_database=None)
+    assert (empty["reason"], bool(empty["verified_working"])) == ("pre_upgrade", False)
+
+
+def test_the_honest_branch_says_only_what_pre_upgrade_actually_restores(
+    tmp_path: Path,
+) -> None:
+    """The copy on the branch the defect case now takes, checked against what the
+    restore DOES rather than against itself.
+
+    ``pre_upgrade`` puts back the configuration that was there when this version
+    first started, so its sentence claims exactly that and claims nothing about
+    clearing anything. The genesis sentence — "your services, notes, widgets and
+    routines are cleared" — is the one that was false here, and it is false in
+    both directions at once: it promises a clearing that does not happen, and it
+    hands back the very settings the person is trying to escape."""
+    store = Store(tmp_path / "addison.sqlite3")
+    _months_of_quiet_use(store)
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=False)
+    row = manager.list()[0]
+
+    # The person changes something and clicks the row in Settings.
+    store.set_setting("theme", "light")
+    store.insert_widget(id="later", spec_json=json.dumps(
+        {"kind": "stat", "source": "connections", "title": "Later"}),
+        pinned=True, position=9, created_at=300)
+    result = manager.restore(row["id"])
+
+    assert result.ok, result.error
+    assert result.detail == (
+        "This is how everything was set up when this version of Addison first "
+        "started. Your chats and your saved keys weren't touched."
+    )
+    # What the sentence describes is what happened: the settings went back...
+    assert store.get_setting("theme") == "dark"
+    assert store.get_setting("selected_model") == "claude-model-that-was-retired"
+    # ...the widget added since is gone, the ones from before are not...
+    titles = [json.loads(w["spec_json"])["title"] for w in store.list_widgets()]
+    assert "Later" not in titles
+    assert "My latency card" in titles
+    # ...and the chats it says it did not touch are untouched.
+    assert store.list_conversations()[0]["id"] == "c1"
+    store.close()
+
+
+def test_genesis_really_does_clear_what_its_copy_promises(tmp_path: Path) -> None:
+    """The genesis sentence promises services, notes, widgets and routines are
+    cleared. On a database this launch created that is true by construction —
+    there was nothing to clear — and this is what makes the two sentences safe to
+    keep apart. Anything the person adds afterwards is what genesis removes."""
+    store = Store(tmp_path / "addison.sqlite3")
+    manager = SnapshotManager(store=store, snapshot_dir=tmp_path / "snapshots",
+                              clock=_Clock(), created_the_database=True)
+    genesis = manager.list()[0]
+    assert genesis["reason"] == "genesis"
+
+    store.upsert_provider_config("anthropic", connected=True, added_at=1)
+    store.insert_skill(id="s1", name="Tone", instructions="Be brief.",
+                       enabled=True, created_at=1)
+    store.insert_routine(id="r1", name="Morning", description="d",
+                         plan_json={"steps": []},
+                         created_from_conversation_id=None, created_at=1)
+    store.insert_widget(id="w1", spec_json=json.dumps(
+        {"kind": "stat", "source": "connections", "title": "Connections"}),
+        pinned=True, position=0, created_at=1)
+
+    result = manager.restore(genesis["id"])
+
+    assert result.ok, result.error
+    assert result.detail == (
+        "This is Addison as it was first installed, so your services, notes, "
+        "widgets and routines are cleared. Your chats and your saved keys "
+        "weren't touched."
+    )
+    assert store.list_skills() == []
+    assert store.list_widgets() == []
+    assert store.list_routines() == []
+    assert store.list_provider_configs() == []
     store.close()
 
 
@@ -893,7 +1321,7 @@ def test_sidecar_is_disabled_for_an_in_memory_database() -> None:
 def test_prune_runs_after_capture_and_bounds_ordinary_rows(tmp_path: Path) -> None:
     store = Store(tmp_path / "addison.sqlite3")
     clock = _Clock()
-    manager = SnapshotManager(store=store, clock=clock)
+    manager = SnapshotManager(store=store, clock=clock, created_the_database=True)
     for i in range(sm.KEEP_LAST + 12):
         store.set_setting("marker", f"v{i}")
         manager.capture(trigger="auto", reason="other")

@@ -703,12 +703,15 @@ v1 tool set (register exactly these; see design doc §7.4.1 for rationale on eac
 | `tool_id` | risk_tier | Module |
 |---|---|---|
 | `web_search` | low | `tools/web_search.py` |
+| `read_web_page` | low | `tools/read_web_page.py` |
 | `read_file` | low | `tools/read_file.py` |
 | `read_clipboard` | low | `tools/read_clipboard.py` |
 | `calculator` | low | `tools/calculator.py` |
 | `save_file` | medium | `tools/save_file.py` |
 | `draft_message` | medium | `tools/draft_message.py` |
 | `open_link` | low | `tools/open_link.py` |
+
+**`read_web_page`** issues one HTTP GET and returns the words on the page, so Addison can answer *from* a page rather than hand over a link — the companion's core job for readers who did not want a browser tab. It changes nothing, on the page or on the machine, so it is **low** and has no `undo()`. It is a normal SAFE-view tool, never `dev_only`, and identical in both modes. It is also the first SAFE tool that sends a request to an address the *model* picked, so every URL and every redirect hop is vetted by resolved IP and the connection is pinned to the address that was vetted; the destination host is shown on every granted call (`permission_detail` → the Activity Panel), because outward reach here is bounded by visibility rather than per-site grants.
 
 **Profile note (§4.7):** *which* of these tools get registered — and whether any opt-in higher-risk tools are added on top — is chosen by the active Profile at startup. The Simple profile registers exactly the table above; the Developer profile may register additional opt-in tools. The registration-time undo check applies identically regardless of profile: a Profile decides *what* is registered, never *how* safety is enforced.
 
@@ -910,8 +913,10 @@ fine-grained per-tool `undo()` (§4.5) *and* a whole-config restore (this sectio
   known-good build + config" wording promised more than the code does and was
   corrected. **Restoring a previous binary is a Phase-3 updater item**, not part of
   this floor. Q2 resolved: retention is 50 rows / 30 days, whichever keeps more,
-  with permanent rows **and the newest verified row** exempt in the SQL — a rule
-  that could prune the last verified row would switch G3 off silently. Anchors never
+  with permanent rows **and the newest two verified rows** exempt in the SQL — a
+  rule that could prune the last verified rows would switch G3 off silently. Two,
+  because the restore walk skips a verified row identical to the current config,
+  so a single exempt row could be precisely the row the walk skips. Anchors never
   prune and never count against the budget; evicting an anchor is deleting an
   anchor, whatever the code calls it.)*
 - **Permanence is enforced in the database.** Two `RAISE(ABORT)` triggers on

@@ -34,6 +34,7 @@ import subprocess
 
 from agent_core.policy import PolicyMode
 from agent_core.tools.base import (
+    MAX_PERMISSION_DETAIL_CHARS,
     ExecutionContext,
     RiskTier,
     ToolDefinition,
@@ -55,7 +56,6 @@ _READ_ONLY_GIT_SUBCOMMANDS: frozenset[str] = frozenset({"status", "log", "diff",
 _METACHARACTERS: tuple[str, ...] = (";", "&&", "||", "|", ">", "<", "`", "$(")
 
 _MAX_OUTPUT_CHARS = 4000    # transcript-friendly truncation
-_MAX_DETAIL_CHARS = 120     # command text shown on the per-invocation card
 _TIMEOUT_SECONDS = 30
 
 _SAFE_MODE_REFUSAL = (
@@ -106,13 +106,18 @@ class RunCommandTool:
         return not is_read_only_command(str(args.get("command", "")))
 
     def permission_detail(self, args: dict) -> str | None:
-        """The exact command text for the per-invocation permission card, truncated
-        to keep the card readable (tools/base.call_permission_detail)."""
+        """The exact command text, for the permission card and the Activity Panel.
+
+        ``call_permission_detail`` caps this again with the same constant, so the
+        truncation here is not what makes it fit — it is what keeps the ellipsis
+        meaning "this command was longer" rather than being applied twice. Read that
+        function before returning anything new from a ``permission_detail``: the
+        value is shown to the person on every call, in both modes."""
         command = str(args.get("command", "")).strip()
         if not command:
             return None
-        if len(command) > _MAX_DETAIL_CHARS:
-            return command[:_MAX_DETAIL_CHARS] + "…"
+        if len(command) > MAX_PERMISSION_DETAIL_CHARS:
+            return command[:MAX_PERMISSION_DETAIL_CHARS] + "…"
         return command
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
