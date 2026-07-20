@@ -51,6 +51,7 @@ import { useMediaQuery } from "./hooks/useMediaQuery";
 import { useModelSelection } from "./hooks/useModelSelection";
 import { useWidgets } from "./hooks/useWidgets";
 import { useSkills } from "./hooks/useSkills";
+import { useSnapshots } from "./hooks/useSnapshots";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -120,6 +121,24 @@ export function App() {
   const models = useModelSelection();
   const widgetsState = useWidgets({ connected, railOpen, setStatusBanner });
   const skillsState = useSkills({ connected, setStatusBanner });
+  // Restore points (G3). The hook re-reads itself on every engine "ready", so it
+  // isn't in the refresh list below; what it needs from here is the other way
+  // round — a restore replaces the profile, the services and the saved items
+  // wholesale, so everything this file cached from before it is now describing a
+  // configuration that no longer exists.
+  // HAZARD: `refreshProfile` is a forward reference; this closure only ever runs
+  // at event time, after a restore has landed.
+  const snapshotsState = useSnapshots({
+    connected,
+    onRestored: () => {
+      models.refreshRoles();
+      models.refreshProviders();
+      refreshProfile();
+      widgetsState.refreshWidgets();
+      widgetsState.refreshStats();
+      skillsState.refreshSkills();
+    },
+  });
   const turn = useTurn({
     connected,
     setStatusBanner,
@@ -628,6 +647,7 @@ export function App() {
             }
             models={models}
             skills={skillsState}
+            snapshots={snapshotsState}
             profile={profile}
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}

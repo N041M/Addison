@@ -90,9 +90,22 @@ class WidgetsMixin(ServerContext):
         return {"ok": True}
 
     def _widget_delete(self, params: dict) -> dict:
+        """widget.delete {id} -> {ok}. Idempotent — deleting an absent widget is fine.
+
+        Hook H5 (G3): the snapshot comes FIRST, and a failed snapshot REFUSES the
+        delete. The spec text exists nowhere else once the row is gone, so
+        proceeding without a restore point is the one outcome the floor must not
+        allow; refusing is recoverable, an unbackable delete is not. The existence
+        check is what keeps a blind delete of an absent id from minting a row."""
         self._ensure_built()
         widget_id = params.get("id")
-        if widget_id:
+        if widget_id and self.store.get_widget(widget_id) is not None:
+            if not self._snapshot_auto("widget_delete"):
+                return {
+                    "ok": False,
+                    "error": "Addison couldn't save a restore point just now, so it "
+                    "didn't delete anything. Try again in a moment.",
+                }
             self.store.delete_widget(widget_id)
         return {"ok": True}
 

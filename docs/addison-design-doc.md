@@ -759,11 +759,19 @@ unbreakable.* Realised with **app-state snapshots**:
 deletable. But the moment a safety guard is **turned off in Custom mode and saved**
 (§7.11), Addison mints an **undeletable** snapshot of the last verified-working
 state — neither user nor model can remove it, and it persists even if the guard is
-switched back on. This anchor **also captures the app binary** (a complete
-known-good *build + config*, unlike ordinary state-only snapshots), so a weakened
-session that corrupts more than config still has a whole-app state to return to.
-Keys are excluded even here (G1 holds). So the act of lowering your own protections
-*always* leaves a guaranteed way back.
+switched back on. This anchor also **records the app build it was minted on**, so if
+a weakened session ends with the app on a different build, the restore says so in
+plain words instead of quietly leaving the person to wonder. Keys are excluded even
+here (G1 holds). So the act of lowering your own protections *always* leaves a
+guaranteed way back to a **working configuration**.
+
+> *Owner decision, 2026-07-20 (Phase-2 step 1).* This paragraph originally promised
+> the anchor was "a complete known-good *build + config*" restore point. It is not,
+> and the wording was corrected rather than left standing: what ships is a short build
+> **reference**, and **restoring a previous app binary is not implemented** — that
+> belongs to the updater and is a Phase-3 item. A product doc should not promise a
+> recovery its own code cannot perform; the story at the top of this section is
+> exactly what happens when it does.
 
 **The keyword gate as an injection defense.** Running or arming a powerful/elevated
 action (OS-run automation, a code-backed widget) requires the user to type a
@@ -876,7 +884,8 @@ track (post-greenlight):
 1. **Snapshot / restore subsystem (G3)** — the floor everything else leans on,
    built and hardened first; its single most important test is *"restore always
    works, even from a broken config."* Includes automatic + on-command snapshots
-   and the app-binary capture used by Custom anchors (§9).
+   and the app **build reference** recorded by Custom anchors (§9). **Shipped
+   2026-07-20**; binary *restore* was descoped to Phase 3 (see §9).
 2. **Custom profile + guard model** (`policy.py`) + the undeletable-anchor rule
    (§7.11).
 3. **Routing strategies** (four named + Custom) + the companion prefer-quality /
@@ -989,5 +998,7 @@ the docs/spec update; all Phase-2).**
     how a widget spec *declares* the capabilities it needs, how the tier check maps
     capabilities → mode, and how code-backed widgets are managed alongside
     declarative ones (§7 note, §7.9).
-16. **Anchor binary capture** — how the app binary is captured/restored in practice
-    (version pin? copy-on-write?) without bloating storage (§9).
+16. ~~**Anchor binary capture**~~ — **RESOLVED 2026-07-20: a version pin, capture
+    only.** The anchor records `{"version", "identifier"}`; a copy-on-write bundle was
+    rejected as platform-dependent and too large to keep an anchor undeletable.
+    **Restoring a binary is a Phase-3 updater item**, not part of the floor (§9).

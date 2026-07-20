@@ -70,6 +70,21 @@ These are hard constraints, enforced in code rather than by convention:
    exact same registry, permission gate, and undo manager instances as the live
    loop — no privilege escalation through automation.
 6. **No scheduling or autonomous triggering.** Nothing runs unless the user starts it.
+7. **Guaranteed rollback.** Neither the user nor the model can leave Addison in a
+   state you cannot get out of. Addison saves a **restore point** automatically
+   before any risky change — switching profiles, connecting or removing a service,
+   deleting a note, a widget, or a routine — and you can save one yourself at any
+   time. One action in Settings → **Restore points** puts your settings back to the
+   last setup that actually worked. Your chats are never touched, and your saved
+   keys never move: they stay in the OS keychain, so a rollback can't expose or
+   clobber one. Restore points are stored twice, in the database and as plain files
+   beside it, so the restore still works when the database itself is damaged.
+
+The list above is the v1 model. The 2026-07 scope amendment adds an opt-in
+**Developer** surface where real commands can run behind a per-invocation
+confirmation, so invariant 1 holds for the default **Simple** profile rather than
+universally; invariants 2–7 hold in every mode, without exception. See
+[CLAUDE.md](CLAUDE.md) for the current, authoritative statement.
 
 ## Feature highlights
 

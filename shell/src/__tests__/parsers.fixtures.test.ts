@@ -11,7 +11,7 @@
 // deliberately — a diff in this file IS the frontend-visible impact of the change.
 import { describe, expect, it } from "vitest";
 
-import { parseStats, parseWidgetList } from "../ipc/client";
+import { parseSnapshotList, parseStats, parseWidgetList } from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
 import { normalizeCloudModels, normalizeRoles } from "../hooks/useModelSelection";
 
@@ -19,6 +19,7 @@ import statsFixture from "./fixtures/stats.get.json";
 import widgetListFixture from "./fixtures/widget.list.json";
 import profileFixture from "./fixtures/profile.get.json";
 import rolesFixture from "./fixtures/model.availableRoles.json";
+import snapshotListFixture from "./fixtures/snapshot.list.json";
 
 describe("parseStats over the real stats.get payload", () => {
   it("pins the full parsed output", () => {
@@ -123,5 +124,55 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         providerLabel: "OpenAI",
       },
     ]);
+  });
+});
+
+describe("parseSnapshotList over the real snapshot.list payload", () => {
+  it("pins the full parsed output, permanent row included", () => {
+    // Note what is NOT here: no copy of the config, no fingerprint, no build
+    // reference. `capturesBinary` is a boolean and that is all the card needs
+    // (contract §7.3) — this expectation is where that stays true.
+    expect(parseSnapshotList(snapshotListFixture)).toEqual({
+      snapshots: [
+        {
+          id: "snapshot-fixture-2",
+          createdAt: 4102444802,
+          trigger: "auto",
+          reason: "guard_weakened",
+          reasonLabel: "Before turning a guard off",
+          verifiedWorking: true,
+          undeletable: true,
+          capturesBinary: true,
+          createdInMode: "safe",
+        },
+        {
+          id: "snapshot-fixture-1",
+          createdAt: 4102444801,
+          trigger: "on_command",
+          reason: "user_request",
+          reasonLabel: "You saved this",
+          verifiedWorking: true,
+          undeletable: false,
+          capturesBinary: false,
+          createdInMode: "safe",
+        },
+        {
+          id: "snapshot-fixture-0",
+          createdAt: 4102444800,
+          trigger: "auto",
+          reason: "mode_switch",
+          reasonLabel: "Before switching profile",
+          verifiedWorking: false,
+          undeletable: false,
+          capturesBinary: false,
+          createdInMode: "safe",
+        },
+      ],
+      lastWorkingId: "snapshot-fixture-2",
+      lastWorkingLabel: "Before turning a guard off",
+      // null on the wire means "no profile change", not a sentence to render.
+      lastWorkingProfileChange: undefined,
+      warning: undefined,
+    });
   });
 });

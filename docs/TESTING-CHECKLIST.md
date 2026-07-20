@@ -197,6 +197,80 @@ falls back to plain code without breaking the row.
 
 ---
 
+## 13a. Restore points (the G3 rollback floor)
+
+The Settings card that makes global floor **G3** visible. Everything here is
+recovery machinery, so a failure in this section outranks a failure anywhere
+else in this document — file it first.
+
+**Where.** Settings → **Restore points**, directly under Profile (deliberate:
+the person who just changed their profile is one row away from undoing it).
+The card is called "Restore points" everywhere in the UI, never "Snapshots".
+
+**The list.** Rows are 8px `ProviderRow` shells: a plain-language label
+("Working setup", "Before switching profile", "Before deleting a note",
+"You saved this") in the semibold UI face, and its timestamp below in **mono**
+(machine facts only). On a fresh profile there is exactly one row, **"Addison as
+first installed"**, and it is marked **Permanent**.
+
+**Automatic capture.** Do each of these and re-open the card — a new row appears
+for each, and its label names the change: switch profile (Simple ⇄ Developer),
+connect a provider key, remove a provider key, delete a routine, delete a widget,
+delete a note (skill), edit a note. Then send one ordinary chat message and
+re-open: a **"Working setup"** row appears. Send a second message without
+changing anything — **no second row** (identical configs dedupe).
+
+**Save a snapshot now.** The outlined button in the card's header (Diagnostics
+"Clear" style, never fern-filled). One click adds a **"You saved this"** row
+immediately.
+
+**Restore, the two-step.** Click **Restore to the last working state** (fern
+filled, rounded — a recovery is never styled as a destruction, so it must not
+carry the rose `danger` token). Expect an inline fern-tint confirm block —
+**never** a system `window.confirm` — reading *"Your settings, services, notes,
+widgets and routines go back to how they were. Your chats and your saved keys
+aren't touched."* The **target must be named above the buttons** with its
+timestamp: Restore is never a click into the dark. **Not now** backs out and
+leaves everything unchanged.
+
+**The two extra sentences.** Make a change in Developer, switch to Simple, then
+open the confirm: a second sentence must say Addison will switch back to
+Developer — a restore can move you between profiles, and therefore between
+safety modes, and the base sentence never said so. On a fresh install where the
+only target is genesis, the second sentence must instead warn that services,
+notes, widgets and routines are cleared.
+
+**Restore actually restores.** Add a note, restore past it, and confirm the note
+is gone, the widget rail matches, and **the chat history is untouched** — a
+rollback restores configuration, it never erases chats. Re-open the API keys
+card: a provider whose key is still in the keychain reconnects on its own; one
+whose key was removed is **named in the result message**, not silently shown as
+connected.
+
+**Permanent rows refuse deletion.** The genesis row (and, from step 2, any
+Custom-mode anchor) shows a blocky **PERMANENT** tag — square, 2px fern left
+rule, small caps: it is something Addison is telling you about the record, not a
+control — and has **no Remove control at all**. Ordinary rows do.
+
+**Mode never hides a row.** Create a routine and a snapshot in Developer, switch
+to Simple, open Restore points: **every row is still listed and still
+restorable.** Routines and widgets made in Developer are hidden in Simple;
+snapshots are the deliberate exception, because hiding them would hide the way
+back from the person most likely to need it. An empty or shortened list here is
+a **G3 failure**, not a cosmetic one.
+
+**Both themes.** Walk the card in **light and dark**: row borders and the mono
+timestamps read correctly, the **fern-tint confirm block** has enough contrast
+against the card in dark, the **`text-fern-deep` PERMANENT tag** stays legible in
+dark (it is the one place that token sits on a row background), the fern-filled
+Restore button's label passes contrast, and Tab focus rings are visible on the
+save button, the restore button, both confirm buttons, and every Remove.
+
+**Narrow window.** Under 768px the card stacks into the single Settings column
+and the save / restore / confirm buttons are all **≥44px** tall.
+
+---
+
 ## 14. Narrow window / mobile layout
 
 Addison is a desktop app, so "mobile" = the **narrow-window layout** below the

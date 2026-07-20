@@ -55,6 +55,16 @@ export const Method = {
   SkillSetEnabled: "skill.setEnabled",
   SkillDelete: "skill.delete",
 
+  // Snapshots — the G3 guaranteed-rollback floor. A snapshot copies Addison's
+  // settings/providers/skills/widgets/routines; it never contains your saved
+  // keys (they stay in the system keychain) and never touches your chats.
+  // "Restore" always goes back to the last setup that actually worked.
+  SnapshotList: "snapshot.list",
+  SnapshotCreate: "snapshot.create",
+  SnapshotRestore: "snapshot.restore",
+  SnapshotRestoreLastWorking: "snapshot.restoreLastWorking",
+  SnapshotDelete: "snapshot.delete",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.
@@ -67,6 +77,7 @@ export const Method = {
   ShellOpenExternal: "shell.openExternal",
   ShellPickFile: "shell.pickFile",
   ShellReadScopedFile: "shell.readScopedFile",
+  ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
   KeychainSignRelayRequest: "keychain.signRelayRequest",

@@ -6,7 +6,8 @@
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server
 > config. Column names for the new tables are Phase-2 and marked as tentative below;
-> the shapes are authoritative, the exact names are not yet frozen.
+> the shapes are authoritative, the exact names are not yet frozen — **except
+> `config_snapshots`, which shipped in Phase-2 step 1 and is final.**
 
 Addison's local state is a single SQLite database on the user's device, created from
 `agent_core/memory/schema.sql` on first open. All timestamps are unix epoch seconds.
@@ -130,16 +131,19 @@ erDiagram
         TEXT value
         INTEGER updated_at
     }
-    snapshots {
+    config_snapshots {
         TEXT id PK
         INTEGER created_at
-        TEXT trigger "auto or on_command; Phase-2"
-        TEXT reason "what change prompted it; Phase-2"
-        TEXT state_blob "captured config/state JSON; Phase-2"
-        INTEGER verified_working "last-known-good marker; Phase-2"
-        INTEGER undeletable "1 for a Custom-mode anchor; Phase-2"
-        INTEGER captures_binary "1 only for anchors; Phase-2"
-        TEXT binary_ref "app build reference, anchors only; Phase-2"
+        TEXT trigger "auto or on_command"
+        TEXT reason "closed slug set; never free text"
+        INTEGER payload_version "state_blob format version"
+        TEXT state_blob "captured config row-image JSON"
+        TEXT state_fingerprint "sha256 of the canonical blob"
+        INTEGER verified_working "a turn completed against this config"
+        INTEGER undeletable "1 = permanent: G4 anchor or genesis"
+        INTEGER captures_binary "1 only when a build ref was obtained"
+        TEXT binary_ref "app build reference, anchors only; NEVER bytes"
+        TEXT created_in_mode "safe, open or custom - DISPLAY ONLY"
     }
     mcp_servers {
         TEXT id PK
@@ -156,7 +160,14 @@ erDiagram
   it; `reverted` flags a snapshot that has already been undone. Retention is roughly
   the most recent 20 actions or 7 days, whichever keeps more.
 - **tool_grants** — remembered coarse permission grants keyed by tool, with optional
-  tool-specific `scope_details`.
+  tool-specific `scope_details`. *(Phase-2, step 1):* **explicitly excluded from every
+  snapshot.** It is live consent state, not configuration. Restoring it would reinstate
+  a grant the user had since revoked — a permission grant delivered by a deliberately
+  ungated one-action button, with no permission card anywhere in the path. (Inert today:
+  nothing reads or writes this table; `PermissionGate` keeps grants in memory, per
+  session. If grants ever persist, restore must **intersect** them, never replace.) A
+  restore additionally clears the live in-session grants, so the session is never more
+  permissive than the config it just rolled back to.
 - **device_identity** — a single-row table (`id = 1`) holding the public device id.
   The matching ed25519 private key lives only in the OS keychain, never here.
 - **provider_config** — non-secret per-role provider configuration (selected model
@@ -178,24 +189,97 @@ erDiagram
   prefer-free** toggle, and the Custom profile's per-guard **prompting** toggles (the
   floors G1/G2/G3 and the anchor rule are never keys here — they cannot be switched
   off). Never holds secrets.
-- **snapshots** *(Phase-2, amendment §3)* — the backing store for the **G3 guaranteed-
-  rollback floor**, distinct from `action_snapshots` (which reverses one tool call; this
-  captures whole-app *state*). Each row is a point-in-time copy of Addison's **mutable
-  config/state** — settings, provider/routing config, skills, widgets, routines — taken
-  **automatically** before any risky or sweeping change (guard toggle, provider/endpoint
-  change, a "make it cheaper" reconfiguration, a mode switch) and **on command** ("snapshot
-  now"). `trigger` records which. A row is marked **verified-working** once a turn completes
-  successfully against it; **Restore always targets the last verified-working row**, not
-  merely the state before the last edit. Rows are normally **deletable**; a row with
-  `undeletable = 1` is a **Custom-mode anchor**, minted the moment a safety guard is turned
-  off and saved (§3.3) — neither user nor model can remove it, and it persists after the
-  guard is switched back. An anchor additionally sets `captures_binary = 1` and carries a
-  `binary_ref` to a **known-good app build** (ordinary snapshots restore state only; the
-  anchor is a complete build + config restore point). Column names above are tentative;
-  the *shape* — auto/on-command trigger, verified-working marking, undeletable anchor,
-  optional binary capture — is authoritative. **Keys never enter a snapshot**: the keychain
-  is untouched by capture or restore, so a rollback can never move, expose, or clobber a key
-  (G1 holds even for the anchor).
+- **config_snapshots** *(Phase-2 step 1 — **built**; amendment §3, spec §4.9)* — the
+  backing store for the **G3 guaranteed-rollback floor**, distinct from `action_snapshots`
+  (which reverses one tool call; this restores whole-app *configuration*). The column names
+  above are now **final** — this is the shipped DDL, and the dataclass `ConfigSnapshot`
+  mirrors it 1:1. Each row is a point-in-time **row-image** of Addison's mutable config
+  tables — `app_settings`, `provider_config`, `skills`, `widgets`, `routines`; the
+  authoritative table *and column* lists live in `agent_core/snapshots/scope.py`, and tests
+  fail the build if any schema table, or any column of a captured table, is neither captured
+  nor explicitly excluded. (That column half is not pedantry: restore is replace-all with an
+  explicit column list, so an uncaptured new column would be silently reset to its default
+  **by the recovery path** — a restore would wipe, say, the user's routing strategy.)
+  - `trigger` ∈ `auto` | `on_command`. Taken **automatically** before any risky or sweeping
+    change (mode switch, provider connect/disconnect, deleting a routine/widget/note,
+    changing a note) and **on command** from the Settings "Restore points" card. `reason` is
+    a short slug from a **closed vocabulary** (`snapshot_manager.REASONS`) — never free text,
+    because it is written by auto-hooks and later by model-orchestrated flows, and free text
+    would let model-authored prose into the config store. The vocabulary also carries
+    **`pre_upgrade`** — the bottom row written the first time this subsystem opens a
+    database that predates it (see the two-bottom-rows note below).
+  - A row is **verified-working** once a turn completed against that configuration, and
+    **Restore always targets the last verified-working row**, not merely the state before
+    the last edit — so it lands somewhere that actually ran. `state_fingerprint` (sha256 of
+    the canonical blob, timestamps excluded) dedupes repeat captures and lets restore skip a
+    candidate identical to the present state; the effect is that **each click of "Restore to
+    the last working state" steps back one distinct proven configuration.**
+  - Rows are normally **deletable**. `undeletable = 1` marks a permanent row, and it names
+    *the guarantee the delete path enforces*, not the provenance (provenance is `reason`).
+    Three kinds carry it: the **G4 anchor** (`reason='guard_weakened'`, minted when a guard is
+    turned off in Custom mode and saved — step 2) and the two possible bottom rows,
+    **genesis** and **`pre_upgrade`** (below). Enforcement is in the **database** —
+    two `RAISE(ABORT)` triggers refuse both the delete and any clearing of the flag — not in
+    a `WHERE` clause someone can forget. Retention (50 rows / 30 days, whichever keeps more)
+    exempts permanent rows and the newest **two** verified rows **in the SQL**. Two, not one:
+    the restore walk skips any verified row whose fingerprint matches the *current* config
+    (restoring it would change zero bytes), so a single exempt row could be exactly the row
+    the walk skips — leaving the floor with no target at all.
+  - **The bottom row differs by install.** `_ensure_genesis` fires whenever the table is
+    empty, and that is true for every install that predates this subsystem, not only a new
+    one. On a **fresh install** the bottom row is `reason='genesis'`, `verified_working = 1`
+    — a new install is a configuration that works. On an **upgraded install** it is
+    `reason='pre_upgrade'` and deliberately **not** verified: it is a copy of whatever config
+    the user happens to have at that moment, which may be the broken one they are about to
+    need rescuing from, and nothing has run against it under this subsystem's observation.
+    Marking it verified would let the one-action restore hand that config straight back. The
+    accepted consequence is that on an upgraded install `restore_last_working()` has **no
+    target until the first turn completes**, and says so in plain language.
+  - Which install it is comes from a **heuristic**, `_looks_like_a_fresh_install`: true only
+    when there are no providers, no notes/skills, and no routines, *and* no profile has been
+    chosen away from the default. Widgets and settings are not evidence either way — Addison
+    seeds its own default widgets and writes its own first-run rows before this runs. It is
+    **inferred rather than signalled** because the module is forbidden from importing
+    anything or reading a setting (that import ban is the unbreakability argument). Every
+    tie-break, including an unreadable config, leans toward `pre_upgrade`: mislabelling an
+    established install as fresh is the severe direction — it mints a permanent row that lies
+    about what it holds, marks it proven when nothing was proven, and can drop the user into
+    Developer from the bottom of the walk. The cleaner fix is tracked in `docs/HANDOFF.md`.
+  - `captures_binary` / `binary_ref` hold a short **build reference** — `{"version",
+    "identifier"}`, obtained via `shell.appBuildRef` — **never bytes and never a path**.
+    *(Owner decision 2026-07-20:* the anchor **records** the build it was minted on; it is
+    not a build restore point. A restore whose build differs says so in plain language and
+    changes settings only. Restoring a previous binary is a **Phase-3 updater** item.*)*
+  - `created_in_mode` is **recorded for display only and never filters a query** — see the
+    note below.
+  - **The payload shape**, written byte-identically into `state_blob` and into the JSON
+    sidecar: `{"version", "captured_at", "captured_at_ns", "meta", "tables"}`. A *restore*
+    reads only `version` and `tables`; `meta` is the row's **only backup** — it carries every
+    column not derivable from `tables` (identity, provenance, the fingerprint, and the three
+    flags plus `binary_ref`), because a rebuild from sidecars alone would otherwise quietly
+    convert every G4 anchor into an ordinary deletable row.
+    - **`meta.restored_to`** *(additive, step 1)* — the snapshot id a restore landed on,
+      written **only** on a `pre_restore` row. It is what makes the rollback walk survive a
+      relaunch: the walk's position is held in memory during a session, but a restart between
+      two clicks would otherwise rewind it and put the user straight back into the config they
+      had just escaped. `_recorded_restore_target` reads the newest `pre_restore` row's
+      payload to recover it. Additive by construction — an ordinary payload keeps the exact
+      bytes it has always had, and every existing reader ignores the key.
+  - **Keys never enter a snapshot** (G1): the captured tables cannot hold key material, and
+    the keychain is untouched by capture *and* restore, so a rollback can never move, expose,
+    or clobber a key. A restored provider config re-binds to whatever key is in the keychain
+    by provider id; if that key is gone, the restore says so by name. Also never captured:
+    the transcript, `usage_log`, `action_snapshots`, `routine_runs`, `device_identity`,
+    `tool_grants`, and this table itself — a restore must never rewrite the way back.
+
+  **`created_in_mode` never hides a snapshot** *(a deliberate override, step 1)*. The
+  engineering spec's provisional DDL commented that this column "mirrors existing artifact
+  hiding" (routines and widgets made in OPEN are hidden in SAFE). That was **overridden, not
+  followed.** Taken literally it hides the way back from exactly the user who most needs it:
+  weakened a guard in Custom, broke something, switched to Simple, opens Restore points and
+  finds an empty list. Snapshots are recovery machinery, not artifacts. Two tests hold the
+  line — a behavioural one and a **source-level** one that reads the SQL in `store.py` and
+  `snapshot_manager.py` and fails if the column ever appears in a filter position.
 - **mcp_servers** *(Phase-2, amendment §8.5)* — non-secret configuration for external **MCP
   servers Addison consumes as a client** (Addison is never an MCP server/gateway). Shaped
   like a provider row: a label, the transport, and non-secret connection metadata

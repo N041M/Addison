@@ -148,6 +148,88 @@ CREATE TABLE IF NOT EXISTS skills (
 -- sole authority (mirrors the Routine no-escalation rule). Skills therefore apply in
 -- BOTH SAFE and OPEN modes and carry no created_in_mode column. See agent_core/skills.py.
 
+CREATE TABLE IF NOT EXISTS config_snapshots (
+    id                 TEXT PRIMARY KEY,        -- uuid4
+    created_at         INTEGER NOT NULL,        -- unix epoch seconds
+    trigger            TEXT NOT NULL
+                           CHECK(trigger IN ('auto','on_command')),
+    reason             TEXT NOT NULL,           -- closed slug set, see snapshot_manager.REASONS
+    payload_version    INTEGER NOT NULL,        -- state_blob format version (currently 1)
+    state_blob         TEXT NOT NULL,           -- JSON row-image of the captured tables
+    state_fingerprint  TEXT NOT NULL,           -- sha256 of the canonical blob, minus timestamps
+    verified_working   INTEGER NOT NULL DEFAULT 0,  -- boolean: a turn completed against this config
+    undeletable        INTEGER NOT NULL DEFAULT 0,  -- boolean: 1 = G4 anchor, never removable
+    captures_binary    INTEGER NOT NULL DEFAULT 0,  -- boolean: 1 only when binary_ref was obtained
+    binary_ref         TEXT,                    -- JSON build reference, anchors only; NEVER bytes
+    created_in_mode    TEXT NOT NULL DEFAULT 'safe'
+                           CHECK(created_in_mode IN ('safe','open','custom'))
+);
+-- The backing store for GLOBAL FLOOR G3 (guaranteed rollback) — amendment §3,
+-- spec §4.9. DISTINCT from action_snapshots above: that table reverses ONE tool
+-- call (§4.5, UndoManager); this one restores Addison's whole mutable
+-- CONFIGURATION. The two are complementary and never touch each other.
+--
+-- Each row is a point-in-time row-image of the captured config tables
+-- (app_settings, provider_config, skills, widgets, routines — the authoritative
+-- list lives in agent_core/snapshots/scope.py and tests assert that every schema
+-- table AND every column of every captured table is either captured or
+-- explicitly excluded). Taken AUTOMATICALLY before any risky or sweeping change (a mode
+-- switch, a provider/endpoint change, a delete of a saved artifact) and ON
+-- COMMAND from Settings. `trigger` records which; `reason` is a short slug from
+-- a closed vocabulary (never free text, never model-authored prose).
+--
+-- HARD RULES (MUST — these are the floor, not preferences):
+--   * state_blob NEVER contains API keys or any keychain material (G1). It is
+--     built by SELECTing named columns of the tables above, none of which can
+--     hold a key; restore leaves the keychain untouched, so a restored provider
+--     config re-binds to whatever key is in the keychain by provider id.
+--   * The conversation transcript is NOT captured and NOT restored — history is
+--     append-only and orthogonal. Neither are usage_log, action_snapshots,
+--     memory_facts, device_identity, routine_runs, or this table itself.
+--   * verified_working = 1 marks a config a turn actually completed against.
+--     Restore ALWAYS targets the newest USABLE verified_working row, never
+--     merely "the state before the last edit" (amendment §3.2).
+--   * undeletable = 1 names the GUARANTEE THE DELETE PATH ENFORCES, not the
+--     provenance (provenance is `reason`). Two kinds of row carry it: the G4
+--     anchor minted when a safety guard is turned OFF in Custom mode and saved
+--     (reason='guard_weakened'), and the genesis row (reason='genesis'), which is
+--     the bottom of the restore walk and must therefore outlive every retention
+--     rule. Removable by NEITHER user NOR model; an anchor survives the guard
+--     being switched back on; retention pruning skips both. Enforcement is in the
+--     DATABASE (the triggers below), not only in a WHERE clause.
+--   * created_in_mode is RECORDED FOR DISPLAY ONLY. Unlike routines and widgets,
+--     snapshots are NEVER hidden by mode — a user who breaks things in Developer
+--     or Custom and returns to Simple must still see and restore every snapshot,
+--     or G3 fails in exactly the moment it exists for. No query in the codebase
+--     may filter on this column.
+--   * This table is NEVER dropped or recreated by a migration. The
+--     drop-and-recreate path used for provider_config (store.py
+--     _migrate_provider_config) is FORBIDDEN here — it would destroy anchors and
+--     break G4. Future column changes use _add_column_if_missing only.
+--   * binary_ref holds a short JSON build REFERENCE ({"version","identifier"}),
+--     never binary content and never a filesystem path — anchors are unbounded,
+--     so they must stay tiny (amendment §13 Q8: "without bloating storage").
+--     It records THE BUILD THE ANCHOR WAS MINTED ON, which is not necessarily the
+--     build the copied payload was captured on.
+
+-- Permanence, enforced by the DATABASE rather than by a WHERE clause. G4 says
+-- "removable by neither user nor model", and a floor that must survive code
+-- nobody has written yet cannot live in one method's SQL: prune_config_snapshots
+-- is already a SECOND independent DELETE statement that has to remember the same
+-- predicate, and there will eventually be a third. With these triggers, no
+-- statement can reach a permanent row regardless of its WHERE clause.
+CREATE TRIGGER IF NOT EXISTS trg_config_snapshots_permanent_no_delete
+BEFORE DELETE ON config_snapshots WHEN OLD.undeletable = 1
+BEGIN SELECT RAISE(ABORT, 'this restore point is permanent'); END;
+
+CREATE TRIGGER IF NOT EXISTS trg_config_snapshots_permanent_stays_permanent
+BEFORE UPDATE OF undeletable ON config_snapshots
+WHEN OLD.undeletable = 1 AND NEW.undeletable = 0
+BEGIN SELECT RAISE(ABORT, 'this restore point is permanent'); END;
+-- NOTE: a trigger does NOT stop DROP TABLE. The "never drop this table" rule
+-- above and test_reopening_never_drops_config_snapshots remain load-bearing —
+-- the triggers close the DELETE/UPDATE hole, not the DROP one.
+
 -- Indexes -------------------------------------------------------------------
 -- All IF NOT EXISTS so this script stays idempotent on every open (store.py
 -- runs it via executescript on both fresh and existing databases). These back
@@ -162,3 +244,9 @@ CREATE INDEX IF NOT EXISTS idx_usage_log_provider_created
 -- Backs list_enabled_skills (the hot read path: every non-setup turn composes the
 -- enabled skills into its system prompt).
 CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
+-- Backs the G3 read paths: the Settings list (newest first) and, hotter, the
+-- "newest usable verified-working row" lookup that restore_last_working() walks.
+CREATE INDEX IF NOT EXISTS idx_config_snapshots_created
+    ON config_snapshots(created_at);
+CREATE INDEX IF NOT EXISTS idx_config_snapshots_verified_created
+    ON config_snapshots(verified_working, created_at);

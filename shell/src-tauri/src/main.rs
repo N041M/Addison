@@ -17,6 +17,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agent_process;
+mod app_build;
 mod filesystem;
 mod ipc;
 mod keychain;

@@ -3,8 +3,15 @@
 **Status:** ADOPTED 2026-07-20 (Phase 1 — docs). Owner greenlit. The authoritative
 docs (`CLAUDE.md`, `docs/architecture.md`, `docs/data-model.md`, `docs/flows.md`,
 `docs/classes.md`, `docs/addison-design-doc.md`, `docs/addison-engineering-spec.md`)
-are being updated to match. **No code has changed yet** — code follows in the
-phased order in §14, after the doc pass.
+are being updated to match. Code follows in the phased order in §14.
+
+> **Update 2026-07-20 — Phase-2 step 1 has shipped.** The snapshot/restore subsystem
+> (G3) is built. Two owner decisions taken during that step **correct wording in this
+> document**, and the corrections are inline where the original claims were made:
+> the anchor **records a build reference, it does not capture or restore the app
+> binary** (§3.1, §3.3, §12, §13 Q8 — binary restore is now a Phase-3 updater item),
+> and §13's Q2, Q4 and Q8 are resolved and marked as such. Where this document and the
+> inline decision notes differ, **the notes win** — they describe what exists.
 
 **Amends:** the mode-scoped safety model (owner decision 2026-07-19), the v1
 scope lines on scheduling and auto-routing, and the product framing of the
@@ -98,10 +105,12 @@ A snapshot explicitly **excludes**:
   keeps **G1 (key isolation)** intact — a rollback can never move, expose, or
   clobber a key. (Consequence: after a restore, whatever keys are in the
   keychain remain; a restored provider config re-binds to them by provider id.)
-- The **app binary / installed version** — for *ordinary* snapshots (they restore
-  *state*, not *code*). **Exception:** the Custom-mode undeletable anchor (§3.3)
-  *also* captures the binary, so a weakened-mode session always has a complete
-  known-good *build + config* to fall back to.
+- The **app binary / installed version**. **Partial exception:** the Custom-mode
+  undeletable anchor (§3.3) additionally records a build **reference**, so a restore
+  can say plainly whether the app itself has changed since. *(Owner decision
+  2026-07-20 — see the correction in §3.3. This bullet originally promised that the
+  anchor captured the binary and gave "a complete known-good build + config" to fall
+  back to; it does not.)*
 - The conversation transcript itself (history is append-only and orthogonal;
   rollback is about configuration, not erasing chats).
 
@@ -136,11 +145,29 @@ The friend's rewind failed partly because recovery depended on him, so the
   back on. So the act of lowering your own protections *always* leaves behind a
   guaranteed way back. (Multiple weakenings may create multiple anchors;
   retention policy for anchors is an open question — §13.)
-- **The anchor also captures the app binary** (owner decision, this amendment).
-  Unlike ordinary snapshots (config/state only), the Custom-mode anchor is a
-  *complete known-good build + config* restore point — so if a weakened-mode
-  session corrupts more than configuration, there is still a whole-app state to
-  return to. Keys are **still** excluded (G1 holds even here).
+- **The anchor records the app build it was minted on** — a short
+  `{"version", "identifier"}` reference, never bytes and never a path. A restore whose
+  build differs from the one running says so in plain language and changes settings
+  only. Keys are **still** excluded (G1 holds even here).
+
+  > **Owner decision, 2026-07-20 (supersedes this amendment's original wording).**
+  > As written, this bullet said the anchor "also captures the app binary" and called
+  > it a *complete known-good build + config* restore point. **That is not what was
+  > built, and the promise has been narrowed to what the code does.** Phase-2 step 1
+  > ships the *capture* half as a version pin — a reference string in `binary_ref` —
+  > and **no binary restore path at all**. Reasons, in order of weight: (1) the repo
+  > must not carry a floor its own tests do not cover, which is the exact
+  > anti-pattern this amendment was written against; (2) re-installing a prior build
+  > is the Tauri updater's job, and `updater.rs` is an unwired stub — a second,
+  > uncoordinated binary-replacement mechanism inside the recovery floor would be on a
+  > collision course with it, and would be the one piece of the floor that could
+  > itself brick the app; (3) a bundle copy is 50–150 MB per anchor, which would force
+  > anchor eviction and contradict "undeletable" (§13 Q2's answer depends on anchors
+  > staying cheap). **Binary restore is tracked as a Phase-3 updater item.** G4 now
+  > reads: *lowering your own protections always leaves a guaranteed way back to a
+  > working **configuration**, on a snapshot that records the build it was minted on.*
+  > `CLAUDE.md`, `docs/architecture.md`, `docs/data-model.md`, `docs/classes.md` and
+  > `docs/addison-engineering-spec.md` were corrected to match in the same pass.
 
 ### 3.4 Why G3 is a floor, in every mode
 
@@ -489,7 +516,7 @@ reversible, and floored by G3.
 | **G1** — keys keychain-only, never webview/SQLite | **Unchanged, reinforced.** Snapshots exclude the keychain (§3.1). |
 | **G2** — no scheduling / autonomous triggering | **Reinterpreted, still a floor.** Addison never self-triggers; it may *author* OS-run automation; powerful actions need the keyword gate (§9). |
 | **G3** — guaranteed rollback | **New global floor** (§3). Snapshots take automatically *and* on command; keys always excluded. |
-| Undeletable-anchor-on-weakening | **New rule** (§3.3), enforced in Custom mode; the anchor **also captures the app binary** (complete known-good build+config), keys still excluded. |
+| Undeletable-anchor-on-weakening (**G4** in `CLAUDE.md` and in code — the same rule) | **New rule** (§3.3), enforced in Custom mode; the anchor **records the app build it was minted on** (a reference, not the binary — owner decision 2026-07-20, §3.3), keys still excluded. Restoring a binary is a Phase-3 updater item. |
 | **SAFE-1** — no arbitrary code/shell in SAFE | **Unchanged for Simple.** `run_command` remains dev-only; the harness lives in OPEN. |
 | **SAFE-2** — every non-LOW tool has real `undo()` | **Unchanged.** Reinforced by workspace edits being undoable (§8.3). |
 | **SAFE-3** — routines gain no privilege beyond granted | **Unchanged.** |
@@ -508,12 +535,40 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
 1. **Keyword-gate syntax** — exact prefix (`!run`, `arm:`, `sudo:`…), and the
    precise set of actions it gates (my read: running/arming powerful or
    OS-automation actions in the harness, not ordinary chat).
-2. **Snapshot retention** — how many ordinary snapshots to keep; how anchors
-   accumulate (all weakenings, or the single most-recent working anchor).
+2. ~~**Snapshot retention**~~ — **RESOLVED (Phase-2 step 1).** Keep the most recent
+   **50 or 30 days, whichever keeps more** (the same idiom as the undo window), with
+   two exemptions written into the SQL rather than left to a caller: permanent rows,
+   and **the newest verified-working row**. Retention here is not housekeeping — a
+   rule that can prune the last verified row leaves the one-action restore with no
+   target, i.e. G3 silently off with no error anywhere, which is the friend's failure
+   reintroduced by the recovery machinery itself. **Every weakening mints a new
+   anchor; anchors never prune and never count against the budget.** The alternative
+   ("the single most-recent working anchor") was rejected: it requires *replacing* an
+   undeletable row, which would create the codebase's only
+   `DELETE … WHERE undeletable = 1` — the exact statement G4 says must not exist. Its
+   stated worry was storage, and Q8's answer removes it: an anchor is a few KB.
 3. **Custom reachability** — from Simple directly, or only via Developer first
    (current lean: reachable-but-deep regardless).
-4. **Verified-working definition** — precisely which "successful turn" marks a
-   config good (any completed turn? one with no error and no rolled-back action?).
+4. ~~**Verified-working definition**~~ — **RESOLVED (Phase-2 step 1).** **Any turn
+   whose response was sent** — execution reached `_respond({"ok": True, …})`. A tool
+   failure is deliberately *not* a turn failure (the orchestrator turns a tool
+   exception into a failed `ToolResult` and continues), and the "no rolled-back
+   action" variant was rejected because it couples config health to file-level regret
+   through an independent mechanism with an unbounded window. The sub-decision the
+   docs had never made matters more: the mark does **not** flag the pre-change row —
+   that config never ran — it captures the **current** config as a new verified row,
+   deduped by fingerprint. **Honest residual:** this predicate is satisfied by
+   configurations that are *degraded* rather than dead, which is the whole "make it
+   cheaper" class. The mitigation is that `restore_last_working()` never targets a
+   config identical to the present one, so **each click steps back one distinct proven
+   configuration** — but if the user makes two bad changes and a turn answers after
+   each, **one click lands on the first bad config and they must click again.** That
+   is bounded, visible (the card names the target before the click), and was chosen
+   over a stronger predicate that would have to observe the future. *(Related, and
+   also decided: the **genesis** row is written `verified_working = 1` on a fresh
+   database, before any turn has run. Strictly nothing proved it — but G3 requires a
+   restore target to exist at all times, including during onboarding, and refusing the
+   mark would leave both G3 and G4 unsatisfiable in that window.)*
 5. **Auto-routing depth now vs. v2** — how much of confidence-based escalation
    ships now vs. stays substrate.
 6. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
@@ -522,8 +577,27 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
    (to-do/checklist, note, timer, …), how a widget spec *declares* the
    capabilities it needs, how the tier check maps capabilities → mode, and how
    code-backed widgets are listed/managed alongside declarative ones.
-8. **Anchor binary capture** — how the app binary is captured/restored in
-   practice (version pin? copy-on-write?) without bloating storage.
+8. ~~**Anchor binary capture**~~ — **RESOLVED (owner decision 2026-07-20): a version
+   pin, and capture only.** `binary_ref` holds `{"version", "identifier"}`, fetched
+   from the shell via a new `shell.appBuildRef` call — never bytes, never a path (an
+   earlier draft also carried the executable path; dropped, because nothing read it,
+   it goes stale on any move or reinstall, and it would write the user's account name
+   into a plaintext sidecar and into every permanent anchor). Copy-on-write was
+   rejected: APFS `clonefile` is platform-specific, degrades silently to a full copy
+   across filesystems and volumes, and would make an anchor's size depend on the
+   user's disk layout — not something a floor should rest on. **Restoring a binary
+   does not ship and is a Phase-3 updater item** — see the decision note in §3.3.
+
+**Also resolved in step 1, though it was never listed here** — and it deserved to be,
+because it was a larger threat to G3 than any question above. The engineering spec's
+provisional snapshot DDL commented that `created_in_mode` "mirrors existing artifact
+hiding". **That comment was overridden, not implemented.** Snapshots are recovery
+machinery, not artifacts: hiding OPEN/Custom-created rows in SAFE would hide the way
+back from precisely the user who most needs it — someone who weakened a guard in
+Custom, broke something, switched to Simple, and now opens Restore points to an empty
+list. The column ships **for display only** and never filters a list, restore, prune,
+or delete query in any mode, held by a behavioural test *and* a source-level one that
+fails if the column ever appears in a filter position.
 
 ---
 
@@ -551,10 +625,16 @@ matters to reflect the shift, *before touching code*:
 safety floor first, then companion-facing, then the dev-harness track (which the
 code-widget and MCP steps depend on):
 
-1. **Snapshot/restore subsystem** (G3) — the floor everything else leans on;
-   built and hardened *first*, with the single most important test being "restore
-   always works, even from a broken config." Includes automatic + on-command
-   snapshots and the app-binary capture used by Custom anchors.
+1. **Snapshot/restore subsystem** (G3) — **SHIPPED 2026-07-20.** The floor
+   everything else leans on; built and hardened *first*, with the single most
+   important test being "restore always works, even from a broken config." Includes
+   automatic + on-command snapshots and the app **build reference** recorded by Custom
+   anchors. Two lines of this item did **not** ship in step 1, both deliberately and
+   both with an owner decision behind them: **restoring a binary** (Phase-3 updater —
+   §3.3), and **asking Addison for a snapshot in plain language** (step 2, as a LOW,
+   capture-only tool — step 1 shipped the Settings control and the RPC method).
+   `mint_anchor()` is fully implemented with no caller, because the Custom guard toggle
+   that mints an anchor is step 2.
 2. **Custom profile + guard model** (`policy.py`) + the undeletable-anchor rule.
 3. **Routing strategies** (4 + custom) + companion prefer-quality/prefer-free
    toggle + free-model disclaimer + graceful fallback/cooldown.

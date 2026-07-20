@@ -48,6 +48,12 @@ class ProfileMixin(ServerContext):
         except ValueError:
             self._respond_error(request_id, _SERVER_ERROR, _UNKNOWN_PROFILE_MESSAGE)
             return
+        # Hook H1 (G3): a restore point holding the PRE-switch profile, taken only
+        # after the guard above so an unknown id can never mint one. A profile
+        # switch is the sweeping change the amendment's motivating story turns on,
+        # but it is also one the person can simply redo — so a failed capture
+        # proceeds with the sticky warning rather than blocking the switch.
+        self._snapshot_auto("mode_switch")
         self.store.set_setting("active_profile", profile.id.value)
         self._active_profile = profile
         # Mode is derived live from _active_profile (policy.py) — the switch takes

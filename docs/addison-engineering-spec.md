@@ -31,8 +31,9 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
   any risky/sweeping change *and* on command. See the §1.4 / §3 / §4.9 notes.
 - **Undeletable anchor (new fourth floor).** Turning a safety guard **off** in
   Custom mode mints a permanent, non-deletable snapshot of the last
-  verified-working state — and, uniquely, of the **app binary** too. Neither user
-  nor model can remove it.
+  verified-working state, which also **records the app build it was minted on**.
+  Neither user nor model can remove it. *(Owner decision 2026-07-20: a build
+  **reference**, not the binary — see §4.9.)*
 - **Simple / Developer / Custom mode model + capability tiers** (§4.10). Custom is
   reachable only deep in Settings behind extra confirmation and tunes *prompting*
   guards **only** — never the floors.
@@ -57,7 +58,7 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
   no paid frontier key; only *legitimate* free/local sources appear in-app.
 
 **G1 reaffirmed.** API keys stay keychain-only and are **excluded from every
-snapshot**, including the Custom binary anchor. After this amendment there are
+snapshot**, including the Custom-mode undeletable anchor. After this amendment there are
 **four global floors — G1, G2, G3, and the undeletable-anchor rule** — none of
 which any mode or guard can switch off.
 
@@ -158,10 +159,11 @@ places them in the architecture.
   load-bearing floor: automatic snapshots fire before any risky/sweeping change,
   restore always targets the last *verified-working* state, and **the restore
   path is itself unbreakable** ("restore always works, even from a broken
-  config"). Snapshots **exclude the OS keychain** (G1) and the app binary — the
-  one exception being the **Custom-mode undeletable anchor**, which also captures
-  the binary (complete known-good build+config) while still excluding keys. See
-  §4.9.
+  config"). Snapshots **exclude the OS keychain** (G1) and the app binary; the
+  **Custom-mode undeletable anchor** additionally records a build **reference**
+  (`{"version", "identifier"}`), so a restore can say plainly that the app itself
+  did not change. Restoring a binary is a Phase-3 updater item, not part of this
+  floor. See §4.9.
 - **Simple / Developer / Custom mode model + capability tiers.** The mode is still
   derived from the profile (2026-07-19 model); the amendment adds a third profile,
   **Custom**, reachable only deep in Settings behind extra confirmation, whose
@@ -482,8 +484,41 @@ of Addison's *mutable state* — settings, provider/routing config, skills, widg
 routines, and the relevant `provider_config` / `app_settings` / skills / widgets /
 routines rows.
 
+> **SHIPPED 2026-07-20 (Phase-2 step 1) — this block is no longer provisional.**
+> The sketch below was superseded by the implementation contract and by
+> `agent_core/memory/schema.sql`, which is now authoritative. Four things changed
+> and the old names are gone: the single three-value `reason` enum became **two
+> columns**, `trigger` ∈ `auto` | `on_command` plus a `reason` slug from a closed
+> vocabulary (`snapshot_manager.REASONS`) — the enum had nowhere to record *what
+> change* prompted the capture; `is_anchor` became **`undeletable`** (it should name
+> the guarantee the delete path enforces, not the provenance, and anchor-ness now
+> has exactly one source of truth); `includes_binary` became **`captures_binary`**;
+> and `payload_version` / `state_fingerprint` were added. See `docs/data-model.md`
+> for the shipped column set and its reasoning.
+>
+> **The `created_in_mode` comment below — "mirrors existing artifact hiding" — was
+> deliberately OVERRIDDEN, not implemented.** The column ships, but it is recorded
+> **for display only** and **never filters a list, restore, prune, or delete query,
+> in any mode.** Read literally, it would hide the way back from exactly the user
+> who most needs it: someone who weakened a guard in Custom, broke something,
+> switched to Simple, and now opens Restore points to an empty list. Snapshots are
+> recovery machinery, not artifacts, and §8's artifact hiding is scoped to routines
+> and widgets. Two tests hold the line — a behavioural one, and a source-level one
+> that reads the SQL in `store.py` and `snapshot_manager.py` and fails if the column
+> appears in a filter position.
+>
+> **Q8 (binary capture) is resolved, and narrower than this section implies** *(owner
+> decision 2026-07-20)*: `binary_ref` holds a short build **reference** —
+> `{"version", "identifier"}` from the new `shell.appBuildRef` — never bytes and
+> never a path. Restore **reports** a build mismatch in plain language and changes
+> settings only. **Restoring a previous binary is not implemented** and is a
+> **Phase-3 updater** item; building a downgrade path here would put a second,
+> uncoordinated binary-replacement mechanism on a collision course with the
+> (unwired) `updater.rs`.
+
 ```sql
--- Phase-2, provisional — column set to be finalised (amendment §13 Q2, Q4, Q8).
+-- SUPERSEDED — kept for the record. The shipped DDL is in
+-- agent_core/memory/schema.sql; see the note above for what changed and why.
 CREATE TABLE config_snapshots (
     id                 TEXT PRIMARY KEY,       -- uuid4
     created_at         INTEGER NOT NULL,
@@ -494,19 +529,20 @@ CREATE TABLE config_snapshots (
     includes_binary    INTEGER NOT NULL DEFAULT 0,  -- 1 ONLY for Custom anchors (§3.3 of the amendment)
     state_blob         TEXT NOT NULL           -- serialised mutable state; keys are NEVER included (G1)
 );
--- Hard rules (MUST):
+-- Hard rules (MUST) — all of these survived into the shipped table:
 --   * state_blob NEVER contains API keys or any keychain material (G1) — this holds
---     even for anchors (includes_binary=1). Restore leaves the keychain untouched;
---     a restored provider config re-binds to whatever keys are in the keychain by
---     provider id.
+--     even for anchors. Restore leaves the keychain untouched; a restored provider
+--     config re-binds to whatever keys are in the keychain by provider id.
 --   * The conversation transcript is NOT part of a snapshot (history is append-only
 --     and orthogonal; rollback restores config, never erases chats).
 --   * Restore ALWAYS targets the most recent verified_working snapshot, not merely
 --     "the state before the last edit."
---   * is_anchor=1 rows are undeletable by user AND model, and persist even if the
---     guard is later re-enabled. Ordinary (is_anchor=0) snapshots are deletable.
---   * The binary-capture mechanism for anchors (version pin? copy-on-write?) is an
---     OPEN question (amendment §13 Q8) — do not invent it here.
+--   * Permanent rows are undeletable by user AND model, and persist even if the
+--     guard is later re-enabled. Ordinary snapshots are deletable. (Shipped
+--     enforcement is in the DATABASE — two RAISE(ABORT) triggers — not in a WHERE
+--     clause, and the genesis row carries the flag too, as the bottom of the walk.)
+--   * The binary-capture mechanism was an OPEN question (amendment §13 Q8) and is
+--     now resolved as a build REFERENCE — see the note above.
 ```
 
 **Capability-tiered widget vocabulary (§8 note).** Widgets stay **declarative
@@ -823,6 +859,13 @@ The Developer profile deliberately reuses surfaces that already exist for other 
 
 ### 4.9 Amendment 2026-07-20: Snapshot / restore subsystem (G3) — the guaranteed-rollback floor
 
+> **Built 2026-07-20 (Phase-2 step 1).** `agent_core/snapshots/snapshot_manager.py`,
+> `agent_core/snapshots/scope.py`, the `config_snapshots` table, the `snapshot.*`
+> RPC namespace, seven auto-capture hooks + one verified-working site, a sidecar
+> cold-start recovery path, and the Settings **"Restore points"** card. The design
+> below holds; the three places where the implementation is *narrower or more
+> specific* than this prose are marked inline.
+
 **Why this exists.** The motivating failure was a non-technical user who asked his
 setup to "make the models run as cheaply as possible" and bricked it
 *permanently* — the built-in rewind did not fire, and he had no way back. G3 is
@@ -845,21 +888,55 @@ fine-grained per-tool `undo()` (§4.5) *and* a whole-config restore (this sectio
   toggle, a provider/endpoint change, a bulk "make it cheaper" reconfiguration, a
   mode switch) — this is the guarantee and never depends on the user remembering.
   *On command* too, from a Settings control or by asking Addison ("snapshot now").
+  *(Step 1 ships the Settings control and the RPC method. **Asking Addison** is
+  step 2, and lands as a **LOW, capture-only** registry tool — it may only ever add
+  a row, never restore and never delete.)*
 - **Verified-working marking.** A config is marked *verified-working* after a turn
   completes successfully against it, and **restore targets the last
   verified-working state** — the difference between real recovery and the friend's
-  dead end. (The precise definition of "successful turn" is open — amendment
-  §13 Q4.)
+  dead end. *(Q4 resolved: "successful turn" = the turn's response was sent, i.e.
+  `rpc/conversation.py` reached `_respond({"ok": True, …})`. A tool failure is
+  deliberately not a turn failure. The mark does **not** flag the pre-change row —
+  that config never ran; it captures the **current** config as a new verified row,
+  deduped by fingerprint. And because restore never targets a config identical to
+  the present one, **each click steps back one distinct proven configuration**.)*
 - **Deletability & the undeletable anchor.** Ordinary snapshots are deletable
   housekeeping. The moment a safety guard is **turned off in Custom mode and
   saved**, Addison mints an **undeletable** anchor of the last verified-working
   state — removable by neither user nor model, surviving the guard being
-  re-enabled. The anchor **also captures the app binary** (complete known-good
-  build + config); keys are **still** excluded. Retention of multiple anchors is
-  open (§13 Q2).
+  re-enabled; keys are **still** excluded. *(Owner decision 2026-07-20: the anchor
+  **records the app build it was minted on** — a short `{"version", "identifier"}`
+  reference, never bytes. The earlier "also captures the app binary / complete
+  known-good build + config" wording promised more than the code does and was
+  corrected. **Restoring a previous binary is a Phase-3 updater item**, not part of
+  this floor. Q2 resolved: retention is 50 rows / 30 days, whichever keeps more,
+  with permanent rows **and the newest verified row** exempt in the SQL — a rule
+  that could prune the last verified row would switch G3 off silently. Anchors never
+  prune and never count against the budget; evicting an anchor is deleting an
+  anchor, whatever the code calls it.)*
+- **Permanence is enforced in the database.** Two `RAISE(ABORT)` triggers on
+  `config_snapshots` refuse to delete an `undeletable = 1` row and refuse to clear
+  the flag — not a `WHERE` clause a future query can forget. The **genesis** row
+  (written on first build, so G3 holds before the first turn) carries the flag too:
+  it is the bottom of the restore walk.
+- **`tool_grants` is excluded from capture.** Live consent state, not
+  configuration — restoring it could reinstate a grant the user had revoked, via a
+  deliberately ungated one-action button. A restore also clears the live in-session
+  grants, so the session is never more permissive than the config it rolled back to.
 - **The restore path is unbreakable.** The single most important Phase-2 test is
   "restore always works, **even from a broken config**." Build and harden this
-  module *first* (amendment §14 Phase-2 step 1); everything else leans on it.
+  module *first* (amendment §14 Phase-2 step 1); everything else leans on it. *(As
+  built, that means: the manager imports stdlib plus two schema-mirroring leaf
+  modules and nothing else — no provider, router, profile, policy mode, registry or
+  gate; retention and payload version are module constants, not settings, so nothing
+  the model can write shrinks the rollback window; every payload is written **twice**,
+  into the row and into a `0600` JSON sidecar at `<db_dir>/snapshots/<id>.json`; and
+  `snapshot.list` + `snapshot.restoreLastWorking` are **exempt** from the
+  build-failure short-circuit in `main.py`, so a database that will not open is
+  answered from the sidecars — the restore renames the damaged file **aside, never
+  deletes it**, and rebuilds in the same session with no restart. Restore is an RPC
+  path, **never a registry tool and never gated**: a permission gate that could deny
+  a restore would make this bullet false.)*
 
 > **Reversible data vs. inviolable machinery.** Provider endpoints, model/routing
 > choices, cost settings, which guards are on, skills, widgets, routines are all
@@ -979,7 +1056,7 @@ Addison works with MCP as a **client** — it *consumes* external MCP servers/to
 **Amendment 2026-07-20 (G1 reaffirmed, reinforced).** Keys remain keychain-only
 and, per the snapshot subsystem (§4.9), are **excluded from every snapshot** —
 ordinary snapshots *and* the Custom-mode undeletable anchor, even though that
-anchor uniquely captures the app binary. A snapshot's `state_blob` **MUST NOT**
+anchor uniquely records a build reference. A snapshot's `state_blob` **MUST NOT**
 contain API keys or any keychain material; a rollback can never move, expose, or
 clobber a key. After a restore, whatever keys are in the keychain remain, and a
 restored provider config re-binds to them by provider id. Endpoints/MCP servers
@@ -1227,10 +1304,10 @@ working around it.
 
 | Floor | Statement |
 |---|---|
-| **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. **Reinforced:** excluded from every snapshot, including the Custom binary anchor (§4.9, §5). |
+| **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. **Reinforced:** excluded from every snapshot, including the Custom-mode undeletable anchor (§4.9, §5). |
 | **G2** | No autonomous self-triggering / scheduling *by Addison*. **Reinterpreted (§6):** Addison may *author* OS-run automation; the OS runs it; Addison never fires it. |
 | **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** |
-| **Anchor** | Turning a guard *off* in Custom mode mints an **undeletable** snapshot (also capturing the app binary; keys still excluded). **New.** |
+| **Anchor** (**G4** in `CLAUDE.md` and in code — the two names are the same rule) | Turning a guard *off* in Custom mode mints an **undeletable** snapshot that **records the app build it was minted on** (a reference, not the binary; keys still excluded). Restoring a binary is a Phase-3 updater item — owner decision 2026-07-20, §4.9. **New.** |
 
 **Reinterpreting invariant 4 (widgets).** SAFE invariant 4 said "widgets are
 declarative specs, never code." The amendment's owner decision: **widgets are
@@ -1336,7 +1413,8 @@ of that pass); code then follows in **dependency order, safety floor first**:
 1. **Snapshot / restore subsystem (G3, §4.9)** — the floor everything leans on;
    built and hardened *first*. The single most important Phase-2 test: **restore
    always works, even from a broken config.** Includes automatic + on-command
-   snapshots and the app-binary capture used by Custom anchors.
+   snapshots and the app **build reference** recorded by Custom anchors.
+   **Shipped 2026-07-20** — see the note at the head of §4.9.
 2. **Custom profile + guard model** (`policy.py`) + the **undeletable-anchor rule**
    (§4.9, §4.10).
 3. **Routing strategies** (4 + Custom) + the companion prefer-quality/prefer-free

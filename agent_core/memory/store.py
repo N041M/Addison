@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.skills import Skill
+from agent_core.snapshots.model import ConfigSnapshot
+from agent_core.snapshots.scope import _CAPTURED_TABLES, _PRESERVED_SETTING_KEYS
 from agent_core.tools.base import ActionSnapshot
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
@@ -33,7 +35,8 @@ _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 class Store:
     def __init__(self, db_path: str | Path) -> None:
-        self._conn = sqlite3.connect(str(db_path))
+        self.db_path = str(db_path)   # G3: the sidecar snapshot dir is derived from it
+        self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON;")
         # WAL pairs cleanly with our commit-per-write convention: each write is still
@@ -758,6 +761,376 @@ class Store:
     def delete_skill(self, skill_id: str) -> None:
         self._conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
         self._conn.commit()
+
+    # --- config snapshots (GLOBAL FLOOR G3 — see agent_core/snapshots/) -------
+    # App-state rollback, NOT the per-tool-call undo above. These rows hold a JSON
+    # row-image of Addison's mutable config tables; the SnapshotManager owns the
+    # policy (when to capture, what counts as verified-working, retention) and this
+    # layer owns only the SQL. Keys can never appear here: read_config_state SELECTs
+    # named columns of tables that hold no key material (G1), and restore never
+    # touches the keychain. created_in_mode is stored for display and MUST NOT be
+    # used to filter any query — snapshots are visible in every mode, always.
+
+    def insert_config_snapshot(self, snapshot: ConfigSnapshot) -> None:
+        """Persist one ``ConfigSnapshot`` verbatim. Booleans cross as ints; the
+        blob is already-serialised TEXT (the manager owns serialisation, so
+        capture and fingerprint see the same exact bytes)."""
+        self._conn.execute(
+            "INSERT INTO config_snapshots "
+            "(id, created_at, trigger, reason, payload_version, state_blob, "
+            " state_fingerprint, verified_working, undeletable, captures_binary, "
+            " binary_ref, created_in_mode) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                snapshot.id,
+                snapshot.created_at,
+                snapshot.trigger,
+                snapshot.reason,
+                snapshot.payload_version,
+                snapshot.state_blob,
+                snapshot.state_fingerprint,
+                int(snapshot.verified_working),
+                int(snapshot.undeletable),
+                int(snapshot.captures_binary),
+                snapshot.binary_ref,
+                snapshot.created_in_mode,
+            ),
+        )
+        self._conn.commit()
+
+    def list_config_snapshots(self) -> list[dict[str, Any]]:
+        """Every snapshot, newest first, WITHOUT ``state_blob`` (metadata only —
+        this feeds ``snapshot.list``, and a multi-KB blob has no business on the
+        wire). Ordered ``created_at DESC, rowid DESC``; rowid breaks the
+        same-second tie exactly as ``recent_unreverted_snapshots`` does.
+
+        Returns every row regardless of ``created_in_mode`` — snapshots are never
+        mode-hidden (G3)."""
+        rows = self._conn.execute(
+            "SELECT id, created_at, trigger, reason, payload_version, state_fingerprint, "
+            "       verified_working, undeletable, captures_binary, binary_ref, "
+            "       created_in_mode "
+            "FROM config_snapshots ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "created_at": row["created_at"],
+                "trigger": row["trigger"],
+                "reason": row["reason"],
+                "payload_version": row["payload_version"],
+                "state_fingerprint": row["state_fingerprint"],
+                "verified_working": bool(row["verified_working"]),
+                "undeletable": bool(row["undeletable"]),
+                "captures_binary": bool(row["captures_binary"]),
+                "binary_ref": row["binary_ref"],
+                "created_in_mode": row["created_in_mode"],
+            }
+            for row in rows
+        ]
+
+    def get_config_snapshot(self, snapshot_id: str) -> ConfigSnapshot | None:
+        """One full snapshot, blob included, as the dataclass. ``None`` when the
+        id is unknown — an absent snapshot is a normal state, not an error."""
+        row = self._conn.execute(
+            "SELECT id, created_at, trigger, reason, payload_version, state_blob, "
+            "       state_fingerprint, verified_working, undeletable, captures_binary, "
+            "       binary_ref, created_in_mode "
+            "FROM config_snapshots WHERE id = ?",
+            (snapshot_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return ConfigSnapshot(
+            id=row["id"],
+            created_at=row["created_at"],
+            trigger=row["trigger"],
+            reason=row["reason"],
+            payload_version=row["payload_version"],
+            state_blob=row["state_blob"],
+            state_fingerprint=row["state_fingerprint"],
+            verified_working=bool(row["verified_working"]),
+            undeletable=bool(row["undeletable"]),
+            captures_binary=bool(row["captures_binary"]),
+            binary_ref=row["binary_ref"],
+            created_in_mode=row["created_in_mode"],
+        )
+
+    def verified_config_snapshot_refs(self) -> list[dict[str, Any]]:
+        """Every ``verified_working = 1`` row, newest first, as lightweight refs:
+        ``{id, state_fingerprint, reason, created_at, created_in_mode}``.
+        **No blobs.**
+
+        Refs rather than rows, and UNBOUNDED rather than a ``limit``, both on
+        purpose. ``restore_last_working()`` walks this list and loads one blob at
+        a time via ``get_config_snapshot(id)``, so (a) it can skip a candidate on
+        its fingerprint alone without paying to decode it, and (b) one corrupt
+        blob can never strand the floor. A capped walk over the NEWEST rows would
+        make "genesis sits at the bottom of the walk" false as soon as more
+        verified rows than the cap existed — genesis is the OLDEST row. There is
+        no cost argument for a cap either: the table holds at most ``KEEP_LAST``
+        ordinary rows plus anchors, and this query reads no blobs."""
+        rows = self._conn.execute(
+            "SELECT id, state_fingerprint, reason, created_at, created_in_mode "
+            "FROM config_snapshots WHERE verified_working = 1 "
+            "ORDER BY created_at DESC, rowid DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def set_config_snapshot_verified(self, snapshot_id: str) -> None:
+        """Flag one snapshot verified-working. Idempotent.
+
+        NO PRODUCTION CALLER, and that is the design rather than an oversight —
+        it is frozen by contract §4.1, so it stays. Nothing flips this flag on an
+        EXISTING row: ``SnapshotManager.mark_verified_working()`` deliberately
+        writes a NEW row for the current config instead of marking an older one,
+        because the pre-change snapshot holds a config the turn never ran
+        against, and marking it verified would make "restore lands somewhere that
+        actually ran" false — the exact failure G3 exists to prevent. Every row
+        that carries the flag therefore gets it at INSERT time.
+
+        It is kept because the flag is a column any later caller may legitimately
+        need to set (a step-2 anchor promoted by copy, a repair path rebuilding
+        rows from sidecar payloads), and re-deriving the statement then is a
+        worse trade than one documented method with only test callers today. If
+        you are about to call it from a new "the turn worked" hook, read
+        ``mark_verified_working()`` first — that hook is the thing this method is
+        NOT for."""
+        self._conn.execute(
+            "UPDATE config_snapshots SET verified_working = 1 WHERE id = ?",
+            (snapshot_id,),
+        )
+        self._conn.commit()
+
+    def delete_config_snapshot(self, snapshot_id: str) -> bool:
+        """Delete an ORDINARY snapshot. Returns True when a row was removed,
+        False when the id is unknown OR the row is ``undeletable = 1``.
+
+        Three independent guards, deliberately, because "neither user nor model
+        can remove it" is a floor: the manager's message check, this method's
+        ``AND undeletable = 0``, and — underneath both — the schema's BEFORE
+        DELETE trigger, which refuses the row even to a statement that forgot the
+        predicate entirely (spec:506 "undeletable by user AND model")."""
+        cursor = self._conn.execute(
+            "DELETE FROM config_snapshots WHERE id = ? AND undeletable = 0",
+            (snapshot_id,),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
+    def prune_config_snapshots(self, *, cutoff: int, keep_last: int) -> None:
+        """Retention for the rollback window (amendment §13 Q2).
+
+        A row is deleted only when ALL of these hold:
+          * ``created_at < cutoff``  (older than the age floor), AND
+          * it is not among the ``keep_last`` most recent rows, AND
+          * ``undeletable = 0``      (anchors AND genesis never prune), AND
+          * it is not among the newest TWO ``verified_working = 1`` rows.
+
+        The first two mirror ``prune_action_snapshots`` ("whichever keeps MORE
+        wins"). The last two are load-bearing on the floor rather than
+        housekeeping: pruning the last verified rows would leave
+        ``restore_last_working()`` with no target, i.e. G3 silently off.
+
+        Two verified rows, not one. ``restore_last_working()`` skips any verified
+        row whose fingerprint equals the CURRENT config — restoring it would be a
+        guaranteed no-op. If retention exempted only the newest verified row, the
+        one exempt row could be exactly the row the walk skips, leaving nothing.
+        Keeping the newest two guarantees the walk always has at least one
+        candidate that can actually change something.
+
+        The ``undeletable = 0`` clause is belt-and-braces: the schema trigger
+        would abort the statement anyway. It stays because a statement that
+        raises mid-prune is a worse failure than one that matches nothing."""
+        self._conn.execute(
+            "DELETE FROM config_snapshots "
+            "WHERE created_at < ? AND undeletable = 0 "
+            "  AND id NOT IN ("
+            "    SELECT id FROM config_snapshots "
+            "    ORDER BY created_at DESC, rowid DESC LIMIT ?"
+            "  ) "
+            "  AND id NOT IN ("
+            "    SELECT id FROM config_snapshots WHERE verified_working = 1 "
+            "    ORDER BY created_at DESC, rowid DESC LIMIT 2"
+            "  )",
+            (cutoff, keep_last),
+        )
+        self._conn.commit()
+
+    def read_config_state(self) -> dict[str, list[dict[str, Any]]]:
+        """A row-image of every CAPTURED config table, for the snapshot payload.
+
+        Table name -> list of row dicts, each dict mapping the exact SQL column
+        names to the exact SQLite values (ints stay ints, NULL stays None, TEXT
+        stays str — NO coercion, because ``apply_config_state`` inserts them back
+        verbatim and any coercion here would make the round-trip lossy). Rows are
+        ordered by primary key ASC so the serialised bytes are deterministic and
+        the fingerprint is stable.
+
+        The captured set is exactly ``_CAPTURED_TABLES``. Columns are named
+        explicitly — never ``SELECT *`` — so a future column cannot slip into a
+        payload unreviewed, and no table that could hold key material is listed
+        (G1)."""
+        state: dict[str, list[dict[str, Any]]] = {}
+        for table, columns in _CAPTURED_TABLES.items():
+            rows = self._conn.execute(
+                f"SELECT {', '.join(columns)} FROM {table} ORDER BY {columns[0]} ASC"
+            ).fetchall()
+            state[table] = [dict(row) for row in rows]
+        return state
+
+    def apply_config_state(self, state: dict[str, list[dict[str, Any]]]) -> None:
+        """Replace the captured config tables with ``state``, ATOMICALLY.
+
+        Semantics are REPLACE-ALL within the captured scope: each captured table
+        is emptied and refilled from ``state``. A widget/skill/provider created
+        after the snapshot is therefore REMOVED, not merged — "restore to the
+        last verified-working state" has to mean the state IS that state, or the
+        result is a configuration that never actually ran (which is the failure
+        amendment §3.2 exists to prevent, and the "make it cheaper" scenario
+        exactly: the bad change ADDED a guidance skill, and a merge would leave
+        it).
+
+        Tables outside the captured scope are untouched: conversations, messages,
+        usage_log, action_snapshots, memory_facts, device_identity, tool_grants,
+        and config_snapshots itself all survive a restore unchanged.
+
+        EXCEPTION — one-way latches in ``app_settings``. That table mixes
+        reversible user config with irreversible one-way flags, and replace-all
+        treats them identically. The keys in ``_PRESERVED_SETTING_KEYS`` (today:
+        ``widgets_seeded``) are read before the wipe and written back after, so a
+        payload that predates the flag cannot drop it. Without this, restoring an
+        old payload would clear ``widgets_seeded`` and the next launch would
+        re-seed default widgets the user had deleted.
+
+        FOREIGN KEYS. ``PRAGMA foreign_keys = ON`` above, and SQLite enforces FK
+        constraints IMMEDIATELY rather than at COMMIT. Two consequences:
+
+          * INBOUND (``routine_runs.routine_id`` REFERENCES ``routines(id)``, no
+            ON DELETE CASCADE). ``DELETE FROM routines`` fails the instant ANY
+            run row references a routine — including a routine reinserted later
+            in the same transaction — so deleting only the runs whose routine is
+            absent from the incoming set is NOT enough: the surviving runs are
+            exactly the ones that break the delete. That would abort the restore
+            for every user who has ever run a routine, i.e. the floor off for
+            precisely the people who use the feature. Hence
+            ``PRAGMA defer_foreign_keys = ON`` as the first statement inside the
+            transaction: per-transaction, auto-clearing at COMMIT, and exactly
+            what a delete-then-refill needs. Orphaned run rows are still deleted,
+            so no dangling run survives.
+          * OUTBOUND (``routines.created_from_conversation_id`` REFERENCES
+            ``conversations(id)``) — a captured table pointing at an excluded
+            one. Dormant today, but not dormant at all when a fresh database is
+            rebuilt from sidecar payloads: it has no conversations, so every
+            routine carrying a provenance pointer would fail at COMMIT. Hence the
+            column is NULLed on insert when the referent is absent. A routine
+            losing its provenance pointer is cosmetic; a restore that aborts is
+            the floor failing.
+
+        UNKNOWN COLUMNS. The per-row INSERT column list is the intersection of
+        the declared columns and the row's own keys, so a payload written by an
+        older build (before a column was added) inserts without it and SQLite
+        applies the declared default. ``_add_column_if_missing`` always supplies
+        a default, so this is always well-defined.
+
+        Raises ``sqlite3.Error`` on failure, after rolling back. The caller
+        (SnapshotManager.restore) turns that into a plain-language
+        RestoreResult."""
+        # pysqlite manages implicit transactions (the connection is opened WITHOUT
+        # isolation_level=None), so BEGIN IMMEDIATE is only valid if nothing is
+        # already open. That holds today because every other Store method commits
+        # per-write — an otherwise undocumented invariant this method's atomicity
+        # rests on, so it is enforced here rather than assumed.
+        if self._conn.in_transaction:
+            self._conn.commit()
+        preserved = self._read_preserved_settings()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Defer FK enforcement to COMMIT — see the docstring. Per-transaction.
+            self._conn.execute("PRAGMA defer_foreign_keys = ON")
+
+            # Run rows whose routine does not survive the restore would be left
+            # dangling, so they go first. (The ones whose routine DOES survive are
+            # kept — that history is real — and the deferral is what lets their
+            # routine be deleted and reinserted underneath them.)
+            surviving = [row["id"] for row in state.get("routines", []) if "id" in row]
+            placeholders = ", ".join("?" for _ in surviving)
+            self._conn.execute(
+                "DELETE FROM routine_runs"
+                + (f" WHERE routine_id NOT IN ({placeholders})" if surviving else ""),
+                tuple(surviving),
+            )
+
+            known_conversations = {
+                row["id"] for row in self._conn.execute("SELECT id FROM conversations")
+            }
+            for table, columns in _CAPTURED_TABLES.items():
+                self._conn.execute(f"DELETE FROM {table}")
+                for row in state.get(table, []):
+                    values = dict(row)
+                    if table == "routines":
+                        referent = values.get("created_from_conversation_id")
+                        if referent is not None and referent not in known_conversations:
+                            values["created_from_conversation_id"] = None
+                    present = [col for col in columns if col in values]
+                    if not present:
+                        continue
+                    self._conn.execute(
+                        f"INSERT INTO {table} ({', '.join(present)}) "
+                        f"VALUES ({', '.join('?' for _ in present)})",
+                        tuple(values[col] for col in present),
+                    )
+
+            # The one-way latches go back last, so a payload that predates a flag
+            # cannot un-set it.
+            for key, (value, updated_at) in preserved.items():
+                self._conn.execute(
+                    "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                    "updated_at = excluded.updated_at",
+                    (key, value, updated_at),
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            # A ROLLBACK can ITSELF raise (full disk, I/O error). Letting that
+            # escape would replace the real exception AND leave the single worker
+            # connection inside an open transaction, after which every later write
+            # in the process fails. So the rollback's own failure never escapes,
+            # and if it does fail we drop and rebuild the connection rather than
+            # carry on with a poisoned one.
+            try:
+                self._conn.execute("ROLLBACK")
+            except Exception:
+                self._reconnect()
+            raise
+
+    def _read_preserved_settings(self) -> dict[str, tuple[str, int]]:
+        """The current value of every one-way ``app_settings`` latch, so
+        ``apply_config_state`` can write it back after the wipe."""
+        preserved: dict[str, tuple[str, int]] = {}
+        for key in sorted(_PRESERVED_SETTING_KEYS):
+            row = self._conn.execute(
+                "SELECT value, updated_at FROM app_settings WHERE key = ?", (key,)
+            ).fetchone()
+            if row is not None:
+                preserved[key] = (row["value"], row["updated_at"])
+        return preserved
+
+    def _reconnect(self) -> None:
+        """Replace a connection stranded in an open transaction by a failed
+        ROLLBACK. The schema is already on disk, so this only re-establishes the
+        connection and its pragmas — it never re-applies schema.sql, because the
+        caller is already unwinding an error and a second failure here would
+        bury the first."""
+        try:
+            self._conn.close()
+        except Exception:
+            pass
+        self._conn = sqlite3.connect(self.db_path)
+        self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA foreign_keys = ON;")
+        self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._conn.execute("PRAGMA busy_timeout=5000;")
 
     def close(self) -> None:
         self._conn.close()

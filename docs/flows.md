@@ -8,6 +8,10 @@
 > (SAFE safe-vocabulary vs. higher-tier code-backed), routing degrade-with-disclaimer,
 > and an MCP tool call through the existing gate. Names in the new flows are illustrative
 > where the amendment leaves them open (marked Phase-2); the shapes are authoritative.
+> **Flow 9 is the exception — snapshot/restore shipped in Phase-2 step 1, so its names
+> are real.** The `reason` slugs quoted in flows 10, 11 and 12 are the reserved entries
+> of that vocabulary (`snapshot_manager.REASONS`), so they are real too, even though the
+> flows around them are not built yet.
 
 Sequence diagrams for the main flows across the three processes. Method and function
 names match the code. Every Core-to-webview frame in these diagrams actually reaches
@@ -296,35 +300,58 @@ mutable **config/state** — settings, provider/routing config, skills, widgets,
 before any risky or sweeping change and can also be taken **on command**. A config is marked
 **verified-working** once a turn completes successfully against it, and **Restore always
 targets the last verified-working snapshot**, so it lands somewhere that actually ran — the
-difference between recovery and the friend's dead end. Names below are Phase-2.
+difference between recovery and the friend's dead end. **Shipped in Phase-2 step 1** —
+the names below are the real ones.
 
 ```mermaid
 sequenceDiagram
     participant WV as React webview
     participant SRV as Core server
     participant SM as SnapshotManager
-    participant ST as Store (snapshots)
+    participant ST as Store (config_snapshots)
 
     Note over SRV,SM: auto-snapshot — before a risky/sweeping change
-    SRV->>SM: snapshot(trigger="auto", reason)
-    SM->>ST: capture config/state rows (keychain excluded)
+    SRV->>SM: capture(trigger="auto", reason="mode_switch")
+    SM->>ST: insert row image of the config tables (keychain excluded)
+    SM->>SM: also write the payload to a 0600 JSON sidecar
     ST-->>SM: snapshotId
-    Note over SM: after the change's turn completes cleanly,<br/>mark that config verified-working
+    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint)
 
-    Note over WV,SRV: on-command — "snapshot now" / Settings control
+    Note over WV,SRV: on-command — Settings "Restore points" card
     WV->>SRV: snapshot.create
-    SRV->>SM: snapshot(trigger="on_command")
+    SRV->>SM: capture(trigger="on_command", reason="user_request")
     SM->>ST: capture (deletable, unless minted as a Custom anchor)
     SRV-->>WV: {ok: true, snapshotId}
 
-    WV->>SRV: snapshot.restore  (one action)
+    Note over WV,SRV: the one-action button — no argument, by design
+    WV->>SRV: snapshot.restoreLastWorking
     SRV->>SM: restore_last_working()
-    SM->>ST: last verified-working snapshot
+    SM->>ST: newest verified row that DIFFERS from the current config
     ST-->>SM: state_blob
-    Note over SM: reapply config/state; keychain untouched, so a<br/>restored provider re-binds to its key by provider id
+    Note over SM: reapply in one transaction; keychain untouched, so a<br/>restored provider re-binds to its key by provider id
     SM-->>SRV: RestoreResult
-    SRV-->>WV: ok, detail (what was restored)
+    SRV-->>WV: {ok, snapshotId, detail, binaryMismatch?}
+
+    Note over WV,SRV: the targeted path — a specific row, or an anchor
+    WV->>SRV: snapshot.restore {id}
+    SRV->>SM: restore(snapshot_id)
 ```
+
+Three things the diagram cannot show:
+
+- **`restore_last_working()` skips a candidate identical to the present config.** A
+  restore that changes zero bytes is a no-op dressed as a recovery — the friend's dead
+  end again. So **each click steps back one distinct proven configuration**; two bad
+  changes deep, the user clicks twice. The Settings list is the way to jump straight to
+  a specific point (`snapshot.restore {id}`).
+- **A restore is an RPC path, never a registry tool, and never passes the permission
+  gate** — a gate that could deny a restore would make "the restore path is itself
+  unbreakable" false.
+- **The database itself may be the broken thing.** `snapshot.list` and
+  `snapshot.restoreLastWorking` are the only two methods exempt from the server's
+  build-failure short-circuit: with no usable Store they are answered from the sidecar
+  files, and the restore renames the damaged database **aside** (never deletes it) and
+  rebuilds, in the same session, with no restart.
 
 ## 10. "Make it cheaper" orchestration
 
@@ -347,7 +374,7 @@ sequenceDiagram
     ORC-->>WV: proposed plan card ("I'll add this note and switch to [cheaper model] — apply?")
     Note over WV: user taps Apply / Not now
     WV->>SRV: costPlan.apply {accept: true}
-    SRV->>SM: snapshot(trigger="auto", reason="make-it-cheaper")
+    SRV->>SM: capture(trigger="auto", reason="make_it_cheaper")
     SM->>ST: capture config/state (keys excluded)
     SRV->>ST: write guidance skill + update provider_config / routing_strategy
     SRV-->>WV: {ok: true, undoable: true}
@@ -378,7 +405,7 @@ sequenceDiagram
     WV->>SH: invoke store_provider_key(provider, key)
     WV->>SRV: provider.connect(provider, baseUrl)
     Note over SRV: validate with one tiny request (flow 7), record non-secret metadata
-    SRV->>SM: snapshot(trigger="auto", reason="add-endpoint")
+    SRV->>SM: capture(trigger="auto", reason="add_endpoint")
     SM->>ST: (config captured for one-click undo)
     SRV-->>WV: {ok: true} — endpoint now in the picker union
 ```
@@ -403,7 +430,7 @@ sequenceDiagram
     participant TL as Tool
 
     WV->>SRV: workspace.grantTrust {directory}
-    SRV->>SM: snapshot(trigger="auto", reason="grant-workspace-trust")
+    SRV->>SM: capture(trigger="auto", reason="workspace_trust")
     SRV-->>WV: ok (trust scoped, revocable)
 
     Note over WV,ORC: ordinary edit/run inside the trusted directory

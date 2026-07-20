@@ -75,8 +75,11 @@ from agent_core.rpc.constants import (
     _LOCAL_SETUP_BUSY_MESSAGE,
     _METHOD_NOT_FOUND,
     _NOT_BUILT_MESSAGE,
+    _NOTHING_TO_REBUILD_FROM,
     _OLLAMA_NOT_INSTALLED_MESSAGE,
+    _REBUILT_MESSAGE,
     _SERVER_ERROR,
+    _STORE_UNAVAILABLE_MESSAGE,
     _BYOK_ONBOARDING_MESSAGE as _BYOK_ONBOARDING_MESSAGE,
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
@@ -86,9 +89,16 @@ from agent_core.rpc.profile import ProfileMixin
 from agent_core.rpc.providers import ProvidersMixin
 from agent_core.rpc.routines import RoutinesMixin
 from agent_core.rpc.skills import SkillsMixin
+from agent_core.rpc.snapshots import SnapshotsMixin, snapshot_list_from_payloads
 from agent_core.rpc.undo import UndoMixin
 from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.shell_bridge import IpcShellBridge
+from agent_core.snapshots.snapshot_manager import (
+    SnapshotManager,
+    rebuild_rows_from_payloads,
+    recover_payloads_from_disk,
+    select_payload_to_restore,
+)
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
@@ -338,6 +348,33 @@ def run_cli() -> None:
             )
 
 
+# --- G3 cold-start copy -----------------------------------------------------
+# These two live here rather than beside their siblings in rpc/constants.py only
+# because of who owns which file in the remediation round that added them; they
+# belong in rpc/constants.py with _REBUILT_MESSAGE and _NOTHING_TO_REBUILD_FROM,
+# and moving them is a rename with no behaviour attached.
+#
+# Said when the rebuild worked but nothing on disk had ever been proven working.
+# _REBUILT_MESSAGE would be a lie here, and this button's entire value is that
+# its promise is true — "I put you back on your last working setup" is the
+# sentence the user's trust in the floor rests on.
+_REBUILT_FROM_UNVERIFIED = (
+    "Addison's settings file was damaged. It couldn't find a setup it had seen "
+    "working, so it rebuilt from the most recent settings it had saved instead. "
+    "Have a look and check things are how you want them. Your chats and saved "
+    "keys are untouched."
+)
+# ...and when restore points were there, readable, and none of them would go
+# back in. Deliberately distinct from _NOTHING_TO_REBUILD_FROM: telling someone
+# nothing is saved when several things are is a false statement about the
+# floor's own storage, and it sends them looking for the wrong problem.
+_REBUILD_FAILED = (
+    "Addison couldn't open its settings file, and it couldn't rebuild from your "
+    "saved restore points either. Restart Addison — nothing was deleted, and "
+    "your restore points are still saved."
+)
+
+
 class JsonRpcServer(
     ConversationMixin,
     UndoMixin,
@@ -347,6 +384,7 @@ class JsonRpcServer(
     ProvidersMixin,
     WidgetsMixin,
     SkillsMixin,
+    SnapshotsMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -387,6 +425,7 @@ class JsonRpcServer(
         tool_registry: ToolRegistry,
         store_factory,
         model_router: ModelRouter,
+        db_path: str | Path | None = None,
         shell_bridge: IpcShellBridge | None = None,
         conversation_id: str | None = None,
         primary_key_probe=None,
@@ -407,6 +446,13 @@ class JsonRpcServer(
         self.tool_registry = tool_registry
         self._store_factory = store_factory     # called once, on the worker thread
         self.model_router = model_router
+        # G3: where the sidecar payloads live, derived from the DB path HERE rather
+        # than from the Store — because the one situation this floor exists for is
+        # the Store failing to open, and a path that only exists on a live Store is
+        # no use then. None where the caller wired no path (CLI-ish tests): the
+        # subsystem still works, it just has no belt and no cold-start rebuild.
+        self._db_path = Path(db_path) if db_path else None
+        self._snapshot_dir = (self._db_path.parent / "snapshots") if self._db_path else None
         self._shell_bridge = shell_bridge
         # The cloud-model menu (models_catalog.py) the picker renders and validates
         # explicit picks against. It starts as the built-in fallback (or empty in
@@ -474,6 +520,7 @@ class JsonRpcServer(
         # state — _record_usage and provider reconnect check it); the ``store``
         # property narrows to Store for the handlers, which all run post-build.
         self._store: Store | None = None
+        self._snapshot_manager: SnapshotManager | None = None
         self._undo_manager: UndoManager | None = None
         self._orchestrator: Orchestrator | None = None
         self._routine_builder: RoutineBuilder | None = None
@@ -510,6 +557,17 @@ class JsonRpcServer(
         # Opportunistic usage-log pruning throttle (§4.8): counts recorded usage
         # rows so _record_usage prunes only once every _USAGE_PRUNE_EVERY writes.
         self._usage_records_since_prune = 0
+        # G3 build-failure state. A store that will not open is answered with one
+        # plain sentence per request instead of a dead worker (see _worker_loop);
+        # both are CLEARED once a build finally succeeds, so a transient failure
+        # doesn't brick the session until restart.
+        self._build_error: str | None = None
+        self._build_error_detail: dict | None = None
+        # Sticky notice that an automatic snapshot failed — surfaced on
+        # snapshot.list until the user saves one themselves. It does NOT clear on
+        # the next successful auto-capture: a degraded floor that clears itself is
+        # a degraded floor nobody sees.
+        self._snapshot_warning: str | None = None
 
         # Method -> handler, built once (see _build_dispatch_table). Built last so
         # every handler it references (and self._queue) already exists.
@@ -533,6 +591,17 @@ class JsonRpcServer(
     # The same narrowing pattern for the other worker-built singletons: nullable
     # backing field, non-Optional property. Setters exist because _ensure_built
     # (and tests) assign through the public names.
+    @property
+    def snapshot_manager(self) -> SnapshotManager:
+        assert self._snapshot_manager is not None, (
+            "snapshot_manager accessed before _ensure_built()"
+        )
+        return self._snapshot_manager
+
+    @snapshot_manager.setter
+    def snapshot_manager(self, value: SnapshotManager) -> None:
+        self._snapshot_manager = value
+
     @property
     def undo_manager(self) -> UndoManager:
         assert self._undo_manager is not None, "undo_manager accessed before _ensure_built()"
@@ -595,6 +664,18 @@ class JsonRpcServer(
         self._seed_default_widgets()
         # §4.7: read the persisted profile now that the store exists (SIMPLE if unset).
         self._active_profile = resolve_active_profile(self.store)
+        # GLOBAL FLOOR G3: built before the orchestration machinery so a restore
+        # target exists from the first moment the store does. Construction writes
+        # the genesis snapshot on a fresh database — after widget seeding above, so
+        # genesis holds the real first-run state.
+        self.snapshot_manager = SnapshotManager(
+            store=self.store,
+            snapshot_dir=self._snapshot_dir,
+            app_build_ref=(
+                self._shell_bridge.get_app_build_ref if self._shell_bridge else None
+            ),
+            mode_ref=lambda: mode_for_profile(self._active_profile).value,
+        )
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
         self.orchestrator = Orchestrator(
             model_router=self.model_router,
@@ -619,6 +700,10 @@ class JsonRpcServer(
             on_ask_user=self._ask_user_continue,
             store=self.store,
         )
+        # The build worked, so a remembered failure is stale — clear it rather than
+        # answering "couldn't open its settings file" for the rest of the session.
+        self._build_error = None
+        self._build_error_detail = None
 
     # In-house premade widgets seeded on first run, so a fresh install's rail isn't
     # empty. These are ordinary DECLARATIVE stat widgets (invariant 4) built ONLY from
@@ -759,7 +844,14 @@ class JsonRpcServer(
             Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE: self._handle_set_role,
             Method.MODEL_START_LOCAL_SETUP: self._handle_start_local_setup,
         }
-        for jobs in (_ROUTINE_JOBS, _CONVERSATION_JOBS, _PROVIDER_JOBS, _WIDGET_JOBS, _SKILL_JOBS):
+        for jobs in (
+            _ROUTINE_JOBS,
+            _CONVERSATION_JOBS,
+            _PROVIDER_JOBS,
+            _WIDGET_JOBS,
+            _SKILL_JOBS,
+            _SNAPSHOT_JOBS,
+        ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
         # Reserved-for-later methods answer a plain "not built yet" (empty today).
@@ -774,12 +866,37 @@ class JsonRpcServer(
 
     # --- worker thread (all SQLite-backed work) ---------------------------
     def _worker_loop(self) -> None:
-        self._ensure_built()
+        # G3: a store that will not build is the exact situation the snapshot
+        # subsystem exists for, so a build failure must NOT kill this thread. It
+        # used to: the raise escaped, the worker died, and every later request hung
+        # forever with no error frame — an unrecoverable state produced by the
+        # recovery machinery's own absence. Now the failure is remembered and every
+        # dequeued job answers with one plain sentence, so the window stays
+        # responsive and the user is told what to do.
+        try:
+            self._ensure_built()
+        except Exception as exc:
+            self._build_error = _STORE_UNAVAILABLE_MESSAGE
+            self._build_error_detail = self._raw_detail(exc)
         while True:
             job = self._queue.get()
             if job is None:
                 break
             kind, params, request_id = job
+            if self._build_error is not None:
+                # THE EXEMPTION. Without it this branch answers EVERY job —
+                # including the restore the message above tells the user to run —
+                # so the copy would point at a control the same code path
+                # guarantees will fail. These two are served store-free from the
+                # sidecar files; a successful rebuild clears _build_error, so the
+                # session recovers in place rather than requiring a restart.
+                if kind in ("snapshot_list", "snapshot_restore_last_working"):
+                    self._handle_store_free_snapshot_job(kind, request_id)
+                    continue
+                self._respond_error(
+                    request_id, _SERVER_ERROR, self._build_error, self._build_error_detail
+                )
+                continue
             try:
                 if kind == "send":
                     self._run_send_message(params, request_id)
@@ -801,8 +918,7 @@ class JsonRpcServer(
                 elif kind == "routine_run":
                     self._handle_routine_run(params, request_id)
                 elif kind == "routine_delete":
-                    self.routine_library.delete(params.get("routineId"))
-                    self._respond(request_id, {"ok": True})
+                    self._handle_routine_delete(params, request_id)
                 elif kind == "profile_get":
                     self._respond(request_id, self._profile_get())
                 elif kind == "profile_set":
@@ -846,6 +962,16 @@ class JsonRpcServer(
                     self._respond(request_id, self._skill_set_enabled(params))
                 elif kind == "skill_delete":
                     self._respond(request_id, self._skill_delete(params))
+                elif kind == "snapshot_list":
+                    self._respond(request_id, self._snapshot_list())
+                elif kind == "snapshot_create":
+                    self._respond(request_id, self._snapshot_create())
+                elif kind == "snapshot_restore":
+                    self._respond(request_id, self._snapshot_restore(params))
+                elif kind == "snapshot_restore_last_working":
+                    self._respond(request_id, self._snapshot_restore_last_working())
+                elif kind == "snapshot_delete":
+                    self._respond(request_id, self._snapshot_delete(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -855,6 +981,178 @@ class JsonRpcServer(
                 self._respond_error(
                     request_id, _SERVER_ERROR, _GENERIC_TURN_ERROR, self._raw_detail(exc)
                 )
+
+    def _handle_routine_delete(self, params: dict, request_id) -> None:
+        """routine.delete — hook H4. The snapshot comes FIRST, and a failed
+        snapshot REFUSES the delete: deleting a routine cascades to its run
+        history and the old content exists nowhere else afterwards, so proceeding
+        without a restore point is the one outcome the floor must not allow.
+        Refusing is recoverable; an unbackable delete is not."""
+        routine_id = params.get("routineId")
+        if isinstance(routine_id, str) and self.store.get_routine(routine_id) is not None:
+            if not self._snapshot_auto("routine_delete"):
+                self._respond(
+                    request_id,
+                    {
+                        "ok": False,
+                        "error": (
+                            "Addison couldn't save a restore point just now, so it "
+                            "didn't delete anything. Try again in a moment."
+                        ),
+                    },
+                )
+                return
+        if isinstance(routine_id, str):
+            self.routine_library.delete(routine_id)
+        self._respond(request_id, {"ok": True})
+
+    # --- G3 cold start: the database itself will not open ------------------
+    def _handle_store_free_snapshot_job(self, kind: str, request_id) -> None:
+        """Answer ``snapshot.list`` / ``snapshot.restoreLastWorking`` with NO Store.
+
+        This is the headline claim of the whole subsystem — "restore always works,
+        even from a broken config" — in the one grade of damage a Python-side
+        SnapshotManager cannot reach, because it has no store to be constructed
+        with. The sidecar files need no schema, no WAL and no sqlite3, so they are
+        what is left to work from."""
+        payloads = recover_payloads_from_disk(self._snapshot_dir) if self._snapshot_dir else []
+        if kind == "snapshot_list":
+            # A list is a look. It reads the files and touches nothing else — the
+            # rename-and-rebuild below is reserved for the restore the user
+            # actually asked for.
+            payload = snapshot_list_from_payloads(payloads)
+            if not payload["snapshots"]:
+                payload["warning"] = _NOTHING_TO_REBUILD_FROM
+            self._respond(request_id, payload)
+            return
+        ok, sentence = self._recover_from_sidecars(payloads)
+        self._respond(
+            request_id, {"ok": True, "detail": sentence} if ok else {"ok": False, "error": sentence}
+        )
+
+    def _recover_from_sidecars(self, payloads: list[dict]) -> tuple[bool, str]:
+        """Rebuild a working database from the sidecar payloads. Returns
+        ``(ok, sentence)`` — the plain sentence to show the user either way.
+
+        Three outcomes, three sentences, because they are three different
+        situations and only one of them is the user's problem to act on: nothing
+        was saved, something was saved but would not go back in, or it worked.
+        Reporting the middle case as the first one is a false statement about the
+        floor's own storage and sends the user looking for the wrong problem.
+
+        The rebuild happens in a SIDE FILE and is swapped in only once it has
+        worked. The damaged file used to be renamed aside first, which meant a
+        rebuild that then failed left a fresh empty database at the live path —
+        so the next click renamed THAT aside too, and the user's real data sank
+        one ``.damaged-`` file deeper with every attempt. Nothing moves until
+        there is a working replacement to move it for.
+
+        The damaged file is RENAMED ASIDE, never deleted: it may still be
+        forensically useful, and destroying the user's data is not ours to do."""
+        if not payloads or self._db_path is None:
+            return False, _NOTHING_TO_REBUILD_FROM
+        rebuilt = Path(f"{self._db_path}.rebuilding-{int(time.time())}")
+        try:
+            verified = self._rebuild_into(rebuilt, payloads)
+            if verified is None:
+                return False, _REBUILD_FAILED
+            self._move_damaged_db_aside()
+            self._swap_in(rebuilt)
+        except Exception:
+            return False, _REBUILD_FAILED
+        finally:
+            self._discard_rebuild(rebuilt)
+        # Finish the build normally — _ensure_built opens the rebuilt file and
+        # wires every singleton (and clears _build_error), so the session
+        # continues in place instead of requiring a restart.
+        try:
+            self._ensure_built()
+        except Exception:
+            return False, _REBUILD_FAILED
+        return True, _REBUILT_MESSAGE if verified else _REBUILT_FROM_UNVERIFIED
+
+    def _rebuild_into(self, path: Path, payloads: list[dict]) -> bool | None:
+        """Build a complete replacement database at ``path`` from the payloads
+        alone. Returns whether the config it applied had been PROVEN WORKING, or
+        None when nothing could be applied at all — three states, because
+        "rebuilt from a setup I'd seen working" and "rebuilt from the most recent
+        settings I had" are different promises and only one of them is true.
+
+        ``Store(path)`` directly rather than ``self._store_factory()``: the
+        factory is bound to the one path that, in this exact situation, holds a
+        file that will not open. A recovery that can only build over the wreckage
+        cannot be tried and discarded."""
+        store = None
+        try:
+            store = Store(path)
+            # The flags travel WITH the payload, so anchors come back as anchors —
+            # a rebuild that dropped `undeletable` would quietly convert every G4
+            # anchor into an ordinary deletable row, G4 defeated by G3's own
+            # recovery machinery with no code path anywhere called "delete".
+            rebuild_rows_from_payloads(store, payloads)
+            candidates = list(payloads)
+            while candidates:
+                # ONE function chooses the payload here, in the manager's sidecar
+                # arm, and in the listing that named it in the confirm step — so
+                # the preview and the button can never describe different
+                # restore points.
+                payload, verified = select_payload_to_restore(candidates)
+                if payload is None:
+                    return None
+                try:
+                    store.apply_config_state(payload["tables"])
+                    return verified
+                except Exception:
+                    # It decoded but would not go back in. Drop it by identity
+                    # (two payloads can compare equal) and let the same function
+                    # pick the next one, so the fallback order stays the one
+                    # rule rather than a second one written here.
+                    candidates = [item for item in candidates if item is not payload]
+            return None
+        except Exception:
+            return None
+        finally:
+            if store is not None:
+                try:
+                    store.close()
+                except Exception:
+                    pass
+
+    def _swap_in(self, rebuilt: Path) -> None:
+        """Put the rebuilt database where the damaged one used to be.
+
+        The WAL/SHM siblings move with it — a cleanly closed store normally
+        leaves none, but a leftover WAL beside a replaced database would be read
+        as part of it. They move FIRST and the database itself LAST, so the main
+        rename is the commit point: nothing can fail after the database is in
+        place, and a rebuild that actually worked can never be reported as one
+        that did not."""
+        assert self._db_path is not None
+        for suffix in ("-wal", "-shm"):
+            sibling = Path(f"{rebuilt}{suffix}")
+            if sibling.exists():
+                os.replace(sibling, Path(f"{self._db_path}{suffix}"))
+        os.replace(rebuilt, self._db_path)
+
+    def _discard_rebuild(self, rebuilt: Path) -> None:
+        """Clear away a half-built replacement, best effort. Runs after a
+        successful swap too, where it finds nothing — cheaper than remembering
+        which of the two paths got here."""
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                Path(f"{rebuilt}{suffix}").unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    def _move_damaged_db_aside(self) -> None:
+        """Rename the unopenable database (and its WAL/SHM siblings) out of the
+        way so a fresh one can be created beside them."""
+        assert self._db_path is not None
+        stamp = int(time.time())
+        for suffix in ("", "-wal", "-shm"):
+            source = Path(str(self._db_path) + suffix)
+            if source.exists():
+                source.rename(Path(f"{self._db_path}.damaged-{stamp}{suffix}"))
 
     def _primary_key_available(self) -> bool:
         probe = self._primary_key_probe
@@ -1139,6 +1437,18 @@ _SKILL_JOBS = {
     Method.SKILL_DELETE: "skill_delete",
 }
 
+# snapshot.* touch the Store and must serialise behind any in-flight turn (a
+# restore replaces the config tables wholesale), so they run on the worker like
+# every other store op. Method -> worker job kind. Two of these kinds are ALSO
+# answered when the store could not be built at all (_worker_loop's exemption).
+_SNAPSHOT_JOBS = {
+    Method.SNAPSHOT_LIST: "snapshot_list",
+    Method.SNAPSHOT_CREATE: "snapshot_create",
+    Method.SNAPSHOT_RESTORE: "snapshot_restore",
+    Method.SNAPSHOT_RESTORE_LAST_WORKING: "snapshot_restore_last_working",
+    Method.SNAPSHOT_DELETE: "snapshot_delete",
+}
+
 
 def _plain(exc: Exception) -> str:
     """A user-ready sentence for a handler failure — never the raw exception."""
@@ -1307,6 +1617,9 @@ def main() -> None:
         tool_registry=registry,
         store_factory=_store_factory,
         model_router=model_router,
+        # G3: the server derives the sidecar directory from this itself, so the
+        # cold-start rebuild exists even when the Store cannot be opened.
+        db_path=db_path,
         shell_bridge=shell_bridge,
         primary_key_probe=_primary_key_available,
         setup_prompt=load_setup_prompt(),

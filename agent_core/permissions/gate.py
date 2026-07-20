@@ -137,6 +137,14 @@ class PermissionGate:
     def revoke(self, tool_id: str) -> None:
         self._grants.pop(tool_id, None)
 
+    def revoke_all(self) -> None:
+        """Forget every grant this session accumulated. Called after a G3 restore
+        (rpc/snapshots.py): grants live only here, so a restore that left them in
+        place would leave the session's permission posture WIDER than the config
+        the user just rolled back to. One extra card next time a tool runs is the
+        right price for a recovery."""
+        self._grants.clear()
+
     def clear_denials(self) -> None:
         """Forget "Not now" answers. The orchestrator calls this at the start of
         every user turn: a denial silences re-asking only for the REST of the

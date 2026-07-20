@@ -1,6 +1,8 @@
 {
   "include": ["agent_core", "tests"],
   "exclude": ["**/.venv", "**/node_modules", "shell"],
+  "venvPath": "agent_core",
+  "venv": ".venv",
   "typeCheckingMode": "basic",
   "pythonVersion": "3.12",
   "reportMissingImports": true,

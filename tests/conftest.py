@@ -160,6 +160,7 @@ def build_server(
     provider_key_probe=None,
     ollama_client=None,
     seed_widgets: bool = False,
+    store_factory=None,
 ) -> IpcHarness:
     """Stand up a real JsonRpcServer on fake pipes and start its run loop.
 
@@ -177,6 +178,11 @@ def build_server(
       False (the harness pre-sets the 'widgets_seeded' flag so the rail starts empty),
       keeping the widget-mechanics tests isolated from the seeded defaults; the
       seeding tests pass True to exercise it.
+    - ``store_factory``: replaces the default file-backed factory. Exists for the
+      G3 tests, whose whole premise is a factory that RAISES — a store that will
+      not open is the situation the snapshot floor exists for, and it has to be
+      expressible here to be testable at all. The db_path is passed to the server
+      either way, so the sidecar directory still lands in the test's tmp tree.
 
     The caller owns teardown via :func:`_shutdown` (kept explicit because a few
     tests relaunch on the same database and must stop one server before the next).
@@ -190,7 +196,7 @@ def build_server(
     reader = _PipeReader()
     writer = _FrameWriter()
 
-    def _store_factory() -> Store:
+    def _default_store_factory() -> Store:
         store = Store(tmp_path / IPC_DB_NAME)
         if not seed_widgets:
             # Suppress first-run seeding so tests start with an empty rail.
@@ -201,7 +207,8 @@ def build_server(
         reader=reader,
         writer=writer,
         tool_registry=registry,
-        store_factory=_store_factory,
+        store_factory=store_factory or _default_store_factory,
+        db_path=tmp_path / IPC_DB_NAME,
         model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
         shell_bridge=bridge,
         cloud_catalog=cloud_catalog,

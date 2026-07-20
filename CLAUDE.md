@@ -58,8 +58,9 @@ truth, there is no separately-persisted mode (`agent_core/policy.py`,
   Settings, behind extra confirmation). The user may loosen/tighten the *prompting*
   guards (per-invocation destructive card, auto-grant scope, the workspace-trust
   boundary, keyword-gate strictness) — **never** the global floors. Turning any
-  guard OFF and saving mints an **undeletable snapshot anchor** (which also
-  captures the app binary), so weakening safety always leaves a guaranteed way back.
+  guard OFF and saving mints an **undeletable snapshot anchor** (which records the
+  app build it was minted on — see G4), so weakening safety always leaves a
+  guaranteed way back.
 
 Organizing principle (amendment): **reversible data/config** (endpoints, models,
 guards, skills, widgets, routines — all snapshotted and one-action reversible) vs.
@@ -85,7 +86,8 @@ actions.
 **Artifact hiding.** Routines/widgets created in OPEN mode (`created_in_mode`
 column) are **hidden and disabled in SAFE mode** — never listed, never runnable —
 and return **untouched** when Developer mode is active again. Switching modes is
-always allowed.
+always allowed. **Snapshots are the one exception and it is not negotiable — see
+"Snapshots are never hidden by mode" below.**
 
 **Four GLOBAL floors never relax, in ANY mode** (flag any conflict rather
 than working around it silently):
@@ -113,11 +115,114 @@ than working around it silently):
   allow a one-action **Restore to the last verified-working state**, and the
   restore path is itself unbreakable. Snapshots cover config/DB (settings,
   providers, models, skills, widgets, routines) and **exclude the OS keychain**
-  (keys stay put — G1 holds). (New floor, 2026-07-20.)
-- **G4 — Undeletable anchor on weakening.** Turning a guard OFF in Custom mode
-  (and saving) mints a **permanent, undeletable** snapshot anchor that also
-  captures the **app binary** — lowering your own protections always leaves a
-  guaranteed, complete way back.
+  (keys stay put — G1 holds). (New floor, 2026-07-20. **Built** in Phase-2 step 1
+  — see "The snapshot / restore subsystem" below.)
+- **G4 — Undeletable anchor on weakening** (≡ what the other docs call *the
+  undeletable-anchor rule*; use **G4** in code, comments, and test names).
+  Turning a guard OFF in Custom mode (and saving) mints a **permanent,
+  undeletable** snapshot anchor that **records the app build it was minted on** —
+  lowering your own protections always leaves a guaranteed way back to a working
+  **configuration**. (Owner decision 2026-07-20 — this corrects the earlier
+  wording, which promised the anchor "captures the app binary". What ships is a
+  short build **reference** string in `binary_ref` (`{"version", "identifier"}`,
+  never bytes, never a path); a restore whose build differs says so in plain
+  language and changes settings only. **Restoring a previous app *binary* is not
+  implemented** and is tracked as a **Phase-3 updater** item — `updater.rs` is an
+  unwired stub, and a second binary-replacement mechanism inside the recovery
+  floor would collide with it. The repo must not carry a floor its own tests do
+  not cover; that is the anti-pattern the amendment was written against, so the
+  promise was narrowed to what the code does.)
+
+### The snapshot / restore subsystem (G3 — shipped, Phase-2 step 1)
+
+`agent_core/snapshots/snapshot_manager.py` + the `config_snapshots` table. **Not**
+the `UndoManager` beside it: `UndoManager` reverses ONE tool call
+(`action_snapshots`, §4.5); this restores Addison's whole mutable **configuration**.
+Complementary, independent, and they never call each other. Verbs are
+**capture / restore / mint_anchor / prune** — never `record` / `undo_last`.
+
+The single most important property, and the one every change to this code is
+judged against: **restore still works when everything else is broken.** That is
+why the manager imports stdlib plus two schema-mirroring leaf modules and nothing
+else — no provider, no router, no profile, no policy mode, no registry, no gate;
+why retention and payload version are module constants rather than settings (so
+the model cannot shrink the rollback window); and why every payload is written
+**twice** — into the row and into a plain JSON sidecar at
+`<db_dir>/snapshots/<id>.json` (dir `0700`, files `0600`), so a damaged database
+is recoverable with no SQLite at all. `snapshot.list` and
+`snapshot.restoreLastWorking` are the only two RPC methods **exempt** from the
+build-failure short-circuit in `main.py`: with a broken store they are answered
+from the sidecars, and a restore renames the damaged file aside (never deletes it)
+and rebuilds in the same session.
+
+- **Restore is an RPC path, never a registry tool, and never passes the
+  `PermissionGate`** — a gate that could deny a restore would make "the restore
+  path is itself unbreakable" false. The only model-facing snapshot surface that
+  will ever exist is a **LOW, capture-only** `snapshot_now` tool (step 2): it may
+  only ever ADD a row, never restore and never delete.
+- **What is captured** is a declared table set *and* a declared column set
+  (`agent_core/snapshots/scope.py`). Tests fail the build if any schema table, or
+  any column of a captured table, is neither captured nor explicitly excluded —
+  because restore is replace-all, an uncaptured new column would be silently reset
+  to its default **by the recovery path**. Add a Phase-2 table or column, and you
+  decide there, in code.
+- **Never captured:** the keychain (G1), the transcript, `usage_log`,
+  `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
+  itself, and **`tool_grants`** — live consent state, not config: restoring it
+  could reinstate a grant the user had revoked, i.e. a privilege grant delivered
+  by a deliberately ungated one-action button. A restore additionally clears the
+  live in-session grants.
+- **Permanence lives in the DATABASE.** Two `RAISE(ABORT)` triggers refuse to
+  delete an `undeletable = 1` row and refuse to clear the flag — not a `WHERE`
+  clause someone can forget. Three kinds of row carry it: the G4 anchor
+  (`reason='guard_weakened'`, step 2) and the two possible **bottom rows**, which
+  differ by how Addison arrived at this database.
+- **The bottom of the restore walk is not the same row on every install.** On a
+  **fresh install** it is **genesis** (`reason='genesis'`), written
+  `verified_working = 1` — a brand-new install is a configuration that works — so
+  the walk has a guaranteed floor from before the first turn ever runs. On an
+  **upgraded install** (any database predating this subsystem: `config_snapshots`
+  is empty, but the config is not) the bottom row is **`pre_upgrade`** instead,
+  and it is deliberately **not** verified. Nothing has run against it under this
+  subsystem's own eyes, and it is a copy of whatever the user has *right now* —
+  up to and including the broken setup they may be about to need rescuing from.
+  Marking it verified would make the one-action button hand that setup straight
+  back, which is exactly the harm the floor exists to prevent. The honest
+  consequence, and it is the right trade: on an upgraded install
+  `restore_last_working()` has **no target until the first turn completes**, and
+  it says so plainly rather than pretending it restored something. Which install
+  this is gets **inferred, not signalled** — see `_looks_like_a_fresh_install`
+  and the ledger item in `docs/HANDOFF.md`.
+- **`reason` is a closed slug vocabulary** (`REASONS`), never free text — it is
+  written by auto-hooks and, later, by model-orchestrated flows, and free text
+  would let model-authored prose into the config store. Unknown slugs collapse to
+  `other`.
+- **Restore targets the last *verified-working* config, not "before the last
+  edit"** — so it always lands somewhere that actually ran. A row is verified
+  once a turn completed against it. `restore_last_working()` never targets a
+  config identical to the present one, so **each click steps back one distinct
+  proven configuration**; two bad changes deep, the user clicks twice. Retention
+  is 50 snapshots / 30 days (whichever keeps more), with anchors and the newest
+  **two** verified rows exempt **in the SQL** — a rule that could prune the last
+  verified rows would switch G3 off with no error anywhere. Two, not one, and the
+  second is not slack: the restore walk skips any verified row whose fingerprint
+  matches the *current* config (restoring it would change zero bytes), so if only
+  the newest verified row were exempt, the one surviving row could be exactly the
+  row the walk skips — leaving the floor with no target at all.
+
+**Snapshots are never hidden by mode (C6 — a deliberate override).**
+`created_in_mode` ships on `config_snapshots`, but it is **recorded for display
+only**. No list, restore, prune, or delete query may filter on it, in any mode.
+The engineering spec's DDL comment said this column "mirrors existing artifact
+hiding"; that phrasing was **overridden, not followed**. Taken literally it hides
+the way back from exactly the user who most needs it — weakened a guard in Custom,
+broke things, switched to Simple, opens Restore points and sees an empty list.
+That is a larger threat to G3 than any question in the amendment's §13. Two tests
+hold the line: a behavioural one (rows made in every mode restore under SAFE) and
+a **source-level** one, `test_no_snapshot_query_filters_on_created_in_mode`, which
+reads the SQL in `store.py` and `snapshot_manager.py` and fails if the column ever
+appears in a filter position. The behavioural test alone would only prove today's
+behaviour; it would not stop someone adding `AND created_in_mode = ?` next quarter.
 
 ### SAFE-MODE invariants (Simple profile — hold byte-for-byte)
 
@@ -239,9 +344,14 @@ Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.
 
 **Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
-dependency order (amendment §14): (1) the **snapshot/restore subsystem** (floor G3
-— built and hardened first; "restore always works, even from a broken config" is
-its single most important test), (2) the **Custom profile + guard model +
+dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem**
+(floor G3; `agent_core/snapshots/`, the `config_snapshots` table, the `snapshot.*`
+RPC namespace, seven auto-capture hooks + the verified-working site, the sidecar
+cold-start recovery path, and the Settings "Restore points" card. Its single most
+important test, `test_restore_always_works_from_a_broken_config`, passes; the
+subsystem is described above under the floors. **`mint_anchor()` ships fully
+implemented with no caller** — step 2 supplies it, because the Custom-profile guard
+toggle that mints an anchor does not exist yet), (2) the **Custom profile + guard model +
 undeletable anchor** (policy.py), (3) **routing strategies** (4 + custom) +
 companion prefer-quality/prefer-free toggle + free-model disclaimer + graceful
 fallback/cooldown, (4) **free-model endpoints** (legit free/local + add-by-prompt),
@@ -291,9 +401,21 @@ export/import **sharing** and untrusted-content screening (design-doc §11) — 
 pull them forward. (Untrusted-content screening becomes load-bearing once
 free/gray-area endpoints and MCP tools are in play — still v2.)
 
+Also deferred, and specifically **not** to be solved inside the snapshot
+subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a
+**Phase-3 updater** item; G4 promises a config anchor that records its build, see
+above). Building a downgrade path into the recovery floor would put a second,
+uncoordinated binary-replacement mechanism on a collision course with
+`updater.rs`, and it would be the one piece of the floor that could itself brick
+the app. The rest of the step-1 deferrals — the `snapshot_now` tool and the anchor
+minting caller (step 2), `_valid_http_url` credential hardening (step 4), the
+permanent distrust of Addison's own data directory (step 5), `tool_grants` capture
+(step 2, and then as an INTERSECT) — are itemised with their reasons in
+`docs/HANDOFF.md`.
+
 **Pulled forward by the amendment** (build per the Phase-2 order above, not
 opportunistically): the four **named routing strategies** + custom, free/no-frontier
-models + extensible endpoints, the **snapshot/rollback** subsystem, the **Custom**
+models + extensible endpoints, the **snapshot/rollback** subsystem (now built), the **Custom**
 profile, the **coding harness + workspace-trust**, **capability-tiered widgets**,
 the **MCP client**, and OS-authored automation behind the **keyword gate**.
 Scheduling is still **not** Addison triggering itself (G2) — Addison authors, the

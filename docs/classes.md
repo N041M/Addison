@@ -124,8 +124,23 @@ active profile; Custom is a tuned overlay whose *floors* are fixed. The
 `SnapshotManager` captures app-state snapshots (config/DB rows — never keys, so G1
 holds), marks a configuration verified-working after a turn completes, and restores to
 the last verified-working state. Turning a guard off in Custom mode mints an
-**undeletable anchor** that also captures the app binary. `WorkspaceTrust` scopes the
-gate's OPEN-mode auto-grant to a user-granted project directory.
+**undeletable anchor** that records the app build it was minted on (a reference, not
+the binary — owner decision 2026-07-20; see `data-model.md`). `WorkspaceTrust` scopes
+the gate's OPEN-mode auto-grant to a user-granted project directory.
+
+**`SnapshotManager` shipped in Phase-2 step 1**, so its members below are real and the
+signatures are the ones in `agent_core/snapshots/snapshot_manager.py`. Three names in
+the earlier sketch were wrong and are corrected here: `snapshot(reason)` is
+**`capture(...)`** (the verb set is capture / restore / mint_anchor / prune, never
+record / undo_last, so it can never be confused with `UndoManager`);
+`mark_verified_working(config_id)` takes **no argument** (there is no config-identity
+concept in the data model — it captures the *current* config as a new verified row,
+deduped by fingerprint); and `Snapshot.payload` is **`ConfigSnapshot.state_blob`**,
+because dataclasses mirror their table 1:1 and the column is `state_blob`.
+`restore(snapshot_id)` and `restore_last_working()` **both** exist: the second is the
+G3 floor — the one-action button, which cannot take an argument — and is implemented
+as the first, so there is one code path. `mint_anchor()` ships fully implemented with
+no caller; step 2's Custom guard toggle supplies it.
 
 ```mermaid
 classDiagram
@@ -160,21 +175,29 @@ classDiagram
         +revoke()
     }
     class SnapshotManager {
-        +snapshot(reason) Snapshot
-        +mark_verified_working(config_id)
+        +capture(trigger, reason, verified_working, prune) ConfigSnapshot
+        +mark_verified_working() ConfigSnapshot
         +restore(snapshot_id) RestoreResult
-        +mint_anchor(reason) Snapshot
+        +restore_last_working() RestoreResult
+        +last_working_target() dict
+        +mint_anchor(reason) ConfigSnapshot
         +list()
         +delete(snapshot_id)
+        +prune()
     }
-    class Snapshot {
+    class ConfigSnapshot {
         +id
         +created_at
+        +trigger
         +reason
+        +payload_version
+        +state_blob
+        +state_fingerprint
         +verified_working
         +undeletable
         +captures_binary
-        +payload
+        +binary_ref
+        +created_in_mode
     }
 
     Profile --> PolicyMode
@@ -183,7 +206,7 @@ classDiagram
     GuardConfig --> WorkspaceTrust
     PermissionGate ..> GuardConfig
     PermissionGate ..> CapabilityTier
-    SnapshotManager ..> Snapshot
+    SnapshotManager ..> ConfigSnapshot
     SnapshotManager --> Store
 ```
 
@@ -191,9 +214,19 @@ classDiagram
 Developer→OPEN); Custom carries the tunable guard fields. `CapabilityTier` is what the
 gate and the widget validator consult to decide whether a tool/widget's requested
 capability is admissible in the active mode — SAFE admits only `NON_DESTRUCTIVE`.
-Neither `Snapshot.undeletable` anchors nor the four floors (G1, G2, G3, the anchor
-rule) are reachable from `GuardConfig`. All members here are *(Phase-2)*; exact module
-and class names are not fixed yet.
+Neither `ConfigSnapshot.undeletable` anchors nor the four floors (G1, G2, G3, the
+anchor rule — **G4** in code and in `CLAUDE.md`; the two names are the same rule) are
+reachable from `GuardConfig`. `SnapshotManager` and `ConfigSnapshot` are **shipped**
+and their names are fixed; `GuardConfig`, `WorkspaceTrust`, `CapabilityTier` and the
+`CUSTOM` profile are still *(Phase-2)* sketches whose module and class names are not.
+
+`SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
+It reaches no provider, router, profile, policy mode, registry, or gate, because the
+restore path has to work when any of those is broken. For the same reason **restore is
+never a registry tool and never passes the `PermissionGate`**: a gate that could deny a
+restore would make "the restore path is itself unbreakable" false. The only
+model-facing snapshot surface planned is a **LOW, capture-only** `snapshot_now` tool
+(step 2) that may add a row and nothing else.
 
 ## External tools via MCP
 

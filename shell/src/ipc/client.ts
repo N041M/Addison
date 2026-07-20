@@ -18,6 +18,8 @@ import {
   parseConversationSummaries,
   type ConversationSummary,
   type Skill,
+  type Snapshot,
+  type SnapshotList,
   type Widget,
   type WidgetProposal,
   type WidgetSpec,
@@ -415,6 +417,33 @@ export const ipc = {
     call(Method.SkillSetEnabled, { id, enabled }).then(parseSkillMutation),
   deleteSkill: (id: string): Promise<SkillMutationResult> =>
     call(Method.SkillDelete, { id }).then(parseSkillMutation),
+
+  // Restore points — the G3 guaranteed-rollback floor. These are plain RPC
+  // methods, never registry tools: a floor the permission gate could deny is not
+  // a floor. `restoreLastWorking` takes no argument on purpose — the one-action
+  // way back must not require the user to know which point to pick.
+  listSnapshots: (): Promise<SnapshotList> =>
+    call(Method.SnapshotList).then(parseSnapshotList),
+  createSnapshot: (): Promise<SnapshotMutationResult> =>
+    call(Method.SnapshotCreate).then(parseSnapshotMutation),
+  // NO CALLER IN STEP 1, on purpose — the same staging the core gives
+  // `mint_anchor()` (contract §1.1 item 4, §1.2). Step 1's Settings card ships a
+  // list, "Save a snapshot now", the one-action "Restore to the last working
+  // state" and a per-row Remove; it deliberately ships NO per-row Restore
+  // (contract §1.1 item 11), so nothing here calls this yet. It stays because
+  // step 2's Custom-profile anchor path restores one specific point by id, and
+  // because `snapshot.restore` is a frozen method string (§11.3 item 7) that
+  // step 2 must not have to re-derive. snapshots.test.ts covers it so it cannot
+  // rot in the meantime. If you add a per-row Restore, it follows §11.2: the
+  // fern-filled two-step INLINE confirm, never window.confirm(), never the
+  // danger token — going back to a setup that worked is a recovery, not a
+  // destructive act.
+  restoreSnapshot: (id: string): Promise<SnapshotRestoreResult> =>
+    call(Method.SnapshotRestore, { id }).then(parseSnapshotRestore),
+  restoreLastWorking: (): Promise<SnapshotRestoreResult> =>
+    call(Method.SnapshotRestoreLastWorking).then(parseSnapshotRestore),
+  deleteSnapshot: (id: string): Promise<SnapshotMutationResult> =>
+    call(Method.SnapshotDelete, { id }).then(parseSnapshotMutation),
 };
 
 // ---------------------------------------------------------------------------
@@ -698,6 +727,101 @@ function parseSkillMutation(result: unknown): SkillMutationResult {
     ok: obj?.ok === true,
     id: typeof obj?.id === "string" ? obj.id : undefined,
     error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Restore-point shapes + defensive parsers (G3). Fail CLOSED, and here that word
+// carries more weight than usual: a row we can't identify or date is a row the
+// card could offer as a way back and then fail to restore. Better to not offer
+// it. Nothing in these payloads is secret — no copy of the config, no key, no
+// chat — so the parsers only have to worry about shape.
+// ---------------------------------------------------------------------------
+
+/** snapshot.create/delete → {ok, snapshotId?, error?}. An expected refusal (a
+ * permanent row, a failed save) is a resolved {ok:false} carrying a plain
+ * sentence, never a reject. */
+export interface SnapshotMutationResult {
+  ok: boolean;
+  snapshotId?: string;
+  error?: string;
+}
+
+/** snapshot.restore/restoreLastWorking → {ok, snapshotId?, detail?, error?,
+ * binaryMismatch?}. `detail` is the plain "here's what just happened" sentence;
+ * `binaryMismatch` says the point was saved on a different version of Addison. */
+export interface SnapshotRestoreResult {
+  ok: boolean;
+  snapshotId?: string;
+  detail?: string;
+  error?: string;
+  binaryMismatch?: string;
+}
+
+/** The label the core gives the very first snapshot. Restoring to it throws away
+ * everything the person has set up since install, so the card says so out loud
+ * (§11.2). Kept in step with REASONS["genesis"] in snapshot_manager.py. */
+export const GENESIS_LABEL = "Addison as first installed";
+
+export function parseSnapshotList(result: unknown): SnapshotList {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.snapshots) ? (obj.snapshots as unknown[]) : [];
+  const out: Snapshot[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    if (!row || typeof row.id !== "string" || !row.id) continue;
+    // No usable timestamp means the row can't be named to the person before they
+    // click it, and naming the target is the whole point of the confirm step.
+    if (typeof row.createdAt !== "number" || !Number.isFinite(row.createdAt)) continue;
+    // Accept either camel/snake spelling, like parseWidgetList.
+    const rawMode = row.createdInMode ?? row.created_in_mode;
+    out.push({
+      id: row.id,
+      createdAt: row.createdAt,
+      trigger: row.trigger === "on_command" ? "on_command" : "auto",
+      reason: typeof row.reason === "string" ? row.reason : "other",
+      // Never fall back to the raw slug — a slug is a machine fact and this line
+      // is read by the person deciding whether to go back to it.
+      reasonLabel:
+        typeof row.reasonLabel === "string" && row.reasonLabel ? row.reasonLabel : "Before a change",
+      // Default OFF for all three: claiming a point is verified-working, or
+      // permanent, or version-stamped when the core didn't say so would each be
+      // a promise the floor can't keep.
+      verifiedWorking: row.verifiedWorking === true,
+      undeletable: row.undeletable === true,
+      capturesBinary: row.capturesBinary === true,
+      createdInMode:
+        rawMode === "open" || rawMode === "safe" || rawMode === "custom" ? rawMode : undefined,
+    });
+  }
+  const target = typeof obj?.lastWorkingId === "string" ? obj.lastWorkingId : undefined;
+  return {
+    snapshots: out,
+    lastWorkingId: target,
+    lastWorkingLabel: typeof obj?.lastWorkingLabel === "string" ? obj.lastWorkingLabel : undefined,
+    lastWorkingProfileChange:
+      typeof obj?.lastWorkingProfileChange === "string" ? obj.lastWorkingProfileChange : undefined,
+    warning: typeof obj?.warning === "string" ? obj.warning : undefined,
+  };
+}
+
+function parseSnapshotMutation(result: unknown): SnapshotMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    snapshotId: typeof obj?.snapshotId === "string" ? obj.snapshotId : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+function parseSnapshotRestore(result: unknown): SnapshotRestoreResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    snapshotId: typeof obj?.snapshotId === "string" ? obj.snapshotId : undefined,
+    detail: typeof obj?.detail === "string" ? obj.detail : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+    binaryMismatch: typeof obj?.binaryMismatch === "string" ? obj.binaryMismatch : undefined,
   };
 }
 
