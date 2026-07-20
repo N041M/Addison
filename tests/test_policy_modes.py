@@ -38,7 +38,17 @@ from agent_core.routines.model import Routine, RoutineStep, routine_to_json
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
 from agent_core.tools.registry import ToolRegistry
-from agent_core.tools.run_command import is_read_only_command
+# NOTE: the REAL run_command now returns is_destructive=True for every command
+# (owner decision 2026-07-20 — classifying arbitrary shell as read-only is a
+# losing game). The double below keeps a tiny per-call classifier ON PURPOSE: its
+# subject is the GATE/ENGINE dispatch on is_destructive — that a non-destructive
+# step auto-allows and a destructive one cards in OPEN mode — which is generic
+# machinery any dev tool can drive, independent of run_command's own policy.
+def _fake_is_read_only(command: str) -> bool:
+    text = command.strip()
+    if not text or any(c in text for c in ";&|<>`$"):
+        return False
+    return text.split()[0] in {"ls", "cat", "pwd", "echo", "grep"}
 
 
 # ============================================================================
@@ -170,7 +180,7 @@ class _FakeRunCommand:
         self.ran: list[dict] = []
 
     def is_destructive(self, args: dict) -> bool:
-        return not is_read_only_command(str(args.get("command", "")))
+        return not _fake_is_read_only(str(args.get("command", "")))
 
     def permission_detail(self, args: dict) -> str | None:
         return str(args.get("command", "")) or None
@@ -475,11 +485,29 @@ def test_dev_artifacts_hidden_in_safe_and_returned_in_open_round_trip(tmp_path):
         _shutdown(reader, thread)
 
 
-def test_dev_routine_runs_in_developer_mode(tmp_path):
+def test_dev_routine_cards_even_for_a_harmless_command(tmp_path):
+    """Every run_command step cards now, including a plain ``echo`` (owner decision
+    2026-07-20). The card names the exact command; after approval the run
+    completes. There is no longer an auto-allowed "read-only" path to hide a
+    mutation in — that is the point of removing the classifier."""
     server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
     try:
-        # The dev routine's read-only echo command auto-allows and completes.
-        result = _rpc(reader, writer, 1, Method.ROUTINE_RUN, {"routineId": "dev-r"})["result"]
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.ROUTINE_RUN, "params": {"routineId": "dev-r"}}
+        )
+        card = writer.wait_for(
+            lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT
+        )
+        assert card["params"]["toolId"] == "run_command"
+        assert card["params"]["description"] == (
+            "This time it wants to run: echo policy-mode-test"
+        )
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 100, "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": "run_command", "allow": True}}
+        )
+        result = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
         assert result["ok"] is True and result["status"] == "completed"
     finally:
         _shutdown(reader, thread)
@@ -541,18 +569,27 @@ def test_widget_and_routine_rows_carry_created_in_mode(tmp_path):
         _shutdown(reader, thread)
 
 
-def test_widget_run_read_only_command_auto_allows_in_open(tmp_path):
-    """The rail's Run pill on a read-only command widget completes silently —
-    no permission card (OPEN auto-allows non-destructive), output returned."""
+def test_widget_run_command_cards_even_when_harmless(tmp_path):
+    """The rail's Run pill on a command widget now raises a card too, even for a
+    harmless echo (owner decision 2026-07-20). After approval it completes and
+    returns output. There is no silent auto-allow path any more."""
     server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
     try:
-        result = _rpc(reader, writer, 1, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.WIDGET_RUN, "params": {"id": "dev-w"}}
+        )
+        card = writer.wait_for(
+            lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT
+        )
+        assert card["params"]["toolId"] == "run_command"
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 100, "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": "run_command", "allow": True}}
+        )
+        result = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
         assert result["ok"] is True
         assert isinstance(result["output"], str)
-        cards = [
-            f for f in writer.frames if f.get("method") == Method.PERMISSION_REQUEST_GRANT
-        ]
-        assert cards == []
     finally:
         _shutdown(reader, thread)
 

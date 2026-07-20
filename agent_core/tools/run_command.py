@@ -10,20 +10,26 @@ Developer profile). It is registered ``dev_only`` (tools/registry.py), so:
     is dev_only and never reachable from SAFE mode;
   * as belt-and-suspenders, ``execute`` itself REFUSES to run under SAFE mode.
 
-DESTRUCTIVE CLASSIFICATION (feeds the PermissionGate in OPEN mode). A command is
-treated as READ-ONLY (destructive=False -> the gate auto-allows it) only when
-BOTH hold:
-  1. its first token is in this vetted read-only allowlist —
-       ls, cat, head, tail, grep, rg, find, pwd, echo, which, file, wc, du, df,
-       uname, ps
-     plus ``git`` when its subcommand is one of: status, log, diff, show;
-  2. it contains NONE of the shell metacharacters that chain, pipe, or redirect:
-       ;   &&   ||   |   >   <   `   $(
-EVERYTHING else is destructive=True and takes the normal permission-card flow.
-The allowlist is deliberately conservative: anything not provably read-only
-prompts. This is a gate heuristic, not a sandbox — OPEN mode is "nearly
-completely open", and the destructive check is what keeps a prompt in front of
-the dangerous majority.
+EVERY COMMAND CARDS (owner decision 2026-07-20). ``is_destructive`` returns True
+unconditionally, so the PermissionGate raises the per-invocation destructive card
+for every run_command call in OPEN mode — the card shows the exact command text,
+and running it requires the user's approval each time.
+
+There used to be a classifier here that auto-allowed "read-only" commands
+(``ls``, ``grep``, a bare ``git status`` …) without a card. It was defeated three
+separate ways during hardening: a metacharacter list beaten by a bare newline
+(``shlex`` treats ``\n`` as whitespace, so ``ls\nrm -rf /`` read as a lone
+``ls``); short-flag matching beaten by bundling (``grep -rf /etc/passwd``) and
+attaching (``grep -f/etc/passwd``); and allowlisted readers turned into arbitrary
+writes by a flag (``file -Cm`` compiles a magic file to disk). Statically deciding
+whether an arbitrary shell command is read-only is a losing game: the failure
+lands OUTSIDE the G3 rollback floor (an ``rm -rf`` is not undoable), so the safe
+choice is to remove the auto-allow, not to keep patching the classifier. The card
+is cheap; a misclassification is not.
+
+This is a gate decision, not a sandbox — OPEN mode is still "nearly completely
+open." What changed is only that the dangerous majority no longer has a
+frictionless minority hiding a mutation inside it.
 ============================================================================
 """
 
@@ -41,40 +47,12 @@ from agent_core.tools.base import (
     ToolResult,
 )
 
-# First tokens that are read-only. ``git`` is handled separately (only certain
-# subcommands are read-only), so it is NOT in this bare-command set.
-_READ_ONLY_COMMANDS: frozenset[str] = frozenset(
-    {
-        "ls", "cat", "head", "tail", "grep", "rg", "find", "pwd", "echo",
-        "which", "file", "wc", "du", "df", "uname", "ps",
-    }
-)
-_READ_ONLY_GIT_SUBCOMMANDS: frozenset[str] = frozenset({"status", "log", "diff", "show"})
-
-# Metacharacters that chain / pipe / redirect / substitute. Any of these makes a
-# command destructive regardless of its first token (it could smuggle a mutation).
-_METACHARACTERS: tuple[str, ...] = (";", "&&", "||", "|", ">", "<", "`", "$(")
-
 _MAX_OUTPUT_CHARS = 4000    # transcript-friendly truncation
 _TIMEOUT_SECONDS = 30
 
 _SAFE_MODE_REFUSAL = (
     "Running commands is only available in the Developer profile."
 )
-
-
-def is_read_only_command(command: str) -> bool:
-    """True iff ``command`` is provably read-only per the module docstring's rules."""
-    text = command.strip()
-    if not text:
-        return False
-    if any(meta in text for meta in _METACHARACTERS):
-        return False
-    tokens = text.split()
-    first = tokens[0]
-    if first == "git":
-        return len(tokens) >= 2 and tokens[1] in _READ_ONLY_GIT_SUBCOMMANDS
-    return first in _READ_ONLY_COMMANDS
 
 
 class RunCommandTool:
@@ -99,11 +77,15 @@ class RunCommandTool:
     )
 
     def is_destructive(self, args: dict) -> bool:
-        """Per-call classification the gate consults (tools/base.call_is_destructive).
-        Read-only commands are non-destructive (auto-allowed in OPEN mode); anything
-        else is destructive and prompts — PER INVOCATION (gate.authorize): approving
-        one destructive command never authorizes a later one."""
-        return not is_read_only_command(str(args.get("command", "")))
+        """Always True — every run_command call cards (owner decision 2026-07-20;
+        see the module docstring for why the read-only auto-allow was removed).
+
+        The gate consults this (tools/base.call_is_destructive) and, because it is
+        True, raises the destructive card PER INVOCATION (gate.authorize): the card
+        shows this exact command, and approving one command never authorizes a
+        later one. The ``args`` are unused — no property of the command text can
+        make it safe enough to skip the card, which is the whole point."""
+        return True
 
     def permission_detail(self, args: dict) -> str | None:
         """The exact command text, for the permission card and the Activity Panel.
