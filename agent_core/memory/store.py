@@ -880,14 +880,18 @@ class Store:
     def set_config_snapshot_verified(self, snapshot_id: str) -> None:
         """Flag one snapshot verified-working. Idempotent.
 
-        NO PRODUCTION CALLER, and that is the design rather than an oversight —
-        it is frozen by contract §4.1, so it stays. Nothing flips this flag on an
-        EXISTING row: ``SnapshotManager.mark_verified_working()`` deliberately
-        writes a NEW row for the current config instead of marking an older one,
-        because the pre-change snapshot holds a config the turn never ran
-        against, and marking it verified would make "restore lands somewhere that
-        actually ran" false — the exact failure G3 exists to prevent. Every row
-        that carries the flag therefore gets it at INSERT time.
+        Called from ``SnapshotManager.mark_verified_working()`` for exactly one
+        case: a PERMANENT row whose fingerprint proves the completed turn ran
+        against its precise contents. Everything else still gets the flag at
+        INSERT time, because a pre-change snapshot holds a config the turn never
+        ran against and flagging one would make "restore lands somewhere that
+        actually ran" false — the exact failure G3 exists to prevent. The
+        fingerprint match is what separates the two: it is evidence, not a guess.
+
+        The narrow case is worth the method because the permanent row is the one
+        restore point retention can never prune and the triggers refuse to
+        delete. Before this it could never become a target however many turns ran
+        against it, and a byte-identical clone was written beside it instead.
 
         It is kept because the flag is a column any later caller may legitimately
         need to set (a step-2 anchor promoted by copy, a repair path rebuilding

@@ -2048,3 +2048,86 @@ def test_capture_scope_covers_every_column_of_every_captured_table(store: Store)
             f"listed in _EXCLUDED_COLUMNS — a restore would reset them to their "
             f"defaults"
         )
+
+
+# --- the permanent row earns its verified flag (owner suggestion 2026-07-20) --
+
+
+def test_a_turn_against_the_permanent_row_verifies_it_instead_of_cloning_it(
+    store: Store,
+) -> None:
+    """The one restore point that is always there should be provable.
+
+    Before this, an upgraded install that answered one message ended up with TWO
+    rows holding byte-identical config: the permanent ``pre_upgrade`` row, still
+    unverified, and a fresh ``turn_verified`` clone. So the row retention can
+    never prune and the triggers refuse to delete — the row most worth returning
+    to — was the one row that could never become a target, no matter how many
+    turns ran against exactly its contents."""
+    store.set_setting("selected_model", "the-model-they-upgraded-with")
+    manager = _manager(store, created_the_database=False)
+
+    manager.mark_verified_working()
+
+    rows = manager.list()
+    assert len(rows) == 1, f"expected the permanent row to be reused, got {rows}"
+    assert rows[0]["reason"] == "pre_upgrade"
+    assert rows[0]["verified_working"] is True
+    assert rows[0]["undeletable"] is True
+
+
+def test_the_verified_permanent_row_is_a_real_restore_target(store: Store) -> None:
+    """Verifying it is only worth anything if the button then reaches THAT row.
+
+    Asserting the settings came back is not enough — the clone holds identical
+    config, so a restore onto it looks the same from the outside and the test
+    would pass against the behaviour this change replaces. What distinguishes
+    them is WHICH row the button landed on, so that is what gets asserted: the
+    permanent one, the row retention can never prune."""
+    store.set_setting("selected_model", "good-model")
+    manager = _manager(store, created_the_database=False)
+    manager.mark_verified_working()
+
+    store.set_setting("selected_model", "broken-model")
+    result = manager.restore_last_working()
+
+    assert result.ok is True
+    assert store.get_setting("selected_model", "") == "good-model"
+    assert result.snapshot_id is not None
+    landed = store.get_config_snapshot(result.snapshot_id)
+    assert landed is not None
+    assert landed.undeletable is True
+    assert landed.reason == "pre_upgrade"
+
+
+def test_an_ordinary_snapshot_is_never_flagged_after_the_fact(store: Store) -> None:
+    """The narrowing is the safety. A pre-change snapshot holds a config the turn
+    never ran against, so flagging one would make "restore lands somewhere that
+    actually ran" false — the failure G3 exists to prevent. Only a PERMANENT row
+    whose fingerprint proves the turn ran against its exact contents qualifies.
+
+    This one cannot fail against the code it replaced — that code flagged nothing
+    at all, so removing the feature makes it pass trivially. It is written
+    against the PLAUSIBLE BAD FIX instead: drop ``row.get("undeletable") and``
+    from ``_permanent_row_matching`` and it fails.
+
+    The setup has to be exact or it proves nothing. The permanent row must hold a
+    DIFFERENT config from the one being verified, otherwise it matches first and
+    the ordinary row is never reached; and no verified row may exist yet, or the
+    fingerprint check at the top returns before either lookup runs. So: boot on
+    one config, move to another, snapshot there, and verify there."""
+    store.set_setting("selected_model", "at-boot")
+    manager = _manager(store, created_the_database=False)  # permanent row holds "at-boot"
+
+    store.set_setting("selected_model", "changed-since")
+    manager.capture(trigger="auto", reason="provider_connect")  # ordinary row holds current
+    ordinary = [row for row in manager.list() if row["reason"] == "provider_connect"]
+    assert ordinary, "the fixture did not produce the pre-change row this test needs"
+    assert not any(row["verified_working"] for row in manager.list()), (
+        "a verified row here would short-circuit before the lookup under test"
+    )
+
+    manager.mark_verified_working()
+
+    after = {row["id"]: row for row in manager.list()}
+    assert after[ordinary[0]["id"]]["verified_working"] is False

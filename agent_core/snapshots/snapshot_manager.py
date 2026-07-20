@@ -729,6 +729,12 @@ class SnapshotManager:
             refs = self._store.verified_config_snapshot_refs()
             if refs and refs[0].get("state_fingerprint") == fingerprint:
                 return None
+            permanent = self._permanent_row_matching(fingerprint)
+            if permanent is not None:
+                if permanent["verified_working"]:
+                    return None
+                self._store.set_config_snapshot_verified(permanent["id"])
+                return self._store.get_config_snapshot(permanent["id"])
             return self._write_row(
                 tables=tables,
                 trigger="auto",
@@ -739,6 +745,31 @@ class SnapshotManager:
             )
         except Exception:
             return None
+
+    def _permanent_row_matching(self, fingerprint: str) -> dict | None:
+        """A permanent row holding EXACTLY the configuration that just answered.
+
+        The one case where flagging an existing row is honest rather than the
+        failure the docstring above warns about. A pre-change snapshot holds a
+        config the turn never ran against — but a fingerprint match is proof the
+        turn ran against precisely THIS content, which is the whole evidence
+        ``verified_working`` is meant to record.
+
+        Narrowed to ``undeletable`` rows on purpose, because that is where it
+        pays. The permanent bottom row (genesis / pre_upgrade / a G4 anchor) is
+        the one restore point retention can never prune and the triggers refuse
+        to delete — so it is the row most worth being able to return to, and it
+        was previously the one row that could never become a target, however many
+        turns ran against it. Writing a second row with byte-identical content
+        instead left the guaranteed row permanently unproven.
+
+        Ordinary rows are deliberately left alone: verifying an arbitrary
+        pre-change snapshot buys nothing the fresh ``turn_verified`` row does not
+        already provide, and would widen a rule that only needs to be narrow."""
+        for row in self._store.list_config_snapshots():
+            if row.get("undeletable") and row.get("state_fingerprint") == fingerprint:
+                return row
+        return None
 
     # --- restore -----------------------------------------------------------
 
