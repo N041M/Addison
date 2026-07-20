@@ -1,21 +1,30 @@
 # CLAUDE.md
 
-Guidance for working in this repository. Read the two specs before non-trivial
+Guidance for working in this repository. Read the specs before non-trivial
 work — this file is the short version, they are authoritative:
 
 - `docs/addison-design-doc.md` — product/UX rationale (the *why*)
-- `docs/addison-engineering-spec.md` — build brief; **architecture is final for v1**
+- `docs/addison-engineering-spec.md` — build brief
+- `docs/addison-scope-amendment-2026-07.md` — **the 2026-07-20 scope amendment:
+  butler identity; Developer = coding harness / Simple = companion / new Custom
+  profile; the guaranteed-rollback floor (G3); widgets buildable in all modes,
+  capability-gated; MCP client; routing strategies; free / no-frontier models.
+  Where it and the two specs differ, the amendment wins.**
 
 ## What this is
 
-Addison is a local-first desktop chat agent that is **approachable by default and
-powerful on request**. Its default audience is non-technical users (personas
-"Mira", 54, and "Petr", 68 — design-doc §5); technical users/developers are served
-by an opt-in **Developer profile** (design-doc §7.11), not by complicating the
-default. A profile reshapes the *surface and default capabilities* only — it
-**never** changes the security model (see invariants below). Simple is the default;
-Developer is opt-in. When adding a capability, ask which profile surfaces it — do
-not leak developer affordances into Simple.
+Addison is a local-first desktop **butler** — **approachable by default and
+powerful on request** (scope amendment 2026-07-20). Its default audience is
+non-technical users (personas "Mira", 54, and "Petr", 68 — design-doc §5), served
+by the **Simple** profile as an all-in-one **companion**. Technical users get the
+opt-in **Developer** profile: a **Claude-Code-class coding-agent harness** (real
+project work — read/edit files, run builds/tests, iterate) with Addison's safety +
+QoL layered on. A third **Custom** profile (deep in Settings, behind extra
+confirmation) lets advanced users tune the *prompting* guards — never the floors.
+A profile reshapes the *surface, capability tier, and prompting* — it **never**
+removes a global floor (see invariants). Simple is the default; Developer/Custom
+are opt-in. When adding a capability, ask which profile/tier surfaces it — do not
+leak developer affordances into Simple.
 
 Three processes, three trust levels (spec §1.3):
 
@@ -45,6 +54,19 @@ truth, there is no separately-persisted mode (`agent_core/policy.py`,
   `command` step/kind; and the permission gate **auto-allows non-destructive
   actions, prompting ONLY for destructive ones**. "Open" means *fewer prompts, not
   no gate* — the gate still runs (and logs) on every call.
+- **Custom profile → a user-tuned surface** (scope amendment 2026-07-20; deep in
+  Settings, behind extra confirmation). The user may loosen/tighten the *prompting*
+  guards (per-invocation destructive card, auto-grant scope, the workspace-trust
+  boundary, keyword-gate strictness) — **never** the global floors. Turning any
+  guard OFF and saving mints an **undeletable snapshot anchor** (which also
+  captures the app binary), so weakening safety always leaves a guaranteed way back.
+
+Organizing principle (amendment): **reversible data/config** (endpoints, models,
+guards, skills, widgets, routines — all snapshotted and one-action reversible) vs.
+**inviolable machinery** (Addison's code and the global floors, never alterable by
+user or model). The apparent "users can reconfigure Addison" / "users can't break
+Addison" tension resolves here: everything a user or the model can change is
+reversible config sitting on the rollback floor (G3).
 
 **Destructive-prompt rule (OPEN mode).** The gate auto-grants a call iff it is
 non-destructive; destructive calls raise a permission card **per invocation** —
@@ -65,7 +87,7 @@ column) are **hidden and disabled in SAFE mode** — never listed, never runnabl
 and return **untouched** when Developer mode is active again. Switching modes is
 always allowed.
 
-**Two GLOBAL invariants never relax, in EITHER mode** (flag any conflict rather
+**Four GLOBAL floors never relax, in ANY mode** (flag any conflict rather
 than working around it silently):
 
 - **G1 — API keys never reach the frontend/webview or SQLite.** They live in the
@@ -77,8 +99,25 @@ than working around it silently):
   process memory only). The Setup Assistant relay's keys never exist in this
   repo's runtime — they're external and server-side. **Do not touch this
   machinery.**
-- **G2 — No scheduling / autonomous triggering in v1** (§6.7). This is a v1 scope
-  line, not a mode question — it holds in SAFE *and* OPEN.
+- **G2 — Addison never triggers itself.** No autonomous self-triggering or
+  self-scheduling, in any mode. Addison *may author* automation the OS runs (a
+  launchd/cron entry, a watcher script) — like Claude Code scaffolding a cron job;
+  the OS runs it, Addison never fires itself. Running/arming a powerful action
+  requires a **user-typed keyword prefix** (e.g. `!run …`); because it is
+  user-typed, observed/injected content can never supply it, so the prefix is also
+  a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
+  "no scheduling in v1" wording.)
+- **G3 — Guaranteed rollback (the operative meaning of "safety").** Neither the
+  user nor the model can drive Addison into an unrecoverable state. App-state
+  **snapshots** — automatic before any risky change, plus **on-command** — always
+  allow a one-action **Restore to the last verified-working state**, and the
+  restore path is itself unbreakable. Snapshots cover config/DB (settings,
+  providers, models, skills, widgets, routines) and **exclude the OS keychain**
+  (keys stay put — G1 holds). (New floor, 2026-07-20.)
+- **G4 — Undeletable anchor on weakening.** Turning a guard OFF in Custom mode
+  (and saving) mints a **permanent, undeletable** snapshot anchor that also
+  captures the **app binary** — lowering your own protections always leaves a
+  guaranteed, complete way back.
 
 ### SAFE-MODE invariants (Simple profile — hold byte-for-byte)
 
@@ -103,16 +142,23 @@ relaxes exactly these four, and only as spelled out above.
    SAFE/OPEN distinction is a *filtered view* over the one shared registry
    (`visible_tools(mode)`), never a second registry, so this no-escalation
    property survives OPEN mode intact.
-4. **Widgets are declarative specs (routine-run or whitelisted stat display) —
-   never code; enforced at save and render.** In SAFE mode a widget is one of
-   exactly two fixed shapes (`agent_core/widgets.py`): `{kind: "routine",
-   routineId, title}` runs a saved routine through the *existing* routine.run path
-   (same registry + gate, zero new execution surface), or `{kind: "stat", source,
-   title}` displays a value from a fixed whitelist (`tokens_month`,
-   `provider_latency`, `connections`). No eval, expression, or template field
-   exists; unknown kinds/sources are rejected at save and hidden at render. (OPEN
-   mode adds a third `{kind: "command", command, title}` shape, valid only in OPEN
-   and hidden in SAFE.)
+4. **Widgets are capability-gated, not code — buildable in every mode (scope
+   amendment 2026-07-20).** Widgets can be *built* in all modes; the mode gates
+   the *capability*, not the ability to build. SAFE-tier widgets come from a
+   **safe, non-destructive vocabulary** (`agent_core/widgets.py`): the launchers
+   (`{kind:"routine",routineId,title}` runs a saved routine through the *existing*
+   routine.run path — same registry + gate, zero new execution surface;
+   `{kind:"stat",source,title}` from the fixed whitelist `tokens_month` /
+   `provider_latency` / `connections`) **plus new interactive display kinds**
+   (to-do/checklist, note, timer, …) rendered by *trusted Addison components* and
+   backed by safe storage. Still **no eval, no arbitrary code, no raw-code/template
+   field** — SAFE-1 and the webview CSP hold; a SAFE widget can never reach
+   anything that harms the machine or Addison. Unknown kinds/sources are rejected
+   at save and hidden at render. Higher tiers (Developer/Custom) add **code-backed
+   / system-capable** widgets (today's OPEN `{kind:"command",…}`; monitors/scripts
+   under workspace-trust + undo + snapshot + keyword gate). Surviving guarantee: a
+   widget never exceeds its mode's tier, and SAFE widgets are non-destructive by
+   construction.
 
 ## Module boundary rule (spec §2)
 
@@ -185,12 +231,24 @@ Then (5) remaining tools + their `undo()`, (6) `UndoManager`, (7) Tauri shell +
 IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router, (11)
 Profiles — the Simple/Developer split, which now ALSO derives the policy mode
 (policy.py): Developer = OPEN mode reshapes the visible tool set and the gate's
-prompting, but NEVER the two GLOBAL invariants (keys isolation, no scheduling).
-The permission gate is mode-aware (`authorize`), not profile-blind — the earlier
-"never the permission gate" framing is superseded by the mode-scoped model above.
+prompting, but NEVER the global floors. The permission gate is mode-aware
+(`authorize`), not profile-blind — the earlier "never the permission gate"
+framing is superseded by the mode-scoped model above.
 
 Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
 section — implement them in order, not opportunistically.
+
+**Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
+dependency order (amendment §14): (1) the **snapshot/restore subsystem** (floor G3
+— built and hardened first; "restore always works, even from a broken config" is
+its single most important test), (2) the **Custom profile + guard model +
+undeletable anchor** (policy.py), (3) **routing strategies** (4 + custom) +
+companion prefer-quality/prefer-free toggle + free-model disclaimer + graceful
+fallback/cooldown, (4) **free-model endpoints** (legit free/local + add-by-prompt),
+(5) **harness + workspace-trust** (OPEN), (6) **widget capability tiers + expanded
+safe vocabulary** (to-do/checklist, note, timer), (7) **MCP client** tools via the
+registry + gate, (8) the **automation keyword gate** + author-OS-run automation.
+Steps 3–4 (companion) can run in parallel with 5–8 once 1–2 land.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 
@@ -208,19 +266,38 @@ in the `provider_config` table; the custom base URL is the ONE permitted `http:/
 case (validated http(s)://). The orchestrator stays provider-agnostic — capability
 differences via `ProviderCapabilities`, never `isinstance`.
 
-## Do NOT build yet (spec §10)
+**Routing & free models (scope amendment 2026-07-20).** Routing gains four named
+strategies — quality-first (default; strong→weak degrade), cost-first, local-only,
+balanced — plus a Developer custom builder; the companion sees a single
+prefer-quality/prefer-free toggle. Strong-first with graceful fallback + provider
+cooldown; a visible "answered with a free model" disclaimer when a free model
+answers. Addison must be useful **without a paid frontier key** (local Ollama +
+legitimate free cloud tiers); new endpoints are extensible and addable by prompting
+Addison (reversible config, keys per G1). Gray-area aggregating routers
+(OmniRoute/LiteLLM) are the user's own choice — documented on GitHub only, never
+surfaced or endorsed in-app. **MCP is a *client* capability** (consume external
+tools through the existing registry + gate; SAFE admits only read-only/undo-able
+ones), never a server/gateway.
 
-Automatic
-task-based model routing/auto-switching (**planned for v2** — v1 ships the
-substrate: `vision`/`audio` capability flags and multiple local models with an
-*explicit* picker, but the automatic choice among them is v2), the Context
-Budget Manager / automatic long-conversation continuation (**planned for v2**
-— spec §4.8; v1 ships only the schema substrate at step 6, and it is
-orchestrator machinery, never a registry tool), messaging channels, Routine
-step-editing UI, any Routine scheduling/triggers, a Rust rewrite of the Agent
-Core, and the two v2 items adopted from the 2026-07 ecosystem survey —
-Routine export/import sharing and untrusted-content screening (design-doc
-§11 "Adopted from the 2026-07 ecosystem survey") — do not pull them forward.
+## Do NOT build yet (spec §10; reconciled with the 2026-07-20 amendment)
+
+Still deferred: **fully-automatic task classification** for routing (the *choice
+logic* that picks a strategy per task — v2; the four *named* strategies below ship
+now), the Context Budget Manager / automatic long-conversation continuation (**v2**
+— spec §4.8; v1 ships only the schema substrate, orchestrator machinery, never a
+registry tool), messaging channels, Routine step-editing UI, a Rust rewrite of the
+Agent Core, and the two v2 items from the 2026-07 ecosystem survey — Routine
+export/import **sharing** and untrusted-content screening (design-doc §11) — do not
+pull them forward. (Untrusted-content screening becomes load-bearing once
+free/gray-area endpoints and MCP tools are in play — still v2.)
+
+**Pulled forward by the amendment** (build per the Phase-2 order above, not
+opportunistically): the four **named routing strategies** + custom, free/no-frontier
+models + extensible endpoints, the **snapshot/rollback** subsystem, the **Custom**
+profile, the **coding harness + workspace-trust**, **capability-tiered widgets**,
+the **MCP client**, and OS-authored automation behind the **keyword gate**.
+Scheduling is still **not** Addison triggering itself (G2) — Addison authors, the
+OS runs.
 
 ## Commands
 
