@@ -51,7 +51,3 @@ Even if advised of the possibility of such damage.
 ## 7. Commercial Licensing
 
 The maintainer may grant explicit commercial licenses upon request. Contact via GitHub.
-
----
-
-This license is designed to be as protective as reasonably possible while remaining readable. It is not legal advice.
