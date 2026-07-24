@@ -14,8 +14,12 @@ _PROTOCOL_TS = _REPO_ROOT / "shell" / "src" / "types" / "protocol.ts"
 
 # Only constant-definition lines count — docstrings/comments may mention methods
 # too, and must not be able to mask a missing constant.
-_PY_CONSTANT = re.compile(r'^\s+[A-Z_]+ = "([a-z]+\.[a-zA-Z]+)"', re.MULTILINE)
-_TS_CONSTANT = re.compile(r'^\s+\w+: "([a-z]+\.[a-zA-Z]+)"', re.MULTILINE)
+# The namespace half is [a-zA-Z]+, not [a-z]+. It was lowercase-only, so the
+# camelCase namespaces `costPlan.propose` / `costPlan.apply` matched NEITHER
+# pattern and the one guard standing in for codegen silently ignored the two
+# newest methods — deleting them from protocol.ts left this test green.
+_PY_CONSTANT = re.compile(r'^\s+[A-Z_]+ = "([a-zA-Z]+\.[a-zA-Z]+)"', re.MULTILINE)
+_TS_CONSTANT = re.compile(r'^\s+\w+: "([a-zA-Z]+\.[a-zA-Z]+)"', re.MULTILINE)
 
 
 def _python_methods() -> set[str]:

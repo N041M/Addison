@@ -78,6 +78,7 @@ class PermissionGate:
         destructive: bool = False,
         detail: str | None = None,
         guards: GuardConfig | None = None,
+        trusted: bool = False,
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
@@ -114,7 +115,21 @@ class PermissionGate:
         the scope LABELLED "ask about everything", and counted as a tightening, so
         no anchor would ever have been minted. The two knobs stay orthogonal
         instead: scope decides how often everyday actions ask, the card guard alone
-        decides how destructive ones do."""
+        decides how destructive ones do.
+
+        ``trusted`` (step 5, D3) is workspace-trust: True ONLY for a typed,
+        path-bounded, undoable file tool whose RESOLVED path the caller confirmed
+        sits inside a trusted root (the caller resolves it store-side; the gate stays
+        store-free — F6). A trusted destructive call auto-grants card-free (recorded
+        + logged) — that IS the harness payoff, card-free undoable editing inside a
+        trusted project (§8.3). It is a permission-to-SKIP-the-card only: the caller
+        has already confined WHICH path may be touched (permission-to-touch, D3), so
+        the two are separate gates. ``run_command`` is never trusted (its
+        ``affected_path`` is None, so the caller cannot mark it) and neither are
+        stored/replayable surfaces — routine command steps and command widgets pass
+        ``trusted=False`` unconditionally (D5), so a persisted one-click spec can
+        never skip a card. ``trusted=False`` ≡ today byte-for-byte (the freeze), and
+        SAFE ignores ``trusted`` entirely (F7)."""
         if mode is PolicyMode.OPEN:
             effective = guards if guards is not None else GuardConfig()
             if effective.auto_grant_scope == "everything":
@@ -127,6 +142,28 @@ class PermissionGate:
                     # "Ask about everything": everyday actions run the SAFE-style
                     # coarse flow instead of auto-granting.
                     return self._safe_flow(tool_id)
+                return self._auto_grant(tool_id)
+            if trusted and effective.auto_grant_scope != "none" and tool_id not in self._denied:
+                # A confined, undoable file edit inside a trusted workspace: no card,
+                # still recorded + logged so the Activity Panel shows it happened.
+                # The caller only sets this for a path INSIDE trust, so it can never
+                # widen WHICH path is touched — only whether the card is shown.
+                #
+                # TWO THINGS TRUST DOES NOT OVERRIDE, both found by the post-build
+                # adversarial pass:
+                #  * A turn-scoped "Not now". The don't-nag rule cuts both ways: a
+                #    denial is honoured for the rest of the turn, and a person who
+                #    was shown a card and said no must not then watch Addison edit a
+                #    file in the same turn. Nothing is escalated either way (the call
+                #    was card-free anyway) — what was broken is consent HONESTY.
+                #  * Custom's ``auto_grant_scope='none'``, the strictest option the
+                #    panel offers, whose copy says Addison asks about everything.
+                #    Trust silently making destructive writes card-free under that
+                #    setting is the same defect shape the step-2 rigor pass found:
+                #    the strictest-LABELLED option carrying the quiet hole, and a
+                #    tightening minting no anchor, so nothing marks the moment.
+                #    Simple/Developer are untouched — their guards are the defaults,
+                #    where this branch behaves exactly as step 5 built it.
                 return self._auto_grant(tool_id)
             if effective.destructive_card == "session":
                 return self._request_destructive_session(tool_id, detail)

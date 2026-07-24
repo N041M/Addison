@@ -34,6 +34,9 @@ import {
   type RoutingStrategy,
   type RoutingSurface,
   type AnsweredWith,
+  type EndpointProposal,
+  type CostPlan,
+  type WorkspaceRoot,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -475,6 +478,46 @@ export const ipc = {
     strategy?: RoutingStrategy;
     customChain?: string[];
   }): Promise<RoutingSetResult> => call(Method.RoutingSet, patch).then(parseRoutingSet),
+
+  // Add-a-model-server by prompt (Phase-2 step 4). `proposeEndpoint` asks the core
+  // whether the CURRENT turn's user text named an add-endpoint address; it resolves
+  // to a drafted proposal or `null` (nothing to add — Addison answers in prose).
+  // `confirmAddEndpoint` applies (or declines) the held draft by running the
+  // existing `provider.connect {provider:"custom", baseUrl}` path CORE-side. The
+  // key is NEVER a parameter here — it went to the keychain via `storeProviderKey`
+  // before this call (G1); this frame carries only the base URL + the decision.
+  proposeEndpoint: (): Promise<EndpointProposal | null> =>
+    call(Method.EndpointProposeFromConversation).then(parseEndpointProposal),
+  confirmAddEndpoint: (baseUrl: string, accept: boolean): Promise<EndpointConfirmResult> =>
+    call(Method.EndpointConfirmAdd, { baseUrl, accept }).then(parseEndpointConfirm),
+
+  // "Make it cheaper" (Phase-2 step 4). `proposeCostPlan` asks the core to draft the
+  // canned prefer-cheaper plan (a fixed guidance note + the cost_first strategy);
+  // it resolves to the plan or `null`. `applyCostPlan` applies (or declines) it —
+  // the core validates, snapshots FIRST (refusing the whole change if the restore
+  // point can't be saved), then persists the note + strategy atomically.
+  proposeCostPlan: (): Promise<CostPlan | null> =>
+    call(Method.CostPlanPropose).then(parseCostPlan),
+  applyCostPlan: (accept: boolean): Promise<CostPlanApplyResult> =>
+    call(Method.CostPlanApply, { accept }).then(parseCostPlanApply),
+  // Workspace trust — the coding-harness trust boundary (Phase-2 step 5). These
+  // carry only the folder path + when it was trusted; no key material, no file
+  // contents ever cross this boundary. `grantTrust` resolves to {ok, error?} — a
+  // refusal (the folder is Addison's own data dir, or doesn't exist) is a resolved
+  // {ok:false} carrying the core's plain, already-user-ready sentence, never a
+  // reject, so the card can show one calm line. `revokeTrust` likewise resolves to
+  // {ok}. `listWorkspaceRoots` returns the currently-trusted roots. `pickDirectory`
+  // opens the OS folder picker through the Rust shell and resolves to the chosen
+  // absolute path, or `null` when the person cancelled (or the picker is
+  // unavailable) — the caller simply does nothing then.
+  grantWorkspaceTrust: (directory: string): Promise<WorkspaceMutationResult> =>
+    call(Method.WorkspaceGrantTrust, { directory }).then(parseWorkspaceMutation),
+  revokeWorkspaceTrust: (directory: string): Promise<WorkspaceMutationResult> =>
+    call(Method.WorkspaceRevokeTrust, { directory }).then(parseWorkspaceMutation),
+  listWorkspaceRoots: (): Promise<WorkspaceRoot[]> =>
+    call(Method.WorkspaceList).then(parseWorkspaceRoots),
+  pickWorkspaceDirectory: (): Promise<string | null> =>
+    call(Method.WorkspacePickDirectory).then(parseWorkspaceDirectory),
 };
 
 // ---------------------------------------------------------------------------
@@ -1013,6 +1056,148 @@ export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
     free: raw.free === true,
     routed: raw.routed === true,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Add-a-model-server + "make it cheaper" shapes + defensive parsers (Phase-2
+// step 4). Both propose parsers fail CLOSED: a shape the card can't act on is
+// `null`, so no card renders and Addison falls back to prose. Nothing here is
+// secret — the endpoint key NEVER rides in these payloads (G1); it goes straight
+// to the keychain via `storeProviderKey`.
+// ---------------------------------------------------------------------------
+
+/** endpoint.confirmAdd → {ok, error?}. A failed connect is a resolved
+ * {ok:false} carrying a plain, already-user-ready sentence, never a reject. */
+export interface EndpointConfirmResult {
+  ok: boolean;
+  error?: string;
+}
+
+// Workspace-trust shapes + defensive parsers (coding harness, Phase-2 step 5).
+// Fail CLOSED throughout: a mutation whose shape we can't read is {ok:false}
+// (so a grant/revoke never reports a success the core didn't confirm), a roots
+// list drops any row without a usable directory string (so the card never offers
+// a "Stop trusting" button it can't act on), and the picker yields `null` on
+// anything that isn't a non-empty string path (a cancelled or unavailable picker
+// must not look like a chosen folder).
+// ---------------------------------------------------------------------------
+
+/** workspace.grantTrust/revokeTrust → {ok, error?}. A refusal (the folder is
+ * Addison's own data dir, or doesn't exist) is a resolved {ok:false} carrying a
+ * plain, already-user-ready sentence, never a reject. */
+export interface WorkspaceMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** costPlan.apply → {ok, snapshotId?, error?}. `snapshotId` rides on success (the
+ * restore point saved before the change). An expected refusal — most importantly
+ * "the restore point couldn't be saved, so nothing changed" — is a resolved
+ * {ok:false} carrying a plain sentence, never a reject. */
+export interface CostPlanApplyResult {
+  ok: boolean;
+  snapshotId?: string;
+  error?: string;
+}
+
+/**
+ * Parse `endpoint.proposeFromConversation`. Fails CLOSED: `{none}`, a missing
+ * payload, or anything without a usable http(s) base URL yields `null` — no card.
+ * The http(s) scheme check is a belt-and-braces guard on top of the core's own
+ * `_base_url_problem` validation: the card renders the URL as the address the user
+ * is about to trust, so a non-web scheme must never reach it. `isLocalOrLan` is
+ * trusted only on a strict boolean `true`.
+ */
+export function parseEndpointProposal(result: unknown): EndpointProposal | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  if (typeof obj.baseUrl !== "string" || !obj.baseUrl) return null;
+  if (!/^https?:\/\//i.test(obj.baseUrl)) return null;
+  return {
+    baseUrl: obj.baseUrl,
+    isLocalOrLan: obj.isLocalOrLan === true,
+  };
+}
+
+function parseEndpointConfirm(result: unknown): EndpointConfirmResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+function parseWorkspaceMutation(result: unknown): WorkspaceMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/**
+ * Parse `costPlan.propose`. Fails CLOSED: `{none}`, a missing payload, or a plan
+ * without BOTH a usable skill name and non-empty instructions yields `null` — no
+ * card. `strategy` is hard-set to `cost_first` (the only value this flow ever
+ * uses); we never trust a different value off the wire onto the card.
+ */
+export function parseCostPlan(result: unknown): CostPlan | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  if (typeof obj.skillName !== "string" || !obj.skillName) return null;
+  if (typeof obj.skillInstructions !== "string" || !obj.skillInstructions) return null;
+  return {
+    skillName: obj.skillName,
+    skillInstructions: obj.skillInstructions,
+    strategy: "cost_first",
+  };
+}
+
+function parseCostPlanApply(result: unknown): CostPlanApplyResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    snapshotId: typeof obj?.snapshotId === "string" ? obj.snapshotId : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
+  const obj = asRecord(result);
+  // `folders` — the key the core actually sends (rpc/workspace._workspace_list,
+  // documented on Method.WORKSPACE_LIST). This read said `roots` until an
+  // adversarial pass caught it: the list rendered permanently empty, so the
+  // "Stop trusting" button never appeared and standing consent that suppresses
+  // permission cards could not be revoked from the UI. Both sides' tests were
+  // green — the Python one asserted `folders`, the vitest one parsed a hand-built
+  // `{roots: […]}` literal, and neither could see the other. The fixture below
+  // (shell/src/__tests__/fixtures/workspace.list.json, generated from this very
+  // handler) is what makes that class of mismatch impossible now.
+  const list = obj && Array.isArray(obj.folders) ? (obj.folders as unknown[]) : [];
+  const out: WorkspaceRoot[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    // A row we can't name is a row the card can't offer a "Stop trusting" button
+    // for — drop it rather than render a control that could only fail.
+    if (!row || typeof row.directory !== "string" || !row.directory) continue;
+    out.push({
+      directory: row.directory,
+      grantedAt:
+        typeof row.grantedAt === "number" && Number.isFinite(row.grantedAt)
+          ? row.grantedAt
+          : undefined,
+    });
+  }
+  return out;
+}
+
+/** workspace.pickDirectory → the chosen absolute path, or `null` when the person
+ * cancelled or no picker is available. Anything that isn't a non-empty string is
+ * `null` — a cancelled picker must never look like a chosen folder. */
+export function parseWorkspaceDirectory(result: unknown): string | null {
+  const obj = asRecord(result);
+  const dir = obj?.directory;
+  return typeof dir === "string" && dir ? dir : null;
 }
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,7 @@ from agent_core.rpc.constants import (
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
 from agent_core.rpc.conversation import ConversationMixin
+from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
 from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
@@ -94,6 +95,7 @@ from agent_core.rpc.skills import SkillsMixin
 from agent_core.rpc.snapshots import SnapshotsMixin, snapshot_list_from_payloads
 from agent_core.rpc.undo import UndoMixin
 from agent_core.rpc.widgets import WidgetsMixin
+from agent_core.rpc.workspace import WorkspaceMixin
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.snapshots.snapshot_manager import (
     SnapshotManager,
@@ -108,12 +110,14 @@ from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
 from agent_core.tools.read_clipboard import ReadClipboardTool
 from agent_core.tools.read_file import ReadFileTool
+from agent_core.tools.read_project_file import ReadProjectFileTool
 from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
 from agent_core.tools.snapshot_now import SnapshotNowTool
 from agent_core.tools.web_search import WebSearchTool
+from agent_core.tools.write_project_file import WriteProjectFileTool
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -229,6 +233,14 @@ def build_registry(
     # registry; hidden from the SAFE view. Exempt from the undo check BECAUSE it is
     # dev_only and never reachable from SAFE mode (registry.register / run_command.py).
     registry.register(RunCommandTool(), dev_only=True)
+    # OPEN-mode coding harness (step 5). ALWAYS registered but open_only, so hidden
+    # from the SAFE view and refused at dispatch outside OPEN — the confinement layer
+    # (orchestrator/engine) additionally keeps them to trusted roots. The write tool
+    # is open_only but undo-ENFORCED (allow_missing_undo defaults False, R3): a real
+    # undo() is mandatory, so registration RAISES if a future edit drops it. Its undo
+    # bridge is injected here (used only by undo(), which gets no ExecutionContext).
+    registry.register(ReadProjectFileTool(), open_only=True)
+    registry.register(WriteProjectFileTool(shell_bridge=shell_bridge), open_only=True)
     return registry
 
 
@@ -417,6 +429,8 @@ class JsonRpcServer(
     SnapshotsMixin,
     GuardsMixin,
     RoutingMixin,
+    CostPlanMixin,
+    WorkspaceMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -794,6 +808,9 @@ class JsonRpcServer(
             routing_chain=self._routing_chain,
             on_answered=self._record_answered,
             model_label=self._model_label,
+            # Workspace-trust confinement (step 5, D3): resolves whether a path is
+            # inside a trusted root AND past the data-dir floor, reading the store.
+            trust_check=self._is_trusted_path,
         )
         self.routine_builder = RoutineBuilder(store=self.store)
         self.routine_library = RoutineLibrary(store=self.store)
@@ -813,6 +830,8 @@ class JsonRpcServer(
             # Same guard resolution as the live loop (D3) — a routine can never
             # out- or under-permission the conversation.
             guards_provider=self._effective_guards,
+            # Same confinement resolver as the live loop (step 5, D3).
+            trust_check=self._is_trusted_path,
         )
         # The build worked, so a remembered failure is stale — clear it rather than
         # answering "couldn't open its settings file" for the rest of the session.
@@ -1002,6 +1021,8 @@ class JsonRpcServer(
             _SNAPSHOT_JOBS,
             _GUARDS_JOBS,
             _ROUTING_JOBS,
+            _COSTPLAN_JOBS,
+            _WORKSPACE_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1131,6 +1152,22 @@ class JsonRpcServer(
                     self._respond(request_id, self._routing_get())
                 elif kind == "routing_set":
                     self._respond(request_id, self._routing_set(params))
+                elif kind == "endpoint_propose":
+                    self._respond(request_id, self._endpoint_propose())
+                elif kind == "endpoint_confirm_add":
+                    self._respond(request_id, self._endpoint_confirm_add(params))
+                elif kind == "costplan_propose":
+                    self._respond(request_id, self._cost_plan_propose())
+                elif kind == "costplan_apply":
+                    self._respond(request_id, self._cost_plan_apply(params))
+                elif kind == "workspace_list":
+                    self._respond(request_id, self._workspace_list())
+                elif kind == "workspace_grant":
+                    self._respond(request_id, self._workspace_grant(params))
+                elif kind == "workspace_revoke":
+                    self._respond(request_id, self._workspace_revoke(params))
+                elif kind == "workspace_pick_directory":
+                    self._respond(request_id, self._workspace_pick_directory())
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1576,10 +1613,22 @@ _CONVERSATION_JOBS = {
 }
 
 # provider.list/connect/disconnect run on the worker (Store + router + connect ping).
+# endpoint.* (add-by-prompt, step 4) belong with them: propose reads the live
+# conversation + validates a base URL, and confirmAdd runs the provider.connect
+# custom path — both Store/router-touching, so both run on the worker.
 _PROVIDER_JOBS = {
     Method.PROVIDER_LIST: "provider_list",
     Method.PROVIDER_CONNECT: "provider_connect",
     Method.PROVIDER_DISCONNECT: "provider_disconnect",
+    Method.ENDPOINT_PROPOSE_FROM_CONVERSATION: "endpoint_propose",
+    Method.ENDPOINT_CONFIRM_ADD: "endpoint_confirm_add",
+}
+
+# costPlan.* (make it cheaper, step 4) read/write app_settings + skills and mint a
+# make_it_cheaper snapshot, so they run on the worker like every other store op.
+_COSTPLAN_JOBS = {
+    Method.COSTPLAN_PROPOSE: "costplan_propose",
+    Method.COSTPLAN_APPLY: "costplan_apply",
 }
 
 # widget.* run on the worker (Store + routine library + live conversation).
@@ -1628,6 +1677,16 @@ _GUARDS_JOBS = {
 _ROUTING_JOBS = {
     Method.ROUTING_GET: "routing_get",
     Method.ROUTING_SET: "routing_set",
+}
+
+# workspace.* touch the Store (read/write workspace_trust) and grantTrust mints an
+# auto-snapshot through the SnapshotManager, so they run on the worker like every
+# other store op. Method -> worker job kind. (Step 5.)
+_WORKSPACE_JOBS = {
+    Method.WORKSPACE_GRANT_TRUST: "workspace_grant",
+    Method.WORKSPACE_REVOKE_TRUST: "workspace_revoke",
+    Method.WORKSPACE_LIST: "workspace_list",
+    Method.WORKSPACE_PICK_DIRECTORY: "workspace_pick_directory",
 }
 
 

@@ -25,10 +25,16 @@ TWO HAZARDS SHAPE EVERYTHING BELOW.
    Agent Core sits *inside* the machine's trust boundary: ``http://localhost:11434``
    is the user's Ollama, ``http://192.168.1.1`` is their router, and
    ``http://169.254.169.254`` is cloud metadata. So every URL — the first one and
-   every redirect hop — is vetted by RESOLVED IP in ``_vet`` before a request is
-   issued, AND the connection is then PINNED to the exact address that was vetted
-   (``_pinned_url``), so the address that was judged is the address that is
-   contacted. See ``_vet`` for why a hostname-string check is not enough.
+   every redirect hop — is vetted by RESOLVED IP before a request is issued, AND
+   the connection is then PINNED to the exact address that was vetted, so the
+   address that was judged is the address that is contacted. That whole mechanism
+   — resolve, vet, pin (Host + TLS SNI), follow no redirects — lives in the shared
+   ``agent_core.net_vetting`` module (factored there in step 4 so the
+   ``provider.connect`` validation GET can reuse it, contract R1); this tool wires
+   it with the PUBLIC-web policy (loopback/LAN and odd ports refused) and its own
+   plain sentences, and keeps everything page-specific (content types, byte cap,
+   HTML-to-text) here. See ``net_vetting.vet_url`` for why a hostname-string check
+   is not enough.
 
 2. Prompt injection. A whole page is a far larger injected-instruction surface than
    a snippet, so the untrusted wrapper here is blunter than ``web_search``'s and is
@@ -72,16 +78,15 @@ Nothing raises out of ``execute``; no stack trace ever reaches the person.
 
 from __future__ import annotations
 
-import ipaddress
 import re
-import socket
 from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 import httpx
 
+from agent_core import net_vetting
 from agent_core.tools.base import (
     BROWSER_USER_AGENT,
     ExecutionContext,
@@ -90,8 +95,6 @@ from agent_core.tools.base import (
     ToolResult,
 )
 
-_ALLOWED_SCHEMES = ("http", "https")
-_DEFAULT_PORTS = {"http": 80, "https": 443}
 _TIMEOUT_SECONDS = 20.0
 _MAX_REDIRECTS = 3
 # Stop pulling bytes at 2 MB. A page is read for its words; no answer needs half a
@@ -111,11 +114,6 @@ _MAX_TITLE_CHARS = 200
 # real links do not go. It also bounds how much can ride OUTWARD on a request, which
 # matters because the destination is model-chosen (see the module note above).
 _MAX_URL_CHARS = 2048
-# How many of a name's vetted addresses to try before giving up. A name commonly
-# answers with both an A and an AAAA record and only one of them is reachable from
-# this machine; pinning to the first alone would turn that into "I couldn't reach
-# that page". Every address in the list has already passed _address_is_public.
-_MAX_ADDRESS_ATTEMPTS = 3
 
 # Content types worth reading as words. Anything else (PDF, image, zip, video) is
 # refused in plain language instead of being fed to an HTML parser as mojibake.
@@ -236,176 +234,24 @@ class _Fetched:
     truncated: bool   # True when the download hit _MAX_BYTES and stopped
 
 
-@dataclass
-class _Redirect:
-    """A hop the server asked for. Raw, unjoined and unvetted — the caller does both."""
-
-    location: str
-
-
-@dataclass
-class _Verdict:
-    """The answer from ``_vet``: either a refusal, or the addresses cleared to connect to."""
-
-    problem: str | None
-    addresses: tuple[str, ...] = ()
-
-
-def _resolve_host(hostname: str) -> list[str]:
-    """Every address a hostname currently answers with, both families.
-
-    Split out so tests can inject a resolver: ``httpx.MockTransport`` intercepts
-    below the DNS layer, so a resolve-then-check design is untestable offline
-    unless the resolution itself is injectable."""
-    infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    return [str(info[4][0]) for info in infos]
-
-
-def _address_is_public(raw: str) -> bool:
-    """True only for an address that is genuinely out on the public internet."""
-    try:
-        address = ipaddress.ip_address(raw)
-    except ValueError:
-        return False
-    # Unwrap the IPv6 forms that carry an IPv4 address inside them, so
-    # ::ffff:127.0.0.1 and 2002:7f00:1::1 are judged as the 127.0.0.1 they are
-    # rather than as "some IPv6 address". Recent CPython classifies both
-    # correctly on its own; doing it here as well keeps the guard from depending
-    # on that staying true.
-    mapped = getattr(address, "ipv4_mapped", None)
-    if mapped is None:
-        mapped = getattr(address, "sixtofour", None)
-    if mapped is not None:
-        address = mapped
-    if (
-        address.is_loopback       # 127.0.0.0/8, ::1 — the user's own machine
-        or address.is_private     # RFC1918 LAN, IPv6 unique-local fc00::/7
-        or address.is_link_local  # 169.254.0.0/16 — includes cloud metadata
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    ):
-        return False
-    # Belt to those braces: anything the stdlib does not consider globally
-    # routable — carrier-grade NAT, documentation ranges, future assignments —
-    # is not a public web page either. Deciding by an allow-rule rather than by a
-    # list of bad addresses is the point: a blocklist is always one address short,
-    # because the attacker picks the address. The cost of over-refusing is one
-    # plain sentence.
-    return bool(address.is_global)
-
-
-def _vet(url: str, resolve: Callable[[str], list[str]]) -> _Verdict:
-    """Judge a URL, and hand back the exact addresses the caller may connect to.
-
-    WHY THE CHECK IS BY RESOLVED IP AND NOT BY HOSTNAME STRING: whoever chose the
-    URL also owns its DNS record. ``pages.example.com`` is on nobody's blocklist
-    and can answer with 127.0.0.1 whenever its owner likes, so refusing the
-    literal strings "localhost" and "127.0.0.1" stops nothing at all. Resolving
-    first and judging the ADDRESSES is the only check that holds. EVERY address
-    must pass, not just the first — a name that answers with one public and one
-    loopback address would otherwise get through on a lucky ordering.
-
-    WHY THE ADDRESSES COME BACK: judging them is only half the job. If the caller
-    hands the hostname to httpx, the name is resolved a SECOND time when the
-    connection opens, and a record with a very short TTL can answer differently
-    that time (DNS rebinding) — the address that was vetted is then not the address
-    that is contacted. So ``_fetch`` connects to one of these, by address, and
-    carries the hostname in the ``Host`` header and the TLS SNI instead. One
-    lookup, one connection, same address (see ``_pinned_url``).
-    """
-    if not isinstance(url, str) or not url.strip():
-        return _Verdict(_NO_URL)
-    candidate = url.strip()
-    if len(candidate) > _MAX_URL_CHARS:
-        # A real link does not run to thousands of characters. An enormous one is
-        # either nonsense or a way to move a payload; either way it is not read.
-        return _Verdict(_ODD_WEB_ADDRESS)
-    # Check the raw prefix before parsing and the parsed scheme after it: two
-    # cheap looks at the same thing, so nothing slips through on a parse quirk.
-    lowered = candidate.lower()
-    if not any(lowered.startswith(f"{scheme}://") for scheme in _ALLOWED_SCHEMES):
-        return _Verdict(_NOT_A_WEB_LINK)
-    try:
-        parts = urlsplit(candidate)
-        hostname = parts.hostname
-        port = parts.port
-    except ValueError:
-        return _Verdict(_NOT_A_WEB_LINK)
-    scheme = parts.scheme.lower()
-    if scheme not in _ALLOWED_SCHEMES:
-        return _Verdict(_NOT_A_WEB_LINK)
-    # Userinfo is refused, and NOT for the reason it looks like. The disguise case
-    # — http://example.com@127.0.0.1/, which reads as example.com and connects to
-    # loopback — is already dead: the address checks below judge 127.0.0.1, which is
-    # what `hostname` actually parses to. This line earns its place on the OTHER
-    # side. `execute` returns the fetched URL in `content["url"]`, and that goes
-    # into the transcript sent to the model provider, so
-    # https://svc:KEY@api.example.com/ would copy a live credential out of the
-    # machine even though the request itself was perfectly safe. It guards the
-    # TRANSCRIPT, not the connection, which is why it is not redundant with the IP
-    # vetting and must not be dropped as a duplicate of it.
-    #
-    # Only the parsed fields are tested. A raw `"@" in parts.netloc` belt sat here
-    # too, and `rpc/providers.py` records the brute force that retired the same
-    # expression there: `urlsplit` splits the authority on its LAST "@", so any
-    # non-empty userinfo always lands in `username`/`password`. The raw test fired
-    # alone only for `https://@host/` and `https://:@host/` — no credential, no
-    # header, same host — so it defended nothing while implying it defended
-    # something, and those two shapes are now simply fetched.
-    if parts.username or parts.password:
-        return _Verdict(_NOT_A_WEB_LINK)
-    if not hostname:
-        return _Verdict(_NOT_A_WEB_LINK)
-    # Public web pages live on the standard port. Allowing any port would make this
-    # a port scanner pointed at public hosts — the caller learns which ports answer
-    # from which sentence comes back — and would buy nothing, because a page on
-    # :6379 is a database, not a page. Over-refusing costs one plain sentence.
-    if port is not None and port != _DEFAULT_PORTS[scheme]:
-        return _Verdict(_NOT_PUBLIC)
-
-    # A literal address needs no lookup — judge it directly, and never resolve.
-    try:
-        literal = ipaddress.ip_address(hostname)
-    except ValueError:
-        literal = None
-    if literal is not None:
-        if not _address_is_public(str(literal)):
-            return _Verdict(_NOT_PUBLIC)
-        return _Verdict(None, (str(literal),))
-
-    try:
-        addresses = resolve(hostname)
-    except (OSError, UnicodeError):
-        # UnicodeError, not just OSError: getaddrinfo runs the name through IDNA
-        # encoding first, and a hostname built to fail that (an over-long label, a
-        # stray surrogate) raises UnicodeEncodeError instead. Since the hostname
-        # arrives from a web page, that is reachable input, not a curiosity.
-        return _Verdict(_COULD_NOT_FIND_SITE)
-    if not addresses:
-        return _Verdict(_COULD_NOT_FIND_SITE)
-    if not all(_address_is_public(address) for address in addresses):
-        return _Verdict(_NOT_PUBLIC)
-    return _Verdict(None, tuple(addresses))
-
-
-def _host_header(parts) -> str:
-    """What a browser would put in ``Host`` — the name, re-bracketed if it's IPv6."""
-    hostname = parts.hostname or ""
-    return f"[{hostname}]" if ":" in hostname else hostname
-
-
-def _pinned_url(parts, address: str) -> str:
-    """The same request, addressed to the ONE address ``_vet`` cleared.
-
-    The name is not in this URL at all, so nothing resolves it a second time. The
-    name still travels — in ``Host`` and, for https, in the TLS SNI — so virtual
-    hosting works and the certificate is still checked against the HOSTNAME, not
-    against the address. Verification is not weakened by this; it is simply pointed
-    at the name it was always meant to be pointed at.
-    """
-    host = f"[{address}]" if ":" in address else address
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
+# The public-web vetting policy + this tool's own plain sentences, handed to the
+# shared ``net_vetting`` mechanism (step 4, R1). ``allow_private=False`` +
+# ``require_default_port=True`` are what make this the PUBLIC-web fetcher —
+# loopback/LAN/metadata and odd ports refused — while the connect path uses the
+# same mechanism with ``allow_private=True``. The wording stays exactly the words
+# this tool has always shown; only the machine behind it moved.
+_SENTENCES = net_vetting.Sentences(
+    no_url=_NO_URL,
+    not_a_web_link=_NOT_A_WEB_LINK,
+    not_allowed=_NOT_PUBLIC,
+    odd_web_address=_ODD_WEB_ADDRESS,
+    could_not_find_site=_COULD_NOT_FIND_SITE,
+    could_not_open=_COULD_NOT_OPEN,
+    could_not_reach=_COULD_NOT_REACH,
+    took_too_long=_TOOK_TOO_LONG,
+    too_many_redirects=_TOO_MANY_REDIRECTS,
+    dropped_secure_link=_DROPPED_THE_SECURE_LINK,
+)
 
 
 def _content_kind(header: str) -> str | None:
@@ -465,122 +311,67 @@ def _mostly_unreadable(text: str) -> bool:
     return damaged * 10 > len(sample)
 
 
-def _request_once(active: httpx.Client, logical: str, address: str) -> _Fetched | _Redirect:
-    """One GET, pinned to ``address``, with ``logical``'s name in Host + SNI."""
-    parts = urlsplit(logical)
-    headers = dict(_HEADERS)
-    headers["Host"] = _host_header(parts)
-    with active.stream(
-        "GET",
-        _pinned_url(parts, address),
-        headers=headers,
-        # Read by httpcore as the TLS server_hostname, so the certificate is checked
-        # against the site's name even though the connection is addressed by IP.
-        extensions={"sni_hostname": parts.hostname or ""},
-        # timeout goes on the call, not the client, so an injected client carries it too.
-        timeout=_TIMEOUT_SECONDS,
-        follow_redirects=False,
-    ) as response:
-        if 300 <= response.status_code < 400:
-            location = response.headers.get("location", "")
-            if not location:
-                raise _ReadError(_COULD_NOT_OPEN)
-            if len(location) > _MAX_URL_CHARS:
-                raise _ReadError(_ODD_WEB_ADDRESS)
-            return _Redirect(location)
-        if response.status_code >= 400:
-            raise _ReadError(_COULD_NOT_OPEN)
-        content_type = response.headers.get("content-type", "")
-        kind = _content_kind(content_type)
-        if kind is not None and kind not in _READABLE_TYPES:
-            raise _ReadError(_NOT_A_READABLE_PAGE)
-        body, truncated = _read_capped(response)
-        if kind is None and _looks_binary(body):
-            # No content type at all: without this, a body with no header is parsed
-            # as HTML whatever it really is, and a PDF comes back as page text with
-            # success=True.
-            raise _ReadError(_NOT_A_READABLE_PAGE)
-        document = _decode(body, content_type)
-        if _mostly_unreadable(document):
-            raise _ReadError(_NOT_A_READABLE_PAGE)
-        return _Fetched(url=logical, document=document, kind=kind, truncated=truncated)
+def _on_final(response: httpx.Response, logical: str) -> _Fetched:
+    """Turn a non-redirect response into a ``_Fetched`` — everything PAGE-specific
+    (status, content type, the 2 MB byte cap, decode, binary detection) that the
+    shared ``net_vetting`` mechanism deliberately knows nothing about.
 
-
-def _fetch_hop(
-    active: httpx.Client, logical: str, addresses: tuple[str, ...]
-) -> _Fetched | _Redirect:
-    """One hop: try the vetted addresses in turn, translate every failure to plain words."""
-    if not addresses:  # _vet never returns a clean verdict with none; belt anyway
-        raise _ReadError(_COULD_NOT_FIND_SITE)
-    attempts = addresses[:_MAX_ADDRESS_ATTEMPTS]
-    last = len(attempts) - 1
-    for index, address in enumerate(attempts):
-        try:
-            return _request_once(active, logical, address)
-        except (httpx.ConnectError, httpx.ConnectTimeout):
-            # This address didn't answer; a name commonly has one reachable and one
-            # not. Both have already been vetted, so trying the next widens nothing.
-            # Listed before TimeoutException because ConnectTimeout is one.
-            if index == last:
-                raise _ReadError(_COULD_NOT_REACH) from None
-        except httpx.TimeoutException:
-            # No chained exception anywhere below — nothing about the request
-            # should leak upward (same rule web_search follows).
-            raise _ReadError(_TOOK_TOO_LONG) from None
-        except httpx.HTTPError:
-            raise _ReadError(_COULD_NOT_REACH) from None
-        except (httpx.InvalidURL, UnicodeError):
-            # Neither of these is an httpx.HTTPError — they inherit straight
-            # from Exception and ValueError — so the two clauses above do not
-            # cover them, and both are reachable from a hostile page:
-            #   * httpx builds the redirect request EAGERLY (to expose
-            #     .next_request) even with follow_redirects=False, so a
-            #     "Location: javascript:alert(1)" header raises InvalidURL
-            #     before this code ever gets to vet the hop;
-            #   * a hostname httpx cannot IDNA-encode raises idna.IDNAError,
-            #     which is a UnicodeError.
-            # The orchestrator would catch either and say "That step didn't
-            # work" — true, but useless to the person. Its backstop is for real
-            # defects; these two have a real answer, so they get one.
-            raise _ReadError(_ODD_WEB_ADDRESS) from None
-    raise _ReadError(_COULD_NOT_REACH)
+    Runs inside the shared driver's stream context, so ``_read_capped`` can still
+    pull the body. A refusal here raises ``_ReadError`` — not an ``httpx`` error —
+    so it propagates untouched through ``net_vetting`` to ``execute``."""
+    if response.status_code >= 400:
+        raise _ReadError(_COULD_NOT_OPEN)
+    content_type = response.headers.get("content-type", "")
+    kind = _content_kind(content_type)
+    if kind is not None and kind not in _READABLE_TYPES:
+        raise _ReadError(_NOT_A_READABLE_PAGE)
+    body, truncated = _read_capped(response)
+    if kind is None and _looks_binary(body):
+        # No content type at all: without this, a body with no header is parsed
+        # as HTML whatever it really is, and a PDF comes back as page text with
+        # success=True.
+        raise _ReadError(_NOT_A_READABLE_PAGE)
+    document = _decode(body, content_type)
+    if _mostly_unreadable(document):
+        raise _ReadError(_NOT_A_READABLE_PAGE)
+    return _Fetched(url=logical, document=document, kind=kind, truncated=truncated)
 
 
 def _fetch(url: str, client: httpx.Client | None, resolve: Callable[[str], list[str]]) -> _Fetched:
-    """Vet, fetch, and follow redirects by hand. Raises ``_ReadError`` in plain words.
+    """Vet, fetch, and follow redirects — the SSRF-safe pinned execution, run for
+    this tool through the shared ``net_vetting`` mechanism (step 4, R1).
 
-    Redirects are followed manually (``follow_redirects=False``) for one reason:
-    every hop goes back through ``_vet`` first, and is then pinned to the address
-    that vetting cleared. A public page answering 302 to http://localhost:11434 is
-    the obvious way around a check that only ever looked at the URL the model
-    supplied, and handing the hop list to httpx would reopen exactly that.
-    """
+    Everything security-critical (resolve → vet → pin to the vetted IP with Host +
+    SNI → no automatic redirects → re-vet every hop) lives in ``net_vetting`` now,
+    so ``read_web_page`` and the ``provider.connect`` validation GET share ONE
+    correct implementation. This function wires it with the public-web policy and
+    this tool's own plain sentences; ``net_vetting.VettingError`` (a refusal or a
+    network failure) is re-raised as ``_ReadError`` so ``execute`` handles it
+    exactly as before.
+
+    The CLIENT is still built here, not in the shared module: ``trust_env=False``
+    keeps HTTP(S)_PROXY from putting a proxy between the vetted address and the
+    contacted one — this is the one client in the repo whose destination is chosen
+    by untrusted input — and the per-launch monkeypatch test pins that it is built
+    in THIS module's namespace."""
     injected = client
-    # trust_env=False: HTTP_PROXY/HTTPS_PROXY/ALL_PROXY would otherwise be honoured,
-    # and a proxy is handed the request to forward — putting something between the
-    # address that was vetted and the address that is contacted. This is the one
-    # client in the repo whose destination is chosen by untrusted input, so the
-    # environment does not get to redirect it. The cost is honest and small: someone
-    # who can only reach the web through a proxy gets "I couldn't reach that page".
     active = injected if injected is not None else httpx.Client(trust_env=False)
-    current = url.strip()
-    started_secure = current.lower().startswith("https://")
     try:
-        for _ in range(_MAX_REDIRECTS + 1):
-            verdict = _vet(current, resolve)
-            if verdict.problem is not None:
-                raise _ReadError(verdict.problem)
-            outcome = _fetch_hop(active, current, verdict.addresses)
-            if isinstance(outcome, _Fetched):
-                return outcome
-            next_url = urljoin(current, outcome.location)
-            if started_secure and next_url.lower().startswith("http://"):
-                # A chain that began on https must not quietly finish on http. The
-                # body of that last hop can be rewritten by anyone on the path, and
-                # it is fed to the model as what the page says. Nobody would see it.
-                raise _ReadError(_DROPPED_THE_SECURE_LINK)
-            current = next_url  # re-vetted at the top of the next pass
-        raise _ReadError(_TOO_MANY_REDIRECTS)
+        return net_vetting.open_vetted(
+            active,
+            url,
+            resolve=resolve,
+            on_final=_on_final,
+            sentences=_SENTENCES,
+            base_headers=_HEADERS,
+            allow_private=False,          # public web only — loopback/LAN refused
+            require_default_port=True,    # ...on the standard port
+            max_url_chars=_MAX_URL_CHARS,
+            max_redirects=_MAX_REDIRECTS,
+            timeout=_TIMEOUT_SECONDS,
+        )
+    except net_vetting.VettingError as exc:
+        raise _ReadError(str(exc)) from None
     finally:
         if injected is None:
             active.close()
@@ -784,7 +575,7 @@ class ReadWebPageTool:
         # this with no arguments. MockTransport intercepts below DNS, so the
         # resolver has to be injectable separately from the client.
         self._client = client
-        self._resolve = resolve_host if resolve_host is not None else _resolve_host
+        self._resolve = resolve_host if resolve_host is not None else net_vetting.resolve_host
 
     def permission_detail(self, args: dict) -> str | None:
         """Which site this call would reach. SHOWN TO THE PERSON ON EVERY READ.

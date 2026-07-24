@@ -34,6 +34,16 @@ export const Method = {
   ProviderConnect: "provider.connect",
   ProviderDisconnect: "provider.disconnect",
 
+  // Add-a-server-by-prompt + "make it cheaper" (Phase-2 step 4). The turn reply
+  // never carries a model-authored payload: the core inspects the current turn,
+  // drafts, and HOLDS a base URL / a canned cost plan for an explicit confirm
+  // card (the widget/routine precedent). Keys are pasted into the endpoint card
+  // and stored straight to the OS keychain by the shell — never through the core.
+  EndpointProposeFromConversation: "endpoint.proposeFromConversation",
+  EndpointConfirmAdd: "endpoint.confirmAdd",
+  CostPlanPropose: "costPlan.propose",
+  CostPlanApply: "costPlan.apply",
+
   // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
   // pill or a whitelisted stat display, NEVER code. Proposed like routines
   // (draft-in-memory + explicit confirm) and saved LOW-risk (display-only).
@@ -74,6 +84,19 @@ export const Method = {
   GuardsGet: "guards.get",
   GuardsSet: "guards.set",
 
+  // Workspace trust — the coding-harness trust boundary (Phase-2 step 5). A
+  // trusted folder lets Addison's typed, undoable file tools read and edit inside
+  // it WITHOUT a per-change card; commands it runs still ask every time. `grant`
+  // takes an absolute directory (the core floor-checks it and refuses Addison's
+  // own data dir); `revoke` drops one; `list` returns the currently-trusted
+  // roots. `pickDirectory` opens the OS folder picker through the Rust shell and
+  // returns the chosen path (or nothing if cancelled) — no key material, no file
+  // contents ever ride these payloads.
+  WorkspaceGrantTrust: "workspace.grantTrust",
+  WorkspaceRevokeTrust: "workspace.revokeTrust",
+  WorkspaceList: "workspace.list",
+  WorkspacePickDirectory: "workspace.pickDirectory",
+
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
   // from, the Developer custom order, and whether the person sees the Simple
@@ -84,6 +107,9 @@ export const Method = {
   // persists — all core-side. No key material is ever in these payloads (G1).
   RoutingGet: "routing.get",
   RoutingSet: "routing.set",
+
+  // Workspace trust (step 5) — the OPEN-mode coding harness's trust boundary.
+  // Developer/Custom surfaces only. grantTrust floor-refuses Addison's own data dir.
 
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
@@ -97,6 +123,11 @@ export const Method = {
   ShellOpenExternal: "shell.openExternal",
   ShellPickFile: "shell.pickFile",
   ShellReadScopedFile: "shell.readScopedFile",
+  // Workspace-trust file surface (step 5, OPEN harness) — path-based, Rust-enforced.
+  ShellWriteWorkspaceFile: "shell.writeWorkspaceFile",
+  ShellReadWorkspaceFile: "shell.readWorkspaceFile",
+  ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
+  ShellPickDirectory: "shell.pickDirectory",
   ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",

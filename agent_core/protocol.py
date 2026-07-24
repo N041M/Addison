@@ -90,6 +90,14 @@ class Method:
     # snapshot-captured, never a floor.
     ROUTING_GET = "routing.get"      # {} -> {strategy, availableStrategies, customChain, surface}
     ROUTING_SET = "routing.set"      # {strategy?, customChain?} -> {ok, strategy, customChain} | {ok:false, error}
+    # Workspace trust (step 5) — the OPEN-mode coding harness's trust boundary.
+    # Developer/Custom surfaces only (the frontend hides the card in Simple).
+    # grantTrust floor-refuses Addison's own data dir. Trust rows are EXCLUDED from
+    # snapshots (standing consent, like tool_grants).
+    WORKSPACE_GRANT_TRUST = "workspace.grantTrust"   # {directory} -> {ok, directory} | {ok:false, error}
+    WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
+    WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
+    WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
@@ -100,6 +108,24 @@ class Method:
     PROVIDER_LIST = "provider.list"            # {} -> {providers: [{id,label,connected,addedAt?,baseUrl?,lastCheckOk?}]}
     PROVIDER_CONNECT = "provider.connect"      # {provider, baseUrl?} -> {ok, error?}
     PROVIDER_DISCONNECT = "provider.disconnect"  # {provider} -> {ok}
+
+    # Add-a-server-by-prompt (step 4, free-model endpoints; contract F2/R2/R6).
+    # The turn reply NEVER carries a model-authored actionable payload; instead the
+    # CORE inspects the CURRENT turn's user messages, extracts a base URL from a
+    # short add-endpoint utterance (never assistant content, never a pasted wall of
+    # text), validates it, and HOLDS it for a confirm — the widget/routine
+    # precedent. The key is pasted into the card and stored straight to the OS
+    # keychain by the shell (G1); it never crosses this boundary.
+    ENDPOINT_PROPOSE_FROM_CONVERSATION = "endpoint.proposeFromConversation"  # {} -> {baseUrl, isLocalOrLan, error?} | {none:true}
+    ENDPOINT_CONFIRM_ADD = "endpoint.confirmAdd"  # {baseUrl, accept} -> {ok, error?} (runs provider.connect custom)
+
+    # "Make it cheaper" (step 4; contract F3/D4). A canned, core-authored plan —
+    # the model authors NONE of its fields — that adds a fixed brevity/prefer-cheaper
+    # guidance note and switches routing to cost_first, behind an explicit confirm.
+    # apply is idempotent, snapshots FIRST (refuse-on-failure), and persists the
+    # skill + setting in ONE atomic Store commit.
+    COSTPLAN_PROPOSE = "costPlan.propose"      # {} -> {skillName, skillInstructions, strategy:"cost_first"}
+    COSTPLAN_APPLY = "costPlan.apply"          # {accept} -> {ok, snapshotId?, error?}
 
     # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
     # pill or a whitelisted stat display. NEVER code. Widgets are proposed like
@@ -152,6 +178,14 @@ class Method:
     SHELL_OPEN_EXTERNAL = "shell.openExternal"         # {url} -> {}
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
+    # Workspace-trust file surface (step 5, OPEN harness). Path-based (NOT picker-
+    # scoped like the four above) — the core confines which paths reach here (D3),
+    # and the shell independently refuses Addison's own data dir + ledgers what it
+    # wrote so restore can only touch a path this session created/overwrote.
+    SHELL_WRITE_WORKSPACE_FILE = "shell.writeWorkspaceFile"     # {path, content} -> {existed, prior}
+    SHELL_READ_WORKSPACE_FILE = "shell.readWorkspaceFile"       # {path} -> {content}
+    SHELL_RESTORE_WORKSPACE_FILE = "shell.restoreWorkspaceFile" # {path, content?|delete} -> {}
+    SHELL_PICK_DIRECTORY = "shell.pickDirectory"                # {} -> {path} (native folder picker)
     # {} -> {deviceId, publicKey}; the public half ONLY
     KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
     # {provider} -> {key}; read per-call at the moment of use, never cached (G1)

@@ -33,7 +33,18 @@ pub struct FileState {
     /// the handle; `shell.readScopedFile` resolves it. Not persisted: handles die
     /// with the session.
     handles: Mutex<HashMap<String, PathBuf>>,
+    /// Paths the shell WROTE this session via `shell.writeWorkspaceFile` (the OPEN
+    /// coding harness, step 5). `shell.restoreWorkspaceFile` (write_project_file's
+    /// undo) will only put back or delete a path in this set — so undo can never
+    /// write or delete an arbitrary path, and it still works if the workspace's trust
+    /// was revoked between the write and the undo (the ledger is session, not trust).
+    workspace_written: Mutex<HashSet<PathBuf>>,
 }
+
+/// Prior text content larger than this refuses the edit rather than bloating the
+/// core's `action_snapshots.undo_payload` (step 5, R5). Matches the intent of the
+/// core-side bound; the value lives HERE because the shell is where the bytes are.
+const UNDO_SIZE_BOUND: usize = 256 * 1024;
 
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
@@ -44,6 +55,14 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.restoreFile" => restore_file(app, params),
         "shell.pickFile" => pick_file(app).await,
         "shell.readScopedFile" => read_scoped_file(app, params),
+        // OPEN-mode coding harness (step 5). Path-based, NOT picker-scoped: the core
+        // confines which paths reach here (trusted-root check, D3); the shell
+        // independently refuses Addison's own data directory (defence in depth) and
+        // ledgers what it wrote so undo can only touch a path it created/overwrote.
+        "shell.writeWorkspaceFile" => write_workspace_file(app, params),
+        "shell.readWorkspaceFile" => read_workspace_file(params),
+        "shell.restoreWorkspaceFile" => restore_workspace_file(app, params),
+        "shell.pickDirectory" => pick_directory(app).await,
         "shell.openExternal" => open_external(params),
         "shell.readClipboard" => read_clipboard(),
         // Which build of Addison this is — recorded on a permanent restore point
@@ -148,6 +167,20 @@ async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
     Ok(json!({ "fileHandle": handle }))
 }
 
+// shell.pickDirectory {} -> {path}   (native folder picker, step 5)
+//
+// Relays the OS folder chooser for the "Trust a folder" flow. Returns a raw path
+// (unlike pickFile's opaque handle) BECAUSE workspace trust is path-scoped by
+// design (R7): the core canonicalizes it, floor-refuses the data dir, and confines
+// every later edit to it — the trusted-root model is the OPEN harness's equivalent
+// of §9's picker scoping.
+async fn pick_directory(app: &AppHandle) -> Result<Value, RpcError> {
+    let picked: Option<PathBuf> =
+        on_main(app, move || rfd::FileDialog::new().pick_folder()).await?;
+    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+    Ok(json!({ "path": path.to_string_lossy() }))
+}
+
 // shell.readScopedFile {fileHandle} -> {content, kind}
 fn read_scoped_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     let handle = required_str(params, "fileHandle", "A file handle is required.")?;
@@ -173,6 +206,201 @@ fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError
     } else {
         Err(RpcError::app("Addison can't read that kind of file yet."))
     }
+}
+
+// shell.writeWorkspaceFile {path, content} -> {existed, prior}   (step 5)
+//
+// Create-or-OVERWRITE, capturing the prior state ATOMICALLY so undo is exact.
+// Refuses (writing nothing) a binary or oversize existing file — so undo can always
+// round-trip as text — and refuses Addison's own data directory.
+fn write_workspace_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    let content = required_str(params, "content", "There's nothing to write.")?.to_string();
+    write_workspace_path(app.state::<FileState>().inner(), path, &content)
+}
+
+// Session-scope core of the write, testable without a live Tauri app (mirrors the
+// delete/restore split above).
+fn write_workspace_path(state: &FileState, path: PathBuf, content: &str) -> Result<Value, RpcError> {
+    refuse_addison_data_dir(&path)?;
+    let (existed, prior) = capture_prior_text(&path)?;
+    std::fs::write(&path, content).map_err(|_| RpcError::app("Addison couldn't save that file."))?;
+    // Ledger the path so restore_workspace_file may target it — and ONLY it.
+    lock(&state.workspace_written).insert(path);
+    Ok(json!({ "existed": existed, "prior": prior }))
+}
+
+// (existed, prior-text). Refuses a binary or oversize existing file so the undo
+// payload can always round-trip; a missing file is a clean create (false, null).
+fn capture_prior_text(path: &Path) -> Result<(bool, Option<String>), RpcError> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            if bytes.len() > UNDO_SIZE_BOUND {
+                return Err(RpcError::app(
+                    "That file is too big for Addison to edit while keeping an undo.",
+                ));
+            }
+            match String::from_utf8(bytes) {
+                Ok(text) => Ok((true, Some(text))),
+                Err(_) => Err(RpcError::app(
+                    "That file isn't a text file, so Addison won't change it.",
+                )),
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok((false, None)),
+        Err(_) => Err(RpcError::app("Addison couldn't read that file.")),
+    }
+}
+
+// shell.readWorkspaceFile {path} -> {content}   (step 5)
+fn read_workspace_file(params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    read_workspace_path(&path)
+}
+
+fn read_workspace_path(path: &Path) -> Result<Value, RpcError> {
+    refuse_addison_data_dir(path)?;
+    let bytes = std::fs::read(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => RpcError::app("That file isn't there."),
+        _ => RpcError::app("Addison couldn't read that file."),
+    })?;
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(json!({ "content": text })),
+        Err(_) => Err(RpcError::app("That file isn't a text file, so Addison can't read it here.")),
+    }
+}
+
+// shell.restoreWorkspaceFile {path, content?|delete} -> {}   (step 5, write undo)
+//
+// Only ever touches a path THIS session's writes ledgered — the mirror of
+// delete/restore's allowlists, so undo structurally cannot write or delete anywhere
+// new. Restores prior text, or deletes a file the write created (`delete: true`).
+fn restore_workspace_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    restore_workspace_path(app.state::<FileState>().inner(), path, params)
+}
+
+fn restore_workspace_path(
+    state: &FileState,
+    path: PathBuf,
+    params: &Value,
+) -> Result<Value, RpcError> {
+    {
+        let written = lock(&state.workspace_written);
+        if !written.contains(&path) {
+            return Err(RpcError::app("Addison can only undo a file change it made."));
+        }
+    }
+    if params.get("delete").and_then(Value::as_bool).unwrap_or(false) {
+        // Undo of a created file: remove it. A file already gone is a no-op success —
+        // the point is that it is not there after undo.
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(RpcError::app("Addison couldn't undo that file change.")),
+        }
+    } else {
+        let content = required_str(params, "content", "There's nothing to put back.")?;
+        std::fs::write(&path, content)
+            .map_err(|_| RpcError::app("Addison couldn't undo that file change."))?;
+    }
+    Ok(json!({}))
+}
+
+/// Addison's own data directories: the live store's parent (ADDISON_DB_PATH's parent
+/// if set) and `~/.addison`. The core already refuses these (policy.workspace_trust_
+/// allows); this is the shell's independent floor (§6.6, defence in depth), so the
+/// coding harness can never write or read Addison's memory even if the core's check
+/// were bypassed.
+fn addison_data_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Ok(env) = std::env::var("ADDISON_DB_PATH") {
+        if let Some(parent) = PathBuf::from(&env).parent() {
+            if !parent.as_os_str().is_empty() {
+                dirs.push(parent.to_path_buf());
+            }
+        }
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            dirs.push(PathBuf::from(home).join(".addison"));
+        }
+    }
+    dirs
+}
+
+fn refuse_addison_data_dir(path: &Path) -> Result<(), RpcError> {
+    let refused = || {
+        Err(RpcError::app(
+            "That location holds Addison's own memory, so Addison won't touch it there.",
+        ))
+    };
+    let candidate = canonical_lossy(path);
+    // A DANGLING symlink resolves to nothing, so canonicalization stops at the link
+    // itself and the containment test judges the link's own harmless location. But
+    // `std::fs::write` FOLLOWS the link and creates the file at its target — so a
+    // link inside a trusted project, pointing at a not-yet-existing file under
+    // Addison's data dir, planted a file in the G3 sidecar directory while this
+    // check said yes. Read the link's own target and judge that too.
+    let link_target = std::fs::read_link(path)
+        .ok()
+        .map(|target| {
+            if target.is_absolute() {
+                target
+            } else {
+                path.parent().unwrap_or(Path::new("")).join(target)
+            }
+        })
+        .map(|resolved| canonical_lossy(&resolved));
+    for dir in addison_data_dirs() {
+        let protected = canonical_lossy(&dir);
+        // Refuse a path that IS, sits inside, or contains a protected directory.
+        if candidate.starts_with(&protected) || protected.starts_with(&candidate) {
+            return refused();
+        }
+        if let Some(target) = &link_target {
+            if target.starts_with(&protected) || protected.starts_with(target) {
+                return refused();
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Best-effort canonicalization for containment checks. `canonicalize` needs the
+/// path to exist; a path about to be created does not, so walk UP to the nearest
+/// ancestor that does exist, canonicalize that, and re-attach the rest.
+///
+/// Walking up matters, not just checking the immediate parent: when any
+/// intermediate component is missing, the old one-level fallback left the candidate
+/// un-canonicalized while the protected dir WAS canonicalized, so `starts_with`
+/// compared `/var/…` against `/private/var/…` and found no containment. On macOS —
+/// where `/tmp` and `/var` are themselves symlinks — that is not a corner case.
+///
+/// On macOS this also folds the case of existing components onto their real on-disk
+/// spelling.
+fn canonical_lossy(path: &Path) -> PathBuf {
+    if let Ok(c) = std::fs::canonicalize(path) {
+        return c;
+    }
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    while let Some(parent) = cursor.parent() {
+        let name = match cursor.file_name() {
+            Some(n) => n.to_os_string(),
+            None => break,
+        };
+        suffix.push(name);
+        if let Ok(c) = std::fs::canonicalize(parent) {
+            let mut out = c;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        cursor = parent;
+    }
+    path.to_path_buf()
 }
 
 // shell.openExternal {url} -> {}
@@ -421,5 +649,243 @@ mod tests {
         assert_eq!(result.get("content").and_then(Value::as_str), Some("picked by the user"));
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Serializes every test that mutates the PROCESS-GLOBAL `ADDISON_DB_PATH`.
+    /// cargo runs tests in parallel threads, so without this one test's `set_var`
+    /// lands in the middle of another's assertion — which is exactly what happened
+    /// when the two floor tests below were added: the suite went red while each
+    /// test passed alone. A poisoned lock is fine to keep using here; the guard is
+    /// ordering, not state.
+    static DATA_DIR_ENV: Mutex<()> = Mutex::new(());
+
+    // --- Workspace-trust file surface (step 5). The core confines WHICH paths reach
+    // these; the shell guards undo soundness (ledger) and independently refuses
+    // Addison's own data dir. Each test drives the real session-scope core.
+
+    #[test]
+    fn write_workspace_creates_a_new_file_and_reports_no_prior() {
+        // A brand-new file: existed=false, prior=null, and the path is ledgered so
+        // its undo (a delete) is authorized. Content lands on disk.
+        let state = FileState::default();
+        let path = temp_path();
+
+        let result = write_workspace_path(&state, path.clone(), "fresh").unwrap();
+        assert_eq!(result.get("existed").and_then(Value::as_bool), Some(false));
+        assert!(result.get("prior").map(Value::is_null).unwrap_or(false));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fresh");
+        assert!(lock(&state.workspace_written).contains(&path), "written path must be ledgered");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_overwrites_and_returns_prior_text() {
+        // An overwrite: existed=true and the prior text comes back verbatim, so the
+        // core can snapshot it for an exact undo. Inverting the prior capture would
+        // return the wrong bytes and this fails.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "before").expect("seed");
+
+        let result = write_workspace_path(&state, path.clone(), "after").unwrap();
+        assert_eq!(result.get("existed").and_then(Value::as_bool), Some(true));
+        assert_eq!(result.get("prior").and_then(Value::as_str), Some("before"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "after");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_refuses_a_binary_file_and_leaves_it_unchanged() {
+        // A binary existing file can't round-trip as an undo payload, so the write is
+        // refused and the file is left exactly as it was — no half-applied overwrite.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, [0u8, 159, 146, 150]).expect("seed non-utf8");
+
+        let err = write_workspace_path(&state, path.clone(), "text").unwrap_err();
+        assert_eq!(err.message, "That file isn't a text file, so Addison won't change it.");
+        assert_eq!(std::fs::read(&path).unwrap(), vec![0u8, 159, 146, 150], "must be untouched");
+        assert!(!lock(&state.workspace_written).contains(&path), "a refused write is not ledgered");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_refuses_an_oversize_prior_and_leaves_it_unchanged() {
+        // A prior file over the undo bound is refused rather than bloating the undo
+        // payload; the original stays on disk.
+        let state = FileState::default();
+        let path = temp_path();
+        let big = "a".repeat(UNDO_SIZE_BOUND + 1);
+        std::fs::write(&path, &big).expect("seed big");
+
+        let err = write_workspace_path(&state, path.clone(), "small").unwrap_err();
+        assert!(err.message.contains("too big"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap().len(), big.len(), "must be untouched");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // Defence in depth: even if the core's floor were bypassed, the shell refuses
+        // a write under ~/.addison. Drive it via ADDISON_DB_PATH so the test never
+        // touches the real home directory.
+        let state = FileState::default();
+        let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        let target = data_dir.join("snapshots").join("stolen.json");
+        let err = write_workspace_path(&state, target.clone(), "x").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!target.exists(), "nothing may be written into the data dir");
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn read_workspace_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // The read side gets the same independent floor.
+        let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let secret = data_dir.join("addison.sqlite3");
+        std::fs::write(&secret, "secret db bytes").expect("seed db");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", &secret);
+
+        let err = read_workspace_path(&secret).unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn restore_workspace_refuses_a_path_it_did_not_write() {
+        // The undo guard: restore may only touch a path THIS session wrote. A path
+        // not in the ledger is refused and no file written — inverting the check
+        // would let undo write an arbitrary path.
+        let state = FileState::default();
+        let path = temp_path();
+
+        let params = json!({ "path": path.to_string_lossy(), "content": "smuggled" });
+        let err = restore_workspace_path(&state, path.clone(), &params).unwrap_err();
+        assert_eq!(err.message, "Addison can only undo a file change it made.");
+        assert!(!path.exists(), "restore must not write an unledgered path");
+    }
+
+    #[test]
+    fn restore_workspace_puts_back_prior_text_for_a_ledgered_path() {
+        // The overwrite-undo happy path: a ledgered path is rewritten with the prior
+        // text. Works regardless of trust state (the ledger is session, not trust).
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "changed").expect("seed");
+        lock(&state.workspace_written).insert(path.clone());
+
+        let params = json!({ "path": path.to_string_lossy(), "content": "original" });
+        restore_workspace_path(&state, path.clone(), &params).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_refuses_a_dangling_symlink_into_the_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // The shell's floor claims to hold "even if the core's check were bypassed".
+        // It did not: a symlink inside a project pointing at a not-yet-existing file
+        // under the data dir canonicalized to the LINK's own harmless location, the
+        // containment test passed, and `fs::write` then followed the link and planted
+        // a file in the G3 sidecar directory. Revert the read_link branch in
+        // refuse_addison_data_dir and this test writes into `snapshots/`.
+        let state = FileState::default();
+        let data_dir = std::env::temp_dir().join(format!("addison-dang-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
+        let project = std::env::temp_dir().join(format!("addison-proj-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project).expect("seed project");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        // The target does NOT exist yet — that is the whole point.
+        let victim = data_dir.join("snapshots").join("planted.json");
+        let link = project.join("innocent.txt");
+        std::os::unix::fs::symlink(&victim, &link).expect("plant the dangling link");
+
+        let err = write_workspace_path(&state, link.clone(), "PLANTED").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!victim.exists(), "a dangling link must not plant a file in the data dir");
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn the_data_dir_floor_holds_when_an_intermediate_directory_is_missing() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // canonical_lossy only checked the IMMEDIATE parent, so a path with any
+        // missing intermediate component stayed un-canonicalized while the protected
+        // dir was canonicalized — comparing /var/... against /private/var/... and
+        // finding no containment. On macOS, where /tmp and /var are themselves
+        // symlinks, that is the ordinary case, not a corner one.
+        let state = FileState::default();
+        let data_dir = std::env::temp_dir().join(format!("addison-mid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        // `nosuchdir` does not exist, so neither the path nor its parent resolves.
+        let target = data_dir.join("nosuchdir").join("x.json");
+        let err = write_workspace_path(&state, target.clone(), "x").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!target.exists());
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn restore_workspace_deletes_a_created_file_for_a_ledgered_path() {
+        // The created-file-undo happy path: `delete: true` removes a ledgered path.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "created by the write").expect("seed");
+        lock(&state.workspace_written).insert(path.clone());
+
+        let params = json!({ "path": path.to_string_lossy(), "delete": true });
+        restore_workspace_path(&state, path.clone(), &params).unwrap();
+        assert!(!path.exists(), "an undone create must be removed");
     }
 }

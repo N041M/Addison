@@ -26,10 +26,18 @@ from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
     ToolResult,
+    call_affected_path,
     call_is_destructive,
     call_permission_detail,
 )
 from agent_core.tools.registry import ToolRegistry
+
+# Confinement refusal for a routine step (step 5, D3), kept identical to the live
+# loop's so the same message shows wherever a path-bounded tool runs outside trust.
+_OUTSIDE_TRUST = (
+    "That file is outside the folders you've trusted, so Addison left it alone. "
+    "Trust its folder first if you want Addison to work with it."
+)
 
 # A command step (RoutineStep.command set) runs through this dev-only tool, so it
 # hits the exact same registry + gate path — and destructive-prompt rule — as a
@@ -118,12 +126,20 @@ class RoutineEngine:
         store=None,
         on_activity=None,
         guards_provider=None,
+        trust_check=None,
     ) -> None:
         # SAME instances as the live orchestrator — never private copies (§6.4).
         self.tool_registry = tool_registry
         self.permission_gate = permission_gate
         self.undo_manager = undo_manager
         self.shell_bridge = shell_bridge
+        # Workspace-trust confinement (step 5, D3): the SAME resolver the live loop
+        # uses, so a routine can never touch a path outside trust that the chat
+        # couldn't. Default refuses everything (the file tools aren't routine-exposed
+        # in v1, so this is defence-in-depth). NOTE: a routine command step / any
+        # step still passes trusted=False to the gate unconditionally (D5) — a
+        # persisted one-click spec never skips a card.
+        self._trust_check = trust_check or (lambda path: False)
         # The effective GuardConfig provider (Custom profile, D3) — the SAME
         # resolution function the live loop uses, so a routine can never out- or
         # under-permission the conversation. None/absent -> the unguarded gate.
@@ -214,11 +230,33 @@ class RoutineEngine:
                             step_log,
                         )
                 continue
+            # CONFINEMENT (step 5, D3): a path-bounded step may only run inside a
+            # trusted root. Resolve once, refuse before the gate if outside trust,
+            # and hand the resolved path to execute via the context (R6). The file
+            # tools aren't routine-exposed in v1, so this is defence-in-depth;
+            # affected_path is None for a command step, which resets resolved_path.
+            affected = call_affected_path(tool, resolved_args)
+            if affected is not None and not self._trust_check(affected):
+                result = ToolResult(success=False, content=_OUTSIDE_TRUST)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, _OUTSIDE_TRUST))
+                if step.on_failure == "abort":
+                    return self._finish(run_id, "failed", step_results, _OUTSIDE_TRUST, step_log)
+                if step.on_failure == "ask_user" and not self._on_ask_user(
+                    step, run_id, _OUTSIDE_TRUST
+                ):
+                    return self._finish(
+                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                    )
+                continue
+            context.resolved_path = affected
             # Mode-aware authorization (policy.py): SAFE prompts for every
             # not-yet-granted step; OPEN auto-allows non-destructive steps and
             # prompts PER INVOCATION for destructive ones (a destructive command
             # stops to ask every time, card showing the exact resolved command).
-            # Routines NEVER auto-escalate — same gate as §4.3.
+            # Routines NEVER auto-escalate — same gate as §4.3. trusted=False
+            # UNCONDITIONALLY (D5): a persisted, one-click, model-authorable spec
+            # must never skip a card the way a live confined edit does.
             destructive = call_is_destructive(tool, resolved_args)
             # Asked once and used twice, exactly as the live loop does it: the
             # permission card and the Activity Panel must describe the SAME step.
@@ -229,6 +267,7 @@ class RoutineEngine:
                 destructive=destructive,
                 detail=detail,
                 guards=guards,
+                trusted=False,
             )
             if status == PermissionStatus.DENIED:
                 step_log.append(self._log_entry(index, step, "permission denied"))

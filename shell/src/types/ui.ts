@@ -375,6 +375,58 @@ export interface AnsweredWith {
   routed: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Add-a-model-server by prompt + "make it cheaper" (Phase-2 step 4). Both are
+// CORE-derived (the model authors no actionable field on the turn reply): the
+// core drafts a proposal from the conversation and holds it; a separate confirm
+// applies it, mirroring the widget precedent. Nothing here is secret — the
+// endpoint API key NEVER rides in one of these shapes; it goes straight to the
+// OS keychain via `storeProviderKey` (G1). Both parsers fail CLOSED: a shape the
+// card can't act on becomes `null`, so no card is shown.
+// ---------------------------------------------------------------------------
+
+/**
+ * A drafted "add this model server" proposal from `endpoint.proposeFromConversation`.
+ * `baseUrl` is the full address the core extracted from a short, add-endpoint-shaped
+ * user utterance (never assistant content, never a URL buried in pasted page text).
+ * `isLocalOrLan` is true when the address resolves to the user's own computer or a
+ * device on their network — the card discloses that in plain language.
+ */
+export interface EndpointProposal {
+  baseUrl: string;
+  isLocalOrLan: boolean;
+}
+
+/**
+ * A drafted "switch to cheaper models" plan from `costPlan.propose`. ALL fields are
+ * CANNED in the core (the model authors none): `skillName` + `skillInstructions`
+ * are fixed constants (a brevity + prefer-cheaper guidance note), and `strategy`
+ * is always `cost_first`. The card renders the name AND the full instructions text
+ * so the person sees exactly what note is being added before confirming.
+ */
+export interface CostPlan {
+  skillName: string;
+  skillInstructions: string;
+  strategy: "cost_first";
+}
+
+// ---------------------------------------------------------------------------
+// Workspace trust — the coding-harness trust boundary (workspace.list; Phase-2
+// step 5). A trusted ROOT is a folder Addison may read and edit inside without a
+// per-change card; the typed file tools stay undoable and every change is logged,
+// and commands Addison runs still ask every time. Nothing here is secret — no key,
+// no file contents — only the folder path and when it was trusted, so the parser
+// only has to worry about shape. It fails CLOSED: a row without a usable directory
+// string is DROPPED, never rendered, because a row the card can't name is a row it
+// could offer a "Stop trusting" button for and then fail to act on.
+// ---------------------------------------------------------------------------
+export interface WorkspaceRoot {
+  /** The absolute, canonicalized folder path the core is currently trusting. */
+  directory: string;
+  /** Unix seconds when trust was granted, when the core reports it. */
+  grantedAt?: number;
+}
+
 /** The full profile picture from `profile.get`. */
 export interface ProfileState {
   activeProfile: string;

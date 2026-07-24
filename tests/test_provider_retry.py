@@ -68,6 +68,16 @@ def test_helper_idempotent_retries_read_timeout_but_post_does_not():
     assert post_counter["n"] == 1
 
 
+# list_models now issues its GET through the shared SSRF pin (step 4, R1), which
+# resolves the host before connecting. A single-address stub resolver keeps these
+# retry tests offline (no real DNS to api.openai.com) AND deterministic — one
+# vetted address per attempt, so each request the counter sees is a real retry
+# rather than the pin trying a second A/AAAA record. The retry itself is unchanged:
+# a retryable VettingError from the pin is surfaced as the httpx error
+# request_with_retry gives its one idempotent retry to.
+_STUB_RESOLVE = lambda host: ["93.184.216.34"]  # noqa: E731
+
+
 # --- GET (openai list_models): fails once then succeeds --------------------
 def test_get_retries_once_after_connect_error_then_succeeds():
     client, counter = _scripted_client(
@@ -76,7 +86,9 @@ def test_get_retries_once_after_connect_error_then_succeeds():
             httpx.Response(200, json={"data": [{"id": "gpt-x"}]}),
         ]
     )
-    ids = list_models("https://api.openai.com/v1", lambda: "sk-test", client=client)
+    ids = list_models(
+        "https://api.openai.com/v1", lambda: "sk-test", client=client, resolve=_STUB_RESOLVE
+    )
     assert ids == ["gpt-x"]
     assert counter["n"] == 2  # exactly one retry
 
@@ -87,7 +99,9 @@ def test_get_fails_twice_surfaces_plain_error_and_stops_at_two():
         [httpx.ConnectError("refused"), httpx.ConnectError("still refused")]
     )
     with pytest.raises(RuntimeError) as exc:
-        list_models("https://api.openai.com/v1", lambda: "sk-test", client=client)
+        list_models(
+            "https://api.openai.com/v1", lambda: "sk-test", client=client, resolve=_STUB_RESOLVE
+        )
     # Byte-identical to the no-retry message — the retry is invisible.
     assert str(exc.value) == "Couldn't reach that server. Check the address and that it's running."
     assert counter["n"] == 2  # no third attempt
@@ -98,7 +112,9 @@ def test_get_retries_once_on_5xx_then_succeeds():
     client, counter = _scripted_client(
         [httpx.Response(503, json={}), httpx.Response(200, json={"data": [{"id": "m"}]})]
     )
-    ids = list_models("https://api.openai.com/v1", lambda: "sk-test", client=client)
+    ids = list_models(
+        "https://api.openai.com/v1", lambda: "sk-test", client=client, resolve=_STUB_RESOLVE
+    )
     assert ids == ["m"]
     assert counter["n"] == 2
 

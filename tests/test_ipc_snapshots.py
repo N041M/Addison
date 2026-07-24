@@ -18,8 +18,6 @@ import re
 import sqlite3
 from pathlib import Path
 
-import pytest
-
 from agent_core.main import _REBUILD_FAILED, _REBUILT_FROM_UNVERIFIED
 from agent_core.memory.store import Store
 from agent_core.policy import PolicyMode
@@ -1027,14 +1025,75 @@ def test_the_created_in_mode_guard_would_actually_catch_a_filter(tmp_path) -> No
     assert _mode_comparisons(planted) != []
 
 
-@pytest.mark.xfail(reason="workspace-trust lands in step 5; the rule is reserved now", strict=True)
 def test_the_addison_data_dir_can_never_be_workspace_trusted():
-    # §6.6, forward-declared. In OPEN mode run_command executes arbitrary shell,
-    # and step 5's workspace-trust suppresses the destructive card inside a
-    # trusted directory. If a user trusts a directory containing — or above —
-    # Addison's data directory, `rm -rf snapshots/` runs with no card and the
-    # floor's storage is protected by nothing but its location. Written now as
-    # executable text so step 5 cannot discover this instead of implementing it.
-    from agent_core.policy import workspace_trust_allows   # type: ignore[attr-defined]
+    # §6.6 (step 5, D1/D7 — the xfail is now flipped live). In OPEN mode a typed file
+    # edit inside a trusted directory skips its card; if a user could trust a
+    # directory containing — or above — Addison's data directory, the floor's own
+    # storage would be protected by nothing but its location. The FLOOR refuses the
+    # data dir, its snapshots sidecar, and ~/.addison, in BOTH directions
+    # (ancestor and descendant), symlink- and case-fold-safe.
+    from agent_core.policy import workspace_trust_allows
 
     assert workspace_trust_allows(Path("~/.addison").expanduser()) is False
+
+
+def test_workspace_trust_floor_derivation_matches_default_db_path(monkeypatch):
+    # D1: with data_dir=None the floor RE-DERIVES the data dir, and that derivation
+    # must equal the directory main.default_db_path() lives in — or the floor could
+    # protect a different directory than the store actually uses. Pinned for both the
+    # env-override and the ~/.addison default.
+    from agent_core import main
+    from agent_core.policy import _derived_data_dir
+
+    monkeypatch.delenv("ADDISON_DB_PATH", raising=False)
+    assert Path(_derived_data_dir()) == Path(main.default_db_path()).parent
+
+    override = Path("/tmp/addison-derivation/addison.sqlite3")
+    monkeypatch.setenv("ADDISON_DB_PATH", str(override))
+    assert Path(_derived_data_dir()) == Path(main.default_db_path()).parent == override.parent
+
+
+def test_workspace_trust_floor_refuses_ancestors_descendants_symlinks_and_case(tmp_path):
+    # The full D1 robustness matrix, each case mutation-relevant.
+    from agent_core.policy import workspace_trust_allows
+
+    data_dir = tmp_path / "data"
+    (data_dir / "snapshots").mkdir(parents=True)
+    project = tmp_path / "project"
+    project.mkdir()
+    dd = str(data_dir)
+
+    # The data dir itself, its sidecar, a descendant, and an ancestor — all refused.
+    assert workspace_trust_allows(data_dir, dd) is False
+    assert workspace_trust_allows(data_dir / "snapshots", dd) is False
+    assert workspace_trust_allows(data_dir / "snapshots" / "x.json", dd) is False
+    assert workspace_trust_allows(tmp_path, dd) is False           # ancestor contains it
+    # A genuine sibling project dir IS allowed.
+    assert workspace_trust_allows(project, dd) is True
+
+    # Relative / .. traversal resolves before the check.
+    assert workspace_trust_allows(str(data_dir / ".." / "data" / "snapshots"), dd) is False
+
+    # A symlink pointing INTO the data dir is followed (realpath) and refused.
+    link = tmp_path / "link-to-data"
+    link.symlink_to(data_dir)
+    assert workspace_trust_allows(link, dd) is False
+    assert workspace_trust_allows(link / "snapshots", dd) is False
+
+    # Case-folded spelling of the data dir (caught by realpath+casefold when the
+    # real dir exists on a case-insensitive filesystem; a no-op refusal elsewhere).
+    assert workspace_trust_allows(str(data_dir).upper(), dd) is False
+
+    # data_dir=None re-derives from ADDISON_DB_PATH.
+    import os
+
+    prev = os.environ.get("ADDISON_DB_PATH")
+    os.environ["ADDISON_DB_PATH"] = str(data_dir / "addison.sqlite3")
+    try:
+        assert workspace_trust_allows(data_dir) is False
+        assert workspace_trust_allows(project) is True
+    finally:
+        if prev is None:
+            os.environ.pop("ADDISON_DB_PATH", None)
+        else:
+            os.environ["ADDISON_DB_PATH"] = prev

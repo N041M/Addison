@@ -27,10 +27,19 @@ from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
     ToolResult,
+    call_affected_path,
     call_is_destructive,
     call_permission_detail,
 )
 from agent_core.tools.registry import ToolRegistry
+
+# Confinement refusal (step 5, D3). A path-bounded tool whose resolved path is not
+# inside a currently-trusted root is hard-refused BEFORE execute — permission-to-
+# touch, distinct from the gate's card. Plain language, one next step.
+_OUTSIDE_TRUST = (
+    "That file is outside the folders you've trusted, so Addison left it alone. "
+    "Trust its folder first if you want Addison to work with it."
+)
 
 
 # Two ceilings, because a turn can run away in two different directions and each
@@ -160,6 +169,7 @@ class Orchestrator:
         routing_chain=lambda requested_role, model_name: None,
         on_answered=lambda model_id, label, free, routed: None,
         model_label=lambda model_id: model_id,
+        trust_check=lambda path: False,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
@@ -195,6 +205,16 @@ class Orchestrator:
         # human label for that chip and the fallback note.
         self.on_answered = on_answered
         self._model_label = model_label
+        # Workspace-trust confinement (step 5, D3). Given a RESOLVED absolute path,
+        # returns whether it may be touched right now (under a trusted root AND past
+        # the data-dir floor). Store-backed, so it is wired in by the server
+        # (rpc/workspace._is_trusted_path); the default refuses everything, so in
+        # CLI/tests a path-bounded tool is confined to nothing until trust is wired —
+        # the safe default. run_command has no affected_path, so this never governs it.
+        # ``or`` a refuse-everything default, matching RoutineEngine: an explicit
+        # None from a caller used to raise TypeError mid-turn rather than confine
+        # to nothing, and the two call sites must not disagree about that.
+        self._trust_check = trust_check or (lambda path: False)
         # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
         # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
         self._cooldowns: dict[str, float] = {}
@@ -431,11 +451,28 @@ class Orchestrator:
                     call.id, ToolResult(success=False, content=dev_only_refusal)
                 )
                 continue
+            # CONFINEMENT (step 5, D3): a path-bounded tool (non-None affected_path)
+            # may only ever run INSIDE a currently-trusted root. Resolve the path
+            # ONCE here; hard-refuse before the gate and before execute if it is not
+            # trusted (permission-to-touch, separate from the card). The resolved
+            # path rides on the context so execute acts on the exact path checked —
+            # never a re-read of args["path"] (R6, TOCTOU). affected_path is None for
+            # every non-path tool (run_command included), which resets resolved_path
+            # and leaves those tools completely unaffected.
+            affected = call_affected_path(tool, call.args)
+            trusted = bool(affected) and self._trust_check(affected)
+            if affected is not None and not trusted:
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=_OUTSIDE_TRUST)
+                )
+                continue
+            context.resolved_path = affected
             # Mode-aware authorization (policy.py): SAFE prompts for every
             # not-yet-granted tool; OPEN auto-allows non-destructive calls and prompts
             # PER INVOCATION for destructive ones (the card shows the exact command via
-            # `detail`). Destructiveness is per-call (run_command classifies its own;
-            # else HIGH == destructive).
+            # `detail`). A confined, trusted file edit passes `trusted=True` so the
+            # gate auto-grants it card-free (§8.3). Destructiveness is per-call
+            # (run_command and write_project_file classify their own; else HIGH).
             destructive = call_is_destructive(tool, call.args)
             # Asked once and used twice, on purpose: the permission card and the
             # Activity Panel must describe the SAME call. Calling the tool's
@@ -448,6 +485,7 @@ class Orchestrator:
                 destructive=destructive,
                 detail=detail,
                 guards=guards,
+                trusted=trusted,
             )  # may block for UI
             if status == PermissionStatus.DENIED:
                 # Steer the model past the refusal: "not now" declines the STEP, not

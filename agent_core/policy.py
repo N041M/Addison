@@ -37,6 +37,7 @@ PolicyMode for the ExecutionContext, so the dependency runs one way only).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -103,3 +104,110 @@ def weakenings_between(old: GuardConfig, new: GuardConfig) -> list[str]:
     if _AUTO_GRANT_SCOPE_RANK[new.auto_grant_scope] < _AUTO_GRANT_SCOPE_RANK[old.auto_grant_scope]:
         weakened.append("auto_grant_scope")
     return weakened
+
+
+# --- Workspace-trust floor (step 5, D1; global-floor G3) ---------------------
+#
+# Pure, stdlib-only, store-free — this module never imports the store, so the
+# check can be reused by the RPC (grant time), the gate/caller (authorize time),
+# and the forward-declared xfail test alike, none of which may reach a live Store.
+#
+# ``workspace_trust_allows`` answers exactly ONE question: is ``path`` safe to sit
+# INSIDE the trust boundary at all — i.e. is it NOT Addison's own data directory
+# (or an ancestor/descendant of it)? It is the FLOOR, not the confinement check.
+# "Is this path inside a currently-trusted root" is a different predicate the
+# caller computes (rpc/workspace.is_trusted), because that one needs the stored
+# trust rows and this one must not. The two compose: a path is genuinely trusted
+# iff it sits under a granted root AND passes this floor (floor beats a root that
+# was somehow planted over the data dir — order: match-a-root THEN floor).
+
+
+def _derived_data_dir() -> str:
+    """The live DB's parent directory, derived the SAME way ``main.default_db_path``
+    derives the DB path — env override's parent, else ``~/.addison``. Used only when
+    ``workspace_trust_allows`` is called with ``data_dir=None`` (the xfail's one-arg
+    convenience); the gate and RPC always pass the live ``server._db_path.parent``.
+    A test pins this against ``Path(main.default_db_path()).parent`` so the two can
+    never drift."""
+    override = os.environ.get("ADDISON_DB_PATH")
+    if override:
+        return os.path.dirname(os.path.abspath(os.path.expanduser(override)))
+    return os.path.expanduser("~/.addison")
+
+
+def _protected_dirs(data_dir: str | os.PathLike[str] | None) -> list[str]:
+    """The directories that may never be, contain, or be contained by a trusted
+    workspace: the live data dir + its ``snapshots/`` sidecar, AND ``~/.addison`` +
+    its sidecar even when the live store is redirected elsewhere (ADDISON_DB_PATH) —
+    the default home store must never be trustable either. Deduplication is left to
+    the realpath comparison in ``workspace_trust_allows`` (case/symlink-folded)."""
+    bases: list[str] = []
+    live = os.path.expanduser(str(data_dir)) if data_dir is not None else _derived_data_dir()
+    bases.append(live)
+    home = os.path.expanduser("~/.addison")
+    if home not in bases:
+        bases.append(home)
+    protected: list[str] = []
+    for base in bases:
+        protected.append(base)
+        protected.append(os.path.join(base, "snapshots"))
+    return protected
+
+
+def _canonical(path: str | os.PathLike[str]) -> str | None:
+    """``realpath`` (resolves symlinks, ``..`` and relative paths against cwd) plus
+    a case fold, so comparison is symlink- and case-insensitive-filesystem safe
+    (``/tmp/link -> ~/.addison`` and ``~/.Addison`` both normalise onto the real
+    data dir). Returns None if the path can't be resolved at all."""
+    try:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(str(path)))).casefold()
+    except (OSError, ValueError):
+        return None
+
+
+def _within_or_equal(inner: str, outer: str) -> bool:
+    """True iff canonical ``inner`` is ``outer`` or sits inside it. ``commonpath``
+    on already-canonicalised, case-folded strings — separators are untouched by the
+    fold, so component boundaries are respected (``/a/bc`` is NOT inside ``/a/b``)."""
+    try:
+        return os.path.commonpath([inner, outer]) == outer
+    except ValueError:
+        # Different drives / a mix of absolute and relative — not contained.
+        return False
+
+
+def path_is_within(path: str | os.PathLike[str], ancestor: str | os.PathLike[str]) -> bool:
+    """True iff canonical ``path`` equals or sits inside canonical ``ancestor``.
+    Symlink- and case-fold-safe, the same comparison ``workspace_trust_allows``
+    uses. Used by the confinement check (rpc/workspace.is_trusted) to test a
+    resolved path against a stored (already-canonical) trusted root."""
+    p = _canonical(path)
+    a = _canonical(ancestor)
+    if p is None or a is None:
+        return False
+    return _within_or_equal(p, a)
+
+
+def workspace_trust_allows(
+    path: str | os.PathLike[str], data_dir: str | os.PathLike[str] | None = None
+) -> bool:
+    """Return False when ``path`` is, contains, or is contained by any protected
+    directory (the data dir, its sidecar, ``~/.addison``); True otherwise. This is
+    the floor that keeps Addison's own memory — and the G3 restore storage under it
+    — un-trustable, so ``run_command`` inside a trusted parent can never ``rm -rf``
+    the floor's own files with no card (§6.6; the forward-declared xfail).
+
+    Refuses BOTH directions: a descendant (``~/.addison/x`` — inside it) and an
+    ancestor (``~`` — contains it). Both sides are realpath+casefold canonicalised,
+    so a symlink into the data dir and a case-folded spelling are both caught. A
+    path that cannot be resolved is refused (fail closed)."""
+    candidate = _canonical(path)
+    if candidate is None:
+        return False
+    for protected in _protected_dirs(data_dir):
+        prot = _canonical(protected)
+        if prot is None:
+            continue
+        if _within_or_equal(candidate, prot) or _within_or_equal(prot, candidate):
+            return False
+    return True

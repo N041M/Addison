@@ -36,6 +36,19 @@ CREATE TABLE IF NOT EXISTS tool_grants (
     scope_details   TEXT                    -- JSON, tool-specific (e.g. remembered file handles)
 );
 
+-- Workspace trust (step 5) — directories the user has trusted for the OPEN-mode
+-- coding harness. Inside a trusted root a typed, undoable file edit skips the
+-- per-change card (the edit is still logged and reversible); commands still card
+-- every time. The root is canonicalized (realpath) at grant time, so the caller's
+-- confinement check (rpc/workspace.is_trusted) is realpath-vs-realpath. EXCLUDED
+-- from snapshots (snapshots/scope.py) like tool_grants: trust is standing consent,
+-- and a restore reinstating a trust the user had revoked would be a privilege grant
+-- delivered by the ungated one-action restore button.
+CREATE TABLE IF NOT EXISTS workspace_trust (
+    root        TEXT PRIMARY KEY,       -- canonical absolute directory path
+    granted_at  INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS action_snapshots (
     id                  TEXT PRIMARY KEY,
     tool_call_id        TEXT NOT NULL,

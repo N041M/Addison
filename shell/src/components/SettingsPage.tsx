@@ -25,11 +25,13 @@ import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
+import type { WorkspaceCardState } from "../hooks/useWorkspace";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
 import { SnapshotsCard, SaveSnapshotButton } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
+import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
 import { RoutingCard, type RoutingCardModel } from "./RoutingCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -57,6 +59,11 @@ interface Props {
    * caller (older tests) still renders — the routing card is simply omitted then.
    * The card itself decides toggle vs. full from the core's `surface`. */
   routing?: RoutingCardState;
+  /** The workspace-trust bundle (useWorkspace; Phase-2 step 5). Optional so a
+   * partial caller (older tests) still renders — the card is simply omitted then.
+   * It shows ONLY on the Developer/Custom surfaces (keyed off the active profile,
+   * never the mode); Simple never sees it. */
+  workspace?: WorkspaceCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -92,6 +99,25 @@ const KEY_PROVIDERS: { id: string; label: string; kind: ProviderKind }[] = [
 // Printable-ASCII, no whitespace — catches clipboard damage (smart quotes, a "…"
 // from a truncated copy, a non-breaking space) at the door before it's stored.
 const KEY_SHAPE = /^[\x21-\x7E]+$/;
+
+// Google's free tier surfaced as INFORMATION, not a routing flag (contract D3):
+// one plain sentence under the Google row saying where a free key comes from. No
+// cloud model is ever marked "free" — the free chip fires only for
+// free-by-construction local models — so this is information, not a flag.
+//
+// It is deliberately NOT an <a href>. THE WEBVIEW CANNOT OPEN A URL. The Rust
+// shell registers exactly three commands for the webview (main.rs:
+// send_to_core, store_provider_key, delete_provider_key); `shell.openExternal`
+// is a CORE→shell method reached only by the `open_link` tool, and Markdown.tsx
+// states the standing rule as "the webview must never open URLs itself, and must
+// never call any shell.* IPC method". An anchor here would render, invite a
+// click, and do nothing — a dead control in a Settings panel, which is worse than
+// plain text. So the address is shown as SELECTABLE mono text the person can copy
+// into their own browser, and the sentence says to open it there.
+//
+// If clickable external links are ever wanted, the fix is a webview→shell
+// capability (one narrow Tauri command), not an anchor here — tracked in HANDOFF.
+const GOOGLE_KEY_URL_TEXT = "aistudio.google.com/apikey";
 
 // The connected-models union for the custom chain builder: every cloud model
 // (attributed to its provider when the payload names one) plus every configured
@@ -129,6 +155,7 @@ export function SettingsPage({
   snapshots,
   guards,
   routing,
+  workspace,
   profile,
   onSetProfile,
   diagnostics,
@@ -274,6 +301,22 @@ export function SettingsPage({
               </Card>
             </CardSlot>
           )}
+          {/* Workspace trust — the coding-harness boundary (Phase-2 step 5). Shown
+              ONLY on the Developer and Custom surfaces (keyed off the active
+              profile, never the policy mode); Simple never sees it. It sits with
+              the other "how freely Addison may act" controls, above Restore points
+              so the way back is always in view alongside a loosening. */}
+          {workspace &&
+            (profile?.activeProfile === "developer" || profile?.activeProfile === "custom") && (
+              <CardSlot>
+                <Card
+                  title="Folders Addison may work in"
+                  subtitle="Trust a project folder so Addison can edit files there without asking each time."
+                >
+                  <WorkspaceTrustPanel connected={connected} workspace={workspace} />
+                </Card>
+              </CardSlot>
+            )}
           {/* Restore points sit directly after Profile on purpose: the person who
               has just changed how freely Addison may act should see the way back
               in the same breath (G3). */}
@@ -449,7 +492,9 @@ function SelectableRow({
 }
 
 // --- API keys --------------------------------------------------------------
-function ApiKeys({
+// Exported for the step-4 Google free-tier-line test (step4.test.tsx). It is
+// still only rendered from within this page.
+export function ApiKeys({
   connected,
   providers,
   onConnect,
@@ -689,6 +734,17 @@ function ProviderRow({
             </p>
           )}
         </div>
+      )}
+
+      {/* Google free-tier info line (contract D3/D5). The address is selectable
+          text, not a link — see GOOGLE_KEY_URL_TEXT above for why the webview
+          cannot open one, and why a dead anchor would be the dishonest option. */}
+      {def.id === "google" && (
+        <p className="mt-2 text-fine text-faint">
+          Google's API has a free tier — a free key works here. Open{" "}
+          <span className="select-all font-mono text-ink">{GOOGLE_KEY_URL_TEXT}</span> in your
+          browser to get one.
+        </p>
       )}
     </div>
   );

@@ -5,8 +5,18 @@ For the next working session. Read **CLAUDE.md** first (repo law), then
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: Phase-2 step 4 (free-model endpoints + add-by-prompt, which also
-carries the "make it cheaper" flow) and/or step 5 (harness + workspace-trust).**
+**Next up: Phase-2 step 6 (widget capability tiers + expanded safe vocabulary;
+make `primary.txt` capability-aware), then 7 (MCP client) and 8 (the automation
+keyword gate).** Steps 4 (free-model endpoints, add-by-prompt, "make it cheaper")
+and 5 (coding harness + workspace-trust) are **BUILT — 2026-07-24**, on the
+`step4-step5` branch; see "What shipped 07-24: steps 4 + 5" below, **and read its
+post-build rigor pass before trusting any of it.**
+
+**Two queued, contract-first, not started:** rework local-model setup
+(state-aware — not-downloaded → one-click download plus a source link;
+downloaded → how to connect it; and more open-source models), and skills
+file-upload (an uploaded text file's contents become the skill's guidance text —
+editable, previewed, size-limited).
 **Step 3 (routing strategies) is BUILT** — 2026-07-24, the
 `step3-routing-strategies` branch; see "What shipped 07-24: step 3" below.
 Step 1 (the snapshot/rollback floor, G3) is **merged**; the **step-1 ledger is
@@ -340,6 +350,174 @@ haiku turn) verified the whole Custom flow over real JSON-RPC — dispatch,
 anchor, dedupe, D7 notice, C6 under SAFE, and `snapshot_now` writing through
 `main()`'s late-bound holder.
 
+## What shipped 07-24: steps 4 + 5 — free-model endpoints & the coding harness
+
+Built by four agents in isolated worktrees from two frozen contracts, each
+adversarially reviewed twice before a line was written, then merged four ways by
+hand. **Read the post-build pass below before trusting any of it** — it is where
+the real defects were.
+
+**Step 4 — free-model endpoints, add-by-prompt, "make it cheaper".**
+- **`agent_core/net_vetting.py` is new and is the load-bearing piece.** The WHOLE
+  pinned-request execution moved out of `read_web_page` — not just the URL
+  rewrite. Reusing only `pinned_url` would make httpx verify the certificate
+  against the IP literal and refuse every legitimate HTTPS server, or tempt
+  someone to weaken verification, which is a worse hole. The vetting DECISION is a
+  parameter (`allow_private` / `require_default_port`), so the public-web policy
+  and the user's-own-LAN-host policy share one mechanism; the plain sentences are
+  a parameter too, because the two callers speak to different audiences.
+- Both flows are **propose/confirm RPCs whose fields are core-derived or canned** —
+  the turn reply never carries a model-authored actionable payload. `endpoint.propose`
+  reads the CURRENT turn's `role=="user"` messages only (a model that echoes
+  `https://evil` into its answer must not become the extraction source), and only
+  a short add-endpoint-shaped utterance arms a card. `costPlan.propose` is entirely
+  constants.
+- `costPlan.apply`: validate → skip if already in effect → **snapshot, REFUSING
+  the whole apply if it cannot mint** (a deliberate new hook class — a compound,
+  conversationally-initiated degradation for the at-risk persona whose only
+  recovery is the restore point; `routing.set` still proceeds-with-warning, and
+  the asymmetry is noted in both places) → **one atomic `Store` commit** so a
+  half-applied plan is impossible.
+- The free chip stays **Ollama-only**: no cloud `CloudModel.free` is True in v1, so
+  the chip asserts a cost fact Addison can actually establish. Google's free tier
+  is *information* under the provider row, not a routing flag.
+
+**Step 5 — the coding harness + workspace-trust.** Two typed, OPEN-only,
+path-bounded file tools, a `workspace_trust` table, a `workspace.*` RPC, and three
+new Rust bridge methods. Four things are worth internalising before extending it:
+
+- **Confinement is a DIFFERENT PREDICATE from prompting, and that was the central
+  gap in the first draft.** "Is this path inside a trusted root" (permission to
+  TOUCH) is not "may the card be skipped" — and a LOW read never cards in OPEN
+  anyway, so the gate's `trusted` bool alone confines nothing. The CALLER
+  (orchestrator / routine engine) resolves `affected_path`, checks it, and
+  **hard-refuses before `execute`** for LOW and MEDIUM alike.
+- **Resolve ONCE.** `affected_path` realpaths exactly once; the resolved value is
+  what the caller checks AND what `execute` acts on, handed over via
+  `ExecutionContext.resolved_path`. Re-reading `args["path"]` inside `execute`
+  reopens a TOCTOU gap: confinement approves one path, the write lands on another.
+- **`dev_only` split into two dimensions** (`open_only` = visibility,
+  `allow_missing_undo` = the exemption from the undo-at-registration check),
+  because `write_project_file` must be BOTH hidden from SAFE AND undo-enforced,
+  and the old single flag could not say that.
+- **Owner decision 2026-07-24: trust suppresses cards ONLY for the typed,
+  path-bounded, undoable file tools. `run_command` ALWAYS cards.** Its
+  `affected_path` is None, so confinement never governs it and it can never be
+  trust-suppressed. That is what makes amendment §8.2's two bullets simultaneously
+  deliverable. **§8.2 and design-doc §9 are both annotated as superseded** — trust
+  is NOT snapshotted (see below), and the OPEN tools scope by trusted root rather
+  than by file picker.
+- **Trust is EXCLUDED from snapshots**, on the `tool_grants` precedent: standing
+  consent that suppresses cards is a grant in all but name, and restoring one the
+  user had revoked would be privilege escalation delivered by the deliberately
+  ungated one-action restore button.
+
+### The step-4/5 post-build rigor pass — read this before trusting the above
+
+Three adversarial reviewers attacked the finished tree with reproduce-don't-read
+rules. They found **seven real bugs that two rounds of contract review, four build
+agents and 847 green tests all missed**, plus a cluster of tests that proved
+nothing. Every fix below is mutation-proven: **27 Python mutations applied, 27
+killed**, plus 2 Rust mutations killed, each reverting one fixed line in a scratch
+copy outside the repo. The coordinator reproduced the two worst personally, from
+scratch, before touching anything.
+
+**The two that would have shipped a broken feature and a leaked key:**
+
+1. **The API key was forwarded to whatever host a redirect named.** `open_vetted`
+   built the header dict once and threaded it through every hand-followed hop, so
+   a custom server — or anything able to answer 302 for it — harvested the user's
+   key verbatim. The aggravating detail: **httpx's own follower strips
+   `Authorization` cross-origin** (`Client._redirect_headers`), so the hand-rolled
+   loop that replaced it was strictly weaker than the library it displaced, on the
+   one axis that carries a secret. Fixed with a SEPARATE `credential_headers`
+   parameter rather than a "strip anything called authorization" rule, so the next
+   caller to put a secret in a header inherits the protection by construction
+   instead of by naming their header correctly.
+2. **`pinned_url` dropped the PORT**, so `http://localhost:11434/v1` connected to
+   `127.0.0.1:80` — a different service on the same machine, carrying the Bearer
+   key to it. Harmless while the only caller required the default port; live the
+   moment step 4 allowed any port, which means **the entire feature — Ollama
+   :11434, LM Studio :1234, llama.cpp :8080 — could not work at all.** The default
+   port is still omitted, exactly as a browser omits it, so `read_web_page`'s
+   requests are byte-identical to before.
+
+**The rest, each reproduced before it was believed:**
+
+3. **A NUL byte in a `path` argument crashed the whole turn** — `Path(raw).resolve()`
+   raises, and both confinement call sites sit OUTSIDE the handling that exists so
+   "a tool failure is a failed STEP, never a crashed turn". On the routine path it
+   left the run recorded as `running` forever. Now an unresolvable path returns a
+   **sentinel, never `None`** — because `None` means "not a path tool" and skips
+   confinement entirely, which would have let a malformed argument walk past the
+   boundary into the gate.
+4. **`workspace.list` was read as `{roots}` while the core sends `{folders}`**, so
+   the trusted-folder list rendered permanently empty in the shipped app: no "Stop
+   trusting" button, standing consent unrevocable from the UI. Both suites were
+   green — Python asserted `folders`, vitest parsed a hand-built `{roots: […]}`
+   literal, and **neither could see the other**. Fixed, and closed structurally: the
+   generated payload fixtures now cover `workspace.list`, `costPlan.propose` and
+   `endpoint.proposeFromConversation`, so a new payload a parser consumes gets an
+   artifact both sides share. *Add a fixture for every new payload.*
+5. **A turn-scoped "Not now" was ignored inside a trusted folder** (`_auto_grant`
+   never consulted `_denied`). Nothing escalated — the call was card-free anyway —
+   but a person was shown a card, said no, and watched Addison edit a file in the
+   same turn. Consent honesty, not privilege.
+6. **Workspace trust silently overrode Custom's strictest guard.**
+   `auto_grant_scope='none'` is the maximum-asking option and its copy says Addison
+   asks about everything; trust made destructive writes card-free under it, and a
+   tightening mints no anchor, so nothing marked the moment. **Exactly the defect
+   shape the step-2 rigor pass found** — the strictest-LABELLED option carrying the
+   quiet hole. Simple/Developer are byte-for-byte unchanged (their guards are the
+   defaults).
+7. **`trust_env=False` was applied to the stock OpenAI connect**, which is a module
+   constant, not user input — so connecting an OpenAI key behind a corporate proxy
+   would fail while chat kept working. A freeze break dressed as hardening.
+8. **The connect card's worst case went from ~20s to ~120–240s**: the walk tries up
+   to `MAX_ADDRESS_ATTEMPTS` addresses per hop across every redirect, and the
+   idempotent retry then re-ran the whole thing. A per-socket timeout is not a
+   budget — same lesson as the step-3 fallback budget — so `total_timeout` now
+   bounds the whole walk, **including the address loop inside each hop** (bounding
+   hops alone left most of the wait unbounded; the first version of this fix did
+   exactly that and its own mutation test caught it).
+9. **The Rust shell's data-dir floor was defeatable by a DANGLING symlink** — the
+   target does not exist, so canonicalization stopped at the link's own harmless
+   location while `fs::write` followed it and planted a file in the G3 sidecar
+   directory. The Python floor caught it, so this was never a live breach, but the
+   comment claiming defence-in-depth was false. `canonical_lossy` also only checked
+   the IMMEDIATE parent, so any missing intermediate component left the candidate
+   un-canonicalized while the protected dir was canonicalized — on macOS, where
+   `/tmp` and `/var` are themselves symlinks, that is the ordinary case.
+10. **Smaller, all real:** the `_ADD_ENDPOINT_HINTS` gate matched **substrings**, so
+    "add" matched **Addison** — the app's own name — and "api" matched "therapist";
+    `"Addison, what is <url>?"` armed a connect card, and deleting the entire gate
+    left the suite green. Now word boundaries, with two hints dropped for carrying
+    no signal. The case-insensitive URL regex fed a case-SENSITIVE scheme check, so
+    a phone's `Http://…` was refused with "Enter a web address that starts with
+    http://" — false about the address just typed. The protocol drift test's
+    `[a-z]+\.` namespace pattern matched **neither** `costPlan.*` constant, so the
+    one guard standing in for codegen ignored the two newest methods.
+11. **Tests that proved nothing.** Five mutations survived the *entire* 847-test
+    suite, and the reason was structural: **pytest's `tmp_path` is already fully
+    realpath'd**, so in every step-5 test the raw argument and the resolved path
+    were byte-identical and the whole resolve-once mechanism could be deleted
+    unnoticed. The fix is a symlinked alias in the fixture, so the tool is handed a
+    path it must normalise. Also unwatched: `apply_cost_plan`'s atomicity (the one
+    property its dedicated `Store` method exists for), R7's "both halves must
+    hold", and the routine engine's confinement, which had only a positive test.
+
+**Frontend integration completed in the same pass:** the step-4 cards were built
+and tested but rendered nowhere — now wired through a `useOffers` hook mirroring
+the widget propose→card→confirm flow, triggered off the USER's text only (the
+model's reply must never arm a card; the core enforces the same rule). The Google
+free-tier line was an `<a href target="_blank">` **that could not open anything** —
+the Rust shell registers exactly three commands for the webview and none is
+`openExternal`, and `Markdown.tsx` states the standing rule that the webview never
+opens URLs itself. Its test asserted the `href` and passed while the control was
+dead. Now selectable mono text the person can copy, with a test pinning the absence
+of an anchor. A throwing post-turn drafter also used to stamp a **successful** turn
+`failed: true`; isolated now.
+
 ## What shipped 07-24 — the security + test-hardening wave (#48, #49)
 
 After step 1 merged (#47), a test-quality measurement turned up a **live security
@@ -501,9 +679,12 @@ Then:
 3. ~~**Routing strategies**~~ — **DONE (2026-07-24; see "What shipped 07-24:
    step 3" above).** Balanced cut from v1 by owner decision (amendment §10.1);
    the confidence half of §13 Q5 stays v2 substrate.
-4. **Free-model endpoints** — legit free/local + add-an-endpoint-by-prompting.
-5. **Harness + workspace-trust** (OPEN): grant a project dir; inside it the gate
-   still runs and logs but doesn't prompt; outside, unchanged.
+4. ~~**Free-model endpoints**~~ — **DONE (2026-07-24; see "What shipped 07-24:
+   steps 4 + 5" above).**
+5. ~~**Harness + workspace-trust**~~ — **DONE (2026-07-24; same section).** Note
+   the shipped shape is narrower than this line described: inside a trusted dir
+   the gate stops prompting for the **typed path-bounded file tools only** —
+   `run_command` always cards (owner decision).
 6. **Widget capability tiers + expanded safe vocabulary**; make `primary.txt`
    capability-aware.
 7. **MCP client** tools through the registry + gate (SAFE: read-only/undo-able
@@ -904,6 +1085,50 @@ coherently — but **not line-by-line against what that agent intended**, becaus
 report never arrived.
 
 ## Known gaps (deliberate or tracked, not bugs)
+
+**Opened by steps 4 + 5 — decide these, don't rediscover them:**
+
+- **The webview cannot open an external link, at all.** `main.rs` registers three
+  commands for it (`send_to_core`, `store_provider_key`, `delete_provider_key`);
+  `shell.openExternal` is CORE→shell, reachable only by the `open_link` tool, and
+  `Markdown.tsx` states the rule as "the webview must never open URLs itself, and
+  must never call any `shell.*` IPC method". So every address shown in Settings is
+  copy-paste text (the Google free-tier line now says so honestly), and
+  `Markdown.tsx`'s inert anchors are inert for the same reason. If clickable links
+  are wanted, the fix is **one narrow webview→shell Tauri command**, not an anchor
+  — and it is new highest-trust surface, so it is an owner call, not a cleanup.
+- **The Custom guard panel still has no workspace-trust guard**, which CLAUDE.md
+  and this file both said step 5 would add ("as those capabilities land, never
+  before"). It was not in the frozen step-5 contract, so it was not built. In the
+  meantime the precedence question is answered defensively: `auto_grant_scope='none'`
+  now beats trust (see rigor-pass item 6). **Decide at step 6 or 8** whether the
+  panel grows the third guard or whether that precedence rule is the whole answer.
+- **`tsc --noEmit` does not cover the test files** — `tsconfig.json` excludes
+  `src/__tests__` and `*.test.ts(x)`. A fixture that drifts from the hook signature
+  it drives is invisible to the typechecker; that is exactly how `useTurn.test.tsx`
+  came to be missing a required callback. Consider a second `tsconfig.test.json` in
+  CI; it is a real hole in a gate people trust.
+- **`policy._canonical` case-folds unconditionally**, so `/tmp/PROJECT/x` is judged
+  inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
+  (case-insensitive), **wrong on a case-sensitive volume**, where it widens
+  confinement. macOS-only assumption, currently undocumented in the function.
+- **The floor protects Addison's DATA, not Addison's CODE.** A trusted root may
+  contain the repo (fine — that IS the harness working for a developer) or, in a
+  packaged install, `/Applications/Addison.app`, where the model could rewrite
+  `policy.py` card-free. The amendment's "inviolable machinery: Addison's code and
+  the global floors" is therefore broader than what ships. Either narrow the wording
+  or add the running app's resource root to `_protected_dirs`. **Owner call.**
+- **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
+  cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
+  than fixed.
+- **`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
+  bridge's 60s ceiling; browse for longer and the timeout is swallowed into
+  `{"directory": null}` with no explanation, while every other store RPC queues
+  behind the open dialog.
+- **A failed endpoint add still clobbers the keychain**: the card stores the key
+  under `custom` before `confirmAddEndpoint`, so a failed connect leaves the new key
+  overwriting any previous custom-server key, with no rollback and no disclosure.
+  The ordering is contract-mandated and G1 is intact; the undisclosed clobber is not.
 
 - `draft_message` compose handoff: Rust returns "not available yet" — a real
   discardable-draft mechanism is required by the undo invariant.
