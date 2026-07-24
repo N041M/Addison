@@ -189,8 +189,13 @@ class SnapshotsMixin(ServerContext):
         return payload
 
     def _reweaken_notice(self, guards_before: GuardConfig | None) -> str | None:
-        """D7 [R1]: the mandatory notice when a restore leaves the guard posture
-        WEAKER than before AND the restored active profile is Custom.
+        """D7 [R1]: the notice when a restore leaves the guard posture WEAKER than
+        before AND the restored active profile is Custom. Mandatory on THIS path —
+        every RPC restore comes through _finish_restore. The one restore that skips
+        it is the sidecar cold-start rebuild (main.py), deliberately: the database
+        was the broken thing, so the pre-restore posture is genuinely unknowable
+        and a comparison would be a guess dressed as a disclosure; that path shows
+        its own rebuild sentence instead (adversarial pass, 2026-07-24).
 
         Compared here rather than in the manager because the guards are a live,
         profile-gated concern the store-only manager knows nothing about. Wrapped

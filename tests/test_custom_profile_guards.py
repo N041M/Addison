@@ -136,6 +136,54 @@ def test_scope_none_runs_the_safe_coarse_flow_in_open():
     assert gate.check("web_search") == PermissionStatus.GRANTED
 
 
+def test_scope_none_never_downgrades_destructive_to_the_coarse_flow():
+    """The adversarial-pass bug (2026-07-24): 'none' used to route DESTRUCTIVE
+    calls through the coarse SAFE flow, so one approved ``ls`` silently covered
+    every later ``rm -rf`` — with no command text, under the scope labelled "Ask
+    about everything", counted as a tightening so no anchor was ever minted.
+
+    Destructive calls under 'none' must stay on the per-invocation card: a card
+    EVERY time, each carrying its own command text, nothing remembered."""
+    asked: list[tuple[str, str | None]] = []
+
+    def on_request(tool_id, detail=None):
+        asked.append((tool_id, detail))
+        return PermissionStatus.GRANTED
+
+    gate = PermissionGate(on_request=on_request)
+    guards = GuardConfig(destructive_card="per_invocation", auto_grant_scope="none")
+    for command in ("ls", "rm -rf /important", "rm -rf /more"):
+        assert gate.authorize(
+            "run_command", mode=PolicyMode.OPEN, destructive=True,
+            detail=command, guards=guards,
+        ) == PermissionStatus.GRANTED
+    # Three cards, one per call, each naming ITS command — never a coarse grant.
+    assert asked == [
+        ("run_command", "ls"),
+        ("run_command", "rm -rf /important"),
+        ("run_command", "rm -rf /more"),
+    ]
+    assert gate.check("run_command") == PermissionStatus.NOT_YET_ASKED
+
+
+def test_scope_none_with_session_card_keeps_the_session_semantics():
+    """The two knobs stay orthogonal: under 'none', a destructive call still obeys
+    the CARD guard — so 'session' cards once and then remembers, in the dedicated
+    session set, never as a coarse ``_grants`` entry the SAFE path could read."""
+    asked: list[str | None] = []
+    gate = PermissionGate(
+        on_request=lambda tid, detail=None: (asked.append(detail), PermissionStatus.GRANTED)[1]
+    )
+    guards = GuardConfig(destructive_card="session", auto_grant_scope="none")
+    for command in ("rm a", "rm b"):
+        assert gate.authorize(
+            "run_command", mode=PolicyMode.OPEN, destructive=True,
+            detail=command, guards=guards,
+        ) == PermissionStatus.GRANTED
+    assert asked == ["rm a"]                                   # asked once
+    assert gate.check("run_command") == PermissionStatus.NOT_YET_ASKED  # not coarse
+
+
 def test_session_card_asks_once_then_remembers_for_the_session():
     """'Ask once': the first destructive call of a tool cards; the next is silent."""
     asked: list[str | None] = []
@@ -470,5 +518,42 @@ def test_mint_anchor_dedupes_a_repeated_weakening(tmp_path: Path) -> None:
             if r.get("reason") == "guard_weakened" and r.get("undeletable")
         ]
         assert len(anchors) == 1
+    finally:
+        store.close()
+
+
+def test_dedupe_never_confirms_an_anchor_whose_payload_cannot_load(tmp_path: Path) -> None:
+    """Adversarial pass, 2026-07-24: dedupe is guards.set's confirmation that a
+    way back EXISTS, so a matching anchor whose payload has rotted (row blob
+    corrupt AND sidecar gone) must not count — the mint falls through to a fresh
+    anchor instead of letting a weakening proceed against a row that cannot
+    restore."""
+    store = Store(tmp_path / "addison.sqlite3")
+    try:
+        manager = SnapshotManager(store=store, clock=_Clock(), created_the_database=True)
+        store.set_setting("marker", "known-good")
+        manager.mark_verified_working()
+
+        first = manager.mint_anchor()
+        assert first is not None
+        # Rot the anchor: corrupt the row's blob and remove its sidecar. (The G4
+        # triggers forbid deleting the row or clearing its flag — not this.)
+        store._conn.execute(
+            "UPDATE config_snapshots SET state_blob = ? WHERE id = ?",
+            ("not json {", first.id),
+        )
+        store._conn.commit()
+        sidecar = tmp_path / "snapshots" / f"{first.id}.json"
+        if sidecar.exists():
+            sidecar.unlink()
+
+        second = manager.mint_anchor()
+        assert second is not None
+        assert second.id != first.id            # fresh mint, not the rotten match
+        anchors = [
+            r for r in store.list_config_snapshots()
+            if r.get("reason") == "guard_weakened" and r.get("undeletable")
+        ]
+        assert len(anchors) == 2                # the rotten one stays (undeletable), a live one joins it
     finally:
         store.close()

@@ -40,8 +40,8 @@ const WEAKENING_CONFIRM =
 const CARD_PER_INVOCATION =
   "Always ask — Addison asks every time before anything that can't be undone.";
 const CARD_SESSION =
-  "Ask once — after you approve a risky action, Addison won't ask about that tool " +
-  "again until you close Addison.";
+  "Ask once — approve a risky tool once and anything else it does goes ahead " +
+  "without asking, until you close Addison.";
 const SCOPE_NONE = "Ask about everything — Addison asks before every kind of action.";
 const SCOPE_NON_DESTRUCTIVE =
   "Ask only for risky actions — everyday actions go ahead; anything that can't be " +

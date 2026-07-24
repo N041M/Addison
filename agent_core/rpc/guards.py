@@ -126,6 +126,11 @@ class GuardsMixin(ServerContext):
                 anchor = None
             if anchor is None:
                 return {"ok": False, "error": _MINT_FAILED}
-        self.store.set_setting(_GUARD_DESTRUCTIVE_CARD_KEY, card)
-        self.store.set_setting(_GUARD_AUTO_GRANT_SCOPE_KEY, scope)
+        # ONE commit for the pair — the two values are a single decision, and a
+        # failure between two separate writes would persist half of it while the
+        # refusal copy above promises "nothing was changed" (adversarial pass,
+        # 2026-07-24; see Store.set_settings).
+        self.store.set_settings(
+            {_GUARD_DESTRUCTIVE_CARD_KEY: card, _GUARD_AUTO_GRANT_SCOPE_KEY: scope}
+        )
         return {"ok": True, "destructiveCard": card, "autoGrantScope": scope}

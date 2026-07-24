@@ -95,16 +95,26 @@ class PermissionGate:
         ``guards`` (Custom profile, D2/D3) only MODULATES the OPEN path. ``None`` ≡
         the fixed defaults ≡ today's OPEN behaviour byte-for-byte — that equivalence
         is the freeze. The two guards:
-          * ``auto_grant_scope`` = 'everything' -> every call auto-grants,
-            destructive included (still logged; wins over the card guard). = 'none'
-            -> every call runs the SAFE-style coarse check/request flow (asks about
-            everything, remembers a grant per tool id). = 'non_destructive'
-            (default) -> non-destructive auto-grants; destructive falls to the card
-            guard below.
-          * ``destructive_card`` (only when scope is 'non_destructive') =
-            'per_invocation' (default) -> card every time, no grant kept. = 'session'
-            -> first destructive call of a tool cards, then it is remembered for the
-            session in ``_destructive_session_grants`` (never ``_grants`` — [R2])."""
+          * ``auto_grant_scope`` governs NON-DESTRUCTIVE calls (with one explicit
+            exception): 'everything' -> every call auto-grants, destructive included
+            (still logged; the one place scope overrides the card guard). = 'none'
+            -> non-destructive calls run the SAFE-style coarse check/request flow
+            (asks about everyday actions too). = 'non_destructive' (default) ->
+            non-destructive auto-grants.
+          * ``destructive_card`` governs DESTRUCTIVE calls under every scope except
+            'everything' = 'per_invocation' (default) -> card every time, no grant
+            kept. = 'session' -> first destructive call of a tool cards, then it is
+            remembered for the session in ``_destructive_session_grants`` (never
+            ``_grants`` — [R2]).
+
+        Destructive NEVER falls into the coarse ``_safe_flow`` under any scope
+        (adversarial pass, 2026-07-24): the coarse flow remembers a grant per tool
+        id with no per-call text, so routing destructive through it would let one
+        approved ``ls`` silently authorize every later ``rm -rf`` — precisely under
+        the scope LABELLED "ask about everything", and counted as a tightening, so
+        no anchor would ever have been minted. The two knobs stay orthogonal
+        instead: scope decides how often everyday actions ask, the card guard alone
+        decides how destructive ones do."""
         if mode is PolicyMode.OPEN:
             effective = guards if guards is not None else GuardConfig()
             if effective.auto_grant_scope == "everything":
@@ -112,11 +122,11 @@ class PermissionGate:
                 # grant is still recorded and announced ("Never ask" is a choice the
                 # Activity Panel still shows).
                 return self._auto_grant(tool_id)
-            if effective.auto_grant_scope == "none":
-                # "Ask about everything": the SAFE-style coarse flow, in OPEN mode.
-                return self._safe_flow(tool_id)
-            # auto_grant_scope == 'non_destructive' (today's OPEN):
             if not destructive:
+                if effective.auto_grant_scope == "none":
+                    # "Ask about everything": everyday actions run the SAFE-style
+                    # coarse flow instead of auto-granting.
+                    return self._safe_flow(tool_id)
                 return self._auto_grant(tool_id)
             if effective.destructive_card == "session":
                 return self._request_destructive_session(tool_id, detail)
@@ -126,7 +136,9 @@ class PermissionGate:
     def _safe_flow(self, tool_id: str) -> PermissionStatus:
         """The historical SAFE check -> request path: prompt once for a not-yet-
         granted tool, then remember the coarse grant. Shared by SAFE mode and by
-        OPEN mode's ``auto_grant_scope='none'`` guard, so both behave identically."""
+        the NON-DESTRUCTIVE side of OPEN's ``auto_grant_scope='none'`` guard.
+        Destructive calls never come through here in OPEN mode — a coarse grant
+        with no per-call text must not cover them (see ``authorize``)."""
         status = self.check(tool_id)
         if status == PermissionStatus.NOT_YET_ASKED:
             status = self.request(tool_id)

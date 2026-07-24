@@ -236,6 +236,33 @@ removal); every regression test in the wave is mutation-proven.
   (loose end resolved: the keychain probe computes names itself); amendment §13
   **Q3 closed** as the lean (reachable from any profile, deep + questioned).
 
+**The post-build rigor pass (same day) — read this before trusting the wave
+above.** A second adversarial reviewer attacked the finished code with
+reproduce-don't-read rules and found **one real bug the first review, both build
+agents, and 25 green tests all missed**: `auto_grant_scope='none'` — the
+STRICTEST-labelled option — routed destructive calls into the coarse SAFE flow,
+so one approved `ls` silently covered every later `rm -rf` with no card and no
+command text, under copy promising "asks before every kind of action", and
+counted as a *tightening* so no anchor was minted. Fixed: destructive never
+enters the coarse flow under any scope; the scope knob governs everyday actions,
+the card knob alone governs destructive ones ('everything' stays the one explicit
+override). Two regression tests pin it, both proven red against the reverted fix.
+The lesson is the standing one: the test gap was structural — the only
+scope-'none' test used a non-destructive tool, and its one-arg stub would have
+TypeError'd on the destructive path, so the wrong assumption protected itself.
+Also from the pass: `guards.set` now persists its two keys in ONE commit
+(`Store.set_settings`; half-a-pair after "nothing was changed" was a lie
+waiting); anchor dedupe refuses to confirm an anchor whose payload no longer
+loads (row rotted + sidecar gone → fresh mint); the D7 docstring now names the
+one path that legitimately skips the notice (sidecar cold-start — the
+pre-restore posture is unknowable there); the "Ask once" copy now states its
+real breadth ("anything else it does goes ahead without asking"); TESTING-
+CHECKLIST **§13b** is the manual QA script for all of this; and a **live
+end-to-end driver run** (the HANDOFF pattern, 17 checks, including one real
+haiku turn) verified the whole Custom flow over real JSON-RPC — dispatch,
+anchor, dedupe, D7 notice, C6 under SAFE, and `snapshot_now` writing through
+`main()`'s late-bound holder.
+
 ## What shipped 07-24 — the security + test-hardening wave (#48, #49)
 
 After step 1 merged (#47), a test-quality measurement turned up a **live security
@@ -818,21 +845,14 @@ report never arrived.
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 - `shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets moved
   inline on mobile) — delete or repurpose.
-- **Three loose ends left by step 1, all deliberate, all small:**
-  - `RestoreResult.providers_needing_a_key` **has no writer**. The keychain probe
-    lives in `rpc/snapshots.py` (the manager may not touch the keychain, by
-    design) and it computes the names itself rather than filling the field. Either
-    drop the field in step 2 or give it a writer — don't leave it looking populated.
-  - `ipc.restoreSnapshot` **has no caller.** The Restore points card offers save /
-    restore-last-working / per-row remove, but no per-row *restore*, because
-    §1.1's card spec didn't list one. It is typed and waiting for step 2's anchor
-    path. If a list of restore points that offers no way to pick one reads wrong in
-    QA, it is a one-line card change.
-  - **No cross-language test pins the genesis label.** `REASONS["genesis"]` in
-    `snapshot_manager.py` and `GENESIS_LABEL` in `shell/src/ipc/client.ts` must
-    stay equal — the card appends its "this clears everything" sentence by
-    comparing them — but nothing enforces it. One line in `tests/ipc_fixtures.py`
-    or the drift test would close it.
+- **~~Three loose ends left by step 1~~ — ALL THREE CLOSED (2026-07-24, step 2 +
+  its rigor pass):** `RestoreResult.providers_needing_a_key` was dropped (the
+  keychain probe in `rpc/snapshots.py` computes the names itself — a field would
+  be a second, never-written source of truth); `ipc.restoreSnapshot` got its
+  caller (per-row "Restore this one" on permanent rows); and
+  `test_genesis_label_matches_across_languages` in `tests/test_protocol_drift.py`
+  now pins `REASONS["genesis"]` ≡ `GENESIS_LABEL` byte-for-byte
+  (mutation-proven).
 
 ## Working conventions (established with the user)
 

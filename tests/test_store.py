@@ -868,6 +868,24 @@ def test_restore_of_a_routine_whose_conversation_is_gone_succeeds(store: Store):
     assert row["created_from_conversation_id"] is None
 
 
+def test_set_settings_is_all_or_nothing(store: Store):
+    """``set_settings`` exists for keys that form ONE decision (the two Custom
+    guard values): a failure mid-pair must leave BOTH keys untouched, or the
+    guards.set refusal copy "nothing was changed" lies (adversarial pass,
+    2026-07-24). An unbindable value on the SECOND row makes sqlite3 fail after
+    the first row has already executed — the first row must roll back with it.
+    (Not a None key: SQLite's TEXT PRIMARY KEY quirk admits NULL.)"""
+    store.set_setting("guard_a", "old")
+    with pytest.raises(Exception):
+        store.set_settings({"guard_a": "new", "guard_b": object()})  # type: ignore[dict-item]
+    assert store.get_setting("guard_a") == "old"
+    assert store.get_setting("guard_b") is None
+
+    store.set_settings({"guard_a": "newer", "guard_b": "first-write"})
+    assert store.get_setting("guard_a") == "newer"
+    assert store.get_setting("guard_b") == "first-write"
+
+
 def test_apply_config_state_preserves_one_way_setting_latches(store: Store):
     # A payload that predates the flag must not un-set it, or the next launch
     # re-seeds default widgets the person deleted on purpose.

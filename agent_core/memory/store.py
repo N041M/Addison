@@ -433,6 +433,25 @@ class Store:
         )
         self._conn.commit()
 
+    def set_settings(self, values: dict[str, str]) -> None:
+        """Upsert SEVERAL ``app_settings`` values in ONE commit — all land or none
+        do. Exists for callers whose keys form a single decision (the two Custom
+        guard values, ``rpc/guards.py``): written as two ``set_setting`` calls, a
+        failure between them would persist half the pair while the handler reports
+        "nothing was changed" (adversarial pass, 2026-07-24)."""
+        now = int(time.time())
+        try:
+            self._conn.executemany(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                [(key, value, now) for key, value in values.items()],
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
     # --- provider connection metadata (multi-provider, §4.1.1) --------------
     # NON-SECRET connection state only — which providers are connected, when, the
     # custom server base URL, and an optional cached catalog. API keys NEVER appear

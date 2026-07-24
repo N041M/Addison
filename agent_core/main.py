@@ -327,6 +327,11 @@ def run_cli() -> None:
         raise SystemExit(1)
 
     profile = resolve_active_profile()
+    # No snapshot_manager_ref here, knowingly: the CLI loop has no SnapshotManager
+    # (only the in-memory undo stub), so snapshot_now answers its "can't save a
+    # restore point just yet" sentence forever on this path. Misleading-but-honest
+    # is accepted for a dev-only loop; the fix is a manager, not a message
+    # (adversarial pass, 2026-07-24).
     registry = build_registry(profile)
     permission_gate = PermissionGate(on_request=_terminal_permission_handler(registry))
 

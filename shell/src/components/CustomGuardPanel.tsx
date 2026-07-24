@@ -48,9 +48,13 @@ const DESTRUCTIVE_CARD_OPTIONS: { value: DestructiveCardGuard; copy: string }[] 
   },
   {
     value: "session",
+    // The breadth is the point of this sentence: an approval covers EVERYTHING the
+    // tool does afterwards — for the command tool that means every later command,
+    // not a repeat of the one whose text was on the card. Softening this line hides
+    // exactly the cost the choice carries (coordinator pass, 2026-07-24).
     copy:
-      "Ask once — after you approve a risky action, Addison won't ask about that tool " +
-      "again until you close Addison.",
+      "Ask once — approve a risky tool once and anything else it does goes ahead " +
+      "without asking, until you close Addison.",
   },
 ];
 

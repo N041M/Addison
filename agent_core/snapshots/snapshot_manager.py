@@ -1533,7 +1533,14 @@ class SnapshotManager:
         fingerprint of the config the anchor would copy. Reason-scoped so a genesis
         or pre_upgrade bottom row (also undeletable) is never mistaken for a G4
         anchor. Any store failure reads as "no existing anchor" — minting a fresh
-        one is the safe direction, since a missing anchor is what G4 forbids."""
+        one is the safe direction, since a missing anchor is what G4 forbids.
+
+        A match must also still LOAD (row or sidecar) before it counts: dedupe is
+        ``guards.set``'s confirmation that a way back exists, and confirming with a
+        row whose payload has rotted would let a weakening proceed against an
+        anchor that cannot restore. An unloadable match falls through to a fresh
+        mint — the same carefulness the mint loop itself applies to its source row
+        (adversarial pass, 2026-07-24)."""
         try:
             rows = self._store.list_config_snapshots()
         except Exception:
@@ -1546,6 +1553,8 @@ class SnapshotManager:
             ):
                 snapshot_id = row.get("id")
                 if isinstance(snapshot_id, str) and snapshot_id:
+                    if self._load_payload(snapshot_id) is None:
+                        continue
                     return self._store.get_config_snapshot(snapshot_id)
         return None
 
