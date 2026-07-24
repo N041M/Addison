@@ -138,4 +138,7 @@ The core can also be driven without the desktop shell for development:
 
 ## License
 
-Not yet chosen.
+The **Addison Non-Commercial License v1.0** — free to use, study, modify and
+share for personal, educational, research and other non-commercial purposes.
+Commercial use needs a separate license from the maintainer (contact via
+GitHub). Full terms: [LICENSE.md](LICENSE.md).
