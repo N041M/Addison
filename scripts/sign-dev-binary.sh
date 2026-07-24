@@ -20,11 +20,27 @@
 # setting, so it is not something this script should do on your behalf):
 #
 #   1. Open Keychain Access.
-#   2. Menu: Keychain Access > Certificate Assistant > Create a Certificate…
-#   3. Name:            Addison Dev
+#   2. Menu bar at the TOP OF THE SCREEN (not in the window):
+#        Keychain Access > Certificate Assistant > Create a Certificate…
+#   3. Name:            Addison Dev      (must match exactly — this script looks
+#                                         for it by name)
 #      Identity Type:   Self Signed Root
 #      Certificate Type: Code Signing
-#   4. Create, then Done.
+#   4. Create. It warns the certificate is self-signed and not from a recognised
+#      authority — that is expected. Continue, then Done.
+#   5. TRUST IT, which is a separate step and the one that is easy to miss. A
+#      freshly created self-signed root is NOT trusted for code signing, so
+#      `security find-identity -v -p codesigning` still reports 0 valid
+#      identities and this script still refuses:
+#        - find "Addison Dev" under My Certificates and double-click it
+#        - expand the "Trust" section
+#        - set "Code Signing" to "Always Trust" (leave the rest alone)
+#        - close the window; macOS asks for your password to save the setting
+#      That prompt is a one-off: it authorises a trust-setting change, not app
+#      access to your keychain.
+#
+# Confirm with:  security find-identity -v -p codesigning
+# You want "1 valid identities found" naming Addison Dev.
 #
 # THEN, after any `cargo build` / `npm run tauri dev` rebuild:
 #
@@ -40,12 +56,26 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BINARY="$REPO_ROOT/shell/src-tauri/target/debug/addison"
 
 if ! security find-identity -v -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
-  echo "No code-signing identity named '$IDENTITY' was found."
+  # Distinguish "not created" from "created but not trusted". They look identical
+  # in the valid-identities list and have completely different fixes, and the
+  # second one is where people actually get stuck.
+  if security find-identity -p codesigning 2>/dev/null | grep -q "$IDENTITY"; then
+    echo "'$IDENTITY' exists but is NOT TRUSTED for code signing, so it cannot sign yet."
+    echo
+    echo "In Keychain Access: find '$IDENTITY' under My Certificates, double-click it,"
+    echo "expand 'Trust', set 'Code Signing' to 'Always Trust', and close the window."
+    echo "macOS will ask for your password to save that setting — that prompt is a"
+    echo "one-off and is authorising the trust change, not app access to your keychain."
+  else
+    echo "No code-signing identity named '$IDENTITY' was found."
+    echo
+    echo "Create one — Keychain Access (menu bar, top of the screen) >"
+    echo "Certificate Assistant > Create a Certificate…, named '$IDENTITY',"
+    echo "Identity Type 'Self Signed Root', Certificate Type 'Code Signing'."
+    echo "Then TRUST it for Code Signing; see this script's header for that step."
+  fi
   echo
-  echo "Create one first — Keychain Access > Certificate Assistant >"
-  echo "Create a Certificate…, named '$IDENTITY', Identity Type 'Self Signed Root',"
-  echo "Certificate Type 'Code Signing'. Then run this again."
-  echo
+  echo "Confirm with: security find-identity -v -p codesigning"
   echo "(Set ADDISON_SIGN_IDENTITY to use a different name.)"
   exit 1
 fi
