@@ -42,7 +42,17 @@ class ToolRegistry:
             # or missing entirely is mechanically capped at read-only — unless it
             # is dev_only, in which case OPEN mode owns the risk explicitly.
             own_undo = getattr(type(tool), "undo", None)
-            if own_undo is None or getattr(own_undo, "__isabstractmethod__", False):
+            # ``not callable`` matters as much as ``is None``: an ``undo`` bound to a
+            # non-callable (a string, a constant) passed this check and registered at
+            # HIGH straight into the SAFE view, where the UndoManager would then fail
+            # at the moment someone actually needed to reverse something. A hollow but
+            # CALLABLE undo (``def undo(self): pass``) cannot be detected here — no
+            # static check can — which is what the per-tool round-trip tests are for.
+            if (
+                own_undo is None
+                or getattr(own_undo, "__isabstractmethod__", False)
+                or not callable(own_undo)
+            ):
                 raise ValueError(
                     f"Tool '{tool.definition.id}' has risk_tier="
                     f"{tool.definition.risk_tier.value} but no undo() implementation. "

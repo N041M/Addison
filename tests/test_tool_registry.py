@@ -79,3 +79,71 @@ def test_duplicate_registration_rejected():
     registry.register(CalculatorTool())
     with pytest.raises(ValueError, match="already registered"):
         registry.register(CalculatorTool())
+
+
+class _MediumToolWithNonCallableUndo:
+    """``undo`` exists but is not callable. It passed the presence-only check and
+    registered at HIGH into the SAFE view, where the UndoManager would blow up at
+    the moment somebody actually needed to reverse something — i.e. the failure
+    surfaces only when the safety net is being used."""
+
+    definition = ToolDefinition(
+        id="string_undo_tool",
+        label="String undo",
+        description="A mutating tool whose undo is not callable.",
+        risk_tier=RiskTier.MEDIUM,
+        parameters_schema={"type": "object", "properties": {}},
+    )
+    undo = "not even callable"
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        return ToolResult(success=True, content="mutated something")
+
+
+class _ReversibleTool:
+    """A tool with a real undo, used for the round-trip below. Its effect is a
+    single entry in ``self.written`` so the test can assert the state genuinely
+    changed and was genuinely restored."""
+
+    definition = ToolDefinition(
+        id="reversible_tool",
+        label="Reversible tool",
+        description="Writes an entry, and can take it back.",
+        risk_tier=RiskTier.MEDIUM,
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    def __init__(self) -> None:
+        self.written: list[str] = []
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        self.written.append(args["value"])
+        return ToolResult(success=True, content="wrote it")
+
+    def undo(self, snapshot) -> None:
+        self.written.remove(snapshot)
+
+
+def test_a_non_callable_undo_is_refused_like_a_missing_one():
+    """Presence is not substance. Before this, `undo = "a string"` registered at
+    HIGH and landed in the SAFE view."""
+    registry = ToolRegistry()
+    with pytest.raises(ValueError, match="no undo"):
+        registry.register(_MediumToolWithNonCallableUndo())
+    assert registry.visible_tools(PolicyMode.SAFE) == []
+
+
+def test_a_real_undo_actually_reverses_the_effect():
+    """The round trip the registration check can never make: execute, prove the
+    state CHANGED, undo, prove it was restored. A hollow `def undo: pass` passes
+    every static check there is and fails this."""
+    tool = _ReversibleTool()
+    registry = ToolRegistry()
+    registry.register(tool)
+    context = ExecutionContext(conversation_id="c", policy_mode=PolicyMode.SAFE)
+
+    tool.execute({"value": "entry"}, context)
+    assert tool.written == ["entry"], "the tool did not actually do anything"
+
+    tool.undo("entry")
+    assert tool.written == [], "undo did not reverse the effect"
