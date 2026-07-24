@@ -211,7 +211,10 @@ class Orchestrator:
         # (rpc/workspace._is_trusted_path); the default refuses everything, so in
         # CLI/tests a path-bounded tool is confined to nothing until trust is wired —
         # the safe default. run_command has no affected_path, so this never governs it.
-        self._trust_check = trust_check
+        # ``or`` a refuse-everything default, matching RoutineEngine: an explicit
+        # None from a caller used to raise TypeError mid-turn rather than confine
+        # to nothing, and the two call sites must not disagree about that.
+        self._trust_check = trust_check or (lambda path: False)
         # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
         # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
         self._cooldowns: dict[str, float] = {}

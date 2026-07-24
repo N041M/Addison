@@ -11,7 +11,14 @@
 // deliberately — a diff in this file IS the frontend-visible impact of the change.
 import { describe, expect, it } from "vitest";
 
-import { parseSnapshotList, parseStats, parseWidgetList } from "../ipc/client";
+import {
+  parseCostPlan,
+  parseEndpointProposal,
+  parseSnapshotList,
+  parseStats,
+  parseWidgetList,
+  parseWorkspaceRoots,
+} from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
 import { normalizeCloudModels, normalizeRoles } from "../hooks/useModelSelection";
 
@@ -20,6 +27,9 @@ import widgetListFixture from "./fixtures/widget.list.json";
 import profileFixture from "./fixtures/profile.get.json";
 import rolesFixture from "./fixtures/model.availableRoles.json";
 import snapshotListFixture from "./fixtures/snapshot.list.json";
+import workspaceListFixture from "./fixtures/workspace.list.json";
+import costPlanFixture from "./fixtures/costPlan.propose.json";
+import endpointProposeFixture from "./fixtures/endpoint.proposeFromConversation.json";
 
 describe("parseStats over the real stats.get payload", () => {
   it("pins the full parsed output", () => {
@@ -187,5 +197,40 @@ describe("parseSnapshotList over the real snapshot.list payload", () => {
       lastWorkingProfileChange: undefined,
       warning: undefined,
     });
+  });
+});
+
+// --- Step-4 / step-5 payloads ----------------------------------------------
+// These exist because their ABSENCE had a cost. `parseWorkspaceRoots` read
+// `{roots}` while the core sent `{folders}`, so the trusted-folder list rendered
+// permanently empty in the shipped app — the "Stop trusting" button never
+// appeared, and standing consent that suppresses permission cards could not be
+// revoked from the UI. Both suites were green: the Python one asserted `folders`,
+// the vitest one parsed a hand-built `{roots: […]}` literal, and neither could
+// see the other. A fixture generated from the real handler is the one artifact
+// both sides share, so every new payload a parser consumes gets one.
+describe("parseWorkspaceRoots over the real workspace.list payload", () => {
+  it("reads the folders the core actually sends", () => {
+    expect(parseWorkspaceRoots(workspaceListFixture)).toEqual([
+      { directory: "/fixture/project", grantedAt: 4102444800 },
+    ]);
+  });
+});
+
+describe("parseCostPlan over the real costPlan.propose payload", () => {
+  it("carries the canned name and the FULL instructions the card must show", () => {
+    const plan = parseCostPlan(costPlanFixture);
+    expect(plan?.skillName).toBe("Addison: keep it cheap");
+    // The card renders the whole text — a truncated parse would hide what the
+    // person is agreeing to.
+    expect(plan?.skillInstructions).toBe(costPlanFixture.skillInstructions);
+  });
+});
+
+describe("parseEndpointProposal over the real endpoint payload", () => {
+  it("fails closed on the core's genuine no-proposal answer", () => {
+    // The fixture is generated from an empty conversation, so it is the {none:true}
+    // shape — which must produce no card at all.
+    expect(parseEndpointProposal(endpointProposeFixture)).toBeNull();
   });
 });

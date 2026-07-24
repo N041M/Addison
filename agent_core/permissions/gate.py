@@ -143,11 +143,27 @@ class PermissionGate:
                     # coarse flow instead of auto-granting.
                     return self._safe_flow(tool_id)
                 return self._auto_grant(tool_id)
-            if trusted:
+            if trusted and effective.auto_grant_scope != "none" and tool_id not in self._denied:
                 # A confined, undoable file edit inside a trusted workspace: no card,
                 # still recorded + logged so the Activity Panel shows it happened.
                 # The caller only sets this for a path INSIDE trust, so it can never
                 # widen WHICH path is touched — only whether the card is shown.
+                #
+                # TWO THINGS TRUST DOES NOT OVERRIDE, both found by the post-build
+                # adversarial pass:
+                #  * A turn-scoped "Not now". The don't-nag rule cuts both ways: a
+                #    denial is honoured for the rest of the turn, and a person who
+                #    was shown a card and said no must not then watch Addison edit a
+                #    file in the same turn. Nothing is escalated either way (the call
+                #    was card-free anyway) — what was broken is consent HONESTY.
+                #  * Custom's ``auto_grant_scope='none'``, the strictest option the
+                #    panel offers, whose copy says Addison asks about everything.
+                #    Trust silently making destructive writes card-free under that
+                #    setting is the same defect shape the step-2 rigor pass found:
+                #    the strictest-LABELLED option carrying the quiet hole, and a
+                #    tightening minting no anchor, so nothing marks the moment.
+                #    Simple/Developer are untouched — their guards are the defaults,
+                #    where this branch behaves exactly as step 5 built it.
                 return self._auto_grant(tool_id)
             if effective.destructive_card == "session":
                 return self._request_destructive_session(tool_id, detail)

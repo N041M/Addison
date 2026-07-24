@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_core.tools.base import (
+    UNRESOLVABLE_PATH,
     ExecutionContext,
     RiskTier,
     ToolDefinition,
@@ -58,14 +59,17 @@ class ReadProjectFileTool:
     )
 
     def affected_path(self, args: dict) -> str | None:
-        """The absolute path this read would touch, resolved ONCE (realpath, so
-        symlinks / ``..`` / a relative path are collapsed here). The caller uses the
+        """The absolute path this read would touch, resolved ONCE (expanduser +
+        realpath, so ``~``, symlinks, ``..`` and a relative path are collapsed here). The caller uses the
         returned value for BOTH the confinement check and, via
         ``ExecutionContext.resolved_path``, the read itself (D4/R6)."""
         raw = args.get("path")
         if not raw or not isinstance(raw, str):
-            return None
-        return str(Path(raw).resolve())
+            # The SENTINEL, never None: this tool IS path-bounded, so an argument it
+            # cannot read must be refused by confinement, not waved past it (None
+            # means "not a path tool" and skips the boundary entirely).
+            return UNRESOLVABLE_PATH
+        return str(Path(raw).expanduser().resolve())
 
     def permission_detail(self, args: dict) -> str | None:
         """The file name only — never the full path (the Activity Panel leaves the

@@ -248,6 +248,24 @@ def call_is_destructive(tool: Any, args: dict) -> bool:
     return tool.definition.risk_tier is RiskTier.HIGH
 
 
+# The answer when a path-bounded tool cannot work out WHICH path it was given —
+# a missing/non-string argument, or one the OS refuses to resolve at all (an
+# embedded NUL makes ``Path.resolve()`` raise ValueError). It is a string, so it
+# flows through the caller's ordinary confinement check unchanged; it contains a
+# NUL, so it can never name a real file and can never sit inside a trusted root,
+# and the check refuses it the same way it refuses ``/etc/passwd``.
+#
+# NOT ``None``: None means "this is not a path-bounded tool at all", which SKIPS
+# confinement entirely — that is ``run_command``'s honest answer and must keep
+# working. Collapsing an unresolvable path onto it instead would have let a
+# malformed ``path`` argument walk straight past the boundary and into the gate,
+# where, being destructive, it raised a card the user could approve. And before
+# that, the unguarded ``resolve()`` took the whole turn down with it: a routine run
+# was left recorded as ``running`` forever, which is the exact failure the engine's
+# own error handling exists to prevent.
+UNRESOLVABLE_PATH = "\x00unresolvable"
+
+
 def call_affected_path(tool: Any, args: dict) -> str | None:
     """The absolute filesystem path this call would touch, RESOLVED ONCE, or None.
 
@@ -260,12 +278,29 @@ def call_affected_path(tool: Any, args: dict) -> str | None:
     lands on another (R6, D4). Every other tool (run_command included) has no
     ``affected_path`` and returns None, so confinement never applies to it — which
     is exactly why run_command's cwd is a convenience, never an effect bound, and it
-    is never trust-suppressed (contract §4)."""
+    is never trust-suppressed (contract §4).
+
+    Never raises. A tool that declares ``affected_path`` is path-bounded, so if it
+    cannot produce a usable path this returns ``UNRESOLVABLE_PATH`` — a value the
+    caller's trust check refuses — rather than ``None``, which would mean "not a
+    path tool" and skip the boundary altogether."""
     provider = getattr(tool, "affected_path", None)
-    if callable(provider):
+    if not callable(provider):
+        return None
+    try:
         value = provider(args)
-        return str(value) if value else None
-    return None
+    except (OSError, ValueError, TypeError):
+        # ``Path(...).resolve()`` raises ValueError on an embedded NUL and OSError
+        # on some malformed paths. A model can put either in a tool call, and this
+        # runs OUTSIDE the orchestrator's per-call error handling, so letting it
+        # escape ends the turn rather than the step.
+        return UNRESOLVABLE_PATH
+    # None is passed through UNCHANGED: for ``run_command`` it means "no path bound
+    # at all", and turning that into the sentinel would confine — and refuse — every
+    # command. A PATH tool that cannot read its own argument returns the sentinel
+    # itself (read_project_file / write_project_file), which is the case that must
+    # not reach the gate.
+    return str(value) if value is not None else None
 
 
 # The User-Agent every outbound tool request carries. One string, because two

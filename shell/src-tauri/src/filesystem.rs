@@ -330,34 +330,77 @@ fn addison_data_dirs() -> Vec<PathBuf> {
 }
 
 fn refuse_addison_data_dir(path: &Path) -> Result<(), RpcError> {
+    let refused = || {
+        Err(RpcError::app(
+            "That location holds Addison's own memory, so Addison won't touch it there.",
+        ))
+    };
     let candidate = canonical_lossy(path);
+    // A DANGLING symlink resolves to nothing, so canonicalization stops at the link
+    // itself and the containment test judges the link's own harmless location. But
+    // `std::fs::write` FOLLOWS the link and creates the file at its target — so a
+    // link inside a trusted project, pointing at a not-yet-existing file under
+    // Addison's data dir, planted a file in the G3 sidecar directory while this
+    // check said yes. Read the link's own target and judge that too.
+    let link_target = std::fs::read_link(path)
+        .ok()
+        .map(|target| {
+            if target.is_absolute() {
+                target
+            } else {
+                path.parent().unwrap_or(Path::new("")).join(target)
+            }
+        })
+        .map(|resolved| canonical_lossy(&resolved));
     for dir in addison_data_dirs() {
         let protected = canonical_lossy(&dir);
         // Refuse a path that IS, sits inside, or contains a protected directory.
         if candidate.starts_with(&protected) || protected.starts_with(&candidate) {
-            return Err(RpcError::app(
-                "That location holds Addison's own memory, so Addison won't touch it there.",
-            ));
+            return refused();
+        }
+        if let Some(target) = &link_target {
+            if target.starts_with(&protected) || protected.starts_with(target) {
+                return refused();
+            }
         }
     }
     Ok(())
 }
 
 /// Best-effort canonicalization for containment checks. `canonicalize` needs the
-/// path to exist; a file about to be created does not, so fall back to canonicalizing
-/// the (existing) parent and re-attaching the name. On macOS this also folds the case
-/// of existing components onto their real on-disk spelling.
+/// path to exist; a path about to be created does not, so walk UP to the nearest
+/// ancestor that does exist, canonicalize that, and re-attach the rest.
+///
+/// Walking up matters, not just checking the immediate parent: when any
+/// intermediate component is missing, the old one-level fallback left the candidate
+/// un-canonicalized while the protected dir WAS canonicalized, so `starts_with`
+/// compared `/var/…` against `/private/var/…` and found no containment. On macOS —
+/// where `/tmp` and `/var` are themselves symlinks — that is not a corner case.
+///
+/// On macOS this also folds the case of existing components onto their real on-disk
+/// spelling.
 fn canonical_lossy(path: &Path) -> PathBuf {
     if let Ok(c) = std::fs::canonicalize(path) {
         return c;
     }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => match std::fs::canonicalize(parent) {
-            Ok(cp) => cp.join(name),
-            Err(_) => path.to_path_buf(),
-        },
-        _ => path.to_path_buf(),
+    let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+    let mut cursor = path;
+    while let Some(parent) = cursor.parent() {
+        let name = match cursor.file_name() {
+            Some(n) => n.to_os_string(),
+            None => break,
+        };
+        suffix.push(name);
+        if let Ok(c) = std::fs::canonicalize(parent) {
+            let mut out = c;
+            for part in suffix.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        cursor = parent;
     }
+    path.to_path_buf()
 }
 
 // shell.openExternal {url} -> {}
@@ -608,6 +651,14 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Serializes every test that mutates the PROCESS-GLOBAL `ADDISON_DB_PATH`.
+    /// cargo runs tests in parallel threads, so without this one test's `set_var`
+    /// lands in the middle of another's assertion — which is exactly what happened
+    /// when the two floor tests below were added: the suite went red while each
+    /// test passed alone. A poisoned lock is fine to keep using here; the guard is
+    /// ordering, not state.
+    static DATA_DIR_ENV: Mutex<()> = Mutex::new(());
+
     // --- Workspace-trust file surface (step 5). The core confines WHICH paths reach
     // these; the shell guards undo soundness (ledger) and independently refuses
     // Addison's own data dir. Each test drives the real session-scope core.
@@ -679,6 +730,7 @@ mod tests {
 
     #[test]
     fn write_workspace_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
         // Defence in depth: even if the core's floor were bypassed, the shell refuses
         // a write under ~/.addison. Drive it via ADDISON_DB_PATH so the test never
         // touches the real home directory.
@@ -705,6 +757,7 @@ mod tests {
 
     #[test]
     fn read_workspace_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
         // The read side gets the same independent floor.
         let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&data_dir).expect("seed data dir");
@@ -754,6 +807,73 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_refuses_a_dangling_symlink_into_the_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // The shell's floor claims to hold "even if the core's check were bypassed".
+        // It did not: a symlink inside a project pointing at a not-yet-existing file
+        // under the data dir canonicalized to the LINK's own harmless location, the
+        // containment test passed, and `fs::write` then followed the link and planted
+        // a file in the G3 sidecar directory. Revert the read_link branch in
+        // refuse_addison_data_dir and this test writes into `snapshots/`.
+        let state = FileState::default();
+        let data_dir = std::env::temp_dir().join(format!("addison-dang-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
+        let project = std::env::temp_dir().join(format!("addison-proj-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project).expect("seed project");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        // The target does NOT exist yet — that is the whole point.
+        let victim = data_dir.join("snapshots").join("planted.json");
+        let link = project.join("innocent.txt");
+        std::os::unix::fs::symlink(&victim, &link).expect("plant the dangling link");
+
+        let err = write_workspace_path(&state, link.clone(), "PLANTED").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!victim.exists(), "a dangling link must not plant a file in the data dir");
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn the_data_dir_floor_holds_when_an_intermediate_directory_is_missing() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // canonical_lossy only checked the IMMEDIATE parent, so a path with any
+        // missing intermediate component stayed un-canonicalized while the protected
+        // dir was canonicalized — comparing /var/... against /private/var/... and
+        // finding no containment. On macOS, where /tmp and /var are themselves
+        // symlinks, that is the ordinary case, not a corner one.
+        let state = FileState::default();
+        let data_dir = std::env::temp_dir().join(format!("addison-mid-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        // `nosuchdir` does not exist, so neither the path nor its parent resolves.
+        let target = data_dir.join("nosuchdir").join("x.json");
+        let err = write_workspace_path(&state, target.clone(), "x").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!target.exists());
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 
     #[test]

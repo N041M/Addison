@@ -168,10 +168,14 @@ and rebuilds in the same session.
   decide there, in code.
 - **Never captured:** the keychain (G1), the transcript, `usage_log`,
   `action_snapshots`, `routine_runs`, `device_identity`, `config_snapshots`
-  itself, and **`tool_grants`** — live consent state, not config: restoring it
-  could reinstate a grant the user had revoked, i.e. a privilege grant delivered
-  by a deliberately ungated one-action button. A restore additionally clears the
-  live in-session grants.
+  itself, **`tool_grants`**, and (step 5) **`workspace_trust`** — live consent
+  state, not config: restoring it could reinstate a grant the user had revoked,
+  i.e. a privilege grant delivered by a deliberately ungated one-action button. A
+  restore additionally clears the live in-session grants. **This inverts the scope
+  amendment §8.2's "trust is snapshotted" wording**, which is now annotated there
+  as superseded: workspace trust is standing consent that suppresses cards inside
+  a directory, so it is a grant in everything but name, and a recovery floor must
+  not be a privilege-escalation vector.
 - **Permanence lives in the DATABASE.** Two `RAISE(ABORT)` triggers refuse to
   delete an `undeletable = 1` row and refuse to clear the flag — not a `WHERE`
   clause someone can forget. Three kinds of row carry it: the G4 anchor
@@ -293,7 +297,11 @@ relaxes exactly these four, and only as spelled out above.
    functions, not "run command"; SAFE routines are *declarative plans* (§6.1),
    not scripts. Do not add `eval`, a Lua sandbox, or a raw-code field. (OPEN mode's
    `run_command` is a single **dev-only** tool, absent from the SAFE registry view
-   — `registry.visible_tools(SAFE)` — and it refuses to run under SAFE as a belt.)
+   — `registry.visible_tools(SAFE)` — and it refuses to run under SAFE as a belt.
+   Step 5's `read_project_file` / `write_project_file` are `open_only` too: also
+   absent from the SAFE view, also refused at dispatch outside OPEN. They are
+   typed path-bounded functions, not a shell, so this invariant is unaffected —
+   and the SAFE file tools keep design-doc §9's picker scoping unchanged.)
 2. **Every `risk_tier != LOW` tool must have a real `undo()`**, enforced at
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()` — a tool that genuinely can't be undone stays LOW and
@@ -441,10 +449,36 @@ outranks even the explicit picker and is resolved BEFORE the Setup-Assistant
 relay branch — no model call leaves the machine; `answeredWith` + the
 "Answered with a free model." chip when `free && routed`; usage rows now carry
 the RESOLVED per-attempt identity, fixing a pre-existing mis-attribution),
-(4) **free-model endpoints** (legit free/local + add-by-prompt),
-(5) **harness + workspace-trust** (OPEN), (6) **widget capability tiers + expanded
-safe vocabulary** (to-do/checklist, note, timer), (7) **MCP client** tools via the
-registry + gate, (8) the **automation keyword gate** + author-OS-run automation.
+(4) **DONE (2026-07-24) — free-model endpoints** (add-an-endpoint-by-prompt +
+"make it cheaper"; the whole pinned-request mechanism factored out of
+`read_web_page` into `agent_core/net_vetting.py` so the `provider.connect`
+validation GET adopts the same SSRF/rebinding defence instead of growing a weaker
+copy — resolve → vet → connect to the vetted IP with the name in `Host` + TLS SNI
+→ follow no redirects → re-vet every hop, with the vetting DECISION as a parameter
+so the LAN endpoint policy and the public-web policy share one mechanism; both
+flows are propose/confirm RPCs whose fields are **core-derived or canned**, never
+model-authored; `costPlan.apply` REFUSES if its restore point cannot be minted and
+persists skill + strategy in ONE atomic commit; the free chip stays Ollama-only —
+**no cloud model ever claims free**, Google's free tier is information, not a
+routing flag),
+(5) **DONE (2026-07-24) — harness + workspace-trust** (OPEN; two typed,
+path-bounded, OPEN-only file tools + a `workspace_trust` table and `workspace.*`
+RPC. **CONFINEMENT is a predicate separate from prompting**: a path-bounded tool
+whose resolved path is outside every trusted root is hard-refused *before*
+`execute`, LOW and MEDIUM alike, which is permission-to-TOUCH; the gate's
+`trusted` bool is only permission-to-skip-the-card. The path is resolved ONCE and
+handed to `execute` via `ExecutionContext.resolved_path`, never re-read from
+`args` — check one path, act on another is the TOCTOU gap. The registry's
+`dev_only` split into `open_only` (visibility) + `allow_missing_undo` (the
+exemption) so `write_project_file` is hidden from SAFE **and** undo-enforced at
+registration. **Owner decision 2026-07-24: trust suppresses cards ONLY for the
+typed, path-bounded, undoable file tools — `run_command` ALWAYS cards**, its
+`affected_path` is None so confinement never governs it. Trust is **excluded from
+snapshots** on the `tool_grants` precedent — see G3's "never captured" list.
+Routine steps and command widgets pass `trusted=False` unconditionally), (6)
+**widget capability tiers + expanded safe vocabulary** (to-do/checklist, note,
+timer), (7) **MCP client** tools via the registry + gate, (8) the **automation
+keyword gate** + author-OS-run automation.
 Steps 3–4 (companion) can run in parallel with 5–8 once 1–2 land.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")

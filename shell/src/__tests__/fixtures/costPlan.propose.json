@@ -1,0 +1,5 @@
+{
+  "skillName": "Addison: keep it cheap",
+  "skillInstructions": "Keep answers short and to the point \u2014 a sentence or two when that will do, and no long preamble or recap. Prefer the simplest approach that answers the question, and don't reach for a bigger, more expensive model when a smaller one would do the job just as well.",
+  "strategy": "cost_first"
+}

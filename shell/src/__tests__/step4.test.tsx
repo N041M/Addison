@@ -69,7 +69,8 @@ const COST_REFUSED =
   "Addison couldn't save the restore point that goes with this change, so nothing " +
   "was changed. Try again in a moment.";
 const GOOGLE_LINE =
-  "Google's API has a free tier — a free key works here. Get one at aistudio.google.com/apikey.";
+  "Google's API has a free tier — a free key works here. Open aistudio.google.com/apikey " +
+  "in your browser to get one.";
 
 // ---------------------------------------------------------------------------
 // (a) parseEndpointProposal
@@ -316,9 +317,19 @@ describe("the Google free-tier line", () => {
     expect(document.body.textContent).toContain(GOOGLE_LINE);
   });
 
-  it("renders the URL as a real, openable link — not dead text", () => {
+  // The earlier version of this test asserted an <a href> and called it "a real,
+  // openable link". The href proved only that an anchor existed in the DOM — the
+  // webview has no way to open a URL at all (main.rs registers three commands, and
+  // none of them is openExternal; Markdown.tsx states the rule). So the assertion
+  // passed while the control was dead. What is pinned now is the honest shape: the
+  // address is selectable text a person can copy, and there is NO anchor inviting a
+  // click that would do nothing.
+  it("shows the address as selectable text, never as a dead link", () => {
     renderApiKeys();
-    const link = screen.getByRole("link", { name: "aistudio.google.com/apikey" });
-    expect(link.getAttribute("href")).toBe("https://aistudio.google.com/apikey");
+    expect(screen.queryByRole("link", { name: /aistudio/ })).toBeNull();
+    expect(document.querySelector("a[href*='aistudio']")).toBeNull();
+    const address = screen.getByText("aistudio.google.com/apikey");
+    expect(address.tagName).toBe("SPAN");
+    expect(address.className).toContain("select-all");
   });
 });

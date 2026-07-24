@@ -52,6 +52,7 @@ function makeArgs() {
     effectiveLocalModel: vi.fn(() => undefined),
     effectiveCloudModel: vi.fn(() => "claude-opus-4-8"),
     maybeProposeWidget: vi.fn(),
+    maybeProposeOffers: vi.fn(),
     refreshConversations: vi.fn(),
     refreshStats: vi.fn(),
   };
@@ -138,5 +139,35 @@ describe("useTurn race guard", () => {
     expect(args.maybeProposeWidget).toHaveBeenCalledTimes(1);
     expect(args.maybeProposeWidget).toHaveBeenCalledWith("B");
     expect(args.refreshStats).toHaveBeenCalledTimes(1);
+    // The offers drafter rides the same post-turn path, on the same text.
+    expect(args.maybeProposeOffers).toHaveBeenCalledTimes(1);
+    expect(args.maybeProposeOffers).toHaveBeenCalledWith("B");
+  });
+
+  // The answer is already on screen when the post-turn drafters run, so a drafter
+  // that throws must not reach the failure path: `content || message` would keep
+  // the text but stamp the turn `failed: true` — telling the person their answer
+  // went wrong when it did not. Revert the inner try/catch in runTurn and this
+  // goes red on `failed`.
+  it("a throwing post-turn drafter does not mark a good turn as failed", async () => {
+    const args = makeArgs();
+    args.maybeProposeOffers = vi.fn(() => {
+      throw new Error("drafting blew up");
+    });
+    const { result } = renderHook(() => useTurn(args));
+
+    act(() => {
+      result.current.handleSend("cheaper please");
+    });
+    await act(async () => {
+      deferreds[0].resolve({ text: "the answer" });
+      await flushMicrotasks();
+    });
+
+    const assistant = result.current.messages.at(-1)!;
+    expect(assistant.content).toBe("the answer");
+    expect(assistant.failed).toBeFalsy();
+    expect(assistant.pending).toBe(false);
+    expect(result.current.isWorking).toBe(false);
   });
 });

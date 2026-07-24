@@ -229,3 +229,117 @@ def test_apply_updates_an_existing_canned_skill_rather_than_duplicating(tmp_path
             store.close()
     finally:
         _shutdown(h.reader, h.thread)
+
+
+# ---------------------------------------------------------------------------
+# The guards the post-build adversarial pass found unwatched. Each mutation below
+# left the WHOLE suite green before these tests existed; one of them produced a
+# genuinely half-applied plan.
+# ---------------------------------------------------------------------------
+def test_apply_cost_plan_is_atomic_when_the_setting_write_fails(tmp_path):
+    """The dedicated Store method exists for exactly one reason — "a half-applied
+    plan is then impossible" (contract R4) — and nothing was watching it. With the
+    rollback removed, the skill row survives a failure in the settings write: the
+    person gets a terse Addison that never got cheaper, and no restore point
+    describes that state because the snapshot was taken before it.
+    """
+    store = Store(tmp_path / IPC_DB_NAME)
+    real_conn = store._conn
+
+    class _FailsOnTheSetting:
+        """The live connection with ONE statement broken. sqlite3.Connection's
+        methods are read-only, so the seam is a wrapper, not a monkeypatch — and it
+        must be a wrapper the rollback can still reach, or the test would prove
+        nothing about the rollback."""
+
+        def execute(self, sql, *args, **kwargs):
+            if "app_settings" in sql:
+                raise RuntimeError("disk gave out mid-plan")
+            return real_conn.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(real_conn, name)
+
+    store._conn = _FailsOnTheSetting()  # type: ignore[assignment]
+    try:
+        store.apply_cost_plan(
+            skill_id="s1",
+            skill_name=_COST_SKILL_NAME,
+            skill_instructions=_COST_SKILL_INSTRUCTIONS,
+            strategy_key=_ROUTING_STRATEGY_KEY,
+            strategy_value=COST_FIRST,
+            now=1,
+        )
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover - the stub always raises
+        raise AssertionError("the seeded failure did not propagate")
+    store._conn = real_conn  # type: ignore[assignment]
+
+    try:
+        assert _skills_named(store, _COST_SKILL_NAME) == [], "a half-applied plan persisted"
+        assert store.get_setting(_ROUTING_STRATEGY_KEY) != COST_FIRST
+        # The connection must be left usable: a rollback that stranded an open
+        # transaction would poison every later write on the one shared connection.
+        store.set_setting("unrelated", "value")
+        assert store.get_setting("unrelated") == "value"
+    finally:
+        store.close()
+
+
+def test_not_already_in_effect_when_only_the_strategy_matches(tmp_path):
+    """R7 says BOTH halves must hold. Mutating ``_cost_plan_in_effect`` to check the
+    strategy alone left the suite green — and under that mutant a person who had
+    already chosen cost_first from the routing toggle presses "Make it cheaper",
+    is told it worked, and the guidance note is never added. Forever."""
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        _call(h, Method.ROUTING_SET, {"strategy": COST_FIRST}, request_id=1)
+        result = _call(h, Method.COSTPLAN_APPLY, {"accept": True}, request_id=2)
+        assert result["ok"] is True
+        assert not result.get("alreadyInEffect"), "the guidance note was never added"
+
+        store = _side_store(tmp_path)
+        try:
+            assert len(_skills_named(store, _COST_SKILL_NAME)) == 1
+        finally:
+            store.close()
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_not_already_in_effect_when_only_the_note_matches(tmp_path):
+    """The mirror case: the note is there but the strategy was changed back, so the
+    plan is genuinely not in effect and apply must proceed — without duplicating
+    the note it already wrote."""
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        _call(h, Method.COSTPLAN_APPLY, {"accept": True}, request_id=1)
+        _call(h, Method.ROUTING_SET, {"strategy": "quality_first"}, request_id=2)
+        result = _call(h, Method.COSTPLAN_APPLY, {"accept": True}, request_id=3)
+        assert result["ok"] is True
+        assert not result.get("alreadyInEffect")
+
+        store = _side_store(tmp_path)
+        try:
+            assert store.get_setting(_ROUTING_STRATEGY_KEY) == COST_FIRST
+            assert len(_skills_named(store, _COST_SKILL_NAME)) == 1, "the note was duplicated"
+        finally:
+            store.close()
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_refused_apply_leaves_the_sticky_capture_warning(tmp_path):
+    """The refusal sentence answers THIS apply and then it is gone; the sticky
+    warning on snapshot.list is the only durable trace that a restore point could
+    not be minted, and only a successful manual save clears it."""
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        _wrap_failing(h)
+        result = _call(h, Method.COSTPLAN_APPLY, {"accept": True}, request_id=1)
+        assert result["ok"] is False
+        listing = _call(h, Method.SNAPSHOT_LIST, request_id=2)
+        assert listing.get("warning"), "no sticky warning survived the refused apply"
+    finally:
+        _shutdown(h.reader, h.thread)

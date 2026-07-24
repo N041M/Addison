@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import ipaddress
 import socket
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -155,22 +156,73 @@ def address_is_public(raw: str) -> bool:
     return bool(address.is_global)
 
 
+def _explicit_port(parts) -> int | None:
+    """The URL's port when it is NOT the scheme's default, else None.
+
+    A browser omits the default port from ``Host`` and from the connection it
+    describes, so omitting it keeps the public-web caller byte-identical to what it
+    sent before this function existed. Everything else MUST carry it — see
+    ``pinned_url``."""
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    if port is None:
+        return None
+    return None if port == _DEFAULT_PORTS.get(parts.scheme.lower()) else port
+
+
 def host_header(parts) -> str:
-    """What a browser would put in ``Host`` — the name, re-bracketed if IPv6."""
+    """What a browser would put in ``Host`` — the name, re-bracketed if IPv6, and
+    the port when it is not the scheme's default (a vhosted server on :11434 must
+    be addressed as ``host:11434``, exactly as httpx would)."""
     hostname = parts.hostname or ""
-    return f"[{hostname}]" if ":" in hostname else hostname
+    host = f"[{hostname}]" if ":" in hostname else hostname
+    port = _explicit_port(parts)
+    return f"{host}:{port}" if port is not None else host
 
 
 def pinned_url(parts, address: str) -> str:
-    """The same request, addressed to the ONE vetted address.
+    """The same request, addressed to the ONE vetted address — PORT INCLUDED.
 
     The name is not in this URL at all, so nothing resolves it a second time. The
     name still travels — in ``Host`` and, for https, in the TLS SNI — so virtual
     hosting works and the certificate is still checked against the HOSTNAME. Cert
     verification is not weakened; it is simply pointed at the name it was always
-    meant to be pointed at."""
+    meant to be pointed at.
+
+    THE PORT IS PART OF THE DESTINATION. Dropping it was harmless while the only
+    caller required the default port, and became a live defect the moment step 4
+    allowed any port: ``http://localhost:11434/v1`` silently became a request to
+    ``127.0.0.1:80`` — a DIFFERENT service on the same machine, carrying the
+    caller's ``Authorization`` header to it. So every non-default port is carried
+    through, and the default port is omitted (what a browser does) so the
+    public-web caller's requests are byte-identical to before."""
     host = f"[{address}]" if ":" in address else address
-    return urlunsplit((parts.scheme, host, parts.path, parts.query, ""))
+    port = _explicit_port(parts)
+    netloc = f"{host}:{port}" if port is not None else host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, ""))
+
+
+def _origin(url: str) -> tuple[str, str, int | None] | None:
+    """(scheme, host, effective port) — the identity a credential is scoped to.
+    The same triple httpx compares when it decides whether to keep ``Authorization``
+    across a redirect.
+
+    Returns None for a URL that cannot even be parsed (a malformed IPv6 literal
+    makes ``urlsplit`` raise). None never compares equal to another origin, INCLUDING
+    another None — the caller treats "I can't tell where this is going" as "not the
+    origin the credential was issued for", so an unparseable hop drops the key.
+    ``vet_url`` refuses such a URL a moment later anyway; failing closed here means
+    the ordering of those two checks can never matter."""
+    try:
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        port = parts.port
+        hostname = parts.hostname
+    except ValueError:
+        return None
+    return (scheme, (hostname or "").lower(), port or _DEFAULT_PORTS.get(scheme))
 
 
 def vet_url(
@@ -303,6 +355,7 @@ def _one_hop(
     sentences: Sentences,
     timeout: float,
     max_url_chars: int,
+    deadline: float | None = None,
 ) -> Any:
     """One hop: try the vetted addresses in turn, translate httpx failures to plain
     words. ``on_final``'s own exceptions (a caller's refusal) are NOT httpx errors,
@@ -312,6 +365,16 @@ def _one_hop(
     attempts = addresses[:MAX_ADDRESS_ATTEMPTS]
     last = len(attempts) - 1
     for index, address in enumerate(attempts):
+        # The budget bounds THIS loop as well as the hop loop above it. Bounding
+        # only hops leaves MAX_ADDRESS_ATTEMPTS x timeout inside each one, which is
+        # most of the wait: three addresses at 10s is half a minute before the hop
+        # loop gets a chance to look at the clock.
+        attempt_timeout = timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise VettingError(sentences.took_too_long, retryable=True)
+            attempt_timeout = min(timeout, remaining)
         try:
             return _request_once(
                 client,
@@ -320,7 +383,7 @@ def _one_hop(
                 base_headers=base_headers,
                 on_final=on_final,
                 sentences=sentences,
-                timeout=timeout,
+                timeout=attempt_timeout,
                 max_url_chars=max_url_chars,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout):
@@ -351,11 +414,13 @@ def open_vetted(
     on_final: Callable[[httpx.Response, str], Any],
     sentences: Sentences,
     base_headers: dict | None = None,
+    credential_headers: dict | None = None,
     allow_private: bool,
     require_default_port: bool,
     max_url_chars: int,
     max_redirects: int,
     timeout: float,
+    total_timeout: float | None = None,
 ) -> Any:
     """Vet, fetch, and follow redirects by hand, pinning every hop. Returns
     whatever ``on_final`` returns; raises ``VettingError`` (plain sentence) on any
@@ -365,11 +430,44 @@ def open_vetted(
     is then pinned to the vetted address. A public page answering 302 to
     http://localhost is the obvious way around a check that only looked at the URL
     the caller supplied; handing the hop list to httpx would reopen exactly that.
-    ``client`` is never created or closed here — the caller owns its lifecycle."""
+    ``client`` is never created or closed here — the caller owns its lifecycle.
+
+    TWO HEADER BAGS, AND THE SPLIT IS LOAD-BEARING. ``base_headers`` (a User-Agent,
+    an Accept) travel to every hop. ``credential_headers`` — an API key — travel
+    ONLY while the request is still going to the origin the caller aimed it at, and
+    are dropped the moment a redirect crosses to a different scheme/host/port.
+
+    This is not caution, it is a defect that shipped and was caught: following
+    redirects by hand replaced ``httpx``'s follower, and ``httpx`` strips
+    ``Authorization`` cross-origin (``Client._redirect_headers``). The hand-rolled
+    loop did not, so a custom model server — or anything able to answer 302 for it —
+    could harvest the user's API key verbatim by redirecting the validation GET at
+    itself. A SEPARATE PARAMETER rather than a "strip anything called authorization"
+    rule, because the next caller to put a secret in a header must inherit the
+    protection by construction, not by naming their header correctly.
+
+    ``timeout`` bounds ONE socket; ``total_timeout`` bounds the WHOLE walk. They
+    are different numbers because this loop multiplies: up to
+    ``MAX_ADDRESS_ATTEMPTS`` addresses per hop, times ``max_redirects + 1`` hops,
+    each on its own ``timeout``. With a 10-second socket timeout that is two
+    minutes before anything gives up — and four if the caller then retries. A
+    caller a person is actively waiting on (a connect card) passes
+    ``total_timeout``; each socket then gets ``min(timeout, what is left)``, so the
+    product is bounded by one number the caller chose. Same reasoning as the
+    step-3 fallback budget: a per-attempt timeout is not a budget."""
     headers = dict(base_headers or {})
+    secrets = dict(credential_headers or {})
     current = url.strip()
+    origin = _origin(current)
     started_secure = current.lower().startswith("https://")
+    deadline = None if total_timeout is None else time.monotonic() + total_timeout
     for _ in range(max_redirects + 1):
+        hop_timeout = timeout
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise VettingError(sentences.took_too_long, retryable=True)
+            hop_timeout = min(timeout, remaining)
         verdict = vet_url(
             current,
             resolve,
@@ -384,11 +482,12 @@ def open_vetted(
             client,
             current,
             verdict.addresses,
-            base_headers=headers,
+            base_headers={**headers, **secrets},
             on_final=on_final,
             sentences=sentences,
-            timeout=timeout,
+            timeout=hop_timeout,
             max_url_chars=max_url_chars,
+            deadline=deadline,
         )
         if not isinstance(outcome, _Redirect):
             return outcome
@@ -397,6 +496,12 @@ def open_vetted(
             # A chain that began on https must not quietly finish on http — the
             # body of that last hop can be rewritten by anyone on the path.
             raise VettingError(sentences.dropped_secure_link)
+        next_origin = _origin(next_url)
+        if secrets and (next_origin is None or origin is None or next_origin != origin):
+            # Leaving the origin the credential was issued for: drop it, and never
+            # pick it up again even if a later hop returns to that origin (a chain
+            # that has passed through a foreign host is not one to re-trust).
+            secrets = {}
         current = next_url  # re-vetted at the top of the next pass
     raise VettingError(sentences.too_many_redirects)
 

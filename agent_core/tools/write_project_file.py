@@ -33,6 +33,7 @@ import uuid
 from pathlib import Path
 
 from agent_core.tools.base import (
+    UNRESOLVABLE_PATH,
     ActionSnapshot,
     ExecutionContext,
     RiskTier,
@@ -84,13 +85,16 @@ class WriteProjectFileTool:
         return True
 
     def affected_path(self, args: dict) -> str | None:
-        """The absolute path this write would touch, resolved ONCE (realpath). The
-        caller checks this exact value for confinement and hands it back through
+        """The absolute path this write would touch, resolved ONCE (expanduser +
+        realpath). The caller checks this exact value for confinement and hands it back through
         ``ExecutionContext.resolved_path`` for ``execute`` (D4/R6)."""
         raw = args.get("path")
         if not raw or not isinstance(raw, str):
-            return None
-        return str(Path(raw).resolve())
+            # The SENTINEL, never None: this tool IS path-bounded, so an argument it
+            # cannot read must be refused by confinement, not waved past it (None
+            # means "not a path tool" and skips the boundary entirely).
+            return UNRESOLVABLE_PATH
+        return str(Path(raw).expanduser().resolve())
 
     def permission_detail(self, args: dict) -> str | None:
         """The file name only (see ``read_project_file`` — no full path to the

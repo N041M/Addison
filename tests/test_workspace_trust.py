@@ -33,6 +33,7 @@ from agent_core.memory.store import Store
 from agent_core.orchestrator import _OUTSIDE_TRUST, Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import (
+    GuardConfig,
     PolicyMode,
     path_is_within,
 )
@@ -202,6 +203,32 @@ def _run_single_tool_call(registry, gate, bridge, trust_check, tool_id, args, mo
     orch.run_turn(conv, mode=mode)
     tool_result = next(m for m in conv.messages if m.role == "tool")
     return conv, tool_result, store
+
+
+def _run_routine_step(tmp_path, registry, gate, bridge, trust_check, tool_id, args):
+    """One routine step through the REAL engine — the negative twin of the live
+    loop's confinement check. Mirrors the positive routine test's setup."""
+    from agent_core.routines.engine import RoutineEngine
+    from agent_core.routines.model import Routine, RoutineStep
+
+    store = Store(tmp_path / "routine.sqlite3")
+    store.insert_routine(
+        id="r-1", name="T", description="", plan_json={},
+        created_from_conversation_id=None, created_at=1, created_in_mode="open",
+    )
+    engine = RoutineEngine(
+        tool_registry=registry,
+        permission_gate=gate,
+        undo_manager=UndoManager(store=store, tool_registry=registry),
+        shell_bridge=bridge,
+        store=store,
+        trust_check=trust_check,
+    )
+    routine = Routine(
+        id="r-1", name="T", description="", variables=[],
+        steps=[RoutineStep("s1", tool_id, args)],
+    )
+    return engine.run(routine, {}, mode=PolicyMode.OPEN)
 
 
 def _harness_registry(bridge):
@@ -680,3 +707,180 @@ def _rpc(reader, writer, rid, method, params=None) -> dict:
         frame["params"] = params
     reader.feed(frame)
     return writer.wait_for(lambda f: f.get("id") == rid and ("result" in f or "error" in f))
+
+
+# ============================================================================
+# (10) — the gaps the post-build adversarial pass found. Every mutation named in a
+# docstring below SURVIVED the entire 847-test suite before these tests existed.
+# ============================================================================
+def test_the_tool_acts_on_the_resolved_path_not_a_second_reading_of_the_argument(tmp_path):
+    """The whole R6/D4 resolve-once mechanism was unwatched, and it was structural:
+    pytest's ``tmp_path`` is already fully realpath'd, so in every other test the raw
+    argument and the resolved path are byte-identical and ``affected_path``'s
+    ``.resolve()``, ``ExecutionContext.resolved_path`` and the ``_NO_RESOLVED_PATH``
+    fail-closed branch could all be deleted with nothing noticing.
+
+    So this test hands the tool a path the caller must NORMALISE — reached through a
+    symlinked alias — and asserts the shell was asked for the REAL path. A tool that
+    re-read ``args["path"]`` would ask for the alias instead, which is the TOCTOU gap:
+    confinement approves one path, the effect lands on another.
+    """
+    real_root = tmp_path / "project"
+    real_root.mkdir()
+    target = real_root / "notes.txt"
+    target.write_text("hello", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_root)
+    aliased_arg = str(alias / "notes.txt")
+    resolved = str(target.resolve())
+    assert aliased_arg != resolved, "the alias must not already equal the real path"
+
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    gate = PermissionGate()
+    _, tool_result, _ = _run_single_tool_call(
+        registry, gate, bridge, lambda p: p == resolved,
+        "read_project_file", {"path": aliased_arg},
+    )
+    assert tool_result.content == "hello"
+    assert bridge.reads == [resolved], "the read must use the path confinement checked"
+
+
+def test_the_write_acts_on_the_resolved_path_not_a_second_reading_of_the_argument(tmp_path):
+    """The write half of the same gap — and the one that matters more, because here
+    the mismatch would be a WRITE landing somewhere confinement never approved."""
+    real_root = tmp_path / "project"
+    real_root.mkdir()
+    target = real_root / "out.txt"
+    target.write_text("before", encoding="utf-8")
+    alias = tmp_path / "alias"
+    alias.symlink_to(real_root)
+    aliased_arg = str(alias / "out.txt")
+    resolved = str(target.resolve())
+    assert aliased_arg != resolved
+
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    gate = PermissionGate()
+    _, _tool_result, store = _run_single_tool_call(
+        registry, gate, bridge, lambda p: p == resolved,
+        "write_project_file", {"path": aliased_arg, "content": "after"},
+    )
+    assert bridge.writes == [resolved], "the write must land on the confined path"
+    assert target.read_text(encoding="utf-8") == "after"
+    # ...and the undo restores THAT path, so undo cannot target a different file
+    # than the one that was written.
+    assert store.inserted and store.inserted[-1].undo_payload["path"] == resolved
+
+
+def test_a_path_the_os_cannot_resolve_is_refused_not_crashed(tmp_path):
+    """``Path(raw).resolve()`` raises ValueError on an embedded NUL, and the
+    confinement call sites sit OUTSIDE the per-call error handling that exists so
+    "a tool failure is a failed STEP, never a crashed turn". One model-authored
+    tool call therefore took the whole turn down — and on the routine path left the
+    run recorded as ``running`` forever.
+
+    Refused, and refused as OUTSIDE TRUST rather than skipped: an unresolvable path
+    must not collapse onto ``None``, which means "not a path tool" and bypasses
+    confinement altogether."""
+    root = tmp_path / "project"
+    root.mkdir()
+    root_real = str(root.resolve())
+    data_dir = str((tmp_path / "data").resolve())
+    os.makedirs(data_dir)
+
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    gate = PermissionGate(on_request=lambda *a, **k: pytest.fail("must never reach the gate"))
+    # The REAL predicate, with a real trusted root — a trust_check that says yes to
+    # everything would be the very assumption under test.
+    for bad in ["/tmp/a\x00b", "", None, 42, {"not": "a path"}]:
+        _, tool_result, _ = _run_single_tool_call(
+            registry, gate, bridge,
+            lambda p: is_trusted(p, [root_real], data_dir),
+            "read_project_file", {"path": bad},
+        )
+        # The turn COMPLETED (no crash) and the step was refused by confinement.
+        assert tool_result.content == _OUTSIDE_TRUST, bad
+    assert bridge.reads == []
+
+
+def test_a_write_outside_trust_in_a_routine_step_is_refused_and_writes_nothing(tmp_path):
+    """The routine engine's confinement had only a POSITIVE test (a step that ran and
+    carded); deleting the hard-refusal entirely left the whole suite green. This is
+    the negative twin of the live loop's ``test_write_outside_trust_refuses_and_writes_nothing``.
+    """
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    gate = PermissionGate(on_request=lambda *a, **k: pytest.fail("must never reach the gate"))
+    outside = str(tmp_path / "not-trusted" / "x.txt")
+
+    result = _run_routine_step(
+        tmp_path, registry, gate, bridge, lambda p: False,
+        tool_id="write_project_file", args={"path": outside, "content": "nope"},
+    )
+    # The step was refused by confinement, the routine did not crash, and the run
+    # is recorded with a real terminal status (never left at 'running').
+    assert result.status in ("completed", "failed"), result.status
+    step = result.step_results["s1"]
+    assert step.success is False
+    assert step.content == _OUTSIDE_TRUST
+    assert bridge.writes == []
+    assert not Path(outside).exists()
+
+
+def test_a_turn_scoped_not_now_is_honoured_even_inside_a_trusted_folder(tmp_path):
+    """The don't-nag rule cuts both ways. ``_auto_grant`` never consulted
+    ``_denied``, so a person who was shown a card and pressed "Not now" could watch
+    Addison edit a file in the same turn anyway. Nothing is escalated — the call was
+    card-free regardless — what was broken is consent HONESTY, and that is the
+    property this pins."""
+    gate = PermissionGate(on_request=lambda *a, **k: PermissionStatus.DENIED)
+    # The first call cards and is refused (a malformed path never reaches trust).
+    first = gate.authorize(
+        "write_project_file", mode=PolicyMode.OPEN, destructive=True, trusted=False
+    )
+    assert first == PermissionStatus.DENIED
+    # The second is genuinely inside trust — and must still be refused this turn.
+    second = gate.authorize(
+        "write_project_file", mode=PolicyMode.OPEN, destructive=True, trusted=True
+    )
+    assert second == PermissionStatus.DENIED
+    assert gate.auto_grants == []
+    # ...and the denial is turn-scoped, so clearing it restores the card-free path.
+    gate.clear_denials()
+    assert (
+        gate.authorize("write_project_file", mode=PolicyMode.OPEN, destructive=True, trusted=True)
+        == PermissionStatus.GRANTED
+    )
+
+
+def test_the_strictest_custom_guard_is_not_overridden_by_workspace_trust(tmp_path):
+    """``auto_grant_scope='none'`` is the strictest option the Custom panel offers and
+    its copy says Addison asks about everything. Trust silently making destructive
+    writes card-free under it is the same defect shape the step-2 rigor pass found —
+    the strictest-LABELLED option carrying the quiet hole, with a tightening minting
+    no anchor, so nothing marks the moment.
+
+    Simple and Developer are untouched: their guards are the defaults, where trust
+    behaves exactly as step 5 built it (asserted in the second half)."""
+    asked: list[str] = []
+    strict = GuardConfig(auto_grant_scope="none")
+    gate = PermissionGate(
+        on_request=lambda tool_id, detail=None: (asked.append(tool_id) or PermissionStatus.GRANTED)
+    )
+    status = gate.authorize(
+        "write_project_file", mode=PolicyMode.OPEN, destructive=True,
+        detail="out.txt", trusted=True, guards=strict,
+    )
+    assert status == PermissionStatus.GRANTED
+    assert asked == ["write_project_file"], "the strictest guard must still ask"
+    assert gate.auto_grants == []
+
+    # The freeze: with the DEFAULT guards (Simple/Developer), trust suppresses.
+    plain = PermissionGate(on_request=lambda *a, **k: pytest.fail("must not card"))
+    assert (
+        plain.authorize("write_project_file", mode=PolicyMode.OPEN, destructive=True, trusted=True)
+        == PermissionStatus.GRANTED
+    )
+    assert plain.auto_grants == ["write_project_file"]

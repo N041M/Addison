@@ -187,3 +187,185 @@ def test_list_models_refuses_a_base_url_that_resolves_nowhere():
             "https://nowhere.example.com/v1", lambda: "sk-a", client=client,
             resolve=lambda h: [],
         )
+
+
+# ---------------------------------------------------------------------------
+# The two defects the post-build adversarial pass found in the endpoint policy.
+# Both were invisible while the only caller required the default port and sent no
+# credential; both became live the moment step 4 relaxed exactly those two things.
+# ---------------------------------------------------------------------------
+def test_the_pin_keeps_the_port_so_a_lan_model_server_is_actually_reached():
+    """The whole point of step 4 is Ollama on :11434, LM Studio on :1234.
+
+    ``pinned_url`` rebuilt the URL from the vetted ADDRESS alone and dropped the
+    port, so ``http://localhost:11434/v1`` connected to ``127.0.0.1:80`` — a
+    different service on the same machine, carrying the caller's Bearer header to
+    it. Asserting only the host (as the earlier test did) cannot see this.
+    """
+    contacted: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        contacted.append(str(request.url))
+        assert request.headers.get("host") == "myollama.local:11434"
+        return httpx.Response(200, json={"data": [{"id": "llama"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    ids = list_models(
+        "http://myollama.local:11434/v1", lambda: "", client=client, require_key=False,
+        resolve=lambda h: ["192.168.1.50"],
+    )
+    assert ids == ["llama"]
+    assert contacted == ["http://192.168.1.50:11434/v1/models"]
+
+
+def test_the_default_port_is_still_omitted_so_the_public_web_caller_is_unchanged():
+    """The fix must not change what read_web_page puts on the wire. A default port
+    is omitted exactly as a browser omits it, so an explicit ``:443`` and no port
+    produce the same request."""
+    from urllib.parse import urlsplit
+
+    from agent_core.net_vetting import host_header, pinned_url
+
+    plain = urlsplit("https://example.com/x")
+    explicit = urlsplit("https://example.com:443/x")
+    assert pinned_url(plain, "93.184.216.34") == pinned_url(explicit, "93.184.216.34")
+    assert pinned_url(plain, "93.184.216.34") == "https://93.184.216.34/x"
+    assert host_header(plain) == host_header(explicit) == "example.com"
+    # IPv6 stays bracketed, with and without a port.
+    assert pinned_url(urlsplit("http://h:8080/x"), "::1") == "http://[::1]:8080/x"
+
+
+def test_the_api_key_never_follows_a_redirect_to_another_host():
+    """A credential is scoped to the origin it was aimed at.
+
+    Following redirects by hand replaced httpx's follower, and httpx strips
+    ``Authorization`` cross-origin (``Client._redirect_headers``). The hand-rolled
+    loop did not, so a custom server — or anything able to answer 302 for it —
+    harvested the user's API key verbatim. This is the regression test for that.
+    """
+    hops: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hops.append((request.headers.get("host", ""), request.headers.get("authorization")))
+        if len(hops) == 1:
+            return httpx.Response(302, headers={"location": "https://elsewhere.example/v1/models"})
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    list_models(
+        "https://models.example.com/v1", lambda: "sk-SECRET", client=client,
+        resolve=lambda h: [_PUBLIC] if "models" in h else ["198.51.100.7"],
+    )
+    assert len(hops) == 2, hops
+    assert hops[0] == ("models.example.com", "Bearer sk-SECRET")
+    # The second host is a different origin: it gets the request, never the key.
+    assert hops[1][0] == "elsewhere.example"
+    assert hops[1][1] is None, "the API key must not leave the origin it was issued for"
+
+
+def test_the_api_key_survives_a_same_origin_redirect():
+    """The strip is scoped, not blunt: a server redirecting within itself (a
+    trailing-slash or path fix) still gets the key, or every such server breaks."""
+    hops: list[str | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hops.append(request.headers.get("authorization"))
+        if len(hops) == 1:
+            return httpx.Response(
+                302, headers={"location": "https://models.example.com/v1/models/"}
+            )
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    list_models(
+        "https://models.example.com/v1", lambda: "sk-SECRET", client=client,
+        resolve=lambda h: [_PUBLIC],
+    )
+    assert hops == ["Bearer sk-SECRET", "Bearer sk-SECRET"]
+
+
+def test_read_web_page_carries_no_credential_bag_at_all():
+    """The split only matters if the OTHER caller has nothing to leak. read_web_page
+    sends a User-Agent and nothing else — pin that, so a future edit cannot quietly
+    put a token in its base headers and inherit the cross-host forwarding."""
+    import inspect
+
+    from agent_core.tools import read_web_page
+
+    source = inspect.getsource(read_web_page)
+    assert "credential_headers" not in source
+    assert "authorization" not in source.lower()
+
+
+def test_the_whole_pinned_walk_is_bounded_by_one_budget():
+    """A per-socket timeout is NOT a budget. The walk loops over up to
+    MAX_ADDRESS_ATTEMPTS addresses for each of max_redirects + 1 hops, so a
+    10-second socket timeout is two minutes of waiting — and the one idempotent
+    retry made it four, on a card the person is watching. ``total_timeout`` bounds
+    the product.
+
+    The mock genuinely BLOCKS. An instant-failing mock cannot see this gap, which
+    is the same lesson the step-3 fallback budget was written from.
+    """
+    import time as _time
+
+    from agent_core.net_vetting import Sentences, open_vetted
+
+    started = _time.monotonic()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _time.sleep(0.4)
+        raise httpx.ConnectError("hangs")
+
+    sentences = Sentences(*(["x"] * 10))  # words don't matter here, the clock does
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(Exception):
+        open_vetted(
+            client,
+            "http://slow.example:9999/v1/models",
+            resolve=lambda h: ["10.0.0.1", "10.0.0.2", "10.0.0.3"],
+            on_final=lambda r, u: r,
+            sentences=sentences,
+            allow_private=True,
+            require_default_port=False,
+            max_url_chars=2048,
+            max_redirects=3,
+            timeout=10.0,
+            total_timeout=0.5,
+        )
+    elapsed = _time.monotonic() - started
+    # Three vetted addresses, each blocking 0.4s: 1.2s unbounded, and that is only
+    # ONE hop. The budget must stop it after the first, inside the address loop.
+    assert elapsed < 1.0, f"the walk ran for {elapsed:.2f}s despite a 0.5s budget"
+
+
+def test_a_slow_server_is_told_it_was_slow_not_that_its_address_is_wrong():
+    """The timeout sentence used to be overwritten by "check the address" — the one
+    thing that was correct. A sentence that can never be reached is a guard that
+    defends nothing, so the transient bridge carries its own words through the
+    retry."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(RuntimeError) as excinfo:
+        list_models(
+            "http://box.local:11434/v1", lambda: "", client=client, require_key=False,
+            resolve=lambda h: ["10.0.0.1"],
+        )
+    assert "took too long" in str(excinfo.value), str(excinfo.value)
+
+
+def test_the_stock_openai_endpoint_still_honours_the_users_proxy():
+    """``trust_env=False`` belongs to a USER-CHOSEN address (a proxy would sit
+    between the address that was vetted and the one contacted). api.openai.com is a
+    module constant, and ``send()`` honours the environment — disabling it only for
+    the connect check would break connecting a key behind a corporate proxy while
+    chat kept working, which is a freeze break dressed as hardening."""
+    import inspect
+
+    from agent_core.providers import openai_provider
+
+    source = inspect.getsource(openai_provider.list_models)
+    assert "trust_env=not own_address" in source
+    assert "_DEFAULT_BASE_URL" in source

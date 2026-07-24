@@ -332,19 +332,53 @@ a chat butler and *hostile* to a coding loop (dozens of edits/runs).
 
 Resolution — a **workspace-trust** model:
 
-- The user grants a **project directory** (an explicit, snapshotted act).
-- **Within** the trusted workspace, OPEN mode acts freely — edits and runs flow
-  without a card per action (the gate still *runs and logs* on every call; it
-  just doesn't *prompt* within the trusted scope).
+- The user grants a **project directory** (an explicit act).
+- **Within** the trusted workspace, OPEN mode acts freely — edits flow without a
+  card per action (the gate still *runs and logs* on every call; it just doesn't
+  *prompt* within the trusted scope).
 - **Outside** the workspace (system paths, other directories, the keychain, the
   network beyond configured providers), destructive actions still raise the
   per-invocation card exactly as today.
-- Trust is scoped, revocable, and snapshotted; revoking it or leaving the
-  directory restores prompting.
+- Trust is scoped and revocable; revoking it restores prompting.
 
 This keeps the gate's guarantee ("it runs and logs on every call") while making
 the harness usable. The per-invocation card is not weakened globally; it is
 *scoped* to a directory the user deliberately trusted.
+
+> **Amended by what shipped (Phase-2 step 5, 2026-07-24). Two sentences above
+> were wrong, and this note is the authority.**
+>
+> **1. "Edits *and runs*" — no. `run_command` ALWAYS cards** (owner decision
+> 2026-07-24). Trust suppresses the card only for the **typed, path-bounded,
+> undoable file tools** (`read_project_file`, `write_project_file`), whose effect
+> IS their `path` argument, so the trusted root genuinely bounds what they can
+> touch. A command's `cwd` is a convenience, never an effect bound — #48 settled
+> that deciding what an arbitrary shell command touches is unwinnable — so its
+> `affected_path` is `None`, confinement never governs it, and it is never
+> trust-suppressed. That is what makes the two bullets above simultaneously
+> deliverable: "outside still asks" holds because the raw escape hatch always
+> asks, and "edits stay undoable" (§8.3) holds for the typed tools.
+>
+> **2. "an explicit, *snapshotted* act" / "revocable, and snapshotted" — no.
+> Workspace trust is EXCLUDED from snapshots**, on the `tool_grants` precedent
+> already recorded in `snapshots/scope.py`. Trust is **standing consent that
+> suppresses cards** — functionally a grant, not config. Capturing it would mean a
+> restore could **reinstate a trust the user had revoked**, i.e. a privilege grant
+> delivered by the deliberately ungated one-action restore button. A recovery floor
+> must not be a privilege-escalation vector. So a restore never resurrects a trust
+> row, and the "disclose a re-granted trust after a restore" copy an earlier draft
+> called for is deleted rather than written: there is nothing to disclose.
+>
+> Two further boundaries the implementation had to add, neither anticipated here:
+> **CONFINEMENT is a separate predicate from prompting.** "Is this inside a trusted
+> root" (permission to TOUCH) is not "may the card be skipped" (permission to skip
+> the card) — and a LOW read never cards in OPEN anyway, so the prompting flag alone
+> confines nothing. A path-bounded tool whose resolved path is outside every trusted
+> root is **hard-refused before `execute`**, for LOW and MEDIUM alike.
+> **The data-dir floor outranks any root**: Addison's own data directory (and the
+> G3 sidecars under it) can never be trusted, in either direction — a granted root
+> that is, contains, or sits inside it fails the floor, so `run_command` in a
+> trusted parent can never quietly `rm -rf` the recovery floor's own storage.
 
 ### 8.3 Undo still applies
 

@@ -271,3 +271,54 @@ def test_confirm_add_carries_no_key_field_only_the_base_url(tmp_path):
         assert seen == [("custom", "http://192.168.1.9:1234/v1")]
     finally:
         _shutdown(h.reader, h.thread)
+
+
+# ---------------------------------------------------------------------------
+# The add-endpoint SHAPE gate (R6). The post-build adversarial pass found it
+# matched hints as SUBSTRINGS, so "add" matched **Addison** — the app's own name —
+# and "api" matched "therapist". Deleting the whole gate left the suite green, so
+# the contract's stated conservatism was resting on nothing.
+# ---------------------------------------------------------------------------
+def test_a_sentence_that_merely_names_addison_does_not_arm_a_connect_card():
+    from agent_core.rpc.providers import _extract_endpoint_url
+
+    # Every one of these contains a hint as a SUBSTRING and nothing more.
+    assert _extract_endpoint_url("Addison, what is https://evil.example/x ?") is None
+    assert _extract_endpoint_url("the address is https://evil.example/x") is None
+    assert _extract_endpoint_url("my therapist sent https://evil.example/x") is None
+    assert _extract_endpoint_url("my appointment https://evil.example/x") is None
+    assert _extract_endpoint_url("read this api doc: https://evil.example/x") is None
+    assert _extract_endpoint_url("observers said https://evil.example/x") is None
+    # ...and the baseline that was already right.
+    assert _extract_endpoint_url("what is https://evil.example/x") is None
+
+
+def test_a_genuine_add_a_server_sentence_still_arms_the_card():
+    """The boundary fix must not close the door it exists to open."""
+    from agent_core.rpc.providers import _extract_endpoint_url
+
+    assert (
+        _extract_endpoint_url("add my own model server at http://192.168.1.5:11434")
+        == "http://192.168.1.5:11434"
+    )
+    assert (
+        _extract_endpoint_url("connect to my Ollama on http://localhost:11434")
+        == "http://localhost:11434"
+    )
+    assert (
+        _extract_endpoint_url("can you set up http://box.local:1234/v1 as an endpoint?")
+        == "http://box.local:1234/v1"
+    )
+
+
+def test_an_autocapitalised_scheme_is_normalised_rather_than_refused():
+    """The URL regex is case-insensitive; ``_base_url_problem`` compares the scheme
+    case-sensitively. A phone's "Http://…" was extracted and then refused with
+    "Enter a web address that starts with http:// or https://" — a sentence that is
+    false about the address the person just typed. Only the scheme is lowered; the
+    host and path belong to the server."""
+    from agent_core.rpc.providers import _base_url_problem, _extract_endpoint_url
+
+    found = _extract_endpoint_url("Add my server at HTTP://Box.Local:11434/V1")
+    assert found == "http://Box.Local:11434/V1"
+    assert _base_url_problem(found) is None

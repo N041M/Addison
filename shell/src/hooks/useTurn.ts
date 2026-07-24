@@ -28,6 +28,10 @@ interface UseTurnArgs {
   effectiveCloudModel: () => string | undefined;
   /** From useWidgets: draft a widget after a turn that asked for one. */
   maybeProposeWidget: (userText: string) => void;
+  /** From useOffers: draft an add-a-server or make-it-cheaper card after a turn
+   * whose USER text asked for one. Same rule as the widget draft — only the
+   * person's own words may arm a card, never the model's reply. */
+  maybeProposeOffers: (userText: string) => void;
   /** From useConversations / useWidgets: post-turn refreshers. */
   refreshConversations: (adopt?: boolean) => void;
   refreshStats: () => void;
@@ -42,6 +46,7 @@ export function useTurn({
   effectiveLocalModel,
   effectiveCloudModel,
   maybeProposeWidget,
+  maybeProposeOffers,
   refreshConversations,
   refreshStats,
 }: UseTurnArgs) {
@@ -117,9 +122,21 @@ export function useTurn({
           return m;
         }),
       );
-      // Composer path: if the user asked Addison to build a widget, draft one from
-      // the just-finished conversation (nothing is saved until they confirm).
-      maybeProposeWidget(text);
+      // Composer path: if the user's own words asked for a widget, a model server,
+      // or a cheaper setup, draft the matching card from the just-finished turn.
+      // Nothing is saved or applied until they press the card's button.
+      //
+      // Isolated on purpose. The answer is already on screen at this point, so a
+      // drafter that throws must not fall into the catch below — `content ||
+      // message` would keep the text but stamp the turn `failed: true`, telling
+      // the person their answer went wrong when it did not. A card that failed to
+      // draft is a card that doesn't appear, which is the intended quiet failure.
+      try {
+        maybeProposeWidget(text);
+        maybeProposeOffers(text);
+      } catch {
+        /* no card — never a failed turn */
+      }
     } catch (err) {
       // Same guard on the failure path: an abandoned turn's error must not
       // replace the stopped message or a newer turn's content.

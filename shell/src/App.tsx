@@ -37,6 +37,8 @@ import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
 import { WidgetRail } from "./components/WidgetRail";
 import { WidgetProposalCard } from "./components/WidgetProposalCard";
+import { EndpointProposalCard } from "./components/EndpointProposalCard";
+import { CostPlanCard } from "./components/CostPlanCard";
 import { Composer } from "./components/Composer";
 import { PermissionCard } from "./components/PermissionCard";
 import {
@@ -55,6 +57,7 @@ import { useSnapshots } from "./hooks/useSnapshots";
 import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useOffers } from "./hooks/useOffers";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -162,6 +165,21 @@ export function App() {
   // only on the Developer/Custom surfaces (SettingsPage keys that off the active
   // profile); the hook itself just owns the trusted roots + grant/revoke.
   const workspaceState = useWorkspace({ connected });
+  // The two step-4 conversational offers — "add my own model server" and "make it
+  // cheaper" (useOffers). Same propose -> card -> explicit confirm mechanism as the
+  // widget flow above; nothing is applied until the person presses the card's
+  // button, and only the person's OWN words can arm a card. Applying either changes
+  // config the core snapshots first, so both refresh the restore-points list.
+  const offers = useOffers(
+    () => connected,
+    setStatusBanner,
+    () => {
+      snapshotsState.refreshSnapshots();
+      routingState.refreshRouting();
+      skillsState.refreshSkills();
+      models.refreshProviders();
+    },
+  );
   const turn = useTurn({
     connected,
     setStatusBanner,
@@ -171,6 +189,7 @@ export function App() {
     effectiveLocalModel: models.effectiveLocalModel,
     effectiveCloudModel: models.effectiveCloudModel,
     maybeProposeWidget: widgetsState.maybeProposeWidget,
+    maybeProposeOffers: offers.maybeProposeOffers,
     // Invoked from runTurn's `finally` — at event time, well after render, when
     // the `conversationsState` const below is initialized. The lazy wrapper is
     // what keeps the hook call order acyclic.
@@ -592,6 +611,22 @@ export function App() {
       onCancel={widgetsState.handleDismissWidgetProposal}
     />
   ) : null;
+  // The step-4 offers, in the same footer slot as the widget/routine cards. One at
+  // a time (useOffers enforces it) — two consent cards under the composer is how a
+  // person confirms the one they did not read.
+  const offerBlock = offers.endpointProposal ? (
+    <EndpointProposalCard
+      proposal={offers.endpointProposal}
+      onDismiss={offers.dismissEndpointProposal}
+      onAdded={offers.handleEndpointAdded}
+    />
+  ) : offers.costPlan ? (
+    <CostPlanCard
+      plan={offers.costPlan}
+      onDismiss={offers.dismissCostPlan}
+      onApplied={offers.handleCostPlanApplied}
+    />
+  ) : null;
 
   const profileLabel =
     profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
@@ -772,6 +807,7 @@ export function App() {
                     <>
                       {proposalBlock}
                       {widgetProposalBlock}
+                      {offerBlock}
                       {/* Mobile: there's no side rail, so the widgets live inline
                           at the foot of the thread — visible on the chat screen,
                           carrying the work + consent blocks with them. Desktop:

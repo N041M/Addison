@@ -101,11 +101,22 @@ const KEY_PROVIDERS: { id: string; label: string; kind: ProviderKind }[] = [
 const KEY_SHAPE = /^[\x21-\x7E]+$/;
 
 // Google's free tier surfaced as INFORMATION, not a routing flag (contract D3):
-// one plain sentence under the Google row with a real, openable link to where a
-// free key is obtained. No cloud model is ever marked "free" — the free chip
-// fires only for free-by-construction local models — so this is a link, not a
-// flag. The href is the full web address; the visible text drops the scheme.
-const GOOGLE_KEY_URL = "https://aistudio.google.com/apikey";
+// one plain sentence under the Google row saying where a free key comes from. No
+// cloud model is ever marked "free" — the free chip fires only for
+// free-by-construction local models — so this is information, not a flag.
+//
+// It is deliberately NOT an <a href>. THE WEBVIEW CANNOT OPEN A URL. The Rust
+// shell registers exactly three commands for the webview (main.rs:
+// send_to_core, store_provider_key, delete_provider_key); `shell.openExternal`
+// is a CORE→shell method reached only by the `open_link` tool, and Markdown.tsx
+// states the standing rule as "the webview must never open URLs itself, and must
+// never call any shell.* IPC method". An anchor here would render, invite a
+// click, and do nothing — a dead control in a Settings panel, which is worse than
+// plain text. So the address is shown as SELECTABLE mono text the person can copy
+// into their own browser, and the sentence says to open it there.
+//
+// If clickable external links are ever wanted, the fix is a webview→shell
+// capability (one narrow Tauri command), not an anchor here — tracked in HANDOFF.
 const GOOGLE_KEY_URL_TEXT = "aistudio.google.com/apikey";
 
 // The connected-models union for the custom chain builder: every cloud model
@@ -725,21 +736,14 @@ function ProviderRow({
         </div>
       )}
 
-      {/* Google free-tier info line (contract D3/D5). A real, openable link —
-          never dead text — to where a free key is obtained; opens a visible
-          browser tab via the shell's external-link path. */}
+      {/* Google free-tier info line (contract D3/D5). The address is selectable
+          text, not a link — see GOOGLE_KEY_URL_TEXT above for why the webview
+          cannot open one, and why a dead anchor would be the dishonest option. */}
       {def.id === "google" && (
         <p className="mt-2 text-fine text-faint">
-          Google's API has a free tier — a free key works here. Get one at{" "}
-          <a
-            href={GOOGLE_KEY_URL}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="text-fern-deep underline"
-          >
-            {GOOGLE_KEY_URL_TEXT}
-          </a>
-          .
+          Google's API has a free tier — a free key works here. Open{" "}
+          <span className="select-all font-mono text-ink">{GOOGLE_KEY_URL_TEXT}</span> in your
+          browser to get one.
         </p>
       )}
     </div>

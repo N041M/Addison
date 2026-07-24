@@ -46,6 +46,11 @@ _TIMEOUT_SECONDS = 60.0
 # The validating GET's own budget + hop limits (list_models). Short: it runs on a
 # connect card the person is waiting on, so it gives up quickly.
 _LIST_TIMEOUT_SECONDS = 10.0
+# ...and a budget for the WHOLE pinned walk, because the per-socket timeout is not
+# one: the walk tries up to MAX_ADDRESS_ATTEMPTS addresses per hop across
+# _LIST_MAX_REDIRECTS + 1 hops, so 10s per socket is two minutes of waiting, and
+# the one idempotent retry made it four. Someone is watching a connect card.
+_LIST_TOTAL_SECONDS = 15.0
 _LIST_MAX_REDIRECTS = 3
 _LIST_MAX_URL_CHARS = 2048
 
@@ -56,6 +61,21 @@ _LIST_MAX_URL_CHARS = 2048
 # pin, so it must stay exact. The status-code messages (bad key, refused) live in
 # ``_list_on_final``, where the response is in hand.
 _COULD_NOT_REACH_SERVER = "Couldn't reach that server. Check the address and that it's running."
+
+
+class _RetryableReach(httpx.ConnectError):
+    """A transient pin failure, wearing the httpx type ``request_with_retry`` retries
+    on while still carrying its OWN plain sentence.
+
+    Without the sentence, every transient outcome collapsed to "check the address
+    and that it's running" — so a person whose server was merely SLOW was told to
+    check the one thing that was correct, and ``_LIST_SENTENCES.took_too_long`` was
+    unreachable copy. A sentence that can never be shown is a guard that defends
+    nothing."""
+
+    def __init__(self, sentence: str) -> None:
+        super().__init__(sentence)
+        self.sentence = sentence
 _LIST_SENTENCES = net_vetting.Sentences(
     no_url=_COULD_NOT_REACH_SERVER,
     not_a_web_link=_COULD_NOT_REACH_SERVER,
@@ -349,23 +369,34 @@ def list_models(
     address between vet and connect) and the redirect gap. ``resolve`` is injectable
     so tests can stub DNS (MockTransport intercepts below name resolution).
 
-    A GET has no side effects, so it keeps its one idempotent retry (a transient
-    connect blip or a 5xx) via ``request_with_retry`` — a retryable
-    ``VettingError`` from the pin is surfaced as the ``httpx`` error that helper
-    retries on, so the pin and the retry policy compose without either owning the
-    other. Returns the model ids; raises a plain-language ``RuntimeError`` on a bad
-    key, an unreachable host, or an unreadable body. The key is fetched ONCE here
-    and used only in the request header, never retained (§8.3)."""
+    A GET has no side effects, so it keeps its one idempotent retry via
+    ``request_with_retry``. What it does NOT keep is an unbounded thing to retry:
+    the pinned walk itself loops over up to ``MAX_ADDRESS_ATTEMPTS`` addresses per
+    hop across every redirect, so at 10s a socket it was already a two-minute wait
+    and the retry made it four. ``total_timeout`` bounds the whole walk, so the
+    retry now doubles a bounded number while a person watches a connect card.
+
+    Returns the model ids; raises a plain-language ``RuntimeError`` on a bad key, an
+    unreachable host, or an unreadable body. The key is fetched ONCE here and used
+    only in the request header, never retained (§8.3)."""
     key = _resolve_list_key(api_key_getter, require_key=require_key)
-    headers = {}
-    if key:
-        headers["authorization"] = f"Bearer {key}"
-    url = f"{(base_url or _DEFAULT_BASE_URL).rstrip('/')}/models"
+    # The key rides in ``credential_headers``, NOT ``base_headers``: the pin drops
+    # credential headers the moment a redirect leaves the origin they were aimed
+    # at. Putting it in ``base_headers`` handed the user's key to whatever host a
+    # hostile 302 named — that shipped, and this split is the fix.
+    credentials = {"authorization": f"Bearer {key}"} if key else {}
+    base = f"{(base_url or _DEFAULT_BASE_URL).rstrip('/')}"
+    url = f"{base}/models"
     injected = client
-    # trust_env=False for the same reason read_web_page uses it: a proxy would sit
-    # between the address that was vetted and the address that is contacted, and
-    # this destination is user/model-influenced.
-    http = injected if injected is not None else httpx.Client(trust_env=False)
+    # trust_env=False ONLY for a user-supplied address, for the same reason
+    # read_web_page uses it: a proxy would sit between the address that was vetted
+    # and the address that is contacted, and that destination is user/model-chosen.
+    # The stock OpenAI endpoint is a module CONSTANT, not user input, and it must
+    # keep honouring the user's proxy environment — connecting an OpenAI key behind
+    # a corporate proxy has to work, and ``send()`` honours it too. Disabling it
+    # there would have been a silent freeze break, not a hardening.
+    own_address = base != _DEFAULT_BASE_URL
+    http = injected if injected is not None else httpx.Client(trust_env=not own_address)
     resolver = resolve if resolve is not None else net_vetting.resolve_host
 
     def _attempt() -> httpx.Response:
@@ -376,28 +407,34 @@ def list_models(
                 resolve=resolver,
                 on_final=_list_read_response,
                 sentences=_LIST_SENTENCES,
-                base_headers=headers,
+                base_headers={},
+                credential_headers=credentials,
                 allow_private=True,           # the user's own LAN model host is legitimate
                 require_default_port=False,   # ...on whatever port it runs (:11434, :1234)
                 max_url_chars=_LIST_MAX_URL_CHARS,
                 max_redirects=_LIST_MAX_REDIRECTS,
                 timeout=_LIST_TIMEOUT_SECONDS,
+                total_timeout=_LIST_TOTAL_SECONDS,
             )
         except net_vetting.VettingError as exc:
             if exc.retryable:
                 # A transient network failure — re-raise as the httpx error
-                # request_with_retry gives its one idempotent retry to. The final
-                # attempt's ConnectError is caught below and turned into the plain
-                # "couldn't reach" sentence, byte-identical to the no-retry message.
-                raise httpx.ConnectError(str(exc)) from None
+                # request_with_retry gives its one idempotent retry to. Safe to
+                # retry ONLY because ``total_timeout`` bounds a whole walk: without
+                # it the walk itself was already MAX_ADDRESS_ATTEMPTS x hops
+                # sockets, and the retry made that a two-minute wait into a
+                # four-minute one, on a card the person is watching.
+                raise _RetryableReach(str(exc)) from None
             # A settled refusal (blocked address, redirect loop, malformed URL) —
             # no retry could help, so surface the plain sentence at once.
             raise RuntimeError(str(exc)) from None
 
     try:
         response = request_with_retry(_attempt, idempotent=True)
-    except httpx.HTTPError:
-        raise RuntimeError(_COULD_NOT_REACH_SERVER) from None
+    except httpx.HTTPError as exc:
+        # The pin's own sentence when it had one (a slow server is told it was
+        # slow); the generic reach failure otherwise.
+        raise RuntimeError(getattr(exc, "sentence", _COULD_NOT_REACH_SERVER)) from None
     finally:
         if injected is None:
             http.close()

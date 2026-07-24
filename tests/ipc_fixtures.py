@@ -303,8 +303,29 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "profile.get": server._profile_get(),
         "model.availableRoles": server._available_roles(),
         "snapshot.list": server._snapshot_list(),
+        # Step-4/5 payloads. These are here because their absence had a cost: the
+        # frontend read `workspace.list` as `{roots}` while the core sent
+        # `{folders}`, the trusted-folder list rendered empty in the shipped app,
+        # and both suites stayed green because each asserted its own idea of the
+        # shape. A fixture generated from the real handler is the only artifact
+        # both sides share, so add one for every new payload a parser consumes.
+        "workspace.list": _workspace_list_fixture(server),
+        "costPlan.propose": server._cost_plan_propose(),
+        "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
     }
+
+
+def _workspace_list_fixture(server: JsonRpcServer) -> dict:
+    """A workspace.list payload with a row in it — an empty list would parse the
+    same whichever key the frontend read, which is exactly how the `roots`/`folders`
+    mismatch survived. The root is a fixed literal (never a real directory) so the
+    fixture is byte-stable and names nobody's home folder."""
+    server.store.insert_workspace_trust(root="/fixture/project", granted_at=_T0)
+    try:
+        return server._workspace_list()
+    finally:
+        server.store.delete_workspace_trust("/fixture/project")
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:

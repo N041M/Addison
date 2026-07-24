@@ -35,13 +35,24 @@ _MAX_ENDPOINT_UTTERANCE_CHARS = 200
 # First http(s) run of non-space, non-delimiter characters. Trailing sentence
 # punctuation is stripped after the match ("...:11434." -> "...:11434").
 _ENDPOINT_URL_RE = re.compile(r"https?://[^\s<>\"'`\]})]+", re.IGNORECASE)
-# An "add-endpoint-shaped" utterance mentions adding/connecting a server. Broad on
-# purpose (the confirm card + key paste are the real gate), but present so a short
-# sentence that merely happens to contain a URL does not arm a connect card.
+# An "add-endpoint-shaped" utterance mentions adding or connecting a server.
+#
+# MATCHED ON WORD BOUNDARIES, and that is not a style choice. The first version
+# tested `hint in text.lower()`, so every hint matched inside longer words: "add"
+# matched **Addison** — the app's own name — and "address"; "api" matched
+# "therapist" and "rapid"; "point" matched "appointment". "Addison, what is
+# https://…?" armed a connect card, which reduced the contract's stated
+# conservatism to "any message under 200 characters containing a URL". Two hints
+# were dropped outright ("api", "point"): they carry no add-a-server signal even
+# as whole words, and every hint here is a way IN, so a weak one is pure cost.
 _ADD_ENDPOINT_HINTS = (
     "add", "connect", "server", "endpoint", "hook up", "set up", "setup",
-    "use my", "use the", "my own", "point", "ollama", "lm studio", "llama",
-    "local model", "base url", "api",
+    "use my", "use the", "my own", "ollama", "lm studio", "llama",
+    "local model", "base url",
+)
+_ADD_ENDPOINT_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(h) for h in _ADD_ENDPOINT_HINTS) + r")\b",
+    re.IGNORECASE,
 )
 
 
@@ -56,12 +67,21 @@ def _extract_endpoint_url(text: object) -> str | None:
     stripped = text.strip()
     if not stripped or len(stripped) > _MAX_ENDPOINT_UTTERANCE_CHARS:
         return None
-    if not any(hint in stripped.lower() for hint in _ADD_ENDPOINT_HINTS):
+    if _ADD_ENDPOINT_RE.search(stripped) is None:
         return None
     match = _ENDPOINT_URL_RE.search(stripped)
     if match is None:
         return None
-    return match.group(0).rstrip(".,;:!?”’\"'") or None
+    found = match.group(0).rstrip(".,;:!?”’\"'")
+    if not found:
+        return None
+    # The URL regex is case-insensitive, so a phone's autocapitalisation gives
+    # "Http://…"; ``_base_url_problem`` compares the scheme case-SENSITIVELY and
+    # would refuse it with "Enter a web address that starts with http:// or
+    # https://" — a sentence that is false about the address the person just typed.
+    # Normalise the scheme (only the scheme — the host and path are the server's).
+    scheme, sep, rest = found.partition("://")
+    return f"{scheme.lower()}{sep}{rest}" if sep else found
 
 # Plain, and it names the way out: the key box already exists and the key it
 # takes goes straight to the keychain, which is the whole point of refusing here.

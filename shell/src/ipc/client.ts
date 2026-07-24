@@ -1164,7 +1164,16 @@ function parseCostPlanApply(result: unknown): CostPlanApplyResult {
 
 export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
   const obj = asRecord(result);
-  const list = obj && Array.isArray(obj.roots) ? (obj.roots as unknown[]) : [];
+  // `folders` — the key the core actually sends (rpc/workspace._workspace_list,
+  // documented on Method.WORKSPACE_LIST). This read said `roots` until an
+  // adversarial pass caught it: the list rendered permanently empty, so the
+  // "Stop trusting" button never appeared and standing consent that suppresses
+  // permission cards could not be revoked from the UI. Both sides' tests were
+  // green — the Python one asserted `folders`, the vitest one parsed a hand-built
+  // `{roots: […]}` literal, and neither could see the other. The fixture below
+  // (shell/src/__tests__/fixtures/workspace.list.json, generated from this very
+  // handler) is what makes that class of mismatch impossible now.
+  const list = obj && Array.isArray(obj.folders) ? (obj.folders as unknown[]) : [];
   const out: WorkspaceRoot[] = [];
   for (const item of list) {
     const row = asRecord(item);

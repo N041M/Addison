@@ -60,11 +60,17 @@ const DIR = "/Users/me/project";
 // ---------------------------------------------------------------------------
 // (a) the fail-closed parsers
 // ---------------------------------------------------------------------------
+// These built `{roots: […]}` by hand while the core has always sent `{folders}` —
+// so the parser was tested against its own wrong assumption, agreed with itself,
+// and passed while the trusted-folder list was permanently empty in the shipped
+// app. The authoritative shape now lives in a generated fixture
+// (parsers.fixtures.test.ts, from tests/ipc_fixtures.py); these keep the
+// junk/fallback paths and use the real key.
 describe("parseWorkspaceRoots", () => {
   it("round-trips a realistic workspace.list payload", () => {
     expect(
       parseWorkspaceRoots({
-        roots: [
+        folders: [
           { directory: "/a/one", grantedAt: 1700000000 },
           { directory: "/b/two" },
         ],
@@ -77,7 +83,7 @@ describe("parseWorkspaceRoots", () => {
 
   it("drops a row without a usable directory string", () => {
     const parsed = parseWorkspaceRoots({
-      roots: [
+      folders: [
         { directory: "/keep/me" },
         { directory: "" }, // empty → dropped
         { grantedAt: 123 }, // no directory → dropped
@@ -86,6 +92,15 @@ describe("parseWorkspaceRoots", () => {
       ],
     });
     expect(parsed).toEqual([{ directory: "/keep/me", grantedAt: undefined }]);
+  });
+
+  it("reads `folders`, the key the core sends — and nothing else", () => {
+    // The regression, stated as a property: a payload under any other key is not
+    // a workspace list. Revert client.ts to `obj.roots` and this goes red.
+    expect(parseWorkspaceRoots({ roots: [{ directory: "/a/one" }] })).toEqual([]);
+    expect(parseWorkspaceRoots({ folders: [{ directory: "/a/one" }] })).toEqual([
+      { directory: "/a/one", grantedAt: undefined },
+    ]);
   });
 
   it("degrades on junk instead of throwing", () => {
