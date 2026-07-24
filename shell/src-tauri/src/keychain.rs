@@ -244,6 +244,28 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
     }
 }
 
+/// Build the `keychain.getDeviceKey` result — the PUBLIC device id and public key,
+/// nothing else. Split out of `handle()` (the app_build.rs call-the-real-builder
+/// pattern) so a test can assert over the EXACT value the core receives: a test that
+/// rebuilt this `json!` by hand would stay green while the real response grew a field
+/// that leaked the private seed.
+fn device_key_response(identity: &DeviceIdentity) -> Value {
+    json!({
+        "deviceId": identity.device_id,
+        "publicKey": identity.public_key_b64(),
+    })
+}
+
+/// Build the `keychain.signRelayRequest` result from an already-computed signature.
+/// Split out for the same reason as `device_key_response`: the shape the core sees is
+/// pinned over the real builder, so adding key material here turns the leak test red.
+fn sign_relay_response(identity: &DeviceIdentity, signature: &str) -> Value {
+    json!({
+        "signature": signature,
+        "deviceId": identity.device_id,
+    })
+}
+
 /// Handle a `keychain.*` request the core sent over stdout. Returns the JSON-RPC
 /// `result` value on success, or an `RpcError` the core relays as plain language.
 /// The returned key value is written straight back to the core's stdin by the
@@ -269,10 +291,7 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
         // leaves the keychain.
         "keychain.getDeviceKey" => {
             let identity = ensure_device_keypair()?;
-            Ok(json!({
-                "deviceId": identity.device_id,
-                "publicKey": identity.public_key_b64(),
-            }))
+            Ok(device_key_response(&identity))
         }
         // {payload} -> {signature, deviceId}. Signs the canonical JSON of `payload`
         // with the device private key (which stays in the keychain) and hands back
@@ -282,10 +301,8 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
                 .get("payload")
                 .ok_or_else(|| RpcError::invalid_params("A payload to sign is required."))?;
             let identity = ensure_device_keypair()?;
-            Ok(json!({
-                "signature": identity.sign_payload(payload)?,
-                "deviceId": identity.device_id,
-            }))
+            let signature = identity.sign_payload(payload)?;
+            Ok(sign_relay_response(&identity, &signature))
         }
         other => Err(RpcError::method_not_found(other)),
     }
@@ -467,13 +484,11 @@ mod tests {
 
     #[test]
     fn get_device_key_response_shape() {
-        // Shape assembled from a generated identity, mirroring the handle() arm
-        // without touching the OS keychain.
+        // Assert over the REAL builder handle() returns (app_build.rs pattern), not a
+        // json! rebuilt in the test body — otherwise this stays green while the real
+        // response grows a field.
         let identity = DeviceIdentity::generate();
-        let response = json!({
-            "deviceId": identity.device_id,
-            "publicKey": identity.public_key_b64(),
-        });
+        let response = device_key_response(&identity);
         assert!(response.get("deviceId").and_then(Value::as_str).is_some());
         let pk = response.get("publicKey").and_then(Value::as_str).unwrap();
         assert_eq!(
@@ -485,12 +500,11 @@ mod tests {
 
     #[test]
     fn sign_relay_request_response_shape() {
+        // Same as above: exercise the real builder, not a hand-rolled twin.
         let identity = DeviceIdentity::generate();
         let payload = json!({ "path": "/v1/setup", "body": { "hi": 1 } });
-        let response = json!({
-            "signature": identity.sign_payload(&payload).unwrap(),
-            "deviceId": identity.device_id,
-        });
+        let signature = identity.sign_payload(&payload).unwrap();
+        let response = sign_relay_response(&identity, &signature);
         let sig = response.get("signature").and_then(Value::as_str).unwrap();
         assert_eq!(
             base64::engine::general_purpose::STANDARD.decode(sig).unwrap().len(),
@@ -500,5 +514,32 @@ mod tests {
             response.get("deviceId").and_then(Value::as_str).unwrap(),
             identity.device_id
         );
+    }
+
+    #[test]
+    fn no_keychain_response_ever_contains_the_private_seed() {
+        // G1's most sensitive edge: the ed25519 private seed lives ONLY in the OS
+        // keychain and must never reach the core. Build EVERY keychain response over
+        // the real builders, serialize each, and prove the seed's base64 appears in
+        // none of them. Adding the seed under ANY key name (as mutation K1 does to a
+        // real handle arm) turns this red.
+        let identity = DeviceIdentity::generate();
+        let seed_b64 =
+            base64::engine::general_purpose::STANDARD.encode(identity.signing_key.to_bytes());
+
+        let payload = json!({ "path": "/v1/setup", "body": { "hi": 1 } });
+        let signature = identity.sign_payload(&payload).unwrap();
+
+        let responses = [
+            device_key_response(&identity),
+            sign_relay_response(&identity, &signature),
+        ];
+        for response in &responses {
+            let serialized = serde_json::to_string(response).unwrap();
+            assert!(
+                !serialized.contains(&seed_b64),
+                "a keychain response leaked the private seed: {serialized}"
+            );
+        }
     }
 }

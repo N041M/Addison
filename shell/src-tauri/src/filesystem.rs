@@ -83,8 +83,13 @@ async fn save_new_file(app: &AppHandle, params: &Value) -> Result<Value, RpcErro
 // shell.deleteFile {path} -> {}   (save_file's undo path)
 fn delete_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    delete_created_path(app.state::<FileState>().inner(), path)
+}
 
-    let state = app.state::<FileState>();
+// The session-scope core of delete, factored out of the Tauri wrapper so the guard
+// is testable without a live app (mirrors app_build.rs splitting shape out of the
+// handler). Behaviour is unchanged: the wrapper only fetches the managed state.
+fn delete_created_path(state: &FileState, path: PathBuf) -> Result<Value, RpcError> {
     {
         let created = lock(&state.created);
         if !created.contains(&path) {
@@ -106,8 +111,12 @@ fn delete_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
 fn restore_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
     let content = required_str(params, "content", "There's nothing to put back.")?.to_string();
+    restore_deleted_path(app.state::<FileState>().inner(), path, &content)
+}
 
-    let state = app.state::<FileState>();
+// The session-scope core of restore, factored out of the Tauri wrapper so the guard
+// is testable without a live app. Behaviour is unchanged from the inline version.
+fn restore_deleted_path(state: &FileState, path: PathBuf, content: &str) -> Result<Value, RpcError> {
     {
         let deleted = lock(&state.deleted);
         if !deleted.contains(&path) {
@@ -118,7 +127,7 @@ fn restore_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     // overwrite — same §7.4.1 rule as saving.
     create_new_and_write(
         &path,
-        &content,
+        content,
         "A file with that name is already there — nothing was changed.",
         "Addison couldn't put that file back.",
     )?;
@@ -142,9 +151,13 @@ async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
 // shell.readScopedFile {fileHandle} -> {content, kind}
 fn read_scoped_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
     let handle = required_str(params, "fileHandle", "A file handle is required.")?;
+    read_scoped_handle(app.state::<FileState>().inner(), handle)
+}
 
+// The handle-scope core of readScopedFile, factored out of the Tauri wrapper so the
+// guard is testable without a live app. Behaviour is unchanged from the inline version.
+fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError> {
     // Resolve ONLY a handle we minted; a raw/unknown handle reads nothing.
-    let state = app.state::<FileState>();
     let path = lock(&state.handles)
         .get(handle)
         .cloned()
@@ -308,5 +321,105 @@ mod tests {
         assert!(!is_image_path(Path::new("/tmp/notes.txt")));
         assert!(!is_image_path(Path::new("/tmp/data.json")));
         assert!(!is_image_path(Path::new("/tmp/noext")));
+    }
+
+    // --- Session-scope guards on the core's file-effect surface. These drive the
+    // real guard logic against a plain FileState (no Tauri app), so inverting a
+    // guard turns the matching test red.
+
+    #[test]
+    fn delete_refuses_a_path_it_did_not_create() {
+        // The core supplies deleteFile's path directly; the ONLY thing standing between
+        // it and an arbitrary file is the `created` allowlist. Prove that a real file
+        // NOT in the set is refused AND left on disk — inverting `!created.contains`
+        // would delete it here.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "not addison's to delete").expect("seed file");
+
+        let err = delete_created_path(&state, path.clone()).unwrap_err();
+        assert_eq!(err.message, "Addison can only remove a file it just created.");
+        assert!(path.exists(), "an unlisted path must never be removed");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn delete_removes_a_created_file_and_marks_it_restorable() {
+        // The happy path: a session-created file IS removed, and its path graduates
+        // created -> deleted so restore can re-create it exactly once. Pins the guard
+        // isn't simply always-refuse, and pins the `deleted.insert` bookkeeping.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "made this session").expect("seed file");
+        lock(&state.created).insert(path.clone());
+
+        delete_created_path(&state, path.clone()).unwrap();
+        assert!(!path.exists(), "a created file should be removed");
+        assert!(!lock(&state.created).contains(&path));
+        assert!(lock(&state.deleted).contains(&path), "path must become restorable");
+    }
+
+    #[test]
+    fn restore_refuses_a_path_it_did_not_remove() {
+        // Restore's mirror guard: it may only re-create a path THIS session removed
+        // (in `deleted`). A path that was never deleted must be refused and no file
+        // written — inverting `!deleted.contains` would write an arbitrary path.
+        let state = FileState::default();
+        let path = temp_path();
+
+        let err = restore_deleted_path(&state, path.clone(), "smuggled content").unwrap_err();
+        assert_eq!(err.message, "Addison can only put back a file it just removed.");
+        assert!(!path.exists(), "restore must not write a path it never removed");
+    }
+
+    #[test]
+    fn restore_recreates_a_removed_file_and_clears_it_from_deleted() {
+        // The happy path: a path in `deleted` is re-created with its content and moves
+        // deleted -> created (so redo is one-shot). Pins the guard isn't always-refuse.
+        let state = FileState::default();
+        let path = temp_path();
+        lock(&state.deleted).insert(path.clone());
+
+        restore_deleted_path(&state, path.clone(), "put back").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "put back");
+        assert!(!lock(&state.deleted).contains(&path));
+        assert!(lock(&state.created).contains(&path));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_scoped_refuses_an_unminted_handle() {
+        // The core only ever holds an opaque handle; the path stays in the shell. Prove
+        // an unknown handle reads nothing — even when the handle string is itself a
+        // real, readable path. Treating the handle as a path (or dropping the map
+        // lookup) would leak that file's bytes to the core.
+        let state = FileState::default();
+        let secret = temp_path();
+        std::fs::write(&secret, "should stay unreadable").expect("seed file");
+
+        let err = read_scoped_handle(&state, &secret.to_string_lossy()).unwrap_err();
+        assert_eq!(err.message, "Addison can't read that file — please pick it again.");
+
+        let _ = std::fs::remove_file(&secret);
+    }
+
+    #[test]
+    fn read_scoped_reads_a_file_behind_a_minted_handle() {
+        // The happy path: a handle the shell minted resolves to its picked file and
+        // returns the content as text. Pins that resolution works, so the refuse test
+        // above can't pass under an always-error mutation.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "picked by the user").expect("seed file");
+        let handle = uuid::Uuid::new_v4().to_string();
+        lock(&state.handles).insert(handle.clone(), path.clone());
+
+        let result = read_scoped_handle(&state, &handle).unwrap();
+        assert_eq!(result.get("kind").and_then(Value::as_str), Some("text"));
+        assert_eq!(result.get("content").and_then(Value::as_str), Some("picked by the user"));
+
+        let _ = std::fs::remove_file(&path);
     }
 }
