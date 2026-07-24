@@ -22,9 +22,13 @@ import httpx
 from agent_core.providers.base import (
     Message,
     ModelResponse,
+    ProviderAuthFailed,
     ProviderCapabilities,
+    ProviderUnavailable,
     ToolCallRequest,
     Usage,
+    effective_timeout,
+    exception_for_http_status,
     request_with_retry,
 )
 
@@ -77,7 +81,11 @@ class AnthropicProvider:
         )
 
     def send(
-        self, messages: list[Message], tools: list, effort: str | None = None
+        self,
+        messages: list[Message],
+        tools: list,
+        effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse:
         # Fetch the key fresh for THIS request; keep it in a local only (§5, §8.3).
         api_key = self._resolve_key()
@@ -111,40 +119,50 @@ class AnthropicProvider:
             "content-type": "application/json",
         }
 
-        response = self._post(headers, body)
+        response = self._post(headers, body, timeout)
 
         if response.status_code >= 400:
-            # Never echo the response body or the key — just a plain next step.
-            raise RuntimeError(_http_error_message(response.status_code))
+            # Never echo the response body or the key — just a plain next step. The
+            # message is byte-identical to before; only the exception TYPE is new,
+            # so the loop can tell "busy, try another" from "bad request" (D4).
+            raise exception_for_http_status(
+                response.status_code, _http_error_message(response.status_code)
+            )
 
         return _translate_response(response.json())
 
     def _resolve_key(self) -> str:
         getter = self._api_key_getter
         if getter is None:
-            raise RuntimeError(_NO_KEY_MESSAGE)
+            raise ProviderAuthFailed(_NO_KEY_MESSAGE)
         api_key = getter()
         if api_key:
             api_key = api_key.strip()
         if not api_key:
-            raise RuntimeError(_NO_KEY_MESSAGE)
+            raise ProviderAuthFailed(_NO_KEY_MESSAGE)
         if not api_key.isascii() or not api_key.isprintable():
-            raise RuntimeError(_MALFORMED_KEY_MESSAGE)
+            raise ProviderAuthFailed(_MALFORMED_KEY_MESSAGE)
         return api_key
 
-    def _post(self, headers: dict, body: dict) -> httpx.Response:
+    def _post(self, headers: dict, body: dict, timeout: float | None = None) -> httpx.Response:
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
         injected = self._client
-        client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
         try:
-            # POST: retry only when the request never reached the server (§8.3).
+            # POST: retry only when the request never reached the server (§8.3). The
+            # per-call ``deadline`` is applied to the request itself so it holds even
+            # for an injected client (tests / the fallback budget, [MF-A]).
             return request_with_retry(
-                lambda: client.post(_API_URL, headers=headers, json=body),
+                lambda: client.post(_API_URL, headers=headers, json=body, timeout=deadline),
                 idempotent=False,
+                # [MF-A] a caller-supplied deadline means the attempt loop is
+                # driving; its chain is the retry — never double the budget here.
+                allow_retry=timeout is None,
             )
         except httpx.HTTPError:
             # Network/timeout failure. Raise a clean message with no chained
             # exception so nothing about the request (headers included) leaks.
-            raise RuntimeError(
+            raise ProviderUnavailable(
                 "Couldn't reach the Anthropic service. "
                 "Check your internet connection and try again."
             ) from None

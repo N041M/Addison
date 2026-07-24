@@ -6,7 +6,7 @@
 import { useRef, useState } from "react";
 import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/protocol";
 import type { DisplayMessage } from "../types/ui";
-import { ipc, type RawError } from "../ipc/client";
+import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
 
 export const WELCOME: DisplayMessage = {
@@ -97,10 +97,19 @@ export function useTurn({
       const userStoreId = typeof ids?.userMessageId === "string" ? ids.userMessageId : undefined;
       const assistantStoreId =
         typeof ids?.assistantMessageId === "string" ? ids.assistantMessageId : undefined;
+      // Which model actually answered (Phase-2 step 3). Fails closed to undefined,
+      // so a malformed block simply shows no free-model chip.
+      const answeredWith = parseAnsweredWith(res);
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id === assistantId) {
-            return { ...m, pending: false, content: finalText ?? m.content, storeId: assistantStoreId };
+            return {
+              ...m,
+              pending: false,
+              content: finalText ?? m.content,
+              storeId: assistantStoreId,
+              answeredWith,
+            };
           }
           if (m.id === userId) {
             return { ...m, storeId: userStoreId };

@@ -352,7 +352,7 @@ class _ScriptedProvider:
             supports_streaming=False, runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         return ModelResponse(text="ok", tool_calls=[])
 
 

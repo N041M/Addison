@@ -428,9 +428,20 @@ FIRST via `guards.set`, with fingerprint dedupe, and refuses the change if the
 anchor cannot mint; a destructive "Ask once" approval lives in a dedicated
 session set the SAFE path structurally never reads, and every profile switch
 revokes all grants; guards are EFFECTIVE only under Custom — Simple/Developer
-stay byte-for-byte), (3) **routing strategies** (4 + custom) +
-companion prefer-quality/prefer-free toggle + free-model disclaimer + graceful
-fallback/cooldown, (4) **free-model endpoints** (legit free/local + add-by-prompt),
+stay byte-for-byte), (3) **DONE (2026-07-24) — routing strategies**
+(quality-first default / cost-first / local-only / Developer custom chain —
+**Balanced cut from v1 by owner decision**, see amendment §10.1; the companion
+sees one prefer-quality/prefer-free toggle; a structured provider exception
+hierarchy in `providers/base.py` distinguishes unavailable from rejected/auth
+so fallback never amplifies a bad request; fallback is per-send continuation
+with cross-provider mid-turn advance forbidden in v1, a per-provider cooldown
+and a real per-attempt deadline, all module constants; the FREEZE is the chain
+head = the user's standing default, never overridden by rank; `local_only`
+outranks even the explicit picker and is resolved BEFORE the Setup-Assistant
+relay branch — no model call leaves the machine; `answeredWith` + the
+"Answered with a free model." chip when `free && routed`; usage rows now carry
+the RESOLVED per-attempt identity, fixing a pre-existing mis-attribution),
+(4) **free-model endpoints** (legit free/local + add-by-prompt),
 (5) **harness + workspace-trust** (OPEN), (6) **widget capability tiers + expanded
 safe vocabulary** (to-do/checklist, note, timer), (7) **MCP client** tools via the
 registry + gate, (8) the **automation keyword gate** + author-OS-run automation.

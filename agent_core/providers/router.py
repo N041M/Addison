@@ -21,7 +21,136 @@ No hidden auto-routing in v1.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from agent_core.providers.base import ModelProvider, ModelRole
+
+# --- routing strategies (step 3, contract D1/D3) ----------------------------
+# The closed vocabulary. Balanced is CUT from v1 (owner decision 2026-07-24,
+# [MF4]): it was provably identical to cost_first at 2-model pools. ``custom`` is
+# the Developer/Custom ordered chain.
+QUALITY_FIRST = "quality_first"
+COST_FIRST = "cost_first"
+LOCAL_ONLY = "local_only"
+CUSTOM = "custom"
+ROUTING_STRATEGIES: tuple[str, ...] = (QUALITY_FIRST, COST_FIRST, LOCAL_ONLY, CUSTOM)
+DEFAULT_ROUTING_STRATEGY = QUALITY_FIRST
+
+
+@dataclass(frozen=True)
+class RoutingCandidate:
+    """One model the attempt loop (D4) may try, spanning BOTH pools (D2 [MF1]).
+
+    ``role`` + ``model_id`` are what ``ModelRouter.resolve`` maps back to a live
+    provider instance, so the chain never holds providers — only the recipe to
+    resolve them. ``provider_id`` is the cooldown / mid-turn-advance key: [MF-E]
+    ALL Ollama locals share ``provider_id="ollama"`` (they share one translator),
+    so same-provider mid-turn advance among locals is permitted while cross-vendor
+    advance is not. ``quality_rank`` (lower == stronger; ``None`` == unknown),
+    ``free`` and ``local`` drive ordering and the free-model disclaimer."""
+
+    model_id: str
+    role: ModelRole
+    provider_id: str
+    quality_rank: int | None
+    free: bool
+    local: bool
+
+
+def _quality_order(candidates: list[RoutingCandidate]) -> list[RoutingCandidate]:
+    """Non-locals first — unknown-rank (None) ahead of every ranked model, then
+    ranked ascending (strongest first) — with locals last. ``sorted`` is stable, so
+    unknown-rank ties and locals keep their given (insertion) order. This is the D2
+    unknown-rank rule: a just-released model (rank None) is never demoted below a
+    known-weak one."""
+    return sorted(
+        candidates,
+        key=lambda c: (
+            c.local,
+            0 if c.quality_rank is None else 1,
+            c.quality_rank if c.quality_rank is not None else 0,
+        ),
+    )
+
+
+def _pop_head(
+    candidates: list[RoutingCandidate], head_model_id: str | None
+) -> tuple[RoutingCandidate | None, list[RoutingCandidate]]:
+    """Split off the candidate whose model_id is ``head_model_id`` (today's
+    resolution / an explicit pick) so it can be forced to the chain head. A head
+    that is None or has since vanished yields ``(None, all)`` — the graceful path,
+    never an error mid-conversation."""
+    if head_model_id is not None:
+        for i, c in enumerate(candidates):
+            if c.model_id == head_model_id:
+                return c, candidates[:i] + candidates[i + 1 :]
+    return None, list(candidates)
+
+
+def _quality_first(
+    candidates: list[RoutingCandidate], head_model_id: str | None
+) -> list[RoutingCandidate]:
+    head, rest = _pop_head(candidates, head_model_id)
+    ordered = _quality_order(rest)
+    return ([head] if head is not None else []) + ordered
+
+
+def _cost_first(
+    candidates: list[RoutingCandidate], head_model_id: str | None
+) -> list[RoutingCandidate]:
+    # Free+local first; then the PAID segment headed by today's resolution and
+    # escalating up (strongest-first) on failure only ([MF-B]: the cross-provider
+    # forbid caps escalation once a tool round has run). Free stays in insertion
+    # order — there are no free cloud models in v1, so this is the local pool.
+    free = [c for c in candidates if c.free]
+    paid = [c for c in candidates if not c.free]
+    head, paid_rest = _pop_head(paid, head_model_id)
+    return list(free) + ([head] if head is not None else []) + _quality_order(paid_rest)
+
+
+def _custom_chain(
+    candidates: list[RoutingCandidate], custom_order: list[str] | None, head_model_id: str | None
+) -> list[RoutingCandidate]:
+    # The stored ordered list; ids that have since vanished are skipped (the caller
+    # emits one activity note). An empty/all-vanished list falls back to
+    # quality_first order (D3).
+    if custom_order:
+        by_id = {c.model_id: c for c in candidates}
+        chain = [by_id[mid] for mid in custom_order if mid in by_id]
+        if chain:
+            return chain
+    return _quality_first(candidates, head_model_id)
+
+
+def resolve_chain(
+    strategy: str,
+    candidates: list[RoutingCandidate],
+    head_model_id: str | None = None,
+    *,
+    custom_order: list[str] | None = None,
+) -> list[RoutingCandidate]:
+    """The ordered fallback chain for ``strategy`` — a PURE function (store-free,
+    no cooldown state; the orchestrator applies cooldown over this result). The
+    head of every cloud-containing chain is ``head_model_id`` (today's resolution /
+    the explicit pick), so the happy-path HEAD is byte-identical to today whenever
+    it is healthy (the freeze, [B1][MF-D]). Strategy governs the TAIL.
+
+    [MF-D] ONE resolution path: an unknown/absent strategy resolves exactly like an
+    explicit ``quality_first`` — there is no separate no-key branch.
+    ``local_only`` is a HARD filter to the local pool here as defence in depth; the
+    privacy invariant is ALSO enforced upstream in rpc/conversation.py (D6)."""
+    candidates = list(candidates)
+    if strategy == LOCAL_ONLY:
+        # Local pool only, but the head (an explicit local pick / the selected local)
+        # still leads so a picked model is tried first; the rest keep their order.
+        locals_only = [c for c in candidates if c.local]
+        head, rest = _pop_head(locals_only, head_model_id)
+        return ([head] if head is not None else []) + rest
+    if strategy == CUSTOM:
+        return _custom_chain(candidates, custom_order, head_model_id)
+    if strategy == COST_FIRST:
+        return _cost_first(candidates, head_model_id)
+    return _quality_first(candidates, head_model_id)
 
 
 class ModelRouter:
@@ -117,6 +246,15 @@ class ModelRouter:
         """The nameable cloud models — the ids the picker sends back as ``modelId``
         when the PRIMARY role is selected (§4.1.1)."""
         return list(self._primary_models)
+
+    def selected_primary_model(self) -> str | None:
+        """The cloud model today's resolution lands on — the HEAD of every
+        cloud-containing routing chain (D3 freeze). ``None`` when the pool is empty."""
+        return self._selected_primary
+
+    def selected_local_model(self) -> str | None:
+        """The local model an unqualified LOCAL turn resolves to (item B)."""
+        return self._selected_local
 
     def select_local_model(self, model_name: str) -> None:
         """Set the local model the per-message Local picker resolves to."""

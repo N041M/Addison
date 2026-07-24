@@ -1031,7 +1031,7 @@ class _AlwaysReadsAnotherPage:
     def capabilities(self):  # pragma: no cover - never reached, no image results
         raise AssertionError("not needed")
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.calls += 1
         if self.calls > 200:
             raise AssertionError("the tool loop never stopped on its own")
@@ -1086,7 +1086,7 @@ class _ReadsHundredsAtOnce:
     def capabilities(self):  # pragma: no cover - never reached, no image results
         raise AssertionError("not needed")
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.calls += 1
         if self.calls > 50:
             raise AssertionError("the tool loop never stopped on its own")

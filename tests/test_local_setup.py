@@ -103,7 +103,7 @@ class _RecordingProvider:
             runs_off_device=(self.tag != "cloud"),
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.histories.append(list(messages))
         return self._response
 
@@ -396,7 +396,7 @@ class _ImageThenTextProvider:
             vision=self._vision,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         return self._responses.pop(0)
 
 

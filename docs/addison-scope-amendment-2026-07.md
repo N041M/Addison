@@ -460,6 +460,11 @@ Curated from OmniRoute's 18, four that mean something to a person:
 - **Cost-first** — cheapest capable model, escalate only when needed.
 - **Local-only** — never leaves the machine (privacy); uses local models only.
 - **Balanced** — a middle policy weighing capability, cost, and latency.
+  **(Owner decision 2026-07-24, Phase-2 step 3: CUT from v1.** The drafted
+  version was provably identical to cost-first at two-model pools and ignored
+  latency — a control that behaves identically to another is a lie in a picker.
+  Balanced returns when a real latency-aware algorithm exists; the latency
+  substrate (`usage_log`) already ships and its attribution was fixed in step 3.)
 
 Plus a **Custom** routing builder — Developer only.
 
@@ -577,7 +582,11 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
    restore target to exist at all times, including during onboarding, and refusing the
    mark would leave both G3 and G4 unsatisfiable in that window.)*
 5. **Auto-routing depth now vs. v2** — how much of confidence-based escalation
-   ships now vs. stays substrate.
+   ships now vs. stays substrate. **(HALF-RESOLVED, Phase-2 step 3, 2026-07-24:
+   the AVAILABILITY half shipped — escalate/degrade on unavailable, rate-limit
+   or network failure, with per-provider cooldown, a per-turn deadline, and the
+   plain "[X] was busy, so Addison used [Y]" note. The CONFIDENCE half — quality
+   -based escalation — remains v2 substrate, untouched.)**
 6. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
    curated allowlist? dev-only?), and how MCP tool metadata declares undo-ability.
 7. **Widget capability tiers & vocabulary** — the exact safe interactive kinds

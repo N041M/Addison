@@ -12,6 +12,14 @@ export interface DisplayMessage extends ChatMessage {
   /** The turn ended in a plain-language error rather than a normal answer. */
   failed?: boolean;
   /**
+   * Which model actually answered this turn (Phase-2 step 3). Rides on the
+   * sendMessage reply. The free-model disclaimer chip renders ONLY when
+   * `answeredWith.free && answeredWith.routed` — both booleans are computed by
+   * the core (routed = the answering model wasn't the user's explicit pick); the
+   * frontend just reads them, never re-derives (contract D5 [S-b]).
+   */
+  answeredWith?: AnsweredWith;
+  /**
    * Developer-only raw error text for a failed turn (the core's `error.data.raw`).
    * Held regardless of profile; only ever rendered when the raw-diagnostics flag
    * is on (Simple never shows it — the plain `content` is unchanged for both).
@@ -321,6 +329,50 @@ export interface GuardsState {
     autoGrantScope: AutoGrantScopeGuard;
   };
   active: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Routing — how Addison picks which model answers (routing.get / routing.set;
+// Phase-2 step 3). The strategy is a CLOSED vocabulary; anything off-vocabulary
+// is coerced to `quality_first` (the safe default — the strongest model answers)
+// rather than trusted, so a garbled wire value never becomes a live strategy the
+// picker then misreads. NO "balanced" (owner decision 2026-07-24 — it was
+// provably identical to cost_first at small pools).
+// ---------------------------------------------------------------------------
+
+/** The four named routing strategies. `quality_first` is the default. */
+export type RoutingStrategy = "quality_first" | "cost_first" | "local_only" | "custom";
+
+/**
+ * Which routing surface the person sees. `toggle` is the Simple two-option
+ * control (Prefer quality / Prefer free → quality_first / cost_first); `full`
+ * is the Developer/Custom picker (all four strategies) + the custom-chain
+ * builder. The core keys this off the profile — the frontend just renders it.
+ */
+export type RoutingSurface = "toggle" | "full";
+
+/** The `routing.get` picture: the current strategy, the strategies this surface
+ * may offer, the Developer custom order (model ids, best-first), and the
+ * surface. `availableStrategies` is advisory for the full picker; the toggle
+ * always shows exactly its two mapped options. */
+export interface RoutingState {
+  strategy: RoutingStrategy;
+  availableStrategies: RoutingStrategy[];
+  customChain: string[];
+  surface: RoutingSurface;
+}
+
+/**
+ * Which model answered a turn (rides on the sendMessage reply; contract D5).
+ * `free` is whether that model is a free one; `routed` is whether it differs
+ * from the user's explicit pick for this message — BOTH computed by the core.
+ * The free-model chip renders only when both are true.
+ */
+export interface AnsweredWith {
+  modelId: string;
+  label: string;
+  free: boolean;
+  routed: boolean;
 }
 
 /** The full profile picture from `profile.get`. */

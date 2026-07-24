@@ -83,6 +83,7 @@ class ServerContext:
         _next_role: ModelRole | None
         _next_model_name: str | None
         _next_effort: str | None
+        _answered_with: dict | None       # step 3 (D5): answeredWith for the in-flight turn
         _cloud_catalog: list[CloudModel]
         _cloud_fetcher: Callable[[], list[CloudModel]] | None
         _cloud_provider_factory: Callable[[CloudModel], Any] | None
@@ -145,3 +146,15 @@ class ServerContext:
         #     type-check without importing the mixin.
         def _effective_guards(self) -> GuardConfig | None: ...
         def _stored_guard_config(self) -> GuardConfig: ...
+
+        # --- activity (main.py): the Activity Panel emitter. Declared so mixins
+        #     that surface routing notes (rpc/routing.py, D3's vanished-id note)
+        #     type-check without importing the server.
+        def _emit_activity(self, tool_id: str, label: str, detail: str | None = None) -> None: ...
+
+        # --- routing (rpc/routing.py, step 3): the strategy read + model label are
+        #     called from rpc/conversation.py (the local_only interlock + answeredWith
+        #     copy); _routing_chain is the orchestrator's chain callback. Declared here
+        #     so both sides type-check without importing the mixin.
+        def _routing_strategy(self) -> str: ...
+        def _model_label(self, model_id: str) -> str: ...

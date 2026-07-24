@@ -37,6 +37,9 @@ from agent_core.providers.base import (
     Message,
     ModelResponse,
     ProviderCapabilities,
+    ProviderUnavailable,
+    effective_timeout,
+    exception_for_http_status,
     request_with_retry,
 )
 from agent_core.providers.tool_call_parser import parse_tool_call
@@ -73,7 +76,11 @@ class SetupAssistantProvider:
         )
 
     def send(
-        self, messages: list[Message], tools: list, effort: str | None = None
+        self,
+        messages: list[Message],
+        tools: list,
+        effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse:
         # ``effort`` is a PRIMARY cloud "answer style" (§4.1.1); the onboarding relay
         # has no such control, so it is accepted and ignored for a uniform call.
@@ -95,10 +102,12 @@ class SetupAssistantProvider:
             "x-addison-signature": signature,
         }
 
-        response = self._post(headers, body)
+        response = self._post(headers, body, timeout)
         if response.status_code >= 400:
             # Never echo the body, headers, or signature — just a plain next step.
-            raise RuntimeError(_relay_error_message(response.status_code))
+            raise exception_for_http_status(
+                response.status_code, _relay_error_message(response.status_code)
+            )
 
         data = response.json()
 
@@ -122,21 +131,27 @@ class SetupAssistantProvider:
         signed = self._bridge.sign_relay_request(body)  # {"signature", "deviceId"}
         return (signed or {}).get("signature", "")
 
-    def _post(self, headers: dict, body: dict) -> httpx.Response:
+    def _post(self, headers: dict, body: dict, timeout: float | None = None) -> httpx.Response:
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
         injected = self._client
-        client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
         try:
-            # POST: retry only when the request never reached the relay (§8.3).
+            # POST: retry only when the request never reached the relay (§8.3). The
+            # per-call ``deadline`` rides on the request so it holds for an injected
+            # client too ([MF-A]).
             return request_with_retry(
-                lambda: client.post(self._relay_url, headers=headers, json=body),
+                lambda: client.post(self._relay_url, headers=headers, json=body, timeout=deadline),
                 idempotent=False,
+                # [MF-A] a caller-supplied deadline means the attempt loop is
+                # driving; its chain is the retry — never double the budget here.
+                allow_retry=timeout is None,
             )
         except httpx.HTTPError:
             # Network/timeout failure. Clean message, no chained exception, so
             # nothing about the request (signature included) can leak.
             # This provider only ever handles turns when NO key is configured
             # (§4.6), so "add your own key" is always a valid way forward.
-            raise RuntimeError(
+            raise ProviderUnavailable(
                 "Couldn't reach the free setup service just now. Check your "
                 "internet connection and try again — or add your own API key "
                 "in Settings and Addison will use that instead."

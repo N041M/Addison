@@ -42,7 +42,6 @@ from agent_core.models_catalog import (
     CloudModel,
     default_cloud_model,
     fetch_cloud_catalog,
-    find_cloud_model,
     load_cloud_catalog,
     static_catalog_for,
 )
@@ -90,6 +89,7 @@ from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
 from agent_core.rpc.providers import ProvidersMixin
 from agent_core.rpc.routines import RoutinesMixin
+from agent_core.rpc.routing import RoutingMixin
 from agent_core.rpc.skills import SkillsMixin
 from agent_core.rpc.snapshots import SnapshotsMixin, snapshot_list_from_payloads
 from agent_core.rpc.undo import UndoMixin
@@ -416,6 +416,7 @@ class JsonRpcServer(
     SkillsMixin,
     SnapshotsMixin,
     GuardsMixin,
+    RoutingMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -571,6 +572,9 @@ class JsonRpcServer(
         self._next_role: ModelRole | None = None
         self._next_model_name: str | None = None   # explicit LOCAL/cloud pick, §4.1.1, §6.8
         self._next_effort: str | None = None       # explicit "answer style" for next msg
+        # The answering candidate for the in-flight turn (D5), stashed by
+        # _record_answered (orchestrator on_answered) and attached to the reply.
+        self._answered_with: dict | None = None
         self._draft_routine = None             # pending §6.3 proposal awaiting confirmSave
         self._draft_widget = None              # pending widget proposal awaiting confirmSave
         # The most recently RUN saved routine this session — a widget proposed
@@ -784,6 +788,12 @@ class JsonRpcServer(
             # Custom-profile guards (D3): the one resolution function, so the live
             # turn honours the same posture as the widget rail and routine engine.
             guards_provider=self._effective_guards,
+            # Routing (step 3, D4): the ordered fallback chain for the turn, the
+            # answering-candidate report (answeredWith, D5), and model labels for the
+            # chip + fallback note.
+            routing_chain=self._routing_chain,
+            on_answered=self._record_answered,
+            model_label=self._model_label,
         )
         self.routine_builder = RoutineBuilder(store=self.store)
         self.routine_library = RoutineLibrary(store=self.store)
@@ -991,6 +1001,7 @@ class JsonRpcServer(
             _SKILL_JOBS,
             _SNAPSHOT_JOBS,
             _GUARDS_JOBS,
+            _ROUTING_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1116,6 +1127,10 @@ class JsonRpcServer(
                     self._respond(request_id, self._guards_get())
                 elif kind == "guards_set":
                     self._respond(request_id, self._guards_set(params))
+                elif kind == "routing_get":
+                    self._respond(request_id, self._routing_get())
+                elif kind == "routing_set":
+                    self._respond(request_id, self._routing_set(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1365,24 +1380,30 @@ class JsonRpcServer(
         self._respond(request_id, {"ok": True})
 
     # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
-    def _record_usage(self, usage, latency_ms, requested_role, model_name) -> None:
+    def _record_usage(self, usage, latency_ms, provider_id, model_id) -> None:
         """Record one provider call's token usage + latency into ``usage_log``.
 
         The single choke point every turn's model calls flow through
         (Orchestrator.on_usage). NOT a registry tool — this is server machinery
         (§4.8 precedent). A call that reported no usage (``usage`` is None) or the
-        onboarding relay is skipped. Never touches key material."""
+        onboarding relay is skipped. Never touches key material.
+
+        ``provider_id``/``model_id`` are the RESOLVED identity of the candidate that
+        produced THIS call, supplied by the orchestrator (D5 [N1]). This fixes the
+        pre-existing mis-attribution: the previous version re-derived identity from
+        (requested_role, model_name) here, so a routed/fallen-forward turn logged the
+        catalog default instead of the model that actually answered. The row is now
+        the truth of what ran."""
         if usage is None or self._store is None:
             return
-        if requested_role is ModelRole.SETUP_ASSISTANT:
+        if provider_id == "setup_assistant":
             return  # the free onboarding relay isn't metered
-        provider_id, model = self._usage_identity(requested_role, model_name)
         now = int(time.time())
         self.store.insert_usage(
             id=str(uuid4()),
             conversation_id=self.conversation.id,
             provider=provider_id,
-            model=model,
+            model=model_id,
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
             latency_ms=latency_ms,
@@ -1395,22 +1416,23 @@ class JsonRpcServer(
             self._usage_records_since_prune = 0
             self.store.prune_usage_log(now - _USAGE_RETENTION_SECONDS)
 
-    def _usage_identity(self, requested_role, model_name) -> tuple[str, str]:
-        """Best-effort (provider_id, model) for a usage row. A LOCAL turn is an
-        Ollama model; a cloud/default turn resolves against the catalog, falling
-        back to a plain default when there's no catalog (CLI/tests)."""
-        if requested_role is ModelRole.LOCAL:
-            return "ollama", (model_name or "local")
-        entry = None
-        if self._cloud_catalog:
-            entry = (
-                find_cloud_model(self._cloud_catalog, model_name)
-                if model_name
-                else default_cloud_model(self._cloud_catalog)
-            )
-        if entry is not None:
-            return entry.provider, entry.id
-        return "anthropic", (model_name or "default")
+    def _record_answered(self, model_id, label, free, routed) -> None:
+        """Orchestrator ``on_answered`` sink (D5): stash the answering candidate so
+        _run_send_message can attach ``answeredWith`` to the reply. Overwritten each
+        turn and read once; a turn that raised leaves the prior value, which
+        _run_send_message clears before the run and never reads on the error path."""
+        self._answered_with = {
+            "modelId": model_id,
+            "label": label,
+            "free": free,
+            "routed": routed,
+        }
+
+    # (``_usage_identity`` was REMOVED in step 3: it re-derived the usage row's
+    # (provider, model) from (requested_role, model_name) here, which mis-attributed a
+    # routed / fallen-forward turn to the catalog default. The orchestrator now passes
+    # the RESOLVED identity of the candidate that produced each call straight to
+    # ``_record_usage`` (D5 [N1]), so the row is the truth of what ran.)
 
     # --- local model setup (§4.1.2) ---------------------------------------
     # These live on the composition root (not the models mixin): they are OS/
@@ -1599,6 +1621,13 @@ _SNAPSHOT_JOBS = {
 _GUARDS_JOBS = {
     Method.GUARDS_GET: "guards_get",
     Method.GUARDS_SET: "guards_set",
+}
+
+# routing.* read/write app_settings and routing.set mints an auto-snapshot through
+# the SnapshotManager (D1 hook), so they run on the worker like every other store op.
+_ROUTING_JOBS = {
+    Method.ROUTING_GET: "routing_get",
+    Method.ROUTING_SET: "routing_set",
 }
 
 

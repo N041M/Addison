@@ -368,7 +368,7 @@ class _RecordingProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.efforts.append(effort)
         return ModelResponse(text=f"from {self.tag}", tool_calls=[])
 

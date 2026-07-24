@@ -70,7 +70,7 @@ class _CallsTheRogue:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self._sent += 1
         if self._sent == 1:
             return ModelResponse(

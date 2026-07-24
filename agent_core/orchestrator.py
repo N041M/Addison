@@ -16,8 +16,13 @@ from typing import Any
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import PolicyMode
-from agent_core.providers.base import Message, ModelRole, ToolCallRequest
-from agent_core.providers.router import ModelRouter
+from agent_core.providers.base import (
+    Message,
+    ModelRole,
+    ProviderUnavailable,
+    ToolCallRequest,
+)
+from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
@@ -56,6 +61,23 @@ _TOO_MANY_STEPS = (
 # (the same reason a tool crash becomes a failed step rather than an exception).
 _STEP_NOT_RUN = (
     "This step was not run: the turn reached its limit on how many steps it may take."
+)
+
+# --- graceful fallback + cooldown (step 3, contract D4) ---------------------
+# Module constants, not settings — the model must not be able to shrink the
+# rollback/fallback safety window. Read through the module namespace inside
+# run_turn so tests can monkeypatch them (small values keep the budget test fast).
+_COOLDOWN_SECONDS = 60.0          # per provider id, in-memory; set on ProviderUnavailable
+_FALLBACK_BUDGET_SECONDS = 120.0  # a real per-attempt deadline ([MF-A]), not a between gate
+# The fallback note surfaces on the SAME Activity Panel channel as tool activity
+# (D4); a synthetic id keeps _emit_activity's tool-agnostic contract intact.
+_ROUTING_ACTIVITY_ID = "routing"
+_FALLBACK_NOTE = "{busy} was busy, so Addison used {used}."  # D8 frozen copy
+# Only reached when the chain is exhausted having never captured a provider's own
+# plain message (an empty chain). Normally the last ProviderUnavailable's own
+# sentence is re-raised, which is more specific than this.
+_NO_MODEL_REACHABLE = (
+    "Addison couldn't reach a model to answer just now. Please try again in a moment."
 )
 
 
@@ -132,9 +154,12 @@ class Orchestrator:
         undo_manager: UndoManager,
         stream_to_frontend=lambda text: None,
         on_activity=lambda tool_id, label, detail=None: None,
-        on_usage=lambda usage, latency_ms, requested_role, model_name: None,
+        on_usage=lambda usage, latency_ms, provider_id, model_id: None,
         shell_bridge=None,
         guards_provider=lambda: None,
+        routing_chain=lambda requested_role, model_name: None,
+        on_answered=lambda model_id, label, free, routed: None,
+        model_label=lambda model_id: model_id,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
@@ -152,12 +177,27 @@ class Orchestrator:
         # tools that have nothing to name. The shell_bridge is the tools' only
         # route to OS effects (§1.3); None in CLI/test mode.
         self.on_activity = on_activity
-        # Called after EACH provider call with its token usage (or None) and the
-        # wall-clock latency, so the server can record a usage_log row (§4.8). This
-        # is orchestrator machinery — the single choke point every turn's model
-        # calls pass through — NEVER a registry tool.
+        # Called after EACH provider call with its token usage (or None), the
+        # wall-clock latency, and the RESOLVED (provider_id, model_id) of the
+        # candidate that produced THAT call (D5 [N1] — fixes routed-turn
+        # mis-attribution). Orchestrator machinery, the single choke point every
+        # turn's model calls pass through — NEVER a registry tool.
         self.on_usage = on_usage
         self.shell_bridge = shell_bridge
+        # The ordered fallback chain for a turn (D4), built by the server from the
+        # active strategy + catalog + router pools (resolve_chain). Returns None when
+        # unwired (CLI/tests) — then run_turn keeps today's single-provider path,
+        # byte-for-byte. A wired-but-EMPTY list means "no candidate" (e.g. local_only
+        # with no locals) and fails plainly; it never silently falls to a cloud call.
+        self._routing_chain = routing_chain
+        # Reports the answering candidate so the reply can carry answeredWith (D5): the
+        # chip renders on ``free && routed``. ``model_label`` maps a model_id to its
+        # human label for that chip and the fallback note.
+        self.on_answered = on_answered
+        self._model_label = model_label
+        # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
+        # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
+        self._cooldowns: dict[str, float] = {}
 
     def run_turn(
         self,
@@ -173,7 +213,7 @@ class Orchestrator:
         # is the per-message "answer style"; providers that don't support it ignore it.
         # ``mode`` (policy.py) is derived from the active profile: SAFE (default) is
         # the historical behaviour; OPEN surfaces dev-only tools and thins the gate.
-        provider = self.model_router.resolve(requested_role, model_name)
+        #
         # The guard posture for this whole turn (Custom profile, D3), resolved once:
         # a settings change lands on the worker thread serialised with the turn, so
         # it cannot shift mid-turn. None ≡ the fixed defaults ≡ today's gate.
@@ -186,6 +226,26 @@ class Orchestrator:
             shell_bridge=self.shell_bridge,
             policy_mode=mode,
         )
+        chain = self._routing_chain(requested_role, model_name)
+        if chain is None:
+            # Unwired (CLI/tests): today's single-provider path, byte-for-byte —
+            # one resolution, no fallback, no per-call timeout (existing fake
+            # providers accept no ``timeout`` kwarg, and a healthy turn is identical).
+            self._run_single(conversation, context, guards, mode, requested_role, model_name, effort)
+        else:
+            # The routed path (D4): walk the ordered chain, falling forward on
+            # ProviderUnavailable within the per-turn budget, and report the
+            # answering candidate (answeredWith, D5).
+            self._run_with_fallback(
+                conversation, context, guards, mode, chain, requested_role, model_name, effort
+            )
+
+    # --- single-provider path (freeze: CLI/tests, no routing chain) ---------
+    def _run_single(
+        self, conversation, context, guards, mode, requested_role, model_name, effort
+    ) -> None:
+        provider = self.model_router.resolve(requested_role, model_name)
+        provider_id, model_id = self._single_identity(requested_role, model_name)
         # Bounded, not ``while True``: see _MAX_TOOL_ROUNDS and _MAX_TOOL_CALLS. The
         # loop is driven by the model, and what the model reads between rounds
         # includes untrusted page text, so neither "how many times round" nor "how
@@ -203,122 +263,265 @@ class Orchestrator:
             )
             latency_ms = int((time.monotonic() - started) * 1000)
             # Record this call's usage + latency at the single choke point (§4.8).
-            # A provider that reports no usage passes None; the recorder skips it.
-            self.on_usage(response.usage, latency_ms, requested_role, model_name)
+            self.on_usage(response.usage, latency_ms, provider_id, model_id)
             if response.tool_calls:
-                # Record the assistant's tool-call turn BEFORE its results so that
-                # each tool_result pairs with the tool_use it answers (§4.4).
-                conversation.append_assistant_tool_calls(response.text, response.tool_calls)
-                for call in response.tool_calls:
-                    if calls_made >= _MAX_TOOL_CALLS:
-                        # Budget spent. Answer this tool_use so the pairing holds,
-                        # but run nothing: the point of the ceiling is that no
-                        # further request leaves the machine, so the check sits
-                        # ABOVE the gate and the tool, not inside them.
-                        budget_spent = True
-                        conversation.append_tool_result(
-                            call.id, ToolResult(success=False, content=_STEP_NOT_RUN)
-                        )
-                        continue
-                    calls_made += 1
-                    tool = self.tool_registry.get(call.tool_id)
-                    # SAFE-1 at dispatch: visible_tools hides dev-only tools from the
-                    # model, but a tool_use naming a hidden id still reaches here, and
-                    # the gate does not check dev-ness. Refuse BEFORE the gate and
-                    # before execute, so the boundary does not depend on each dev
-                    # tool remembering to check the mode itself.
-                    dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(
-                        call.tool_id, mode
-                    )
-                    if dev_only_refusal is not None:
-                        conversation.append_tool_result(
-                            call.id, ToolResult(success=False, content=dev_only_refusal)
-                        )
-                        continue
-                    # Mode-aware authorization (policy.py): SAFE prompts for every
-                    # not-yet-granted tool; OPEN auto-allows non-destructive calls and
-                    # prompts PER INVOCATION for destructive ones (the card shows the
-                    # exact command via `detail`). Destructiveness is per-call
-                    # (run_command classifies its own; else HIGH == destructive).
-                    destructive = call_is_destructive(tool, call.args)
-                    # Asked once and used twice, on purpose: the permission card and
-                    # the Activity Panel must describe the SAME call. Calling the
-                    # tool's permission_detail a second time could describe a
-                    # different one if it ever stops being a pure read of args.
-                    detail = call_permission_detail(tool, call.args)
-                    status = self.permission_gate.authorize(
-                        call.tool_id,
-                        mode=mode,
-                        destructive=destructive,
-                        detail=detail,
-                        guards=guards,
-                    )  # may block for UI
-                    if status == PermissionStatus.DENIED:
-                        # Steer the model past the refusal: "not now" declines the
-                        # STEP, not the request — anything already gathered (search
-                        # results, a calculation) should be delivered in chat.
-                        result = ToolResult(
-                            success=False,
-                            content=(
-                                "User declined this step. Do not ask again this turn. "
-                                "Finish the request without it — if you already found "
-                                "the information, give it directly in your reply."
-                            ),
-                        )
-                    else:
-                        # `detail` rides along so the panel can name the destination,
-                        # not just the step: a granted tool id is re-usable for the
-                        # rest of the session, so after the first "Allow" the panel
-                        # is where the person is told WHERE a call is going (§8, owner
-                        # decision 2026-07-20 — visibility over per-site grants). The
-                        # routine engine emits the same three fields for the same
-                        # reason; these are the two places a tool call is announced,
-                        # and they must not diverge.
-                        #
-                        # Be precise about what this buys, because it is easy to
-                        # over-read: it names the SITE, never the payload. A read that
-                        # carries data outward in the path or query of an
-                        # ordinary-looking host is indistinguishable here from an
-                        # honest read of that host. It catches an unfamiliar
-                        # destination, not a familiar one being misused. Bounding WHO
-                        # can be reached is a grant-scoping change and is still open.
-                        self.on_activity(call.tool_id, tool.definition.label, detail)
-                        # A tool/bridge failure is a FAILED STEP, never a crashed
-                        # turn: crashing here would leave this tool_use with no
-                        # tool_result, and the provider then rejects every later
-                        # request (API 400) until the app restarts.
-                        try:
-                            result = tool.execute(call.args, context)
-                        except RuntimeError as exc:
-                            # Bridge refusals carry a plain user-ready sentence
-                            # (e.g. "A file with that name is already there…").
-                            result = ToolResult(success=False, content=str(exc))
-                        except Exception:
-                            result = ToolResult(
-                                success=False, content="That step didn't work, so it was skipped."
-                            )
-                        else:
-                            if result.snapshot:
-                                result.snapshot.tool_call_id = call.id
-                                self.undo_manager.record(result.snapshot)
-                            result = self._gate_image_result(result, provider)
-                    conversation.append_tool_result(call.id, result)
+                calls_made, budget_spent = self._run_tool_calls(
+                    conversation, response, context, guards, mode, provider, calls_made
+                )
                 if budget_spent:
-                    break  # every tool_use above was answered; stop the turn here
-                continue  # loop again with tool results appended
-            else:
-                conversation.append_assistant_message(response.text)
-                self.stream_to_frontend(response.text)
-                break  # turn complete
+                    break
+                continue
+            conversation.append_assistant_message(response.text)
+            self.stream_to_frontend(response.text)
+            # A single-path answer is the model the caller picked, so it is not routed.
+            self.on_answered(model_id, self._model_label(model_id), False, False)
+            break
         else:
             # Rounds exhausted. Close the turn honestly rather than leaving the
             # transcript ending on tool results with nothing said to the person.
             budget_spent = True
         if budget_spent:
-            # Same sentence for both ceilings: the person does not care which
-            # counter ran out, only that Addison stopped and is saying so.
-            conversation.append_assistant_message(_TOO_MANY_STEPS)
-            self.stream_to_frontend(_TOO_MANY_STEPS)
+            self._finish_over_budget(conversation)
+
+    # --- routed path with graceful fallback + cooldown (D4) -----------------
+    def _run_with_fallback(
+        self, conversation, context, guards, mode, chain, requested_role, model_name, effort
+    ) -> None:
+        turn_started = time.monotonic()
+        # Cooldown-filter the chain, but never lock: if EVERYTHING is cooled, try the
+        # whole chain anyway, in normal (preferred-first) order ([S-a]).
+        active = [c for c in chain if not self._is_cooled(c.provider_id)] or list(chain)
+        # ``preferred`` is the PRE-filter head: what the user's settings say should
+        # answer. A head cooled by a previous turn still counts as "what you
+        # expected" — without this, a cooled head silently hands the turn to a
+        # weaker model with NO note, the exact quiet substitution the note exists
+        # to surface (post-build adversarial pass, 2026-07-24).
+        preferred = chain[0] if chain else None
+        idx = 0
+        committed: str | None = None   # provider id locked once a tool round completes
+        noted = False
+        last_unavailable: ProviderUnavailable | None = None
+        answered: RoutingCandidate | None = None
+        calls_made = 0
+        budget_spent = False
+
+        for _round in range(_MAX_TOOL_ROUNDS):
+            response = None
+            candidate: RoutingCandidate | None = None
+            provider = None
+            latency_ms = 0
+            # Walk the chain for THIS send. Advance ONLY on ProviderUnavailable;
+            # Rejected/AuthFailed propagate immediately (the next provider gets the
+            # same bad request / bad key — no walk). Continuation, never restart:
+            # conversation state is intact and only the provider changes.
+            while True:
+                remaining = _FALLBACK_BUDGET_SECONDS - (time.monotonic() - turn_started)
+                if remaining <= 0 or idx >= len(active):
+                    # Budget spent, or the chain is exhausted -> fail plainly with the
+                    # last provider's own sentence (more specific than the generic).
+                    raise last_unavailable or ProviderUnavailable(_NO_MODEL_REACHABLE)
+                cand = active[idx]
+                if committed is not None and cand.provider_id != committed:
+                    # Cross-provider mid-turn advance is forbidden (foreign tool_use
+                    # history replayed into another vendor's translator is unverified):
+                    # skip past other providers looking for a SAME-provider candidate
+                    # (the two-Ollama case, [MF-E]); exhausting the list fails plainly.
+                    idx += 1
+                    continue
+                provider = self.model_router.resolve(cand.role, cand.model_id)
+                started = time.monotonic()
+                try:
+                    response = provider.send(
+                        messages=conversation.messages,
+                        tools=self.tool_registry.visible_tools(mode),
+                        effort=effort,
+                        # [MF-A] a real per-attempt deadline: the provider clamps this
+                        # to its own default, so a healthy first send is byte-identical
+                        # to today, and no single hanging candidate can blow the budget.
+                        timeout=remaining,
+                    )
+                except ProviderUnavailable as exc:
+                    last_unavailable = exc
+                    self._cool(cand.provider_id)
+                    idx += 1
+                    continue
+                latency_ms = int((time.monotonic() - started) * 1000)
+                candidate = cand
+                break
+
+            # The inner loop only breaks with both set (every other path raises).
+            assert candidate is not None and response is not None
+            self.on_usage(response.usage, latency_ms, candidate.provider_id, candidate.model_id)
+            # The fallback note, once: emitted when a candidate other than the one the
+            # user expected (the preferred head) produced the answer (D4/D8).
+            if (
+                not noted
+                and preferred is not None
+                and candidate.model_id != preferred.model_id
+            ):
+                self._emit_fallback_note(preferred, candidate)
+                noted = True
+
+            if response.tool_calls:
+                calls_made, budget_spent = self._run_tool_calls(
+                    conversation, response, context, guards, mode, provider, calls_made
+                )
+                # A tool round just completed against this candidate: from here on a
+                # mid-turn failure may only advance within the same provider id.
+                committed = candidate.provider_id
+                if budget_spent:
+                    break
+                continue
+            conversation.append_assistant_message(response.text)
+            self.stream_to_frontend(response.text)
+            answered = candidate
+            break
+        else:
+            budget_spent = True
+
+        if budget_spent:
+            self._finish_over_budget(conversation)
+            return
+        if answered is not None:
+            # [S-b] routed == (the answering model differs from the user's explicit
+            # pick). No explicit pick (model_name None) -> routed True; an explicit
+            # pick that ANSWERED -> False; one that FELL FORWARD -> True. The chip
+            # renders on ``free && routed`` (a free answer the user did not choose).
+            routed = answered.model_id != model_name
+            self.on_answered(
+                answered.model_id, self._model_label(answered.model_id), answered.free, routed
+            )
+
+    def _finish_over_budget(self, conversation) -> None:
+        # Same sentence for both ceilings: the person does not care which counter ran
+        # out, only that Addison stopped and is saying so.
+        conversation.append_assistant_message(_TOO_MANY_STEPS)
+        self.stream_to_frontend(_TOO_MANY_STEPS)
+
+    def _run_tool_calls(
+        self, conversation, response, context, guards, mode, provider, calls_made
+    ) -> tuple[int, bool]:
+        """Run one response's tool_calls (shared by both turn paths). Returns the
+        updated ``calls_made`` and whether the per-turn CALL budget was spent."""
+        budget_spent = False
+        # Record the assistant's tool-call turn BEFORE its results so that each
+        # tool_result pairs with the tool_use it answers (§4.4).
+        conversation.append_assistant_tool_calls(response.text, response.tool_calls)
+        for call in response.tool_calls:
+            if calls_made >= _MAX_TOOL_CALLS:
+                # Budget spent. Answer this tool_use so the pairing holds, but run
+                # nothing: the point of the ceiling is that no further request leaves
+                # the machine, so the check sits ABOVE the gate and the tool.
+                budget_spent = True
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=_STEP_NOT_RUN)
+                )
+                continue
+            calls_made += 1
+            tool = self.tool_registry.get(call.tool_id)
+            # SAFE-1 at dispatch: visible_tools hides dev-only tools from the model,
+            # but a tool_use naming a hidden id still reaches here, and the gate does
+            # not check dev-ness. Refuse BEFORE the gate and before execute, so the
+            # boundary does not depend on each dev tool remembering to check the mode.
+            dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(
+                call.tool_id, mode
+            )
+            if dev_only_refusal is not None:
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=dev_only_refusal)
+                )
+                continue
+            # Mode-aware authorization (policy.py): SAFE prompts for every
+            # not-yet-granted tool; OPEN auto-allows non-destructive calls and prompts
+            # PER INVOCATION for destructive ones (the card shows the exact command via
+            # `detail`). Destructiveness is per-call (run_command classifies its own;
+            # else HIGH == destructive).
+            destructive = call_is_destructive(tool, call.args)
+            # Asked once and used twice, on purpose: the permission card and the
+            # Activity Panel must describe the SAME call. Calling the tool's
+            # permission_detail a second time could describe a different one if it ever
+            # stops being a pure read of args.
+            detail = call_permission_detail(tool, call.args)
+            status = self.permission_gate.authorize(
+                call.tool_id,
+                mode=mode,
+                destructive=destructive,
+                detail=detail,
+                guards=guards,
+            )  # may block for UI
+            if status == PermissionStatus.DENIED:
+                # Steer the model past the refusal: "not now" declines the STEP, not
+                # the request — anything already gathered (search results, a
+                # calculation) should be delivered in chat.
+                result = ToolResult(
+                    success=False,
+                    content=(
+                        "User declined this step. Do not ask again this turn. "
+                        "Finish the request without it — if you already found "
+                        "the information, give it directly in your reply."
+                    ),
+                )
+            else:
+                # `detail` rides along so the panel can name the destination, not just
+                # the step: a granted tool id is re-usable for the rest of the session,
+                # so after the first "Allow" the panel is where the person is told
+                # WHERE a call is going (§8, owner decision 2026-07-20 — visibility over
+                # per-site grants). The routine engine emits the same three fields for
+                # the same reason; these are the two places a tool call is announced,
+                # and they must not diverge.
+                #
+                # Be precise about what this buys, because it is easy to over-read: it
+                # names the SITE, never the payload. A read that carries data outward in
+                # the path or query of an ordinary-looking host is indistinguishable
+                # here from an honest read of that host. It catches an unfamiliar
+                # destination, not a familiar one being misused. Bounding WHO can be
+                # reached is a grant-scoping change and is still open.
+                self.on_activity(call.tool_id, tool.definition.label, detail)
+                # A tool/bridge failure is a FAILED STEP, never a crashed turn:
+                # crashing here would leave this tool_use with no tool_result, and the
+                # provider then rejects every later request (API 400) until restart.
+                try:
+                    result = tool.execute(call.args, context)
+                except RuntimeError as exc:
+                    # Bridge refusals carry a plain user-ready sentence (e.g. "A file
+                    # with that name is already there…").
+                    result = ToolResult(success=False, content=str(exc))
+                except Exception:
+                    result = ToolResult(
+                        success=False, content="That step didn't work, so it was skipped."
+                    )
+                else:
+                    if result.snapshot:
+                        result.snapshot.tool_call_id = call.id
+                        self.undo_manager.record(result.snapshot)
+                    result = self._gate_image_result(result, provider)
+            conversation.append_tool_result(call.id, result)
+        return calls_made, budget_spent
+
+    # --- cooldown + note helpers (D4) --------------------------------------
+    def _is_cooled(self, provider_id: str) -> bool:
+        expiry = self._cooldowns.get(provider_id)
+        return expiry is not None and time.monotonic() < expiry
+
+    def _cool(self, provider_id: str) -> None:
+        self._cooldowns[provider_id] = time.monotonic() + _COOLDOWN_SECONDS
+
+    def _emit_fallback_note(self, busy: RoutingCandidate, used: RoutingCandidate) -> None:
+        note = _FALLBACK_NOTE.format(
+            busy=self._model_label(busy.model_id), used=self._model_label(used.model_id)
+        )
+        self.on_activity(_ROUTING_ACTIVITY_ID, note)
+
+    def _single_identity(self, requested_role, model_name) -> tuple[str, str]:
+        """Best-effort (provider_id, model_id) for the unwired single path — used only
+        by CLI/tests (production always wires ``routing_chain``, where the resolved
+        candidate carries the true identity). Mirrors the old role-based mapping."""
+        role = requested_role or ModelRole.PRIMARY
+        if role is ModelRole.SETUP_ASSISTANT:
+            return "setup_assistant", (model_name or "setup")
+        if role is ModelRole.LOCAL:
+            return "ollama", (model_name or "local")
+        return "anthropic", (model_name or "default")
 
     def _gate_image_result(self, result: ToolResult, provider) -> ToolResult:
         """(A) Vision gate (§4.1.1 item A): don't feed a picture to a model that
