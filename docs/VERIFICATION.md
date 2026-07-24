@@ -9,7 +9,7 @@ review obligations.
 ## 1. Automated gates (all four must be green, from repo root)
 
 ```bash
-# Python: full suite (223+ tests; agents may only ever raise the count)
+# Python: full suite (790+ tests; agents may only ever raise the count)
 agent_core/.venv/bin/python -m pytest tests/ -q
 
 # Python lint
@@ -18,7 +18,7 @@ agent_core/.venv/bin/ruff check agent_core tests
 # Frontend: strict tsc + vite, zero errors
 cd shell && npm run build
 
-# Rust shell: 24+ tests, plus clippy if available
+# Rust shell: 38+ tests, plus clippy if available
 cd shell/src-tauri && cargo test && cargo clippy --all-targets
 ```
 
