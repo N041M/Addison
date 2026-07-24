@@ -54,6 +54,7 @@ import { useSkills } from "./hooks/useSkills";
 import { useSnapshots } from "./hooks/useSnapshots";
 import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
+import { useWorkspace } from "./hooks/useWorkspace";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -157,6 +158,10 @@ export function App() {
     connected,
     onSaved: () => snapshotsState.refreshSnapshots(),
   });
+  // The coding-harness workspace-trust boundary (Phase-2 step 5). Its card shows
+  // only on the Developer/Custom surfaces (SettingsPage keys that off the active
+  // profile); the hook itself just owns the trusted roots + grant/revoke.
+  const workspaceState = useWorkspace({ connected });
   const turn = useTurn({
     connected,
     setStatusBanner,
@@ -668,6 +673,7 @@ export function App() {
             snapshots={snapshotsState}
             guards={guardsState}
             routing={routingState}
+            workspace={workspaceState}
             profile={profile}
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}

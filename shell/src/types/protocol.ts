@@ -74,6 +74,19 @@ export const Method = {
   GuardsGet: "guards.get",
   GuardsSet: "guards.set",
 
+  // Workspace trust — the coding-harness trust boundary (Phase-2 step 5). A
+  // trusted folder lets Addison's typed, undoable file tools read and edit inside
+  // it WITHOUT a per-change card; commands it runs still ask every time. `grant`
+  // takes an absolute directory (the core floor-checks it and refuses Addison's
+  // own data dir); `revoke` drops one; `list` returns the currently-trusted
+  // roots. `pickDirectory` opens the OS folder picker through the Rust shell and
+  // returns the chosen path (or nothing if cancelled) — no key material, no file
+  // contents ever ride these payloads.
+  WorkspaceGrantTrust: "workspace.grantTrust",
+  WorkspaceRevokeTrust: "workspace.revokeTrust",
+  WorkspaceList: "workspace.list",
+  WorkspacePickDirectory: "workspace.pickDirectory",
+
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
   // from, the Developer custom order, and whether the person sees the Simple

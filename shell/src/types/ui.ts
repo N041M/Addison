@@ -375,6 +375,23 @@ export interface AnsweredWith {
   routed: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Workspace trust — the coding-harness trust boundary (workspace.list; Phase-2
+// step 5). A trusted ROOT is a folder Addison may read and edit inside without a
+// per-change card; the typed file tools stay undoable and every change is logged,
+// and commands Addison runs still ask every time. Nothing here is secret — no key,
+// no file contents — only the folder path and when it was trusted, so the parser
+// only has to worry about shape. It fails CLOSED: a row without a usable directory
+// string is DROPPED, never rendered, because a row the card can't name is a row it
+// could offer a "Stop trusting" button for and then fail to act on.
+// ---------------------------------------------------------------------------
+export interface WorkspaceRoot {
+  /** The absolute, canonicalized folder path the core is currently trusting. */
+  directory: string;
+  /** Unix seconds when trust was granted, when the core reports it. */
+  grantedAt?: number;
+}
+
 /** The full profile picture from `profile.get`. */
 export interface ProfileState {
   activeProfile: string;
