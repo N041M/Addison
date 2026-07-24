@@ -419,10 +419,16 @@ dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem
 RPC namespace, seven auto-capture hooks + the verified-working site, the sidecar
 cold-start recovery path, and the Settings "Restore points" card. Its single most
 important test, `test_restore_always_works_from_a_broken_config`, passes; the
-subsystem is described above under the floors. **`mint_anchor()` ships fully
-implemented with no caller** — step 2 supplies it, because the Custom-profile guard
-toggle that mints an anchor does not exist yet), (2) the **Custom profile + guard model +
-undeletable anchor** (policy.py), (3) **routing strategies** (4 + custom) +
+subsystem is described above under the floors), (2) **DONE (2026-07-24) — the
+Custom profile + guard model + the G4 anchor caller** (`policy.py`: Custom derives
+OPEN with a `GuardConfig` overlay; two settings-backed prompting guards —
+`guard_destructive_card` per_invocation>session, `guard_auto_grant_scope`
+none>non_destructive>everything; weakening a guard mints the undeletable anchor
+FIRST via `guards.set`, with fingerprint dedupe, and refuses the change if the
+anchor cannot mint; a destructive "Ask once" approval lives in a dedicated
+session set the SAFE path structurally never reads, and every profile switch
+revokes all grants; guards are EFFECTIVE only under Custom — Simple/Developer
+stay byte-for-byte), (3) **routing strategies** (4 + custom) +
 companion prefer-quality/prefer-free toggle + free-model disclaimer + graceful
 fallback/cooldown, (4) **free-model endpoints** (legit free/local + add-by-prompt),
 (5) **harness + workspace-trust** (OPEN), (6) **widget capability tiers + expanded

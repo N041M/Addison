@@ -139,6 +139,7 @@ function stateWith(over: Partial<SnapshotsState> = {}): SnapshotsState {
     refreshSnapshots: vi.fn(),
     handleCreateSnapshot: vi.fn(async () => {}),
     handleRestoreLastWorking: vi.fn(async () => {}),
+    handleRestoreSnapshot: vi.fn(async () => {}),
     handleDeleteSnapshot: vi.fn(async () => {}),
     ...over,
   };
@@ -235,6 +236,80 @@ describe("the restore points card", () => {
   it("offers no restore button at all when there is nothing to go back to", () => {
     renderCard(stateWith({ snapshots: [], lastWorkingId: undefined, lastWorkingLabel: undefined }));
     expect(screen.queryByRole("button", { name: "Restore to the last working state" })).toBeNull();
+  });
+});
+
+// --- the per-row "Restore this one" on permanent rows (step 2, contract D7) --
+//
+// Permanent rows (the G4 anchors + genesis) get their own by-id restore — the
+// points most worth being able to return to by name. Ordinary rows do NOT; they
+// keep only Remove. Same two-step inline confirm idiom, names the row before the
+// click, never a browser dialog, never the danger token. These use a state with
+// NO one-action target, so the only "Restore" button on screen is the per-row
+// confirm's.
+
+const ANCHOR: Snapshot = {
+  ...ROW,
+  id: "anchor",
+  reasonLabel: "Before turning a guard off",
+  undeletable: true,
+  capturesBinary: true,
+};
+const NO_ONE_ACTION_TARGET = { lastWorkingId: undefined, lastWorkingLabel: undefined } as const;
+
+describe("the per-row restore on permanent rows", () => {
+  it("offers Restore this one on permanent rows only; ordinary rows keep Remove", () => {
+    renderCard(stateWith({ snapshots: [ANCHOR, ROW], ...NO_ONE_ACTION_TARGET }));
+    expect(screen.getAllByRole("button", { name: "Restore this one" })).toHaveLength(1);
+    // The ordinary row keeps Remove; the permanent one never shows it.
+    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+  });
+
+  it("names the row, then restores it BY ID through a two-step inline confirm", () => {
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const state = stateWith({ snapshots: [ANCHOR], ...NO_ONE_ACTION_TARGET });
+    renderCard(state);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    // Step one names the row and shows the consequence; nothing has run.
+    expect(state.handleRestoreSnapshot).not.toHaveBeenCalled();
+    expect(screen.getByText(CONSEQUENCE)).toBeTruthy();
+    // The row is named in the confirm as well as in its list row.
+    expect(screen.getAllByText("Before turning a guard off").length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    expect(state.handleRestoreSnapshot).toHaveBeenCalledWith("anchor");
+    // The one-action restore is untouched — this is the by-id path.
+    expect(state.handleRestoreLastWorking).not.toHaveBeenCalled();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("lets the person back out of a per-row restore without restoring", () => {
+    const state = stateWith({ snapshots: [ANCHOR], ...NO_ONE_ACTION_TARGET });
+    renderCard(state);
+    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(state.handleRestoreSnapshot).not.toHaveBeenCalled();
+    expect(screen.queryByText(CONSEQUENCE)).toBeNull();
+    // The trigger is back.
+    expect(screen.getByRole("button", { name: "Restore this one" })).toBeTruthy();
+  });
+
+  it("warns that restoring the genesis point clears everything, in the per-row confirm", () => {
+    const genesis: Snapshot = {
+      ...ROW,
+      id: "genesis",
+      reasonLabel: "Addison as first installed",
+      undeletable: true,
+    };
+    renderCard(stateWith({ snapshots: [genesis], ...NO_ONE_ACTION_TARGET }));
+    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    expect(
+      screen.getByText(
+        `${CONSEQUENCE} This is Addison as it was first installed, so your services, notes, widgets and routines are cleared.`,
+      ),
+    ).toBeTruthy();
   });
 });
 

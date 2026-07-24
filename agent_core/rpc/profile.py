@@ -4,9 +4,23 @@ derives) and switch it live (engineering-spec §7, §4.7; policy.py)."""
 from __future__ import annotations
 
 from agent_core.policy import mode_for_profile
-from agent_core.profiles import DEVELOPER, SIMPLE, ProfileId, get_profile
+from agent_core.profiles import CUSTOM, DEVELOPER, SIMPLE, Profile, ProfileId, get_profile
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _SERVER_ERROR, _UNKNOWN_PROFILE_MESSAGE
+
+
+def _profile_entry(profile: Profile) -> dict:
+    """One selector option. The base shape is byte-stable across every profile;
+    ``advanced`` is added ONLY when the profile carries it (Custom), so the
+    Simple/Developer entries stay exactly as they serialized before (D4)."""
+    entry: dict = {
+        "id": profile.id.value,
+        "label": profile.label,
+        "description": profile.description,
+    }
+    if profile.advanced:
+        entry["advanced"] = True
+    return entry
 
 
 class ProfileMixin(ServerContext):
@@ -20,10 +34,11 @@ class ProfileMixin(ServerContext):
             # The policy mode this profile runs under ('safe' | 'open'), derived 1:1
             # from the profile (policy.py). Consumed by the next (frontend) PR.
             "mode": mode_for_profile(active).value,
-            "profiles": [
-                {"id": p.id.value, "label": p.label, "description": p.description}
-                for p in (SIMPLE, DEVELOPER)
-            ],
+            # SIMPLE/DEVELOPER entries keep their exact serialized shape (no new
+            # keys — the drift + fixture tests pin those bytes); the CUSTOM entry
+            # ALONE carries "advanced": true, which the frontend uses to render it
+            # behind an Advanced disclosure with a two-step confirm (D4).
+            "profiles": [_profile_entry(p) for p in (SIMPLE, DEVELOPER, CUSTOM)],
             "flags": {
                 "exposeRoutinePlan": active.expose_routine_plan,
                 "rawDiagnostics": active.raw_diagnostics,
@@ -37,11 +52,13 @@ class ProfileMixin(ServerContext):
         switch takes effect immediately (no restart). An unknown id is refused plainly.
 
         Mode-scoped safety (owner decision 2026-07-19, policy.py): the profile also
-        derives the policy mode — Simple=SAFE, Developer=OPEN — which reshapes the
-        permission gate (OPEN prompts only for destructive actions) and the visible
-        tool set (OPEN surfaces run_command). The two GLOBAL invariants never move:
+        derives the policy mode — Simple=SAFE, Developer AND Custom=OPEN — which
+        reshapes the permission gate (OPEN prompts only for destructive actions) and
+        the visible tool set (OPEN surfaces run_command). Custom additionally applies
+        its two prompting guards over the OPEN gate (guards.*), which can only change
+        how often it asks — never a GLOBAL floor. The GLOBAL invariants never move:
         keys stay keychain-only and never reach the webview/SQLite, and there is no
-        scheduling in either mode. Switching modes is always allowed; dev-created
+        scheduling in any mode. Switching profiles is always allowed; dev-created
         routines/widgets simply hide in SAFE and return in OPEN."""
         try:
             profile = get_profile(ProfileId(params.get("profileId")))
@@ -56,6 +73,17 @@ class ProfileMixin(ServerContext):
         self._snapshot_auto("mode_switch")
         self.store.set_setting("active_profile", profile.id.value)
         self._active_profile = profile
+        # A profile change is the same posture event as a G3 restore (the
+        # revoke_all docstring's own principle): the new profile — or its guard
+        # posture — may be STRICTER than the session's accumulated grants, so
+        # leaving them in place would keep the session wider than the profile the
+        # user just chose. This also clears the Custom session-destructive grants,
+        # so a "Ask once" approval never survives a switch away from Custom [R2].
+        try:
+            self.permission_gate.revoke_all()
+            self.permission_gate.clear_denials()
+        except Exception:
+            pass
         # Mode is derived live from _active_profile (policy.py) — the switch takes
         # effect immediately and needs no per-mode cache to refresh: the orchestrator
         # reads visible_tools(mode) per turn and the gate takes mode per call. Return

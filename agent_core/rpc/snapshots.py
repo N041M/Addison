@@ -28,7 +28,8 @@ boundary, exactly like every other namespace.
 from __future__ import annotations
 
 from agent_core.models_catalog import provider_label
-from agent_core.profiles import resolve_active_profile
+from agent_core.policy import GuardConfig, weakenings_between
+from agent_core.profiles import ProfileId, resolve_active_profile
 from agent_core.rpc.base import ServerContext
 from agent_core.snapshots.snapshot_manager import REASONS, select_payload_to_restore
 
@@ -42,6 +43,14 @@ _CAPTURE_FAILED_WARNING = (
 )
 _CREATE_FAILED = "Addison couldn't save a restore point just now. Try again in a moment."
 _NO_TARGET = "There's no saved working setup to go back to yet."
+# D7 [R1]: appended when a restore lands on a WEAKER guard posture under Custom, so
+# the user is told the recovery also turned Addison's prompting down. No new anchor
+# — the original weakening's anchor is undeletable and still present; this is a
+# mandatory NOTICE. Frozen copy.
+_RESTORE_REWEAKEN_NOTICE = (
+    "Going back to this setup also turned down how often Addison asks before "
+    "acting. You can change that under Settings."
+)
 
 
 class SnapshotsMixin(ServerContext):
@@ -90,13 +99,21 @@ class SnapshotsMixin(ServerContext):
         snapshot_id = params.get("id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             return {"ok": False, "error": "That restore point isn't here any more."}
-        return self._finish_restore(self.snapshot_manager.restore(snapshot_id))
+        # The guard posture BEFORE the restore replaces the config tables (D7) —
+        # read here because the restore is about to overwrite the settings it reads.
+        guards_before = self._effective_guards()
+        return self._finish_restore(
+            self.snapshot_manager.restore(snapshot_id), guards_before=guards_before
+        )
 
     def _snapshot_restore_last_working(self) -> dict:
         """snapshot.restoreLastWorking -> the one-action G3 floor. No arguments,
         by design: the floor cannot require the user to know an id."""
         self._ensure_built()
-        return self._finish_restore(self.snapshot_manager.restore_last_working())
+        guards_before = self._effective_guards()
+        return self._finish_restore(
+            self.snapshot_manager.restore_last_working(), guards_before=guards_before
+        )
 
     def _snapshot_delete(self, params: dict) -> dict:
         """snapshot.delete {id} -> {ok} | {ok:false, error}. A permanent row (a G4
@@ -112,7 +129,7 @@ class SnapshotsMixin(ServerContext):
         return {"ok": False, "error": error}
 
     # --- post-restore resync ----------------------------------------------
-    def _finish_restore(self, result) -> dict:
+    def _finish_restore(self, result, guards_before: GuardConfig | None = None) -> dict:
         """Bring the LIVE session back in line with the config that was just
         restored, then render the result for the wire.
 
@@ -120,7 +137,11 @@ class SnapshotsMixin(ServerContext):
         pool, the reconnect latch and the permission grants all live in memory and
         would otherwise still describe the config the user just rolled away from.
         Every step is wrapped — a resync problem must never turn a successful
-        recovery into a failure."""
+        recovery into a failure.
+
+        ``guards_before`` is the effective guard posture captured just before the
+        restore overwrote the settings (D7); it feeds the re-weaken disclosure
+        below."""
         if not result.ok:
             return {"ok": False, "error": result.error or _NO_TARGET}
 
@@ -152,7 +173,11 @@ class SnapshotsMixin(ServerContext):
         #     do NOT rewrite `connected`, which would be permanent for providers
         #     whose keys are perfectly fine.
         detail = result.detail
-        for sentence in (result.profile_change, self._keyless_provider_note()):
+        for sentence in (
+            result.profile_change,
+            self._keyless_provider_note(),
+            self._reweaken_notice(guards_before),
+        ):
             if sentence:
                 detail = f"{detail} {sentence}".strip()
 
@@ -162,6 +187,35 @@ class SnapshotsMixin(ServerContext):
         if result.binary_mismatch:
             payload["binaryMismatch"] = result.binary_mismatch
         return payload
+
+    def _reweaken_notice(self, guards_before: GuardConfig | None) -> str | None:
+        """D7 [R1]: the notice when a restore leaves the guard posture WEAKER than
+        before AND the restored active profile is Custom. Mandatory on THIS path —
+        every RPC restore comes through _finish_restore. The one restore that skips
+        it is the sidecar cold-start rebuild (main.py), deliberately: the database
+        was the broken thing, so the pre-restore posture is genuinely unknowable
+        and a comparison would be a guess dressed as a disclosure; that path shows
+        its own rebuild sentence instead (adversarial pass, 2026-07-24).
+
+        Compared here rather than in the manager because the guards are a live,
+        profile-gated concern the store-only manager knows nothing about. Wrapped
+        like every other resync step — a comparison failure must NEVER fail a
+        recovery, so any exception simply drops the notice. The restored profile is
+        re-resolved in step (a) above, and ``_stored_guard_config`` reads the
+        already-restored settings, so this reflects exactly where the user landed.
+        No new anchor is minted: the weakening's original anchor is undeletable and
+        still present."""
+        try:
+            profile = self._active_profile
+            if profile is None or profile.id is not ProfileId.CUSTOM:
+                return None
+            before = guards_before if guards_before is not None else GuardConfig()
+            after = self._stored_guard_config()
+            if weakenings_between(before, after):
+                return _RESTORE_REWEAKEN_NOTICE
+        except Exception:
+            return None
+        return None
 
     def _resync_providers(self) -> None:
         """Forget the router models of providers the restored config dropped, and

@@ -115,6 +115,31 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
     }
   }
 
+  // Per-row restore of ONE specific point by id (SnapshotsCard's "Restore this
+  // one", offered on permanent rows only — contract D7). Same outcome-handling as
+  // the one-action restore: the plain detail sentence stays in the card, and a
+  // landed restore re-reads everything the app cached from the old configuration.
+  async function handleRestoreSnapshot(id: string) {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await ipc.restoreSnapshot(id);
+      if (res.ok) {
+        setNotice(
+          [res.detail, res.binaryMismatch].filter(Boolean).join(" ") || "Your setup is back.",
+        );
+        onRestored?.();
+      } else {
+        setNotice(res.error ?? "There's no saved working setup to go back to yet.");
+      }
+    } catch {
+      setNotice("Addison couldn't put your setup back just now. Please try again.");
+    } finally {
+      setBusy(false);
+      refreshSnapshots();
+    }
+  }
+
   async function handleDeleteSnapshot(id: string) {
     setNotice(null);
     try {
@@ -139,6 +164,7 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
     refreshSnapshots,
     handleCreateSnapshot,
     handleRestoreLastWorking,
+    handleRestoreSnapshot,
     handleDeleteSnapshot,
   };
 }

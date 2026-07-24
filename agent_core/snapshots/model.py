@@ -40,5 +40,7 @@ class RestoreResult:
     binary_mismatch: str | None = None  # plain note when the anchor's build differs
     profile_change: str | None = None   # plain note when the restore moved the user
     # between profiles (and therefore modes)
-    providers_needing_a_key: tuple[str, ...] = ()   # restored provider rows whose
-    # keychain entry is gone; named in `detail`
+    # NOTE: the keyless-provider names live nowhere on this dataclass — rpc/snapshots.py
+    # (_keyless_provider_note) probes the keychain itself and appends the sentence to
+    # `detail`. A field here would be a second, never-written source of truth (dropped
+    # 2026-07-24, step 2; the HANDOFF loose end resolved to "drop").

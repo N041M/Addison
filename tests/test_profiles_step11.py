@@ -35,6 +35,7 @@ from agent_core.main import (
 )
 from agent_core.memory.store import Store
 from agent_core.profiles import (
+    CUSTOM,
     DEVELOPER,
     SIMPLE,
     resolve_active_profile,
@@ -315,7 +316,7 @@ def test_undo_registration_check_raises_regardless_of_profile():
     """Registering a MEDIUM tool without undo() raises in every profile — the
     single most important invariant (spec §9). A profile chooses WHICH tools get
     registered; it can never turn the undo check off."""
-    for profile in (SIMPLE, DEVELOPER):
+    for profile in (SIMPLE, DEVELOPER, CUSTOM):
         # The registry each profile uses is the same class with the same check;
         # build_registry(profile) only registers the (already-safe) v1 set.
         build_registry(profile)  # does not raise: all v1 tools are undoable/LOW
@@ -328,7 +329,7 @@ def test_key_handling_is_not_a_profile_concern():
     """Key isolation (§8.3) holds identically in both profiles: nothing in the
     Profile config names or carries key material, so switching profiles cannot
     open a key-reading code path — there is nowhere in the config for a key to live."""
-    for profile in (SIMPLE, DEVELOPER):
+    for profile in (SIMPLE, DEVELOPER, CUSTOM):
         for field in dataclasses.fields(profile):
             name = field.name.lower()
             assert not any(t in name for t in ("key", "token", "secret", "password"))
@@ -395,11 +396,23 @@ def test_profile_get_default_then_set_flips_flags_immediately(tmp_path):
         got = _rpc(reader, writer, 1, Method.PROFILE_GET)["result"]
         assert got["activeProfile"] == "simple"
         assert got["mode"] == "safe"   # Simple derives SAFE mode (policy.py)
-        assert [p["id"] for p in got["profiles"]] == ["simple", "developer"]
+        # Step 2 (D4): Custom joins the selector list. Simple/Developer keep their
+        # exact serialized shape (no new keys); Custom ALONE carries advanced:true.
+        assert [p["id"] for p in got["profiles"]] == ["simple", "developer", "custom"]
         # Selector copy is present and honest about identical safety.
         dev = next(p for p in got["profiles"] if p["id"] == "developer")
         assert dev["label"] == "Developer"
         assert "Same safety rules" in dev["description"]
+        # Simple/Developer entries do NOT grow the advanced key.
+        assert "advanced" not in dev
+        assert "advanced" not in next(p for p in got["profiles"] if p["id"] == "simple")
+        # Custom is flagged advanced and its copy names the way-back guarantee (D8).
+        custom = next(p for p in got["profiles"] if p["id"] == "custom")
+        assert custom["label"] == "Custom"
+        assert custom["advanced"] is True
+        assert "Going back to a working setup always stays possible" in custom["description"]
+        # profile.get's mode stays 'safe'|'open' — never 'custom' (D1/R10).
+        assert got["mode"] in ("safe", "open")
         assert got["flags"] == {
             "exposeRoutinePlan": False,
             "rawDiagnostics": False,

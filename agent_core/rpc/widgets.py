@@ -154,6 +154,9 @@ class WidgetsMixin(ServerContext):
             mode=mode,
             destructive=call_is_destructive(tool, args),
             detail=call_permission_detail(tool, args),
+            # Same resolution function the live loop + routine engine read (D3):
+            # a Run pill can never skip a card (or add one) the chat would not.
+            guards=self._effective_guards(),
         )
         if status != PermissionStatus.GRANTED:
             self._respond(

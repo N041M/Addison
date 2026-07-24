@@ -276,6 +276,39 @@ describe("normalizeProfile", () => {
     });
   });
 
+  it("carries `advanced` on the Custom profile only, and never invents it (step 2)", () => {
+    const parsed = normalizeProfile({
+      activeProfile: "custom",
+      mode: "open",
+      profiles: [
+        { id: "simple", label: "Simple", description: "Approachable by default." },
+        { id: "developer", label: "Developer", description: "Power on request." },
+        { id: "custom", label: "Custom", description: "For advanced users.", advanced: true },
+      ],
+    });
+    // The two basic entries keep their exact serialized shape — no `advanced` key.
+    expect(parsed?.profiles[0]).toEqual({
+      id: "simple",
+      label: "Simple",
+      description: "Approachable by default.",
+    });
+    expect("advanced" in parsed!.profiles[1]).toBe(false);
+    // Only Custom carries it, and only because the wire said `true`.
+    expect(parsed?.profiles[2]).toEqual({
+      id: "custom",
+      label: "Custom",
+      description: "For advanced users.",
+      advanced: true,
+    });
+  });
+
+  it("only strict true marks a profile advanced (a truthy value doesn't)", () => {
+    const parsed = normalizeProfile({
+      profiles: [{ id: "custom", label: "Custom", description: "", advanced: 1 }],
+    });
+    expect("advanced" in parsed!.profiles[0]).toBe(false);
+  });
+
   it("returns null for a non-object payload", () => {
     expect(normalizeProfile(null)).toBeNull();
     expect(normalizeProfile(undefined)).toBeNull();

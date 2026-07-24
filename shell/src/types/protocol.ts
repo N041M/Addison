@@ -65,6 +65,15 @@ export const Method = {
   SnapshotRestoreLastWorking: "snapshot.restoreLastWorking",
   SnapshotDelete: "snapshot.delete",
 
+  // Guards — the two tunable prompting guards of the Custom profile (Phase-2
+  // step 2). They modulate ONLY how often the gate asks before acting; they can
+  // never touch a global floor (G1/G2/G3/G4). `get` returns the current values,
+  // the fixed defaults, and whether they're effective right now (profile is
+  // Custom); `set` validates, mints the G4 undeletable anchor when a save
+  // weakens a guard, then persists — all core-side.
+  GuardsGet: "guards.get",
+  GuardsSet: "guards.set",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.

@@ -331,6 +331,65 @@ and the save / restore / confirm buttons are all **≥44px** tall.
 
 ---
 
+## 13b. Custom profile + guards (Phase-2 step 2 — the G4 anchor caller)
+
+The Settings surfaces for the Custom profile and its two prompting guards. A
+failure in the **anchor** steps below is a G4 floor failure — file it with the
+same priority as §13a.
+
+**Reaching Custom (deliberately deep).** On the Profile card, Custom must NOT
+appear as an ordinary third option. An **"Advanced…"** disclosure reveals it;
+selecting it shows a two-step inline confirm (never `window.confirm`) carrying
+the honest description — *"Custom — for advanced users. Addison can do
+everything the Developer profile allows, and you choose how often it asks you
+first. Going back to a working setup always stays possible."* Backing out
+changes nothing. Confirming switches the profile; a **"Before switching
+profile"** restore point appears (§13a idiom).
+
+**The guard panel.** Visible ONLY while Custom is active (switch to Simple or
+Developer — the panel is gone, not greyed). Exactly TWO guards, nothing else —
+if a third control ever appears here, that is a design breach, not a nit. Intro
+line: *"These settings change how often Addison asks you before acting. They
+never change Addison's ability to go back to a working setup."*
+
+**Tightening is free.** Move either guard to a stricter option and save: no
+confirm, no new permanent row.
+
+**Weakening mints the anchor.** Move a guard to a weaker option and save: an
+inline confirm first — *"Addison will ask you less often before acting. Before
+this changes, Addison saves a permanent restore point of the last setup it saw
+working — it can't be deleted, and you can always go back to it."* After
+confirming, open Restore points: a **"Before turning a guard off"** row exists,
+marked **Permanent**, with **no Remove control**.
+
+**The anchor dedupes.** Weaken → tighten → weaken again (no chat messages in
+between): still exactly ONE "Before turning a guard off" row. Send a chat
+message between rounds (a new verified config) and weaken again: a second
+anchor is now legitimate.
+
+**Ask-once means everything the tool does.** With the destructive card set to
+"Ask once" (Developer surface, so `!run`-style dev commands): approve one
+destructive command — a DIFFERENT destructive command from the same tool then
+runs with **no card**. That breadth is what the option's copy promises
+("anything else it does goes ahead without asking"). Switch to Simple and back:
+the next destructive action asks again — the approval died with the switch.
+
+**Never-ask still logs.** With the scope on "Never ask", destructive actions run
+without cards but every one still appears in the Activity Panel — fewer prompts,
+not no gate.
+
+**Per-row restore, permanent rows only.** In Restore points, Permanent rows
+(anchor / genesis) carry **"Restore this one"** with the two-step confirm naming
+the row; ordinary rows offer only Remove. Restoring the anchor works from
+Simple too (§13a's C6 rule — the way back is never mode-hidden).
+
+**The restore disclosure.** Under Custom: save a restore point while weakened,
+tighten the guards, then restore that point. The result notice must include
+*"Going back to this setup also turned down how often Addison asks before
+acting."* — a recovery that lowers your protections says so.
+
+---
+
 ## 14. Narrow window / mobile layout
 
 Addison is a desktop app, so "mobile" = the **narrow-window layout** below the

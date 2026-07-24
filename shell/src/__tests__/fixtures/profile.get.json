@@ -11,6 +11,12 @@
       "id": "developer",
       "label": "Developer",
       "description": "Developer \u2014 extra visibility for technical users. Same safety rules."
+    },
+    {
+      "id": "custom",
+      "label": "Custom",
+      "description": "Custom \u2014 for advanced users. Addison can do everything the Developer profile allows, and you choose how often it asks you first. Going back to a working setup always stays possible.",
+      "advanced": true
     }
   ],
   "flags": {

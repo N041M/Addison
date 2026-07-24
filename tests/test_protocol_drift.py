@@ -42,3 +42,19 @@ def test_method_sets_are_in_lockstep():
         f"protocol.py and protocol.ts drifted: only in protocol.py={sorted(only_python)}, "
         f"only in protocol.ts={sorted(only_typescript)}"
     )
+
+
+def test_genesis_label_matches_across_languages():
+    """The one user-facing string BOTH sides must hold byte-for-byte (HANDOFF
+    step-1 loose end, closed 2026-07-24): the Restore card appends its "this
+    clears everything" sentence by comparing the wire label against
+    ``GENESIS_LABEL`` in client.ts, and the core writes that label from
+    ``REASONS["genesis"]``. If they drift, the genesis warning silently stops
+    appearing — a wrong-copy failure no behavioural test on either side alone
+    can see, which is exactly the drift-test shape."""
+    from agent_core.snapshots.snapshot_manager import REASONS
+
+    client_ts = (_REPO_ROOT / "shell" / "src" / "ipc" / "client.ts").read_text(encoding="utf-8")
+    match = re.search(r'export const GENESIS_LABEL = "([^"]+)"', client_ts)
+    assert match is not None, "GENESIS_LABEL is gone from client.ts — the genesis sentence broke"
+    assert match.group(1) == REASONS["genesis"]

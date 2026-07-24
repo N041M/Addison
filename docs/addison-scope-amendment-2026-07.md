@@ -306,9 +306,9 @@ This is how "let advanced users disable guards" coexists with "no one can brick
 Addison": you can lower the prompts, but you can never lower the floor, and
 lowering a prompt guarantees you a recovery point.
 
-*Open question (§13): whether Custom is reachable from Simple directly, or only
-after switching to Developer first. The current lean: reachable but deep +
-questioned, regardless of starting profile.*
+*~~Open question (§13)~~ — resolved as the lean (Phase-2 step 2, 2026-07-24):
+reachable from any profile, behind an "Advanced…" disclosure and a two-step
+inline confirm. See §13 Q3.*
 
 ---
 
@@ -550,8 +550,12 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
    undeletable row, which would create the codebase's only
    `DELETE … WHERE undeletable = 1` — the exact statement G4 says must not exist. Its
    stated worry was storage, and Q8's answer removes it: an anchor is a few KB.
-3. **Custom reachability** — from Simple directly, or only via Developer first
-   (current lean: reachable-but-deep regardless).
+3. ~~**Custom reachability**~~ — **RESOLVED (Phase-2 step 2, 2026-07-24), as the
+   lean:** reachable from ANY profile, deep + questioned. `profile.get` marks the
+   Custom entry `advanced: true`; the frontend renders it only behind an
+   "Advanced…" disclosure, and selecting it runs a two-step inline confirm
+   carrying the honest capability description before `profile.set` fires. If the
+   owner ever wants stronger "questioning", it is a frontend-only change.
 4. ~~**Verified-working definition**~~ — **RESOLVED (Phase-2 step 1).** **Any turn
    whose response was sent** — execution reached `_respond({"ok": True, …})`. A tool
    failure is deliberately *not* a turn failure (the orchestrator turns a tool

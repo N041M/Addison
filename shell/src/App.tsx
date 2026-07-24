@@ -52,6 +52,7 @@ import { useModelSelection } from "./hooks/useModelSelection";
 import { useWidgets } from "./hooks/useWidgets";
 import { useSkills } from "./hooks/useSkills";
 import { useSnapshots } from "./hooks/useSnapshots";
+import { useGuards } from "./hooks/useGuards";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -137,7 +138,15 @@ export function App() {
       widgetsState.refreshWidgets();
       widgetsState.refreshStats();
       skillsState.refreshSkills();
+      guardsState.refreshGuards();
     },
+  });
+  // The Custom-profile guards (Phase-2 step 2). A weakening save mints a permanent
+  // restore point core-side, so a successful save re-reads the snapshots list — the
+  // way back the confirm promised should appear at once.
+  const guardsState = useGuards({
+    connected,
+    onSaved: () => snapshotsState.refreshSnapshots(),
   });
   const turn = useTurn({
     connected,
@@ -386,6 +395,9 @@ export function App() {
         // and library reflect the new mode immediately — and so their empty
         // states settle cleanly when the lists shrink.
         widgetsState.refreshWidgets();
+        // Switching to (or from) Custom changes whether the guards are effective;
+        // re-read so the guard panel reflects the new profile at once.
+        guardsState.refreshGuards();
       })
       .catch((err) => {
         setStatusBanner(
@@ -645,6 +657,7 @@ export function App() {
             models={models}
             skills={skillsState}
             snapshots={snapshotsState}
+            guards={guardsState}
             profile={profile}
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}

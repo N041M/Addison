@@ -69,8 +69,18 @@ class Method:
     ROUTINE_LIST = "routine.list"
     ROUTINE_RUN = "routine.run"
     ROUTINE_DELETE = "routine.delete"
-    PROFILE_GET = "profile.get"      # {} -> {activeProfile, profiles: [{id,label,description}], flags}
-    PROFILE_SET = "profile.set"      # {profileId} -> {ok}; persisted in app_settings (§4.7)
+    # profile.get profiles entries are {id,label,description}; the Custom entry ALSO
+    # carries "advanced": true (D4) — Simple/Developer entries never grow the key.
+    PROFILE_GET = "profile.get"      # {} -> {activeProfile, mode, profiles: [...], flags}
+    PROFILE_SET = "profile.set"      # {profileId} -> {ok, mode}; persisted in app_settings (§4.7)
+
+    # Custom-profile prompting guards (scope amendment 2026-07-20, §7; D2/D5). Two
+    # settings-backed guards that change ONLY how often Addison asks before acting;
+    # they never touch a GLOBAL floor (G1–G4). Lowering one ("weakening") mints the
+    # G4 undeletable anchor FIRST, so a working setup always stays reachable. Values
+    # are the closed snake-case slugs (policy.py); keys are camelCase (house style).
+    GUARDS_GET = "guards.get"        # {} -> {destructiveCard, autoGrantScope, defaults, active}
+    GUARDS_SET = "guards.set"        # {destructiveCard?, autoGrantScope?} -> {ok, destructiveCard?, autoGrantScope?, error?}
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

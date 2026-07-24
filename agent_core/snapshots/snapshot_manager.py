@@ -1488,7 +1488,18 @@ class SnapshotManager:
         Returns None only when there is no verified row to anchor at all, which
         genesis makes unreachable in practice. Step 2's caller must nonetheless
         refuse the guard toggle on None: weakening without a way back is exactly
-        what G4 forbids."""
+        what G4 forbids.
+
+        DEDUPE [R7]: an anchor is minted once per distinct weakening SAVE, not per
+        toggle flick. Before minting, if an undeletable row of THIS reason already
+        holds byte-for-byte the config this call would copy (same
+        ``state_fingerprint``), that existing row IS the anchor this weakening
+        needs — it is returned unchanged and nothing new is written. So
+        weaken -> tighten -> weaken-again-with-the-same-known-good-config produces
+        ONE anchor, and the anchor list never grows on a repeat. It also absorbs a
+        crash between mint and the caller's persist [R8]: a re-attempt finds the
+        existing anchor by fingerprint and does not double-mint."""
+        reason = reason if reason in REASONS else "other"
         try:
             refs = self._store.verified_config_snapshot_refs()
         except Exception:
@@ -1497,19 +1508,54 @@ class SnapshotManager:
             payload = self._load_payload(ref.get("id"))
             if payload is None:
                 continue
+            fingerprint = str(ref.get("state_fingerprint") or _fingerprint(payload["tables"]))
+            existing = self._existing_anchor(reason, fingerprint)
+            if existing is not None:
+                return existing
             binary_ref = self._build_reference()
             version = payload.get("version")
             return self._write_row(
                 tables=payload["tables"],
                 trigger="auto",
-                reason=reason if reason in REASONS else "other",
+                reason=reason,
                 verified_working=True,
                 undeletable=True,
-                fingerprint=str(ref.get("state_fingerprint") or _fingerprint(payload["tables"])),
+                fingerprint=fingerprint,
                 payload_version=version if isinstance(version, int) else PAYLOAD_VERSION,
                 captures_binary=binary_ref is not None,
                 binary_ref=binary_ref,
             )
+        return None
+
+    def _existing_anchor(self, reason: str, fingerprint: str) -> ConfigSnapshot | None:
+        """An existing UNDELETABLE row of ``reason`` holding exactly ``fingerprint``,
+        or None. The dedupe key for ``mint_anchor``: undeletable + reason + the
+        fingerprint of the config the anchor would copy. Reason-scoped so a genesis
+        or pre_upgrade bottom row (also undeletable) is never mistaken for a G4
+        anchor. Any store failure reads as "no existing anchor" — minting a fresh
+        one is the safe direction, since a missing anchor is what G4 forbids.
+
+        A match must also still LOAD (row or sidecar) before it counts: dedupe is
+        ``guards.set``'s confirmation that a way back exists, and confirming with a
+        row whose payload has rotted would let a weakening proceed against an
+        anchor that cannot restore. An unloadable match falls through to a fresh
+        mint — the same carefulness the mint loop itself applies to its source row
+        (adversarial pass, 2026-07-24)."""
+        try:
+            rows = self._store.list_config_snapshots()
+        except Exception:
+            return None
+        for row in rows:
+            if (
+                row.get("undeletable")
+                and row.get("reason") == reason
+                and row.get("state_fingerprint") == fingerprint
+            ):
+                snapshot_id = row.get("id")
+                if isinstance(snapshot_id, str) and snapshot_id:
+                    if self._load_payload(snapshot_id) is None:
+                        continue
+                    return self._store.get_config_snapshot(snapshot_id)
         return None
 
     def _build_reference(self) -> str | None:

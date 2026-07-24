@@ -5,16 +5,20 @@ For the next working session. Read **CLAUDE.md** first (repo law), then
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: Phase-2 step 2 — the Custom profile + guard model + the G4 anchor
-minting caller.** Step 1 (the snapshot/rollback floor, G3) is **merged**, and the
-**step-1 ledger is retired** (2026-07-24, the `retire-step1-ledger` branch):
-`snapshot_now` shipped as a LOW capture-only tool, the Restore card now says so
-when there is no verified restore point, and the recommended source-level lock on
-the verified-flag narrowing is built
+**Next up: Phase-2 step 3 (routing strategies) and/or step 5 (harness +
+workspace-trust) — 3–4 and 5–8 may run in parallel now that 1–2 have landed.**
+Step 1 (the snapshot/rollback floor, G3) is **merged**; the **step-1 ledger is
+retired** (2026-07-24, `retire-step1-ledger`): `snapshot_now` as a LOW
+capture-only tool, the Restore card's honest no-verified-target line, and the
+source-level lock on the verified-flag narrowing
 (`test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing`).
+**Phase-2 step 2 is BUILT** (2026-07-24, `step2-custom-profile-guards` — see
+"What shipped 07-24: step 2" below).
 
-**Everything through PR #49 is on `master`.** `fix-signing-instructions` (the
-signing-script trust fix + this handoff rewrite) is pushed as **PR #50**.
+**Everything through PR #49 is on `master`.** Open, stacked in order:
+**PR #50** (signing trust fix + handoff rewrite) → **PR #51** (ledger
+retirement) → the step-2 PR. Merge in that order; each later diff shrinks to
+its own commit once its parent merges.
 
 ## Read this first: the standard this repo is held to
 
@@ -180,6 +184,85 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
   `addison-design-doc.md` + `addison-engineering-spec.md` were **un-gitignored
   and are now tracked** in the repo.
 
+## What shipped 07-24: step 2 — Custom profile + guard model + the G4 anchor caller
+
+Built from a frozen contract that was **adversarially reviewed before any code**
+(verdict: amend-then-build; six MUST-FIX findings integrated — the review caught
+two real safety holes the draft missed: a targeted restore silently re-weakening
+guards, and a session destructive grant surviving a switch back to Simple).
+Coordinator personally reproduced four mutation kills (CUSTOM→SAFE derivation,
+session-grant leak into `_grants`, guards.set ignoring a mint failure, dedupe
+removal); every regression test in the wave is mutation-proven.
+
+- **`ProfileId.CUSTOM`** (profiles.py) — Developer's surface, `advanced: true` on
+  the wire; the frontend hides it behind an "Advanced…" disclosure + two-step
+  confirm. `mode_for_profile`: DEVELOPER **or CUSTOM** → OPEN (policy.py; a
+  SAFE-derived Custom would have nothing to tune). `profile.get`'s `mode` stays
+  `'safe'|'open'` — never `'custom'`; the guard panel keys off the profile.
+- **`GuardConfig`** (policy.py) — two closed vocabularies with total strictness
+  orders: `guard_destructive_card` `per_invocation` > `session`;
+  `guard_auto_grant_scope` `none` > `non_destructive` > `everything`. Defaults ≡
+  today's OPEN, and `authorize(guards=None)` ≡ defaults — that equivalence is the
+  Simple/Developer freeze, proven by the whole pre-existing suite passing
+  untouched. Guards are EFFECTIVE only under Custom (`_effective_guards`, the ONE
+  resolution function all three authorize call sites read — orchestrator, routine
+  engine, widget Run pill).
+- **"Ask once" lives in a dedicated set.** A `session` destructive approval is
+  remembered in `_destructive_session_grants`, NEVER `_grants` — the SAFE
+  `check()` path reads only `_grants`, so the grant is structurally invisible to
+  Simple. Belt: `profile.set` now calls `revoke_all()` + `clear_denials()` on
+  every switch (the revoke_all docstring's own posture principle).
+- **`guards.set` is the G4 anchor caller** (rpc/guards.py): validate → compute
+  weakenings → **mint the anchor FIRST** (refuse the whole set, nothing persists,
+  if the anchor cannot mint) → persist. `mint_anchor` gained fingerprint
+  **dedupe**: one anchor per distinct weakening save; weaken→tighten→weaken
+  churn cannot grow an unbounded permanent list, and a crash between mint and
+  persist re-mints nothing on retry.
+- **Restore re-weaken disclosure** (rpc/snapshots.py): when a restore lands on a
+  weaker guard posture under Custom, the result's `detail` says so in plain words.
+  No new anchor — the original weakening's anchor is undeletable and still there.
+- **`created_in_mode`:** artifacts stamp `'open'` under Custom (Custom IS
+  OPEN-derived; the three hard-coded `== 'open'` hiding/refusal filters keep
+  working, so Custom-built widgets/routines hide in Simple). ONLY
+  `config_snapshots` records `'custom'` (main.py `mode_ref`) — display-only, C6
+  never filters.
+- **Frontend:** Advanced disclosure + two-step confirm on the profile card; the
+  Custom guard panel (two guards only — the floors are structurally absent from
+  the panel), frozen plain-language copy including the honest cost of "Never ask";
+  weakening saves get the permanent-anchor confirm, tightening saves go straight
+  through; `ipc.restoreSnapshot` finally has its caller — per-row "Restore this
+  one" on PERMANENT rows only (owner decision 2026-07-24).
+- Also: dropped the never-written `RestoreResult.providers_needing_a_key`
+  (loose end resolved: the keychain probe computes names itself); amendment §13
+  **Q3 closed** as the lean (reachable from any profile, deep + questioned).
+
+**The post-build rigor pass (same day) — read this before trusting the wave
+above.** A second adversarial reviewer attacked the finished code with
+reproduce-don't-read rules and found **one real bug the first review, both build
+agents, and 25 green tests all missed**: `auto_grant_scope='none'` — the
+STRICTEST-labelled option — routed destructive calls into the coarse SAFE flow,
+so one approved `ls` silently covered every later `rm -rf` with no card and no
+command text, under copy promising "asks before every kind of action", and
+counted as a *tightening* so no anchor was minted. Fixed: destructive never
+enters the coarse flow under any scope; the scope knob governs everyday actions,
+the card knob alone governs destructive ones ('everything' stays the one explicit
+override). Two regression tests pin it, both proven red against the reverted fix.
+The lesson is the standing one: the test gap was structural — the only
+scope-'none' test used a non-destructive tool, and its one-arg stub would have
+TypeError'd on the destructive path, so the wrong assumption protected itself.
+Also from the pass: `guards.set` now persists its two keys in ONE commit
+(`Store.set_settings`; half-a-pair after "nothing was changed" was a lie
+waiting); anchor dedupe refuses to confirm an anchor whose payload no longer
+loads (row rotted + sidecar gone → fresh mint); the D7 docstring now names the
+one path that legitimately skips the notice (sidecar cold-start — the
+pre-restore posture is unknowable there); the "Ask once" copy now states its
+real breadth ("anything else it does goes ahead without asking"); TESTING-
+CHECKLIST **§13b** is the manual QA script for all of this; and a **live
+end-to-end driver run** (the HANDOFF pattern, 17 checks, including one real
+haiku turn) verified the whole Custom flow over real JSON-RPC — dispatch,
+anchor, dedupe, D7 notice, C6 under SAFE, and `snapshot_now` writing through
+`main()`'s late-bound holder.
+
 ## What shipped 07-24 — the security + test-hardening wave (#48, #49)
 
 After step 1 merged (#47), a test-quality measurement turned up a **live security
@@ -328,21 +411,16 @@ on the `retire-step1-ledger` branch, each with mutation-proven tests:
 Then:
 
 1. ~~**Snapshot/restore subsystem (G3)**~~ — **DONE** (see the section above).
-2. **Custom profile + guard model + undeletable anchor** (`policy.py`).
-   ⚠️ **Scoping finding, checked against the code:** amendment §7 names four
-   tunable guards, but only **two** of their capabilities exist — the
-   per-invocation destructive card and the auto-grant scope. **Workspace-trust
-   does not exist until step 5, and keyword-gate strictness until step 8.** Ship
-   the panel with the two real guards and grow it as those land: a toggle that
-   controls nothing, sitting in a safety panel, is a lie in the worst possible
-   place. Step 1 left four things built and waiting:
-   `mint_anchor()` (fully implemented and tested, **no caller** — the Custom guard
-   toggle is the caller); the `custom` value already admitted by
-   `created_in_mode`'s CHECK constraint, so no migration is needed; the
-   `guard_weakened` reason slug, reserved and unwritten; and
-   `ipc.restoreSnapshot`, a typed targeted-restore wrapper with no caller, for the
-   anchor path. (The **`snapshot_now` tool** originally slated for this step
-   landed early, in the 2026-07-24 ledger retirement — see above.)
+2. ~~**Custom profile + guard model + undeletable anchor**~~ — **DONE
+   (2026-07-24; see "What shipped 07-24: step 2" above).** Shipped with the TWO
+   real guards only, per the scoping finding — the panel grows a
+   workspace-trust guard at step 5 and a keyword-gate guard at step 8 **as those
+   capabilities land, never before** (a toggle that controls nothing, in a
+   safety panel, is a lie in the worst possible place). All four step-1
+   leave-behinds found their consumer: `mint_anchor()` has its caller
+   (`guards.set`, now with fingerprint dedupe), `created_in_mode='custom'` is
+   written (snapshots only), `guard_weakened` rows are minted, and
+   `ipc.restoreSnapshot` drives the per-row restore on permanent rows.
 3. **Routing strategies** (4 + custom) + companion prefer-quality/prefer-free
    toggle + free-model disclaimer + graceful fallback/cooldown.
 4. **Free-model endpoints** — legit free/local + add-an-endpoint-by-prompting.
@@ -357,7 +435,9 @@ Then:
 Steps 3–4 (companion-facing) can run in parallel with 5–8 once 1–2 land.
 Close the amendment's **§13 open questions** as you go. **Three are now closed —
 do not relitigate them**, the reasoning is recorded inline in §13 and summarised
-below. Still open: keyword syntax (Q1), Custom reachability (Q3), auto-routing
+below. **Q3 (Custom reachability) closed 2026-07-24 with step 2** — as the lean:
+reachable from any profile, behind an Advanced disclosure + two-step confirm
+(recorded inline in §13). Still open: keyword syntax (Q1), auto-routing
 depth (Q5), MCP-in-SAFE constraint (Q6), widget capability declaration (Q7).
 
 ### Resolved §13 questions (decided, with reasons — don't reopen)
@@ -765,21 +845,14 @@ report never arrived.
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 - `shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets moved
   inline on mobile) — delete or repurpose.
-- **Three loose ends left by step 1, all deliberate, all small:**
-  - `RestoreResult.providers_needing_a_key` **has no writer**. The keychain probe
-    lives in `rpc/snapshots.py` (the manager may not touch the keychain, by
-    design) and it computes the names itself rather than filling the field. Either
-    drop the field in step 2 or give it a writer — don't leave it looking populated.
-  - `ipc.restoreSnapshot` **has no caller.** The Restore points card offers save /
-    restore-last-working / per-row remove, but no per-row *restore*, because
-    §1.1's card spec didn't list one. It is typed and waiting for step 2's anchor
-    path. If a list of restore points that offers no way to pick one reads wrong in
-    QA, it is a one-line card change.
-  - **No cross-language test pins the genesis label.** `REASONS["genesis"]` in
-    `snapshot_manager.py` and `GENESIS_LABEL` in `shell/src/ipc/client.ts` must
-    stay equal — the card appends its "this clears everything" sentence by
-    comparing them — but nothing enforces it. One line in `tests/ipc_fixtures.py`
-    or the drift test would close it.
+- **~~Three loose ends left by step 1~~ — ALL THREE CLOSED (2026-07-24, step 2 +
+  its rigor pass):** `RestoreResult.providers_needing_a_key` was dropped (the
+  keychain probe in `rpc/snapshots.py` computes the names itself — a field would
+  be a second, never-written source of truth); `ipc.restoreSnapshot` got its
+  caller (per-row "Restore this one" on permanent rows); and
+  `test_genesis_label_matches_across_languages` in `tests/test_protocol_drift.py`
+  now pins `REASONS["genesis"]` ≡ `GENESIS_LABEL` byte-for-byte
+  (mutation-proven).
 
 ## Working conventions (established with the user)
 
