@@ -25,11 +25,13 @@ import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
+import type { WorkspaceCardState } from "../hooks/useWorkspace";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
 import { SnapshotsCard, SaveSnapshotButton } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
+import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
 import { RoutingCard, type RoutingCardModel } from "./RoutingCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -57,6 +59,11 @@ interface Props {
    * caller (older tests) still renders — the routing card is simply omitted then.
    * The card itself decides toggle vs. full from the core's `surface`. */
   routing?: RoutingCardState;
+  /** The workspace-trust bundle (useWorkspace; Phase-2 step 5). Optional so a
+   * partial caller (older tests) still renders — the card is simply omitted then.
+   * It shows ONLY on the Developer/Custom surfaces (keyed off the active profile,
+   * never the mode); Simple never sees it. */
+  workspace?: WorkspaceCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -137,6 +144,7 @@ export function SettingsPage({
   snapshots,
   guards,
   routing,
+  workspace,
   profile,
   onSetProfile,
   diagnostics,
@@ -282,6 +290,22 @@ export function SettingsPage({
               </Card>
             </CardSlot>
           )}
+          {/* Workspace trust — the coding-harness boundary (Phase-2 step 5). Shown
+              ONLY on the Developer and Custom surfaces (keyed off the active
+              profile, never the policy mode); Simple never sees it. It sits with
+              the other "how freely Addison may act" controls, above Restore points
+              so the way back is always in view alongside a loosening. */}
+          {workspace &&
+            (profile?.activeProfile === "developer" || profile?.activeProfile === "custom") && (
+              <CardSlot>
+                <Card
+                  title="Folders Addison may work in"
+                  subtitle="Trust a project folder so Addison can edit files there without asking each time."
+                >
+                  <WorkspaceTrustPanel connected={connected} workspace={workspace} />
+                </Card>
+              </CardSlot>
+            )}
           {/* Restore points sit directly after Profile on purpose: the person who
               has just changed how freely Addison may act should see the way back
               in the same breath (G3). */}
