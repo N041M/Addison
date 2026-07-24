@@ -74,6 +74,17 @@ export const Method = {
   GuardsGet: "guards.get",
   GuardsSet: "guards.set",
 
+  // Add-a-model-server by prompt + "make it cheaper" (Phase-2 step 4). Both
+  // follow the widget precedent: the CORE inspects the conversation, drafts a
+  // proposal, and holds it; a separate confirm applies it. The turn reply itself
+  // carries NO model-authored actionable payload and NEVER a key (G1). The
+  // endpoint key goes straight to the OS keychain via the Rust `storeProviderKey`
+  // command — it is never part of an `endpoint.*` frame.
+  EndpointProposeFromConversation: "endpoint.proposeFromConversation",
+  EndpointConfirmAdd: "endpoint.confirmAdd",
+  CostPlanPropose: "costPlan.propose",
+  CostPlanApply: "costPlan.apply",
+
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
   // from, the Developer custom order, and whether the person sees the Simple

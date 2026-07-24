@@ -34,6 +34,8 @@ import {
   type RoutingStrategy,
   type RoutingSurface,
   type AnsweredWith,
+  type EndpointProposal,
+  type CostPlan,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -475,6 +477,28 @@ export const ipc = {
     strategy?: RoutingStrategy;
     customChain?: string[];
   }): Promise<RoutingSetResult> => call(Method.RoutingSet, patch).then(parseRoutingSet),
+
+  // Add-a-model-server by prompt (Phase-2 step 4). `proposeEndpoint` asks the core
+  // whether the CURRENT turn's user text named an add-endpoint address; it resolves
+  // to a drafted proposal or `null` (nothing to add — Addison answers in prose).
+  // `confirmAddEndpoint` applies (or declines) the held draft by running the
+  // existing `provider.connect {provider:"custom", baseUrl}` path CORE-side. The
+  // key is NEVER a parameter here — it went to the keychain via `storeProviderKey`
+  // before this call (G1); this frame carries only the base URL + the decision.
+  proposeEndpoint: (): Promise<EndpointProposal | null> =>
+    call(Method.EndpointProposeFromConversation).then(parseEndpointProposal),
+  confirmAddEndpoint: (baseUrl: string, accept: boolean): Promise<EndpointConfirmResult> =>
+    call(Method.EndpointConfirmAdd, { baseUrl, accept }).then(parseEndpointConfirm),
+
+  // "Make it cheaper" (Phase-2 step 4). `proposeCostPlan` asks the core to draft the
+  // canned prefer-cheaper plan (a fixed guidance note + the cost_first strategy);
+  // it resolves to the plan or `null`. `applyCostPlan` applies (or declines) it —
+  // the core validates, snapshots FIRST (refusing the whole change if the restore
+  // point can't be saved), then persists the note + strategy atomically.
+  proposeCostPlan: (): Promise<CostPlan | null> =>
+    call(Method.CostPlanPropose).then(parseCostPlan),
+  applyCostPlan: (accept: boolean): Promise<CostPlanApplyResult> =>
+    call(Method.CostPlanApply, { accept }).then(parseCostPlanApply),
 };
 
 // ---------------------------------------------------------------------------
@@ -1012,6 +1036,85 @@ export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
     label: typeof raw.label === "string" && raw.label ? raw.label : raw.modelId,
     free: raw.free === true,
     routed: raw.routed === true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Add-a-model-server + "make it cheaper" shapes + defensive parsers (Phase-2
+// step 4). Both propose parsers fail CLOSED: a shape the card can't act on is
+// `null`, so no card renders and Addison falls back to prose. Nothing here is
+// secret — the endpoint key NEVER rides in these payloads (G1); it goes straight
+// to the keychain via `storeProviderKey`.
+// ---------------------------------------------------------------------------
+
+/** endpoint.confirmAdd → {ok, error?}. A failed connect is a resolved
+ * {ok:false} carrying a plain, already-user-ready sentence, never a reject. */
+export interface EndpointConfirmResult {
+  ok: boolean;
+  error?: string;
+}
+
+/** costPlan.apply → {ok, snapshotId?, error?}. `snapshotId` rides on success (the
+ * restore point saved before the change). An expected refusal — most importantly
+ * "the restore point couldn't be saved, so nothing changed" — is a resolved
+ * {ok:false} carrying a plain sentence, never a reject. */
+export interface CostPlanApplyResult {
+  ok: boolean;
+  snapshotId?: string;
+  error?: string;
+}
+
+/**
+ * Parse `endpoint.proposeFromConversation`. Fails CLOSED: `{none}`, a missing
+ * payload, or anything without a usable http(s) base URL yields `null` — no card.
+ * The http(s) scheme check is a belt-and-braces guard on top of the core's own
+ * `_base_url_problem` validation: the card renders the URL as the address the user
+ * is about to trust, so a non-web scheme must never reach it. `isLocalOrLan` is
+ * trusted only on a strict boolean `true`.
+ */
+export function parseEndpointProposal(result: unknown): EndpointProposal | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  if (typeof obj.baseUrl !== "string" || !obj.baseUrl) return null;
+  if (!/^https?:\/\//i.test(obj.baseUrl)) return null;
+  return {
+    baseUrl: obj.baseUrl,
+    isLocalOrLan: obj.isLocalOrLan === true,
+  };
+}
+
+function parseEndpointConfirm(result: unknown): EndpointConfirmResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/**
+ * Parse `costPlan.propose`. Fails CLOSED: `{none}`, a missing payload, or a plan
+ * without BOTH a usable skill name and non-empty instructions yields `null` — no
+ * card. `strategy` is hard-set to `cost_first` (the only value this flow ever
+ * uses); we never trust a different value off the wire onto the card.
+ */
+export function parseCostPlan(result: unknown): CostPlan | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  if (typeof obj.skillName !== "string" || !obj.skillName) return null;
+  if (typeof obj.skillInstructions !== "string" || !obj.skillInstructions) return null;
+  return {
+    skillName: obj.skillName,
+    skillInstructions: obj.skillInstructions,
+    strategy: "cost_first",
+  };
+}
+
+function parseCostPlanApply(result: unknown): CostPlanApplyResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    snapshotId: typeof obj?.snapshotId === "string" ? obj.snapshotId : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
   };
 }
 
