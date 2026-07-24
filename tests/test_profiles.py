@@ -16,6 +16,7 @@ _V1_TOOLS = [
     "read_file",
     "read_web_page",
     "save_file",
+    "snapshot_now",
     "web_search",
 ]
 

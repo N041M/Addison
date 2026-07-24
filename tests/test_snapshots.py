@@ -2072,6 +2072,95 @@ def test_no_snapshot_query_filters_on_created_in_mode() -> None:
             )
 
 
+def test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing() -> None:
+    """The ONE invariant in this subsystem a green-gates commit has silently
+    inverted before (HANDOFF, "Recommended, not built"): the narrowing in
+    ``_permanent_row_matching`` — only a PERMANENT (undeletable) row may have
+    ``verified_working`` flipped ON after the fact. Flag an ordinary pre-change
+    snapshot and "restore lands somewhere that actually ran" becomes false, which
+    is the failure G3 exists to prevent.
+
+    Two behavioural tests already cover today's behaviour
+    (``test_an_ordinary_snapshot_is_never_flagged_after_the_fact`` and
+    ``test_a_turn_against_the_permanent_row_verifies_it_instead_of_cloning_it``),
+    but behaviour alone would not stop a future edit from widening the narrowing
+    while every gate stayed green — which is precisely how this invariant was
+    inverted once. So this pins the SHAPE of the code, like
+    ``test_no_snapshot_query_filters_on_created_in_mode`` above. NOT generalised
+    into a linter — the one named rule, and only that (HANDOFF says why).
+    """
+    tree = ast.parse(_MANAGER_SRC.read_text(encoding="utf-8"))
+
+    # (0) EXACTLY ONE call site. A second caller is a second way to flag a row no
+    # turn ran against — the whole narrowing routes through this one line (~766).
+    verified_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "set_config_snapshot_verified"
+    ]
+    assert len(verified_calls) == 1, (
+        f"set_config_snapshot_verified is called from {len(verified_calls)} places; "
+        f"there must be exactly one, so the undeletable narrowing cannot be bypassed."
+    )
+    call_node = verified_calls[0]
+
+    funcs = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    assert "mark_verified_working" in funcs and "_permanent_row_matching" in funcs
+
+    # (a) The call site is guarded by the _permanent_row_matching result. It must
+    # live in mark_verified_working, that method must derive its target FROM
+    # _permanent_row_matching, and the set call must sit inside an ``if`` whose test
+    # consults ``permanent`` and the row's ``verified_working`` flag — i.e.
+    # ``if permanent is not None and not permanent["verified_working"]:``.
+    mvw = funcs["mark_verified_working"]
+    assert call_node in set(ast.walk(mvw)), (
+        "set_config_snapshot_verified is set outside mark_verified_working — the "
+        "narrowing lives there and nowhere else."
+    )
+    assert any(
+        isinstance(c, ast.Call)
+        and isinstance(c.func, ast.Attribute)
+        and c.func.attr == "_permanent_row_matching"
+        for c in ast.walk(mvw)
+    ), "mark_verified_working no longer consults _permanent_row_matching before flagging a row."
+    guarding_ifs = [
+        node
+        for node in ast.walk(mvw)
+        if isinstance(node, ast.If)
+        and any(call_node in set(ast.walk(stmt)) for stmt in node.body)
+    ]
+    assert any(
+        "permanent" in {n.id for n in ast.walk(g.test) if isinstance(n, ast.Name)}
+        and "verified_working"
+        in {
+            c.value
+            for c in ast.walk(g.test)
+            if isinstance(c, ast.Constant) and isinstance(c.value, str)
+        }
+        for g in guarding_ifs
+    ), (
+        "the set-verified call is no longer guarded by a check on the permanent row's "
+        "verified_working flag — an already-verified or non-permanent row could be reflagged."
+    )
+
+    # (b) _permanent_row_matching itself filters to UNDELETABLE rows. It is a row
+    # check (``if row.get("undeletable") and ...``), so the narrowing shows up as the
+    # name ``undeletable`` inside the function; drop it and this goes red.
+    prm = funcs["_permanent_row_matching"]
+    prm_strings = {
+        c.value
+        for c in ast.walk(prm)
+        if isinstance(c, ast.Constant) and isinstance(c.value, str)
+    }
+    prm_attrs = {n.attr for n in ast.walk(prm) if isinstance(n, ast.Attribute)}
+    assert "undeletable" in (prm_strings | prm_attrs), (
+        "_permanent_row_matching no longer narrows to undeletable rows — widening it "
+        "past the permanent bottom row would flag a config no turn ran against (G3)."
+    )
+
+
 # --- the import ban (the unbreakability argument, structurally) -------------
 
 _FORBIDDEN = (

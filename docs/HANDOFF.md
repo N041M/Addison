@@ -5,13 +5,16 @@ For the next working session. Read **CLAUDE.md** first (repo law), then
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: retire the step-1 ledger (small, below), then Phase-2 step 2 — the
-Custom profile + guard model + the G4 anchor minting caller.** Step 1 (the
-snapshot/rollback floor, G3) is **merged**.
+**Next up: Phase-2 step 2 — the Custom profile + guard model + the G4 anchor
+minting caller.** Step 1 (the snapshot/rollback floor, G3) is **merged**, and the
+**step-1 ledger is retired** (2026-07-24, the `retire-step1-ledger` branch):
+`snapshot_now` shipped as a LOW capture-only tool, the Restore card now says so
+when there is no verified restore point, and the recommended source-level lock on
+the verified-flag narrowing is built
+(`test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing`).
 
-**Everything through PR #49 is on `master`. No open PRs.** One small branch is
-unpushed: `fix-signing-instructions` (a doc-only correction to
-`scripts/sign-dev-binary.sh`) — push it with your first PR or on its own.
+**Everything through PR #49 is on `master`.** `fix-signing-instructions` (the
+signing-script trust fix + this handoff rewrite) is pushed as **PR #50**.
 
 ## Read this first: the standard this repo is held to
 
@@ -127,7 +130,8 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
 - **Restore is an RPC path, never a registry tool, and never passes the permission
   gate.** A gate that could deny a restore would make "the restore path is itself
   unbreakable" false. The only model-facing snapshot surface that will ever exist
-  is a **LOW, capture-only** `snapshot_now` tool — add a row, nothing else.
+  is the **LOW, capture-only** `snapshot_now` tool — add a row, nothing else.
+  (Shipped 2026-07-24; an AST source test holds it to `capture` alone.)
 - **`created_in_mode` never filters a snapshot query, in any mode.** The
   engineering spec's DDL comment said the column "mirrors existing artifact
   hiding"; that was **overridden, not followed**, and both the spec and
@@ -300,26 +304,26 @@ paths, where swallowing is the point.
 
 ## Next up — Phase 2 (code), in dependency order
 
-**Before step 2, retire the step-1 ledger.** Two small, self-contained items with
-no dependency on the Custom profile. They belong first because step 2's headline
-is anchor minting, which stands on this floor, and step 1 shipped
-green-but-broken the first time precisely by accumulating "while we're in there"
-work:
+**The step-1 ledger is RETIRED (2026-07-24).** The two pre-step-2 items shipped
+on the `retire-step1-ledger` branch, each with mutation-proven tests:
 
-- **`snapshot_now`** as a **LOW, capture-only** registry tool (amendment §3.2's
-  "or by asking Addison" — the one line of §14.1 step 1 did not deliver). It may
-  only ever ADD a row: never restore, never delete. Needs a late-bound
-  `Callable[[], SnapshotManager | None]` on the server, because `build_registry()`
-  runs before the Store exists; it answers *"I can't save a restore point just
-  yet"* when the store is not up. ⚠️ `docs/architecture.md` once claimed this
-  already worked and was corrected — do not let it drift back.
-- **The Restore card says so when there is NO verified restore point.** Today that
-  state means G3 is silently off and nothing says it — the floor failing to report
-  the truth about itself. One honest line in Settings, Fern-compliant, plain
-  language. This is the only piece salvaged from a "doctor command" the owner
-  scrapped on 2026-07-20: a second recovery path contradicts G3 (if the floor
-  holds, doctor is redundant; if doctor is needed, the floor does not hold) and
-  adds a moral hazard without adding a recovery.
+- **`snapshot_now`** — shipped as a **LOW, capture-only** registry tool
+  (`agent_core/tools/snapshot_now.py`), in `_V1_TOOL_IDS` so the companion gets
+  it. Late-bound `Callable[[], SnapshotManager | None]` wired through
+  `build_registry()` + a holder filled after server construction in `main()`;
+  answers *"I can't save a restore point just yet"* before the store is up; a
+  successful save clears the sticky capture-failure warning, matching the
+  Settings button. An AST source test forbids every manager verb except
+  `capture` in the module. `docs/architecture.md` / `docs/classes.md` now
+  describe the shipped tool.
+- **The Restore card says so when there is NO verified restore point**
+  (`SnapshotsCard.tsx`): two client-derived sentences — no row verified (G3
+  silently off until the first completed turn) vs. some row verified but no
+  target (everything saved matches the running config). The core's
+  'unreadable' walk outcome is indistinguishable from 'identical' on this wire
+  — accepted, commented in the component; the wire's `why` field is the future
+  fix if that distinction ever has to be drawn. (Salvaged from the scrapped
+  "doctor command" — see git history for why doctor contradicted G3.)
 
 Then:
 
@@ -337,12 +341,8 @@ Then:
    `created_in_mode`'s CHECK constraint, so no migration is needed; the
    `guard_weakened` reason slug, reserved and unwritten; and
    `ipc.restoreSnapshot`, a typed targeted-restore wrapper with no caller, for the
-   anchor path. Also land the **`snapshot_now` tool** here: **LOW and
-   capture-only** — it may only ever ADD a row, never restore and never delete.
-   Mind the ordering trap that caused it to be deferred: `build_registry()` runs
-   inside `main()` *before* the Store (and so the SnapshotManager) exists, so the
-   tool must close over a late-bound `Callable[[], SnapshotManager | None]` and
-   answer "I can't save a restore point just yet" when the store isn't up.
+   anchor path. (The **`snapshot_now` tool** originally slated for this step
+   landed early, in the 2026-07-24 ledger retirement — see above.)
 3. **Routing strategies** (4 + custom) + companion prefer-quality/prefer-free
    toggle + free-model disclaimer + graceful fallback/cooldown.
 4. **Free-model endpoints** — legit free/local + add-an-endpoint-by-prompting.
@@ -467,7 +467,14 @@ twice in one day, once by re-adding the sentence its own changeset falsified.
   to measure a baseline and stashed the other's in-flight work; `stash pop`
   restored it, but do not repeat that while a tree is shared.
 
-**Recommended, not built: a second source-level lock.** Exactly one invariant in
+**Recommended, and now BUILT (2026-07-24):
+`test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing` in
+`tests/test_snapshots.py` — pins exactly one `set_config_snapshot_verified` call
+site, its `permanent`/`verified_working` guard, and `_permanent_row_matching`'s
+`undeletable` narrowing. Mutation-killed three ways (second call site; dropped
+narrowing; dropped already-verified guard), the widened-narrowing kill reproduced
+by the coordinator personally.** The original recommendation follows, kept for
+the reasoning. Exactly one invariant in
 this subsystem has now been silently inverted by a commit while every gate stayed
 green, and it is the narrowing in `_permanent_row_matching` — *only* an
 `undeletable` row may have `verified_working` set after the fact. That narrowing
@@ -577,7 +584,7 @@ Nothing here is forgotten; each line names where it lands and why it waited.
 | Item | Why it waited | Where it lands |
 |---|---|---|
 | **Anchor minting caller** | The Custom profile doesn't exist — `ProfileId` has two members. `mint_anchor()` is built and tested. | **Step 2** |
-| **`snapshot_now` tool** | Solvable now behind a late-bound callable; deferred only to keep step 1's blast radius small, since everything leans on it. Owner ruled: step 2. | **Step 2**, as **LOW and capture-only** — may only ever add a row |
+| **`snapshot_now` tool** | ~~Deferred to keep step 1's blast radius small.~~ **Done in the 2026-07-24 ledger retirement** — LOW, capture-only, late-bound callable, AST source test forbidding every manager verb but `capture`. | **Landed (ledger retirement)** |
 | **`tool_grants` capture** | Excluded, and correctly so. The table is inert today (nothing reads or writes it; `PermissionGate` keeps grants in memory). More important: once grants persist, restoring a snapshot taken *before* the user revoked a grant would **reinstate** it — a privilege grant delivered by a deliberately ungated one-action button with no permission card in the path. A floor must not be a privilege-escalation vector. | **Step 2**, if grants ever persist — and then as an **INTERSECT**, never a replace |
 | **Data-dir permanent distrust** | Workspace-trust doesn't exist until step 5, but the rule must be fixed *before* it does, or `run_command` inside a trusted parent directory can `rm -rf` the floor's own storage with no card. | **Step 5**. Write `test_the_addison_data_dir_can_never_be_workspace_trusted` **now, as an `xfail`**, so the rule exists before the capability does |
 | **`_valid_http_url` credential hardening** | **Pulled forward from step 4 and landed in step 1** — see the G1 note below. A `base_url` carrying a secret lands in a plaintext sidecar *forever* via any permanent row, so it could not wait. Userinfo, any query string or fragment, and key-shaped path segments are now refused by `_base_url_problem` at the moment the person types the address, not stripped on capture — stripping would make a restore write back a *different* address and silently break their server. | **Landed (step 1).** Residual: the path check's composition gate and entropy bar let some token shapes through (a UUID, an all-letter or all-digit segment) — see the G1 note above |

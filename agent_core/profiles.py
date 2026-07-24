@@ -45,6 +45,13 @@ class ProfileId(str, Enum):
 # cannot tell an honest read from one carrying data outward in the query string.
 # Narrowing the grant to a site is a permission-gate change and is still open; see
 # the ledger in ``docs/HANDOFF.md``.
+#
+# ``snapshot_now`` sits here for the same companion reason: saving a restore point
+# by asking Addison ("make a backup of how things are now") is the amendment's
+# third way to reach the G3 floor, and the non-technical personas are exactly who
+# would ask in words rather than open Settings. It is LOW and CAPTURE-ONLY — it may
+# only ADD a restore point, never restore/delete/prune — so it needs no undo
+# (invariants 1 and 2) and is non-destructive in both modes.
 _V1_TOOL_IDS = [
     "web_search",
     "read_web_page",
@@ -54,6 +61,7 @@ _V1_TOOL_IDS = [
     "save_file",
     "draft_message",
     "open_link",
+    "snapshot_now",
 ]
 
 

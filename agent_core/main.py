@@ -111,6 +111,7 @@ from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
+from agent_core.tools.snapshot_now import SnapshotNowTool
 from agent_core.tools.web_search import WebSearchTool
 
 if TYPE_CHECKING:
@@ -168,7 +169,12 @@ def _pull_progress(update: dict) -> tuple[int | None, str | None]:
     return None, None
 
 
-def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolRegistry:
+def build_registry(
+    profile: Profile | None = None,
+    shell_bridge=None,
+    snapshot_manager_ref: Callable[[], SnapshotManager | None] | None = None,
+    on_snapshot_captured: Callable[[], None] | None = None,
+) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
     A Profile chooses *which* SAFE-view tools are registered; it never changes *how*
@@ -188,8 +194,20 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
     bridge is injected here once and used ONLY by undo() — ``execute()`` still uses
     ``context.shell_bridge`` per the orchestration contract (§4.4). CLI/``main``
     pass None today; the real bridge arrives with the shell at step 7.
+
+    ``snapshot_manager_ref`` is the late-bound handle ``snapshot_now`` uses to reach
+    the ``SnapshotManager`` (G3): the registry is built here in ``main()`` BEFORE the
+    worker thread builds the store and manager (``_ensure_built``), so the tool holds
+    a zero-arg callable resolved at execute time rather than a manager instance. Left
+    None (the CLI path, tests) the tool registers normally and answers "can't save a
+    restore point just yet" until a manager exists. ``on_snapshot_captured`` is run
+    after a successful capture so a save via the tool clears the server's sticky
+    capture-failure warning, exactly as the Settings control does.
     """
     profile = profile or resolve_active_profile()
+    # None → a ref that always resolves to no manager, so a snapshot_now built
+    # without wiring (CLI, tests) is honest about not being able to save yet.
+    manager_ref = snapshot_manager_ref if snapshot_manager_ref is not None else (lambda: None)
     all_tools = {
         "web_search": WebSearchTool(),
         "read_web_page": ReadWebPageTool(),
@@ -199,6 +217,9 @@ def build_registry(profile: Profile | None = None, shell_bridge=None) -> ToolReg
         "save_file": SaveFileTool(shell_bridge=shell_bridge),
         "draft_message": DraftMessageTool(shell_bridge=shell_bridge),
         "open_link": OpenLinkTool(),
+        "snapshot_now": SnapshotNowTool(
+            manager_ref=manager_ref, on_captured=on_snapshot_captured
+        ),
     }
     registry = ToolRegistry()
     for tool_id in profile.tool_ids:
@@ -1565,7 +1586,34 @@ def main() -> None:
     # (with the store), derives its policy mode (policy.py), and consults both per-use.
     profile = resolve_active_profile()
     shell_bridge = IpcShellBridge()             # sender bound by the server below
-    registry = build_registry(profile, shell_bridge=shell_bridge)
+
+    # G3: the snapshot_now tool needs the SnapshotManager, but the manager is built
+    # later on the worker thread (server._ensure_built) and the registry has to exist
+    # to pass to the server. So the tool gets late-bound closures over a holder that
+    # main() fills in AFTER the server is constructed. The manager closure reads the
+    # PRIVATE field, not the property: the property asserts before _ensure_built runs,
+    # and this ref must resolve to None (not raise) during that window.
+    _server_holder: dict = {}
+
+    def _live_snapshot_manager() -> SnapshotManager | None:
+        srv = _server_holder.get("server")
+        return srv._snapshot_manager if srv is not None else None
+
+    def _clear_snapshot_warning() -> None:
+        # Sticky-warning parity with the Settings control (rpc/snapshots._snapshot_create):
+        # a successful save proves writes work again, so the "couldn't save a restore
+        # point" notice is cleared. Same worker thread as the capture, so this is a
+        # plain assignment, not a cross-thread hop.
+        srv = _server_holder.get("server")
+        if srv is not None:
+            srv._snapshot_warning = None
+
+    registry = build_registry(
+        profile,
+        shell_bridge=shell_bridge,
+        snapshot_manager_ref=_live_snapshot_manager,
+        on_snapshot_captured=_clear_snapshot_warning,
+    )
 
     # The real SQLite Store + UndoManager are built by the server on its worker
     # thread (sqlite3 connections are single-thread), so main() supplies a factory
@@ -1731,6 +1779,9 @@ def main() -> None:
         connect_provider=_connect_provider,
         provider_key_probe=_provider_key_present,
     )
+    # Close the late-binding loop: snapshot_now's manager ref and warning-clear
+    # closures resolve through this holder once the server exists (see above).
+    _server_holder["server"] = server
     # §4.7: the server re-resolves the active profile from the store on its worker
     # thread (profile.get/set) and consults it per-use for the onboarding path, raw
     # diagnostics, and routine-plan visibility. The startup registry is profile-agnostic

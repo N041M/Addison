@@ -225,8 +225,11 @@ It reaches no provider, router, profile, policy mode, registry, or gate, because
 restore path has to work when any of those is broken. For the same reason **restore is
 never a registry tool and never passes the `PermissionGate`**: a gate that could deny a
 restore would make "the restore path is itself unbreakable" false. The only
-model-facing snapshot surface planned is a **LOW, capture-only** `snapshot_now` tool
-(step 2) that may add a row and nothing else.
+model-facing snapshot surface is a **LOW, capture-only** `snapshot_now` tool
+(`agent_core/tools/snapshot_now.py`, in both v1 profiles) that may add a row and
+nothing else — it reaches the `SnapshotManager` through a **late-bound** ref (the
+registry is built before the manager exists, so it answers "can't save yet" until the
+store is up) and calls only `capture(...)`, never restore/delete/prune.
 
 ## External tools via MCP
 
