@@ -32,10 +32,10 @@ flowchart TB
         DB["SQLite, on device"]
     end
 
-    webview -->|"invoke send_to_core"| Relay
-    Relay -->|"JSON-RPC 2.0 over stdio"| core
-    core -.->|"shell.* and keychain.* back over stdio"| shell
-    Relay -.->|"core-message and core-status events"| webview
+    UI -->|"invoke send_to_core"| Relay
+    Relay -->|"JSON-RPC 2.0 over stdio"| Orch
+    Orch -.->|"shell.* and keychain.* requests"| Relay
+    Relay -.->|"core-message and core-status events"| UI
 ```
 
 - **Tauri shell (Rust)** — highest trust. Owns the OS keychain, the filesystem and
@@ -86,10 +86,11 @@ confirmation, so invariant 1 holds for the default **Simple** profile rather tha
 universally; invariants 2–7 hold in every mode, without exception. See
 [CLAUDE.md](CLAUDE.md) for the current, authoritative statement.
 
-## Feature highlights
+## What it does
 
-- Chat with tool use — web search, reading a picked file, the clipboard, a
-  calculator, saving a new file, drafting a message, opening a link.
+- Chat with tool use — web search, reading a web page and answering from it,
+  reading a picked file, the clipboard, a calculator, saving a new file,
+  drafting a message, opening a link.
 - A per-message model picker: cloud models the configured key can access, plus local
   models run through Ollama, chosen explicitly per message with an answer-style
   ("effort") control where the model supports it.
@@ -99,14 +100,24 @@ universally; invariants 2–7 hold in every mode, without exception. See
   thread to an earlier message and edit-and-resend.
 - Routines — save a sequence of steps Addison just did as a declarative plan you can
   re-run, with per-run values generalized into variables.
-- Simple and Developer profiles — a surface choice that reshapes onboarding and
-  visibility, never the security model.
+- Three profiles. Simple is the default: plain language, every risky action asks
+  first. Developer adds real command execution behind a confirmation card that
+  shows the exact command every time. Custom, tucked behind an extra
+  confirmation, lets you choose how often Addison asks — and lowering any
+  safeguard first saves a permanent restore point you can always come back to.
+- Model routing you can actually explain: prefer quality or prefer free on the
+  Simple profile, a full strategy picker for developers. If your model is busy,
+  Addison falls back to the next one and tells you it did; if a free model
+  answered, it says so.
 - Bring keys from multiple providers — Anthropic, OpenAI, Google, or your own
-  OpenAI-compatible server — and pick any of their models from one picker.
+  OpenAI-compatible server — and pick any of their models from one picker. The
+  custom-server option will also take an aggregating router (LiteLLM and the
+  like) if you point it at one; that's your call, and nothing of the sort is
+  bundled or endorsed in the app.
 - A widget rail of small, declarative cards — routine run-buttons, a token
   meter, connection status — proposed by Addison in chat and pinned by you.
-- A redesigned three-column interface ("Fern"): conversation sidebar, a
-  serif correspondence-style chat with Markdown and Mermaid rendering, and the
+- A three-column interface ("Fern"): conversation sidebar, a serif
+  correspondence-style chat with Markdown and Mermaid rendering, and the
   widget rail — warm and calm, light and dark themes, in-window settings.
 
 ## Quickstart

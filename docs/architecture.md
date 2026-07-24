@@ -17,7 +17,10 @@ Back to the [README](../README.md).
 ## Trust boundaries
 
 ```mermaid
-flowchart TB
+%% LR, deliberately: the core->shell callback edges make a rank cycle that, in a
+%% TB layout, scrambles the bands and routes edges through the shell subgraph's
+%% title text. Left-to-right, every edge lands in open space.
+flowchart LR
     subgraph webview["React webview — lowest trust"]
         direction TB
         UIrender["Renders chat, permission cards, settings"]
@@ -221,7 +224,7 @@ Component by component:
   The gate still runs on every call in both modes. Destructiveness is per-call
   (`run_command` classifies its own command via a read-only allowlist; any other
   tool is destructive iff its tier is HIGH). Non-dev tools keep the coarse
-  session-grant model it tracks; the consent prompt itself is an IPC round-trip to
+  session-grant model the gate tracks; the consent prompt itself is an IPC round-trip to
   the webview. The amendment extends the gate along two axes without changing its
   "runs and logs on every call" guarantee. **Workspace-trust** (Phase-2): when the
   user grants a project directory, OPEN mode stops *prompting* for destructive calls

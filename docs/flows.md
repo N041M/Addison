@@ -8,10 +8,11 @@
 > (SAFE safe-vocabulary vs. higher-tier code-backed), routing degrade-with-disclaimer,
 > and an MCP tool call through the existing gate. Names in the new flows are illustrative
 > where the amendment leaves them open (marked Phase-2); the shapes are authoritative.
-> **Flow 9 is the exception — snapshot/restore shipped in Phase-2 step 1, so its names
-> are real.** The `reason` slugs quoted in flows 10, 11 and 12 are the reserved entries
-> of that vocabulary (`snapshot_manager.REASONS`), so they are real too, even though the
-> flows around them are not built yet.
+> **Flows 9 and 14 are the exceptions — snapshot/restore shipped in Phase-2 step 1 and
+> routing in step 3, so their names are real** (step 2 also made flow 9's per-row
+> restore live). The `reason` slugs quoted in flows 10, 11 and 12 are the reserved
+> entries of that vocabulary (`snapshot_manager.REASONS`), so they are real too, even
+> though the flows around them are not built yet.
 
 Sequence diagrams for the main flows across the three processes. Method and function
 names match the code. Every Core-to-webview frame in these diagrams actually reaches
@@ -87,13 +88,13 @@ sequenceDiagram
         PG-->>ORC: GRANTED (no card)
     else SAFE mode, or a destructive OPEN call
         PG->>SRV: _on_permission_request(tool_id, detail)
-        Note over SRV: park a threading.Event keyed by tool_id;<br/>destructive-OPEN: description = the exact command text
+        Note over SRV: park a threading.Event keyed by tool_id<br/>destructive-OPEN: description = the exact command text
         SRV-->>WV: permission.requestGrant, toolId label description riskTier
         Note over WV: user taps Allow or Not now
         WV->>SRV: permission.respond, toolId and allow
         SRV->>SRV: _handle_permission_respond sets the event
         PG-->>ORC: GRANTED or DENIED
-        Note over PG: a SAFE grant is remembered; a destructive-OPEN approval is<br/>per-invocation (never remembered); DENIED clears at the next user turn
+        Note over PG: a SAFE grant is remembered — a destructive-OPEN approval is<br/>per-invocation (never remembered) — DENIED clears at the next user turn
     end
 ```
 
@@ -189,7 +190,7 @@ sequenceDiagram
     Note over RE: topologically_sorted, then resolve_template per step
     loop each step
         RE->>PG: authorize(tool_id, mode, destructive)
-        Note over PG: SAFE prompts; OPEN auto-allows non-destructive, prompts destructive
+        Note over PG: SAFE prompts — OPEN auto-allows non-destructive, prompts destructive
         PG-->>RE: GRANTED or DENIED
         RE->>TL: execute(resolved_args, context)
         TL-->>RE: ToolResult
@@ -276,12 +277,12 @@ permission card; a routine/command widget keeps its own gates when it is actuall
 sequenceDiagram
     participant WV as React webview
     participant SRV as Core server
-    participant W as widgets.validate_widget_spec
+    participant W as widget spec validator
     participant DB as Store (widgets)
 
     Note over WV: user sends "Build me a widget that …" (composer seed)
     WV->>SRV: widget.proposeFromConversation
-    Note over SRV: draft from recent chat — a routine just run/named,<br/>or a token/latency/connections stat; else a plain refusal
+    Note over SRV: draft from recent chat — a routine just run/named,<br/>or a token/latency/connections stat, else a plain refusal
     SRV-->>WV: {title, kind, summary, spec}  (held in memory, nothing saved)
     Note over WV: WidgetProposalCard — "Add widget" / "Not now"
     WV->>SRV: widget.confirmSave {accept: true}
@@ -300,8 +301,10 @@ mutable **config/state** — settings, provider/routing config, skills, widgets,
 before any risky or sweeping change and can also be taken **on command**. A config is marked
 **verified-working** once a turn completes successfully against it, and **Restore always
 targets the last verified-working snapshot**, so it lands somewhere that actually ran — the
-difference between recovery and the friend's dead end. **Shipped in Phase-2 step 1** —
-the names below are the real ones.
+difference between recovery and the dead end suffered by the amendment's *friend*: the
+non-technical user whose single "make it cheaper" request permanently broke his setup, with
+the built-in rewind giving him no way back. **Shipped in Phase-2 step 1** — the names below
+are the real ones.
 
 ```mermaid
 sequenceDiagram
@@ -328,16 +331,16 @@ sequenceDiagram
     SRV->>SM: restore_last_working()
     SM->>ST: newest verified row that DIFFERS from the current config
     ST-->>SM: state_blob
-    Note over SM: reapply in one transaction; keychain untouched, so a<br/>restored provider re-binds to its key by provider id
+    Note over SM: reapply in one transaction — keychain untouched, so a<br/>restored provider re-binds to its key by provider id
     SM-->>SRV: RestoreResult
     SRV-->>WV: {ok, snapshotId, detail, binaryMismatch?}
 
-    Note over WV,SRV: staged for step 2 — no caller yet, see below
+    Note over WV,SRV: shipped in step 2 — "Restore this one" on permanent rows
     WV->>SRV: snapshot.restore {id}
     SRV->>SM: restore(snapshot_id)
 ```
 
-Three things the diagram cannot show:
+Four things the diagram cannot show:
 
 - **`restore_last_working()` skips a candidate identical to the present config.** A
   restore that changes zero bytes is a no-op dressed as a recovery — the friend's dead
@@ -405,7 +408,7 @@ sequenceDiagram
 
     WV->>SRV: conversation.sendMessage ("add this OpenAI-compatible server at <base>")
     SRV->>ORC: run_turn(...)
-    Note over ORC: recognize an add-endpoint intent; confirm base URL + which key
+    Note over ORC: recognize an add-endpoint intent — confirm base URL + which key
     ORC-->>WV: confirm card (base URL, "paste the key into the secure field")
     Note over WV: key entered in the shell's field, never a chat frame
     WV->>SH: invoke store_provider_key(provider, key)
@@ -448,7 +451,7 @@ sequenceDiagram
 
     Note over WV,ORC: a powerful/armed action needs the typed keyword
     WV->>SRV: conversation.sendMessage ("!run deploy.sh")
-    Note over ORC: keyword prefix present (user-typed; injected content can't supply it)
+    Note over ORC: keyword prefix present (user-typed — injected content can't supply it)
     ORC->>PG: authorize(run_command, OPEN, destructive=true, detail)
     Note over PG: outside trust / powerful -> per-invocation card (flow 2), exact command shown
     PG-->>ORC: GRANTED or DENIED
@@ -467,20 +470,20 @@ through workspace-trust + the keyword gate + snapshot floor.
 sequenceDiagram
     participant WV as React webview
     participant SRV as Core server
-    participant W as widgets.validate_widget_spec
+    participant W as widget spec validator
     participant DB as Store (widgets)
 
     WV->>SRV: widget.proposeFromConversation ("build me a to-do widget")
-    Note over SRV: draft a spec; stamp required_capabilities + created_in_mode
+    Note over SRV: draft a spec — stamp required_capabilities + created_in_mode
     SRV-->>WV: {title, kind, summary, spec}  (held in memory)
     WV->>SRV: widget.confirmSave {accept: true}
     SRV->>W: validate_widget_spec(draft, mode)
     alt SAFE-tier capabilities only (to-do/checklist, note, timer, launchers)
-        Note over W: non-destructive vocabulary — no code/eval; SAFE-1 + CSP hold
+        Note over W: non-destructive vocabulary — no code/eval, SAFE-1 + CSP hold
         W-->>SRV: None (valid)
         SRV->>DB: insert_widget (created_in_mode="safe")
     else code-backed / system-capable (Developer / Custom)
-        Note over W: capability tier > SAFE -> requires OPEN/Custom;<br/>refused if built under Simple
+        Note over W: capability tier > SAFE -> requires OPEN/Custom<br/>refused if built under Simple
         W-->>SRV: None (valid in-tier) — else reject + plain reason
         SRV->>DB: insert_widget (created_in_mode="open"/"custom", hidden in Simple)
     end
@@ -490,36 +493,37 @@ sequenceDiagram
 
 ## 14. Routing: degrade-down with a free-model disclaimer
 
-Routing is **strong-first, degrade-down** by default (amendment §10) — the inverse of a
-cheap-first gateway, so the companion never silently gets a worse answer. When the picked
-model is unavailable or rate-limited, routing falls forward/down to the next capable model
-with a plain-language note and a light provider **cooldown**; when a **free** model answers,
-a visible **"answered with a free model"** disclaimer is shown.
+Shipped in Phase-2 step 3, so the names below are real. Routing is
+**strong-first, degrade-down** (amendment §10), and the chain's head is always the
+user's standing default model — a strategy orders only the fallback tail, so routing
+never overrides a deliberate choice. The turn falls forward only on a
+**provider-unavailable** failure (429, 5xx, network); a rejected request or a bad key
+ends the turn at once, because the next provider would just get the same bad request.
+The cooldown is in-memory, and the per-turn deadline is threaded into each attempt so
+one hanging candidate cannot stall the turn.
 
 ```mermaid
 sequenceDiagram
     participant ORC as Orchestrator
-    participant MR as ModelRouter
-    participant ST as Store (provider_config)
-    participant PR as Provider
+    participant RC as resolve_chain
+    participant A as Provider A — the head
+    participant B as Provider B — next in the chain
 
-    ORC->>MR: resolve(role, strategy)
-    Note over MR: quality-first -> strongest capable model not in cooldown
-    MR-->>ORC: chosen provider+model
-    ORC->>PR: provider.send(...)
-    alt available
-        PR-->>ORC: response
-    else unavailable / 429 rate-limited
-        PR-->>ORC: error
-        ORC->>ST: set cooldown_until on that provider
-        ORC->>MR: resolve(role, strategy, exclude=chosen)
-        MR-->>ORC: next capable model (may be a free/local one)
-        ORC->>PR: provider.send(...)
-        PR-->>ORC: response
-        Note over ORC: emit plain note ("X was busy, so I used your local model")
+    ORC->>RC: routing_chain(role, model_name)
+    Note over RC: head = the user's default — strategy orders the tail
+    RC-->>ORC: [A, B, ...] (cooled providers skipped)
+    ORC->>A: send(..., timeout=budget remaining)
+    alt A answers
+        A-->>ORC: response
+    else ProviderUnavailable (429 / 5xx / network)
+        A-->>ORC: raises
+        Note over ORC: cool A (in-memory, module constant) and advance
+        ORC->>B: send(..., timeout=budget remaining)
+        B-->>ORC: response
+        Note over ORC: activity note "A was busy, so Addison used B."
     end
-    Note over ORC: if the answering model is free -> attach "answered with a free model" disclaimer
-    ORC-->>ORC: stream_to_frontend(text + any note/disclaimer)
+    Note over ORC: on_answered(model, label, free, routed) -> reply carries answeredWith
+    Note over ORC: chip "Answered with a free model." iff free AND routed<br/>(routed = the answering model was not the user's explicit pick)
 ```
 
 ## 15. MCP tool call through the existing gate
@@ -540,11 +544,11 @@ sequenceDiagram
     participant SRV as External MCP server
     participant UM as UndoManager
 
-    Note over REG: MCP tools registered as ordinary registry entries;<br/>visible_tools(SAFE) admits only read-only / undo-able ones
+    Note over REG: MCP tools registered as ordinary registry entries<br/>visible_tools(SAFE) admits only read-only / undo-able ones
     ORC->>REG: resolve(tool_id) for an MCP-backed tool
     REG-->>ORC: Tool wrapper (mode-filtered)
     ORC->>PG: authorize(tool_id, mode, destructive, detail)
-    Note over PG: SAFE prompts; OPEN auto-allows non-destructive,<br/>per-invocation card for destructive / powerful (keyword gate)
+    Note over PG: SAFE prompts — OPEN auto-allows non-destructive,<br/>per-invocation card for destructive / powerful (keyword gate)
     PG-->>ORC: GRANTED
     ORC->>MC: call(tool_id, args)
     MC->>SRV: MCP tools/call

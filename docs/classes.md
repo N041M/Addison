@@ -139,8 +139,9 @@ deduped by fingerprint); and `Snapshot.payload` is **`ConfigSnapshot.state_blob`
 because dataclasses mirror their table 1:1 and the column is `state_blob`.
 `restore(snapshot_id)` and `restore_last_working()` **both** exist: the second is the
 G3 floor — the one-action button, which cannot take an argument — and is implemented
-as the first, so there is one code path. `mint_anchor()` ships fully implemented with
-no caller; step 2's Custom guard toggle supplies it.
+as the first, so there is one code path. `mint_anchor()` got its caller in Phase-2
+step 2: `guards.set` mints the anchor before persisting any weakening, deduped by
+fingerprint so repeated toggling cannot grow an unbounded permanent list.
 
 ```mermaid
 classDiagram
@@ -164,9 +165,8 @@ classDiagram
     class GuardConfig {
         +destructive_card
         +auto_grant_scope
-        +workspace_trust
-        +keyword_gate_strictness
-        +mode_for_profile(profile) PolicyMode
+        +workspace_trust : Phase-2 step 5
+        +keyword_gate_strictness : Phase-2 step 8
     }
     class WorkspaceTrust {
         +root_dir
@@ -210,15 +210,19 @@ classDiagram
     SnapshotManager --> Store
 ```
 
-`GuardConfig.mode_for_profile` keeps today's 1:1 derivation (Simple→SAFE,
-Developer→OPEN); Custom carries the tunable guard fields. `CapabilityTier` is what the
+`mode_for_profile` is a module function in `policy.py`, not a `GuardConfig` member:
+Simple→SAFE, Developer and Custom→OPEN, with `GuardConfig` as the Custom profile's
+overlay on the OPEN gate. `CapabilityTier` is what the
 gate and the widget validator consult to decide whether a tool/widget's requested
 capability is admissible in the active mode — SAFE admits only `NON_DESTRUCTIVE`.
 Neither `ConfigSnapshot.undeletable` anchors nor the four floors (G1, G2, G3, the
 anchor rule — **G4** in code and in `CLAUDE.md`; the two names are the same rule) are
-reachable from `GuardConfig`. `SnapshotManager` and `ConfigSnapshot` are **shipped**
-and their names are fixed; `GuardConfig`, `WorkspaceTrust`, `CapabilityTier` and the
-`CUSTOM` profile are still *(Phase-2)* sketches whose module and class names are not.
+reachable from `GuardConfig`. `SnapshotManager`, `ConfigSnapshot`, the `CUSTOM`
+profile and `GuardConfig` (its two shipped fields, in `policy.py`) are **shipped**
+and their names are fixed — Phase-2 step 2 built the Custom profile and the guard
+overlay, and lowering a guard mints the G4 anchor through `guards.set`.
+`WorkspaceTrust` (step 5), `CapabilityTier` (step 6) and `GuardConfig`'s two
+remaining fields are still *(Phase-2)* sketches whose names are not.
 
 `SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the
@@ -278,15 +282,17 @@ The concrete providers satisfy the protocol structurally (duck-typed, shown here
 realization). `ModelRouter` resolves a provider per turn from a role and an optional
 model name, with several models reachable per role.
 
-The amendment adds a bounded **routing strategy** layer *(Phase-2)*. A `RoutingStrategy`
-picks, within the resolved role, which of the reachable models to try first and how to
-degrade: **quality-first** (default — strongest capable model, degrade down on
-unavailability/rate-limit/budget), **cost-first**, **local-only** (never leaves the
-machine), **balanced**, plus a Developer-only **custom** builder. The companion surface
-exposes only a "prefer quality / prefer free" toggle over these. On failure the router
-degrades gracefully — a plain-language note, a light per-provider **cooldown** instead
-of hammering a failing endpoint, and an "answered with a free model" disclaimer
-whenever a free model responds.
+Phase-2 step 3 **shipped** the bounded routing layer. A routing strategy orders the
+fallback chain behind the user's standing default model, which always heads the chain:
+**quality-first** (default), **cost-first**, **local-only** (no model call leaves the
+machine — the Setup Assistant relay included), plus a Developer-only **custom** ordered
+list. **Balanced was cut from v1 by owner decision** (amendment §10.1): the drafted
+version was indistinguishable from cost-first at two-model pools. The companion surface
+is a single "prefer quality / prefer free" toggle. On failure the turn falls forward
+gracefully: only on a provider-unavailable failure (a rejected request or bad key ends
+the turn instead), with a plain note ("[X] was busy, so Addison used [Y]."), an
+in-memory per-provider cooldown, a per-turn deadline, and an "Answered with a free
+model." chip whenever routing — not an explicit pick — chose a free model.
 
 ```mermaid
 classDiagram
@@ -329,8 +335,15 @@ classDiagram
         QUALITY_FIRST
         COST_FIRST
         LOCAL_ONLY
-        BALANCED
         CUSTOM
+    }
+    class RoutingCandidate {
+        +model_id
+        +role
+        +provider_id
+        +quality_rank
+        +free
+        +local
     }
     class ModelRouter {
         +resolve(requested_role, model_name) ModelProvider
@@ -339,9 +352,8 @@ classDiagram
         +register_primary_model(name, provider)
         +available_roles()
         +available_local_models()
-        +set_strategy(strategy)
-        +next_candidate(role, exclude) ModelProvider
-        +cooldown(provider_id, until)
+        +selected_primary_model()
+        +selected_local_model()
     }
     class ModelResponse {
         +text
@@ -364,11 +376,15 @@ classDiagram
     ModelResponse --> ToolCallRequest
     ModelRouter o-- ModelProvider
     ModelRouter ..> ModelRole
-    ModelRouter ..> RoutingStrategy
+    RoutingCandidate ..> RoutingStrategy
 ```
 
-`set_strategy` / `next_candidate` / `cooldown` are the *(Phase-2)* strategy + graceful
-fallback surface; the `resolve`/`register*`/`available*` members are today's code.
+All members are shipped code. The strategy layer lives beside the router, not on it:
+`resolve_chain(strategy, candidates, head, custom_order)` is a pure module function in
+`providers/router.py` that orders `RoutingCandidate`s, and the attempt loop — per-send
+continuation, cooldown, the per-turn deadline — is orchestrator machinery. The router
+itself still answers one question: which provider instance serves this role and model
+name.
 
 ## Routines
 

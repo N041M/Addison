@@ -22,7 +22,8 @@ server in this repo.
 **Do:** `cd shell && npm run tauri dev`. Wait for the window.
 **Expect:** brief "Getting ready…" state, then the message box becomes active
 with the placeholder "Tell Addison what you'd like help with…". No error
-banner. Window looks calm/utilitarian — sharp corners, one steel-blue accent.
+banner. Window looks calm and warm: the paper-neutral Fern look, one
+fern-green accent.
 **Fail signs:** stuck on "Getting ready", or "Addison's engine isn't connected
 yet." after ~10 s → copy the launch-terminal stderr.
 
