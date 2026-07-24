@@ -22,9 +22,11 @@ Note the module-boundary rule (CLAUDE.md §2): ``providers/`` must not import fr
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 import httpx
 
+from agent_core import net_vetting
 from agent_core.providers.base import (
     Message,
     ModelResponse,
@@ -41,6 +43,33 @@ from agent_core.providers.base import (
 _DEFAULT_BASE_URL = "https://api.openai.com/v1"
 _MAX_TOKENS = 4096
 _TIMEOUT_SECONDS = 60.0
+# The validating GET's own budget + hop limits (list_models). Short: it runs on a
+# connect card the person is waiting on, so it gives up quickly.
+_LIST_TIMEOUT_SECONDS = 10.0
+_LIST_MAX_REDIRECTS = 3
+_LIST_MAX_URL_CHARS = 2048
+
+# Plain sentences for the SSRF-pinned validation GET (step 4, D1/R1). The custom
+# server is the user's OWN LAN model host, so the pin uses ``allow_private=True``
+# and any port; these are the words shown when it can't be reached — the network
+# string ("Couldn't reach that server") is the one the existing list_models tests
+# pin, so it must stay exact. The status-code messages (bad key, refused) live in
+# ``_list_on_final``, where the response is in hand.
+_COULD_NOT_REACH_SERVER = "Couldn't reach that server. Check the address and that it's running."
+_LIST_SENTENCES = net_vetting.Sentences(
+    no_url=_COULD_NOT_REACH_SERVER,
+    not_a_web_link=_COULD_NOT_REACH_SERVER,
+    not_allowed=_COULD_NOT_REACH_SERVER,
+    odd_web_address=_COULD_NOT_REACH_SERVER,
+    could_not_find_site=_COULD_NOT_REACH_SERVER,
+    could_not_open="That server didn't accept the request. Check the address and try again.",
+    could_not_reach=_COULD_NOT_REACH_SERVER,
+    took_too_long="That server took too long to answer. Try again in a moment.",
+    too_many_redirects="That server kept sending the request elsewhere, so Addison stopped.",
+    dropped_secure_link=(
+        "That server tried to switch to an unsecured connection, so Addison stopped."
+    ),
+)
 
 _NO_KEY_MESSAGE = (
     "No API key is set up yet. Add your OpenAI API key in Settings to start chatting."
@@ -271,42 +300,10 @@ def _parse_arguments(raw) -> dict:
 
 
 # --- connect-time model listing (main.py drives this for validation) -------
-def list_models(
-    base_url: str, api_key_getter, client=None, *, require_key: bool = True
-) -> list[str]:
-    """``GET {base_url}/models`` — the "one tiny request" provider.connect makes to
-    validate an OpenAI (or OpenAI-compatible) key/server, doubling as the model
-    list for a custom server.
-
-    Returns the model ids from the response ``data`` array. Raises a plain-language
-    ``RuntimeError`` on a bad key, an unreachable host, or an unreadable body — the
-    caller turns that into the card's error line. The key is fetched ONCE here and
-    used only in the request header, never retained (§8.3).
-    """
-    key = _resolve_list_key(api_key_getter, require_key=require_key)
-    headers = {}
-    if key:
-        headers["authorization"] = f"Bearer {key}"
-    url = f"{(base_url or _DEFAULT_BASE_URL).rstrip('/')}/models"
-    injected = client
-    http = injected if injected is not None else httpx.Client(timeout=10.0)
-    try:
-        # GET model listing has no side effects — retry on any connection/read
-        # hiccup or a transient 5xx.
-        response = request_with_retry(
-            lambda: http.get(url, headers=headers), idempotent=True
-        )
-    except httpx.HTTPError:
-        raise RuntimeError(
-            "Couldn't reach that server. Check the address and that it's running."
-        ) from None
-    finally:
-        if injected is None:
-            http.close()
-    if response.status_code in (401, 403):
-        raise RuntimeError("That key doesn't work. Check it and try again.")
-    if response.status_code >= 400:
-        raise RuntimeError("That server didn't accept the request. Check the address and try again.")
+def _list_parse(response: httpx.Response) -> list[str]:
+    """Turn a validated 2xx model-listing response into its model ids. 4xx/5xx are
+    handled by ``list_models`` (so the idempotent 5xx retry can see the status);
+    this only ever runs on a response that already cleared that."""
     try:
         data = response.json()
     except ValueError:
@@ -317,6 +314,98 @@ def list_models(
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]:
             ids.append(entry["id"])
     return ids
+
+
+def _list_read_response(response: httpx.Response, _logical: str) -> httpx.Response:
+    """The pin's ``on_final``: pull the body inside the stream context and hand the
+    Response back so ``list_models`` can inspect its status (streamed responses need
+    ``.read()`` before ``.json()``). ANY non-redirect status is returned — the
+    status→message mapping and the idempotent 5xx retry both live in
+    ``list_models``, not here."""
+    response.read()
+    return response
+
+
+def list_models(
+    base_url: str,
+    api_key_getter,
+    client=None,
+    *,
+    require_key: bool = True,
+    resolve: Callable[[str], list[str]] | None = None,
+) -> list[str]:
+    """``GET {base_url}/models`` — the "one tiny request" provider.connect makes to
+    validate an OpenAI (or OpenAI-compatible) key/server, doubling as the model
+    list for a custom server.
+
+    GLOBAL note (step 4, D1/R1): this request goes to a base URL a user (or, via
+    the add-by-prompt card, a model-influenced utterance) can point anywhere, so it
+    is issued through the SHARED SSRF-safe pin (``net_vetting.open_vetted``) — the
+    exact mechanism ``read_web_page`` uses: resolve → vet → connect to the vetted
+    IP with the hostname in Host + TLS SNI → follow no redirects → re-vet each hop.
+    The custom server is legitimately on the LAN, so the pin runs with
+    ``allow_private=True`` and any port (``require_default_port=False``); the pin
+    still closes DNS rebinding (a public-looking hostname cannot swap to a different
+    address between vet and connect) and the redirect gap. ``resolve`` is injectable
+    so tests can stub DNS (MockTransport intercepts below name resolution).
+
+    A GET has no side effects, so it keeps its one idempotent retry (a transient
+    connect blip or a 5xx) via ``request_with_retry`` — a retryable
+    ``VettingError`` from the pin is surfaced as the ``httpx`` error that helper
+    retries on, so the pin and the retry policy compose without either owning the
+    other. Returns the model ids; raises a plain-language ``RuntimeError`` on a bad
+    key, an unreachable host, or an unreadable body. The key is fetched ONCE here
+    and used only in the request header, never retained (§8.3)."""
+    key = _resolve_list_key(api_key_getter, require_key=require_key)
+    headers = {}
+    if key:
+        headers["authorization"] = f"Bearer {key}"
+    url = f"{(base_url or _DEFAULT_BASE_URL).rstrip('/')}/models"
+    injected = client
+    # trust_env=False for the same reason read_web_page uses it: a proxy would sit
+    # between the address that was vetted and the address that is contacted, and
+    # this destination is user/model-influenced.
+    http = injected if injected is not None else httpx.Client(trust_env=False)
+    resolver = resolve if resolve is not None else net_vetting.resolve_host
+
+    def _attempt() -> httpx.Response:
+        try:
+            return net_vetting.open_vetted(
+                http,
+                url,
+                resolve=resolver,
+                on_final=_list_read_response,
+                sentences=_LIST_SENTENCES,
+                base_headers=headers,
+                allow_private=True,           # the user's own LAN model host is legitimate
+                require_default_port=False,   # ...on whatever port it runs (:11434, :1234)
+                max_url_chars=_LIST_MAX_URL_CHARS,
+                max_redirects=_LIST_MAX_REDIRECTS,
+                timeout=_LIST_TIMEOUT_SECONDS,
+            )
+        except net_vetting.VettingError as exc:
+            if exc.retryable:
+                # A transient network failure — re-raise as the httpx error
+                # request_with_retry gives its one idempotent retry to. The final
+                # attempt's ConnectError is caught below and turned into the plain
+                # "couldn't reach" sentence, byte-identical to the no-retry message.
+                raise httpx.ConnectError(str(exc)) from None
+            # A settled refusal (blocked address, redirect loop, malformed URL) —
+            # no retry could help, so surface the plain sentence at once.
+            raise RuntimeError(str(exc)) from None
+
+    try:
+        response = request_with_retry(_attempt, idempotent=True)
+    except httpx.HTTPError:
+        raise RuntimeError(_COULD_NOT_REACH_SERVER) from None
+    finally:
+        if injected is None:
+            http.close()
+    if response.status_code in (401, 403):
+        raise RuntimeError("That key doesn't work. Check it and try again.")
+    if response.status_code >= 400:
+        raise RuntimeError("That server didn't accept the request. Check the address and try again.")
+    return _list_parse(response)
 
 
 def _resolve_list_key(api_key_getter, *, require_key: bool) -> str:

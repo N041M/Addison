@@ -238,6 +238,16 @@ def test_custom_server_with_key_still_sends_authorization():
 
 
 # --- list_models (connect-time validation / custom catalog) -----------------
+# The validating GET is now issued through the shared SSRF pin (step 4, R1), which
+# resolves the host before connecting. These two used api.openai.com, so they gain
+# a stub resolver — the same offline discipline read_web_page's SSRF tests use
+# (MockTransport intercepts below DNS; the pin's resolve seam is injectable) —
+# keeping the suite from reaching real DNS. The pinned request addresses the vetted
+# IP, so ``request.url`` carries the IP; the Host header (not asserted here) keeps
+# the name, and the path/Bearer assertions are unchanged.
+_STUB_RESOLVE = lambda host: ["93.184.216.34"]  # noqa: E731
+
+
 def test_list_models_returns_ids_and_validates_key():
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url).endswith("/v1/models")
@@ -245,10 +255,9 @@ def test_list_models_returns_ids_and_validates_key():
         return httpx.Response(200, json={"data": [{"id": "m-one"}, {"id": "m-two"}, {"bad": 1}]})
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    assert list_models("https://api.openai.com/v1", lambda: "sk-a", client=client) == [
-        "m-one",
-        "m-two",
-    ]
+    assert list_models(
+        "https://api.openai.com/v1", lambda: "sk-a", client=client, resolve=_STUB_RESOLVE
+    ) == ["m-one", "m-two"]
 
 
 def test_list_models_401_is_plain_key_error():
@@ -256,7 +265,9 @@ def test_list_models_401_is_plain_key_error():
         transport=httpx.MockTransport(lambda r: httpx.Response(401, json={}))
     )
     with pytest.raises(RuntimeError, match="That key doesn't work"):
-        list_models("https://api.openai.com/v1", lambda: "sk-a", client=client)
+        list_models(
+            "https://api.openai.com/v1", lambda: "sk-a", client=client, resolve=_STUB_RESOLVE
+        )
 
 
 def test_list_models_no_key_allowed_for_custom_server():

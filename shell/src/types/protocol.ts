@@ -34,6 +34,16 @@ export const Method = {
   ProviderConnect: "provider.connect",
   ProviderDisconnect: "provider.disconnect",
 
+  // Add-a-server-by-prompt + "make it cheaper" (Phase-2 step 4). The turn reply
+  // never carries a model-authored payload: the core inspects the current turn,
+  // drafts, and HOLDS a base URL / a canned cost plan for an explicit confirm
+  // card (the widget/routine precedent). Keys are pasted into the endpoint card
+  // and stored straight to the OS keychain by the shell — never through the core.
+  EndpointProposeFromConversation: "endpoint.proposeFromConversation",
+  EndpointConfirmAdd: "endpoint.confirmAdd",
+  CostPlanPropose: "costPlan.propose",
+  CostPlanApply: "costPlan.apply",
+
   // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
   // pill or a whitelisted stat display, NEVER code. Proposed like routines
   // (draft-in-memory + explicit confirm) and saved LOW-risk (display-only).

@@ -6,16 +6,62 @@ never any key material (§8.3)."""
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections import Counter
 from urllib.parse import unquote, urlsplit
 
+from agent_core import net_vetting
 from agent_core.models_catalog import PROVIDER_IDS, provider_label
 from agent_core.providers.ollama_provider import is_running
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _GENERIC_TURN_ERROR
 
 _BAD_SCHEME = "Enter a web address that starts with http:// or https://."
+
+# --- add-a-server-by-prompt: URL extraction from the CURRENT turn (step 4) ------
+# The turn reply carries no model-authored actionable payload (F2). Instead the
+# core reads the CURRENT turn's user messages (R2) and, if one is a short
+# add-endpoint-shaped utterance, extracts the base URL it names — the same class of
+# input as "the user types a URL in Settings", never a URL mined from a pasted wall
+# of page text (R6). primary.txt STEERS the user toward the card; it never emits a
+# URL, so this extraction is the mechanism and the prompt is only guidance.
+
+# The utterance must be SHORT. This is the wall-of-text defence: a URL buried in
+# thousands of characters of pasted page content does NOT arm a card, which keeps
+# the residual bounded to the pre-existing "user types a URL" risk (R6). A real
+# "add my server at http://192.168.1.5:11434" line is well under this.
+_MAX_ENDPOINT_UTTERANCE_CHARS = 200
+# First http(s) run of non-space, non-delimiter characters. Trailing sentence
+# punctuation is stripped after the match ("...:11434." -> "...:11434").
+_ENDPOINT_URL_RE = re.compile(r"https?://[^\s<>\"'`\]})]+", re.IGNORECASE)
+# An "add-endpoint-shaped" utterance mentions adding/connecting a server. Broad on
+# purpose (the confirm card + key paste are the real gate), but present so a short
+# sentence that merely happens to contain a URL does not arm a connect card.
+_ADD_ENDPOINT_HINTS = (
+    "add", "connect", "server", "endpoint", "hook up", "set up", "setup",
+    "use my", "use the", "my own", "point", "ollama", "lm studio", "llama",
+    "local model", "base url", "api",
+)
+
+
+def _extract_endpoint_url(text: object) -> str | None:
+    """The base URL a short add-endpoint utterance names, or None (R2/R6).
+
+    Returns None for a non-string, an empty/over-long utterance (the wall-of-text
+    defence), an utterance that is not add-endpoint-shaped, or one with no http(s)
+    URL. Never inspects assistant content — the caller only ever passes user text."""
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if not stripped or len(stripped) > _MAX_ENDPOINT_UTTERANCE_CHARS:
+        return None
+    if not any(hint in stripped.lower() for hint in _ADD_ENDPOINT_HINTS):
+        return None
+    match = _ENDPOINT_URL_RE.search(stripped)
+    if match is None:
+        return None
+    return match.group(0).rstrip(".,;:!?”’\"'") or None
 
 # Plain, and it names the way out: the key box already exists and the key it
 # takes goes straight to the keychain, which is the whole point of refusing here.
@@ -284,7 +330,15 @@ class ProvidersMixin(ServerContext):
         # snapshotting per branch would only churn a row on each offline retry.
         # Recoverable if the capture fails (the person can reconnect), so this
         # proceeds with the sticky warning.
-        self._snapshot_auto("provider_connect")
+        #
+        # Step 4: a CUSTOM connect is "adding a server" (it is where the add-by-prompt
+        # card lands, and the ordinary Settings "add a custom server" flow), so it
+        # carries the distinct ``add_endpoint`` slug — the restore-points list reads
+        # "Before adding a service" rather than "Before connecting a service". The
+        # cloud providers keep ``provider_connect``. Both proceed-on-failure; the
+        # asymmetry is only the label, not the policy (cross-ref rpc/routing.set,
+        # rpc/cost_plan.apply, which differ in POLICY too).
+        self._snapshot_auto("add_endpoint" if provider_id == "custom" else "provider_connect")
         try:
             models = self._connect_provider(provider_id, base_url)
         except RuntimeError as exc:
@@ -328,3 +382,69 @@ class ProvidersMixin(ServerContext):
             self.model_router.unregister_primary_model(model.id)
         self._cloud_catalog = [m for m in self._cloud_catalog if m.provider != provider_id]
         return {"ok": True}
+
+    # --- add a server by prompt (step 4, F2/R2/R6/D5) ---------------------
+    def _current_turn_user_texts(self) -> list[str]:
+        """The user message texts of the CURRENT turn only (R2), oldest-first.
+
+        The current turn is the trailing block of user messages — everything typed
+        since the last assistant reply. Assistant content is NEVER read (a model
+        that paraphrases ``https://evil`` into its answer must not become the
+        extraction source), and a URL from an earlier turn is out of reach. Tool
+        results are skipped; a user message can only open a turn, so the block ends
+        at the first assistant message walking backwards."""
+        texts: list[str] = []
+        seen_user = False
+        for message in reversed(self.conversation.messages):
+            role = getattr(message, "role", None)
+            if role == "user":
+                content = getattr(message, "content", None)
+                if isinstance(content, str):
+                    texts.append(content)
+                seen_user = True
+            elif role == "assistant" and seen_user:
+                break
+        texts.reverse()
+        return texts
+
+    def _endpoint_propose(self) -> dict:
+        """endpoint.proposeFromConversation -> {baseUrl, isLocalOrLan, error?} |
+        {none:true}.
+
+        The CORE derives the base URL from the current turn's user text (never a
+        model-authored field on the reply, F2) and HOLDS nothing — the frontend
+        renders the card from this reply and a separate confirmAdd applies it. A
+        URL that fails ``_base_url_problem`` still comes back WITH its problem so the
+        card can say what to fix; only a turn with no add-endpoint URL at all
+        returns ``none`` (Addison then answers in prose telling the person what to
+        paste). ``isLocalOrLan`` drives the card's "this points to your own
+        computer" disclosure (D5) — it never allows or blocks the later connect."""
+        self._ensure_built()
+        # Most recent user line first, so the latest add-endpoint utterance wins.
+        for text in reversed(self._current_turn_user_texts()):
+            base_url = _extract_endpoint_url(text)
+            if base_url is None:
+                continue
+            is_local = net_vetting.classify_local_or_lan(base_url)
+            problem = _base_url_problem(base_url)
+            if problem is not None:
+                return {"baseUrl": base_url, "isLocalOrLan": is_local, "error": problem}
+            return {"baseUrl": base_url, "isLocalOrLan": is_local}
+        return {"none": True}
+
+    def _endpoint_confirm_add(self, params: dict) -> dict:
+        """endpoint.confirmAdd {baseUrl, accept} -> {ok, error?}.
+
+        On accept, runs the EXISTING ``provider.connect {provider:"custom"}`` path —
+        same ``_base_url_problem`` gate (so a re-supplied bad URL is refused here
+        too, defence in depth), same ``add_endpoint`` snapshot hook, same pinned
+        validation GET, same keychain-only key handling (G1). No new connect surface
+        is introduced; this is the add-by-prompt entry point onto the one that
+        already exists."""
+        self._ensure_built()
+        if not params.get("accept"):
+            return {"ok": False, "declined": True}
+        base_url = (params.get("baseUrl") or "").strip()
+        if not base_url:
+            return {"ok": False, "error": _BAD_SCHEME}
+        return self._provider_connect({"provider": "custom", "baseUrl": base_url})

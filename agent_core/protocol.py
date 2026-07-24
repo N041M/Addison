@@ -101,6 +101,24 @@ class Method:
     PROVIDER_CONNECT = "provider.connect"      # {provider, baseUrl?} -> {ok, error?}
     PROVIDER_DISCONNECT = "provider.disconnect"  # {provider} -> {ok}
 
+    # Add-a-server-by-prompt (step 4, free-model endpoints; contract F2/R2/R6).
+    # The turn reply NEVER carries a model-authored actionable payload; instead the
+    # CORE inspects the CURRENT turn's user messages, extracts a base URL from a
+    # short add-endpoint utterance (never assistant content, never a pasted wall of
+    # text), validates it, and HOLDS it for a confirm — the widget/routine
+    # precedent. The key is pasted into the card and stored straight to the OS
+    # keychain by the shell (G1); it never crosses this boundary.
+    ENDPOINT_PROPOSE_FROM_CONVERSATION = "endpoint.proposeFromConversation"  # {} -> {baseUrl, isLocalOrLan, error?} | {none:true}
+    ENDPOINT_CONFIRM_ADD = "endpoint.confirmAdd"  # {baseUrl, accept} -> {ok, error?} (runs provider.connect custom)
+
+    # "Make it cheaper" (step 4; contract F3/D4). A canned, core-authored plan —
+    # the model authors NONE of its fields — that adds a fixed brevity/prefer-cheaper
+    # guidance note and switches routing to cost_first, behind an explicit confirm.
+    # apply is idempotent, snapshots FIRST (refuse-on-failure), and persists the
+    # skill + setting in ONE atomic Store commit.
+    COSTPLAN_PROPOSE = "costPlan.propose"      # {} -> {skillName, skillInstructions, strategy:"cost_first"}
+    COSTPLAN_APPLY = "costPlan.apply"          # {accept} -> {ok, snapshotId?, error?}
+
     # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
     # pill or a whitelisted stat display. NEVER code. Widgets are proposed like
     # routines (draft-held-in-memory + explicit confirm) and saved LOW-risk.

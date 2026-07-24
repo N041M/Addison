@@ -781,6 +781,55 @@ class Store:
         self._conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
         self._conn.commit()
 
+    def apply_cost_plan(
+        self,
+        *,
+        skill_id: str,
+        skill_name: str,
+        skill_instructions: str,
+        strategy_key: str,
+        strategy_value: str,
+        now: int,
+    ) -> None:
+        """Apply the "make it cheaper" plan atomically (step 4, contract R4): upsert
+        the canned guidance skill BY NAME and write the routing strategy, in ONE
+        commit — all land or none do, so a half-applied plan (a note with no
+        strategy change, or vice versa) is impossible.
+
+        Exists as a dedicated Store method because every write here commits on the
+        one shared ``self._conn``, so the RPC layer cannot wrap two calls in a single
+        transaction — the two-``set_setting`` hazard ``set_settings`` was added to
+        close. Idempotent by skill NAME: an existing row with that exact name is
+        UPDATED in place and re-enabled (the ``skills`` table has no UNIQUE
+        constraint, so a plain INSERT-if-name-exists would duplicate the note and
+        grow the prompt on every repeat)."""
+        try:
+            row = self._conn.execute(
+                "SELECT id FROM skills WHERE name = ? ORDER BY created_at ASC, rowid ASC LIMIT 1",
+                (skill_name,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute(
+                    "INSERT INTO skills (id, name, instructions, enabled, created_at) "
+                    "VALUES (?, ?, ?, 1, ?)",
+                    (skill_id, skill_name, skill_instructions, now),
+                )
+            else:
+                self._conn.execute(
+                    "UPDATE skills SET instructions = ?, enabled = 1 WHERE id = ?",
+                    (skill_instructions, row["id"]),
+                )
+            self._conn.execute(
+                "INSERT INTO app_settings (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, "
+                "updated_at = excluded.updated_at",
+                (strategy_key, strategy_value, now),
+            )
+        except Exception:
+            self._conn.rollback()
+            raise
+        self._conn.commit()
+
     # --- config snapshots (GLOBAL FLOOR G3 — see agent_core/snapshots/) -------
     # App-state rollback, NOT the per-tool-call undo above. These rows hold a JSON
     # row-image of Addison's mutable config tables; the SnapshotManager owns the

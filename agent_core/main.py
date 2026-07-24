@@ -84,6 +84,7 @@ from agent_core.rpc.constants import (
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
 from agent_core.rpc.conversation import ConversationMixin
+from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
 from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
@@ -417,6 +418,7 @@ class JsonRpcServer(
     SnapshotsMixin,
     GuardsMixin,
     RoutingMixin,
+    CostPlanMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -1002,6 +1004,7 @@ class JsonRpcServer(
             _SNAPSHOT_JOBS,
             _GUARDS_JOBS,
             _ROUTING_JOBS,
+            _COSTPLAN_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1131,6 +1134,14 @@ class JsonRpcServer(
                     self._respond(request_id, self._routing_get())
                 elif kind == "routing_set":
                     self._respond(request_id, self._routing_set(params))
+                elif kind == "endpoint_propose":
+                    self._respond(request_id, self._endpoint_propose())
+                elif kind == "endpoint_confirm_add":
+                    self._respond(request_id, self._endpoint_confirm_add(params))
+                elif kind == "costplan_propose":
+                    self._respond(request_id, self._cost_plan_propose())
+                elif kind == "costplan_apply":
+                    self._respond(request_id, self._cost_plan_apply(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1576,10 +1587,22 @@ _CONVERSATION_JOBS = {
 }
 
 # provider.list/connect/disconnect run on the worker (Store + router + connect ping).
+# endpoint.* (add-by-prompt, step 4) belong with them: propose reads the live
+# conversation + validates a base URL, and confirmAdd runs the provider.connect
+# custom path — both Store/router-touching, so both run on the worker.
 _PROVIDER_JOBS = {
     Method.PROVIDER_LIST: "provider_list",
     Method.PROVIDER_CONNECT: "provider_connect",
     Method.PROVIDER_DISCONNECT: "provider_disconnect",
+    Method.ENDPOINT_PROPOSE_FROM_CONVERSATION: "endpoint_propose",
+    Method.ENDPOINT_CONFIRM_ADD: "endpoint_confirm_add",
+}
+
+# costPlan.* (make it cheaper, step 4) read/write app_settings + skills and mint a
+# make_it_cheaper snapshot, so they run on the worker like every other store op.
+_COSTPLAN_JOBS = {
+    Method.COSTPLAN_PROPOSE: "costplan_propose",
+    Method.COSTPLAN_APPLY: "costplan_apply",
 }
 
 # widget.* run on the worker (Store + routine library + live conversation).
