@@ -184,6 +184,28 @@ class RoutineEngine:
                 return self._finish(run_id, "failed", step_results, str(exc), step_log)
 
             tool = self.tool_registry.get(tool_id)
+            # SAFE-1 at dispatch, before the gate: a routine step naming a dev-only
+            # tool cannot run outside OPEN, whoever wrote that tool. Refusing here
+            # rather than inside execute also means the person is never asked to
+            # approve something that was never going to run. Shaped as a FAILED
+            # STEP (not a failed run) so on_failure still decides what happens next
+            # — byte-for-byte what run_command's own refusal already produced.
+            dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(tool_id, mode)
+            if dev_only_refusal is not None:
+                result = ToolResult(success=False, content=dev_only_refusal)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, dev_only_refusal))
+                if step.on_failure == "abort":
+                    return self._finish(
+                        run_id, "failed", step_results, dev_only_refusal, step_log
+                    )
+                if step.on_failure == "ask_user":
+                    if not self._on_ask_user(step, run_id, dev_only_refusal):
+                        return self._finish(
+                            run_id, "cancelled", step_results, "Stopped at your request.",
+                            step_log,
+                        )
+                continue
             # Mode-aware authorization (policy.py): SAFE prompts for every
             # not-yet-granted step; OPEN auto-allows non-destructive steps and
             # prompts PER INVOCATION for destructive ones (a destructive command

@@ -212,6 +212,19 @@ class Orchestrator:
                         continue
                     calls_made += 1
                     tool = self.tool_registry.get(call.tool_id)
+                    # SAFE-1 at dispatch: visible_tools hides dev-only tools from the
+                    # model, but a tool_use naming a hidden id still reaches here, and
+                    # the gate does not check dev-ness. Refuse BEFORE the gate and
+                    # before execute, so the boundary does not depend on each dev
+                    # tool remembering to check the mode itself.
+                    dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(
+                        call.tool_id, mode
+                    )
+                    if dev_only_refusal is not None:
+                        conversation.append_tool_result(
+                            call.id, ToolResult(success=False, content=dev_only_refusal)
+                        )
+                        continue
                     # Mode-aware authorization (policy.py): SAFE prompts for every
                     # not-yet-granted tool; OPEN auto-allows non-destructive calls and
                     # prompts PER INVOCATION for destructive ones (the card shows the

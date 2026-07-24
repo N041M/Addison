@@ -18,6 +18,11 @@ from __future__ import annotations
 from agent_core.policy import PolicyMode
 from agent_core.tools.base import RiskTier, Tool, ToolDefinition
 
+# Said when a dev-only tool is reached outside OPEN mode. Plain language, and the
+# same register as run_command's own refusal — the person is being told a whole
+# capability belongs to another profile, not shown an enforcement detail.
+DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
+
 
 class ToolRegistry:
     def __init__(self) -> None:
@@ -37,7 +42,17 @@ class ToolRegistry:
             # or missing entirely is mechanically capped at read-only — unless it
             # is dev_only, in which case OPEN mode owns the risk explicitly.
             own_undo = getattr(type(tool), "undo", None)
-            if own_undo is None or getattr(own_undo, "__isabstractmethod__", False):
+            # ``not callable`` matters as much as ``is None``: an ``undo`` bound to a
+            # non-callable (a string, a constant) passed this check and registered at
+            # HIGH straight into the SAFE view, where the UndoManager would then fail
+            # at the moment someone actually needed to reverse something. A hollow but
+            # CALLABLE undo (``def undo(self): pass``) cannot be detected here — no
+            # static check can — which is what the per-tool round-trip tests are for.
+            if (
+                own_undo is None
+                or getattr(own_undo, "__isabstractmethod__", False)
+                or not callable(own_undo)
+            ):
                 raise ValueError(
                     f"Tool '{tool.definition.id}' has risk_tier="
                     f"{tool.definition.risk_tier.value} but no undo() implementation. "
@@ -57,6 +72,24 @@ class ToolRegistry:
 
     def is_dev_only(self, tool_id: str) -> bool:
         return tool_id in self._dev_only
+
+    def refuse_if_dev_only_outside_open(self, tool_id: str, mode: PolicyMode) -> str | None:
+        """The SAFE-1 boundary, enforced at DISPATCH: a plain refusal sentence when
+        ``tool_id`` is dev_only and ``mode`` is not OPEN, else None.
+
+        ``visible_tools`` hides dev_only tools from the MODEL, but hiding is not
+        enforcing — a tool_use naming a hidden id sails straight through to
+        ``get()``, and the gate does not check dev-ness either. Until this existed
+        the boundary held only because ``run_command`` refused inside its own
+        ``execute``, i.e. by the diligence of one tool's author. Steps 5, 7 and 8
+        add more dev-only surface; tool #2 should be safe by construction, not by
+        remembering. ``run_command`` keeps its own check as belt-and-suspenders.
+
+        Called by BOTH dispatch paths (the orchestrator turn and the routine step)
+        so no execution route is left uncovered."""
+        if mode is not PolicyMode.OPEN and self.is_dev_only(tool_id):
+            return DEV_ONLY_REFUSAL
+        return None
 
     def visible_tools(self, mode: PolicyMode) -> list[ToolDefinition]:
         """The tool definitions the model may call under ``mode``.

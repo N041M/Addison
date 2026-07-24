@@ -12,7 +12,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
-    "ruff>=0.6",
+    # PINNED TO A MINOR SERIES ON PURPOSE. A linter's DEFAULT rule set grows between
+    # releases, and CI installs from this file — so an unpinned ruff means someone
+    # else's release schedule can turn the build red with no change to this repo.
+    # That is not hypothetical: ruff 0.16.0 added enough default rules to produce
+    # 182 errors against an unmodified master, and the first PR unlucky enough to
+    # open afterwards inherited a failure it did not cause.
+    # Raising this bound is a deliberate act: bump it, run `ruff check`, and adopt
+    # or configure the new rules in the same change, so the diff that turns them on
+    # is the diff that fixes them.
+    "ruff>=0.15,<0.16",
 ]
 
 [build-system]

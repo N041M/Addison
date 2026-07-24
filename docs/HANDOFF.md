@@ -489,6 +489,17 @@ read is not the one path where the destination goes unnamed.
 
 ## Environment facts
 
+- **Keychain prompts on every rebuild — fixed by signing, not by code.** Dev builds
+  are ad-hoc signed (`Signature=adhoc`, `TeamIdentifier=not set`, and the identifier
+  embeds a per-build hash), and macOS binds an "Always Allow" keychain decision to
+  the code-signing identity. So each `cargo build` looks like a new app and the
+  saved decision stops matching. `scripts/sign-dev-binary.sh` signs the dev binary
+  with a stable self-signed certificate; the one-time certificate creation is in its
+  header. Free — the $99 Apple Developer Program is for distribution (Gatekeeper),
+  not for this. Within one process `KEY_CACHE` already collapses provider-key reads
+  to one, so repeated prompts mean repeated rebuilds, not a cache miss.
+
+
 - Python venv: `agent_core/.venv` (pytest, ruff, httpx). **Note:** when working
   from a git worktree, run tests as
   `PYTHONPATH=$PWD /Users/karel/Desktop/Addison/agent_core/.venv/bin/python -m pytest tests/ -q`
