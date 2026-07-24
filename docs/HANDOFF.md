@@ -1,13 +1,39 @@
-# Addison — Session Handoff (2026-07-20, second pass)
+# Addison — Session Handoff (2026-07-24)
 
 For the next working session. Read **CLAUDE.md** first (repo law), then
 **`docs/addison-scope-amendment-2026-07.md`** (the adopted scope shift — it
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: Phase-2 step 2 — the Custom profile + guard model + the G4 anchor
-minting caller.** Step 1 (the snapshot/rollback floor, G3) is **done**. Details
-at the bottom, including a ledger of everything step 1 deliberately left behind.
+**Next up: retire the step-1 ledger (small, below), then Phase-2 step 2 — the
+Custom profile + guard model + the G4 anchor minting caller.** Step 1 (the
+snapshot/rollback floor, G3) is **merged**.
+
+**Everything through PR #49 is on `master`. No open PRs.** One small branch is
+unpushed: `fix-signing-instructions` (a doc-only correction to
+`scripts/sign-dev-binary.sh`) — push it with your first PR or on its own.
+
+## Read this first: the standard this repo is held to
+
+Two things happened this session that should change how you work here, and
+neither is visible from the code alone.
+
+**1. Green gates are not the bar.** The first build of the G3 floor passed all
+eight gates while its headline requirement was broken — the one-action restore
+walked the user back *into* the config they were escaping — because the tests
+encoded the same wrong assumptions they were meant to catch. Since then every fix
+in this repo carries a regression test **proven to fail when its own line is
+reverted**, checked in a scratch copy outside the repo. Roughly 75 mutations have
+been applied across the session; the ones that mattered are listed where they
+belong. If you add a test, mutate the thing it guards and watch it go red. Three
+tests that passed both before and after their own fix were caught and rewritten or
+deleted this session — that is the failure mode, and it is not rare.
+
+**2. Prose drifts from code, twice measured.** `CLAUDE.md` has twice asserted the
+opposite of what shipped, once re-added by the very changeset that broke it.
+Before trusting a sentence in any doc — including this one — check it against the
+tree. Exact line counts and gate numbers are deliberately absent here for the same
+reason; they went stale twice in a day, and a stale number reads as a claim.
 
 ## Where the project stands
 
@@ -32,7 +58,7 @@ at the bottom, including a ledger of everything step 1 deliberately left behind.
   ruff·pyright·pytest / frontend: eslint·tsc·vitest·build / rust: cargo test) on
   every PR and push to `master`. Keep it green.
 
-## What shipped this session — Phase-2 step 1, the G3 rollback floor
+## What shipped 07-20 — Phase-2 step 1, the G3 rollback floor
 
 The floor everything else leans on. The motivating story is worth re-reading in
 amendment §1 before touching any of it: a non-technical user asked his AI tool to
@@ -150,6 +176,88 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
   `addison-design-doc.md` + `addison-engineering-spec.md` were **un-gitignored
   and are now tracked** in the repo.
 
+## What shipped 07-24 — the security + test-hardening wave (#48, #49)
+
+After step 1 merged (#47), a test-quality measurement turned up a **live security
+bug**, which is the reason this wave exists.
+
+**#48 — `run_command` auto-granted destructive commands (LIVE BUG, fixed).** In
+OPEN mode the gate auto-granted anything the tool's classifier called read-only,
+and that classifier was defeatable three ways, each a character or flag its
+blocklist did not anticipate:
+
+```
+ls\nrm -rf ~/x      shlex treats \n as whitespace, so it read as a lone `ls`
+ls & rm -rf ~/x     the metachar list had && but not bare &
+find . -delete      an allowlisted reader with a destructive primary
+grep -rf /etc/x .   a short flag defeated by bundling
+file -Cm /tmp/x     an allowlisted reader that WRITES a compiled magic file
+```
+
+The blast radius is the filesystem, which is **outside G3** — an `rm -rf` is not
+undoable. **Owner decision: statically deciding whether an arbitrary shell command
+is read-only is a losing game, so the auto-allow was removed rather than patched.**
+`is_destructive` now returns `True` unconditionally; every command raises the
+per-invocation card showing its exact text. The classifier, the read-only
+allowlist and the metacharacter list are **deleted** — dead once nothing
+auto-grants, and their absence removes the false confidence that any of it was
+trusted. Cost is a card on every command including `ls`; that is the intended
+trade. An argument-allowlist was drafted and rejected — a hardening round showed
+even that was defeatable, which is what drove the decision.
+
+**#49 — the test gaps that would let a floor breach ship green.** A triage pass
+reproduced every candidate against the real code first and found **no further live
+bugs**; everything below was correct code with nothing watching it.
+
+- **`keychain.rs` / G1 — the headline.** Two tests built a `json!` literal in the
+  test body and asserted on it, never calling the real `handle()`. So adding the
+  ed25519 **private seed** to the real `getDeviceKey` response **passed all 31
+  Rust tests** — on the most sensitive value in the system, in the highest-trust
+  process. Response builders are now extracted (behaviour identical) and the tests
+  assert over them, plus a sweep serialising every keychain response and asserting
+  the seed appears in none. Verified failing with the seed added.
+- **dev-only ⟹ OPEN-only, enforced at DISPATCH.** `visible_tools(SAFE)` hides
+  dev-only tools from the *model*, but hiding is not enforcing: a `tool_use`
+  naming a hidden id still reached `registry.get()`, and the gate does not check
+  dev-ness. A dev-only tool **with no self-check executed under SAFE** through both
+  dispatch paths. The boundary held only because `run_command` refuses inside its
+  own `execute` — a convention tool #2 would not inherit, with steps 5, 7 and 8 all
+  adding dev-only surface. Both dispatch sites now consult
+  `registry.refuse_if_dev_only_outside_open()` **before the gate**, so nobody is
+  asked to approve something that was never going to run.
+  `tests/test_dev_only_boundary.py` drives a rogue HIGH dev-only tool through both
+  paths in both modes — and asserts it **still runs in OPEN**, because breaking the
+  harness would be worse than the hole.
+- **undo substance.** `undo = "a string"` registered at HIGH straight into the SAFE
+  view, where it would fail at the moment somebody needed to reverse something. Now
+  refused. A *callable* no-op cannot be caught statically — the comment says so
+  rather than implying otherwise, and a round-trip test is the honest answer.
+- **repo-wide G2** (`tests/test_g2_no_self_trigger.py`): the only test pinning
+  "Addison never triggers itself" AST-scoped `snapshot_manager.py` alone. Now every
+  core module, with the rule stated as *"nothing that fires work on a SCHEDULE or
+  after a DELAY"* rather than a ban on concurrency — so the legitimate worker
+  thread, `Event` waits and blocking `queue.get()` stay green and the test does not
+  get deleted by the next person it annoys. Its anti-vacuity check pins the
+  **subpackages** covered, not a module count: a count lets you drop `providers/`
+  entirely and stay above the floor.
+- **`shell_bridge`** (killed 0 of 3): error frames, timeouts, and
+  `get_provider_key` now covered. Its G1 retention test checks the instance, the
+  **class**, and the **module** namespace — the plausible mistake being to port the
+  Rust shell's sanctioned session cache into the core as `type(self)._cache`.
+- **`rpc/widgets`** (killed 0 of 2): both SAFE-enforcement call sites, asserted
+  against the widgets **table** rather than `widget.list` — the render filter hides
+  the mutation's row, so the list looks identical either way.
+
+**Also #49: `ruff` is pinned to `>=0.15,<0.16`.** CI failed with 183 lint errors
+while the same tree was clean locally. Not the code: `pyproject.toml` asked for
+`ruff>=0.6`, CI installs from it, and **ruff 0.16.0 shipped with more rules on by
+default** — verified at **182 errors against an unmodified `master`**. The first PR
+opened after the release inherited a failure it did not cause. Raising the bound is
+now deliberate: bump it, run ruff, and adopt or configure the new rules in the same
+change. The 182 are a separate decision (see Known gaps) and **must not be
+bulk-fixed** — many `BLE001` hits are the deliberate broad `except` in the recovery
+paths, where swallowing is the point.
+
 ## The scope amendment in one screen (read the full doc)
 
 - **Identity** — butler. Developer = coding harness + Addison's safety/QoL;
@@ -192,9 +300,38 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
 
 ## Next up — Phase 2 (code), in dependency order
 
+**Before step 2, retire the step-1 ledger.** Two small, self-contained items with
+no dependency on the Custom profile. They belong first because step 2's headline
+is anchor minting, which stands on this floor, and step 1 shipped
+green-but-broken the first time precisely by accumulating "while we're in there"
+work:
+
+- **`snapshot_now`** as a **LOW, capture-only** registry tool (amendment §3.2's
+  "or by asking Addison" — the one line of §14.1 step 1 did not deliver). It may
+  only ever ADD a row: never restore, never delete. Needs a late-bound
+  `Callable[[], SnapshotManager | None]` on the server, because `build_registry()`
+  runs before the Store exists; it answers *"I can't save a restore point just
+  yet"* when the store is not up. ⚠️ `docs/architecture.md` once claimed this
+  already worked and was corrected — do not let it drift back.
+- **The Restore card says so when there is NO verified restore point.** Today that
+  state means G3 is silently off and nothing says it — the floor failing to report
+  the truth about itself. One honest line in Settings, Fern-compliant, plain
+  language. This is the only piece salvaged from a "doctor command" the owner
+  scrapped on 2026-07-20: a second recovery path contradicts G3 (if the floor
+  holds, doctor is redundant; if doctor is needed, the floor does not hold) and
+  adds a moral hazard without adding a recovery.
+
+Then:
+
 1. ~~**Snapshot/restore subsystem (G3)**~~ — **DONE** (see the section above).
-2. **Custom profile + guard model + undeletable anchor** (`policy.py`) — **start
-   here.** Step 1 left it four things that are already built and waiting:
+2. **Custom profile + guard model + undeletable anchor** (`policy.py`).
+   ⚠️ **Scoping finding, checked against the code:** amendment §7 names four
+   tunable guards, but only **two** of their capabilities exist — the
+   per-invocation destructive card and the auto-grant scope. **Workspace-trust
+   does not exist until step 5, and keyword-gate strictness until step 8.** Ship
+   the panel with the two real guards and grow it as those land: a toggle that
+   controls nothing, sitting in a safety panel, is a lie in the worst possible
+   place. Step 1 left four things built and waiting:
    `mint_anchor()` (fully implemented and tested, **no caller** — the Custom guard
    toggle is the caller); the `custom` value already admitted by
    `created_in_mode`'s CHECK constraint, so no migration is needed; the
@@ -526,6 +663,81 @@ everything else is request/response by JSON-RPC id. Cap turns, use
 `claude-haiku-4-5` via `ADDISON_MODEL`, per-request timeouts ~90s. This validated
 the whole stack for pennies — reuse it.
 
+## Where a bug could have entered on 07-24 — look here first
+
+Written deliberately, at the owner's request, because a session that changed the
+permission gate, the dispatch path, the registry and the G3 recovery paths in one
+day has earned some suspicion. **Nothing below is a known defect** — everything is
+green and mutation-covered. These are the places where verification was thinnest,
+or where the *process* created risk. If something is misbehaving, start here.
+
+**1. `routines/engine.py` — the dev-only guard duplicates `on_failure` handling.**
+The guard shapes its refusal as a failed step and then re-implements
+abort / ask_user / skip **inline**, instead of falling through to the canonical
+block (`if not result.success:`, ~L255). It matches that block today. It will not
+follow it if someone adds a fourth `on_failure` policy or changes the semantics —
+the two will silently disagree, and only the dev-only path will be wrong. **Fix
+properly by restructuring so both paths share one block**; it was written this way
+to keep the diff small, which was the wrong trade for a branch nobody exercises
+often.
+
+**2. Several agents edited ONE working tree concurrently.** Two near-misses were
+caught by luck rather than design: one agent ran `git stash`, which stashed a
+sibling agent's uncommitted work (restored intact, verified — but nothing
+guaranteed that), and a `git add -A` swept three in-flight test files into an
+unrelated commit (split afterwards). **A silent clobber is plausible and would not
+show up in tests if the lost edit was a comment or a docstring.** If a file reads
+oddly — a half-finished sentence, a comment describing code that is not there —
+suspect this rather than assuming intent. Future sessions should give parallel
+agents disjoint files *and* separate worktrees.
+
+**3. `run_command` now cards on EVERY command — the UX at scale is untested.** The
+behaviour change is correct and deliberate, but nobody ran a routine with several
+command steps end to end. A five-step dev routine is now five permission cards.
+That may be fine, or it may be unusable; it has not been observed. Same for a
+command widget clicked repeatedly.
+
+**4. `keychain.rs` and `filesystem.rs` had functions extracted.** Both extractions
+claim to be behaviour-preserving and the tests agree, but `keychain.rs` is the G1
+machinery `CLAUDE.md` says not to touch, and the change was made to serve a test.
+The response builders return the same `json!` the handler returned inline —
+verified by reading and by the new leak sweep — but if device identity or relay
+signing misbehaves, this is the change that touched it.
+
+**5. The snapshot recovery paths took four late, complex changes.** Retroactive
+verification of the permanent row, the `pre_restore` capture on the sidecar arm,
+`select_payload_to_restore` excluding `pre_restore` payloads, and mirroring the
+verified flag into the sidecar. Each is mutation-covered and was independently
+re-attacked, but they landed at the end of a long session and they are the most
+intricate code in the repo. They interact: the walk, the chooser and the sidecar
+arm all read each other's output.
+
+**6. The `ruff` pin hides 182 real findings**, including several `B023` (a closure not
+binding a loop variable — 5 at the time of writing, but count them yourself). That is a genuine bug class, not a style nit, and those
+four are currently invisible. Read them before or while raising the pin (task in
+Known gaps below).
+
+**7. `tests/test_policy_modes.py` has a `_fake_is_read_only` double** that still
+classifies commands, while the real `run_command` always cards. It exists to drive
+the gate's two OPEN-mode branches and says so — but a reader skimming it could
+conclude the real tool still classifies. If someone "fixes" the double to match
+production, the two gate branches stop being covered.
+
+**8. `agent_core/__init__.py` now arms a global guard on import.**
+`live_db_guard` wraps `sqlite3.connect` for **any** process that imports
+`agent_core`, and only `main.main()` declares itself allowed (`main.py:1560`).
+This fails safe — a new entry point that forgets to declare gets blocked loudly
+rather than writing to the live database — but it *will* surprise. Ad-hoc probe
+scripts must use a temp path or declare. Note `LiveDatabaseBlocked` subclasses
+`AssertionError`, so a broad `except Exception` swallows its message (ledgered
+below); the block still holds, only the explanation is lost.
+
+**9. Partial work was adopted from a workflow killed mid-run by a usage limit.**
+The Rust edits in `keychain.rs`/`filesystem.rs` were left uncommitted by an agent
+that died. They were checked — they compiled, tests passed, the diff read
+coherently — but **not line-by-line against what that agent intended**, because its
+report never arrived.
+
 ## Known gaps (deliberate or tracked, not bugs)
 
 - `draft_message` compose handoff: Rust returns "not available yet" — a real
@@ -596,8 +808,47 @@ the whole stack for pennies — reuse it.
 
 ## Tracked thread: macOS keychain prompts
 
-Not a step-1 item and not a bug in the floor — a separate thread, opened this
-session, with a plan the owner has agreed. Two independent causes were confirmed
+**STATUS 2026-07-24: step 1 of the plan is DONE and working.**
+`scripts/sign-dev-binary.sh` signs the dev binary with a stable self-signed
+certificate. Verified on the owner's machine — the designated requirement the
+keychain ACL matches on went from a per-build hash to:
+
+```
+designated => identifier addison and certificate leaf = H"c24af4b8…"
+```
+
+Two things the next session needs to know:
+
+- **The certificate must be TRUSTED, not just created.** A self-signed root from
+  Certificate Assistant is `CSSMERR_TP_NOT_TRUSTED` until you open it in Keychain
+  Access → Trust → set **Code Signing** to **Always Trust**. Until then
+  `security find-identity -v -p codesigning` reports **0 valid identities** and the
+  script correctly refuses. This step was missing from the first version of the
+  instructions and is where the owner got stuck; the script now detects that exact
+  state and says so. (That fix is on the unpushed `fix-signing-instructions`
+  branch.)
+- **`cargo` strips the signature on every rebuild**, so `./scripts/sign-dev-binary.sh`
+  must be re-run after each build. This is a step someone will forget. Wiring it
+  into the dev loop was offered and **not** done, because `tauri dev` builds and
+  runs in one step with no hook between, so automating it means running Vite and
+  the binary separately — a workflow change the owner has not agreed to. Ask before
+  imposing it.
+
+**⚠️ ONE SYMPTOM REMAINS UNEXPLAINED, and it may be a real bug.** The owner
+reported **three prompts in a single launch** (one process, confirmed by `ps`).
+Signing explains prompts *across* rebuilds; it does not explain three within one
+process, because `KEY_CACHE` should collapse provider-key reads to one. The
+untested hypothesis: a failing `provider-key:anthropic` read cascades to the legacy
+`provider-key:primary` (which still exists on that machine, orphaned — the
+migration only fires when the new entry is ABSENT), and then, with no key
+resolving, the turn falls through to the Setup Assistant relay, which reads
+`device-identity`. That would be three prompts naming **three different items** and
+would mean the first read is *failing*, not merely being re-asked. **The diagnostic
+is cheap: macOS names the item in the dialog.** Same name three times = three
+launches, benign. Three different names = chase it. Do not assume signing closed
+this until the owner confirms.
+
+Original diagnosis below, still accurate. Two independent causes were confirmed
 against the tree.
 
 **1. Dev builds are ad-hoc signed, so the ACL is invalidated on every rebuild.**
