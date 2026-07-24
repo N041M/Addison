@@ -93,6 +93,14 @@ const KEY_PROVIDERS: { id: string; label: string; kind: ProviderKind }[] = [
 // from a truncated copy, a non-breaking space) at the door before it's stored.
 const KEY_SHAPE = /^[\x21-\x7E]+$/;
 
+// Google's free tier surfaced as INFORMATION, not a routing flag (contract D3):
+// one plain sentence under the Google row with a real, openable link to where a
+// free key is obtained. No cloud model is ever marked "free" — the free chip
+// fires only for free-by-construction local models — so this is a link, not a
+// flag. The href is the full web address; the visible text drops the scheme.
+const GOOGLE_KEY_URL = "https://aistudio.google.com/apikey";
+const GOOGLE_KEY_URL_TEXT = "aistudio.google.com/apikey";
+
 // The connected-models union for the custom chain builder: every cloud model
 // (attributed to its provider when the payload names one) plus every configured
 // local model. Same data the model picker consumes.
@@ -449,7 +457,9 @@ function SelectableRow({
 }
 
 // --- API keys --------------------------------------------------------------
-function ApiKeys({
+// Exported for the step-4 Google free-tier-line test (step4.test.tsx). It is
+// still only rendered from within this page.
+export function ApiKeys({
   connected,
   providers,
   onConnect,
@@ -689,6 +699,24 @@ function ProviderRow({
             </p>
           )}
         </div>
+      )}
+
+      {/* Google free-tier info line (contract D3/D5). A real, openable link —
+          never dead text — to where a free key is obtained; opens a visible
+          browser tab via the shell's external-link path. */}
+      {def.id === "google" && (
+        <p className="mt-2 text-fine text-faint">
+          Google's API has a free tier — a free key works here. Get one at{" "}
+          <a
+            href={GOOGLE_KEY_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-fern-deep underline"
+          >
+            {GOOGLE_KEY_URL_TEXT}
+          </a>
+          .
+        </p>
       )}
     </div>
   );
