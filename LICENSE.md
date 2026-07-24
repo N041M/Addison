@@ -1,6 +1,6 @@
 # Addison Non-Commercial License v1.0
 
-Copyright (c) 2026 N041M[](https://github.com/N041M/Addison). All rights reserved.
+Copyright (c) 2026 [N041M](https://github.com/N041M/Addison). All rights reserved.
 
 ## 1. Definitions
 
