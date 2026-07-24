@@ -92,9 +92,14 @@ routing choice and guard toggles, provider configuration metadata, and the
 declarative skills/widgets/routines rows. A snapshot is taken **automatically** before
 any risky or sweeping change (a guard toggle, a provider/endpoint change, a bulk
 "make it cheaper" reconfiguration, a mode switch) and can also be taken **on command**
-from the Settings card. *(**Asking Addison** for one is step-2 work: it needs a LOW,
-capture-only `snapshot_now` registry tool, which is not written and not registered.
-Step 1 ships the Settings control and the RPC method only.)* Restore always targets
+from the Settings card, or by **asking Addison** — the LOW, **capture-only**
+`snapshot_now` registry tool (`agent_core/tools/snapshot_now.py`), in both v1 profiles.
+It holds a **late-bound** reference to the `SnapshotManager` (the registry is built
+before the worker thread builds the manager), so before the store is up it answers
+"can't save a restore point just yet" rather than failing; once up, it makes the same
+`capture(trigger="on_command", reason="user_request")` call the Settings control does.
+Capture-only is the floor: it may only ever **add** a row — never restore, delete or
+prune — which is what keeps it honestly LOW with no `undo()`. Restore always targets
 the last state that actually completed a turn, not merely the state before the last
 edit.
 

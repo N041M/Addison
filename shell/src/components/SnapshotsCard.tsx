@@ -169,6 +169,27 @@ export function SnapshotsCard({
         </div>
       )}
 
+      {/* Restore points exist, but the one-action button has no target — G3's two
+          honest silences. Without a line here the card lists restore points with
+          no button and no reason, and the reader most in need of the floor reads
+          that silence as the floor being broken. So Addison names which silence
+          this is. Same quiet `text-meta text-muted` idiom (and AA reasoning) as
+          the empty-state copy below — this is Addison telling you something, not
+          a control, so it is one <p>, no button, no border.
+
+          Imprecision accepted here: the core's 'unreadable' walk outcome is
+          indistinguishable from 'identical' on this wire — both arrive as "rows
+          exist, at least one verified, no target" — so the second sentence
+          covers both. The wire's `why` field is the future fix if that
+          distinction ever has to be drawn; do not add a wire field now. */}
+      {snapshotsLoaded && connected && snapshots.length > 0 && !targetName && (
+        <p className="mb-3 text-meta text-muted">
+          {snapshots.some((s) => s.verifiedWorking)
+            ? "Your setup already matches your last working setup, so there's nothing to go back to right now."
+            : "None of these has been seen working yet, so the restore button isn't ready. It appears after Addison next answers you."}
+        </p>
+      )}
+
       {/* The outcome of the last save/restore/remove, in plain words. Stays put
           rather than fading — this is a sentence someone re-reads. */}
       {notice && <p className="mb-3 text-fine leading-relaxed text-ink-soft">{notice}</p>}

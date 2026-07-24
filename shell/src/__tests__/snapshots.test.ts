@@ -238,6 +238,69 @@ describe("the restore points card", () => {
   });
 });
 
+// --- the two honest silences (G3): restore points exist, no target ----------
+//
+// When the walk has no target, `canRestore` is false and the whole target/button
+// block renders nothing. If restore points are ALSO listed, that silence reads as
+// "the floor is broken" to a 54- or 68-year-old — so the card must say which of
+// the two truthful states it is in. These pin BOTH sentences byte-for-byte and
+// prove the restore button is absent in each, and that the healthy state (a real
+// target) shows NEITHER line — the guard against the copy leaking upward.
+
+const SILENCE_UNVERIFIED =
+  "None of these has been seen working yet, so the restore button isn't ready. " +
+  "It appears after Addison next answers you.";
+const SILENCE_IDENTICAL =
+  "Your setup already matches your last working setup, so there's nothing to go back to right now.";
+
+describe("the restore points card — no target, but points exist", () => {
+  const NO_TARGET = { lastWorkingId: undefined, lastWorkingLabel: undefined } as const;
+
+  it("says the button isn't ready when no restore point has been seen working", () => {
+    const unverified: Snapshot = { ...ROW, verifiedWorking: false };
+    renderCard(stateWith({ snapshots: [unverified], ...NO_TARGET }));
+    expect(screen.getByText(SILENCE_UNVERIFIED)).toBeTruthy();
+    expect(screen.queryByText(SILENCE_IDENTICAL)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore to the last working state" })).toBeNull();
+  });
+
+  it("says the setup already matches when a point is verified but there's no target", () => {
+    // ROW.verifiedWorking is true; a verified row with no walk target is the
+    // 'identical' outcome (and, on this wire, an 'unreadable' walk too).
+    renderCard(stateWith({ snapshots: [ROW], ...NO_TARGET }));
+    expect(screen.getByText(SILENCE_IDENTICAL)).toBeTruthy();
+    expect(screen.queryByText(SILENCE_UNVERIFIED)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore to the last working state" })).toBeNull();
+  });
+
+  it("shows NEITHER silence when there is a real restore target", () => {
+    // The healthy state: a target is named and the button is offered. Neither
+    // no-target line may leak into it.
+    renderCard(stateWith());
+    expect(screen.queryByText(SILENCE_UNVERIFIED)).toBeNull();
+    expect(screen.queryByText(SILENCE_IDENTICAL)).toBeNull();
+    expect(screen.getByRole("button", { name: "Restore to the last working state" })).toBeTruthy();
+  });
+
+  it("shows NEITHER silence when the list is empty or disconnected", () => {
+    // The existing empty-state / disconnected copy owns those; the silences are
+    // only for "points exist, no target".
+    renderCard(stateWith({ snapshots: [], ...NO_TARGET }));
+    expect(screen.queryByText(SILENCE_UNVERIFIED)).toBeNull();
+    expect(screen.queryByText(SILENCE_IDENTICAL)).toBeNull();
+
+    cleanup();
+    render(
+      createElement(SnapshotsCard, {
+        connected: false,
+        snapshots: stateWith({ snapshots: [ROW], ...NO_TARGET }),
+      }),
+    );
+    expect(screen.queryByText(SILENCE_UNVERIFIED)).toBeNull();
+    expect(screen.queryByText(SILENCE_IDENTICAL)).toBeNull();
+  });
+});
+
 describe("the save control", () => {
   it("asks the core to save a restore point", async () => {
     const state = stateWith();

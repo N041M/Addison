@@ -26,6 +26,7 @@ _V1_TABLE = {
     "save_file": RiskTier.MEDIUM,
     "draft_message": RiskTier.MEDIUM,
     "open_link": RiskTier.LOW,
+    "snapshot_now": RiskTier.LOW,    # capture-only, so LOW and no undo (invariant 2)
 }
 
 
