@@ -71,6 +71,21 @@ class FakeShellBridge:
     def read_scoped_file(self, file_handle: str) -> dict:
         return self.scoped.get(file_handle, {"content": "hello world", "kind": "text"})
 
+    # Step-5 workspace-trust surface — stubs so this fake still satisfies the
+    # (widened) ShellBridge Protocol; these tools are exercised in
+    # tests/test_workspace_trust.py, not here.
+    def write_workspace_file(self, path: str, content: str) -> dict:
+        raise NotImplementedError
+
+    def read_workspace_file(self, path: str) -> str:
+        raise NotImplementedError
+
+    def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        raise NotImplementedError
+
+    def pick_directory(self) -> str:
+        raise NotImplementedError
+
 
 def _ctx(bridge=None) -> ExecutionContext:
     return ExecutionContext(conversation_id="t", shell_bridge=bridge)

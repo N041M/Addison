@@ -830,6 +830,35 @@ class Store:
             raise
         self._conn.commit()
 
+    # --- workspace trust (step 5; OPEN-mode coding harness) -------------------
+    # Directories the user trusts for card-free undoable file edits. EXCLUDED from
+    # snapshots (snapshots/scope.py) — standing consent, not config, like tool_grants.
+    # Roots are stored ALREADY canonicalized (realpath) by the caller at grant time,
+    # so the confinement check is realpath-vs-realpath.
+
+    def insert_workspace_trust(self, *, root: str, granted_at: int) -> None:
+        """Trust a (canonical) directory. Re-granting an existing root just refreshes
+        its timestamp — trust is idempotent, never duplicated."""
+        self._conn.execute(
+            "INSERT INTO workspace_trust (root, granted_at) VALUES (?, ?) "
+            "ON CONFLICT(root) DO UPDATE SET granted_at = excluded.granted_at",
+            (root, granted_at),
+        )
+        self._conn.commit()
+
+    def list_workspace_trust(self) -> list[dict[str, Any]]:
+        """Every trusted root, newest first."""
+        rows = self._conn.execute(
+            "SELECT root, granted_at FROM workspace_trust ORDER BY granted_at DESC, rowid DESC"
+        ).fetchall()
+        return [{"root": row["root"], "granted_at": row["granted_at"]} for row in rows]
+
+    def delete_workspace_trust(self, root: str) -> bool:
+        """Revoke a trusted root. Returns True if a row was removed."""
+        cur = self._conn.execute("DELETE FROM workspace_trust WHERE root = ?", (root,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     # --- config snapshots (GLOBAL FLOOR G3 — see agent_core/snapshots/) -------
     # App-state rollback, NOT the per-tool-call undo above. These rows hold a JSON
     # row-image of Addison's mutable config tables; the SnapshotManager owns the

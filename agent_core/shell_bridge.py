@@ -129,6 +129,31 @@ class IpcShellBridge:
         # The shell owns format extraction and hands back {"content", "kind"}.
         return self._call(Method.SHELL_READ_SCOPED_FILE, {"fileHandle": file_handle})
 
+    # --- workspace-trust file surface (step 5, OPEN harness) ---------------
+    def write_workspace_file(self, path: str, content: str) -> dict:
+        # The shell captures prior state atomically and refuses binary/oversize/data
+        # dir, so undo always round-trips: returns {"existed", "prior"}.
+        return self._call(
+            Method.SHELL_WRITE_WORKSPACE_FILE, {"path": path, "content": content}
+        )
+
+    def read_workspace_file(self, path: str) -> str:
+        return self._call(Method.SHELL_READ_WORKSPACE_FILE, {"path": path})["content"]
+
+    def pick_directory(self) -> str:
+        # Native folder picker; raises (RuntimeError) if the user cancels.
+        return self._call(Method.SHELL_PICK_DIRECTORY, {})["path"]
+
+    def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        # undo of write_workspace_file: put prior bytes back, or DELETE when None (the
+        # write created the file). The shell only honors a path it wrote this session.
+        params = (
+            {"path": path, "delete": True}
+            if prior_content is None
+            else {"path": path, "content": prior_content}
+        )
+        self._call(Method.SHELL_RESTORE_WORKSPACE_FILE, params)
+
     # --- key fetch (§5) ---------------------------------------------------
     def get_provider_key(self, provider: str = "anthropic") -> str:
         """Per-call API-key fetch from the OS keychain via the shell, keyed by

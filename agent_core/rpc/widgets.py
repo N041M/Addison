@@ -157,6 +157,11 @@ class WidgetsMixin(ServerContext):
             # Same resolution function the live loop + routine engine read (D3):
             # a Run pill can never skip a card (or add one) the chat would not.
             guards=self._effective_guards(),
+            # trusted=False UNCONDITIONALLY (step 5, D5): a command widget is a
+            # persisted, one-click, model-authorable spec, so it must ALWAYS card —
+            # workspace trust never suppresses it. (run_command has no affected_path
+            # anyway, so it is never confined or trust-suppressed regardless.)
+            trusted=False,
         )
         if status != PermissionStatus.GRANTED:
             self._respond(

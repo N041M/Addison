@@ -4,13 +4,25 @@ Engineering-spec §4.2 and §9 (test #1). Registering a MEDIUM/HIGH-risk tool
 without a genuine ``undo()`` MUST raise — this is the single most important
 invariant in the codebase, so do NOT satisfy it with a no-op ``undo``.
 
-Mode-scoped safety (owner decision 2026-07-19, policy.py): a ``dev_only`` tool is
-allowed to skip the undo requirement (it exists ONLY for OPEN/Developer mode) and
-is NEVER present in the SAFE view of the registry. There is exactly ONE registry
+Mode-scoped safety (owner decision 2026-07-19, policy.py): an OPEN-only tool is
+NEVER present in the SAFE view of the registry. There is exactly ONE registry
 instance shared by the live orchestrator and the routine engine — the SAFE/OPEN
 distinction is a *filtered view* over that one registry (``visible_tools(mode)``),
 never a second registry — so the no-escalation property (§8.5: routines use the
 same registry + gate instances) survives unchanged.
+
+Two independent dimensions (step 5, R3), because ``dev_only`` used to conflate
+them and one new tool needs them apart:
+  * ``open_only`` — VISIBILITY: absent from ``visible_tools(SAFE)`` and refused at
+    dispatch outside OPEN (``refuse_if_dev_only_outside_open``). SAFE cannot see
+    it, send it to the model, or run it.
+  * ``allow_missing_undo`` — the EXEMPTION from the undo-at-registration check (the
+    single most important invariant, spec §9). Granted ONLY to a genuinely
+    irreversible OPEN-only tool (``run_command``).
+``write_project_file`` is the tool that forced the split: it must be ``open_only``
+(hidden from SAFE) AND undo-ENFORCED (it has a real ``undo()`` and a future edit
+dropping it must fail registration). ``dev_only=True`` stays as a convenience alias
+that sets BOTH — the exact shape ``run_command`` needs.
 """
 
 from __future__ import annotations
@@ -27,17 +39,31 @@ DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
-        self._dev_only: set[str] = set()   # tool ids only visible in OPEN mode
+        self._open_only: set[str] = set()   # tool ids only visible/runnable in OPEN mode
 
-    def register(self, tool: Tool, *, dev_only: bool = False) -> None:
-        """Register a tool. ``dev_only`` tools exist only for OPEN/Developer mode.
+    def register(
+        self,
+        tool: Tool,
+        *,
+        dev_only: bool = False,
+        open_only: bool = False,
+        allow_missing_undo: bool = False,
+    ) -> None:
+        """Register a tool along the two independent OPEN dimensions (R3).
+
+        ``open_only`` hides the tool from the SAFE view (``visible_tools(SAFE)`` /
+        ``list_for_model``) and makes ``refuse_if_dev_only_outside_open`` refuse it
+        outside OPEN. ``allow_missing_undo`` is the ONLY thing that exempts a
+        non-LOW tool from the undo-at-registration check. ``dev_only=True`` is the
+        convenience alias that sets BOTH (``run_command``'s exact shape).
 
         The undo-at-registration check still raises for any non-LOW tool without a
-        real ``undo()`` — EXCEPT a ``dev_only`` tool, which may register at HIGH
-        with no undo (``run_command`` is exactly this case). A dev_only tool is
-        never surfaced by the SAFE view (``visible_tools(SAFE)`` /
-        ``list_for_model``), so SAFE mode is provably unchanged by its presence."""
-        if tool.definition.risk_tier != RiskTier.LOW and not dev_only:
+        real ``undo()`` UNLESS ``allow_missing_undo`` — so ``write_project_file``
+        (``open_only=True, allow_missing_undo=False``) is hidden from SAFE yet stays
+        undo-ENFORCED, the case the split exists for."""
+        open_only = open_only or dev_only
+        allow_missing_undo = allow_missing_undo or dev_only
+        if tool.definition.risk_tier != RiskTier.LOW and not allow_missing_undo:
             # A tool whose undo() is still the Protocol default (unimplemented)
             # or missing entirely is mechanically capped at read-only — unless it
             # is dev_only, in which case OPEN mode owns the risk explicitly.
@@ -56,13 +82,14 @@ class ToolRegistry:
                 raise ValueError(
                     f"Tool '{tool.definition.id}' has risk_tier="
                     f"{tool.definition.risk_tier.value} but no undo() implementation. "
-                    "Either implement undo(), set risk_tier=LOW, or register it dev_only."
+                    "Either implement undo(), set risk_tier=LOW, or register it "
+                    "with allow_missing_undo (dev_only)."
                 )
         if tool.definition.id in self._tools:
             raise ValueError(f"Tool '{tool.definition.id}' is already registered.")
         self._tools[tool.definition.id] = tool
-        if dev_only:
-            self._dev_only.add(tool.definition.id)
+        if open_only:
+            self._open_only.add(tool.definition.id)
 
     def get(self, tool_id: str) -> Tool:
         try:
@@ -71,7 +98,11 @@ class ToolRegistry:
             raise KeyError(f"No tool registered with id '{tool_id}'.") from None
 
     def is_dev_only(self, tool_id: str) -> bool:
-        return tool_id in self._dev_only
+        """True for an OPEN-only tool — hidden from SAFE and refused at dispatch
+        outside OPEN. Named for its original single dimension; since R3 it reports
+        the ``open_only`` (visibility) set, which is what the SAFE boundary keys off
+        (``run_command`` AND the step-5 file tools all belong to it)."""
+        return tool_id in self._open_only
 
     def refuse_if_dev_only_outside_open(self, tool_id: str, mode: PolicyMode) -> str | None:
         """The SAFE-1 boundary, enforced at DISPATCH: a plain refusal sentence when
@@ -94,12 +125,12 @@ class ToolRegistry:
     def visible_tools(self, mode: PolicyMode) -> list[ToolDefinition]:
         """The tool definitions the model may call under ``mode``.
 
-        SAFE mode hides every ``dev_only`` tool — the SAFE view is byte-for-byte the
+        SAFE mode hides every ``open_only`` tool — the SAFE view is byte-for-byte the
         historical registry contents. OPEN mode surfaces all of them."""
         return [
             tool.definition
             for tool_id, tool in self._tools.items()
-            if mode is PolicyMode.OPEN or tool_id not in self._dev_only
+            if mode is PolicyMode.OPEN or tool_id not in self._open_only
         ]
 
     def list_for_model(self) -> list[ToolDefinition]:

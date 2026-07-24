@@ -109,6 +109,10 @@ class ServerContext:
         # None only where no db_path was supplied (CLI-ish tests): sidecars are
         # then off and the cold-start path answers an honest failure.
         _snapshot_dir: Path | None
+        # The live DB path (main.py sets it). Its PARENT is the data dir the
+        # workspace-trust floor protects (rpc/workspace._data_dir). None in CLI-ish
+        # tests, exactly like _snapshot_dir.
+        _db_path: Path | None
 
         # --- shared plumbing (implemented on JsonRpcServer) ---
         def _respond(self, request_id, result) -> None: ...
