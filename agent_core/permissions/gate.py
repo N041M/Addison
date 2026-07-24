@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from agent_core.policy import PolicyMode
+from agent_core.policy import GuardConfig, PolicyMode
 
 
 class PermissionStatus(str, Enum):
@@ -59,6 +59,13 @@ class PermissionGate:
         self._on_auto_grant = on_auto_grant
         self._grants: dict[str, dict] = {}   # tool_id -> {granted_at, scope_details}
         self._denied: set[str] = set()
+        # Custom-profile "Ask once" (destructive_card='session', D2): a destructive
+        # tool approved once is remembered here for the rest of the session. It is a
+        # DEDICATED set, never ``_grants`` [R2] — the SAFE ``check()`` path consults
+        # only ``_grants``, so a session-destructive grant can NEVER leak into SAFE
+        # mode by construction, not merely because ``revoke_all`` runs on the profile
+        # switch. In-memory, per-session; never persisted.
+        self._destructive_session_grants: set[str] = set()
         # OPEN-mode auto-grants recorded this session (the "activity log" the UI can
         # show as auto-approved). In-memory, per-session; never persisted.
         self.auto_grants: list[str] = []
@@ -70,30 +77,69 @@ class PermissionGate:
         mode: PolicyMode = PolicyMode.SAFE,
         destructive: bool = False,
         detail: str | None = None,
+        guards: GuardConfig | None = None,
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
         SAFE mode: identical to the historical ``check()`` -> ``request()`` flow —
-        ``destructive`` is ignored, so SAFE prompts for every not-yet-granted tool
-        exactly as before. OPEN mode: a non-destructive call auto-grants (logged);
-        a destructive call prompts PER INVOCATION — no prior grant is consulted and
-        no grant is recorded, so approving one destructive command never authorizes
-        another (or a later repeat of the same one). ``detail`` carries what exactly
-        is being approved (the command text for run_command) onto the card. A
-        denial is remembered for the rest of the turn (cleared by clear_denials at
-        the next user message), so a model retry can't nag. The gate runs on EVERY
-        call in both modes."""
+        ``destructive`` and ``guards`` are ignored, so SAFE prompts for every
+        not-yet-granted tool exactly as before. OPEN mode: a non-destructive call
+        auto-grants (logged); a destructive call prompts PER INVOCATION — no prior
+        grant is consulted and no grant is recorded, so approving one destructive
+        command never authorizes another (or a later repeat of the same one).
+        ``detail`` carries what exactly is being approved (the command text for
+        run_command) onto the card. A denial is remembered for the rest of the turn
+        (cleared by clear_denials at the next user message), so a model retry can't
+        nag. The gate runs on EVERY call in both modes.
+
+        ``guards`` (Custom profile, D2/D3) only MODULATES the OPEN path. ``None`` ≡
+        the fixed defaults ≡ today's OPEN behaviour byte-for-byte — that equivalence
+        is the freeze. The two guards:
+          * ``auto_grant_scope`` = 'everything' -> every call auto-grants,
+            destructive included (still logged; wins over the card guard). = 'none'
+            -> every call runs the SAFE-style coarse check/request flow (asks about
+            everything, remembers a grant per tool id). = 'non_destructive'
+            (default) -> non-destructive auto-grants; destructive falls to the card
+            guard below.
+          * ``destructive_card`` (only when scope is 'non_destructive') =
+            'per_invocation' (default) -> card every time, no grant kept. = 'session'
+            -> first destructive call of a tool cards, then it is remembered for the
+            session in ``_destructive_session_grants`` (never ``_grants`` — [R2])."""
         if mode is PolicyMode.OPEN:
+            effective = guards if guards is not None else GuardConfig()
+            if effective.auto_grant_scope == "everything":
+                # Fewer prompts, not no gate: destructive auto-grants too, but the
+                # grant is still recorded and announced ("Never ask" is a choice the
+                # Activity Panel still shows).
+                return self._auto_grant(tool_id)
+            if effective.auto_grant_scope == "none":
+                # "Ask about everything": the SAFE-style coarse flow, in OPEN mode.
+                return self._safe_flow(tool_id)
+            # auto_grant_scope == 'non_destructive' (today's OPEN):
             if not destructive:
-                self.auto_grants.append(tool_id)
-                if self._on_auto_grant is not None:
-                    self._on_auto_grant(tool_id)
-                return PermissionStatus.GRANTED
+                return self._auto_grant(tool_id)
+            if effective.destructive_card == "session":
+                return self._request_destructive_session(tool_id, detail)
             return self._request_per_invocation(tool_id, detail)
+        return self._safe_flow(tool_id)
+
+    def _safe_flow(self, tool_id: str) -> PermissionStatus:
+        """The historical SAFE check -> request path: prompt once for a not-yet-
+        granted tool, then remember the coarse grant. Shared by SAFE mode and by
+        OPEN mode's ``auto_grant_scope='none'`` guard, so both behave identically."""
         status = self.check(tool_id)
         if status == PermissionStatus.NOT_YET_ASKED:
             status = self.request(tool_id)
         return status
+
+    def _auto_grant(self, tool_id: str) -> PermissionStatus:
+        """OPEN-mode auto-allow: granted with no card, recorded both ways so the UI
+        can show it happened. Used for non-destructive calls, and for every call
+        under the 'everything' scope."""
+        self.auto_grants.append(tool_id)
+        if self._on_auto_grant is not None:
+            self._on_auto_grant(tool_id)
+        return PermissionStatus.GRANTED
 
     def _request_per_invocation(self, tool_id: str, detail: str | None) -> PermissionStatus:
         """The destructive-in-OPEN card: asked EVERY time, never remembered as a
@@ -104,6 +150,28 @@ class PermissionGate:
             raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
         status = self._on_request(tool_id, detail)
         if status == PermissionStatus.DENIED:
+            self._denied.add(tool_id)
+        return status
+
+    def _request_destructive_session(
+        self, tool_id: str, detail: str | None
+    ) -> PermissionStatus:
+        """Custom "Ask once" (destructive_card='session', D2): the FIRST destructive
+        call of a tool cards (carrying its detail); an approval is then remembered
+        for the session — but in ``_destructive_session_grants``, NEVER ``_grants``
+        [R2]. SAFE ``check()`` reads only ``_grants``, so this remembered approval is
+        structurally invisible to SAFE mode and cannot survive a switch to Simple.
+        A denial is turn-scoped, exactly like the per-invocation card."""
+        if tool_id in self._destructive_session_grants:
+            return PermissionStatus.GRANTED
+        if tool_id in self._denied:
+            return PermissionStatus.DENIED
+        if self._on_request is None:
+            raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
+        status = self._on_request(tool_id, detail)
+        if status == PermissionStatus.GRANTED:
+            self._destructive_session_grants.add(tool_id)
+        elif status == PermissionStatus.DENIED:
             self._denied.add(tool_id)
         return status
 
@@ -138,12 +206,14 @@ class PermissionGate:
         self._grants.pop(tool_id, None)
 
     def revoke_all(self) -> None:
-        """Forget every grant this session accumulated. Called after a G3 restore
-        (rpc/snapshots.py): grants live only here, so a restore that left them in
-        place would leave the session's permission posture WIDER than the config
-        the user just rolled back to. One extra card next time a tool runs is the
-        right price for a recovery."""
+        """Forget every grant this session accumulated — both the coarse ``_grants``
+        AND the Custom session-destructive grants. Called after a G3 restore AND on
+        every profile change (rpc/snapshots.py, rpc/profile.py): grants live only
+        here, so leaving them in place would leave the session's permission posture
+        WIDER than the config/profile the user just moved to. One extra card next
+        time a tool runs is the right price for a recovery or a downgrade."""
         self._grants.clear()
+        self._destructive_session_grants.clear()
 
     def clear_denials(self) -> None:
         """Forget "Not now" answers. The orchestrator calls this at the start of

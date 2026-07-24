@@ -23,10 +23,12 @@ import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
+import type { GuardsCardState } from "../hooks/useGuards";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
 import { SnapshotsCard, SaveSnapshotButton } from "./SnapshotsCard";
+import { CustomGuardPanel } from "./CustomGuardPanel";
 import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
@@ -46,6 +48,9 @@ interface Props {
   skills: SkillsState;
   /** The restore-points bundle (useSnapshots) — the G3 floor's Settings face. */
   snapshots: SnapshotsState;
+  /** The Custom-profile guard bundle (useGuards). Its card renders only while the
+   * active profile is Custom (Phase-2 step 2). */
+  guards: GuardsCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -100,6 +105,7 @@ export function SettingsPage({
   models,
   skills,
   snapshots,
+  guards,
   profile,
   onSetProfile,
   diagnostics,
@@ -221,6 +227,20 @@ export function SettingsPage({
               onSetTheme={onSetTheme}
             />
           </CardSlot>
+          {/* The Custom-profile guard panel — shown ONLY while Custom is the active
+              profile (never merely because the mode is OPEN). It sits between
+              Profile and Restore points so the person who just chose Custom sees
+              both the guards they can loosen and the way back, together (G3/G4). */}
+          {profile?.activeProfile === "custom" && (
+            <CardSlot>
+              <Card
+                title="How careful Addison is"
+                subtitle="Choose how often Addison checks with you before it acts."
+              >
+                <CustomGuardPanel connected={connected} guards={guards} />
+              </Card>
+            </CardSlot>
+          )}
           {/* Restore points sit directly after Profile on purpose: the person who
               has just changed how freely Addison may act should see the way back
               in the same breath (G3). */}
@@ -642,7 +662,9 @@ function ProviderRow({
 }
 
 // --- Profile (+ Appearance) ------------------------------------------------
-function ProfileCard({
+// Exported for the step-2 disclosure/confirm tests (guards.test.tsx). It is still
+// only rendered from within this page.
+export function ProfileCard({
   connected,
   profile,
   onSetProfile,
@@ -659,12 +681,29 @@ function ProfileCard({
   // cancels. Switching BACK (Developer→Simple) reduces what Addison can do, so it
   // needs no confirmation and never sets this.
   const [confirming, setConfirming] = useState<string | null>(null);
+  // The "Advanced…" disclosure that reveals the Custom profile, and the two-step
+  // confirm before Custom is actually turned on. Custom is deeper and more
+  // permissive than Developer, so it never sits in the plain segmented control and
+  // never switches on with a single click.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [customStep, setCustomStep] = useState<0 | 1 | 2>(0);
   const mode = profile?.mode ?? (profile?.activeProfile === "developer" ? "open" : "safe");
+
+  // Advanced profiles (only Custom sets `advanced`) never render as ordinary
+  // options — they live behind the disclosure. Simple/Developer are the plain
+  // segmented control.
+  const advancedProfiles = (profile?.profiles ?? []).filter((p) => p.advanced);
+  const basicProfiles = (profile?.profiles ?? []).filter((p) => !p.advanced);
+  const customProfile = advancedProfiles[0];
+  const isCustomActive = Boolean(customProfile && profile?.activeProfile === customProfile.id);
+  // Auto-reveal the disclosure when Custom is already in use, so the active
+  // profile is never hidden from the person who is standing in it.
+  const showAdvanced = advancedOpen || isCustomActive;
 
   function handlePick(id: string) {
     if (!profile || id === profile.activeProfile) return;
-    // In SAFE mode the only other profile is Developer/OPEN — a step UP in what
-    // Addison may do, so ask first. Otherwise switch straight away.
+    // In SAFE mode the only other basic profile is Developer/OPEN — a step UP in
+    // what Addison may do, so ask first. Otherwise switch straight away.
     if (mode === "safe") {
       setConfirming(id);
     } else {
@@ -687,7 +726,7 @@ function ProfileCard({
             aria-label="Profile"
             className="flex gap-0.5 rounded border border-line bg-paper p-[3px]"
           >
-            {profile.profiles.map((p) => {
+            {basicProfiles.map((p) => {
               const active = p.id === profile.activeProfile;
               return (
                 <button
@@ -743,6 +782,106 @@ function ProfileCard({
                   Not now
                 </button>
               </div>
+            </div>
+          )}
+          {/* Advanced… — the disclosure that reveals the Custom profile. Quiet,
+              text-level, matching the Settings idiom for opt-in depth. Until it is
+              opened, Custom is not in the DOM at all. */}
+          {customProfile && (
+            <div className="mt-3 border-t border-hair pt-3">
+              {!showAdvanced ? (
+                <button
+                  type="button"
+                  onClick={() => setAdvancedOpen(true)}
+                  className="text-fine font-medium text-ink-soft hover:text-fern-deep"
+                >
+                  Advanced…
+                </button>
+              ) : (
+                <div className="rounded-card border border-line bg-paper px-[15px] py-[13px]">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <button
+                      type="button"
+                      aria-pressed={isCustomActive}
+                      disabled={isCustomActive}
+                      onClick={() => setCustomStep(1)}
+                      className={
+                        "rounded-sm px-2.5 py-1 text-control font-medium transition-colors " +
+                        (isCustomActive
+                          ? "bg-fern-tint text-fern-deep"
+                          : "text-muted hover:text-ink-soft")
+                      }
+                    >
+                      {customProfile.label}
+                    </button>
+                    {isCustomActive && (
+                      <span className="border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
+                        In use
+                      </span>
+                    )}
+                  </div>
+                  {/* The core-authored honest description (contract D8). */}
+                  <p className="mt-2 text-fine leading-relaxed text-faint">
+                    {customProfile.description}
+                  </p>
+                  {/* Two-step inline confirm before Custom is turned on — never a
+                      browser confirm(), and profile.set fires only at the end. */}
+                  {customStep >= 1 && !isCustomActive && (
+                    <div className="mt-3 rounded-card bg-fern-tint px-[15px] py-[13px]">
+                      {customStep === 1 ? (
+                        <>
+                          <p className="text-fine leading-relaxed text-ink-soft">
+                            Custom is for advanced users. You choose how often Addison asks before
+                            acting. Ready to continue?
+                          </p>
+                          <div className="mt-2.5 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setCustomStep(2)}
+                              className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep"
+                            >
+                              Continue
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCustomStep(0)}
+                              className="text-xs font-medium text-ink-soft hover:text-muted"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <p className="text-fine leading-relaxed text-ink-soft">
+                            Turn on the Custom profile now? You can switch back to Simple or
+                            Developer anytime.
+                          </p>
+                          <div className="mt-2.5 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onSetProfile(customProfile.id);
+                                setCustomStep(0);
+                              }}
+                              className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep"
+                            >
+                              Turn on Custom
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCustomStep(0)}
+                              className="text-xs font-medium text-ink-soft hover:text-muted"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
           {profile.flags.headlessCli && (

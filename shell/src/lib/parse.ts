@@ -34,6 +34,10 @@ export function normalizeProfile(result: unknown): ProfileState | null {
             id: rp.id,
             label: typeof rp.label === "string" ? rp.label : rp.id,
             description: typeof rp.description === "string" ? rp.description : "",
+            // Only an explicit `true` marks a profile advanced (kept behind the
+            // disclosure). Absent on Simple/Developer → ordinary options, so their
+            // serialized shape is unchanged.
+            ...(rp.advanced === true ? { advanced: true } : {}),
           },
         ];
       })

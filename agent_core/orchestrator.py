@@ -134,12 +134,18 @@ class Orchestrator:
         on_activity=lambda tool_id, label, detail=None: None,
         on_usage=lambda usage, latency_ms, requested_role, model_name: None,
         shell_bridge=None,
+        guards_provider=lambda: None,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
         self.permission_gate = permission_gate
         self.undo_manager = undo_manager
         self.stream_to_frontend = stream_to_frontend
+        # Resolves the effective GuardConfig for THIS turn (Custom profile, D3), or
+        # None for the fixed defaults (Simple/Developer — byte-for-byte today). A
+        # zero-arg callable, wired like the other callbacks and reading the server's
+        # one resolution function; None here (CLI/tests) means the unguarded gate.
+        self._guards_provider = guards_provider
         # Emitted right before each tool runs so the shell can drive the Activity
         # Panel (tool.activityUpdate, §7). Called as (tool_id, label, detail), where
         # detail is the tool's own permission_detail for THIS call — None for the
@@ -168,6 +174,10 @@ class Orchestrator:
         # ``mode`` (policy.py) is derived from the active profile: SAFE (default) is
         # the historical behaviour; OPEN surfaces dev-only tools and thins the gate.
         provider = self.model_router.resolve(requested_role, model_name)
+        # The guard posture for this whole turn (Custom profile, D3), resolved once:
+        # a settings change lands on the worker thread serialised with the turn, so
+        # it cannot shift mid-turn. None ≡ the fixed defaults ≡ today's gate.
+        guards = self._guards_provider()
         # A "Not now" from an earlier turn must not silently deny this one:
         # each new user message may ask again (grants, by contrast, persist).
         self.permission_gate.clear_denials()
@@ -241,6 +251,7 @@ class Orchestrator:
                         mode=mode,
                         destructive=destructive,
                         detail=detail,
+                        guards=guards,
                     )  # may block for UI
                     if status == PermissionStatus.DENIED:
                         # Steer the model past the refusal: "not now" declines the

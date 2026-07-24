@@ -27,6 +27,9 @@ import {
   type Stats,
   type ConnectionStat,
   type ProviderLatencyStat,
+  type GuardsState,
+  type DestructiveCardGuard,
+  type AutoGrantScopeGuard,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -444,6 +447,18 @@ export const ipc = {
     call(Method.SnapshotRestoreLastWorking).then(parseSnapshotRestore),
   deleteSnapshot: (id: string): Promise<SnapshotMutationResult> =>
     call(Method.SnapshotDelete, { id }).then(parseSnapshotMutation),
+
+  // Guards — the two tunable prompting guards of the Custom profile (Phase-2
+  // step 2). `getGuards` returns the current values + fixed defaults + whether
+  // they're effective right now; `setGuards` sends only the guard(s) that
+  // changed. A weakening save mints the G4 undeletable anchor CORE-side before
+  // anything persists; a refusal (bad value, or the anchor couldn't be saved)
+  // is a resolved {ok:false} carrying a plain, already-user-ready sentence.
+  getGuards: (): Promise<GuardsState> => call(Method.GuardsGet).then(parseGuards),
+  setGuards: (patch: {
+    destructiveCard?: DestructiveCardGuard;
+    autoGrantScope?: AutoGrantScopeGuard;
+  }): Promise<GuardsSetResult> => call(Method.GuardsSet, patch).then(parseGuardsSet),
 };
 
 // ---------------------------------------------------------------------------
@@ -822,6 +837,69 @@ function parseSnapshotRestore(result: unknown): SnapshotRestoreResult {
     detail: typeof obj?.detail === "string" ? obj.detail : undefined,
     error: typeof obj?.error === "string" ? obj.error : undefined,
     binaryMismatch: typeof obj?.binaryMismatch === "string" ? obj.binaryMismatch : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Guard shapes + defensive parsers (Custom profile, Phase-2 step 2). Both guards
+// are CLOSED vocabularies, so anything off-vocabulary is coerced to a known-safe
+// value rather than trusted: an unrecognized guard value on the wire must never
+// become a live setting the strictness comparison then misreads.
+// ---------------------------------------------------------------------------
+
+/** guards.set → {ok, destructiveCard?, autoGrantScope?, error?}. A refusal (a
+ * bad value, or the anchor that goes with a weakening couldn't be saved) is a
+ * resolved {ok:false} carrying a plain, already-user-ready sentence. */
+export interface GuardsSetResult {
+  ok: boolean;
+  destructiveCard?: DestructiveCardGuard;
+  autoGrantScope?: AutoGrantScopeGuard;
+  error?: string;
+}
+
+const DESTRUCTIVE_CARD_VALUES: DestructiveCardGuard[] = ["per_invocation", "session"];
+const AUTO_GRANT_SCOPE_VALUES: AutoGrantScopeGuard[] = ["none", "non_destructive", "everything"];
+
+function asDestructiveCard(value: unknown, fallback: DestructiveCardGuard): DestructiveCardGuard {
+  return DESTRUCTIVE_CARD_VALUES.includes(value as DestructiveCardGuard)
+    ? (value as DestructiveCardGuard)
+    : fallback;
+}
+
+function asAutoGrantScope(value: unknown, fallback: AutoGrantScopeGuard): AutoGrantScopeGuard {
+  return AUTO_GRANT_SCOPE_VALUES.includes(value as AutoGrantScopeGuard)
+    ? (value as AutoGrantScopeGuard)
+    : fallback;
+}
+
+export function parseGuards(result: unknown): GuardsState {
+  const obj = asRecord(result);
+  const defaultsObj = asRecord(obj?.defaults);
+  // The wire carries the fixed defaults, but fall back to the known constants so
+  // a partial payload still yields a usable panel rather than a broken one.
+  const defaults = {
+    destructiveCard: asDestructiveCard(defaultsObj?.destructiveCard, "per_invocation"),
+    autoGrantScope: asAutoGrantScope(defaultsObj?.autoGrantScope, "non_destructive"),
+  };
+  return {
+    destructiveCard: asDestructiveCard(obj?.destructiveCard, defaults.destructiveCard),
+    autoGrantScope: asAutoGrantScope(obj?.autoGrantScope, defaults.autoGrantScope),
+    defaults,
+    active: obj?.active === true,
+  };
+}
+
+function parseGuardsSet(result: unknown): GuardsSetResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    destructiveCard: DESTRUCTIVE_CARD_VALUES.includes(obj?.destructiveCard as DestructiveCardGuard)
+      ? (obj?.destructiveCard as DestructiveCardGuard)
+      : undefined,
+    autoGrantScope: AUTO_GRANT_SCOPE_VALUES.includes(obj?.autoGrantScope as AutoGrantScopeGuard)
+      ? (obj?.autoGrantScope as AutoGrantScopeGuard)
+      : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
   };
 }
 

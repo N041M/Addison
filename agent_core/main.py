@@ -49,7 +49,7 @@ from agent_core.models_catalog import (
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import PolicyMode, mode_for_profile
-from agent_core.profiles import Profile, resolve_active_profile
+from agent_core.profiles import Profile, ProfileId, resolve_active_profile
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.base import Message, ModelRole
@@ -85,6 +85,7 @@ from agent_core.rpc.constants import (
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
 from agent_core.rpc.conversation import ConversationMixin
+from agent_core.rpc.guards import GuardsMixin
 from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
 from agent_core.rpc.providers import ProvidersMixin
@@ -409,6 +410,7 @@ class JsonRpcServer(
     WidgetsMixin,
     SkillsMixin,
     SnapshotsMixin,
+    GuardsMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -752,7 +754,17 @@ class JsonRpcServer(
             app_build_ref=(
                 self._shell_bridge.get_app_build_ref if self._shell_bridge else None
             ),
-            mode_ref=lambda: mode_for_profile(self._active_profile).value,
+            # Display-only provenance for a snapshot row (C6 — never filtered). It
+            # reports 'custom' when the active profile is Custom, so a restore points
+            # list can SHOW where a row was made, even though Custom derives OPEN for
+            # every behavioural purpose. The three artifact-hiding filters still
+            # compare against 'open' and stay untouched (D6).
+            mode_ref=lambda: (
+                "custom"
+                if self._active_profile is not None
+                and self._active_profile.id is ProfileId.CUSTOM
+                else mode_for_profile(self._active_profile).value
+            ),
         )
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
         self.orchestrator = Orchestrator(
@@ -764,6 +776,9 @@ class JsonRpcServer(
             on_activity=self._emit_activity,
             on_usage=self._record_usage,
             shell_bridge=self._shell_bridge,
+            # Custom-profile guards (D3): the one resolution function, so the live
+            # turn honours the same posture as the widget rail and routine engine.
+            guards_provider=self._effective_guards,
         )
         self.routine_builder = RoutineBuilder(store=self.store)
         self.routine_library = RoutineLibrary(store=self.store)
@@ -780,6 +795,9 @@ class JsonRpcServer(
             # The same Activity Panel the live turn drives. A routine reaches the
             # web through the same tools, so it must name where it went too.
             on_activity=self._emit_activity,
+            # Same guard resolution as the live loop (D3) — a routine can never
+            # out- or under-permission the conversation.
+            guards_provider=self._effective_guards,
         )
         # The build worked, so a remembered failure is stale — clear it rather than
         # answering "couldn't open its settings file" for the rest of the session.
@@ -967,6 +985,7 @@ class JsonRpcServer(
             _WIDGET_JOBS,
             _SKILL_JOBS,
             _SNAPSHOT_JOBS,
+            _GUARDS_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1088,6 +1107,10 @@ class JsonRpcServer(
                     self._respond(request_id, self._snapshot_restore_last_working())
                 elif kind == "snapshot_delete":
                     self._respond(request_id, self._snapshot_delete(params))
+                elif kind == "guards_get":
+                    self._respond(request_id, self._guards_get())
+                elif kind == "guards_set":
+                    self._respond(request_id, self._guards_set(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1563,6 +1586,14 @@ _SNAPSHOT_JOBS = {
     Method.SNAPSHOT_RESTORE: "snapshot_restore",
     Method.SNAPSHOT_RESTORE_LAST_WORKING: "snapshot_restore_last_working",
     Method.SNAPSHOT_DELETE: "snapshot_delete",
+}
+
+# guards.* touch the Store (read/write app_settings) and mint an anchor through
+# the SnapshotManager, so they run on the worker like every other store op.
+# Method -> worker job kind.
+_GUARDS_JOBS = {
+    Method.GUARDS_GET: "guards_get",
+    Method.GUARDS_SET: "guards_set",
 }
 
 

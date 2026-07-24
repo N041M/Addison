@@ -117,12 +117,17 @@ class RoutineEngine:
         on_ask_user: Callable[[RoutineStep, str, str], bool] | None = None,
         store=None,
         on_activity=None,
+        guards_provider=None,
     ) -> None:
         # SAME instances as the live orchestrator — never private copies (§6.4).
         self.tool_registry = tool_registry
         self.permission_gate = permission_gate
         self.undo_manager = undo_manager
         self.shell_bridge = shell_bridge
+        # The effective GuardConfig provider (Custom profile, D3) — the SAME
+        # resolution function the live loop uses, so a routine can never out- or
+        # under-permission the conversation. None/absent -> the unguarded gate.
+        self._guards_provider = guards_provider or (lambda: None)
         # Same signature and same consumer as the orchestrator's (tool_id, label,
         # detail) — the Activity Panel. A routine runs the same tools through the
         # same gate, so a saved routine containing a page-read step reaches a site
@@ -149,6 +154,9 @@ class RoutineEngine:
         # command step. The SAME gate/registry instances as the live loop are used
         # in both modes — a routine can never out-permission the user (§8.5).
         run_id = str(uuid.uuid4())
+        # One guard posture for the whole run (Custom profile, D3), same as the
+        # live turn: resolved once, passed to every step's authorize call.
+        guards = self._guards_provider()
         step_results: dict[str, ToolResult] = {}
         step_log: list[dict] = []
         context = ExecutionContext(
@@ -220,6 +228,7 @@ class RoutineEngine:
                 mode=mode,
                 destructive=destructive,
                 detail=detail,
+                guards=guards,
             )
             if status == PermissionStatus.DENIED:
                 step_log.append(self._log_entry(index, step, "permission denied"))

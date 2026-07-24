@@ -83,6 +83,9 @@ export function SnapshotsCard({
   // a native dialog can't carry the consequence copy and can't be styled to say
   // calmly that this is a recovery.
   const [confirming, setConfirming] = useState(false);
+  // The permanent row whose per-row "Restore this one" is mid-confirm, if any.
+  // Same inline two-step idiom as the one-action restore above.
+  const [restoreConfirmId, setRestoreConfirmId] = useState<string | null>(null);
 
   const {
     snapshots,
@@ -94,6 +97,7 @@ export function SnapshotsCard({
     notice,
     busy,
     handleRestoreLastWorking,
+    handleRestoreSnapshot,
     handleDeleteSnapshot,
   } = state;
 
@@ -219,23 +223,76 @@ export function SnapshotsCard({
                     {formatWhen(snap.createdAt)}
                   </p>
                 </div>
-                {/* No Remove control on a permanent row — the core refuses to
-                    delete it, and offering a button that can only fail would
-                    make the guarantee look like a bug.
+                {/* A permanent row has NO Remove control — the core refuses to
+                    delete it, and offering a button that can only fail would make
+                    the guarantee look like a bug. What it gets instead is its own
+                    "Restore this one": these are the anchors (the G4 rows and
+                    genesis), the points most worth being able to return to by name
+                    (contract D7). Fern-filled and rounded, like the one-action
+                    restore — a recovery, never the danger token.
 
-                    `text-muted` rather than `text-faint` for the same AA reason as
-                    the timestamps: quiet is right for the only control that deletes
-                    something, unreadable at 2.5:1 is not. */}
-                {!snap.undeletable && (
-                  <button
-                    type="button"
-                    onClick={() => void handleDeleteSnapshot(snap.id)}
-                    className="shrink-0 text-xs font-medium text-muted hover:text-danger"
-                  >
-                    Remove
-                  </button>
-                )}
+                    An ordinary row keeps only Remove. `text-muted` rather than
+                    `text-faint` for the same AA reason as the timestamps: quiet is
+                    right for the only control that deletes something, unreadable at
+                    2.5:1 is not. */}
+                {snap.undeletable
+                  ? restoreConfirmId !== snap.id && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => setRestoreConfirmId(snap.id)}
+                        className="shrink-0 rounded-sm bg-fern px-3 py-1.5 text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50 max-md:min-h-[44px]"
+                      >
+                        Restore this one
+                      </button>
+                    )
+                  : (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteSnapshot(snap.id)}
+                        className="shrink-0 text-xs font-medium text-muted hover:text-danger"
+                      >
+                        Remove
+                      </button>
+                    )}
               </div>
+              {/* The per-row confirm — names the row before the click (never a
+                  blind recovery), then the same consequence copy the one-action
+                  restore shows. Two-step and inline, never window.confirm(). */}
+              {snap.undeletable && restoreConfirmId === snap.id && (
+                <div className="mt-2.5 rounded-card bg-fern-tint px-[15px] py-[13px]">
+                  <p className="text-meta text-ink-soft">
+                    Going back to <span className="font-semibold text-ink">{snap.reasonLabel}</span>
+                    <span className="ml-1.5 font-mono text-label text-muted">
+                      {formatWhen(snap.createdAt)}
+                    </span>
+                  </p>
+                  <p className="mt-2 text-fine leading-relaxed text-ink-soft">
+                    {CONSEQUENCE}
+                    {snap.reasonLabel === GENESIS_LABEL && ` ${GENESIS_CONSEQUENCE}`}
+                  </p>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => {
+                        setRestoreConfirmId(null);
+                        void handleRestoreSnapshot(snap.id);
+                      }}
+                      className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
+                    >
+                      Restore
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRestoreConfirmId(null)}
+                      className="text-xs font-medium text-ink-soft hover:text-muted"
+                    >
+                      Not now
+                    </button>
+                  </div>
+                </div>
+              )}
             </li>
           ))}
         </ul>

@@ -63,16 +63,29 @@ describe("parseWidgetList over the real widget.list payload", () => {
 });
 
 describe("normalizeProfile over the real profile.get payload", () => {
-  it("carries the Developer profile, OPEN mode, and every flag", () => {
+  it("carries the Developer profile, OPEN mode, every flag, and the Custom entry's advanced marker", () => {
     expect(normalizeProfile(profileFixture)).toEqual({
       activeProfile: "developer",
       mode: "open",
       profiles: [
+        // The two basic profiles keep their exact serialized shape — no `advanced`
+        // key (contract D4/R6). Only Custom carries it, and only because the real
+        // payload marks it so; this is where the frontend proves it never invents
+        // the disclosure and never leaks it onto Simple/Developer.
         { id: "simple", label: "Simple", description: "Simple — the everyday Addison." },
         {
           id: "developer",
           label: "Developer",
           description: "Developer — extra visibility for technical users. Same safety rules.",
+        },
+        {
+          id: "custom",
+          label: "Custom",
+          description:
+            "Custom — for advanced users. Addison can do everything the Developer profile " +
+            "allows, and you choose how often it asks you first. Going back to a working " +
+            "setup always stays possible.",
+          advanced: true,
         },
       ],
       flags: {

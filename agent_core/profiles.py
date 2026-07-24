@@ -20,6 +20,7 @@ from enum import Enum
 class ProfileId(str, Enum):
     SIMPLE = "simple"        # default — the non-technical personas (design-doc §5)
     DEVELOPER = "developer"  # opt-in — technical users
+    CUSTOM = "custom"        # opt-in, deep in Settings — Developer's surface with tunable guards
 
 
 # The v1 tool set (spec §4.2). The Simple profile exposes exactly these.
@@ -80,6 +81,10 @@ class Profile:
     headless_cli: bool = False           # Developer: expose the Agent Core JSON-RPC entry point
     raw_diagnostics: bool = False        # Developer: real errors/logs vs. translated messages
     allow_advanced_tools: bool = False   # Developer: permit opt-in higher-risk tools (still gated + undoable)
+    # Custom only: the frontend renders it behind an "Advanced…" disclosure with a
+    # two-step confirm (D4). Surfaced ONLY on this profile's profile.get entry — the
+    # Simple/Developer entries never grow the key (their wire shape stays byte-stable).
+    advanced: bool = False
 
 
 SIMPLE = Profile(
@@ -105,7 +110,36 @@ DEVELOPER = Profile(
     allow_advanced_tools=True,
 )
 
-_PROFILES = {ProfileId.SIMPLE: SIMPLE, ProfileId.DEVELOPER: DEVELOPER}
+# Custom (scope amendment 2026-07-20; D1, D8) — Developer's exact surface (same
+# tools, same OPEN-derived mode, same feature flags), plus the two tunable
+# prompting guards the frontend exposes behind an Advanced disclosure. It is a
+# *surface + prompting* choice, never a floor: the guards can only make Addison
+# ask more or less often, and lowering one mints an undeletable G4 anchor
+# (guards.set), so the way back to a working setup always stays.
+CUSTOM = Profile(
+    id=ProfileId.CUSTOM,
+    tool_ids=list(_V1_TOOL_IDS),
+    onboarding="byok_first",
+    label="Custom",
+    # Frozen copy (D8): plain language for personas 54/68, honest that it does
+    # everything Developer does and that going back always stays possible.
+    description=(
+        "Custom — for advanced users. Addison can do everything the Developer "
+        "profile allows, and you choose how often it asks you first. Going back "
+        "to a working setup always stays possible."
+    ),
+    expose_routine_plan=True,
+    headless_cli=True,
+    raw_diagnostics=True,
+    allow_advanced_tools=True,
+    advanced=True,
+)
+
+_PROFILES = {
+    ProfileId.SIMPLE: SIMPLE,
+    ProfileId.DEVELOPER: DEVELOPER,
+    ProfileId.CUSTOM: CUSTOM,
+}
 
 DEFAULT_PROFILE_ID = ProfileId.SIMPLE
 

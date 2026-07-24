@@ -31,7 +31,7 @@ if TYPE_CHECKING:
     from agent_core.models_catalog import CloudModel
     from agent_core.orchestrator import Conversation, Orchestrator
     from agent_core.permissions.gate import PermissionGate
-    from agent_core.policy import PolicyMode
+    from agent_core.policy import GuardConfig, PolicyMode
     from agent_core.profiles import Profile
     from agent_core.providers.base import ModelRole
     from agent_core.providers.router import ModelRouter
@@ -137,3 +137,11 @@ class ServerContext:
         #     rather than proceed blind (contract §8).
         def _snapshot_auto(self, reason: str) -> bool: ...
         def _mark_verified_working(self) -> None: ...
+
+        # --- Custom-profile guards (rpc/guards.py, D3): the one resolution
+        #     function the widget rail calls across the namespace boundary, and the
+        #     stored-config read the snapshot D7 notice uses. Returns None for the
+        #     fixed defaults (Simple/Developer). Declared here so both sides
+        #     type-check without importing the mixin.
+        def _effective_guards(self) -> GuardConfig | None: ...
+        def _stored_guard_config(self) -> GuardConfig: ...

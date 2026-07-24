@@ -284,6 +284,43 @@ export interface ProfileOption {
   id: string;
   label: string;
   description: string;
+  /**
+   * True for a profile kept behind an "Advanced…" disclosure (Phase-2 step 2 —
+   * only the Custom profile sets it). An advanced profile is never rendered as an
+   * ordinary segmented option; it appears only once the disclosure is opened, and
+   * selecting it runs a deeper two-step confirm. Absent/false on Simple and
+   * Developer, whose serialized shape is unchanged.
+   */
+  advanced?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Guards — the two tunable prompting guards of the Custom profile (guards.get /
+// guards.set; Phase-2 step 2). Each is a CLOSED vocabulary with a total
+// strictness order. They change ONLY how often Addison asks before acting — they
+// can never touch a global floor, so nothing here is a security boundary, only a
+// prompting one. Guards are EFFECTIVE only while the active profile is Custom;
+// Simple/Developer use the fixed defaults, byte-for-byte unchanged.
+// ---------------------------------------------------------------------------
+
+/** How the per-invocation destructive card behaves. `per_invocation` (the
+ * default, today's OPEN behaviour) is stricter than `session`. */
+export type DestructiveCardGuard = "per_invocation" | "session";
+
+/** Which actions auto-grant without a prompt. `none` (strictest) > `non_destructive`
+ * (default, today's OPEN) > `everything` (weakest — destructive auto-grants too). */
+export type AutoGrantScopeGuard = "none" | "non_destructive" | "everything";
+
+/** The `guards.get` picture: the current values, the fixed defaults, and whether
+ * the guards are effective right now (`active` = the profile is Custom). */
+export interface GuardsState {
+  destructiveCard: DestructiveCardGuard;
+  autoGrantScope: AutoGrantScopeGuard;
+  defaults: {
+    destructiveCard: DestructiveCardGuard;
+    autoGrantScope: AutoGrantScopeGuard;
+  };
+  active: boolean;
 }
 
 /** The full profile picture from `profile.get`. */
