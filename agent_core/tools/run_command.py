@@ -87,6 +87,14 @@ class RunCommandTool:
         make it safe enough to skip the card, which is the whole point."""
         return True
 
+    def affected_path(self, args: dict) -> str | None:
+        """Always None (step 5, D4). A command's cwd is a CONVENIENCE, never an
+        effect bound — #48 settled that scanning command text for what it touches is
+        unwinnable — so confinement (which only applies to a non-None affected_path)
+        never governs run_command, and it is never trust-suppressed: it keeps
+        carding every time regardless of any trusted workspace."""
+        return None
+
     def permission_detail(self, args: dict) -> str | None:
         """The exact command text, for the permission card and the Activity Panel.
 

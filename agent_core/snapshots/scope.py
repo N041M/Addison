@@ -46,6 +46,13 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # (nothing reads or writes this table; PermissionGate keeps grants in memory).
     # If grants ever persist, restore must INTERSECT, never replace.
     "tool_grants":      "live consent state; restoring it could re-widen permissions",
+    # Step 5, D2 (inverts the v1 lean, per the tool_grants precedent above). Trust
+    # is standing consent that suppresses cards inside a directory — functionally a
+    # grant. Restoring a snapshot taken while a folder was trusted would RE-INSTATE
+    # a trust the user has since revoked, delivered by the ungated one-action restore
+    # button. So a restore never resurrects trust, and the round-1 D6 disclosure is
+    # unnecessary: there is nothing to disclose.
+    "workspace_trust":  "standing consent (like tool_grants); restoring it could re-trust a revoked folder",
 }
 
 # Columns of a CAPTURED table that are deliberately not captured. Empty today.

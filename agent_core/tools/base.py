@@ -103,6 +103,50 @@ class ShellBridge(Protocol):
         "text"|"image"|...}``. Never accepts a raw path — scope is by picker."""
         ...
 
+    # --- workspace-trust file surface (step 5, OPEN-only) ------------------
+    # A DELIBERATE departure from the picker-scoped methods above (design-doc §9,
+    # R7): the OPEN-mode coding harness edits files by absolute PATH inside a
+    # TRUSTED ROOT, not through a per-file picker handle. ``save_new_file`` refuses
+    # to overwrite (that refusal is what makes its undo trivial) and
+    # ``read_scoped_file`` is handle-based — neither fits an editor, so these three
+    # are genuinely new surface. The core confines which paths reach here (the
+    # caller's trusted-root check, D3); the shell independently refuses Addison's
+    # own data directory (defence in depth, §1.3), and ledgers what it wrote so undo
+    # can never restore a path this tool did not create.
+
+    def write_workspace_file(self, path: str, content: str) -> dict:
+        """Create-or-OVERWRITE ``path`` with ``content`` (an editor needs both),
+        capturing the prior state ATOMICALLY so undo is exact. Returns
+        ``{"existed": bool, "prior": str | None}`` — ``prior`` is the previous text
+        content (None when the write created the file). REFUSES, writing nothing,
+        when the existing file is not valid UTF-8 text or its prior content exceeds
+        the undo size bound (so undo can always round-trip it), and refuses any path
+        under Addison's own data directory. The path is recorded so a later
+        ``restore_workspace_file`` may target it."""
+        ...
+
+    def read_workspace_file(self, path: str) -> str:
+        """Return the text at ``path`` — used by ``read_project_file``. Refuses a
+        binary/oversize file and any path under Addison's own data directory (the
+        prior-bytes snapshot for a write is captured by ``write_workspace_file``
+        itself, atomically, not through this method)."""
+        ...
+
+    def pick_directory(self) -> str:
+        """Open the native folder picker and return the chosen absolute directory
+        path; raises if the user cancels. Relayed by ``workspace.pickDirectory`` so
+        the frontend's "Trust a folder" flow reaches a real OS dialog (§1.3)."""
+        ...
+
+    def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        """Undo-time restore for ``write_project_file``: put ``prior_content`` back at
+        ``path`` (the bytes it overwrote), or DELETE the file when ``prior_content``
+        is None (the write created it). Like ``restore_file`` it only ever touches a
+        path THIS session's writes ledgered, so undo can never write or delete an
+        arbitrary path — and it works even if the workspace's trust was revoked
+        between the write and the undo."""
+        ...
+
 
 @dataclass
 class ExecutionContext:
@@ -119,6 +163,14 @@ class ExecutionContext:
     # a belt-and-suspenders check — it refuses to run under SAFE even though the
     # SAFE registry view never surfaces it in the first place.
     policy_mode: PolicyMode = PolicyMode.SAFE
+    # The path a path-bounded tool's ``affected_path`` resolved for THIS call (step
+    # 5, D4). The caller sets it right before ``execute`` so the tool acts on the
+    # exact resolved path the caller checked for confinement — never a re-read of
+    # ``args["path"]`` (resolving twice could act on a different path than the one
+    # confinement approved: a TOCTOU gap, R6). None for every tool without an
+    # ``affected_path`` (run_command, the SAFE tools), and reset per call so a path
+    # tool can never inherit a stale value from an earlier call in the same turn.
+    resolved_path: str | None = None
 
 
 @runtime_checkable
@@ -181,15 +233,39 @@ def call_is_destructive(tool: Any, args: dict) -> bool:
 
     In OPEN mode the gate auto-allows a non-destructive call and prompts for a
     destructive one (policy.py, spec §8 SAFE-mode carve-out). A tool may classify
-    its OWN call by implementing ``is_destructive(args) -> bool`` — ``run_command``
-    does this so a read-only command (``ls``, ``git status``) auto-allows while
-    anything that can mutate prompts. With no classifier, a call is destructive iff
-    the tool's tier is HIGH; LOW and MEDIUM tools are non-destructive. (SAFE mode
-    ignores this entirely — it prompts for every not-yet-granted tool as before.)"""
+    its OWN call by implementing ``is_destructive(args) -> bool``. Two tools do:
+    ``run_command`` returns True UNCONDITIONALLY — every command cards, because
+    statically deciding whether an arbitrary shell command is read-only is a losing
+    game (the read-only allowlist was defeated three ways and removed, #48; see its
+    docstring) — and ``write_project_file`` returns True because an overwrite is
+    data loss, so a card is the belt behind confinement (step 5, R2). With no
+    classifier, a call is destructive iff the tool's tier is HIGH; LOW and MEDIUM
+    tools are non-destructive. (SAFE mode ignores this entirely — it prompts for
+    every not-yet-granted tool as before.)"""
     classifier = getattr(tool, "is_destructive", None)
     if callable(classifier):
         return bool(classifier(args))
     return tool.definition.risk_tier is RiskTier.HIGH
+
+
+def call_affected_path(tool: Any, args: dict) -> str | None:
+    """The absolute filesystem path this call would touch, RESOLVED ONCE, or None.
+
+    A path-bounded tool (``read_project_file``, ``write_project_file``) implements
+    ``affected_path(args) -> str | None`` and returns ``Path(args["path"]).resolve()``
+    — realpath'd exactly once here so the value the CALLER checks for confinement
+    (rpc/workspace.is_trusted) is the very value ``execute`` then acts on (handed
+    over via ``ExecutionContext.resolved_path``). Resolving again inside ``execute``
+    would reopen a TOCTOU gap: confinement could approve one path while the write
+    lands on another (R6, D4). Every other tool (run_command included) has no
+    ``affected_path`` and returns None, so confinement never applies to it — which
+    is exactly why run_command's cwd is a convenience, never an effect bound, and it
+    is never trust-suppressed (contract §4)."""
+    provider = getattr(tool, "affected_path", None)
+    if callable(provider):
+        value = provider(args)
+        return str(value) if value else None
+    return None
 
 
 # The User-Agent every outbound tool request carries. One string, because two

@@ -85,6 +85,13 @@ export const Method = {
   RoutingGet: "routing.get",
   RoutingSet: "routing.set",
 
+  // Workspace trust (step 5) — the OPEN-mode coding harness's trust boundary.
+  // Developer/Custom surfaces only. grantTrust floor-refuses Addison's own data dir.
+  WorkspaceGrantTrust: "workspace.grantTrust",
+  WorkspaceRevokeTrust: "workspace.revokeTrust",
+  WorkspaceList: "workspace.list",
+  WorkspacePickDirectory: "workspace.pickDirectory",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.
@@ -97,6 +104,11 @@ export const Method = {
   ShellOpenExternal: "shell.openExternal",
   ShellPickFile: "shell.pickFile",
   ShellReadScopedFile: "shell.readScopedFile",
+  // Workspace-trust file surface (step 5, OPEN harness) — path-based, Rust-enforced.
+  ShellWriteWorkspaceFile: "shell.writeWorkspaceFile",
+  ShellReadWorkspaceFile: "shell.readWorkspaceFile",
+  ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
+  ShellPickDirectory: "shell.pickDirectory",
   ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
