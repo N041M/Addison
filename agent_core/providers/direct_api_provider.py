@@ -61,8 +61,13 @@ class DirectAPIProvider:
         return self._require_adapter().capabilities()
 
     def send(
-        self, messages: list[Message], tools: list, effort: str | None = None
+        self,
+        messages: list[Message],
+        tools: list,
+        effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse:
-        # Thread ``effort`` through to the underlying adapter (an AnthropicProvider
-        # today), which honors it only for a model that supports it.
-        return self._require_adapter().send(messages, tools, effort=effort)
+        # Thread ``effort`` + per-call ``timeout`` ([MF-A]) through to the underlying
+        # adapter (an AnthropicProvider today), which honors effort only for a model
+        # that supports it.
+        return self._require_adapter().send(messages, tools, effort=effort, timeout=timeout)

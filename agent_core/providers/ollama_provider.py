@@ -35,8 +35,11 @@ from agent_core.providers.base import (
     Message,
     ModelResponse,
     ProviderCapabilities,
+    ProviderUnavailable,
     ToolCallRequest,
     Usage,
+    effective_timeout,
+    exception_for_http_status,
     request_with_retry,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
@@ -105,7 +108,11 @@ class OllamaProvider:
 
     # --- send -------------------------------------------------------------
     def send(
-        self, messages: list[Message], tools: list, effort: str | None = None
+        self,
+        messages: list[Message],
+        tools: list,
+        effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse:
         # ``effort`` is a cloud-model "answer style" (§4.1.1); local models have no
         # such control, so it is accepted and ignored for a uniform provider call.
@@ -120,9 +127,11 @@ class OllamaProvider:
             # JSON block by appending the instruction block to the system prompt.
             body["messages"] = _with_tool_instructions(history, tools)
 
-        response = self._post("/api/chat", body)
+        response = self._post("/api/chat", body, timeout)
         if response.status_code >= 400:
-            raise RuntimeError(_chat_error_message(response.status_code))
+            raise exception_for_http_status(
+                response.status_code, _chat_error_message(response.status_code)
+            )
 
         payload = response.json() or {}
         message = payload.get("message") or {}
@@ -135,21 +144,27 @@ class OllamaProvider:
         return _translate_fallback_response(message, usage)
 
     # --- HTTP -------------------------------------------------------------
-    def _post(self, path: str, body: dict) -> httpx.Response:
+    def _post(self, path: str, body: dict, timeout: float | None = None) -> httpx.Response:
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
         injected = self._client
-        client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
         try:
             # POST: retry only on a connection failure. On localhost that is
             # connection-refused (ConnectError) — a single harmless retry rides
-            # out a race with an Ollama that is just finishing starting up.
+            # out a race with an Ollama that is just finishing starting up. The
+            # per-call ``deadline`` is applied to the request so it holds for an
+            # injected client too ([MF-A]).
             return request_with_retry(
-                lambda: client.post(f"{self._base_url}{path}", json=body),
+                lambda: client.post(f"{self._base_url}{path}", json=body, timeout=deadline),
                 idempotent=False,
+                # [MF-A] a caller-supplied deadline means the attempt loop is
+                # driving; its chain is the retry — never double the budget here.
+                allow_retry=timeout is None,
             )
         except httpx.HTTPError:
             # Connection refused / timeout: almost always "Ollama isn't running".
             # No chained exception, so nothing about the request can leak.
-            raise RuntimeError(_NOT_RUNNING_MESSAGE) from None
+            raise ProviderUnavailable(_NOT_RUNNING_MESSAGE) from None
         finally:
             if injected is None:
                 client.close()

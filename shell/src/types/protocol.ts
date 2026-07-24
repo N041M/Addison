@@ -74,6 +74,17 @@ export const Method = {
   GuardsGet: "guards.get",
   GuardsSet: "guards.set",
 
+  // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
+  // `get` returns the current strategy, the strategies this surface may pick
+  // from, the Developer custom order, and whether the person sees the Simple
+  // TWO-option toggle ("toggle") or the full picker + chain builder ("full").
+  // `set` validates the closed strategy vocabulary and the model ids, snapshots
+  // per the core's hook split (a plain strategy change proceeds-with-warning; a
+  // custom-chain overwrite is REFUSED if the snapshot can't be saved), then
+  // persists — all core-side. No key material is ever in these payloads (G1).
+  RoutingGet: "routing.get",
+  RoutingSet: "routing.set",
+
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test
   // (§9) covers the full method surface; the frontend must never invoke these.

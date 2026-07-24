@@ -28,9 +28,13 @@ import httpx
 from agent_core.providers.base import (
     Message,
     ModelResponse,
+    ProviderAuthFailed,
     ProviderCapabilities,
+    ProviderUnavailable,
     ToolCallRequest,
     Usage,
+    effective_timeout,
+    exception_for_http_status,
     request_with_retry,
 )
 
@@ -84,7 +88,11 @@ class OpenAIProvider:
         )
 
     def send(
-        self, messages: list[Message], tools: list, effort: str | None = None
+        self,
+        messages: list[Message],
+        tools: list,
+        effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse:
         # ``effort`` is an Anthropic "answer style" (§4.1.1); OpenAI has no such
         # per-message control here, so it is accepted and ignored for a uniform call.
@@ -103,10 +111,14 @@ class OpenAIProvider:
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
 
-        response = self._post(headers, body)
+        response = self._post(headers, body, timeout)
         if response.status_code >= 400:
-            # Never echo the response body or the key — just a plain next step.
-            raise RuntimeError(self._http_error_message(response.status_code))
+            # Never echo the response body or the key — just a plain next step. Same
+            # message as before; the new exception TYPE only lets the loop tell
+            # "busy, try another" from "bad request" / "bad key" (D4).
+            raise exception_for_http_status(
+                response.status_code, self._http_error_message(response.status_code)
+            )
         return _translate_response(response.json())
 
     def _resolve_key(self) -> str:
@@ -116,26 +128,32 @@ class OpenAIProvider:
             api_key = api_key.strip()
         if not api_key:
             if self._require_key:
-                raise RuntimeError(_NO_KEY_MESSAGE)
+                raise ProviderAuthFailed(_NO_KEY_MESSAGE)
             return ""   # keyless custom server: no Authorization header
         if not api_key.isascii() or not api_key.isprintable():
-            raise RuntimeError(_MALFORMED_KEY_MESSAGE)
+            raise ProviderAuthFailed(_MALFORMED_KEY_MESSAGE)
         return api_key
 
-    def _post(self, headers: dict, body: dict) -> httpx.Response:
+    def _post(self, headers: dict, body: dict, timeout: float | None = None) -> httpx.Response:
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
         injected = self._client
-        client = injected if injected is not None else httpx.Client(timeout=_TIMEOUT_SECONDS)
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
         url = f"{self._base_url}/chat/completions"
         try:
-            # POST: retry only when the request never reached the server (§8.3).
+            # POST: retry only when the request never reached the server (§8.3). The
+            # per-call ``deadline`` rides on the request so it holds for an injected
+            # client too ([MF-A]).
             return request_with_retry(
-                lambda: client.post(url, headers=headers, json=body),
+                lambda: client.post(url, headers=headers, json=body, timeout=deadline),
                 idempotent=False,
+                # [MF-A] a caller-supplied deadline means the attempt loop is
+                # driving; its chain is the retry — never double the budget here.
+                allow_retry=timeout is None,
             )
         except httpx.HTTPError:
             # Network/timeout failure. Raise a clean message with no chained
             # exception so nothing about the request (headers included) leaks.
-            raise RuntimeError(
+            raise ProviderUnavailable(
                 f"Couldn't reach {self._service_label}. "
                 "Check your internet connection and try again."
             ) from None

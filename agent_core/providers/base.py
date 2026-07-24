@@ -38,7 +38,7 @@ _IDEMPOTENT_ERRORS: tuple[type[Exception], ...] = _CONNECT_ERRORS + (
 
 
 def request_with_retry(
-    send: Callable[[], httpx.Response], *, idempotent: bool
+    send: Callable[[], httpx.Response], *, idempotent: bool, allow_retry: bool = True
 ) -> httpx.Response:
     """Run ``send()`` (returns an ``httpx.Response``) with at most ONE retry after
     a short fixed pause. Invisible to callers: it returns the same Response or
@@ -58,8 +58,18 @@ def request_with_retry(
 
     Both attempts reuse the caller's client, so the injected-client / per-call
     construct-and-close pattern at each call site is unchanged.
+
+    ``allow_retry=False`` disables the internal retry entirely. Providers pass
+    it when the caller supplied a per-call deadline ([MF-A]): a deadline means
+    the routing attempt loop is driving, and THAT loop is the retry mechanism —
+    a hidden second attempt here would double the per-turn budget on a
+    ConnectTimeout (up to 2× deadline + the sleep), which is exactly the hole
+    the budget exists to close (post-build adversarial pass, 2026-07-24).
+    Standalone calls (no deadline) keep today's one-retry robustness unchanged.
     """
     retryable = _IDEMPOTENT_ERRORS if idempotent else _CONNECT_ERRORS
+    if not allow_retry:
+        return send()  # the chain retries by advancing candidates, never here
     try:
         response = send()
     except retryable:
@@ -69,6 +79,54 @@ def request_with_retry(
         time.sleep(_RETRY_SLEEP_SECONDS)
         return send()
     return response
+
+
+# --- provider failure hierarchy (step 3 stage 0, contract §"Stage 0") --------
+# Three named failures the attempt loop (orchestrator, D4) branches on. All three
+# subclass RuntimeError so every existing ``except RuntimeError`` still catches
+# them (behaviour freeze) and each carries the SAME plain user-facing message the
+# provider raised before this split — the type is new, the wording is byte-identical.
+#
+# The distinction the loop cares about is ONLY "may I try the next candidate?":
+#   * ProviderUnavailable  -> transient; the loop MAY walk the chain.
+#   * ProviderRequestRejected / ProviderAuthFailed -> fail the turn immediately, no
+#     walk (the next provider gets the same bad request / the same missing key).
+
+
+class ProviderUnavailable(RuntimeError):
+    """A transient failure — HTTP 429, any 5xx, or a network connect/read timeout.
+    The attempt loop may fall forward to the next candidate on this (D4)."""
+
+
+class ProviderRequestRejected(RuntimeError):
+    """A 4xx other than 401/403/429 — the request itself is bad, so the next
+    provider would reject it identically. The turn fails immediately (D4)."""
+
+
+class ProviderAuthFailed(RuntimeError):
+    """A 401/403, or a missing/malformed API key — a credential problem the chain
+    cannot route around for THIS candidate. The turn fails immediately (D4)."""
+
+
+def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
+    """Classify a >=400 status into the hierarchy, carrying the caller's own plain
+    message unchanged. 401/403 -> auth; 429 or 5xx -> unavailable; every other 4xx
+    -> rejected. The order matters: auth is checked before the 429/5xx band."""
+    if status_code in (401, 403):
+        return ProviderAuthFailed(message)
+    if status_code == 429 or status_code >= 500:
+        return ProviderUnavailable(message)
+    return ProviderRequestRejected(message)
+
+
+def effective_timeout(override: float | None, default: float) -> float:
+    """The per-call timeout a provider actually uses ([MF-A]). ``None`` -> the
+    provider's own default (freeze). A value only ever TIGHTENS the default, never
+    extends it, so handing a provider the full remaining per-turn budget on a
+    healthy first send resolves to exactly today's constant."""
+    if override is None:
+        return default
+    return min(override, default)
 
 
 class ModelRole(str, Enum):
@@ -139,9 +197,17 @@ class ModelProvider(Protocol):
     # ``effort`` is the per-message "answer style" (§4.1.1, models_catalog.py). Only
     # AnthropicProvider acts on it (and only for models that support it); every other
     # provider ACCEPTS and IGNORES it, so the orchestrator can pass it uniformly.
+    #
+    # ``timeout`` ([MF-A]) is an optional per-call deadline in seconds the attempt
+    # loop threads down so a single hanging candidate can never blow the per-turn
+    # budget. None means "use my own default" — byte-identical to today. A provider
+    # never EXTENDS past its own default; the override only ever tightens it
+    # (``effective_timeout``), so passing the whole remaining budget on the first,
+    # healthy send resolves to today's constant exactly.
     def send(
         self,
         messages: list[Message],
         tools: list["ToolDefinition"],
         effort: str | None = None,
+        timeout: float | None = None,
     ) -> ModelResponse: ...

@@ -53,6 +53,7 @@ import { useWidgets } from "./hooks/useWidgets";
 import { useSkills } from "./hooks/useSkills";
 import { useSnapshots } from "./hooks/useSnapshots";
 import { useGuards } from "./hooks/useGuards";
+import { useRouting } from "./hooks/useRouting";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
@@ -139,12 +140,20 @@ export function App() {
       widgetsState.refreshStats();
       skillsState.refreshSkills();
       guardsState.refreshGuards();
+      routingState.refreshRouting();
     },
   });
   // The Custom-profile guards (Phase-2 step 2). A weakening save mints a permanent
   // restore point core-side, so a successful save re-reads the snapshots list — the
   // way back the confirm promised should appear at once.
   const guardsState = useGuards({
+    connected,
+    onSaved: () => snapshotsState.refreshSnapshots(),
+  });
+  // Routing strategies + the companion prefer-quality/prefer-free toggle (Phase-2
+  // step 3). A strategy change and a custom-chain save both snapshot core-side, so
+  // a successful save re-reads the restore-points list.
+  const routingState = useRouting({
     connected,
     onSaved: () => snapshotsState.refreshSnapshots(),
   });
@@ -658,6 +667,7 @@ export function App() {
             skills={skillsState}
             snapshots={snapshotsState}
             guards={guardsState}
+            routing={routingState}
             profile={profile}
             onSetProfile={handleSetProfile}
             diagnostics={diagnostics}

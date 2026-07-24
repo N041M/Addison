@@ -55,6 +55,21 @@ class CloudModel:
     # together (§4.1.1); this is the attribution the frontend renders, and it is what
     # the router keys a by-name pick to the right provider instance.
     provider: str = "anthropic"
+    # --- routing metadata (step 3, contract D2) --------------------------------
+    # HAND-ASSIGNED on the curated static catalogs below (this table is the
+    # maintainer, in code, beside the entries — the capture-scope discipline). LOWER
+    # rank == stronger; it orders quality_first's tail and breaks cross-provider ties.
+    # ``None`` means "unknown rank" and sorts directly BEHIND the chain head, ahead of
+    # every ranked model (D2 unknown-rank rule) — a just-released model must never be
+    # demoted below known-weak ones. Live-fetched Anthropic entries, ADDISON_MODEL
+    # injections, and custom-endpoint models all carry ``None`` ([N-c]).
+    quality_rank: int | None = None
+    # True only for a genuinely free tier. Every curated cloud model here is PAID, so
+    # this stays False for them; Ollama locals (built as RoutingCandidates directly,
+    # not CloudModels) are the free candidates in step 3. Drives the "Answered with a
+    # free model" disclaimer (D5) — custom-endpoint models are excluded there by the
+    # candidate builder, never by this flag.
+    free: bool = False
 
     @property
     def supported_effort(self) -> tuple[str, ...]:
@@ -106,6 +121,7 @@ FALLBACK_CLOUD_MODELS: tuple[CloudModel, ...] = (
         adaptive_thinking=True,
         effort_levels=_STANDARD_EFFORT,
         default=True,
+        quality_rank=10,
     ),
     CloudModel(
         id="claude-sonnet-5",
@@ -113,6 +129,7 @@ FALLBACK_CLOUD_MODELS: tuple[CloudModel, ...] = (
         description="",
         adaptive_thinking=True,
         effort_levels=_STANDARD_EFFORT,
+        quality_rank=30,
     ),
     CloudModel(
         id="claude-haiku-4-5",
@@ -120,6 +137,7 @@ FALLBACK_CLOUD_MODELS: tuple[CloudModel, ...] = (
         description="",
         adaptive_thinking=False,
         effort_levels=(),   # no effort control — sending output_config errors
+        quality_rank=60,
     ),
 )
 
@@ -152,16 +170,25 @@ def provider_label(provider_id: str) -> str:
 # Each catalog's strongest entry is marked ``default``; the union-builder keeps at
 # most one default across all connected providers.
 OPENAI_CLOUD_MODELS: tuple[CloudModel, ...] = (
-    CloudModel(id="gpt-4.1", label="GPT-4.1", description="", provider="openai", default=True),
-    CloudModel(id="gpt-4o", label="GPT-4o", description="", provider="openai"),
-    CloudModel(id="gpt-4o-mini", label="GPT-4o mini", description="", provider="openai"),
+    CloudModel(
+        id="gpt-4.1", label="GPT-4.1", description="", provider="openai",
+        default=True, quality_rank=15,
+    ),
+    CloudModel(id="gpt-4o", label="GPT-4o", description="", provider="openai", quality_rank=35),
+    CloudModel(
+        id="gpt-4o-mini", label="GPT-4o mini", description="", provider="openai", quality_rank=70,
+    ),
 )
 
 GOOGLE_CLOUD_MODELS: tuple[CloudModel, ...] = (
     CloudModel(
-        id="gemini-2.5-pro", label="Gemini 2.5 Pro", description="", provider="google", default=True
+        id="gemini-2.5-pro", label="Gemini 2.5 Pro", description="", provider="google",
+        default=True, quality_rank=20,
     ),
-    CloudModel(id="gemini-2.5-flash", label="Gemini 2.5 Flash", description="", provider="google"),
+    CloudModel(
+        id="gemini-2.5-flash", label="Gemini 2.5 Flash", description="", provider="google",
+        quality_rank=50,
+    ),
 )
 
 

@@ -107,7 +107,7 @@ class _ScriptedProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.histories.append(list(messages))
         return self._responses.pop(0)
 
@@ -127,7 +127,7 @@ class _RaisingProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
         self.histories.append(list(messages))
         raise RuntimeError(self._message)
 

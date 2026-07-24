@@ -24,11 +24,13 @@ import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
+import type { RoutingCardState } from "../hooks/useRouting";
 import type { ThemeChoice } from "../lib/theme";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
 import { SnapshotsCard, SaveSnapshotButton } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
+import { RoutingCard, type RoutingCardModel } from "./RoutingCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
 interface Props {
@@ -51,6 +53,10 @@ interface Props {
   /** The Custom-profile guard bundle (useGuards). Its card renders only while the
    * active profile is Custom (Phase-2 step 2). */
   guards: GuardsCardState;
+  /** The routing bundle (useRouting; Phase-2 step 3). Optional so a partial
+   * caller (older tests) still renders — the routing card is simply omitted then.
+   * The card itself decides toggle vs. full from the core's `surface`. */
+  routing?: RoutingCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -87,6 +93,22 @@ const KEY_PROVIDERS: { id: string; label: string; kind: ProviderKind }[] = [
 // from a truncated copy, a non-breaking space) at the door before it's stored.
 const KEY_SHAPE = /^[\x21-\x7E]+$/;
 
+// The connected-models union for the custom chain builder: every cloud model
+// (attributed to its provider when the payload names one) plus every configured
+// local model. Same data the model picker consumes.
+function routingModels(models: ModelSelection): RoutingCardModel[] {
+  const cloud: RoutingCardModel[] = models.cloudModels.map((m) => ({
+    id: m.id,
+    label: m.providerLabel ? `${m.label} · ${m.providerLabel}` : m.label,
+  }));
+  const localRole = models.roles.find((r) => r.role === "local" && r.configured);
+  const local: RoutingCardModel[] = (localRole?.models ?? []).map((m) => ({
+    id: m.id,
+    label: m.label,
+  }));
+  return [...cloud, ...local];
+}
+
 function formatAdded(addedAt?: number): string {
   if (!addedAt) return "";
   try {
@@ -106,6 +128,7 @@ export function SettingsPage({
   skills,
   snapshots,
   guards,
+  routing,
   profile,
   onSetProfile,
   diagnostics,
@@ -183,6 +206,16 @@ export function SettingsPage({
               onChangeDefaultCloudModel={models.handleChangeDefaultCloudModel}
             />
           </CardSlot>
+          {routing && (
+            <CardSlot>
+              <Card
+                title="Which model answers"
+                subtitle="Choose how Addison decides which model to use for a reply."
+              >
+                <RoutingCard connected={connected} routing={routing} models={routingModels(models)} />
+              </Card>
+            </CardSlot>
+          )}
           <CardSlot>
             <ApiKeys
               connected={connected}

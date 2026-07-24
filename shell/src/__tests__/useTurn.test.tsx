@@ -13,7 +13,12 @@ import { ipc } from "../ipc/client";
 
 // The hook only touches ipc.sendMessage on the tested paths; mock the whole
 // module so no Tauri context is needed (RawError is a type — erased at build).
-vi.mock("../ipc/client", () => ({ ipc: { sendMessage: vi.fn() } }));
+// `parseAnsweredWith` is also imported by the hook (Phase-2 step 3) — stub it to
+// the fail-closed default (no chip) so these race-guard tests stay focused.
+vi.mock("../ipc/client", () => ({
+  ipc: { sendMessage: vi.fn() },
+  parseAnsweredWith: () => undefined,
+}));
 
 const sendMessage = ipc.sendMessage as unknown as ReturnType<typeof vi.fn>;
 

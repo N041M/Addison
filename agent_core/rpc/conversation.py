@@ -8,9 +8,24 @@ from uuid import uuid4
 
 from agent_core.orchestrator import Conversation
 from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.router import LOCAL_ONLY
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _BYOK_ONBOARDING_MESSAGE, _SERVER_ERROR
 from agent_core.skills import compose_skills_prompt
+
+# Frozen copy (D6/D8). local_only's privacy invariant OUTRANKS the explicit picker
+# ([MF-C]): an explicit cloud pick under local_only is refused, never honoured — or
+# the "nothing leaves this machine" promise is breakable per message. The empty-pool
+# sentence speaks of models only (read_web_page is unaffected; the copy must not
+# over-promise).
+_LOCAL_ONLY_REFUSES_CLOUD = (
+    "You've set Addison to use only models on this computer, so it didn't use {x}. "
+    "Change how models are picked to use cloud models again."
+)
+_LOCAL_ONLY_EMPTY_POOL = (
+    "You've asked Addison to use only models on this computer, and there aren't any "
+    "set up yet. Add one under Local models, or change how models are picked."
+)
 
 
 def _auto_title(text: str) -> str | None:
@@ -44,6 +59,28 @@ class ConversationMixin(ServerContext):
         if error is not None:
             self._respond_error(request_id, _SERVER_ERROR, error)
             return
+
+        # Routing strategy governs role selection BEFORE the relay branch (D6 [MF-C]):
+        # under local_only the turn is forced to the LOCAL role so the §4.6 relay
+        # short-circuit below is unreachable — no model call leaves this machine, the
+        # Setup Assistant relay included. An explicit cloud/PRIMARY pick is REFUSED
+        # here rather than silently rerouted (the invariant outranks the picker), and
+        # an empty local pool answers the plain sentence, never a cloud call.
+        if self._routing_strategy() == LOCAL_ONLY:
+            local_ids = set(self.model_router.available_local_models())
+            explicit_cloud = requested_role is ModelRole.PRIMARY or (
+                model_name is not None and model_name not in local_ids
+            )
+            if explicit_cloud:
+                picked = self._model_label(model_name) if model_name else "cloud models"
+                self._respond_error(
+                    request_id, _SERVER_ERROR, _LOCAL_ONLY_REFUSES_CLOUD.format(x=picked)
+                )
+                return
+            if not local_ids:
+                self._respond_error(request_id, _SERVER_ERROR, _LOCAL_ONLY_EMPTY_POOL)
+                return
+            requested_role = ModelRole.LOCAL
 
         # Is a real PRIMARY key available right now? Both the BYOK-onboarding refusal
         # and the §4.6 Setup Assistant handoff below turn on this, so probe it ONCE
@@ -112,6 +149,10 @@ class ConversationMixin(ServerContext):
 
         pre_turn = len(self.conversation.messages)
         assistant_message_id: str | None = None
+        # Cleared before the run so a turn that raises can never surface a previous
+        # turn's answeredWith (the error path never reads it); set by _record_answered
+        # (orchestrator on_answered, D5) when a turn produces a final answer.
+        self._answered_with = None
         try:
             self.orchestrator.run_turn(
                 self.conversation,
@@ -152,14 +193,17 @@ class ConversationMixin(ServerContext):
         self._mark_verified_working()
         # The persisted ids let the frontend anchor "Rewind to here" on REAL
         # store ids — its own display ids mean nothing to the core.
-        self._respond(
-            request_id,
-            {
-                "ok": True,
-                "userMessageId": user_message_id,
-                "assistantMessageId": assistant_message_id,
-            },
-        )
+        result = {
+            "ok": True,
+            "userMessageId": user_message_id,
+            "assistantMessageId": assistant_message_id,
+        }
+        # answeredWith (D5): {modelId, label, free, routed}. The transcript chip
+        # renders on ``free && routed`` — a free model the user did not choose.
+        # Absent when the turn produced no final answer (e.g. an over-budget stop).
+        if self._answered_with is not None:
+            result["answeredWith"] = self._answered_with
+        self._respond(request_id, result)
 
     def _ensure_conversation(self) -> None:
         if self._conversation_created:

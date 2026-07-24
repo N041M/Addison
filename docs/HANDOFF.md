@@ -5,8 +5,10 @@ For the next working session. Read **CLAUDE.md** first (repo law), then
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: Phase-2 step 3 (routing strategies) and/or step 5 (harness +
-workspace-trust) — 3–4 and 5–8 may run in parallel now that 1–2 have landed.**
+**Next up: Phase-2 step 4 (free-model endpoints + add-by-prompt, which also
+carries the "make it cheaper" flow) and/or step 5 (harness + workspace-trust).**
+**Step 3 (routing strategies) is BUILT** — 2026-07-24, the
+`step3-routing-strategies` branch; see "What shipped 07-24: step 3" below.
 Step 1 (the snapshot/rollback floor, G3) is **merged**; the **step-1 ledger is
 retired** (2026-07-24, `retire-step1-ledger`): `snapshot_now` as a LOW
 capture-only tool, the Restore card's honest no-verified-target line, and the
@@ -183,6 +185,81 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
 - **Docs: scope amendment adopted across all authoritative docs** (#44).
   `addison-design-doc.md` + `addison-engineering-spec.md` were **un-gitignored
   and are now tracked** in the repo.
+
+## What shipped 07-24: step 3 — routing strategies
+
+Built from a contract that took TWO adversarial review rounds (round 1:
+REDESIGN — the drafted quality-first silently overrode the user's standing
+default model, the fallback trigger assumed an error classification the
+providers don't have, and per-turn vs per-send was undefined; round 2 on the
+redraft: AMEND-THEN-BUILD with five sharper fixes). **Owner decision: Balanced
+is CUT from v1** — the drafted version was provably identical to cost-first at
+two-model pools; amendment §10.1 carries the note.
+
+- **Stage 0, load-bearing:** `ProviderUnavailable` / `ProviderRequestRejected`
+  / `ProviderAuthFailed` in `providers/base.py`, raised by every provider from
+  the existing collapse points with byte-identical messages. Fallback advances
+  ONLY on Unavailable — Rejected/Auth fail the turn at once (the next provider
+  would get the same bad request / same missing key). Providers also accept a
+  per-call timeout override — the budget's teeth.
+- **Chains** (`resolve_chain`, pure, store-free): the HEAD of every
+  cloud-containing chain is the user's standing default (`selected_primary`) —
+  strategy orders only the tail, so the freeze is structural and rank can
+  never override a deliberate weaker-model choice. One resolution path:
+  absent key ≡ quality_first (a dual path made the Simple toggle's round-trip
+  observable). Unknown-rank models sort behind the head, never demoted. All
+  Ollama candidates share `provider_id="ollama"`.
+- **The attempt loop** (orchestrator): per-send continuation, never restart;
+  cross-provider mid-turn advance FORBIDDEN in v1 (foreign tool_use history
+  into another vendor's translator is unverified — the same-provider case, two
+  Ollama models, is allowed); `_COOLDOWN_SECONDS=60` and
+  `_FALLBACK_BUDGET_SECONDS=120` as module constants, the budget enforced as a
+  REAL per-attempt deadline (`timeout=min(default, remaining)`) so a single
+  hanging candidate cannot blow it — the test uses a genuinely BLOCKING mock,
+  because an instant-fail mock cannot see this gap.
+- **`local_only` outranks everything**: resolved BEFORE the Setup-Assistant
+  relay branch (the relay is a cloud call), and an explicit per-message cloud
+  pick under local_only is refused in plain words — the privacy invariant has
+  no per-message bypass.
+- **`answeredWith` + the chip**: `on_answered` carries (model, label, free,
+  routed) with `routed ≡ answering ≠ explicit pick` — an explicit pick that
+  fell forward to a free model DOES chip. `on_usage` now carries the RESOLVED
+  per-attempt identity, **fixing a pre-existing bug**: `_usage_identity`
+  attributed every routed turn to the catalog default.
+- **`routing.*` RPC**: closed vocab, custom chain validated at set (unknown
+  ids refused), hook split — a strategy change snapshots-and-proceeds
+  (`routing_change`), a custom-chain OVERWRITE refuses if the snapshot fails
+  (user-authored content, the note-overwrite policy). Simple sees the one
+  toggle; Developer/Custom the full picker + chain builder.
+- Verified: mutation-proven throughout (coordinator personally killed the
+  freeze head, the budget threading, and the local_only interlock); an
+  11-check live driver over real JSON-RPC including a real model turn carrying
+  `answeredWith`.
+
+**The step-3 post-build rigor pass (same day).** The adversarial hunt confirmed
+the load-bearing invariants non-vacuous and found one real (low-severity) bug
+plus three smaller items, all fixed and kill-verified:
+- **The internal connect-retry could double the fallback budget**: a
+  ConnectTimeout inside `request_with_retry` retried once BEFORE the
+  orchestrator regained control, so one candidate could run ~2× its deadline.
+  Now a caller-supplied deadline disables the internal retry — the chain IS the
+  retry (`allow_retry=timeout is None`, all five providers); standalone calls
+  keep today's robustness (both pinned).
+- **The vanished-custom-chain-id note existed in the contract but not the
+  code** — the skip shipped silently. Now one plain Activity note names the
+  skipped models, tested over the wire.
+- **A head cooled by a previous turn suppressed the fallback note** —
+  `preferred` is now the pre-cooldown chain head, so quiet substitution is
+  impossible.
+- The contract-NAMED `test_local_only_never_reaches_the_relay` now exists
+  (keyless Simple + relay redirect armed + interlock forces LOCAL; kill-verified
+  loud).
+- **Known gap, deliberate:** a Simple user whose stored strategy is
+  `local_only`/`custom` (set in a Developer session) sees the two-option toggle
+  with neither option active while the real strategy still governs — a
+  migration/UX edge needing design, not a silent bug; the strategy is honest in
+  `routing.get`. Decide the toggle's third state when step 4 touches this
+  surface.
 
 ## What shipped 07-24: step 2 — Custom profile + guard model + the G4 anchor caller
 
@@ -421,8 +498,9 @@ Then:
    (`guards.set`, now with fingerprint dedupe), `created_in_mode='custom'` is
    written (snapshots only), `guard_weakened` rows are minted, and
    `ipc.restoreSnapshot` drives the per-row restore on permanent rows.
-3. **Routing strategies** (4 + custom) + companion prefer-quality/prefer-free
-   toggle + free-model disclaimer + graceful fallback/cooldown.
+3. ~~**Routing strategies**~~ — **DONE (2026-07-24; see "What shipped 07-24:
+   step 3" above).** Balanced cut from v1 by owner decision (amendment §10.1);
+   the confidence half of §13 Q5 stays v2 substrate.
 4. **Free-model endpoints** — legit free/local + add-an-endpoint-by-prompting.
 5. **Harness + workspace-trust** (OPEN): grant a project dir; inside it the gate
    still runs and logs but doesn't prompt; outside, unchanged.

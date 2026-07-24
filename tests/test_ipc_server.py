@@ -149,7 +149,7 @@ def test_failed_turn_rolls_back_partial_history_and_next_turn_succeeds(tmp_path)
             super().__init__(responses)
             self.fail_first = True
 
-        def send(self, messages, tools, effort=None):
+        def send(self, messages, tools, effort=None, timeout=None):
             if self.fail_first:
                 self.fail_first = False
                 self.histories.append(list(messages))

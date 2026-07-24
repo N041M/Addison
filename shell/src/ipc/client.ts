@@ -30,6 +30,10 @@ import {
   type GuardsState,
   type DestructiveCardGuard,
   type AutoGrantScopeGuard,
+  type RoutingState,
+  type RoutingStrategy,
+  type RoutingSurface,
+  type AnsweredWith,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -459,6 +463,18 @@ export const ipc = {
     destructiveCard?: DestructiveCardGuard;
     autoGrantScope?: AutoGrantScopeGuard;
   }): Promise<GuardsSetResult> => call(Method.GuardsSet, patch).then(parseGuardsSet),
+
+  // Routing — how Addison picks which model answers (Phase-2 step 3). `getRouting`
+  // returns the current strategy + the surface (Simple toggle vs. full picker) +
+  // the Developer custom order. `setRouting` sends only what changed — a strategy,
+  // a custom chain, or both. A refusal (a bad value, or the custom-chain overwrite
+  // whose snapshot couldn't be saved) is a resolved {ok:false} carrying a plain,
+  // already-user-ready sentence, never a reject.
+  getRouting: (): Promise<RoutingState> => call(Method.RoutingGet).then(parseRouting),
+  setRouting: (patch: {
+    strategy?: RoutingStrategy;
+    customChain?: string[];
+  }): Promise<RoutingSetResult> => call(Method.RoutingSet, patch).then(parseRoutingSet),
 };
 
 // ---------------------------------------------------------------------------
@@ -900,6 +916,102 @@ function parseGuardsSet(result: unknown): GuardsSetResult {
       ? (obj?.autoGrantScope as AutoGrantScopeGuard)
       : undefined,
     error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Routing shapes + defensive parsers (Phase-2 step 3). The strategy is a CLOSED
+// vocabulary, so anything off-vocabulary is coerced to `quality_first` (the safe
+// default — the strongest model answers) rather than trusted: a garbled wire
+// value must never become a live strategy the picker then misreads. The chain is
+// a list of model-id strings; non-string entries are dropped. `answeredWith`
+// fails closed too — a malformed shape yields `undefined`, so no chip renders.
+// ---------------------------------------------------------------------------
+
+/** routing.set → {ok, strategy?, customChain?, error?}. A refusal (a bad value,
+ * or the custom-chain overwrite whose snapshot couldn't be saved) is a resolved
+ * {ok:false} carrying a plain, already-user-ready sentence. */
+export interface RoutingSetResult {
+  ok: boolean;
+  strategy?: RoutingStrategy;
+  customChain?: string[];
+  error?: string;
+}
+
+const ROUTING_STRATEGIES: RoutingStrategy[] = [
+  "quality_first",
+  "cost_first",
+  "local_only",
+  "custom",
+];
+
+function asStrategy(value: unknown, fallback: RoutingStrategy): RoutingStrategy {
+  return ROUTING_STRATEGIES.includes(value as RoutingStrategy)
+    ? (value as RoutingStrategy)
+    : fallback;
+}
+
+/** Coerce a raw chain to a list of non-empty model-id strings. Anything else is
+ * dropped — a chain the picker can't act on is worse than a shorter one. */
+function asChain(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item === "string" && item) out.push(item);
+  }
+  return out;
+}
+
+export function parseRouting(result: unknown): RoutingState {
+  const obj = asRecord(result);
+  // Off-vocabulary or missing → quality_first, the strongest-model default. Never
+  // fall through to a strategy the picker can't render.
+  const strategy = asStrategy(obj?.strategy, "quality_first");
+  // Keep only known strategies, in the order the core listed them; if none
+  // survive, offer at least the current strategy so the picker isn't empty.
+  const rawAvailable = Array.isArray(obj?.availableStrategies) ? obj.availableStrategies : [];
+  const available = rawAvailable.filter((s): s is RoutingStrategy =>
+    ROUTING_STRATEGIES.includes(s as RoutingStrategy),
+  );
+  const availableStrategies = available.length > 0 ? available : [strategy];
+  // The Simple two-option toggle is the safe default surface — an unknown value
+  // never reveals the full picker + chain builder to a Simple user.
+  const surface: RoutingSurface = obj?.surface === "full" ? "full" : "toggle";
+  return {
+    strategy,
+    availableStrategies,
+    customChain: asChain(obj?.customChain),
+    surface,
+  };
+}
+
+function parseRoutingSet(result: unknown): RoutingSetResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    strategy: ROUTING_STRATEGIES.includes(obj?.strategy as RoutingStrategy)
+      ? (obj?.strategy as RoutingStrategy)
+      : undefined,
+    customChain: obj?.customChain !== undefined ? asChain(obj.customChain) : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/**
+ * Parse the optional `answeredWith` block on a sendMessage reply (contract D5).
+ * Fails CLOSED: a missing block, or one without a usable `modelId`, yields
+ * `undefined` so the transcript shows no chip. `free`/`routed` are trusted only
+ * on a strict boolean `true` — the chip must never fire on a truthy-ish value.
+ */
+export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
+  const obj = asRecord(result);
+  const raw = asRecord(obj?.answeredWith);
+  if (!raw || typeof raw.modelId !== "string" || !raw.modelId) return undefined;
+  return {
+    modelId: raw.modelId,
+    label: typeof raw.label === "string" && raw.label ? raw.label : raw.modelId,
+    free: raw.free === true,
+    routed: raw.routed === true,
   };
 }
 

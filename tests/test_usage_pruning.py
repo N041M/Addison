@@ -4,6 +4,12 @@
 throttle (once every ``_USAGE_PRUNE_EVERY`` records), prunes rows older than the
 ~6-month retention window. These tests drive that choke point directly with a real
 ``Store`` and assert both the throttle cadence and the age cutoff.
+
+Updated for step 3 (D5 [N1]): ``_record_usage`` now takes the RESOLVED
+``(provider_id, model_id)`` the orchestrator supplies for each call, instead of
+re-deriving identity here from ``(requested_role, model_name)`` — the change that
+fixes routed-turn mis-attribution. The relay skip is keyed on
+``provider_id == "setup_assistant"``.
 """
 
 from pathlib import Path
@@ -12,7 +18,6 @@ from types import SimpleNamespace
 import agent_core.main as main
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
-from agent_core.providers.base import ModelRole
 from agent_core.providers.router import ModelRouter
 from agent_core.tools.registry import ToolRegistry
 
@@ -53,13 +58,13 @@ def test_record_usage_prunes_on_throttle_boundary(tmp_path: Path, monkeypatch):
 
     # Two records: below the throttle threshold, so no prune yet.
     for _ in range(2):
-        server._record_usage(_usage_obj(), latency_ms=5, requested_role=ModelRole.PRIMARY,
-                             model_name=None)
+        server._record_usage(_usage_obj(), latency_ms=5, provider_id="anthropic",
+                             model_id="claude-opus-4-8")
     assert _row_count(server) == 3  # ancient + 2 new, still present
 
     # Third record hits the boundary (3 >= 3): prune runs and drops the ancient row.
-    server._record_usage(_usage_obj(), latency_ms=5, requested_role=ModelRole.PRIMARY,
-                         model_name=None)
+    server._record_usage(_usage_obj(), latency_ms=5, provider_id="anthropic",
+                         model_id="claude-opus-4-8")
     ids = {r["id"] for r in server.store._conn.execute("SELECT id FROM usage_log").fetchall()}
     assert "ancient" not in ids
     assert _row_count(server) == 3  # the three fresh records, ancient pruned
@@ -68,11 +73,24 @@ def test_record_usage_prunes_on_throttle_boundary(tmp_path: Path, monkeypatch):
 def test_record_usage_skips_setup_assistant(tmp_path: Path):
     server = _server(tmp_path)
     server._record_usage(_usage_obj(), latency_ms=5,
-                         requested_role=ModelRole.SETUP_ASSISTANT, model_name=None)
+                         provider_id="setup_assistant", model_id="relay")
     assert _row_count(server) == 0  # onboarding relay is never metered
+
+
+def test_record_usage_records_resolved_identity(tmp_path: Path):
+    # D5 [N1]: the row is the RESOLVED identity the orchestrator passed — the model
+    # that actually answered — not a re-derivation from role/name.
+    server = _server(tmp_path)
+    server._record_usage(_usage_obj(), latency_ms=5, provider_id="google",
+                         model_id="gemini-2.5-flash")
+    row = server.store._conn.execute(
+        "SELECT provider, model FROM usage_log"
+    ).fetchone()
+    assert row["provider"] == "google"
+    assert row["model"] == "gemini-2.5-flash"
 
 
 def test_record_usage_noop_when_usage_is_none(tmp_path: Path):
     server = _server(tmp_path)
-    server._record_usage(None, latency_ms=5, requested_role=ModelRole.PRIMARY, model_name=None)
+    server._record_usage(None, latency_ms=5, provider_id="anthropic", model_id="m")
     assert _row_count(server) == 0

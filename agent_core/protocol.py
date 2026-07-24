@@ -81,6 +81,15 @@ class Method:
     # are the closed snake-case slugs (policy.py); keys are camelCase (house style).
     GUARDS_GET = "guards.get"        # {} -> {destructiveCard, autoGrantScope, defaults, active}
     GUARDS_SET = "guards.set"        # {destructiveCard?, autoGrantScope?} -> {ok, destructiveCard?, autoGrantScope?, error?}
+
+    # Routing strategies (step 3, scope amendment 2026-07-20; D7). How Addison picks
+    # among configured models per turn — a closed vocabulary (quality_first |
+    # cost_first | local_only | custom; NO balanced, owner decision 2026-07-24). The
+    # Simple profile sees a two-way toggle (surface "toggle"); Developer/Custom see the
+    # full picker + reorderable custom chain (surface "full"). Reversible config,
+    # snapshot-captured, never a floor.
+    ROUTING_GET = "routing.get"      # {} -> {strategy, availableStrategies, customChain, surface}
+    ROUTING_SET = "routing.set"      # {strategy?, customChain?} -> {ok, strategy, customChain} | {ok:false, error}
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

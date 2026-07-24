@@ -109,6 +109,11 @@ function MessageRow({
   const isAddison = message.role === "assistant";
   const showWriting = message.pending && message.content.length === 0;
   const showRaw = showTechnicalDetails && message.failed && Boolean(message.raw);
+  // The free-model disclaimer (Phase-2 step 3, contract D5 [S-b]). Renders ONLY
+  // when a free model answered a turn the user did not choose it for — both
+  // booleans come from the core; the frontend never re-derives `routed`. Not an
+  // error, so no danger tone: it's Addison telling you which model replied.
+  const showFreeChip = Boolean(message.answeredWith?.free && message.answeredWith?.routed);
 
   return (
     // A gentle opacity fade as each turn arrives (opacity only — never shifts
@@ -154,6 +159,15 @@ function MessageRow({
           }
         >
           {message.content}
+        </p>
+      )}
+
+      {showFreeChip && (
+        // Blocky annotation (square edges, 2px left rule, small-caps) — the "live
+        // annotation" shape, matching the Permanent / In-use tags. The DOM text is
+        // the frozen sentence verbatim; CSS small-caps is styling only.
+        <p className="mt-2 border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
+          Answered with a free model.
         </p>
       )}
 
