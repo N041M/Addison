@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from agent_core.protocol import Method
-from agent_core.shell_bridge import IpcShellBridge
+from agent_core.shell_bridge import _KEYCHAIN_TIMEOUT, IpcShellBridge
 
 # A stand-in secret. Long and distinctive so a "did this leak?" scan cannot pass
 # by accident on a substring of something else.
@@ -134,6 +134,139 @@ def test_get_provider_key_returns_the_key_itself_never_the_frame_around_it():
     shell = _Shell(result={"key": _KEY})
 
     assert shell.bridge.get_provider_key("openai") == _KEY
+
+
+def test_nothing_saved_and_could_not_read_are_two_different_answers():
+    """The empty key is a normal result; a failed read is an error, and must raise.
+
+    Everything downstream turns on this one distinction. ``""`` means the person has
+    not added a key yet, which is onboarding. A read that FAILED — a dismissed OS
+    password dialog, a locked keychain — means a key may well be sitting there
+    unread, and the caller that cannot tell the two apart routes a turn to the Setup
+    Assistant relay on the strength of an unanswered dialog.
+    """
+    saved_nothing = _Shell(result={"key": ""})
+    assert saved_nothing.bridge.get_provider_key("anthropic") == ""
+
+    denied = _Shell(
+        error={"code": -32001, "message": "Couldn't read your saved key from the keychain."}
+    )
+    with pytest.raises(RuntimeError) as raised:
+        denied.bridge.get_provider_key("anthropic")
+    assert str(raised.value) == "Couldn't read your saved key from the keychain."
+
+
+def test_a_keychain_call_waits_at_a_persons_pace_not_the_shells(monkeypatch):
+    """Keychain calls get their own, much longer budget than every other request.
+
+    A ``shell.*`` call is the shell answering from its own process, so sixty seconds
+    means it is wedged. A ``keychain.*`` call may be sitting behind an OS password
+    dialog, and the person on the other side of it may be away from the desk.
+    Abandoning the request does not dismiss the dialog: it only guarantees that the
+    password they eventually type answers a request nobody is waiting on any more.
+    """
+    import time
+
+    import agent_core.shell_bridge as bridge_module
+
+    monkeypatch.setattr(bridge_module, "_KEYCHAIN_TIMEOUT", 0.30)
+    # An instance timeout far below the keychain budget: a keychain call that used
+    # it would come back almost at once, which is exactly the bug.
+    shell = _Shell(silent=True, timeout=0.02)
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError):
+        shell.bridge.get_provider_key("anthropic")
+    assert time.monotonic() - started >= 0.2
+
+    # ...and the ordinary calls are untouched: still the instance/default budget.
+    other = _Shell(silent=True, timeout=0.02)
+    started = time.monotonic()
+    with pytest.raises(RuntimeError):
+        other.bridge.read_clipboard()
+    assert time.monotonic() - started < 0.2
+
+
+# Every bridge method that makes a Core -> Shell request, with arguments that get
+# it as far as ``_call``. Asserted EXHAUSTIVE below: a new method must be added
+# here and therefore classified, instead of silently inheriting whichever budget
+# its author happened to pass.
+_BRIDGE_CALLS = (
+    ("save_new_file", ("notes.txt", "body")),
+    ("delete_file", ("/tmp/notes.txt",)),
+    ("restore_file", ("/tmp/notes.txt", "body")),
+    ("open_draft", ("mira@example.com", "Subject", "Body")),
+    ("discard_draft", ("draft-1",)),
+    ("read_clipboard", ()),
+    ("open_external", ("https://example.com",)),
+    ("read_scoped_file", ("handle-1",)),
+    ("write_workspace_file", ("/tmp/project/a.py", "print()")),
+    ("read_workspace_file", ("/tmp/project/a.py",)),
+    ("restore_workspace_file", ("/tmp/project/a.py", "print()")),
+    ("pick_directory", ()),
+    ("get_app_build_ref", ()),
+    ("get_provider_key", ("anthropic",)),
+    ("get_device_key", ()),
+    ("sign_relay_request", ({"messages": []},)),
+)
+
+# Not requests: one binds the sender, the other is the read loop handing an answer
+# back. Neither has a timeout to choose.
+_NOT_REQUESTS = {"bind_sender", "resolve_response"}
+
+
+class _RecordingBridge(IpcShellBridge):
+    """Records what each method asks ``_call`` for, without any transport at all.
+
+    The timeout is chosen at the CALL SITE (``get_provider_key`` and friends pass
+    ``_KEYCHAIN_TIMEOUT``), so recording the argument is a direct reading of the
+    rule — no clock, no sleeping, nothing that can flake on a loaded machine.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls: list[tuple[str, float | None]] = []
+
+    def _call(self, method: str, params: dict, timeout: float | None = None) -> dict:
+        self.calls.append((method, timeout))
+        # One dict that satisfies every caller's unwrapping.
+        return {"path": "/tmp/x", "draftRef": "d", "text": "t", "content": "c", "key": "",
+                "existed": False, "prior": None}
+
+
+def test_only_the_keychain_calls_wait_at_a_persons_pace():
+    """The long budget belongs to the calls a PERSON answers, and to no others.
+
+    A ``shell.*`` request is the shell answering out of its own process, so a
+    minute of silence means it is wedged and the turn should say so. A
+    ``keychain.*`` request may be sitting behind an OS password dialog, where
+    giving up achieves nothing: the dialog stays on screen, and the password
+    eventually typed lands on a request nobody is waiting on any more.
+
+    Both directions are pinned because both are failures. A keychain call left on
+    the short budget is the bug this fixes; a file or clipboard call quietly given
+    the long one turns a wedged shell into a ten-minute hang with no explanation.
+
+    (The folder and file pickers also wait on a person. They were deliberately
+    left on the default budget by this change — a separate call to make, and the
+    table makes it visible rather than implied.)
+    """
+    named = {name for name, _ in _BRIDGE_CALLS}
+    public = {
+        name for name in dir(IpcShellBridge)
+        if not name.startswith("_") and callable(getattr(IpcShellBridge, name))
+    } - _NOT_REQUESTS
+    assert named == public, "a bridge method is missing from the timeout table"
+
+    bridge = _RecordingBridge()
+    for name, args in _BRIDGE_CALLS:
+        getattr(bridge, name)(*args)
+
+    for method, timeout in bridge.calls:
+        if method.startswith("keychain."):
+            assert timeout == _KEYCHAIN_TIMEOUT, method
+        else:
+            assert timeout is None, method   # None = the instance/default budget
 
 
 def test_a_fetched_key_is_not_retained_anywhere_on_the_bridge():

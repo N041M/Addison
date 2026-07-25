@@ -37,6 +37,25 @@ _LOCAL_SETUP_BUSY_MESSAGE = (
 _BYOK_ONBOARDING_MESSAGE = (
     "No API key is set up yet. Add your Anthropic API key in Settings."
 )
+
+# --- PRIMARY key status (§4.6) ------------------------------------------------
+# THREE outcomes, not two. "No key saved" and "the key could not be read" look the
+# same to a bool and are not the same thing at all: the first is onboarding, the
+# second is a locked keychain or a password dialog the person dismissed, with a
+# perfectly good key sitting behind it. Collapsed together, a failed read sent the
+# turn to the Setup Assistant relay — Addison would answer a BYOK user's message
+# through an external service because macOS asked for a password and got no answer.
+_KEY_READY = "ready"            # a usable key came back
+_KEY_MISSING = "missing"        # nothing saved -> today's onboarding, byte-for-byte
+_KEY_UNREADABLE = "unreadable"  # the read failed -> a key may exist; never onboard
+# Said instead of running the turn when the read failed. It names the way out
+# (Allow, or re-add) and stays true whichever of the two happened. "your computer's
+# keychain" matches the wording already used on the connect card (rpc/providers.py).
+_KEY_UNREADABLE_MESSAGE = (
+    "Addison couldn't read your saved key from your computer's keychain just now. "
+    "If your computer asks for permission, choose Allow — or add the key again in "
+    "Settings."
+)
 _UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
 
 # G3: the store could not be opened. Plain, actionable, no stack trace. It names

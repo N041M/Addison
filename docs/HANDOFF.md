@@ -1191,6 +1191,91 @@ report never arrived.
 
 ## Tracked thread: macOS keychain prompts
 
+**STATUS 2026-07-25: root causes confirmed and FIXED (working tree, uncommitted).**
+The unexplained multi-prompt symptom was diagnosed by a multi-agent audit with
+adversarial verification and fixed the same day. What it was, in one breath: the
+device identity had no session cache (two OS reads per relay message —
+`getDeviceKey` + `signRelayRequest`); a denied/failed provider-key read was
+indistinguishable from "no key saved", so the core silently rerouted the turn to
+the external Setup Assistant relay (which then raised the two device-identity
+dialogs); and `keychain::handle` ran synchronously inside the stdout pump, so one
+open dialog stalled every core↔shell call into the 60s bridge timeout. The owner's
+"six prompts + app restarting on its own" episode was the dev watcher: agents
+editing `keychain.rs` while `tauri dev` ran meant a rebuild+relaunch (fresh ad-hoc
+signature, empty session cache) per save.
+
+Shipped (all suites green: cargo 64, pytest 879, ruff, pyright):
+
+- **Device-identity session cache** (`DEVICE_CACHE`, keychain.rs) — same owner
+  decision as KEY_CACHE; one OS read per launch; corrupt blobs never cached.
+- **The three-way key-read seam** — `{"key": "<value>"}` / `{"key": ""}` (nothing
+  saved — a normal result now, NOT an error) / app error "Couldn't read your saved
+  key from the keychain." Core-side: `_primary_key_status()` = ready | missing |
+  unreadable (`rpc/constants.py`); **unreadable answers the turn on-machine with
+  `_KEY_UNREADABLE_MESSAGE` in BOTH profiles — a keychain failure can no longer
+  send a message to the relay** (pinned by `tests/test_keychain_read_failures.py`
+  with a recording relay stub).
+- **Negative failure cache** (`FAILED_READS`, keychain.rs) — a denied read is
+  remembered for the session (stops the 60s stats-poll dialog storm); evicted on
+  store/delete (re-saving or removing the key is the retry signal).
+- **Pump unblocked** (`spawn_keychain_request`, agent_process.rs) — keychain work
+  runs on a blocking task; OS access serialized by one `OS_KEYCHAIN` mutex (also
+  taken by store/delete, which closes the parked-read stale-cache race);
+  `_KEYCHAIN_TIMEOUT = 600s` core-side for the three keychain methods.
+- **Migration ordering** — legacy entry deleted only after the copy lands
+  (`migrate_legacy_key`, closure-testable); **Remove now also deletes the legacy
+  `provider-key:primary`** so a removed key cannot resurrect (the orphan measured
+  on the owner's machine was the live resurrection source).
+- **provider.connect** reads the key up front so a read failure surfaces the
+  keychain sentence, not "That key doesn't work."
+
+**Round-2 regression fixes (2026-07-25, same working tree, all suites green:
+cargo 66, pytest 880, ruff, tsc, clippy).** A second adversarial audit of the
+round-1 diff found five real regressions it had introduced; all fixed:
+
+- **Sync keychain Tauri commands froze the whole window.** `store_provider_key`
+  / `delete_provider_key` took the new `OS_KEYCHAIN` mutex on the main thread, so
+  a core-initiated read parked at a password dialog would beachball the UI. Both
+  are now `async` + `spawn_blocking` (keychain.rs).
+- **Frontend 120s timeout vs the core's 600s keychain wait.** `sendMessage` now
+  uses `TURN_TIMEOUT_MS = 900_000` (client.ts) so the reply the person waited for
+  behind a dialog isn't dropped and the composer can't invite a duplicate turn.
+- **Anthropic-only probe rerouted OpenAI/Google/custom-only users to the relay.**
+  `_run_send_message` now treats a connected non-Anthropic provider row as
+  standing evidence of a PRIMARY-capable setup (`_other_cloud_provider_connected`,
+  rpc/conversation.py) — no wrongful off-machine detour, no false BYOK demand.
+- **Detached keychain task could answer a respawned core's colliding id.** The
+  core channel now carries a `generation` counter (agent_process.rs); a keychain
+  task writes back only while its captured generation still matches, else drops.
+- **`delete_provider_key` evicted the cache before taking the OS lock**, so a
+  dialog-parked read could resurrect the removed key. It now evicts again *under*
+  the lock.
+- Also: a per-turn `fresh` read (`get_provider_key(provider, fresh)`, keychain.rs;
+  `_primary_key_turn_probe`, main.py) lets a person's own next message retry past
+  a dismissed dialog, while the launch/poll probes stay quiet — the negative
+  cache no longer strands a user who dismissed once by mistake.
+
+Still open (all LOW severity, from the round-2 audit — verify before acting, the
+verifier agents were cut off by a session limit): `shell.pickDirectory` still
+keeps the 60s budget though it waits on a person; connect-card vs chat-turn use
+two different "unreadable" sentences; `_KEY_UNREADABLE_MESSAGE` names a permission
+prompt that (for the automatic pollers) the negative cache suppresses; the
+`answeredWith routed` flag mislabels an explicitly-chosen Local turn as "answered
+with a free model"; net-vetting gaps (`read_web_page` omits `total_timeout`; the
+custom-provider CHAT `send()` re-resolves its base_url unpinned; connect-validation
+GET reads the body with no size cap); snapshot-floor edges (`restore_last_working`
+gives up on first apply failure unlike the sidecar arm; a G4 anchor duplicating
+the newest verified fingerprint can defeat the newest-two-verified prune
+exemption; `_sweep_sidecars` can erase prior sidecar history once a fresh DB has
+one genesis row); `undo_manager.record()` sits outside the per-call error
+envelope; `_canonical`'s unconditional casefold can merge distinct dirs on a
+case-sensitive volume (widens workspace trust); the file tools' permission card
+names the raw arg basename, not the resolved path. A failed *device-identity*
+read is still not negative-cached (aborts the turn visibly, no storm — deliberate);
+the wall-clock upper-bound assert in `test_shell_bridge.py` may flake under load;
+signing-script automation is still un-agreed (ask before imposing the split dev
+loop).
+
 **STATUS 2026-07-24: step 1 of the plan is DONE and working.**
 `scripts/sign-dev-binary.sh` signs the dev binary with a stable self-signed
 certificate. Verified on the owner's machine — the designated requirement the

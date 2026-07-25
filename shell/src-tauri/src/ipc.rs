@@ -111,6 +111,7 @@ pub async fn send_to_core(frame: Value, core: State<'_, CoreStdin>) -> Result<()
 
     let mut guard = core.0.lock().await;
     let stdin = guard
+        .stdin
         .as_mut()
         .ok_or_else(|| "Addison's engine isn't running right now.".to_string())?;
     stdin
