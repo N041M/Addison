@@ -1,26 +1,34 @@
-// Addison — top-level app shell (Fern direction; design-brief-fern README §1).
+// Addison — top-level app shell (DARK direction; docs/design-brief-dark).
 //
-// Three columns: the conversation Sidebar, the chat column (header + ChatThread +
-// Composer), and the hideable WidgetRail. Settings is an in-window screen
-// (SettingsPage) that replaces the chat column, not a drawer. This component owns
-// the UI-chrome state and wires the Core → Frontend notifications (streamed
-// text, permission prompts, tool activity, local-setup progress) into React
-// state, and Frontend → Core actions back out through the typed `ipc`. The four
-// big state clusters live in dedicated hooks (mechanical extractions from this
-// file): useModelSelection, useWidgets, useTurn, useConversations.
+// One full-width header over three columns: the conversation Sidebar (212px),
+// the chat column, and the hideable widget rail (232px). Both side columns
+// collapse by animating width/opacity/margin/translateX, so hiding one widens
+// the middle rather than leaving a hole.
 //
-// Visual direction is binding (CLAUDE.md; Fern direction, docs/design-brief-fern,
-// amended 2026-07 v3): warm paper neutrals + one fern-green accent, a serif
-// "correspondence" voice (Source Serif 4) beside a plain Public Sans UI, blocky
-// live annotations vs. rounded ownable/actionable things, real typographic
-// hierarchy for readers who are 54 and 68 — never a generic AI-chat template,
-// never a model vendor's branding. Theme is class-driven and persisted in
-// localStorage ("addison.theme") as one of "light" | "dark" | "system" (the
-// last follows the OS preference live); light is the fallback for absent values.
+// FOUR SURFACES — Settings, Tools, Snapshots, Build a widget — replace the chat
+// column (the rail hides entirely, the sidebar stays). `view` is the single
+// state that says which one is showing; `changeView` owns the transition
+// (children fadeDrop, commit at ~240ms) and the header's ← and Escape both
+// route back to chat through it.
+//
+// This component owns the UI-chrome state and wires the Core → Frontend
+// notifications (streamed text, permission prompts, tool activity, local-setup
+// progress) into React state, and Frontend → Core actions back out through the
+// typed `ipc`. The big state clusters live in dedicated hooks: useModelSelection,
+// useWidgets, useTurn, useConversations, useSnapshots, useGuards, useRouting,
+// useWorkspace, useOffers.
+//
+// Theme is class-driven and persisted in localStorage ("addison.theme") as one of
+// "light" | "dark" | "system"; the default is now "system" (Match this computer).
+//
+// PHASE NOTE (redesign 1/4): the chat column's internals — ChatThread, Composer,
+// the cards — and SettingsPage still carry their Fern-era styling. They are fully
+// wired and rendering; phases 2–3 restyle them in place. Nothing here fakes a
+// control or hides a real one to make the new chrome look finished.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Method, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
-import type { DisplayMessage, LocalSetupState, ProfileState } from "./types/ui";
+import type { DisplayMessage, LocalSetupState, ProfileState, View } from "./types/ui";
 import {
   ipc,
   isEngineConnected,
@@ -35,6 +43,7 @@ import {
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
+import { Surface, SurfaceSection, SurfaceRow, SURFACE_ID } from "./components/Surface";
 import { WidgetRail } from "./components/WidgetRail";
 import { WidgetProposalCard } from "./components/WidgetProposalCard";
 import { EndpointProposalCard } from "./components/EndpointProposalCard";
@@ -62,9 +71,39 @@ import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
 import { type ThemeChoice, parseThemeChoice, resolveTheme } from "./lib/theme";
+import {
+  INITIAL_SCRAMBLE_SELECTOR,
+  installScrambleClickHandler,
+  isMotionEnabled,
+  scrambleAll,
+  scrambleElement,
+  useScrambleOnChange,
+} from "./lib/scramble";
 
 const THEME_KEY = "addison.theme";
 const RAIL_OPEN_KEY = "addison.railOpen";
+const SIDE_OPEN_KEY = "addison.sideOpen";
+
+/** How long the leaving surface's fadeDrop runs before the new view commits. */
+const VIEW_COMMIT_MS = 240;
+
+// The header title for each surface. Chat shows the conversation's own title.
+const SURFACE_TITLES: Record<Exclude<View, "chat">, string> = {
+  settings: "Settings",
+  tools: "Tools",
+  snapshots: "Snapshots",
+  widgets: "Build a widget",
+};
+
+// Seeds for the Build-a-widget surface. These are PROMPTS, not widgets: "use"
+// writes the sentence into the composer and returns to chat, where the existing
+// propose → card → confirm flow runs unchanged. Nothing is created by opening
+// this page.
+const WIDGET_IDEAS: { name: string; prompt: string }[] = [
+  { name: "Bus departures from your stop", prompt: "bus departures from my stop" },
+  { name: "Weather for the cottage weekend", prompt: "weather for the cottage this weekend" },
+  { name: "Name-day calendar", prompt: "whose name day it is today" },
+];
 
 export function App() {
   const connected = useMemo(() => isEngineConnected(), []);
@@ -78,35 +117,36 @@ export function App() {
   const [composerSeed, setComposerSeed] = useState<string | null>(null);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
-  // In-window screen: the live chat, or the Settings page (replaces the drawer).
-  const [screen, setScreen] = useState<"chat" | "settings">("chat");
-  // Fern app-shell chrome, persisted. Rail hosts the widget column + the
-  // "Addison's work"/consent blocks; hiding it moves those inline (§3–§4). The
-  // sidebar has no desktop hide/collapse — it is always present above md.
+  // Which in-window view is showing: the live chat, or one of the four surfaces.
+  const [view, setView] = useState<View>("chat");
+  const viewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const seenView = useRef<View>("chat");
+  // App-shell chrome, both persisted. The rail hosts the widget column + the
+  // "Addison's work"/consent blocks; hiding it moves those inline. The sidebar
+  // now collapses too (the header's «/» on the chat view).
   const [railOpen, setRailOpen] = useState<boolean>(() => loadBool(RAIL_OPEN_KEY, true));
+  const [sideOpen, setSideOpen] = useState<boolean>(() => loadBool(SIDE_OPEN_KEY, true));
 
-  // Narrow-window (mobile) layout. Below the md breakpoint (768px — the same one
-  // Tailwind's `md:` uses) the sidebar becomes a slide-over drawer and the widget
-  // rail moves inline to the foot of the chat thread (no side column fits). The
-  // drawer is ephemeral — deliberately NOT persisted. `isMobile` drives the
-  // structural swaps that CSS alone can't express (which overlay exists, where
-  // the widgets render); purely visual mobile tweaks stay in Tailwind `max-md:`.
+  // Narrow-window (mobile) layout. Below the md breakpoint (768px) the sidebar
+  // becomes a slide-over drawer and the widget rail moves inline to the foot of
+  // the chat thread (no side column fits). The drawer is ephemeral — deliberately
+  // NOT persisted.
   const isMobile = useMediaQuery("(max-width: 767.98px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
-  // Appearance (Fern direction). Three choices — "light" | "dark" | "system"
-  // ("Match this computer"); light is the fallback for absent/legacy values. The
-  // class on <html> drives the whole palette. The inline script in index.html
-  // sets the class before first paint to avoid a flash; the effect below keeps it
-  // in sync, persists the CHOICE, and (only while "system") follows the OS live.
+  // Appearance — "light" | "dark" | "system" ("Match this computer", the
+  // default). The class on <html> drives the whole palette. The inline script in
+  // index.html sets it before first paint to avoid a flash; the effect below
+  // keeps it in sync, persists the CHOICE, and (only while "system") follows the
+  // OS live.
   const [themeChoice, setThemeChoiceState] = useState<ThemeChoice>(loadThemeChoice);
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
-  // First-run experience (design-brief-fern §5). `startedUnconfigured` latches
-  // once — true iff this launch began with nothing configured (or we're in a
-  // disconnected design-review browser, where roles never load) — so connecting
-  // a provider mid-launch advances the banner to step 2 rather than hiding it,
-  // while a launch that began configured never shows it at all. `firstRunDismissed`
-  // is "Skip for now": this launch only, deliberately not persisted.
+  // First-run experience. `startedUnconfigured` latches once — true iff this
+  // launch began with nothing configured (or we're in a disconnected
+  // design-review browser, where roles never load) — so connecting a provider
+  // mid-launch advances the banner to step 2 rather than hiding it, while a
+  // launch that began configured never shows it at all. `firstRunDismissed` is
+  // "Skip for now": this launch only, deliberately not persisted.
   const [startedUnconfigured, setStartedUnconfigured] = useState<boolean | null>(null);
   const [firstRunDismissed, setFirstRunDismissed] = useState(false);
   // One-shot Settings scroll request (first-run "Start setup" → API-keys card).
@@ -123,7 +163,7 @@ export function App() {
   // raw-diagnostics flag is on, so Simple never sees it.
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
 
-  // --- The four extracted state clusters (mechanical moves from this file) ---
+  // --- The extracted state clusters ----------------------------------------
   const models = useModelSelection();
   const widgetsState = useWidgets({ connected, railOpen, setStatusBanner });
   const skillsState = useSkills({ connected, setStatusBanner });
@@ -206,7 +246,9 @@ export function App() {
     controlsBusy,
     resetTransientState,
     setMessages: turn.setMessages,
-    setScreen,
+    // Loading or starting a conversation always lands on the chat view, through
+    // the same transition every other route uses.
+    setScreen: (screen) => changeView(screen),
     setStatusBanner,
   });
 
@@ -218,6 +260,64 @@ export function App() {
     setRoutineProposal(null);
     setComposerSeed(null);
   }
+
+  // --- The view machine -----------------------------------------------------
+  // Leaving a surface plays fadeDrop over its children and commits at 240ms, so
+  // the page leaves before it is replaced. Entering is handled after the commit
+  // (the effect below) because the incoming children don't exist until then.
+  // With motion off, or when no surface is on screen, the change is immediate —
+  // the fast path, not a degraded one.
+  function changeView(next: View) {
+    if (next === view) return;
+    if (viewTimer.current) clearTimeout(viewTimer.current);
+    const commit = () => setView(next);
+    const surface = document.getElementById(SURFACE_ID);
+    if (!isMotionEnabled() || !surface) return commit();
+    Array.from(surface.children).forEach((child) => {
+      replayAnimation(child as HTMLElement, "fadeDrop .25s ease both");
+    });
+    viewTimer.current = setTimeout(commit, VIEW_COMMIT_MS);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (viewTimer.current) clearTimeout(viewTimer.current);
+    };
+  }, []);
+
+  const isSurface = view !== "chat";
+  const viewTitle =
+    view === "chat"
+      ? conversationsState.conversationTitle || "New conversation"
+      : SURFACE_TITLES[view];
+
+  // The header title resolves out of the scramble whenever it changes — a view
+  // change or a chat that just got its name.
+  const titleRef = useRef<HTMLSpanElement>(null);
+  useScrambleOnChange(titleRef, viewTitle);
+
+  // Entering a view: stagger the surface's children in, and let its labels and
+  // row names resolve out of the scramble behind them.
+  useEffect(() => {
+    if (seenView.current === view) return; // first paint — the load pass owns it
+    seenView.current = view;
+    const surface = document.getElementById(SURFACE_ID);
+    if (surface && isMotionEnabled()) {
+      Array.from(surface.children).forEach((child, i) => {
+        replayAnimation(child as HTMLElement, `fadeRise .35s ease both ${i * 40}ms`);
+      });
+    }
+    document.querySelectorAll("[data-surf]").forEach((el, i) => {
+      if (el.children.length === 0) scrambleElement(el, i * 45);
+    });
+  }, [view]);
+
+  // Initial load: the staggered scramble pass, and the global click handler that
+  // scrambles any leaf element carrying a data-scramble attribute.
+  useEffect(() => {
+    scrambleAll(INITIAL_SCRAMBLE_SELECTOR);
+    return installScrambleClickHandler();
+  }, []);
 
   // --- Wire up notifications + initial data on mount ------------------------
   useEffect(() => {
@@ -345,7 +445,7 @@ export function App() {
     const apply = () => {
       const resolved = resolveTheme(themeChoice, mql?.matches ?? false);
       root.classList.toggle("dark", resolved === "dark");
-      root.style.backgroundColor = resolved === "dark" ? "#171D1A" : "#F6F5F1";
+      root.style.backgroundColor = resolved === "dark" ? "#0C0C0D" : "#F7F7F5";
     };
     apply();
     try {
@@ -362,10 +462,13 @@ export function App() {
     setThemeChoiceState(next);
   }
 
-  // Persist the app-shell chrome toggle alongside the other prefs.
+  // Persist the app-shell chrome toggles alongside the other prefs.
   useEffect(() => {
     saveBool(RAIL_OPEN_KEY, railOpen);
   }, [railOpen]);
+  useEffect(() => {
+    saveBool(SIDE_OPEN_KEY, sideOpen);
+  }, [sideOpen]);
 
   // Growing the window past the breakpoint reveals the static sidebar + rail, so
   // the mobile drawer must not linger (and mustn't pop back if the window shrinks
@@ -537,30 +640,38 @@ export function App() {
   // First-run "Start setup": open Settings scrolled to the API-keys card. The
   // scroll request is one-shot (SettingsPage clears it via onScrolled).
   function handleStartSetup() {
-    setScreen("settings");
+    changeView("settings");
     setSettingsScrollTarget(API_KEYS_SECTION_ID);
   }
 
-  // The dashed "＋ Ask Addison to build a widget" seeds the composer (does NOT
-  // create anything) and switches to chat if we're on Settings.
+  // The rail's "＋ Ask Addison to build a widget" now opens the Build-a-widget
+  // surface (it used to seed the composer directly). Nothing is created there
+  // either — the surface's rows seed the composer, below.
   function handleAskBuildWidget() {
-    setScreen("chat");
-    setComposerSeed("Build me a widget that ");
+    changeView("widgets");
   }
 
-  // Window-level shortcuts: Escape returns from Settings to chat; Cmd/Ctrl+N
+  // "use" on an idea: write the sentence into the composer and go back to chat.
+  // The person still presses Send, and the propose → card → confirm flow is
+  // unchanged.
+  function seedWidgetIdea(prompt: string) {
+    setComposerSeed(`Build me a widget: ${prompt}`);
+    changeView("chat");
+  }
+
+  // Window-level shortcuts: Escape returns from any surface to chat; Cmd/Ctrl+N
   // starts a new chat (unless a turn or permission prompt is in flight).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
         // The mobile drawer takes Escape first, before it would fall through to
-        // leaving Settings.
+        // leaving a surface.
         if (drawerOpen) {
           setDrawerOpen(false);
           return;
         }
-        if (screen === "settings") {
-          setScreen("chat");
+        if (view !== "chat") {
+          changeView("chat");
           return;
         }
       }
@@ -574,13 +685,12 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, connected, controlsBusy, drawerOpen]);
+  }, [view, connected, controlsBusy, drawerOpen]);
 
   // --- Render ---------------------------------------------------------------
-  // The two movable blocks (design-brief-fern §3–§4): the "Addison's work"
-  // annotation and the consent card live in the widget rail when it's open, and
-  // fall back inline in the thread when it's hidden. Assemble each once so it can
-  // render in either slot without duplication.
+  // The two movable blocks: the "Addison's work" annotation and the consent card
+  // live in the widget rail when it's open, and fall back inline in the thread
+  // when it's hidden. Assemble each once so it can render in either slot.
   const hasWork =
     turn.isWorking || turn.activities.length > 0 || Boolean(lastUndoDetail) || canRedo;
   const workBlock = hasWork ? (
@@ -629,16 +739,33 @@ export function App() {
   ) : null;
 
   const profileLabel =
-    profile?.activeProfile === "developer" ? "Developer profile" : "Simple profile";
-  // In OPEN (Developer) mode the sidebar appends a dim, mono " · open" — the one
-  // quiet acknowledgement that the safety posture is different. Nothing louder.
+    profile?.activeProfile === "developer"
+      ? "Developer profile"
+      : profile?.activeProfile === "custom"
+        ? "Custom profile"
+        : "Simple profile";
+  // In OPEN mode the sidebar appends a dim, mono " · open" — the one quiet
+  // acknowledgement that the safety posture is different. Nothing louder.
   const profileModeNote = profile?.mode === "open" ? "open" : undefined;
 
-  // First-run render pieces. The pine banner rides in the chat column above the
-  // thread while first-run is active; the serif greeting replaces the welcome
-  // message only at step 1 (nothing configured yet) with an otherwise-empty
-  // thread. Once a provider connects (step 2), the normal welcome returns so
-  // Addison "introduces itself" per the step-2 copy.
+  // The sidebar's two machine facts. Both are REAL: the count of folders Addison
+  // may work in (Developer/Custom only — Simple has none by construction, and
+  // then the policy mode is the honest thing to show), and how many restore
+  // points exist right now.
+  const trustedRoots = workspaceState.rootsLoaded ? workspaceState.roots.length : 0;
+  const toolsHint =
+    trustedRoots > 0
+      ? `${trustedRoots} folder${trustedRoots === 1 ? "" : "s"}`
+      : profile?.mode;
+  const snapshotsHint = snapshotsState.snapshotsLoaded
+    ? String(snapshotsState.snapshots.length)
+    : undefined;
+
+  // First-run render pieces. The banner rides in the chat column above the
+  // thread while first-run is active; the greeting replaces the welcome message
+  // only at step 1 (nothing configured yet) with an otherwise-empty thread. Once
+  // a provider connects (step 2), the normal welcome returns so Addison
+  // "introduces itself" per the step-2 copy.
   const threadEmpty = turn.messages.length === 1 && turn.messages[0]?.id === "welcome";
   const showGreeting = firstRunActive && !anyConfigured && threadEmpty;
   const threadMessages = showGreeting
@@ -654,137 +781,138 @@ export function App() {
   ) : undefined;
 
   // Wrap the sidebar's pick handlers so, in the mobile drawer, choosing a
-  // conversation / Settings / New chat also closes the drawer (handoff §1).
+  // conversation / Settings / New chat also closes the drawer.
   const closeDrawer = () => setDrawerOpen(false);
   // Opening a conversation or starting a new chat always returns to the chat
-  // screen — picked from Settings, either would otherwise load invisibly
-  // behind it. Used by the desktop sidebar AND the drawer.
+  // view — picked from a surface, either would otherwise load invisibly behind it.
   const openConversationFromNav = (id: string) => {
-    setScreen("chat");
+    changeView("chat");
     conversationsState.handleOpenConversation(id);
   };
   const newChatFromNav = () => {
-    setScreen("chat");
+    changeView("chat");
     conversationsState.handleNewChat();
   };
+  // Clicking the workspace item that is already open goes back to chat — the
+  // sidebar rows toggle rather than dead-end.
+  const toggleSurface = (target: View) => changeView(view === target ? "chat" : target);
+
+  const sidebarProps = {
+    conversations: conversationsState.conversations,
+    currentConversationId: conversationsState.currentConversationId,
+    onRenameConversation: conversationsState.handleRenameConversation,
+    newChatDisabled: !connected || controlsBusy,
+    view,
+    toolsHint,
+    snapshotsHint,
+    profileLabel,
+    modeNote: profileModeNote,
+  };
+
+  const railVisible = railOpen && view === "chat";
 
   return (
-    <div className="flex h-full bg-paper text-ink">
-      {/* Desktop: the static left column. Below md it's replaced by the slide-over
-          drawer (rendered at the end of this tree). */}
-      {!isMobile && (
-        <Sidebar
-          conversations={conversationsState.conversations}
-          currentConversationId={conversationsState.currentConversationId}
-          onOpenConversation={openConversationFromNav}
-          onRenameConversation={conversationsState.handleRenameConversation}
-          onNewChat={newChatFromNav}
-          newChatDisabled={!connected || controlsBusy}
-          screen={screen}
-          onOpenSettings={() => setScreen("settings")}
-          profileLabel={profileLabel}
-          modeNote={profileModeNote}
-        />
-      )}
+    <div className="relative flex h-full flex-col overflow-hidden bg-paper text-[13px] text-ink">
+      {/* One header across the whole window: the way out on the left (← from a
+          surface, the sidebar chevron on chat), the view's name beside it, and
+          the two live controls on the right. */}
+      <header className="relative z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-6 py-4">
+        <span className="flex min-w-0 items-center gap-4">
+          {isSurface ? (
+            <button
+              type="button"
+              onClick={() => changeView("chat")}
+              title="Back to chat"
+              aria-label="Back to chat"
+              className="shrink-0 text-[13px] text-muted transition-colors hover:text-ink max-md:min-h-[44px] max-md:min-w-[44px]"
+            >
+              ←
+            </button>
+          ) : isMobile ? (
+            <button
+              type="button"
+              onClick={() => setDrawerOpen(true)}
+              aria-label="Menu"
+              className="flex h-11 w-11 shrink-0 items-center justify-center text-[15px] text-disabled transition-colors hover:text-ink"
+            >
+              ☰
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setSideOpen((v) => !v)}
+              title={sideOpen ? "Hide chats" : "Show chats"}
+              aria-label={sideOpen ? "Hide chats" : "Show chats"}
+              className="shrink-0 text-[12px] text-disabled transition-colors hover:text-ink"
+            >
+              {sideOpen ? "«" : "»"}
+            </button>
+          )}
+          <span
+            ref={titleRef}
+            data-scramble-live="0"
+            className="min-w-0 truncate text-[13px] font-medium text-ink-soft"
+          >
+            {viewTitle}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-[22px] text-[12px]">
+          {hasUndoableActions && (
+            <button
+              type="button"
+              data-scramble="320"
+              onClick={handleUndoLastAction}
+              className="text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+            >
+              Undo last action
+            </button>
+          )}
+          {!isSurface && !isMobile && (
+            <button
+              type="button"
+              onClick={() => setRailOpen((v) => !v)}
+              title={railOpen ? "Hide widgets" : "Show widgets"}
+              aria-label={railOpen ? "Hide widgets" : "Show widgets"}
+              className="text-[12px] text-disabled transition-colors hover:text-ink"
+            >
+              {railOpen ? "»" : "«"}
+            </button>
+          )}
+        </span>
+      </header>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        {screen === "settings" ? (
-          <SettingsPage
-            connected={connected}
-            notice={
-              (!connected || statusBanner) && (
-                <>
-                  {!connected && (
-                    <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-                  )}
-                  {statusBanner && (
-                    <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
-                  )}
-                </>
-              )
-            }
-            models={models}
-            skills={skillsState}
-            snapshots={snapshotsState}
-            guards={guardsState}
-            routing={routingState}
-            workspace={workspaceState}
-            profile={profile}
-            onSetProfile={handleSetProfile}
-            diagnostics={diagnostics}
-            onClearDiagnostics={clearDiagnostics}
-            theme={themeChoice}
-            onSetTheme={setThemeChoice}
-            onOpenMenu={() => setDrawerOpen(true)}
-            scrollTarget={settingsScrollTarget}
-            onScrolled={() => setSettingsScrollTarget(null)}
-          />
-        ) : (
-          <>
-            {/* Desktop chat header — active title left; undo (when undoable) +
-                rail toggle right (design-brief-fern §2). Hidden below md. */}
-            <header className="hidden items-baseline justify-between gap-4 border-b border-line px-[44px] py-3.5 md:flex">
-              <span className="min-w-0 truncate text-control font-semibold tracking-emphasis text-ink-soft">
-                {conversationsState.conversationTitle || "New conversation"}
-              </span>
-              <div className="flex shrink-0 items-baseline gap-[18px]">
-                {hasUndoableActions && (
-                  <button
-                    type="button"
-                    onClick={handleUndoLastAction}
-                    className="text-meta font-medium text-muted hover:text-ink-soft"
-                  >
-                    <span aria-hidden="true">↺</span> Undo last action
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setRailOpen((v) => !v)}
-                  className="text-meta font-medium text-fern-deep hover:text-fern"
-                >
-                  {railOpen ? "Hide widgets »" : "« Show widgets"}
-                </button>
-              </div>
-            </header>
+      <main className="relative flex min-h-0 min-w-0 flex-1 px-4 md:gap-[44px] md:px-10">
+        {/* Left column. Collapsing animates width, opacity, margin and offset
+            together so the chat column glides wider instead of jumping. */}
+        {!isMobile && (
+          <div
+            className="shrink-0 overflow-hidden"
+            aria-hidden={!sideOpen}
+            style={{
+              transition:
+                "width .35s ease, opacity .25s ease, margin-right .35s ease, transform .35s ease",
+              width: sideOpen ? "212px" : "0px",
+              opacity: sideOpen ? 1 : 0,
+              marginRight: sideOpen ? "0px" : "-44px",
+              transform: sideOpen ? "translateX(0)" : "translateX(-16px)",
+              pointerEvents: sideOpen ? undefined : "none",
+            }}
+          >
+            <Sidebar
+              {...sidebarProps}
+              onOpenConversation={openConversationFromNav}
+              onNewChat={newChatFromNav}
+              onOpenSettings={() => toggleSurface("settings")}
+              onOpenTools={() => toggleSurface("tools")}
+              onOpenSnapshots={() => toggleSurface("snapshots")}
+            />
+          </div>
+        )}
 
-            {/* Mobile top bar (below md): ☰ opens the drawer · centered title ·
-                undo (when there's something to undo, mirroring the desktop
-                header) or a balancing spacer. Widgets are visible inline at the
-                foot of the thread, so there's no widget control here. Safe-area
-                top inset for a phone status bar. */}
-            <header className="flex items-center gap-2 border-b border-line px-4 pt-[env(safe-area-inset-top)] md:hidden">
-              <button
-                type="button"
-                onClick={() => setDrawerOpen(true)}
-                aria-label="Menu"
-                className="flex h-11 w-11 shrink-0 items-center justify-center text-glyph text-ink-soft"
-              >
-                ☰
-              </button>
-              <span className="min-w-0 flex-1 truncate text-center text-control font-semibold text-ink-soft">
-                {conversationsState.conversationTitle || "New conversation"}
-              </span>
-              {hasUndoableActions ? (
-                <button
-                  type="button"
-                  onClick={handleUndoLastAction}
-                  aria-label="Undo last action"
-                  className="flex h-11 shrink-0 items-center px-1 text-meta font-medium text-muted transition-colors hover:text-ink-soft"
-                >
-                  <span aria-hidden="true">↺</span>
-                </button>
-              ) : (
-                <span aria-hidden className="h-11 w-11 shrink-0" />
-              )}
-            </header>
-
-            {/* Body: centered chat column + (optional) widget rail, each with its
-                own scroll. Full-bleed side padding below md; 44px gutters at md. */}
-            <div className="flex min-h-0 flex-1 justify-center gap-[38px] px-4 md:px-[44px]">
-              {/* The banner wrapper shares the chat column's exact width and
-                  center (owner: banners were centered across column + rail and
-                  read as off-balance). Same geometry as before for the thread:
-                  the column centers in the space beside the rail. */}
+        {/* Centre column: the thread + composer, or a surface in their place. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="flex min-h-0 flex-1 justify-center">
+            {view === "chat" ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
                 {(!connected || statusBanner) && (
                   <div className="flex w-full max-w-[580px] flex-col gap-2 pt-3">
@@ -809,7 +937,7 @@ export function App() {
                       {widgetProposalBlock}
                       {offerBlock}
                       {/* Mobile: there's no side rail, so the widgets live inline
-                          at the foot of the thread — visible on the chat screen,
+                          at the foot of the thread — visible on the chat view,
                           carrying the work + consent blocks with them. Desktop:
                           work/consent go inline only when the rail is hidden
                           (otherwise they're in the rail). */}
@@ -840,23 +968,102 @@ export function App() {
                   }
                 />
               </div>
-              {!isMobile && railOpen && (
-                <WidgetRail
-                  work={workBlock}
-                  consent={consentBlock}
-                  developer={profileModeNote === "open"}
-                  widgets={widgetsState.widgets}
-                  stats={widgetsState.stats}
-                  routines={widgetsState.railRoutines}
-                  onSetPinned={widgetsState.handleSetWidgetPinned}
-                  onDelete={widgetsState.handleDeleteWidget}
-                  onRunRoutine={widgetsState.handleRunWidgetRoutine}
-                  onRunCommandWidget={(id) => ipc.runWidget(id)}
-                  onAskBuildWidget={handleAskBuildWidget}
+            ) : view === "settings" ? (
+              // PHASE NOTE (redesign 3/4): SettingsPage still brings its own
+              // header, scroller and card layout, so it renders in the "raw"
+              // surface — the transitions apply, the 580px reading column does
+              // not. Phase 3 rebuilds it as sections and rows and drops this
+              // variant.
+              <Surface variant="raw" title="Settings">
+                <SettingsPage
+                  connected={connected}
+                  notice={
+                    (!connected || statusBanner) && (
+                      <>
+                        {!connected && (
+                          <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+                        )}
+                        {statusBanner && (
+                          <Banner
+                            message={statusBanner}
+                            onDismiss={() => setStatusBanner(null)}
+                          />
+                        )}
+                      </>
+                    )
+                  }
+                  models={models}
+                  skills={skillsState}
+                  snapshots={snapshotsState}
+                  guards={guardsState}
+                  routing={routingState}
+                  workspace={workspaceState}
+                  profile={profile}
+                  onSetProfile={handleSetProfile}
+                  diagnostics={diagnostics}
+                  onClearDiagnostics={clearDiagnostics}
+                  theme={themeChoice}
+                  onSetTheme={setThemeChoice}
+                  onOpenMenu={() => setDrawerOpen(true)}
+                  scrollTarget={settingsScrollTarget}
+                  onScrolled={() => setSettingsScrollTarget(null)}
                 />
-              )}
-            </div>
+              </Surface>
+            ) : view === "tools" ? (
+              <Surface
+                title="Tools"
+                description="What Addison can reach on this computer. Connect only what you're comfortable with."
+              >
+                <SurfaceSection label="Still being built">
+                  <SurfaceRow
+                    name="This page doesn't list anything yet."
+                    value="coming in this build"
+                  />
+                  <SurfaceRow
+                    name="What Addison can reach today is in Settings."
+                    action="open"
+                    onAction={() => changeView("settings")}
+                  />
+                </SurfaceSection>
+              </Surface>
+            ) : view === "snapshots" ? (
+              <Surface
+                title="Snapshots"
+                description="Addison saves a restore point before anything risky, so you can always go back to a setup that worked."
+              >
+                <SurfaceSection label="Still being built">
+                  <SurfaceRow
+                    name="The full list of restore points isn't here yet."
+                    value="coming in this build"
+                  />
+                  <SurfaceRow
+                    name="Your restore points"
+                    value={snapshotsHint ? `${snapshotsHint} saved` : undefined}
+                    action="open in Settings"
+                    onAction={() => changeView("settings")}
+                  />
+                </SurfaceSection>
+              </Surface>
+            ) : (
+              <Surface
+                title="Build a widget"
+                description="Describe what you want to keep an eye on, and Addison turns it into a small card in the right rail."
+              >
+                <SurfaceSection label="Ideas to start from">
+                  {WIDGET_IDEAS.map((idea) => (
+                    <SurfaceRow
+                      key={idea.prompt}
+                      name={idea.name}
+                      action="use"
+                      onAction={() => seedWidgetIdea(idea.prompt)}
+                    />
+                  ))}
+                </SurfaceSection>
+              </Surface>
+            )}
+          </div>
 
+          {view === "chat" && (
             <Composer
               connected={connected}
               turn={turn}
@@ -865,43 +1072,76 @@ export function App() {
               onDraftSeedUsed={() => setComposerSeed(null)}
               focusSignal={composerFocusSignal}
             />
-          </>
+          )}
+        </div>
+
+        {/* Right column: widgets. Chat view only — a surface takes the whole
+            middle, and the rail's contents are about the conversation. */}
+        {!isMobile && (
+          <div
+            className="shrink-0 overflow-hidden"
+            aria-hidden={!railVisible}
+            style={{
+              transition:
+                "width .35s ease, opacity .25s ease, margin-left .35s ease, transform .35s ease",
+              width: railVisible ? "232px" : "0px",
+              opacity: railVisible ? 1 : 0,
+              marginLeft: railVisible ? "0px" : "-44px",
+              transform: railVisible ? "translateX(0)" : "translateX(16px)",
+              pointerEvents: railVisible ? undefined : "none",
+            }}
+          >
+            <WidgetRail
+              work={workBlock}
+              consent={consentBlock}
+              developer={profileModeNote === "open"}
+              widgets={widgetsState.widgets}
+              stats={widgetsState.stats}
+              routines={widgetsState.railRoutines}
+              onSetPinned={widgetsState.handleSetWidgetPinned}
+              onDelete={widgetsState.handleDeleteWidget}
+              onRunRoutine={widgetsState.handleRunWidgetRoutine}
+              onRunCommandWidget={(id) => ipc.runWidget(id)}
+              onAskBuildWidget={handleAskBuildWidget}
+            />
+          </div>
         )}
       </main>
 
       {/* Mobile slide-over drawer: the same Sidebar, in drawer mode. Picking a
-          conversation / Settings / New chat / the close arrow closes it; so does
+          conversation / a surface / New chat / the close arrow closes it; so does
           the scrim (in MobileDrawer) and Escape (handled above). Every path just
           flips `drawerOpen` false — MobileDrawer plays the slide-out either way,
           which is why it stays mounted here (open-prop, not a conditional). */}
       {isMobile && (
         <MobileDrawer open={drawerOpen} onClose={closeDrawer}>
           <Sidebar
+            {...sidebarProps}
             variant="drawer"
-            conversations={conversationsState.conversations}
-            currentConversationId={conversationsState.currentConversationId}
             onOpenConversation={(id) => {
               closeDrawer();
               openConversationFromNav(id);
             }}
-            onRenameConversation={conversationsState.handleRenameConversation}
             onNewChat={() => {
               closeDrawer();
               newChatFromNav();
             }}
-            newChatDisabled={!connected || controlsBusy}
-            screen={screen}
             onOpenSettings={() => {
               closeDrawer();
-              setScreen("settings");
+              toggleSurface("settings");
+            }}
+            onOpenTools={() => {
+              closeDrawer();
+              toggleSurface("tools");
+            }}
+            onOpenSnapshots={() => {
+              closeDrawer();
+              toggleSurface("snapshots");
             }}
             onCloseDrawer={closeDrawer}
-            profileLabel={profileLabel}
-            modeNote={profileModeNote}
           />
         </MobileDrawer>
       )}
-
     </div>
   );
 }
@@ -910,18 +1150,27 @@ export function App() {
 // Small pure helpers — defensive parsing of free-form JSON-RPC payloads, since
 // the Python side's result/notification shapes aren't pinned in protocol.ts.
 // ---------------------------------------------------------------------------
-// Appearance persists like the default role. Light unless the user chose dark
-// or "system"; absent/legacy values fall back to light (see lib/theme).
+// Restart a CSS animation on an element that may already be carrying one (the
+// standard reflow trick — assigning the same animation name would otherwise be
+// ignored).
+function replayAnimation(el: HTMLElement, animation: string): void {
+  el.style.animation = "none";
+  el.getBoundingClientRect(); // force reflow so the restart is seen
+  el.style.animation = animation;
+}
+
+// Appearance persists like the default role. Absent/legacy values fall back to
+// "system" — Match this computer (see lib/theme).
 function loadThemeChoice(): ThemeChoice {
   try {
     return parseThemeChoice(localStorage.getItem(THEME_KEY));
   } catch {
     /* localStorage may be unavailable; fall through to the default */
-    return "light";
+    return "system";
   }
 }
 
-// Boolean prefs (rail open) persist as "1"/"0".
+// Boolean prefs (rail/sidebar open) persist as "1"/"0".
 function loadBool(key: string, fallback: boolean): boolean {
   try {
     const v = localStorage.getItem(key);

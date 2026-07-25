@@ -1,21 +1,24 @@
 /** @type {import('tailwindcss').Config} */
-// Addison's visual direction is binding: the "Fern" direction — warm paper
-// neutrals + one fern-green accent, a serif "correspondence" voice (Source Serif
-// 4) beside a plain sans UI (Public Sans) and mono for machine facts (IBM Plex
-// Mono). One honest rule governs shape: BLOCKY things (square edges, 2px left
-// rules, small-caps labels) are live annotations Addison is showing you;
-// ROUNDED things (6–12px cards/inputs/banners, 999px pills) are yours to own,
-// run, or act on. Amended 2026-07 (v3) — this SUPERSEDES the earlier dark
-// terminal-adjacent look (which itself superseded design-doc §7.1's cool-slate).
-// Still NOT a generic AI-chat aesthetic (no purple, glassmorphism, sparkle
-// icons, shimmer) and deliberately distant from any model vendor's branding (no
-// cream/terracotta, no steel blue). The design handoff at docs/design-brief-fern
-// is authoritative for tokens, type, shape, and copy.
+// Addison's visual direction is binding: the DARK direction (docs/design-brief-dark,
+// 2026-07-25) — a calm, text-first surface with warm-neutral greys, one soft
+// violet accent, and system type only. It SUPERSEDES the Fern direction
+// (docs/design-brief-fern, which stays in the tree as history).
+//
+// The shape language changed with it: selection/active is a 2px accent LEFT RAIL
+// (chat rows, model rows, settings nav); section labels sit on a 2px `rail` left
+// rule; hairline `line` top-borders separate rows. Cards-with-borders are now
+// reserved for floating chrome (popovers, modal, composer menu) — surfaces are
+// flat hairline rows, not floating cards.
 //
 // Colors are driven by CSS custom properties (channels declared in
 // src/styles.css: :root = light, .dark = dark) so the whole theme flips with one
-// class on <html>. darkMode:"class"; the class is toggled from Settings →
-// Appearance and persisted in localStorage ("addison.theme").
+// class on <html>. darkMode:"class" stays; the class is toggled from Settings →
+// Appearance and persisted in localStorage ("addison.theme"), whose default is
+// now "system" (Match this computer).
+//
+// Dark is the DESIGNED reference (exact hex from the handoff); light is a derived
+// translation with identical structure. docs/design-brief-dark/IMPLEMENTATION.md
+// holds the authoritative token table.
 const withOpacity = (v) => `rgb(var(${v}) / <alpha-value>)`;
 
 export default {
@@ -24,90 +27,70 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Warm surfaces, light → dark via the CSS vars.
+        // --- The dark-direction palette (IMPLEMENTATION.md token table) -----
         paper: withOpacity("--c-paper"), // app background
-        side: withOpacity("--c-side"), // sidebar background
-        surface: withOpacity("--c-surface"), // cards, composer
-        line: withOpacity("--c-line"), // 1px borders
-        hair: withOpacity("--c-hair"), // active-row bg, progress track
-        // Text, high → low emphasis.
+        panel: withOpacity("--c-panel"), // popovers, menus, modal
+        line: withOpacity("--c-line"), // 1px hairlines / separators
+        rail: withOpacity("--c-rail"), // inactive 2px section rails; menu borders
+        track: withOpacity("--c-track"), // composer idle top border, meter track
+        "track-hi": withOpacity("--c-track-hi"), // composer focused top border
         ink: withOpacity("--c-ink"), // primary text
         "ink-soft": withOpacity("--c-ink-soft"), // secondary text
         muted: withOpacity("--c-muted"), // tertiary text
-        faint: withOpacity("--c-faint"), // labels, placeholders (dim by design)
-        // The single accent: fern green. Reserved for Addison's voice, primary
-        // actions, and live state — never decoration.
-        fern: withOpacity("--c-fern"), // primary buttons, live dots
-        "fern-deep": withOpacity("--c-fern-deep"), // accent text/links, hover
-        "fern-tint": withOpacity("--c-fern-tint"), // consent card, selected, pills
-        // Live-annotation + structural accents.
-        rule: withOpacity("--c-rule"), // 2px "Addison's work" left rule
-        dash: withOpacity("--c-dash"), // dashed "add widget" border
-        pine: withOpacity("--c-pine"), // setup banner bg (high-contrast block)
-        // Pine-banner text scale (first-run). Fixed across themes — the pine
-        // block never inverts. See :root in styles.css (not overridden in .dark).
-        "pine-soft": withOpacity("--c-pine-soft"), // eyebrow small-caps
-        "pine-ink": withOpacity("--c-pine-ink"), // serif headline (cream)
-        cream: withOpacity("--c-cream"), // body text / step circle / button
-        "pine-body": withOpacity("--c-pine-body"), // current-step description
-        "pine-muted": withOpacity("--c-pine-muted"), // skip / later-step text
-        "pine-line": withOpacity("--c-pine-line"), // outlined step circle
-        // Text that sits ON a fern-filled button: white on light, dark on the
-        // lightened dark-mode fern. One token, flips with the theme.
-        "on-accent": withOpacity("--c-on-accent"),
-        // Quiet warm notice (status banners) + errors.
-        notice: withOpacity("--c-notice"),
-        "notice-tint": withOpacity("--c-notice-tint"),
+        faint: withOpacity("--c-faint"), // section labels
+        disabled: withOpacity("--c-disabled"), // hints, idle glyphs, "You" label
+        ghost: withOpacity("--c-ghost"), // faintest microcopy
+        accent: withOpacity("--c-accent"), // links/actions, selection rails, send fill
+        "on-accent": withOpacity("--c-on-accent"), // glyph on an accent fill
+        // Real destructive actions only (delete a widget/routine). A RESTORE is
+        // never danger-colored — it is a recovery, not a loss (HANDOFF rule).
         danger: withOpacity("--c-danger"),
+        // Overlay scrim behind the modal — the same value in both themes.
+        scrim: "rgb(var(--c-scrim) / 0.55)",
+
+        // --- TEMPORARY legacy aliases --------------------------------------
+        // TODO(redesign phase 4): remove legacy aliases.
+        // Phases 2–3 restyle ChatThread/Composer/SettingsPage and the cards; until
+        // then those components still name Fern tokens. Each alias points at its
+        // nearest dark-direction equivalent so the app keeps compiling AND keeps
+        // rendering in the new palette (never a half-old one) while the wave lands.
+        fern: withOpacity("--c-accent"),
+        "fern-deep": withOpacity("--c-accent"),
+        "fern-tint": withOpacity("--c-panel"),
+        surface: withOpacity("--c-panel"),
+        side: withOpacity("--c-paper"),
+        hair: withOpacity("--c-line"),
+        rule: withOpacity("--c-rail"),
+        dash: withOpacity("--c-rail"),
+        // The pine first-run block is retired by the brief; its tokens survive
+        // only so FirstRunBanner keeps rendering until phase 2 replaces it.
+        pine: withOpacity("--c-panel"),
+        "pine-soft": withOpacity("--c-muted"),
+        "pine-ink": withOpacity("--c-ink"),
+        cream: withOpacity("--c-ink"),
+        "pine-body": withOpacity("--c-ink-soft"),
+        "pine-muted": withOpacity("--c-muted"),
+        "pine-line": withOpacity("--c-rail"),
+        notice: withOpacity("--c-muted"),
+        "notice-tint": withOpacity("--c-panel"),
       },
       fontFamily: {
-        // Public Sans is the default body/UI family.
-        sans: [
-          '"Public Sans"',
-          "-apple-system",
-          "BlinkMacSystemFont",
-          '"Segoe UI"',
-          "Roboto",
-          "Helvetica",
-          "Arial",
-          "sans-serif",
-        ],
-        // Source Serif 4 — the "correspondence" voice (message text, greetings).
-        serif: ['"Source Serif 4"', "Georgia", "ui-serif", "serif"],
-        // IBM Plex Mono — machine facts only (counts, latency, model tags).
-        mono: [
-          '"IBM Plex Mono"',
-          "ui-monospace",
-          '"SF Mono"',
-          "Menlo",
-          "Monaco",
-          "Consolas",
-          "monospace",
-        ],
+        // System stacks only — every bundled OFL woff2 and @font-face is gone.
+        sans: ['"Helvetica Neue"', "Helvetica", "Arial", "sans-serif"],
+        mono: ["ui-monospace", '"SF Mono"', "Menlo", "monospace"],
+        // TODO(redesign phase 4): remove legacy aliases.
+        // The serif voice is retired. `font-serif` survives as an alias to the UI
+        // stack so the not-yet-restyled components (ChatThread, FirstRunBanner,
+        // SettingsPage) render in the new type language rather than a leftover
+        // serif; phases 2–3 delete the classes, phase 4 deletes this line.
+        serif: ['"Helvetica Neue"', "Helvetica", "Arial", "sans-serif"],
       },
       fontSize: {
-        // Fern type scale (docs/design-brief-fern). Each token is a PLAIN string
-        // — never the [size, lineHeight] tuple — because these replaced arbitrary
-        // text-[Npx] utilities that set only font-size; a tuple would introduce a
-        // line-height where none existed and shift layout. The default Tailwind
-        // scale (text-xs/sm/base/…) stays untouched and keeps its built-in
-        // line-heights.
-        //   tag       9.5px   Developer "DEV" annotation tag (with tracking-caps-wide)
-        //   tick      10px    smallest mono details (tray caret, connection detail)
-        //   label     10.5px  small-caps section/sender labels (with tracking-caps-*)
-        //   fact      11px    mono machine facts, pill captions
-        //   fine      11.5px  fine print — helper text, consequence lines
-        //   hint      12px    dim hints, small controls, mono key inputs
-        //   meta      12.5px  meta text — work-list steps, subtitles, text buttons
-        //   control   13px    controls, chat items, header titles
-        //   action    13.5px  action buttons (Send), item names
-        //   row       14px    prominent rows / mobile touch targets
-        //   body      15px    Public Sans UI body
-        //   message   17px    Source Serif message text (pairs with leading-[1.7])
-        //   glyph     19px    icon-glyph characters (mobile ☰)
-        //   title     20px    in-window page titles (Settings)
-        //   headline  24px    pine-banner serif headline
-        //   greeting  32px    serif time-of-day greeting
+        // TODO(redesign phase 4): remove legacy aliases.
+        // The dark direction's type scale is expressed as literal px utilities
+        // (text-[15.5px], text-[11px], …) — the prototype's inline sizes, which
+        // is what "pixel-perfect" means here. These named Fern sizes stay only
+        // for components phases 2–3 have yet to restyle.
         tag: "9.5px",
         tick: "10px",
         label: "10.5px",
@@ -123,26 +106,28 @@ export default {
         glyph: "19px",
         title: "20px",
         headline: "24px",
-        greeting: "32px",
+        greeting: "26px",
       },
       letterSpacing: {
-        // Fern tracking tokens (plain em strings; defaults tight/wide/… untouched).
-        //   logo       -0.02em  "Addison" wordmark tighten
-        //   display    -0.01em  serif greeting/headline tighten
-        //   emphasis    0.02em  semibold titles, slight opening
-        //   caps        0.06em  compact uppercase labels
-        //   caps-wide   0.09em  small-caps section labels
-        //   caps-wider  0.11em  small-caps eyebrow/sender labels
-        logo: "-0.02em",
+        // `display` (-0.01em) survives the redesign: it is the surface-title and
+        // greeting tightening the brief calls for.
         display: "-0.01em",
+        // TODO(redesign phase 4): remove legacy aliases (logo/emphasis/caps*).
+        logo: "-0.02em",
         emphasis: "0.02em",
         caps: "0.06em",
         "caps-wide": "0.09em",
         "caps-wider": "0.11em",
       },
       borderRadius: {
-        // 6 small buttons/selects · 8 inputs/rows · 10 cards/composer ·
-        // 12 banners · 999 pills.
+        // Dark direction: popover 7px, modal 8px, composer menu 6px, menu rows
+        // 4–5px, send button 50%. No pills, no 10–12px cards.
+        menu: "5px",
+        popover: "7px",
+        modal: "8px",
+        // TODO(redesign phase 4): remove legacy aliases (sm = the 6px composer
+        // menu radius, DEFAULT = the 8px modal radius — kept for the components
+        // phases 2–3 still own).
         sm: "6px",
         DEFAULT: "8px",
         card: "10px",
@@ -150,15 +135,12 @@ export default {
         pill: "999px",
       },
       boxShadow: {
-        // The only two shadows in the app.
-        soft: "0 1px 4px rgba(34,38,31,.05)", // composer / cards
-        // Setup-banner lift, reworked 2026-07-19 (owner: the handoff's
-        // 0 6px 18px/.18 smeared on light paper) — now a tight, quiet edge in
-        // the same register as `soft`. Named `banner`, NOT `pine`: a token name
-        // shared between `colors` and `boxShadow` makes Tailwind emit
-        // `shadow-pine` twice (box-shadow AND shadow-color), and the color
-        // variant wins with an OPAQUE shadow — that was the original smear.
-        banner: "0 1px 6px rgba(30,43,37,.10)",
+        // Floating chrome only. Both flip with the theme (values in styles.css).
+        popover: "var(--shadow-popover)",
+        modal: "var(--shadow-modal)",
+        // TODO(redesign phase 4): remove legacy aliases.
+        soft: "var(--shadow-popover)",
+        banner: "var(--shadow-popover)",
       },
     },
   },

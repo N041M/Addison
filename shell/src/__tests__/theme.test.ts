@@ -1,3 +1,11 @@
+// Appearance — the three-way theme choice and how it resolves.
+//
+// The fallback moved from "light" to "system" in the 2026-07-25 dark redesign
+// (Appearance now defaults to "Match this computer"). The assertion below is
+// updated to that intent rather than deleted: what still has teeth is that an
+// EXPLICIT stored choice is never overridden by the OS preference — a person who
+// picked light keeps light on a dark machine — and that only unreadable values
+// fall through to following the computer.
 import { describe, it, expect } from "vitest";
 import { parseThemeChoice, resolveTheme } from "../lib/theme";
 
@@ -22,10 +30,10 @@ describe("parseThemeChoice", () => {
     expect(parseThemeChoice("system")).toBe("system");
   });
 
-  it("falls back to 'light' for absent or legacy/unknown values", () => {
-    expect(parseThemeChoice(null)).toBe("light");
-    expect(parseThemeChoice(undefined)).toBe("light");
-    expect(parseThemeChoice("")).toBe("light");
-    expect(parseThemeChoice("midnight")).toBe("light");
+  it("falls back to 'system' for absent or legacy/unknown values", () => {
+    expect(parseThemeChoice(null)).toBe("system");
+    expect(parseThemeChoice(undefined)).toBe("system");
+    expect(parseThemeChoice("")).toBe("system");
+    expect(parseThemeChoice("midnight")).toBe("system");
   });
 });

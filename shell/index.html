@@ -7,16 +7,20 @@
     <title>Addison</title>
     <script>
       // Theme bootstrap — runs before the stylesheet loads so there's no flash
-      // of the wrong theme. Reads "addison.theme" ("light" | "dark" | "system",
-      // default light), resolves "system" against the OS preference, sets the
-      // class the Tailwind palette keys off, and paints the background
-      // immediately. App.tsx keeps localStorage in sync (and follows OS changes
-      // live while "system" is chosen) afterwards. Mirror of lib/theme.ts — this
-      // runs before the bundle loads, so it can't import it; keep them in step.
+      // of the wrong theme. Reads "addison.theme" ("light" | "dark" | "system"),
+      // resolves "system" against the OS preference, sets the class the palette
+      // keys off, and paints the background immediately. App.tsx keeps
+      // localStorage in sync (and follows OS changes live while "system" is
+      // chosen) afterwards. Mirror of lib/theme.ts — this runs before the bundle
+      // loads, so it can't import it; keep them in step.
+      //
+      // The default is "system" (Match this computer) as of the 2026-07-25 dark
+      // redesign: absent and legacy values both land there, so a machine set to
+      // dark opens dark.
       (function () {
         try {
           var t = localStorage.getItem("addison.theme");
-          if (t !== "light" && t !== "dark" && t !== "system") t = "light";
+          if (t !== "light" && t !== "dark" && t !== "system") t = "system";
           var dark =
             t === "dark" ||
             (t === "system" &&
@@ -24,9 +28,9 @@
               window.matchMedia("(prefers-color-scheme: dark)").matches);
           var root = document.documentElement;
           if (dark) root.classList.add("dark");
-          root.style.backgroundColor = dark ? "#171D1A" : "#F6F5F1";
+          root.style.backgroundColor = dark ? "#0C0C0D" : "#F7F7F5";
         } catch (e) {
-          document.documentElement.style.backgroundColor = "#F6F5F1";
+          document.documentElement.style.backgroundColor = "#F7F7F5";
         }
       })();
     </script>

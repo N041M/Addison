@@ -5,6 +5,14 @@
 import type { ChatMessage, ModelRole } from "./protocol";
 import { asRecord } from "../lib/parse";
 
+/**
+ * Which in-window view is showing (docs/design-brief-dark, "Screens"). "chat" is
+ * the live conversation; the other four are SURFACES — they replace the chat
+ * column (the right rail hides entirely, the sidebar stays) and are left with
+ * the header's ← or Escape.
+ */
+export type View = "chat" | "settings" | "tools" | "snapshots" | "widgets";
+
 /** A message as rendered in the thread, with transient display flags. */
 export interface DisplayMessage extends ChatMessage {
   /** Assistant message still receiving streamed chunks. */

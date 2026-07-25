@@ -1,4 +1,4 @@
-// Appearance theme resolution (Fern direction; Settings → Appearance).
+// Appearance theme resolution (Settings → Appearance).
 //
 // The user's choice is one of three: an explicit "light"/"dark", or "system"
 // ("Match this computer"), which follows the OS's prefers-color-scheme live. The
@@ -13,15 +13,19 @@
 export type ThemeChoice = "light" | "dark" | "system";
 export type ResolvedTheme = "light" | "dark";
 
-// Legacy/absent localStorage values map to "light" — the historical default.
-// Existing users either have no stored value or a literal "light"/"dark", so
-// "light" as the fallback keeps their launch byte-for-byte; a fresh install
-// lands on light too (we can't distinguish it from an existing user who never
-// toggled, so defaulting to "system" would silently flip long-time users on a
-// dark-set machine). "system" is only ever active when the user picks it.
+// Absent, empty, and unrecognised values all map to "system" — "Match this
+// computer" is the default as of the 2026-07-25 dark redesign, so a machine set
+// to dark opens dark instead of forcing light on it.
+//
+// This CHANGED the fallback (it was "light"). The old comment argued that a
+// person who had never opened Appearance couldn't be told apart from a fresh
+// install, so light was the safe default. The redesign settles that the other
+// way: a stored "light" is still honoured byte-for-byte, so the only launches
+// this moves are the ones carrying no preference at all — where following the
+// computer is the better guess, not a silent override of anyone's choice.
 export function parseThemeChoice(raw: string | null | undefined): ThemeChoice {
   if (raw === "light" || raw === "dark" || raw === "system") return raw;
-  return "light";
+  return "system";
 }
 
 // The concrete light/dark the UI paints, given the choice and the OS preference.
