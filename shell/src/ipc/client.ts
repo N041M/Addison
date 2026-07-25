@@ -41,6 +41,14 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+// A turn's budget, not a request's. A turn legitimately outlives the default:
+// model rounds plus tool calls, and — the hard floor — the core waits up to 600s
+// (its _KEYCHAIN_TIMEOUT) for a person to answer an OS keychain dialog. If this
+// were shorter, the reply the person waited for would arrive after the pending
+// entry was deleted and be dropped on the floor, while the composer re-enabled
+// and invited a duplicate turn. Must stay comfortably above the core's 600s.
+const TURN_TIMEOUT_MS = 900_000;
+
 // ---------------------------------------------------------------------------
 // Tauri context detection — the app must degrade gracefully when opened in a
 // plain browser (e.g. `npm run dev` for design review), where the Tauri APIs
@@ -224,6 +232,7 @@ function normalizeStatusText(payload: unknown): string {
 async function call<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
 ): Promise<T> {
   if (!isEngineConnected()) {
     throw new Error(NOT_CONNECTED_MESSAGE);
@@ -237,7 +246,7 @@ async function call<T = unknown>(
     const timer = setTimeout(() => {
       pending.delete(id);
       reject(new Error("Addison took too long to answer. Please try again."));
-    }, DEFAULT_TIMEOUT_MS);
+    }, timeoutMs);
 
     pending.set(id, {
       resolve: (result) => resolve(result as T),
@@ -323,7 +332,9 @@ function toPlainMessage(err: unknown): string {
 // ---------------------------------------------------------------------------
 export const ipc = {
   sendMessage: (text: string, role?: ModelRole, modelId?: string, effort?: string) =>
-    call(Method.ConversationSendMessage, { text, role, modelId, effort }),
+    // TURN_TIMEOUT_MS, not the default: a turn may sit behind an OS keychain
+    // dialog for up to the core's 600s before it even starts.
+    call(Method.ConversationSendMessage, { text, role, modelId, effort }, TURN_TIMEOUT_MS),
 
   respondToPermission: (toolId: string, allow: boolean) =>
     call(Method.PermissionRespond, { toolId, allow }),

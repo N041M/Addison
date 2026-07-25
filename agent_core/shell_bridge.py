@@ -25,9 +25,17 @@ import threading
 from agent_core.protocol import Method
 
 # How long a single Core -> Shell request may wait before we give up on it. The
-# shell answers picker/keychain calls near-instantly; a stall this long means the
-# shell is wedged, so surface a retry rather than hang the turn forever.
+# shell answers a file/clipboard/draft call from its own process, so a stall this
+# long means the shell is wedged: surface a retry rather than hang the turn forever.
 _DEFAULT_TIMEOUT = 60.0
+
+# ...but a ``keychain.*`` call is not the shell's own answer to give. The OS may put
+# a password dialog in front of the person first, and a person is not a process:
+# they may be away from the keyboard, or reading the dialog. Abandoning the request
+# at sixty seconds does not cancel that dialog — it only guarantees that the
+# password they eventually type lands on a request nobody is waiting on, so the turn
+# fails anyway AND the shell's answer is thrown away. Human-paced, therefore.
+_KEYCHAIN_TIMEOUT = 600.0
 
 # Plain-language, never-leaks-internals fallbacks (CLAUDE.md).
 _TIMEOUT_MESSAGE = "Addison couldn't finish that just now. Please try again."
@@ -58,7 +66,9 @@ class IpcShellBridge:
             self._counter += 1
             return f"core-req-{self._counter}"
 
-    def _call(self, method: str, params: dict) -> dict:
+    def _call(self, method: str, params: dict, timeout: float | None = None) -> dict:
+        # ``timeout`` overrides the instance default for ONE call (the keychain
+        # methods pass _KEYCHAIN_TIMEOUT); None keeps the default.
         if self._send is None:
             # No shell wired (e.g. CLI/dev). Callers translate this to a plain
             # "needs the desktop shell" message at the tool layer.
@@ -71,7 +81,7 @@ class IpcShellBridge:
 
         self._send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
 
-        if not event.wait(timeout=self._timeout):
+        if not event.wait(timeout=self._timeout if timeout is None else timeout):
             with self._lock:
                 self._pending.pop(req_id, None)
             raise RuntimeError(_TIMEOUT_MESSAGE)
@@ -155,13 +165,29 @@ class IpcShellBridge:
         self._call(Method.SHELL_RESTORE_WORKSPACE_FILE, params)
 
     # --- key fetch (§5) ---------------------------------------------------
-    def get_provider_key(self, provider: str = "anthropic") -> str:
+    def get_provider_key(self, provider: str = "anthropic", fresh: bool = False) -> str:
         """Per-call API-key fetch from the OS keychain via the shell, keyed by
         PROVIDER id (``anthropic`` | ``openai`` | ``google`` | ``custom``).
 
         The key is returned to the caller for immediate one-request use and is
-        never retained on this bridge (§8.3)."""
-        result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, {"provider": provider})
+        never retained on this bridge (§8.3).
+
+        Two outcomes, and they are NOT the same thing (the shell keeps them apart
+        too): ``""`` means nothing is saved for this provider — a normal answer that
+        onboarding acts on. A read that FAILED (the person dismissed the OS password
+        dialog, the keychain errored) comes back as a JSON-RPC error and therefore
+        raises here, because a key may well exist and Addison simply could not see
+        it. Collapsing the two would route a turn to onboarding on the strength of a
+        dialog nobody answered.
+
+        ``fresh`` asks the shell to retry past a failure it remembered earlier this
+        session. Sent ONLY by the per-turn probe: the person's own message may
+        re-raise the dialog they dismissed, while the automatic pollers keep
+        answering from the shell's memory."""
+        params: dict = {"provider": provider}
+        if fresh:
+            params["fresh"] = True
+        result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, params, timeout=_KEYCHAIN_TIMEOUT)
         return result.get("key", "")
 
     # --- app build reference (G4) -----------------------------------------
@@ -183,7 +209,7 @@ class IpcShellBridge:
 
         Returns ``{"deviceId", "publicKey"}`` — the PUBLIC half ONLY. The private
         key never leaves the OS keychain and the core never sees it (§5)."""
-        return self._call(Method.KEYCHAIN_GET_DEVICE_KEY, {})
+        return self._call(Method.KEYCHAIN_GET_DEVICE_KEY, {}, timeout=_KEYCHAIN_TIMEOUT)
 
     def sign_relay_request(self, payload: dict) -> dict:
         """Ask the shell to sign a Setup Assistant relay body with the device
@@ -191,7 +217,9 @@ class IpcShellBridge:
 
         The core hands over bytes to sign and gets back a signature; the key
         material stays in the OS keychain and is never exposed here (§5, §8.4)."""
-        return self._call(Method.KEYCHAIN_SIGN_RELAY_REQUEST, {"payload": payload})
+        return self._call(
+            Method.KEYCHAIN_SIGN_RELAY_REQUEST, {"payload": payload}, timeout=_KEYCHAIN_TIMEOUT
+        )
 
 
 def _error_message(error) -> str:

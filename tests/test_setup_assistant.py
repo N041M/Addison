@@ -57,11 +57,16 @@ class _FakeBridge:
         self._device_id = device_id
         self._signature = signature
         self.signed_payloads: list[dict] = []
+        # In order, so a test can pin HOW MANY times one send() reaches the shell
+        # for device identity — each of these is a keychain read on the far side.
+        self.calls: list[str] = []
 
     def get_device_key(self):
+        self.calls.append("get_device_key")
         return {"deviceId": self._device_id, "publicKey": "pub-xyz"}
 
     def sign_relay_request(self, payload):
+        self.calls.append("sign_relay_request")
         self.signed_payloads.append(payload)
         return {"signature": self._signature, "deviceId": self._device_id}
 
@@ -108,6 +113,26 @@ def test_request_carries_device_signature_and_translation():
     assert bridge.signed_payloads == [body]
     assert captured["headers"]["x-addison-device"] == "dev-123"
     assert captured["headers"]["x-addison-signature"] == "sig-abc"
+
+
+def test_one_send_reaches_the_shell_for_the_device_key_exactly_twice():
+    """Two device-identity calls per message, in this order — a fixed contract.
+
+    It is worth pinning because of what sits on the other end. Both calls used to
+    read the OS keychain, so one typed message raised two password dialogs back to
+    back; the shell now keeps the identity for the session and answers the second
+    from memory. That cache was sized against exactly this shape. A third call
+    added here would be free until the day the cache is touched, and then it is a
+    dialog the person has to answer mid-sentence.
+
+    Order matters as much as the count: the identity has to exist before there is
+    anything to sign with it.
+    """
+    provider, _, bridge = _make({"text": "ok"})
+
+    provider.send([Message(role="user", content="hi")], [])
+
+    assert bridge.calls == ["get_device_key", "sign_relay_request"]
 
 
 def test_capabilities_report_no_native_tool_calling():

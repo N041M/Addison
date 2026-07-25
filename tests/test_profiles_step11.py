@@ -41,6 +41,7 @@ from agent_core.profiles import (
     resolve_active_profile,
 )
 from agent_core.protocol import Method
+from agent_core.rpc.constants import _KEY_UNREADABLE_MESSAGE
 from agent_core.providers.base import (
     ModelResponse,
     ModelRole,
@@ -174,11 +175,19 @@ def _tool_call_response(tool_id: str = "spy_tool") -> ModelResponse:
     )
 
 
-def _seed(db_path: Path, *, profile_id: str | None = None, routines=None) -> None:
+def _seed(
+    db_path: Path,
+    *,
+    profile_id: str | None = None,
+    routines=None,
+    connected_provider: str | None = None,
+) -> None:
     """Pre-populate the SQLite file the server's store_factory will open."""
     store = Store(db_path)
     if profile_id is not None:
         store.set_setting("active_profile", profile_id)
+    if connected_provider is not None:
+        store.upsert_provider_config(connected_provider, connected=True, added_at=0)
     for routine in routines or []:
         store.insert_routine(
             id=routine.id,
@@ -202,10 +211,16 @@ def _server(
     setup=None,
     primary_key_probe=None,
     setup_prompt: str | None = None,
+    connected_provider: str | None = None,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)  # callers may pass a sub-path
     db_path = tmp_path / "profiles-step11.sqlite3"
-    _seed(db_path, profile_id=profile_id, routines=routines)
+    _seed(
+        db_path,
+        profile_id=profile_id,
+        routines=routines,
+        connected_provider=connected_provider,
+    )
 
     registry = ToolRegistry()
     if tool is not None:
@@ -468,7 +483,7 @@ def test_profile_set_persists_to_app_settings(tmp_path):
 # ============================================================================
 # Onboarding path by profile (§4.7): Developer is BYOK-first, Simple relays.
 # ============================================================================
-def _routing_server(tmp_path, *, profile_id: str):
+def _routing_server(tmp_path, *, profile_id: str, key_probe=None, connected_provider=None):
     primary = _ScriptedProvider([ModelResponse(text="primary reply", tool_calls=[])])
     setup = _ScriptedProvider([ModelResponse(text="setup reply", tool_calls=[])])
     server, reader, writer, thread = _server(
@@ -477,10 +492,22 @@ def _routing_server(tmp_path, *, profile_id: str):
         profile_id=profile_id,
         primary=primary,
         setup=setup,
-        primary_key_probe=lambda: False,  # no PRIMARY key configured
+        # Default: no PRIMARY key configured. A probe that RAISES is the third
+        # answer — the keychain read failed — see the two tests below.
+        primary_key_probe=key_probe or (lambda: False),
         setup_prompt="SETUP-PROMPT",
+        connected_provider=connected_provider,
     )
     return server, reader, writer, thread, primary, setup
+
+
+def _unreadable_key():
+    """A probe standing in for a keychain read that FAILED — the person dismissed
+    the OS password dialog, or the keychain is locked. The core's real probe
+    (main._primary_key_available) raises exactly this way, because the shell answers
+    a failed read with a JSON-RPC error and the bridge turns that into a
+    RuntimeError. "Nothing saved" is a plain False and stays a different answer."""
+    raise RuntimeError("Couldn't read your saved key from the keychain.")
 
 
 def test_developer_no_key_turn_gets_byok_message_and_never_hits_relay(tmp_path):
@@ -511,6 +538,76 @@ def test_simple_no_key_turn_still_routes_to_setup_assistant(tmp_path):
         assert len(setup.histories) == 1
         assert primary.histories == []
         assert setup.histories[0][0].role == "system"  # injected setup prompt
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_no_anthropic_key_but_another_cloud_provider_connected_does_not_relay(tmp_path):
+    """"No key yet" means no PRIMARY-capable provider AT ALL — not "no Anthropic key".
+
+    The key probe is Anthropic-only, so a person whose only key is OpenAI/Google/
+    custom reads as keyless. Without the provider-config check they would be routed
+    to the external Setup Assistant relay (Simple) — the same wrongful off-machine
+    detour the unreadable-key fix closes, arrived at from the other side. A connected
+    provider row is standing evidence of a real setup, so the turn takes normal
+    PRIMARY routing instead."""
+    server, reader, writer, thread, primary, setup = _routing_server(
+        tmp_path, profile_id="simple", connected_provider="openai"
+    )
+    try:
+        assert _rpc(
+            reader, writer, 1, Method.CONVERSATION_SEND_MESSAGE, {"text": "hi"}
+        )["result"]["ok"] is True
+        # PRIMARY handled it; the relay was never touched.
+        assert len(primary.histories) == 1
+        assert setup.histories == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_simple_unreadable_key_is_answered_here_and_never_relayed(tmp_path):
+    """A key that could not be READ must not be treated as a key that isn't there.
+
+    This is the whole point of the three-way probe. Under Simple, "no key" routes
+    the turn to the Setup Assistant relay — so with the two states collapsed, a
+    dismissed macOS password dialog sent the person's message to an EXTERNAL service
+    while their own key sat in the keychain, and nothing on screen said so. The turn
+    is answered on this machine instead, with a sentence naming the way out.
+    """
+    server, reader, writer, thread, primary, setup = _routing_server(
+        tmp_path, profile_id="simple", key_probe=_unreadable_key
+    )
+    try:
+        error = _rpc(
+            reader, writer, 1, Method.CONVERSATION_SEND_MESSAGE, {"text": "hi"}
+        )["error"]
+        assert error["message"] == _KEY_UNREADABLE_MESSAGE
+        # Nothing left this machine: neither the relay nor PRIMARY was called.
+        assert setup.histories == []
+        assert primary.histories == []
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_developer_unreadable_key_says_so_rather_than_asking_for_a_new_key(tmp_path):
+    """Developer's refusal must also tell the truth about which failure happened.
+
+    Its BYOK message ("No API key is set up yet. Add your Anthropic API key in
+    Settings") is a false statement when the key IS set up and the read failed — it
+    sends the person to replace a key that is fine. Same sentence as Simple gets:
+    neither onboarding path applies while the question has no answer.
+    """
+    server, reader, writer, thread, primary, setup = _routing_server(
+        tmp_path, profile_id="developer", key_probe=_unreadable_key
+    )
+    try:
+        error = _rpc(
+            reader, writer, 1, Method.CONVERSATION_SEND_MESSAGE, {"text": "hi"}
+        )["error"]
+        assert error["message"] == _KEY_UNREADABLE_MESSAGE
+        assert error["message"] != _BYOK_ONBOARDING_MESSAGE
+        assert setup.histories == []
+        assert primary.histories == []
     finally:
         _shutdown(reader, thread)
 

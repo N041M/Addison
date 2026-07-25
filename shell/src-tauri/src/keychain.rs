@@ -18,8 +18,8 @@
 // (bytes-to-sign in, signature out) — so the private key is never logged, never
 // emitted, and never crosses an IPC boundary.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -62,6 +62,54 @@ fn cache_evict(provider: &str) {
     }
 }
 
+/// Provider ids whose last OS read FAILED for a reason other than "nothing saved" —
+/// a denied or dismissed password dialog, or a keychain error. Those are answered
+/// from here without touching the OS again, because the widget rail polls
+/// `stats.get` every 60 seconds and each poll probes for a key: without this a
+/// single denial becomes a fresh password dialog every minute, forever.
+///
+/// TRADE-OFF, stated plainly: a denial holds for the rest of the session. The retry
+/// signal is the USER acting on the key — `store_provider_key` and
+/// `delete_provider_key` both clear the provider's entry here, so re-saving or
+/// removing a key touches the OS again immediately.
+///
+/// `NoEntry` is NEVER recorded here: "nothing saved" costs no dialog and is a normal
+/// answer, so re-asking the OS for it every time is free.
+static FAILED_READS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn failed_reads() -> &'static Mutex<HashSet<String>> {
+    FAILED_READS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn failure_remember(provider: &str) {
+    if let Ok(mut failures) = failed_reads().lock() {
+        failures.insert(provider.to_string());
+    }
+}
+
+fn failure_recorded(provider: &str) -> bool {
+    failed_reads().lock().map(|failures| failures.contains(provider)).unwrap_or(false)
+}
+
+fn failure_forget(provider: &str) {
+    if let Ok(mut failures) = failed_reads().lock() {
+        failures.remove(provider);
+    }
+}
+
+/// Serializes every OS keychain access in this process. Keychain-bound requests run
+/// on blocking tasks now (agent_process.rs) so a modal password dialog can never
+/// stall the core's stdout pump — which means two of them can be in flight at once.
+/// Without this lock concurrent requests could raise OVERLAPPING password dialogs,
+/// or both miss the session cache and read the same item twice.
+static OS_KEYCHAIN: Mutex<()> = Mutex::new(());
+
+/// Take the OS-access lock. A poisoned lock is recovered rather than propagated: a
+/// panic while holding it must not wedge every later keychain call.
+fn os_guard() -> MutexGuard<'static, ()> {
+    OS_KEYCHAIN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// Keychain service name — matches the app identifier (tauri.conf.json).
 const SERVICE: &str = "app.addison.desktop";
 
@@ -84,74 +132,210 @@ fn account_for_provider(provider: &str) -> String {
 /// working across the upgrade (see `get_provider_key`).
 const LEGACY_ANTHROPIC_ACCOUNT: &str = "provider-key:primary";
 
+/// The only provider the legacy account can hold a key for. Shared by the migration
+/// read and the removal path, so the two can never disagree about which provider has
+/// a second durable copy of its key.
+const LEGACY_PROVIDER: &str = "anthropic";
+
 /// Webview -> Shell. Write-only path for a BYOK key the user typed. The key goes
 /// straight into the OS keychain, keyed by provider id, and is never echoed back
 /// anywhere (§8.3).
+///
+/// `async` + `spawn_blocking` because the body waits on `OS_KEYCHAIN`: a
+/// core-initiated read can hold that lock for as long as a password dialog sits
+/// unanswered, and a sync command would park the main thread — the whole window —
+/// behind it.
 #[tauri::command]
-pub fn store_provider_key(provider: String, key: String) -> Result<(), String> {
-    let entry = Entry::new(SERVICE, &account_for_provider(&provider))
+pub async fn store_provider_key(provider: String, key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || store_provider_key_blocking(&provider, &key))
+        .await
+        .unwrap_or_else(|_| Err("The keychain didn't answer just now.".to_string()))
+}
+
+fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> {
+    let _os = os_guard();
+    let entry = Entry::new(SERVICE, &account_for_provider(provider))
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
     entry
-        .set_password(&key)
+        .set_password(key)
         .map_err(|_| "Couldn't save your key to the system keychain.".to_string())?;
     // Keep the session cache coherent so a Replace takes effect immediately
     // without another OS keychain round-trip (and prompt).
-    cache_put(&provider, &key);
+    cache_put(provider, key);
+    // Saving a key is the user's retry signal for a read that failed earlier this
+    // session — drop the negative entry so reads reach the OS again.
+    failure_forget(provider);
     Ok(())
 }
 
 /// Webview -> Shell. Delete a provider's stored key (the "Remove" action). A
 /// missing entry is treated as success — removing an absent key is idempotent.
+///
+/// `async` + `spawn_blocking` for the same reason as `store_provider_key`.
 #[tauri::command]
-pub fn delete_provider_key(provider: String) -> Result<(), String> {
-    let entry = Entry::new(SERVICE, &account_for_provider(&provider))
-        .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
+pub async fn delete_provider_key(provider: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_provider_key_blocking(&provider))
+        .await
+        .unwrap_or_else(|_| Err("The keychain didn't answer just now.".to_string()))
+}
+
+fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
     // Evict BEFORE the OS delete: even if the OS call fails, a removed key must
-    // never keep being served from memory.
-    cache_evict(&provider);
+    // never keep being served from memory. Removing a key is also the user's retry
+    // signal for a read that failed earlier this session.
+    cache_evict(provider);
+    failure_forget(provider);
+
+    let _os = os_guard();
+    // Evict AGAIN under the lock. A read parked at a password dialog holds the lock
+    // with nothing cached yet; if the user answers that dialog after clicking Remove,
+    // the read's `cache_put` (and a dismissal's `failure_remember`) land AFTER the
+    // eviction above — and a removed key must never keep being served from memory.
+    cache_evict(provider);
+    failure_forget(provider);
+    let entry = Entry::new(SERVICE, &account_for_provider(provider))
+        .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
     match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("Couldn't remove your key from the system keychain.".to_string()),
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(_) => return Err("Couldn't remove your key from the system keychain.".to_string()),
+    }
+    // The legacy account is a SECOND durable copy of the same key: left behind, it
+    // resurrects the removed key on the next read through the migration fallback in
+    // `get_provider_key`. Removal has to clear both. A missing legacy entry is the
+    // normal case (nothing to migrate) and counts as success; a real failure is
+    // reported, because the key genuinely is still on the machine — and a retry is
+    // idempotent, the per-provider entry is already gone.
+    if provider == LEGACY_PROVIDER {
+        let legacy = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT)
+            .map_err(|_| "Couldn't remove your key from the system keychain.".to_string())?;
+        match legacy.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(_) => return Err("Couldn't remove your key from the system keychain.".to_string()),
+        }
+    }
+    Ok(())
+}
+
+/// The outcome of a provider-key read, mapped 1:1 onto the wire protocol the core is
+/// written against (`provider_key_response`). The three cases are deliberately
+/// distinct: collapsing the last two is what let a DENIED read look like "no key
+/// saved", so the core quietly rerouted the turn to the external Setup Assistant
+/// relay while the user's key sat in the keychain the whole time.
+enum KeyRead {
+    /// A key is saved. The value goes core-ward and nowhere else.
+    Found(String),
+    /// Nothing is saved for this provider — a normal answer, not an error.
+    NothingSaved,
+    /// The read itself failed (denied dialog, keychain error). A key MAY exist, so
+    /// this must never be reported as "no key saved".
+    Unreadable,
+}
+
+/// Agent-Core-internal read. Never exposed as a Tauri command, so the webview has no
+/// route to it.
+///
+/// Two memories sit in front of the OS, and both exist to hold the OS password
+/// dialog to at most one per launch: the session KEY_CACHE for a key already read,
+/// and FAILED_READS for a read that already failed.
+///
+/// `fresh` skips the FAILED_READS short-circuit (never the key cache): a per-turn
+/// probe is the person acting, and a person who dismissed a dialog by mistake gets
+/// asked again on their next message instead of being told to re-save the key. The
+/// automatic pollers (stats, provider.list) stay non-fresh, so a denial still costs
+/// at most one dialog per user action, never one per minute.
+fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
+    if let Some(answer) = cached_answer(provider, fresh) {
+        return answer;
+    }
+    let _os = os_guard();
+    // Re-check under the OS lock: a caller that queued behind another request for the
+    // same provider must read ITS result rather than raise a second dialog for an
+    // item that has just been fetched.
+    if let Some(answer) = cached_answer(provider, fresh) {
+        return answer;
+    }
+
+    let outcome = read_provider_key_from_os(provider);
+    match &outcome {
+        KeyRead::Found(key) => cache_put(provider, key),
+        // Remembered so the next stats poll answers from memory instead of raising
+        // another dialog. `NothingSaved` is deliberately never remembered.
+        KeyRead::Unreadable => failure_remember(provider),
+        KeyRead::NothingSaved => {}
+    }
+    outcome
+}
+
+/// The answer that can be given without touching the OS at all: a key already read
+/// this session, or — unless the caller asked for a `fresh` attempt — a read that
+/// already failed this session.
+fn cached_answer(provider: &str, fresh: bool) -> Option<KeyRead> {
+    if let Some(key) = cache_get(provider) {
+        return Some(KeyRead::Found(key));
+    }
+    (!fresh && failure_recorded(provider)).then_some(KeyRead::Unreadable)
+}
+
+/// The OS-touching half of the read. Only ever called with `os_guard()` held and
+/// after both memories have missed; the caller owns updating them.
+///
+/// Backward compat: on the first read for `anthropic` with no per-provider entry,
+/// fall back to the legacy role-based account (`provider-key:primary`) and migrate
+/// it into `provider-key:anthropic` so an existing key survives the upgrade to the
+/// per-provider scheme without the user re-pasting it.
+fn read_provider_key_from_os(provider: &str) -> KeyRead {
+    let Ok(entry) = Entry::new(SERVICE, &account_for_provider(provider)) else {
+        return KeyRead::Unreadable;
+    };
+    match entry.get_password() {
+        Ok(key) => KeyRead::Found(key),
+        Err(keyring::Error::NoEntry) if provider == LEGACY_PROVIDER => legacy_anthropic_key(&entry),
+        Err(keyring::Error::NoEntry) => KeyRead::NothingSaved,
+        Err(_) => KeyRead::Unreadable,
     }
 }
 
-/// Agent-Core-internal read. Returns the stored key for a provider, or a keyring
-/// error (notably `NoEntry` when nothing is saved yet). Never exposed as a Tauri
-/// command, so the webview has no route to it.
-///
-/// Backward compat: on the first read for `anthropic` with no per-provider entry,
-/// fall back to the legacy role-based account (`provider-key:primary`) and MIGRATE
-/// it into `provider-key:anthropic` (best-effort) so an existing key survives the
-/// upgrade to the per-provider scheme without the user re-pasting it.
-fn get_provider_key(provider: &str) -> Result<String, keyring::Error> {
-    // Session cache first — at most one OS keychain read (and at most one OS
-    // permission prompt) per provider per launch.
-    if let Some(key) = cache_get(provider) {
-        return Ok(key);
-    }
-    let entry = Entry::new(SERVICE, &account_for_provider(provider))?;
-    let key = match entry.get_password() {
-        Ok(key) => key,
-        Err(keyring::Error::NoEntry) if provider == "anthropic" => {
-            let legacy = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT)?;
-            let key = legacy.get_password()?; // propagates NoEntry when there's nothing to migrate
-            // Best-effort migration: copy into the per-provider account and drop the
-            // legacy one. A failure here doesn't fail the read — the value is returned
-            // regardless, and the migration retries on the next read.
-            let _ = entry.set_password(&key);
-            let _ = legacy.delete_credential();
-            key
-        }
-        Err(e) => return Err(e),
+/// Read the legacy Anthropic key and migrate it into `destination`. Returns the key
+/// either way — a migration that couldn't complete must not cost the user their key
+/// for this launch.
+fn legacy_anthropic_key(destination: &Entry) -> KeyRead {
+    let Ok(legacy) = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT) else {
+        return KeyRead::Unreadable;
     };
-    cache_put(provider, &key);
-    Ok(key)
+    match legacy.get_password() {
+        Ok(key) => {
+            migrate_legacy_key(|| destination.set_password(&key), || legacy.delete_credential());
+            KeyRead::Found(key)
+        }
+        // Nothing to migrate: there is simply no Anthropic key saved.
+        Err(keyring::Error::NoEntry) => KeyRead::NothingSaved,
+        Err(_) => KeyRead::Unreadable,
+    }
+}
+
+/// Best-effort migration, copy THEN delete. The ordering is load-bearing: until the
+/// copy lands, the legacy entry is the only durable copy of the key, so the delete
+/// is attempted only when `copy` reports success. When the copy fails the legacy
+/// entry stays exactly where it is and the migration is retried on the next read —
+/// which is only true in every ordering because of this guard.
+///
+/// Written over closures so the ordering is testable without an OS keychain.
+fn migrate_legacy_key(
+    copy: impl FnOnce() -> Result<(), keyring::Error>,
+    delete_legacy: impl FnOnce() -> Result<(), keyring::Error>,
+) {
+    if copy().is_ok() {
+        let _ = delete_legacy();
+    }
 }
 
 /// The device identity: a stable public `device_id` plus the ed25519 signing key
 /// whose PRIVATE half lives only in the OS keychain. Built exclusively by
 /// `ensure_device_keypair` (load-or-generate). Deliberately does NOT derive
-/// `Debug`, so the private key can never be accidentally formatted into a log line.
+/// `Debug`, so the private key can never be accidentally formatted into a log line —
+/// that absence is load-bearing and must survive any future derive list. `Clone` is
+/// what lets the session cache below hand out the loaded identity.
+#[derive(Clone)]
 struct DeviceIdentity {
     device_id: String,
     signing_key: SigningKey,
@@ -222,25 +406,94 @@ fn canonical_json_bytes(payload: &Value) -> Result<Vec<u8>, RpcError> {
         .map_err(|_| RpcError::app("That request couldn't be prepared for signing."))
 }
 
+/// Session-lifetime cache of the device identity — the same owner decision as
+/// KEY_CACHE (2026-07-19), for the same reason: at most ONE OS read, and so at most
+/// one OS password prompt, per launch. Without it `ensure_device_keypair` re-read the
+/// keychain on every call, and a single relay message calls it TWICE
+/// (`keychain.getDeviceKey`, then `keychain.signRelayRequest`) — two password dialogs
+/// back to back for one message.
+///
+/// G1 is intact. The private key already transits this process's memory on every sign
+/// call, so holding it for the session widens nothing: it stays in shell process
+/// memory, never reaches SQLite or the webview, and vanishes when the app exits.
+static DEVICE_CACHE: OnceLock<Mutex<Option<DeviceIdentity>>> = OnceLock::new();
+
+fn device_cache() -> &'static Mutex<Option<DeviceIdentity>> {
+    DEVICE_CACHE.get_or_init(|| Mutex::new(None))
+}
+
+/// Read from an identity cache slot. Takes the slot rather than reaching for the
+/// global one so a test can exercise the semantics against its own slot — the global
+/// is a single shared cell, and parallel tests writing to it would collide.
+fn identity_cache_load(slot: &Mutex<Option<DeviceIdentity>>) -> Option<DeviceIdentity> {
+    slot.lock().ok()?.as_ref().cloned()
+}
+
+fn identity_cache_store(slot: &Mutex<Option<DeviceIdentity>>, identity: &DeviceIdentity) {
+    if let Ok(mut cache) = slot.lock() {
+        *cache = Some(identity.clone());
+    }
+}
+
 /// Load the device identity, generating and persisting it on first use. Idempotent:
 /// once stored, every later call LOADS the same keypair and never regenerates —
 /// regenerating would rotate the device's identity out from under the relay. The
 /// private key is only ever materialized here as an in-memory `SigningKey`; it is
 /// never returned, logged, or emitted.
 fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
+    if let Some(identity) = identity_cache_load(device_cache()) {
+        return Ok(identity);
+    }
+    let _os = os_guard();
+    // Re-check under the OS lock, for the same reason as the provider read: the two
+    // calls one relay message makes must not both raise a dialog for the same item.
+    if let Some(identity) = identity_cache_load(device_cache()) {
+        return Ok(identity);
+    }
+
     let entry = Entry::new(SERVICE, DEVICE_ACCOUNT).map_err(|_| {
         RpcError::app("Couldn't reach the system keychain for your device identity.")
     })?;
-    match entry.get_password() {
-        Ok(blob) => DeviceIdentity::from_stored(&blob),
+    let identity = match entry.get_password() {
+        // A corrupt blob errors out rather than being cached — only a usable identity
+        // is ever remembered.
+        Ok(blob) => DeviceIdentity::from_stored(&blob)?,
         Err(keyring::Error::NoEntry) => {
             let identity = DeviceIdentity::generate();
             entry
                 .set_password(&identity.to_stored())
                 .map_err(|_| RpcError::app("Couldn't save your device identity to the keychain."))?;
-            Ok(identity)
+            identity
         }
-        Err(_) => Err(RpcError::app("Couldn't read your device identity from the keychain.")),
+        Err(_) => {
+            return Err(RpcError::app("Couldn't read your device identity from the keychain."))
+        }
+    };
+    identity_cache_store(device_cache(), &identity);
+    Ok(identity)
+}
+
+/// Build the `keychain.getProviderKey` response. Split out of `handle()` (the
+/// app_build.rs call-the-real-builder pattern) so a test can pin the exact wire seam
+/// the core is written against without touching the OS keychain.
+///
+/// THE SEAM, both halves of which must agree: a key is `{"key": "<value>"}`; nothing
+/// saved is `{"key": ""}` — a normal RESULT; a failed read is an app error. Core-side
+/// (agent_core/main.py) the empty string means "nothing saved" and the error means
+/// "unreadable — a key may exist".
+fn provider_key_response(outcome: KeyRead) -> Result<Value, RpcError> {
+    match outcome {
+        KeyRead::Found(key) => Ok(json!({ "key": key })),
+        // Not an error: the core reads the empty string as "no key yet" and shows its
+        // own "here's how to add one" message. Sending an error here would be
+        // indistinguishable from a failed read.
+        KeyRead::NothingSaved => Ok(json!({ "key": "" })),
+        // Clean, value-free error — and deliberately NOT the empty string above. A
+        // key may well be saved; treating this as "no key" is what silently rerouted
+        // a turn to the external relay after the user dismissed a password dialog.
+        KeyRead::Unreadable => {
+            Err(RpcError::app("Couldn't read your saved key from the keychain."))
+        }
     }
 }
 
@@ -272,19 +525,17 @@ fn sign_relay_response(identity: &DeviceIdentity, signature: &str) -> Value {
 /// caller (agent_process.rs) — it never passes through the webview.
 pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
     match method {
-        // {provider} -> {key}. Served from the session cache after the first OS
-        // read (owner decision 2026-07-19 — see KEY_CACHE); never persisted.
+        // {provider, fresh?} -> {key}. Served from the session cache after the first
+        // OS read (owner decision 2026-07-19 — see KEY_CACHE); never persisted.
+        // "Nothing saved" and "couldn't read" are separate answers — see
+        // `provider_key_response` for the seam the core is written against. `fresh`
+        // (default false) retries past a remembered failure — sent by the per-turn
+        // probe only, so a person's own message can re-raise the dialog they
+        // dismissed, while the automatic pollers stay quiet.
         "keychain.getProviderKey" => {
             let provider = required_str(params, "provider", "A provider is required.")?;
-            match get_provider_key(provider) {
-                Ok(key) => Ok(json!({ "key": key })),
-                // Clean, value-free error. The core turns this into its own
-                // "no key yet, here's how to add one" message.
-                Err(keyring::Error::NoEntry) => {
-                    Err(RpcError::app("No API key is saved for this yet."))
-                }
-                Err(_) => Err(RpcError::app("Couldn't read your saved key from the keychain.")),
-            }
+            let fresh = params.get("fresh").and_then(Value::as_bool).unwrap_or(false);
+            provider_key_response(get_provider_key(provider, fresh))
         }
         // {} -> {deviceId, publicKey}. Generates the keypair on first use, loads it
         // thereafter (§5). Returns the PUBLIC half only — the private key never
@@ -308,10 +559,22 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
     }
 }
 
+// Tests never touch the real OS keychain — a `cargo test` run must not raise a
+// password dialog, and must not read or write anything the user owns. Everything
+// here exercises a pure helper or a response builder.
+//
+// One consequence, deliberate: the migration ORDERING is tested through
+// `migrate_legacy_key`'s closures rather than through real entries. keyring 3.6.3's
+// mock store can't stand in for the OS here — its builder hands out a fresh,
+// empty credential per `Entry::new` (`CredentialPersistence::EntryOnly`), so a test
+// cannot pre-seed the entries `read_provider_key_from_os` constructs internally, and
+// `set_default_credential_builder` is process-global, which would race across
+// parallel test threads. The closure seam is what keeps the ordering provable.
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use std::cell::Cell;
 
     #[test]
     fn account_is_namespaced_by_provider() {
@@ -324,8 +587,11 @@ mod tests {
     fn legacy_anthropic_account_differs_from_the_per_provider_one() {
         // The migration source must be a DIFFERENT account than the destination, or
         // the copy-and-delete would erase the value it just migrated.
-        assert_ne!(LEGACY_ANTHROPIC_ACCOUNT, account_for_provider("anthropic"));
+        assert_ne!(LEGACY_ANTHROPIC_ACCOUNT, account_for_provider(LEGACY_PROVIDER));
         assert_eq!(LEGACY_ANTHROPIC_ACCOUNT, "provider-key:primary");
+        // Read and removal must agree on which provider owns the legacy copy —
+        // otherwise a removed key resurrects from the account nobody deleted.
+        assert_eq!(LEGACY_PROVIDER, "anthropic");
     }
 
     #[test]
@@ -371,6 +637,134 @@ mod tests {
         assert_eq!(cache_get("cache-test-d2").as_deref(), Some("sk-two"));
     }
 
+    // --- Negative cache: a read that failed must not be retried at the OS until the
+    // user acts on the key. Tests own distinct provider ids so parallel test threads
+    // can't collide.
+
+    #[test]
+    fn a_failed_read_is_remembered_for_the_session() {
+        assert!(!failure_recorded("fail-test-a"));
+        failure_remember("fail-test-a");
+        assert!(failure_recorded("fail-test-a"));
+    }
+
+    #[test]
+    fn a_failed_read_is_forgotten_when_the_user_acts_on_the_key() {
+        // Saving or removing the key is the retry signal — store/delete both call
+        // this, so the very next read reaches the OS again.
+        failure_remember("fail-test-b");
+        failure_forget("fail-test-b");
+        assert!(!failure_recorded("fail-test-b"));
+    }
+
+    #[test]
+    fn failed_reads_are_tracked_per_provider() {
+        failure_remember("fail-test-c1");
+        failure_remember("fail-test-c2");
+        failure_forget("fail-test-c1");
+        assert!(!failure_recorded("fail-test-c1"));
+        assert!(failure_recorded("fail-test-c2"));
+    }
+
+    #[test]
+    fn a_remembered_failure_answers_without_reaching_the_os() {
+        // The whole point: the widget rail probes for a key every 60 seconds, and an
+        // answer from memory is what stops each poll raising a new password dialog.
+        failure_remember("fail-test-d");
+        assert!(matches!(cached_answer("fail-test-d", false), Some(KeyRead::Unreadable)));
+    }
+
+    #[test]
+    fn a_fresh_read_retries_past_a_remembered_failure() {
+        // A per-turn probe is the person acting: their next message must be allowed to
+        // re-raise the dialog they dismissed, so `fresh` skips the failure memory and
+        // falls through to the OS (None here — the caller goes on to read).
+        failure_remember("fail-test-f");
+        assert!(cached_answer("fail-test-f", true).is_none());
+        // The non-fresh pollers still answer from memory.
+        assert!(matches!(cached_answer("fail-test-f", false), Some(KeyRead::Unreadable)));
+    }
+
+    #[test]
+    fn a_fresh_read_still_uses_a_cached_key() {
+        // `fresh` bypasses only the FAILURE memory. A key already read this session is
+        // the correct answer either way — re-reading it would re-prompt for nothing.
+        cache_put("fail-test-g", "sk-value");
+        assert!(matches!(cached_answer("fail-test-g", true), Some(KeyRead::Found(k)) if k == "sk-value"));
+    }
+
+    #[test]
+    fn a_cached_key_outranks_a_remembered_failure() {
+        // A readable key must never be reported as unreadable, whatever order the two
+        // memories were written in.
+        cache_put("fail-test-e", "sk-value");
+        failure_remember("fail-test-e");
+        assert!(
+            matches!(cached_answer("fail-test-e", false), Some(KeyRead::Found(k)) if k == "sk-value")
+        );
+    }
+
+    #[test]
+    fn an_untouched_provider_has_no_answer_without_the_os() {
+        assert!(cached_answer("fail-test-never-touched", false).is_none());
+    }
+
+    // --- The wire seam. Built over the real response builder (app_build.rs pattern),
+    // so these stay honest if the shape changes.
+
+    #[test]
+    fn a_saved_key_is_returned_verbatim() {
+        let response = provider_key_response(KeyRead::Found("sk-abc".to_string())).unwrap();
+        assert_eq!(response.get("key").and_then(Value::as_str), Some("sk-abc"));
+    }
+
+    #[test]
+    fn nothing_saved_is_an_empty_key_not_an_error() {
+        let response = provider_key_response(KeyRead::NothingSaved).unwrap();
+        assert_eq!(response.get("key").and_then(Value::as_str), Some(""));
+    }
+
+    #[test]
+    fn a_failed_read_is_an_error_never_an_empty_key() {
+        // The two must stay distinguishable: an empty string here tells the core "no
+        // key saved", and the turn goes to the external relay while the user's key
+        // sits unread in the keychain.
+        let err = provider_key_response(KeyRead::Unreadable).unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(err.message, "Couldn't read your saved key from the keychain.");
+    }
+
+    // --- Migration ordering, exercised through the closure seam (see the module
+    // comment above for why the mock keychain can't stand in here).
+
+    #[test]
+    fn migration_deletes_the_legacy_entry_only_after_the_copy_lands() {
+        let deleted = Cell::new(false);
+        migrate_legacy_key(
+            || Ok(()),
+            || {
+                deleted.set(true);
+                Ok(())
+            },
+        );
+        assert!(deleted.get(), "a successful copy must be followed by the delete");
+    }
+
+    #[test]
+    fn migration_keeps_the_legacy_entry_when_the_copy_fails() {
+        // Until the copy lands the legacy entry is the ONLY durable copy of the key —
+        // deleting it here destroys it.
+        let deleted = Cell::new(false);
+        migrate_legacy_key(
+            || Err(keyring::Error::NoEntry),
+            || {
+                deleted.set(true);
+                Ok(())
+            },
+        );
+        assert!(!deleted.get(), "a failed copy must leave the legacy entry in place");
+    }
+
     #[test]
     fn get_provider_key_requires_a_provider() {
         let err = handle("keychain.getProviderKey", &json!({})).unwrap_err();
@@ -403,6 +797,50 @@ mod tests {
         verifying_key
             .verify(&canonical_json_bytes(payload).unwrap(), &signature)
             .is_ok()
+    }
+
+    // --- Device-identity session cache. Exercised against a LOCAL slot, never the
+    // global one: the global is a single shared cell, so parallel tests writing to it
+    // would collide (unlike KEY_CACHE, which they can namespace by provider id).
+
+    #[test]
+    fn device_cache_is_empty_until_something_is_stored() {
+        let slot: Mutex<Option<DeviceIdentity>> = Mutex::new(None);
+        assert!(identity_cache_load(&slot).is_none());
+    }
+
+    #[test]
+    fn device_cache_round_trips_the_identity() {
+        let slot = Mutex::new(None);
+        let identity = DeviceIdentity::generate();
+        identity_cache_store(&slot, &identity);
+        let cached = identity_cache_load(&slot).expect("a stored identity reads back");
+        assert_eq!(cached.device_id, identity.device_id);
+        assert_eq!(cached.public_key_b64(), identity.public_key_b64());
+        // The PRIVATE half survives the clone: a signature made by the cached copy
+        // verifies under the original public key. A cache that rotated the keypair
+        // would break the relay silently, which is what `from_stored` refuses to do.
+        let payload = json!({ "check": true });
+        assert!(verify(&identity, &payload, &cached.sign_payload(&payload).unwrap()));
+    }
+
+    #[test]
+    fn device_cache_forgets_when_the_slot_is_cleared() {
+        let slot = Mutex::new(None);
+        identity_cache_store(&slot, &DeviceIdentity::generate());
+        *slot.lock().unwrap() = None;
+        assert!(identity_cache_load(&slot).is_none());
+    }
+
+    #[test]
+    fn device_cache_store_replaces_the_previous_identity() {
+        let slot = Mutex::new(None);
+        let first = DeviceIdentity::generate();
+        let second = DeviceIdentity::generate();
+        identity_cache_store(&slot, &first);
+        identity_cache_store(&slot, &second);
+        assert_ne!(first.device_id, second.device_id);
+        assert_eq!(identity_cache_load(&slot).unwrap().device_id, second.device_id);
     }
 
     #[test]

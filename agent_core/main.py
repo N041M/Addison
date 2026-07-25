@@ -72,6 +72,9 @@ from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
 from agent_core.rpc.constants import (
     _GENERIC_TURN_ERROR,
+    _KEY_MISSING,
+    _KEY_READY,
+    _KEY_UNREADABLE,
     _LOCAL_SETUP_BUSY_MESSAGE,
     _METHOD_NOT_FOUND,
     _NOT_BUILT_MESSAGE,
@@ -475,6 +478,7 @@ class JsonRpcServer(
         shell_bridge: IpcShellBridge | None = None,
         conversation_id: str | None = None,
         primary_key_probe=None,
+        primary_key_turn_probe=None,
         setup_prompt: str | None = None,
         primary_prompt: str | None = None,
         ollama_base_url: str | None = None,
@@ -534,7 +538,15 @@ class JsonRpcServer(
         # is a ()-> bool that reports whether a real PRIMARY key is available right now
         # (it re-reads the keychain per call, so the handoff needs no other state). When
         # None (CLI/tests), the key is treated as present — normal PRIMARY routing.
+        # It may also RAISE RuntimeError, which is the third answer: the read itself
+        # failed, so a key may well exist. ``_primary_key_status`` turns that into
+        # _KEY_UNREADABLE, and no keychain failure can reach the relay branch.
+        # ``primary_key_turn_probe`` is the same contract with `fresh` semantics —
+        # used by the per-turn path only, so a person's message may retry past a
+        # dismissed dialog while the launch/poll probes stay quiet. Falls back to
+        # ``primary_key_probe`` when not wired (CLI/tests).
         self._primary_key_probe = primary_key_probe
+        self._primary_key_turn_probe = primary_key_turn_probe
         self._setup_prompt = setup_prompt
         # App-context prompt for every non-setup turn (None in CLI/tests that
         # don't pass one — those turns then run system-free, as before).
@@ -1350,15 +1362,48 @@ class JsonRpcServer(
             if source.exists():
                 source.rename(Path(f"{self._db_path}.damaged-{stamp}{suffix}"))
 
+    def _primary_key_status(self) -> str:
+        """Is a real PRIMARY key available right now — ready, missing, or unreadable?
+
+        The probe IS the keychain read (main._primary_key_available reuses the
+        Anthropic getter), so its RuntimeError means the READ failed, not that no key
+        is saved. That distinction is the whole point of this method: a failed read
+        used to collapse to False, and False routes a Simple turn to the Setup
+        Assistant relay — so dismissing a macOS password dialog quietly sent the
+        person's message to an external service while their key sat in the keychain.
+        Unreadable is answered plainly by the caller instead; nothing leaves here.
+
+        Anything OTHER than a RuntimeError still reads as missing: a probe that fails
+        in some way this code cannot interpret must not become a claim about a key.
+
+        Prefers the TURN probe (fresh semantics — may retry past a dismissed dialog,
+        because this method only runs on the person's own message) and falls back to
+        the plain probe when none is wired."""
+        probe = self._primary_key_turn_probe or self._primary_key_probe
+        if probe is None:
+            return _KEY_READY   # CLI/tests: no probe wired -> treat PRIMARY as ready
+        try:
+            return _KEY_READY if probe() else _KEY_MISSING
+        except RuntimeError:
+            return _KEY_UNREADABLE
+        except Exception:
+            return _KEY_MISSING
+
     def _primary_key_available(self) -> bool:
+        """Ready-or-not, for the callers that only need to know whether a key fetch
+        is worth attempting at all (the live catalog load). An unreadable keychain
+        reads as not-available there — the same early return as no key, with nothing
+        shown to the person, so that path is unchanged.
+
+        Deliberately the PLAIN probe, never the turn probe: this runs on launch and
+        on polls, with no user action behind it, so it must not retry past a
+        remembered failure (that would re-raise a dismissed dialog unprompted)."""
         probe = self._primary_key_probe
         if probe is None:
             return True   # CLI/tests: no probe wired -> treat PRIMARY as ready
         try:
             return bool(probe())
         except Exception:
-            # A wedged/failing keychain probe shouldn't strand onboarding — fall
-            # back to the Setup Assistant path rather than erroring the turn.
             return False
 
     # --- policy mode ------------------------------------------------------
@@ -1747,17 +1792,35 @@ def main() -> None:
     def _store_factory() -> Store:
         return Store(db_path)
 
-    def _provider_key_getter(provider_id: str):
+    def _provider_key_getter(provider_id: str, fresh: bool = False):
         """A per-call keychain getter for one provider (§5). The key is fetched fresh
         at the moment of use and kept only in the returned callable's local — never
         cached. Anthropic keeps the dev env-var fallback so the core is runnable
-        without the desktop shell; other providers have keychain only."""
+        without the desktop shell; other providers have keychain only.
+
+        The getter speaks the shell's own three-way answer, unflattened: the key,
+        ``""`` for "nothing saved", and a RuntimeError carrying a plain sentence for
+        "the read failed". It used to swallow that RuntimeError into ``""``, which
+        told every caller "no key here" whenever the person dismissed a password
+        dialog — and "no key here" is what routes a turn to the Setup Assistant
+        relay. A locked keychain must never send a message off this machine.
+
+        ``fresh`` rides through to the shell: retry past a remembered failure. Only
+        the per-turn probe passes it (see ``_primary_key_turn_available``)."""
 
         def getter() -> str:
             try:
-                key = shell_bridge.get_provider_key(provider_id)
+                key = shell_bridge.get_provider_key(provider_id, fresh=fresh)
             except RuntimeError:
-                key = ""
+                # DEV FALLBACK, and it applies to an unreadable keychain as much as
+                # to an empty one — a dev running without the desktop shell should
+                # not care WHY the shell had nothing. Only re-raise when there is no
+                # env key to fall back to, so the failure keeps its own sentence.
+                if provider_id == "anthropic":
+                    env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+                    if env_key:
+                        return env_key
+                raise
             if not key and provider_id == "anthropic":
                 # DEV FALLBACK — remove once BYOK-via-keychain is the only path.
                 key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -1771,10 +1834,28 @@ def main() -> None:
         # §4.6 probe: reuse the exact Anthropic getter — no key means this turn runs
         # on the Setup Assistant relay instead. Read fresh each turn, so adding a
         # key mid-conversation flips routing to PRIMARY with no restart.
+        #
+        # It answers True/False for the two states it can SEE, and lets the getter's
+        # RuntimeError out for the third: "the read failed" is not "no key", and the
+        # server (_primary_key_status) turns that raise into its own outcome so the
+        # relay is unreachable from a keychain failure.
         return bool(_api_key_getter())
 
+    _fresh_anthropic_getter = _provider_key_getter("anthropic", fresh=True)
+
+    def _primary_key_turn_available() -> bool:
+        # The PER-TURN probe, and the one place `fresh` is sent: a message is the
+        # person acting, so it may retry past a dialog they dismissed earlier this
+        # session (the shell re-asks the OS once, then remembers the new outcome).
+        # The launch-time catalog probe and the pollers use the plain probe above,
+        # so nothing re-prompts without a user action behind it.
+        return bool(_fresh_anthropic_getter())
+
     def _provider_key_present(provider_id: str) -> bool:
-        # provider.list's implicit-connected signal for a legacy/migrated key.
+        # provider.list's implicit-connected signal for a legacy/migrated key. Raises
+        # like the getter on an unreadable keychain; each caller decides what that
+        # means for what it is rendering (rpc/providers: show it off, display only;
+        # rpc/snapshots: drop the note rather than claim a key was removed).
         return bool(_provider_key_getter(provider_id)())
 
     def _build_cloud_provider(entry: CloudModel) -> AnthropicProvider:
@@ -1802,6 +1883,16 @@ def main() -> None:
         line. The key rides only inside each getter, fetched per request, never cached
         here (§8.3)."""
         getter = _provider_key_getter(provider_id)
+        # Read ONCE here so a keychain read FAILURE surfaces as itself. The Anthropic
+        # branch below turns every fetch failure into "That key doesn't work" — a
+        # false statement about a key Addison never managed to read, and one that
+        # sends the person off to replace a key that was fine all along. The getter's
+        # RuntimeError already carries a plain, user-ready sentence, so letting it
+        # out of here is the whole fix. The value is deliberately dropped: every
+        # provider below fetches the key again at the moment of use, so nothing holds
+        # key material in this frame (§8.3). An EMPTY key falls through unchanged —
+        # that is the bad-key/no-key path each branch already handles.
+        getter()
         if provider_id == "anthropic":
             # The live catalog fetch IS the validating request (it 401s on a bad key).
             try:
@@ -1895,6 +1986,7 @@ def main() -> None:
         db_path=db_path,
         shell_bridge=shell_bridge,
         primary_key_probe=_primary_key_available,
+        primary_key_turn_probe=_primary_key_turn_available,
         setup_prompt=load_setup_prompt(),
         primary_prompt=load_primary_prompt(),
         cloud_catalog=catalog,

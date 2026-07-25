@@ -280,6 +280,15 @@ class ProvidersMixin(ServerContext):
 
     # --- provider connections (multi-provider, §4.1.1) --------------------
     def _provider_key_present(self, provider_id: str) -> bool:
+        """Is a key stored for this provider? DISPLAY ONLY — it decides whether a
+        provider with no stored connection row renders as connected.
+
+        An unreadable keychain (the probe raises) reports False, i.e. "not
+        connected", which is the honest thing to render when Addison cannot see the
+        key: a row is either shown or not, and there is nowhere in that row to say
+        "couldn't tell". It costs nothing either, because no turn routes on this and
+        the shell caches a failed read, so a wrong False cannot become a password
+        dialog every time the widget rail polls."""
         probe = self._provider_key_probe
         if probe is None:
             return False

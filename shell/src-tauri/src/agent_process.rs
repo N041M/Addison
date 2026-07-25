@@ -9,6 +9,8 @@
 //   - read stdout line-by-line; `shell.*`/`keychain.*` frames are handled in-process
 //     (filesystem.rs / keychain.rs) and their response written back to the core's
 //     stdin; everything else is relayed to the webview as a `core-message` event;
+//     `keychain.*` is handled OFF the loop (see `handle_line`) because the OS can put
+//     a modal password dialog in front of it;
 //   - on unexpected exit, tell the user in plain language and respawn ONCE.
 
 use std::path::PathBuf;
@@ -24,17 +26,29 @@ use tokio::sync::Mutex;
 
 use crate::{filesystem, ipc, keychain};
 
-/// Managed state: the running core's stdin, swappable across a restart. `None`
-/// whenever no child is live (before first launch, between launches, after the
-/// final give-up). Shared by `ipc::send_to_core` (webview traffic) and this
-/// module's stdout reader (shell/keychain responses).
+/// The running core's stdin plus a generation counter that ticks on every swap
+/// (publish AND teardown). The counter exists for the detached keychain tasks: a
+/// task parked at a password dialog can outlive the core that asked, and a
+/// respawned core restarts its JSON-RPC ids at `core-req-1` — so a stale response
+/// written blindly could resolve the NEW core's identically-numbered request with
+/// the OLD core's answer. A task captures the generation with the request and only
+/// writes back while it still matches.
+pub struct CoreChannel {
+    pub stdin: Option<ChildStdin>,
+    pub generation: u64,
+}
+
+/// Managed state: the running core's channel, swappable across a restart. `stdin`
+/// is `None` whenever no child is live (before first launch, between launches,
+/// after the final give-up). Shared by `ipc::send_to_core` (webview traffic) and
+/// this module's stdout reader (shell/keychain responses).
 #[derive(Clone)]
-pub struct CoreStdin(pub Arc<Mutex<Option<ChildStdin>>>);
+pub struct CoreStdin(pub Arc<Mutex<CoreChannel>>);
 
 /// Called from the Tauri `setup` hook. Registers the shared stdin state and kicks
 /// off the supervisor on Tauri's async runtime.
 pub fn spawn(app: &AppHandle) -> tauri::Result<()> {
-    let stdin_state = CoreStdin(Arc::new(Mutex::new(None)));
+    let stdin_state = CoreStdin(Arc::new(Mutex::new(CoreChannel { stdin: None, generation: 0 })));
     app.manage(stdin_state.clone());
 
     let app = app.clone();
@@ -95,7 +109,11 @@ async fn run_and_wait(
     let stdout = child.stdout.take().expect("piped stdout");
     let stdin = child.stdin.take().expect("piped stdin");
 
-    *stdin_state.0.lock().await = Some(stdin);
+    {
+        let mut channel = stdin_state.0.lock().await;
+        channel.stdin = Some(stdin);
+        channel.generation += 1;
+    }
     emit_status(app, "ready", ready_message);
 
     let mut lines = BufReader::new(stdout).lines();
@@ -107,7 +125,11 @@ async fn run_and_wait(
         }
     }
 
-    *stdin_state.0.lock().await = None;
+    {
+        let mut channel = stdin_state.0.lock().await;
+        channel.stdin = None;
+        channel.generation += 1;
+    }
     let _ = child.wait().await; // reap so no zombie lingers
     Ok(())
 }
@@ -132,17 +154,13 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
             let id = frame.get("id").cloned().unwrap_or(Value::Null);
             let params = frame.get("params").cloned().unwrap_or(Value::Null);
 
-            let outcome = if method.starts_with(ipc::KEYCHAIN_PREFIX) {
-                keychain::handle(method, &params)
-            } else {
-                filesystem::handle(app, method, &params).await
-            };
+            if method.starts_with(ipc::KEYCHAIN_PREFIX) {
+                spawn_keychain_request(stdin_state, method.to_string(), id, params);
+                return;
+            }
 
-            let response = match outcome {
-                Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
-                Err(err) => json!({ "jsonrpc": "2.0", "id": id, "error": err.to_value() }),
-            };
-            write_to_core(stdin_state, &response).await;
+            let outcome = filesystem::handle(app, method, &params).await;
+            write_to_core(stdin_state, &response_frame(id, outcome)).await;
         }
         // Core -> Frontend: relay untouched. The shell never interprets it (§1.3).
         _ => {
@@ -151,16 +169,68 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
     }
 }
 
+/// Answer a `keychain.*` request OFF this loop.
+///
+/// The OS keychain can put a MODAL password dialog in front of the user, and that
+/// dialog blocks until it is answered. Handled inline, it stalled the whole pump: no
+/// core frame of any kind could be read while the dialog was up, so the core's own
+/// bridge timeout abandoned the request and the password, once typed, landed on a
+/// request nobody was waiting on. So the work goes to a blocking task and the loop
+/// moves straight to the next line.
+///
+/// Responses may now complete out of order. That is fine — JSON-RPC ids correlate
+/// them core-side. Overlapping OS access is serialized inside keychain.rs, so two
+/// requests can never raise two dialogs at once.
+fn spawn_keychain_request(stdin_state: &CoreStdin, method: String, id: Value, params: Value) {
+    let stdin_state = stdin_state.clone();
+    tauri::async_runtime::spawn(async move {
+        // Capture which core asked BEFORE doing the work. The request just came off
+        // this core's stdout, and a respawn takes seconds, so the generation read
+        // here is the asking core's.
+        let generation = stdin_state.0.lock().await.generation;
+        let handled =
+            tauri::async_runtime::spawn_blocking(move || keychain::handle(&method, &params)).await;
+        // The task itself failed (panicked or was cancelled). The core is waiting on
+        // this id, so answer it in plain language rather than let it time out.
+        let outcome = handled
+            .unwrap_or_else(|_| Err(ipc::RpcError::app("The keychain didn't answer just now.")));
+
+        let mut channel = stdin_state.0.lock().await;
+        if channel.generation != generation {
+            // The asking core is gone and its ids mean something else now. Dropping
+            // the frame is the only correct delivery.
+            eprintln!("[addison] dropped a keychain response for a core that has exited");
+            return;
+        }
+        write_to_channel(&mut channel, &response_frame(id, outcome)).await;
+    });
+}
+
+/// Wrap a handled Core->Shell outcome as its JSON-RPC response frame.
+fn response_frame(id: Value, outcome: Result<Value, ipc::RpcError>) -> Value {
+    match outcome {
+        Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
+        Err(err) => json!({ "jsonrpc": "2.0", "id": id, "error": err.to_value() }),
+    }
+}
+
 /// Write one JSON-RPC frame (as a line) back to the core's stdin.
 async fn write_to_core(stdin_state: &CoreStdin, frame: &Value) {
+    let mut channel = stdin_state.0.lock().await;
+    write_to_channel(&mut channel, frame).await;
+}
+
+/// The write itself, against an already-locked channel — split out so the keychain
+/// task can check the generation and write under ONE lock tenure (check-then-write
+/// across two tenures would reopen the stale-delivery window it exists to close).
+async fn write_to_channel(channel: &mut CoreChannel, frame: &Value) {
     let mut line = match serde_json::to_string(frame) {
         Ok(s) => s,
         Err(_) => return,
     };
     line.push('\n');
 
-    let mut guard = stdin_state.0.lock().await;
-    if let Some(stdin) = guard.as_mut() {
+    if let Some(stdin) = channel.stdin.as_mut() {
         let _ = stdin.write_all(line.as_bytes()).await;
         let _ = stdin.flush().await;
     }

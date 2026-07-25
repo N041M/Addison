@@ -327,6 +327,35 @@ def test_fetch_raises_catalog_error_when_no_key_and_makes_no_request():
     assert hits["n"] == 0   # no request attempted without a key
 
 
+def test_fetch_flattens_an_unreadable_keychain_into_a_plain_fetch_failure():
+    """A getter that RAISES is indistinguishable here from having no key at all.
+
+    That is the right answer for this function — the background catalog load wants
+    one failure type so it can fall back to the built-in list silently — but it is
+    also why ``provider.connect`` reads the key itself BEFORE calling this. Passing
+    a raising getter straight in loses the shell's sentence ("Addison couldn't read
+    your saved key…") and the connect card renders the generic "That key doesn't
+    work" over it, which is a false accusation about a key that may be perfectly
+    good. Pinned here so a later "simplification" that deletes the pre-read finds
+    the reason for it written down at the other end.
+    """
+    def unreadable():
+        raise RuntimeError("Couldn't read your saved key from the keychain.")
+
+    hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        hits["n"] += 1
+        return httpx.Response(200, json={"data": [], "has_more": False})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(CatalogFetchError) as raised:
+        fetch_cloud_catalog(unreadable, client=client)
+
+    assert hits["n"] == 0   # nothing is attempted without a key in hand
+    assert "keychain" not in str(raised.value)   # the shell's words did not survive
+
+
 def test_fetch_key_used_per_call_and_never_retained():
     getter_calls = {"n": 0}
 

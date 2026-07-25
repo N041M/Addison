@@ -229,7 +229,14 @@ class SnapshotsMixin(ServerContext):
     def _keyless_provider_note(self) -> str | None:
         """Name the restored providers whose stored key is gone, in plain words.
         Silent when there is no key probe wired (CLI/tests) — an unknowable state
-        is not something to warn about."""
+        is not something to warn about.
+
+        Silent for the same reason when a probe RAISES (an unreadable keychain): the
+        note says a key "was removed", and saying that about a key Addison merely
+        could not read would send the person to replace a key they still have. The
+        try below already covers the whole loop, so one unreadable provider drops the
+        note entirely rather than mis-reporting the others — the conservative side of
+        a sentence that tells someone their key is gone."""
         probe = self._provider_key_probe
         if probe is None:
             return None

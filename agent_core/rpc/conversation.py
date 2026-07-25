@@ -10,7 +10,14 @@ from agent_core.orchestrator import Conversation
 from agent_core.providers.base import Message, ModelRole
 from agent_core.providers.router import LOCAL_ONLY
 from agent_core.rpc.base import ServerContext
-from agent_core.rpc.constants import _BYOK_ONBOARDING_MESSAGE, _SERVER_ERROR
+from agent_core.rpc.constants import (
+    _BYOK_ONBOARDING_MESSAGE,
+    _KEY_MISSING,
+    _KEY_READY,
+    _KEY_UNREADABLE,
+    _KEY_UNREADABLE_MESSAGE,
+    _SERVER_ERROR,
+)
 from agent_core.skills import compose_skills_prompt
 
 # Frozen copy (D6/D8). local_only's privacy invariant OUTRANKS the explicit picker
@@ -42,6 +49,22 @@ def _auto_title(text: str) -> str | None:
 
 
 class ConversationMixin(ServerContext):
+    def _other_cloud_provider_connected(self) -> bool:
+        """Is any NON-Anthropic cloud provider marked connected in provider_config?
+
+        Standing evidence that the person has a PRIMARY-capable setup even with no
+        Anthropic key — the §4.6 relay handoff is for having no key at all, so this
+        keeps an OpenAI/Google/custom-only setup on normal routing. Metadata only
+        (no key is read), and a failure just answers False: this widens nothing on
+        its own, it only prevents a wrongful detour to onboarding."""
+        try:
+            return any(
+                cfg["provider_id"] != "anthropic" and cfg["connected"]
+                for cfg in self.store.list_provider_configs()
+            )
+        except Exception:
+            return False
+
     def _run_send_message(self, params: dict, request_id) -> None:
         text = params.get("text", "")
         requested_role = self._role_from(params.get("role")) or self._next_role
@@ -87,7 +110,32 @@ class ConversationMixin(ServerContext):
         # here rather than per branch — the probe is a keychain round-trip (§5). Only
         # a PRIMARY/default turn touches the key path; a LOCAL turn never probes.
         primary_role = requested_role in (None, ModelRole.PRIMARY)
-        primary_key_available = self._primary_key_available() if primary_role else True
+        key_status = self._primary_key_status() if primary_role else _KEY_READY
+
+        # A key Addison could not READ is not a key that isn't there, and the two
+        # must not share a branch: "missing" is onboarding, but "unreadable" is a
+        # locked keychain or a password dialog nobody answered, with the person's own
+        # key sitting behind it. Sending THAT turn to the Setup Assistant relay would
+        # put their message on an external service because of a dialog — so this
+        # answers here, before anything is persisted and before any model is called.
+        # Both profiles get the same sentence: neither onboarding path applies when
+        # the question "is there a key?" has no answer yet.
+        if key_status == _KEY_UNREADABLE:
+            self._respond_error(request_id, _SERVER_ERROR, _KEY_UNREADABLE_MESSAGE)
+            return
+
+        # §4.6's "no key yet" means no PRIMARY-capable provider AT ALL — not "no
+        # Anthropic key". The probe above is Anthropic-only, so a person whose only
+        # keys are OpenAI/Google/custom would read as keyless here, and their turn —
+        # explicit model pick included — would be silently rerouted to the external
+        # relay (Simple) or refused with a demand for an Anthropic key they don't
+        # need (Developer). A connected provider row is standing evidence of a
+        # PRIMARY-capable setup, so the turn proceeds to normal routing; if that
+        # provider is genuinely unreachable right now, the send fails with its own
+        # plain sentence, which is honest — unlike the relay, which is silent.
+        if key_status == _KEY_MISSING and self._other_cloud_provider_connected():
+            key_status = _KEY_READY
+        primary_key_available = key_status == _KEY_READY
 
         # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
         # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the
