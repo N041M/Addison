@@ -16,7 +16,7 @@ needed any more. (This paragraph used to send you to `redesign/dark-v2`; that
 branch is now fully contained in `master`, and the Fern look is gone from the
 tree rather than merely superseded.)
 
-**Known gaps — not bugs, don't file them** (HANDOFF.md "Known gaps"):
+**Known gaps — not bugs, don't file them** (see `KNOWN-GAPS.md`):
 drafting a message reports "Opening email drafts isn't available yet."; there is
 no file-attach/drop UI, so `read_file` is unreachable from chat; the Setup
 Assistant relay has no server in this repo; nothing in the app can open an

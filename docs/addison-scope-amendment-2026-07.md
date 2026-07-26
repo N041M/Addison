@@ -16,7 +16,7 @@
 >
 > **Authoritative today:** `docs/SAFETY.md` (floors, modes, guards),
 > `docs/addison-engineering-spec.md` (build brief), `docs/addison-design-doc.md`
-> (product rationale), `ROADMAP.md` (status), `docs/HANDOFF.md` → "Known gaps"
+> (product rationale), `ROADMAP.md` (status), `docs/KNOWN-GAPS.md`
 > (the four §13 questions that are still open moved there).
 >
 > **Kept because it is the only place that holds them:** §1's motivating story —

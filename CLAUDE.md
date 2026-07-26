@@ -10,7 +10,9 @@ exactly one owner** — a second mention anywhere is a link, never a copy.
 | Build brief — schema, IPC, subsystems | `docs/addison-engineering-spec.md` |
 | Product and UX rationale (the *why*) | `docs/addison-design-doc.md` |
 | What is built / next / not being built | [`ROADMAP.md`](ROADMAP.md) |
-| Live issues and open design questions | `docs/HANDOFF.md` → "Known gaps" |
+| Live issues and open design questions | [`docs/KNOWN-GAPS.md`](docs/KNOWN-GAPS.md) |
+| The standard, conventions, environment | [`docs/CONVENTIONS.md`](docs/CONVENTIONS.md) |
+| What each step shipped + its rigor findings | [`docs/BUILD-LOG.md`](docs/BUILD-LOG.md) |
 | Gates and verification | `docs/VERIFICATION.md` |
 
 There is **no precedence chain any more.** The 2026-07-20 scope amendment was

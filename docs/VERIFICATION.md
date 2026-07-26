@@ -6,7 +6,7 @@ review obligations that a green CI run does not cover. Companion to
 "open the app and look at it" step — this file does not duplicate them.
 
 Run this before any wave is committed and PR'd. **Green gates are not the bar**
-— see HANDOFF.md, "Read this first: the standard this repo is held to".
+— see [`CONVENTIONS.md`](CONVENTIONS.md), "the standard this repo is held to".
 
 ## 1. Automated gates (all must be green, from repo root)
 
@@ -122,7 +122,7 @@ CLAUDE.md, not just a green run:
 
 ## 4. Open items and known gaps
 
-Owned entirely by **`HANDOFF.md` → "Known gaps"** — the single live-issue
+Owned entirely by **[`KNOWN-GAPS.md`](KNOWN-GAPS.md)** — the single live-issue
 register. This section used to keep its own list; it drifted into a second
 register holding four items the other one did not have, which is the same
 two-copies problem §5 already solved by delegating. Moved there 2026-07-26.
@@ -136,4 +136,4 @@ and there is retired.
 
 ## 6. Known-open polish items
 
-Also moved to `HANDOFF.md` → "Known gaps" (2026-07-26), for the same reason.
+Also moved to [`KNOWN-GAPS.md`](KNOWN-GAPS.md) (2026-07-26), for the same reason.
