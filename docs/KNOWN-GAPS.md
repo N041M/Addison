@@ -20,6 +20,15 @@ ledgers, the deferred-with-reason table and the 07-24 "where a bug could have
 entered" list were folded in here when those sections were retired (2026-07-26);
 everything still open is below, and the closed rows went to git.
 
+**The inline widget rail is too tall for the reading column (owner call).**
+Below 1024px `railBeside` (`App.tsx`) is false and the rail moves inline to the
+foot of the thread. That fallback was designed when the block was one row; with a
+few widgets it is six or more, sitting in the middle of the reading column — the
+"widgets pop out" half of the 2026-07-27 report. The dedup landed the same day
+halves it, but the shape is still wrong at ~880px. Options: collapse the inline
+rail to its tray row only, raise the threshold, or give it a height budget.
+Nothing is broken; it just reads badly.
+
 **Still open from the retired step-1 ledgers:**
 
 - **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
