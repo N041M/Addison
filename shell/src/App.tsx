@@ -41,6 +41,7 @@ import {
   type LocalSetupProgressParams,
   type DiagnosticEntry,
 } from "./ipc/client";
+import { AddisonMark } from "./components/AddisonMark";
 import { ChatThread } from "./components/ChatThread";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
@@ -916,6 +917,18 @@ export function App() {
           the two live controls on the right. */}
       <header className="relative z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-6 py-4">
         <span className="flex min-w-0 items-center gap-4">
+          {/* The mark + wordmark, far left (brandbook §10 "APP HEADER": 22px
+              tile, 10px gap, wordmark 13/500/-.01em ink-soft). Decorative
+              pairing — the tile is aria-hidden and the word is plain text. */}
+          <span className="flex shrink-0 items-center gap-2.5">
+            <AddisonMark size={22} />
+            <span
+              data-scramble="80"
+              className="text-[13px] font-medium tracking-[-.01em] text-ink-soft"
+            >
+              Addison
+            </span>
+          </span>
           {isSurface && (
             <button
               type="button"

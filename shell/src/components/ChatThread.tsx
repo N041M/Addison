@@ -31,6 +31,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import type { DisplayMessage } from "../types/ui";
 import { Markdown } from "./Markdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
+import { AddisonMark } from "./AddisonMark";
 
 interface Props {
   messages: DisplayMessage[];
@@ -240,6 +241,14 @@ function EmptyState({
         }}
       />
 
+      {/* First-run only: the 44px mark above the greeting — the brandbook's
+          "SPLASH · FIRST RUN" application. `header` is only ever the first-run
+          block, so its presence IS the first-run signal. */}
+      {header && (
+        <div className="relative animate-[fadeRise_.6s_ease_both]">
+          <AddisonMark size={44} />
+        </div>
+      )}
       <h1
         ref={greetingRef}
         data-greeting=""

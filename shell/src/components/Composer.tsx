@@ -126,7 +126,11 @@ export function Composer({
           rows={1}
           placeholder={placeholder}
           aria-label="Message to Addison"
-          className="min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-[10px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
+          // min-h 64px = two 22.5px lines + the 9/10px pads: the composer is two
+          // lines deep AT REST, as the prototype renders it — which also lifts
+          // the "Write to Addison…" line level with the sidebar's "Settings"
+          // (owner request 2026-07-26; auto-grow still takes over past two lines).
+          className="min-h-[64px] min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-[10px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
           style={{ maxHeight: `${MAX_TEXTAREA_PX}px` }}
         />
         <div className="flex items-center gap-3 pb-[5px]">

@@ -327,9 +327,10 @@ export function Sidebar({
         );
       })}
 
-      {/* Pinned to the bottom. The generous bottom padding lifts it clear of the
-          composer row on the chat view (prototype: 69px). */}
-      <div className="mt-auto flex shrink-0 flex-col gap-[3px] pb-[69px]">
+      {/* Pinned to the bottom. 56px, not the prototype's 69: with the two-line
+          resting composer, this puts "Settings" level with "Write to Addison…"
+          — measured to 0.5px in the browser (owner request 2026-07-26). */}
+      <div className="mt-auto flex shrink-0 flex-col gap-[3px] pb-[56px]">
         <button
           type="button"
           data-scramble="520"

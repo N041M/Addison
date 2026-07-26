@@ -218,7 +218,17 @@ glyphs hover to `ink`.
 
 - No new backend surface, no RPC changes, no fake data anywhere.
 - `FirstRunBanner`'s pine block, the serif voice, and the bundled fonts are
-  retired; the bell favicon/app icon stays.
+  retired.
+- **Brand (added 2026-07-26):** the bell is retired too. The mark is the
+  lowercase-a tile with the lavender dot — `brand/Addison Logo Mark.dc.html` in
+  this directory is the final sheet (`Addison Logo.dc.html` is exploration
+  history, `Addison Brandbook.dc.html` the wider system). Implemented as
+  `shell/src/components/AddisonMark.tsx` (construction ratios + the sheet's
+  exact sampled sizes; the tile stays dark in BOTH themes — fixed hex, never
+  tokens), used in the header (22px + wordmark, brandbook §10) and the
+  first-run splash (44px above the greeting); `shell/public/favicon.svg` is the
+  16px ramp step. The Tauri OS icon set (`shell/src-tauri/icons/`) still
+  carries the bell — regenerating it is tracked as a follow-up.
 - All permission/consent flows, offers (endpoint/cost-plan), widget/routine
   proposal cards: same logic, restyled (hairline rows on `panel`/flat, accent
   actions, mono values).
