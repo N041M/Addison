@@ -141,7 +141,9 @@ export function Composer({
           className="block w-full resize-none overflow-y-auto border-0 bg-transparent pb-[2px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
           style={{ maxHeight: `${MAX_TEXTAREA_PX}px` }}
         />
-        <div className="flex items-center justify-end gap-3 pb-[5px] pt-1">
+        {/* pt-3, not a token nudge: the visual space above the send button is
+            the point of the stacked layout (owner request 2026-07-26). */}
+        <div className="flex items-center justify-end gap-3 pb-[5px] pt-3">
           <ModelSelector
             roles={models.roles}
             cloudModels={models.cloudModels}

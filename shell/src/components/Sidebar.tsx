@@ -327,11 +327,12 @@ export function Sidebar({
         );
       })}
 
-      {/* Pinned to the bottom. 64.5px, not the prototype's 69: with the
-          stacked composer (text row over the controls strip), this puts
-          "Settings" level with "Write to Addison…" — measured in the browser
-          (owner request 2026-07-26; retuned when the strip landed). */}
-      <div className="mt-auto flex shrink-0 flex-col gap-[3px] pb-[64.5px]">
+      {/* Pinned to the bottom. 72.5px, not the prototype's 69: with the
+          stacked composer (text row over the controls strip, 12px of air above
+          the strip), this puts "Settings" level with "Write to Addison…" —
+          measured in the browser (owner request 2026-07-26; retuned twice as
+          the strip landed and gained its breathing room). */}
+      <div className="mt-auto flex shrink-0 flex-col gap-[3px] pb-[72.5px]">
         <button
           type="button"
           data-scramble="520"
