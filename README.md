@@ -180,6 +180,9 @@ left out.
 
 ## Where the documentation is
 
+[docs/README.md](docs/README.md) maps every document to the topic it owns. The
+short version follows.
+
 Start with [CLAUDE.md](CLAUDE.md). It is the short version of how this repository
 works, and it wins wherever it and another document disagree.
 

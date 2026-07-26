@@ -15,6 +15,9 @@ exactly one owner** — a second mention anywhere is a link, never a copy.
 | What each step shipped + its rigor findings | [`docs/BUILD-LOG.md`](docs/BUILD-LOG.md) |
 | Gates and verification | `docs/VERIFICATION.md` |
 
+**[`docs/README.md`](docs/README.md) is the full map** — every file, what it owns,
+and the rule that keeps it that way.
+
 There is **no precedence chain any more.** The 2026-07-20 scope amendment was
 retired on 2026-07-27: its content had already been folded into the documents
 above, but it kept a *"where we differ, the amendment wins"* rule that made every
