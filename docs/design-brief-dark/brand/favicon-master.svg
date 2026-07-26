@@ -1,9 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <!-- Favicon master: the mark filling the canvas (no Apple-grid margin — a
-       favicon is already small). Geometry from the in-app ramp: radius ~12.5%,
-       letter 69% of the tile baseline-left, dot 23% inset 14% top-right. -->
-  <rect width="256" height="256" rx="32" fill="#16171B"/>
-  <rect x="4" y="4" width="248" height="248" rx="28" fill="none" stroke="#26272B" stroke-width="8"/>
-  <text x="46" y="212" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="500" font-size="184" letter-spacing="-7.4" fill="#E9E9E7">a</text>
-  <circle cx="192" cy="64" r="30" fill="#B4A9F5"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 256 256">
+  <!-- Favicon master. Three deliberate differences from app-icon.svg, all about
+       surviving a browser tab (reported broken 2026-07-26):
+
+       FULL BLEED — no rounded corners, no alpha anywhere. The rounded tile left
+       the corners transparent, and a client that composites a favicon onto a
+       light plate drew a pale square around the mark. A favicon is rendered at
+       16-32px inside someone else's chrome and cannot assume what sits behind
+       it. The app icon keeps its radius; macOS masks that one itself.
+
+       NO INNER STROKE RING. At 16px an 8px ring is half a pixel and rasterises
+       to a grey haze along the edge, which reads as a box rather than an edge.
+
+       A BIGGER LETTER — 91% of the tile against the app icon's 69% — so its
+       strokes land on ~2px at 16px instead of ~1px. Below that a two-storey "a"
+       loses its bowl and turns to mush.
+
+       Render each size DIRECTLY at that size (build-favicon.sh). Downscaling one
+       large raster is what produced the unreadable 16px icon this replaces.
+
+       WIDTH/HEIGHT ARE 100%, NOT 256, and that is load-bearing rather than
+       stylistic. Given a fixed pixel size QuickLook fits the art top-left and
+       pads the rest of the canvas with WHITE — measured at 37px of the 256, so
+       every icon built this way carried a white band down its right edge and
+       along its bottom. That is the white box this mark showed in a browser tab.
+       With a percentage size and an explicit preserveAspectRatio the art fills
+       the canvas and the padding disappears. The viewBox is square and so is
+       every output, so "none" distorts nothing. -->
+  <rect width="256" height="256" fill="#16171B"/>
+  <text x="30" y="214" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-weight="500" font-size="232" letter-spacing="-8" fill="#FFFFFF">a</text>
+  <circle cx="205" cy="52" r="34" fill="#B4A9F5"/>
 </svg>

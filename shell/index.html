@@ -3,12 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <!-- A raster favicon, deliberately: the SVG version drew the mark's "a" with
+    <!-- Raster favicons, deliberately: the SVG version drew the mark's "a" with
          a <text> element, so its letterform and size depended on whichever font
          the rasterising platform resolved (measured: a 15-20% bbox difference
-         off macOS). Rendered once from docs/design-brief-dark/brand/
-         favicon-master.svg, it is identical everywhere. -->
-    <link rel="icon" type="image/png" href="/favicon.png" />
+         off macOS). Rendered from docs/design-brief-dark/brand/favicon-master.svg
+         by build-favicon.sh, so they are identical everywhere.
+
+         Every size is rendered AT that size rather than squashed down from one
+         larger file. Handed only a 64px icon a browser downscales it to 16, and
+         a two-storey "a" does not survive that: it arrives as a grey smudge
+         (reported 2026-07-26). 32 is what a retina tab asks for, 16 is for
+         everything else. The master is also full bleed now — the old rounded
+         one left transparent corners that some clients composite onto a white
+         plate, which is the white box the mark used to sit in. -->
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <title>Addison</title>
     <script>
       // Theme bootstrap — runs before the stylesheet loads so there's no flash

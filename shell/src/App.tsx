@@ -43,6 +43,7 @@ import {
 } from "./ipc/client";
 import { AddisonMark } from "./components/AddisonMark";
 import { ChatThread } from "./components/ChatThread";
+import { PointerGlow } from "./components/PointerGlow";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
 import { Surface, SurfaceSection, SurfaceRow, SURFACE_ID } from "./components/Surface";
@@ -816,10 +817,19 @@ export function App() {
   // The engine/status banners, shown in whichever column the person is looking
   // at. On a surface they ride in its `pinned` slot — the widget rail, which
   // normally carries them on chat, is collapsed to zero width there.
+  // While the first-run block is up it is the one thing to read, so the
+  // not-connected banner stands down and lets it speak. The two say the same
+  // thing to a person on a first launch ("nothing can happen yet, here is what
+  // to do"), and stacking them turned a fresh window into two warnings before a
+  // greeting. Note they are NOT the same condition underneath: `connected` is
+  // the Agent Core being reachable, and first-run is a reachable core with
+  // nothing configured. Anything that actually goes wrong still gets a banner,
+  // because `statusBanner` is untouched by this.
+  const quietBanner = !connected && firstRunActive;
   const banners =
-    !connected || statusBanner ? (
+    (!connected && !quietBanner) || statusBanner ? (
       <>
-        {!connected && (
+        {!connected && !quietBanner && (
           <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
         )}
         {statusBanner && (
@@ -915,6 +925,11 @@ export function App() {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-paper text-[13px] text-ink">
+      {/* The one piece of pure decoration in the app: a soft accent pool under
+          the pointer, behind everything else. It writes its own transform and
+          never re-renders anything. */}
+      <PointerGlow />
+
       {/* One header across the whole window: the way out on the left (← from a
           surface, the sidebar chevron on chat), the view's name beside it, and
           the two live controls on the right. */}

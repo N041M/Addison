@@ -13,6 +13,69 @@ qlmanage -t -s 1024 -o "$WORK" "$SRC" >/dev/null 2>&1
 MASTER="$WORK/$(basename "$SRC").png"
 [ -f "$MASTER" ] || { echo "QuickLook produced no PNG for $SRC" >&2; exit 1; }
 
+# QuickLook flattens onto WHITE, so everything outside the rounded tile comes
+# back opaque white and the dock draws a white square behind the mark. Put the
+# alpha back from app-icon.svg's own geometry: an 824x824 tile at a 100px margin
+# with a 185px radius on the 1024 grid. Keep these three numbers in step with the
+# master. Inside the tile pixels keep their colour; outside goes transparent,
+# feathered across the last pixel so the corners are not stairs.
+python3 - "$MASTER" <<'PY'
+import struct, sys, zlib
+path = sys.argv[1]
+MARGIN, RADIUS, GRID = 100.0, 185.0, 1024.0
+
+d = open(path, "rb").read()
+pos, idat, w, h, bd, ct = 8, b"", None, None, None, None
+while pos < len(d):
+    ln = struct.unpack(">I", d[pos:pos+4])[0]; typ = d[pos+4:pos+8]; ch = d[pos+8:pos+8+ln]
+    if typ == b"IHDR": w, h, bd, ct = struct.unpack(">IIBB", ch[:10])
+    elif typ == b"IDAT": idat += ch
+    pos += 12 + ln
+if (bd, ct) != (8, 6):
+    raise SystemExit(f"expected 8-bit RGBA from QuickLook, got depth {bd} type {ct}")
+
+raw, stride, rows, prev, i = zlib.decompress(idat), w*4, [], bytearray(w*4), 0
+for _ in range(h):                       # undo the per-scanline filters
+    f = raw[i]; i += 1
+    line = bytearray(raw[i:i+stride]); i += stride
+    for x in range(stride):
+        a = line[x-4] if x >= 4 else 0
+        b = prev[x]; c = prev[x-4] if x >= 4 else 0
+        if f == 1: line[x] = (line[x] + a) & 255
+        elif f == 2: line[x] = (line[x] + b) & 255
+        elif f == 3: line[x] = (line[x] + (a + b)//2) & 255
+        elif f == 4:
+            p = a + b - c; pa, pb, pc = abs(p-a), abs(p-b), abs(p-c)
+            line[x] = (line[x] + (a if (pa <= pb and pa <= pc) else b if pb <= pc else c)) & 255
+    rows.append(line); prev = line
+
+s = w / GRID
+x0, y0, x1, y1, r = MARGIN*s, MARGIN*s, w - MARGIN*s, h - MARGIN*s, RADIUS*s
+def coverage(px, py):
+    if px < x0 or px > x1 or py < y0 or py > y1: return 0.0
+    dx = (x0 + r - px) if px < x0 + r else ((px - (x1 - r)) if px > x1 - r else 0.0)
+    dy = (y0 + r - py) if py < y0 + r else ((py - (y1 - r)) if py > y1 - r else 0.0)
+    if dx <= 0 or dy <= 0: return 1.0
+    dist = (dx*dx + dy*dy) ** 0.5
+    return 1.0 if dist <= r - 0.5 else (0.0 if dist >= r + 0.5 else r + 0.5 - dist)
+
+for y in range(h):
+    line = rows[y]
+    for x in range(w):
+        a = coverage(x + 0.5, y + 0.5)
+        if a < 1.0:
+            line[x*4 + 3] = int(round(line[x*4 + 3] * a))
+
+def chunk(tag, payload):
+    return (struct.pack(">I", len(payload)) + tag + payload
+            + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+open(path, "wb").write(
+    b"\x89PNG\r\n\x1a\n"
+    + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+    + chunk(b"IDAT", zlib.compress(b"".join(b"\x00" + bytes(l) for l in rows), 9))
+    + chunk(b"IEND", b""))
+PY
+
 mkdir -p "$WORK/out" "$WORK/Addison.iconset"
 for s in 16 32 48 64 128 256 512 1024; do
   sips -z $s $s "$MASTER" --out "$WORK/out/$s.png" >/dev/null
