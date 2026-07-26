@@ -43,7 +43,6 @@ import {
 } from "./ipc/client";
 import { AddisonMark } from "./components/AddisonMark";
 import { ChatThread } from "./components/ChatThread";
-import { PointerGlow } from "./components/PointerGlow";
 import { ActivityPanel } from "./components/ActivityPanel";
 import { Sidebar } from "./components/Sidebar";
 import { Surface, SurfaceSection, SurfaceRow, SURFACE_ID } from "./components/Surface";
@@ -925,11 +924,6 @@ export function App() {
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-paper text-[13px] text-ink">
-      {/* The one piece of pure decoration in the app: a soft accent pool under
-          the pointer, behind everything else. It writes its own transform and
-          never re-renders anything. */}
-      <PointerGlow />
-
       {/* One header across the whole window: the way out on the left (← from a
           surface, the sidebar chevron on chat), the view's name beside it, and
           the two live controls on the right. */}
