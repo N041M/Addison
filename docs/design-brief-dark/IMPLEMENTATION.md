@@ -155,8 +155,12 @@ glyphs hover to `ink`.
   <18, else "Good evening."), subline 14px `muted` "Ask anything, or hand me a
   chore. Everything can be undone." (fadeRise .6s delay .6s), three accent
   suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the
-  weekend") that fill the composer (fadeRise delay .9s). Faint dotted
-  starfield behind (the exact radial-gradient stack from the prototype).
+  weekend") that fill the composer (fadeRise delay .9s). The prototype's faint
+  dotted starfield behind it is NOT shipped — removed by owner decision
+  2026-07-26. Five 1px dots over a 464x276 box never read as a field, and two of
+  them landed within 20px of the type (one level with the subline), where a lone
+  speck beside a word reads as a dead pixel. Reported from the running app as
+  "there is a pixel or something akin to it".
   First-run: the pine banner is REPLACED by this empty state plus a
   first-run block restyled into the row idiom (setup steps as hairline rows,
   "Start setup" as an accent action; launch-only skip survives).

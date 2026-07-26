@@ -60,7 +60,7 @@ Other:
 ## Screens / Views
 
 ### 1. Chat — empty state
-Centered greeting stack: time-of-day greeting (26px, `#E9E9E7`, scramble-in), subline "Ask anything, or hand me a chore. Everything can be undone." (14px `#909398`), and 3 purple suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the weekend") that fill the composer. A faint dotted "starfield" (few 1px radial-gradient dots, some purple) sits behind. Sublines fade-rise in staggered (.6s ease, delays .6s/.9s).
+Centered greeting stack: time-of-day greeting (26px, `#E9E9E7`, scramble-in), subline "Ask anything, or hand me a chore. Everything can be undone." (14px `#909398`), and 3 purple suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the weekend") that fill the composer. A faint dotted "starfield" (few 1px radial-gradient dots, some purple) sits behind. **[NOT SHIPPED — owner decision 2026-07-26: with five dots it read as dust rather than a field, and two landed within 20px of the type. See IMPLEMENTATION.md.]** Sublines fade-rise in staggered (.6s ease, delays .6s/.9s).
 
 ### 2. Chat — thread
 Single centered column (max 580px), messages stacked with 32px gap, vertical fade mask top/bottom. Each message: tiny label ("You" `#55575C` / "Addison" `#E9E9E7`, 11px/500) + body (15.5px; user `#B9BBBE`, assistant `#E9E9E7`, `white-space: pre-wrap`). While replying, a 7×14px blinking block cursor follows the text.
@@ -123,7 +123,7 @@ Full-screen scrim `rgba(0,0,0,.55)` (fade .2s); centered 440px panel (bg `#14151
 - A `motion: boolean` flag disables all animation (accessibility; also respect `prefers-reduced-motion`)
 
 ## Assets
-None — no images or icon fonts. Arrows/chevrons are text glyphs (←, «, », ＋, ↑, ✕, ✓, ·). The empty-state starfield is a few radial-gradient dots.
+None — no images or icon fonts. Arrows/chevrons are text glyphs (←, «, », ＋, ↑, ✕, ✓, ·). The empty-state starfield is a few radial-gradient dots. **[NOT SHIPPED — see line 63 and IMPLEMENTATION.md; removed 2026-07-26.]**
 
 ## Files
 - `Addison Prototype v2.dc.html` — complete prototype: markup + inline styles in `<x-dc>`, behavior in the `Component` class (scramble engine ~line 358, send/streaming ~line 404, view/collapse transitions ~line 280–335, all screen content in `renderVals()`).

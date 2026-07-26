@@ -1,9 +1,12 @@
 // The chat column — the empty state and the message thread (DARK direction;
 // docs/design-brief-dark, "Screens → Chat empty state / Thread").
 //
-// EMPTY: a centred greeting stack over a faint dotted starfield — the
-// time-of-day greeting (scrambling in), one subline, and three suggestion chips
-// that fill the composer. It REPLACES the seeded "welcome" message: an empty
+// EMPTY: a centred greeting stack — the time-of-day greeting (scrambling in),
+// one subline, and three suggestion chips that fill the composer. The
+// prototype's faint dotted "starfield" behind it was REMOVED (owner decision
+// 2026-07-26): five 1px dots over a 464x276 box never read as a field, and two
+// of them landed within 20px of the type — one level with the subline — where a
+// lone speck beside a word reads as a dead pixel rather than as decoration. It REPLACES the seeded "welcome" message: an empty
 // chat is an invitation, not a message Addison already sent. The first-run block
 // (FirstRunBanner) rides in the same stack when a launch starts unconfigured.
 //
@@ -481,7 +484,7 @@ export function ChatThread({
 }
 
 // ---------------------------------------------------------------------------
-// The empty state: greeting, subline, chips — and the starfield behind them.
+// The empty state: greeting, subline, chips.
 // ---------------------------------------------------------------------------
 function EmptyState({
   header,
@@ -506,44 +509,28 @@ function EmptyState({
     // origin, where it can never be reached. With auto margins the stack sits in
     // the middle while there is room and scrolls normally once there isn't — so
     // the first-run block's actions stay reachable on a short window.
-    <div className="relative m-auto flex w-full shrink-0 flex-col items-center gap-[14px] py-9">
-      {/* The starfield — a few 1px dots, one of them accent. Decoration only:
-          it never intercepts a click. */}
-      <div
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-x-[10%] inset-y-[15%]"
-        style={{
-          backgroundImage: [
-            "radial-gradient(1px 1px at 18% 30%, rgb(var(--c-ink) / .3) 50%, transparent 51%)",
-            "radial-gradient(1px 1px at 72% 18%, rgb(var(--c-ink) / .22) 50%, transparent 51%)",
-            "radial-gradient(1px 1px at 88% 62%, rgb(var(--c-ink) / .18) 50%, transparent 51%)",
-            "radial-gradient(1px 1px at 34% 78%, rgb(var(--c-ink) / .2) 50%, transparent 51%)",
-            "radial-gradient(1.5px 1.5px at 55% 45%, rgb(var(--c-accent) / .25) 50%, transparent 51%)",
-          ].join(", "),
-        }}
-      />
-
+    <div className="m-auto flex w-full shrink-0 flex-col items-center gap-[14px] py-9">
       {/* First-run only: the 44px mark above the greeting — the brandbook's
           "SPLASH · FIRST RUN" application. `header` is only ever the first-run
           block, so its presence IS the first-run signal. */}
       {header && (
-        <div className="relative animate-[fadeRise_.6s_ease_both]">
+        <div className="animate-[fadeRise_.6s_ease_both]">
           <AddisonMark size={44} />
         </div>
       )}
       <h1
         ref={greetingRef}
         data-greeting=""
-        className="relative m-0 text-[26px] font-normal tracking-display text-ink"
+        className="m-0 text-[26px] font-normal tracking-display text-ink"
       >
         {greeting()}
       </h1>
-      <p className="relative m-0 animate-[fadeRise_.6s_ease_both_.6s] text-[14px] text-muted">
+      <p className="m-0 animate-[fadeRise_.6s_ease_both_.6s] text-[14px] text-muted">
         Ask anything, or hand me a chore. Everything can be undone.
       </p>
       {/* gap-x only: each chip already carries a 44px touch height below md, so
           a vertical gap on top of it would open a canyon between wrapped rows. */}
-      <div className="relative mt-3 flex animate-[fadeRise_.6s_ease_both_.9s] flex-wrap justify-center gap-x-[22px] gap-y-0">
+      <div className="mt-3 flex animate-[fadeRise_.6s_ease_both_.9s] flex-wrap justify-center gap-x-[22px] gap-y-0">
         {SUGGESTIONS.map((text) => (
           <button
             key={text}
@@ -556,7 +543,7 @@ function EmptyState({
         ))}
       </div>
 
-      {header && <div className="relative mt-6 w-full max-w-[420px]">{header}</div>}
+      {header && <div className="mt-6 w-full max-w-[420px]">{header}</div>}
     </div>
   );
 }
