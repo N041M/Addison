@@ -12,6 +12,16 @@
    values come from the handoff and are exact. `:root` (light) is a derived
    translation: identical structure, swapped values.
 
+   THE LIGHT RAMP IS CONTRAST-BOUND BELOW `muted` (2026-07-26). Translating the
+   dark ramp by eye produced text nobody could read on paper: `ghost` measured
+   1.53:1, `disabled` 2.17, `faint` 2.94 — all against a 4.5 floor, at 10–11px,
+   for readers who are 54 and 68. Dark keeps its designed values; light's low
+   end is pinned to the floor and therefore COMPRESSED (muted 6.14 → faint 5.43
+   → disabled 4.97 → ghost 4.61). The steps are small on purpose: the ramp still
+   descends, and every rung is legible. `muted` moved with them — leaving it at
+   4.61 would have made `ghost` its equal and `faint`/`disabled` darker than it,
+   inverting the ramp it heads.
+
    There are no bundled fonts and no @font-face anywhere: the app uses system
    stacks only ('Helvetica Neue' for UI, ui-monospace for machine facts).
    ========================================================================== */
@@ -22,18 +32,25 @@
   --c-panel: 255 255 255; /* #FFFFFF  popovers, menus, modal */
   --c-line: 228 228 225; /* #E4E4E1  1px hairlines */
   --c-rail: 214 214 210; /* #D6D6D2  inactive 2px rails, menu borders */
-  --c-track: 232 232 229; /* #E8E8E5  composer idle border, meter track */
-  --c-track-hi: 201 201 196; /* #C9C9C4  composer focused border */
-  --c-ink: 27 27 29; /* #1B1B1D  primary text */
-  --c-ink-soft: 67 69 74; /* #43454A  secondary text */
-  --c-muted: 110 112 118; /* #6E7076  tertiary text */
-  --c-faint: 143 145 150; /* #8F9196  section labels */
-  --c-disabled: 168 170 176; /* #A8AAB0  hints, idle glyphs */
-  --c-ghost: 200 202 207; /* #C8CACF  faintest microcopy */
-  --c-accent: 109 91 208; /* #6D5BD0  links/actions, selection rails */
+  /* `track` draws the composer's only boundary and the idle Send/Stop ring —
+     UI components, so a 3:1 floor, not a decorative hairline. It was #E8E8E5,
+     1.14:1: the ring around the send button was invisible. */
+  --c-track: 140 142 148; /* #8C8E94  composer idle border, meter track — 3.05:1 */
+  --c-track-hi: 110 112 118; /* #6E7076  composer/input focused border — 4.61:1 */
+  --c-ink: 27 27 29; /* #1B1B1D  primary text — 16.03:1 */
+  --c-ink-soft: 67 69 74; /* #43454A  secondary text — 8.94:1 */
+  --c-muted: 91 93 99; /* #5B5D63  tertiary text — 6.14:1 */
+  --c-faint: 99 101 107; /* #63656B  section labels — 5.43:1 */
+  --c-disabled: 105 107 113; /* #696B71  hints, idle glyphs — 4.97:1 */
+  --c-ghost: 110 112 118; /* #6E7076  faintest microcopy — 4.61:1 */
+  --c-accent: 109 91 208; /* #6D5BD0  links/actions, selection rails — 4.83:1 */
   --c-on-accent: 255 255 255; /* #FFFFFF  glyph on an accent fill */
-  --c-danger: 180 84 78; /* #B4544E  real destructive actions only */
-  --c-scrim: 0 0 0; /* used at .55 alpha behind the modal */
+  --c-danger: 180 84 78; /* #B4544E  real destructive actions only — 4.53:1 */
+  --c-scrim: 0 0 0; /* used at .55 alpha behind the modal and the drawer */
+  /* The composer scrollbar thumb — see .bespoke-scroll below for why it is not
+     `rail`. 3.22:1 / 4.61:1 on hover. */
+  --c-scrollbar: 136 138 144; /* #888A90 */
+  --c-scrollbar-hi: 110 112 118; /* #6E7076 */
 
   --shadow-popover:
     0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 18px 48px rgba(0, 0, 0, 0.18);
@@ -62,6 +79,11 @@
   --c-on-accent: 16 14 34; /* #100E22 */
   --c-danger: 226 166 166; /* #E2A6A6 */
   --c-scrim: 0 0 0;
+  /* Dark is the designed reference and is untouched: these are `rail` and
+     `track-hi`, byte for byte, which is what the thumb rendered as before it
+     had a token of its own. */
+  --c-scrollbar: 46 47 51; /* #2E2F33 */
+  --c-scrollbar-hi: 58 59 64; /* #3A3B40 */
 
   --shadow-popover:
     0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 18px 48px rgba(0, 0, 0, 0.65);
@@ -158,14 +180,20 @@ textarea[data-composer]:focus-visible {
 .bespoke-scroll::-webkit-scrollbar-track {
   background: transparent;
 }
+/* The thumb has its own token rather than borrowing `rail`. `rail` is a 1px
+   separator color — at 1.36:1 on light it made the one scrollbar the design
+   deliberately keeps VISIBLE effectively invisible, and darkening `rail` itself
+   would have repainted every menu border and section rule in the app. An
+   affordance that exists to be seen gets the 3:1 non-text floor; a hairline
+   stays a hairline. */
 .bespoke-scroll::-webkit-scrollbar-thumb {
-  background-color: rgb(var(--c-rail));
+  background-color: rgb(var(--c-scrollbar));
   border-radius: 999px;
   border: 4px solid transparent;
   background-clip: padding-box;
 }
 .bespoke-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: rgb(var(--c-track-hi));
+  background-color: rgb(var(--c-scrollbar-hi));
 }
 
 /* Calm interaction motion — a short color ease on the things you hover, press,

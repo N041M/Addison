@@ -134,10 +134,16 @@ export function RestorePointsSection({
     <>
       {/* The core's sticky notice that an automatic restore point couldn't be
           saved. It stays until the person saves one themselves. */}
-      {warning && <SurfaceRow name={warning} />}
+      {warning && <SurfaceRow wrap name={warning} />}
 
-      {/* Name the target, then offer the action. Never the other way round. */}
-      {canRestore && targetName && !confirming && (
+      {/* Name the target, then offer the action. Never the other way round —
+          and the naming line STAYS THROUGH THE CONFIRM (the confirm is the row's
+          own child, exactly as on the per-row path below). A confirm that
+          replaces the name with the consequence puts the target off screen at
+          the one moment the person is deciding, which is the blind press this
+          file exists to prevent. The action itself is dropped while confirming
+          so there is only ever one live "restore" control. */}
+      {canRestore && targetName && (
         <SurfaceRow
           name={
             <>
@@ -145,32 +151,25 @@ export function RestorePointsSection({
             </>
           }
           value={target ? formatWhen(target.createdAt) : undefined}
-          action="restore"
+          action={confirming ? undefined : "restore"}
           actionAriaLabel="Restore to the last working state"
           actionDisabled={busy}
-          onAction={() => setConfirming(true)}
-        />
-      )}
-      {canRestore && targetName && confirming && (
-        <SurfaceRow
-          name={consequence}
-          actions={
-            <>
-              <RowAction
-                disabled={busy}
-                onClick={() => {
-                  setConfirming(false);
-                  void handleRestoreLastWorking();
-                }}
-              >
-                Restore
-              </RowAction>
-              <RowAction tone="muted" onClick={() => setConfirming(false)}>
-                Not now
-              </RowAction>
-            </>
-          }
-        />
+          onAction={confirming ? undefined : () => setConfirming(true)}
+        >
+          {confirming && (
+            <RowConfirm
+              busy={busy}
+              confirmLabel="Restore"
+              onConfirm={() => {
+                setConfirming(false);
+                void handleRestoreLastWorking();
+              }}
+              onCancel={() => setConfirming(false)}
+            >
+              <p className="m-0">{consequence}</p>
+            </RowConfirm>
+          )}
+        </SurfaceRow>
       )}
 
       {/* Restore points exist, but the one-action restore has no target — G3's
@@ -195,7 +194,7 @@ export function RestorePointsSection({
 
       {/* The outcome of the last save/restore/remove, in plain words. Stays put
           rather than fading — this is a sentence someone re-reads. */}
-      {notice && <SurfaceRow name={notice} />}
+      {notice && <SurfaceRow wrap name={notice} />}
 
       <SurfaceRow
         name="All restore points"

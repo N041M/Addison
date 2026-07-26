@@ -233,11 +233,43 @@ describe("streamed text vs. the streaming scramble", () => {
       pending: true,
       content: TRUE_TEXT,
     });
-    // ...and what is DISPLAYED is two ticks' worth of window (5 chars each),
-    // whose contents are still noise rather than the answer's opening words.
+    // ...and what is DISPLAYED is three ticks' worth of window (5 chars each:
+    // one emitted synchronously by the first `push`, two from the timer), whose
+    // contents are still noise rather than the answer's opening words.
     const display = result.current.streamDisplay!;
-    expect(display).toHaveLength(10);
-    expect(display).not.toBe(TRUE_TEXT.slice(0, 10));
+    expect(display).toHaveLength(15);
+    expect(display).not.toBe(TRUE_TEXT.slice(0, 15));
+  });
+
+  // A chunk belongs to a TURN, not to whatever message happens to be flagged
+  // `pending`. Keying on the flag meant a chunk arriving after the answer had
+  // settled — the flag is cleared then, but the overlay lives on through the
+  // reveal — was committed to nothing and displayed anyway: the reader watched a
+  // sentence resolve out of the glyphs that no message contained, and it
+  // vanished when the overlay dropped. The display may lag the truth. It may
+  // never exceed it.
+  it("drops a chunk that has no live turn to attach it to", async () => {
+    const { result } = sendAndStream();
+
+    await act(async () => {
+      deferreds[0].resolve({ text: TRUE_TEXT });
+      await flushMicrotasks();
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 40); // any reveal is long over
+    });
+    expect(result.current.streamDisplay).toBeNull();
+
+    act(() => {
+      result.current.appendStreamedText(" One more thing.");
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
   });
 
   it("drops the overlay when the turn settles, so the real answer shows", async () => {
@@ -314,6 +346,23 @@ describe("revealing an answer that arrived whole", () => {
     return rendered;
   }
 
+  // The overlay has to be in place on the SAME commit that settles the message.
+  // It wasn't: `setStreamMessageId` and the settled message batched together
+  // while the first frame was still 38ms away, so `streamDisplay` was null for
+  // that commit and ChatThread rendered the finished answer in full — parsed
+  // markdown, final layout — before it dissolved into glyphs and jumped back to
+  // plain text. One flash of the whole answer, then a reveal of it (review
+  // 2026-07-26). Nothing here advances a timer: that is the point.
+  it("has the overlay in place on the very commit that settles the answer", async () => {
+    const { result } = await sendAndLand();
+
+    const last = result.current.messages.at(-1)!;
+    expect(last).toMatchObject({ pending: false, content: ANSWER });
+    expect(result.current.streamMessageId).toBe(last.id);
+    expect(result.current.streamDisplay).toHaveLength(5); // one tick, at t=0
+    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 5));
+  });
+
   it("commits the true answer immediately, and shows it resolving", async () => {
     const { result } = await sendAndLand();
 
@@ -324,10 +373,23 @@ describe("revealing an answer that arrived whole", () => {
     // Committed: the real answer, in full, from the moment it landed.
     const last = result.current.messages.at(-1)!;
     expect(last).toMatchObject({ pending: false, content: ANSWER });
-    // Displayed: two ticks of window — noise, not the answer's opening words.
+    // Displayed: three ticks of window (the synchronous first frame plus two
+    // from the timer) — noise, not the answer's opening words.
     expect(result.current.streamMessageId).toBe(last.id);
-    expect(result.current.streamDisplay).toHaveLength(10);
-    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 10));
+    expect(result.current.streamDisplay).toHaveLength(15);
+    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 15));
+  });
+
+  // The engine is a bare 38ms interval closed over this hook's setters. Nothing
+  // else stops it: a reveal running when the chat column is swapped out (or the
+  // app torn down) went on ticking and setting state on a dead hook for as long
+  // as the webview lived.
+  it("stops the reveal when the hook unmounts", async () => {
+    const { unmount } = await sendAndLand();
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("lands on the exact answer and hands the message back", async () => {

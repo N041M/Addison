@@ -24,9 +24,12 @@
 // back it has saved, would be a lie in exactly the place a person is checking
 // whether they can trust the thing (IMPLEMENTATION.md, standing rule 1).
 //
-// `pinned` is the one slot above the title, and it exists for a safety reason:
-// a permission card that is waiting on an answer blocks the turn, so it must be
-// visible on whatever page the person is standing on — never only on chat.
+// `pinned` is the one slot above the title: whatever must be read on THIS page
+// rather than on chat — today the engine/status banners. It still renders any
+// node, and a permission card in it reads correctly; App no longer puts one
+// there because a card inside <main> sat under the Restore points modal's and
+// the mobile drawer's scrim (both `fixed z-40`), so the Allow button could not
+// be clicked. App gives it a fixed layer of its own instead.
 
 import type { MouseEvent, ReactNode } from "react";
 
@@ -37,10 +40,9 @@ interface SurfaceProps {
   title: string;
   description?: string;
   /**
-   * Rendered ABOVE the title, inside the same reading column: status banners and
-   * — the reason this slot exists — a pending permission card. A question that
-   * is holding a turn open must never be invisible because the person walked to
-   * Settings while it was on screen.
+   * Rendered ABOVE the title, inside the same reading column: the engine/status
+   * banners, which have no other home on a surface (the widget rail that carries
+   * them on chat is collapsed to zero width here).
    */
   pinned?: ReactNode;
   children?: ReactNode;
@@ -173,6 +175,17 @@ interface SurfaceRowProps {
   actionTone?: RowActionTone;
   /** Two or more controls in the action slot — replaces `action`/`onAction`. */
   actions?: ReactNode;
+  /**
+   * The name is a SENTENCE, not a label: let it wrap instead of truncating.
+   *
+   * Truncation is right for names (a folder path, a model id) — one measured 8px
+   * out of its box at 375px, which is why it was added. It is wrong for the rows
+   * that carry prose: the G3 sticky warning, the two honest-silence lines, the
+   * "engine isn't connected" sentences. Clipping those to one line hides safety
+   * copy and leaves a `title` tooltip as the only way back — which a keyboard or
+   * screen-reader user does not have (review 2026-07-26).
+   */
+  wrap?: boolean;
   /** A blocky annotation above the name (the G4 "Permanent" tag). */
   tag?: ReactNode;
   /** Optional block under the row (an inline confirm, a form) — full width. */
@@ -188,6 +201,7 @@ export function SurfaceRow({
   actionDisabled = false,
   actionTone = "accent",
   actions,
+  wrap = false,
   tag,
   children,
 }: SurfaceRowProps) {
@@ -197,8 +211,17 @@ export function SurfaceRow({
       <div className="flex items-baseline gap-3">
         {/* Names stay on lh `normal` — the prototype's rows are single-line and
             this keeps row heights pixel-exact; copy that wraps belongs in the
-            row's children slot, which carries leading-[1.55]. */}
-        <span data-surf="1" className="min-w-0 text-ink-soft">
+            row's children slot, which carries leading-[1.55]. `min-w-0` alone
+            let a long name paint straight out of its box (measured: 8px past
+            the column at 375px) because nothing was clipping it; `truncate`
+            does, and the `title` keeps the whole string available. */}
+        <span
+          data-surf="1"
+          title={!wrap && typeof name === "string" ? name : undefined}
+          className={
+            "min-w-0 text-ink-soft " + (wrap ? "leading-[1.55]" : "truncate")
+          }
+        >
           {name}
         </span>
         <span className="flex-1" />

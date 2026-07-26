@@ -60,10 +60,10 @@ export function RoutingCard({
   const { routing, routingLoaded, busy, error, handleSetStrategy, handleSaveChain } = state;
 
   if (!connected) {
-    return <SurfaceRow name="This appears here once Addison’s engine is connected." />;
+    return <SurfaceRow wrap name="This appears here once Addison’s engine is connected." />;
   }
   if (!routingLoaded || !routing) {
-    return <SurfaceRow name="Loading your settings…" />;
+    return <SurfaceRow wrap name="Loading your settings…" />;
   }
 
   return (
@@ -175,7 +175,7 @@ function ChainBuilder({
 
   return (
     <>
-      <SurfaceRow name="Addison tries these in order, top first, and moves down when one can’t answer." />
+      <SurfaceRow wrap name="Addison tries these in order, top first, and moves down when one can’t answer." />
 
       {draft.length === 0 ? (
         <SurfaceRow name="No models yet" value="add one below to build the order" />

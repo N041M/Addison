@@ -3,7 +3,7 @@
 // a mechanical move: the logic — especially the currentTurnRef race guards that
 // drop late results from stopped/superseded turns — is unchanged.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/protocol";
 import type { DisplayMessage } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
@@ -90,6 +90,19 @@ export function useTurn({
     setStreamMessageId(null);
   }
 
+  // Nothing else stops the animation when this hook goes away. The engine is a
+  // plain 38ms interval holding a closure over this hook's setters, so a reveal
+  // running when the webview swaps the chat out (or the app tears down) would
+  // keep ticking and keep calling setState on a dead hook, forever. Refs only —
+  // an unmount cleanup must not touch state.
+  useEffect(() => {
+    return () => {
+      streamRef.current?.stop();
+      streamRef.current = null;
+      revealingRef.current = false;
+    };
+  }, []);
+
   /**
    * Reveal a FINISHED answer with the scramble, instead of having it appear in
    * one frame. The core doesn't stream, so without this every reply plops in
@@ -113,6 +126,14 @@ export function useTurn({
       onDone: () => {
         revealingRef.current = false;
         streamTextRef.current = "";
+        // Release the finished engine. `appendStreamedText` only builds one when
+        // `streamRef` is empty, so a spent reveal left sitting here is an engine
+        // a later chunk gets pushed into — at the reveal's rate, from the
+        // reveal's own leading edge, with no `streamMessageId` set. That path is
+        // now closed at the other end too (a chunk with no live turn is
+        // dropped); this keeps "streamRef holds an engine that can still be
+        // pushed to" true on its own rather than by the other end's grace.
+        streamRef.current = null;
         setStreamDisplay(null);
         setStreamMessageId(null);
       },
@@ -127,7 +148,18 @@ export function useTurn({
    */
   function appendStreamedText(text: string) {
     if (!text) return;
-    setMessages((prev) => prev.map((m) => (m.pending ? { ...m, content: m.content + text } : m)));
+    // Which message this chunk belongs to. Keyed on the running turn, NOT on the
+    // `pending` flag: the flag is cleared the moment the result lands while the
+    // overlay lives on through the reveal, so a chunk arriving in that gap used
+    // to be committed to nothing and displayed anyway — the reader watched a
+    // sentence resolve that no message held, and it vanished when the overlay
+    // dropped. No live turn means no message to append to, so the chunk is
+    // dropped rather than shown: the display may lag the truth, never exceed it.
+    const targetId = currentTurnRef.current;
+    if (!targetId) return;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === targetId ? { ...m, content: m.content + text } : m)),
+    );
     if (!isMotionEnabled()) {
       // Reduced motion / motion off: no overlay at all, so the text just
       // appends. Cheaper than running an engine that emits the input unchanged.
@@ -136,7 +168,9 @@ export function useTurn({
     }
     streamTextRef.current += text;
     if (!streamRef.current) {
-      setStreamMessageId(currentTurnRef.current);
+      setStreamMessageId(targetId);
+      // No `advanceChars`: the answer's full length is unknown while it is still
+      // arriving, so the engine paces itself against the backlog instead.
       streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame));
     }
     streamRef.current.push(streamTextRef.current);

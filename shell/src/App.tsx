@@ -27,7 +27,7 @@
 // resolve against the section instead of the viewport. App owns them, so Escape
 // can also be ordered honestly: drawer, then modal, then the surface itself.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Method, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
 import type { DisplayMessage, LocalSetupState, ProfileState, View } from "./types/ui";
 import {
@@ -142,6 +142,14 @@ export function App() {
   // the chat thread (no side column fits). The drawer is ephemeral — deliberately
   // NOT persisted.
   const isMobile = useMediaQuery("(max-width: 767.98px)");
+  // The step BETWEEN the two: 768–1024px has room for one side column, not two.
+  // With both up, an 820px window left the reading column 208px wide (sidebar
+  // 212 + rail 232 + the 44px gutters), which wrapped the greeting subline to
+  // three lines and the suggestion chips to two rows — measured 2026-07-26. The
+  // rail sheds first because it is ambient; the sidebar is navigation, and the
+  // drawer doesn't take over until 768. Widgets are not lost — below this width
+  // they render inline at the foot of the thread, exactly as they do on mobile.
+  const railBeside = !useMediaQuery("(max-width: 1023.98px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Appearance — "light" | "dark" | "system" ("Match this computer", the
   // default). The class on <html> drives the whole palette. The inline script in
@@ -806,10 +814,8 @@ export function App() {
     : undefined;
 
   // The engine/status banners, shown in whichever column the person is looking
-  // at. On a surface they ride in its `pinned` slot together with the consent
-  // card — a question that is holding a turn open must never be invisible
-  // because someone walked to Settings while it was on screen (the widget rail,
-  // which normally carries it, is not on a surface).
+  // at. On a surface they ride in its `pinned` slot — the widget rail, which
+  // normally carries them on chat, is collapsed to zero width there.
   const banners =
     !connected || statusBanner ? (
       <>
@@ -821,13 +827,10 @@ export function App() {
         )}
       </>
     ) : null;
-  const surfacePinned =
-    banners || consentBlock ? (
-      <>
-        {consentBlock}
-        {banners}
-      </>
-    ) : undefined;
+  // Only the banners ride in the surface's own `pinned` slot now. The consent
+  // card is hoisted onto a fixed layer of its own (see the end of the render) —
+  // inside <main> it sat under the restore modal's and the drawer's scrim.
+  const surfacePinned = banners ?? undefined;
 
   // The anchored model popup's rows: the SAME real catalog the composer's menu
   // reads (cloud models from the connected providers + whatever is set up
@@ -908,7 +911,7 @@ export function App() {
     modeNote: profileModeNote,
   };
 
-  const railVisible = railOpen && view === "chat";
+  const railVisible = railOpen && view === "chat" && railBeside;
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-paper text-[13px] text-ink">
@@ -921,8 +924,25 @@ export function App() {
               pairs it with an "Addison" wordmark; that pairing is redundant in
               the app's own chrome — the tile already says it, and the word was
               spending the view title's width budget (the title truncated at
-              320px). Owner decision 2026-07-26. */}
-          <AddisonMark size={22} />
+              320px). Owner decision 2026-07-26.
+              It is also the way home: clicking it starts a new chat and returns
+              to the thread, so the brand doubles as the one control that always
+              gets you back to a blank page. That makes it a real button — the
+              tile inside stays `aria-hidden`, and the NAME lives here, because a
+              control whose only label is a logo is unusable by screen reader.
+              Held while a turn or a permission prompt is in flight, exactly like
+              the sidebar's "＋ New chat": abandoning a running turn by
+              mis-clicking the logo is not a thing this should make easy. */}
+          <button
+            type="button"
+            onClick={newChatFromNav}
+            disabled={!connected || controlsBusy}
+            title="New chat"
+            aria-label="New chat"
+            className="shrink-0 rounded-[3px] transition-opacity hover:opacity-80 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <AddisonMark size={22} />
+          </button>
           {isSurface && (
             <button
               type="button"
@@ -979,7 +999,9 @@ export function App() {
               Undo last action
             </button>
           )}
-          {!isSurface && !isMobile && (
+          {/* Only offered while the rail has a column to appear in — below
+              1024px it would toggle something that is never on screen. */}
+          {!isSurface && railBeside && (
             <button
               type="button"
               onClick={() => setRailOpen((v) => !v)}
@@ -1000,6 +1022,13 @@ export function App() {
           <div
             className="shrink-0 overflow-hidden"
             aria-hidden={!sideOpen}
+            // A collapsed column is 0px wide and fully transparent, but its
+            // buttons stayed in the tab order: Tab landed on Tools / Snapshots /
+            // Settings with the focus ring rendering nowhere, and Enter
+            // navigated. `inert` is what actually removes them — and it is also
+            // what makes the aria-hidden above legal, since focusable
+            // descendants inside aria-hidden are an ARIA violation.
+            {...inertWhen(!sideOpen)}
             style={{
               transition:
                 "width .35s ease, opacity .25s ease, margin-right .35s ease, transform .35s ease",
@@ -1045,12 +1074,13 @@ export function App() {
                       {proposalBlock}
                       {widgetProposalBlock}
                       {offerBlock}
-                      {/* Mobile: there's no side rail, so the widgets live inline
-                          at the foot of the thread — visible on the chat view,
-                          carrying the work + consent blocks with them. Desktop:
-                          work/consent go inline only when the rail is hidden
-                          (otherwise they're in the rail). */}
-                      {isMobile ? (
+                      {/* Below 1024px there's no side rail (mobile drawer or the
+                          768–1024 band), so the widgets live inline at the foot
+                          of the thread — visible on the chat view, carrying the
+                          work + consent blocks with them. Wide: work/consent go
+                          inline only when the rail is hidden (otherwise they're
+                          in the rail). */}
+                      {!railBeside ? (
                         <WidgetRail
                           variant="inline"
                           work={workBlock}
@@ -1150,11 +1180,17 @@ export function App() {
         </div>
 
         {/* Right column: widgets. Chat view only — a surface takes the whole
-            middle, and the rail's contents are about the conversation. */}
-        {!isMobile && (
+            middle, and the rail's contents are about the conversation. Below
+            1024px it isn't rendered at all: there is no room for two side
+            columns, and the same widgets ride inline in the thread instead. */}
+        {railBeside && (
           <div
             className="shrink-0 overflow-hidden"
             aria-hidden={!railVisible}
+            // Same reason as the sidebar above: a 0px-wide, transparent rail
+            // whose buttons still take Tab stops puts the focus ring nowhere and
+            // lets Enter run a widget nobody can see.
+            {...inertWhen(!railVisible)}
             style={{
               transition:
                 "width .35s ease, opacity .25s ease, margin-left .35s ease, transform .35s ease",
@@ -1167,10 +1203,10 @@ export function App() {
           >
             <WidgetRail
               work={workBlock}
-              // On a surface the consent card is pinned at the top of the
-              // surface column instead (Surface's `pinned`) — the rail is
-              // collapsed to zero width there, so a card left in it would be a
-              // blocking question nobody can see or answer.
+              // On a surface the consent card is on its own fixed layer instead
+              // (see the end of the render) — the rail is collapsed to zero
+              // width there, so a card left in it would be a blocking question
+              // nobody can see or answer.
               consent={isSurface ? null : consentBlock}
               developer={profileModeNote === "open"}
               widgets={widgetsState.widgets}
@@ -1235,11 +1271,59 @@ export function App() {
         <RestorePointsModal
           connected={connected}
           snapshots={snapshotsState}
+          // The footer's undo promise is mode-scoped: under OPEN, `run_command`
+          // is invariant 2's explicit exemption from undo(), so "everything can
+          // be undone" would be false there.
+          mode={profile?.mode}
           onClose={() => setRestorePointsOpen(false)}
         />
       )}
+
+      {isSurface && consentBlock && (
+        <SurfaceConsentLayer>{consentBlock}</SurfaceConsentLayer>
+      )}
     </div>
   );
+}
+
+/**
+ * The pending consent card while a surface is showing, on a layer of its own.
+ *
+ * It used to ride in the surface's `pinned` slot inside <main>, which has no
+ * stacking context — so the Restore points modal and the mobile drawer (both
+ * `fixed inset-0 z-40`) drew their 55% scrim over it and ATE THE CLICK:
+ * elementFromPoint at "Allow" returned the scrim, and pressing it closed the
+ * modal instead of answering. A permission card holds the turn open, so that
+ * was a dead end.
+ *
+ * Hoisted ABOVE the floating chrome rather than suppressing it, so the modal
+ * underneath stays usable — hence z-50, which must stay strictly above every
+ * `fixed z-40` overlay in the app. The layer itself is click-through
+ * (`pointer-events-none`) so it never steals presses meant for the page below;
+ * only the card takes them. Chat is untouched: there the card lives in the
+ * widget rail, or inline in the thread when the rail is hidden.
+ *
+ * Exported for the regression test — the z-order relationship is the fix.
+ */
+export function SurfaceConsentLayer({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-consent-layer=""
+      className="pointer-events-none fixed inset-x-0 top-[72px] z-50 flex justify-center px-4"
+    >
+      <div className="pointer-events-auto w-full max-w-[580px] rounded-[7px] shadow-modal">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// React 18 has no typed `inert` prop (React 19 adds one), but the ATTRIBUTE is
+// what browsers act on — it takes the subtree out of the tab order, out of the
+// a11y tree, and out of hit-testing. Spread it as an attribute so a hidden
+// column stops collecting focus stops nothing can render.
+function inertWhen(hidden: boolean): Record<string, string> {
+  return hidden ? { inert: "" } : {};
 }
 
 // ---------------------------------------------------------------------------

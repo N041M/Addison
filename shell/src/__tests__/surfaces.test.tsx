@@ -19,6 +19,7 @@
 // today, which is an assertion, not an absence.
 
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { useState } from "react";
 import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 import { ToolsSurface } from "../components/ToolsSurface";
 import { SnapshotsSurface, groupSnapshotsByRecency } from "../components/SnapshotsSurface";
@@ -141,6 +142,88 @@ describe("a surface's pinned slot", () => {
 });
 
 // ---------------------------------------------------------------------------
+// (b2) the consent card itself — the question, the consequence, the command
+// ---------------------------------------------------------------------------
+//
+// This is the control that authorises a destructive command, and CLAUDE.md's
+// destructive-prompt rule makes the exact command text a REQUIREMENT of every
+// destructive invocation: "the card carries the exact command text so the user
+// knows precisely what they are approving each time". Nothing pinned the
+// consequence sentence or the command chip, so dropping either rendered a card
+// that asks for consent without saying what to. Both are the core's strings,
+// rendered verbatim — the card never composes prose of its own.
+
+const RUN_REQUEST = {
+  toolId: "run_command",
+  label: "Addison would like to run a command",
+  description: "This changes files on your computer. It will run: rm -rf ./build",
+  riskTier: "high" as const,
+};
+
+/** Fixed heights are the only measurable size in jsdom (no layout, and Tailwind
+ * isn't compiled here), so the tap target is read off the class. */
+function tapHeightPx(el: HTMLElement): number {
+  const match = /(?:^|\s)h-\[(\d+(?:\.\d+)?)px\]/.exec(el.className);
+  return match ? Number(match[1]) : 0;
+}
+
+describe("the consent card", () => {
+  it("renders the core's consequence sentence, verbatim", () => {
+    render(
+      <PermissionCard
+        request={{
+          toolId: "read_web_page",
+          label: "Addison would like to read a page",
+          description: "It will fetch example.com.",
+          riskTier: "low",
+        }}
+        onRespond={vi.fn()}
+      />,
+    );
+    // Without the consequence the card asks for consent to an unnamed effect.
+    expect(screen.getByText("It will fetch example.com.")).toBeTruthy();
+  });
+
+  it("shows the exact command on a destructive card, as a machine fact", () => {
+    render(<PermissionCard request={RUN_REQUEST} onRespond={vi.fn()} />);
+    // The lead keeps the core's wording up to and including "run:"; the command
+    // itself is split off into the mono chip, and is never dropped or shortened.
+    expect(screen.getByText("This changes files on your computer. It will run:")).toBeTruthy();
+    const chip = screen.getByText("rm -rf ./build");
+    expect(chip.className).toContain("font-mono");
+    // Truncated on screen, so the full text has to survive somewhere reachable.
+    expect(chip.getAttribute("title")).toBe("rm -rf ./build");
+  });
+
+  it("gives both answers a real target, with Allow the dominant one", () => {
+    render(<PermissionCard request={RUN_REQUEST} onRespond={vi.fn()} />);
+    const allow = screen.getByRole("button", { name: "Allow" });
+    const notNow = screen.getByRole("button", { name: "Not now" });
+    // WCAG 2.2 SC 2.5.8: 24×24 CSS px is the floor. These were 14.5px tall on
+    // desktop — the mobile-only rescue (max-md:min-h-[44px]) never applied.
+    expect(tapHeightPx(allow)).toBeGreaterThanOrEqual(24);
+    expect(tapHeightPx(notNow)).toBeGreaterThanOrEqual(24);
+    // …and the 44px mobile target survives.
+    expect(allow.className).toContain("max-md:h-11");
+    expect(notNow.className).toContain("max-md:h-11");
+    // One obvious choice: Allow carries the accent FILL, "Not now" does not, so
+    // the two are not distinguished by hue alone.
+    expect(allow.className).toContain("bg-accent");
+    expect(notNow.className).not.toContain("bg-accent");
+  });
+
+  it("still says exactly what the core said — no copy of its own", () => {
+    const onRespond = vi.fn();
+    render(<PermissionCard request={RUN_REQUEST} onRespond={onRespond} />);
+    expect(screen.getByText(RUN_REQUEST.label)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    expect(onRespond).toHaveBeenCalledWith(true);
+    fireEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(onRespond).toHaveBeenCalledWith(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // (c) the anchored model popup
 // ---------------------------------------------------------------------------
 const POPUP_OPTIONS = [
@@ -229,14 +312,55 @@ function snapshotsState(over: Partial<SnapshotsState> = {}): SnapshotsState {
 }
 
 describe("the restore points modal", () => {
-  it("carries the frozen footer note and the real save control", () => {
+  it("carries the real save control", () => {
     const state = snapshotsState();
     render(<RestorePointsModal connected={true} snapshots={state} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "save one now" }));
+    expect(state.handleCreateSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  // The footer's undo claim is MODE-SCOPED. "everything can be undone" is true
+  // under SAFE — SAFE-2 makes a real undo() a registration requirement above LOW
+  // — and false under OPEN, where `run_command` is that rule's one explicit
+  // exemption and Settings already says "…some actions can't be undone" two
+  // sections away. This test used to freeze the SAFE sentence for every mode,
+  // which is what let the modal contradict the profile card.
+  it("claims everything can be undone only in SAFE mode", () => {
+    render(
+      <RestorePointsModal
+        connected={true}
+        snapshots={snapshotsState()}
+        mode="safe"
+        onClose={vi.fn()}
+      />,
+    );
     expect(
       screen.getByText("everything can be undone · restores never delete your files"),
     ).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "save one now" }));
-    expect(state.handleCreateSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops claiming everything can be undone in OPEN mode", () => {
+    render(
+      <RestorePointsModal
+        connected={true}
+        snapshots={snapshotsState()}
+        mode="open"
+        onClose={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText("some actions can't be undone · restores never delete your files"),
+    ).toBeTruthy();
+    expect(document.body.textContent).not.toContain("everything can be undone");
+  });
+
+  it("treats an absent mode as SAFE, like ProfileState.mode does", () => {
+    // An old core sends no mode at all, and a core with no OPEN mode is a core
+    // where the SAFE claim holds.
+    render(<RestorePointsModal connected={true} snapshots={snapshotsState()} onClose={vi.fn()} />);
+    expect(
+      screen.getByText("everything can be undone · restores never delete your files"),
+    ).toBeTruthy();
   });
 
   it("closes on the ✕ and on the scrim, but never on a click inside", () => {
@@ -252,6 +376,92 @@ describe("the restore points modal", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close restore points" }));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) the modal's focus, which `aria-modal="true"` makes load-bearing
+// ---------------------------------------------------------------------------
+//
+// `aria-modal="true"` tells assistive tech that everything outside the dialog is
+// gone. That is a PROMISE about where focus can be, and it was not kept: opening
+// moved no focus at all, two Tabs walked out to the header behind the scrim (with
+// nothing announced, because those stops are hidden), and closing dropped focus
+// on the floor. On the one surface a person opens when something has already gone
+// wrong. jsdom implements no sequential focus navigation, which is exactly why
+// the component handles Tab itself rather than leaning on the browser — the wrap
+// under test here is the wrap that ships.
+
+/** The modal plus a real opener outside it, so the close path has somewhere to
+ * hand focus back to. */
+function ModalHarness() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button type="button" onClick={() => setOpen(true)}>
+        open restore points
+      </button>
+      {open && (
+        <RestorePointsModal
+          connected={true}
+          snapshots={snapshotsState()}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Open it the way a person does: the trigger has focus when it is pressed
+ * (jsdom's click doesn't focus, a browser's does). */
+function openModal() {
+  render(<ModalHarness />);
+  const trigger = screen.getByRole("button", { name: "open restore points" });
+  trigger.focus();
+  fireEvent.click(trigger);
+  return trigger;
+}
+
+describe("the restore points modal's focus", () => {
+  it("moves focus into the dialog when it opens", () => {
+    openModal();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("keeps Tab and Shift+Tab inside the dialog", () => {
+    openModal();
+    const dialog = screen.getByRole("dialog");
+    const save = screen.getByRole("button", { name: "save one now" });
+    const remove = screen.getByRole("button", { name: /^Remove/ });
+
+    // First Tab enters at the near end rather than escaping to the page.
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: "Tab" });
+    expect(document.activeElement).toBe(save);
+
+    // Forward from the last stop wraps to the first, never out to the header.
+    remove.focus();
+    fireEvent.keyDown(remove, { key: "Tab" });
+    expect(document.activeElement).toBe(save);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    // And backwards from the first wraps to the last.
+    fireEvent.keyDown(save, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(remove);
+  });
+
+  it("gives focus back to whatever opened it", () => {
+    const trigger = openModal();
+    expect(document.activeElement).not.toBe(trigger);
+    fireEvent.click(screen.getByRole("button", { name: "Close restore points" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("gives focus back on the scrim path too", () => {
+    const trigger = openModal();
+    fireEvent.click(screen.getByRole("dialog").parentElement as HTMLElement);
+    expect(document.activeElement).toBe(trigger);
   });
 });
 

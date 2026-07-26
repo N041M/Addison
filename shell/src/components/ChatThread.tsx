@@ -27,7 +27,7 @@
 //     anyway — this check makes that refusal explicit rather than incidental, so
 //     a rendered answer is never rewritten by an animation.
 
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode, type UIEvent } from "react";
 import type { DisplayMessage } from "../types/ui";
 import { Markdown } from "./Markdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
@@ -96,6 +96,11 @@ export function resetThreadStaggerForTests() {
  * viewport can actually show. Everything above the fold stays still. */
 const STAGGER_ROWS = 12;
 
+/** How close to the foot of the thread still counts as "following along" —
+ * enough slack for a fractional scroll position, not enough to swallow a
+ * deliberate scroll away. */
+const NEAR_BOTTOM_PX = 40;
+
 export function ChatThread({
   messages,
   onRetry,
@@ -117,13 +122,41 @@ export function ChatThread({
   const visible = messages.filter((m) => m.role !== "tool");
   const isEmpty = visible.length === 0;
 
-  // Keep the newest content in view. Skipped while the thread is empty: the
-  // greeting stack is the content then, and it must stay put.
+  // "Is this the same thread as a moment ago?", cheaply: the count plus the two
+  // end ids. Used only by the stagger effect below, to tell adopting the launch
+  // conversation's id (same messages, new key) from opening another chat.
+  const threadIdentity =
+    `${visible.length}:${visible[0]?.id ?? ""}:${visible[visible.length - 1]?.id ?? ""}`;
+  const previousIdentity = useRef(threadIdentity);
+
+  // Whether the reader is parked at the foot of the thread. Recorded when THEY
+  // scroll, not measured inside the effect below: by the time an effect runs the
+  // new text is already in the DOM, where "was at the bottom" and "was one
+  // answer above it" measure the same.
+  const followingRef = useRef(true);
+  const handleScroll = (event: UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  };
+
+  // Keep the newest content in view — but only for a reader who is already
+  // there. Skipped while the thread is empty: the greeting stack is the content
+  // then, and it must stay put.
+  //
+  // TWO THINGS THIS EFFECT MUST NOT DO, both measured on this branch:
+  //   * Jail the reader. A reveal repaints ~30 times in 1.1s, and scrolling up
+  //     to reread an earlier answer was impossible — the thread yanked itself
+  //     back down before the wheel stopped.
+  //   * Scroll on renders that added nothing. `header` and `footer` are
+  //     deliberately absent from the dependency list: App rebuilds the footer as
+  //     a fresh inline fragment on EVERY render, so listing it meant an
+  //     unrelated state change elsewhere in the app scrolled the thread.
+  //     `streamMessageId` is an id, not content, and is out for the same reason.
   useEffect(() => {
-    if (isEmpty) return;
+    if (isEmpty || !followingRef.current) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, streamDisplay, streamMessageId, header, footer]);
+  }, [messages, streamDisplay]);
 
   // Opening another conversation: the rows rise in one after another and their
   // labels/bodies resolve out of the scramble behind them. The session's very
@@ -144,25 +177,51 @@ export function ChatThread({
       return;
     }
     if (lastStaggeredConversation === key) return;
+    // Learning the launch conversation's id is NOT a switch. `null` means "the
+    // conversation the core minted for this launch, whose id we don't know yet",
+    // and the first completed turn adopts it — the key goes null → "c-…" with
+    // the very same messages on screen. Replaying the switch there re-staggered
+    // and re-scrambled the thread on top of the reveal that was still running
+    // (review 2026-07-26). Opening a different chat from an untouched one also
+    // goes null → "c-…", but it BRINGS different messages, which is what the
+    // identity check separates.
+    const adopted =
+      lastStaggeredConversation === null && previousIdentity.current === threadIdentity;
     lastStaggeredConversation = key;
     const list = listRef.current;
-    if (!list || !isMotionEnabled()) return;
+    if (adopted || !list || !isMotionEnabled()) return;
     const rows = Array.from(list.children).slice(-STAGGER_ROWS) as HTMLElement[];
     rows.forEach((el) => {
       el.style.animation = "none";
     });
     list.getBoundingClientRect(); // one reflow so every restart is seen
+    const cancels: Array<() => void> = [];
     rows.forEach((el, i) => {
       el.style.animation = `fadeRise .38s ease both ${i * ROW_STAGGER_MS}ms`;
       el.querySelectorAll("[data-msg-text], [data-scramble-live]").forEach((text, j) => {
         // Leaf text only: a rendered markdown body has element children and is
         // left alone (see the file header).
         if (text.children.length === 0) {
-          scrambleElement(text, i * ROW_STAGGER_MS + j * TEXT_STAGGER_MS);
+          cancels.push(scrambleElement(text, i * ROW_STAGGER_MS + j * TEXT_STAGGER_MS));
         }
       });
     });
+    // Two dozen 38ms intervals can be in flight after a switch and nothing else
+    // ever stopped them: unmounting the thread (opening Settings, closing the
+    // app) left them ticking over detached nodes for as long as the webview
+    // lived, and a second switch stacked another set on top.
+    return () => cancels.forEach((cancel) => cancel());
+    // The stagger plays on a conversation CHANGE only. `threadIdentity` is read
+    // as a snapshot of the render that changed the key — it must never be a
+    // trigger, or every new message would replay the switch animation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationKey]);
+
+  // Feeds the adoption check above with the PREVIOUS render's identity —
+  // declared after that effect so it is still the previous value when it runs.
+  useEffect(() => {
+    previousIdentity.current = threadIdentity;
+  });
 
   const lastAssistantId = [...visible]
     .reverse()
@@ -180,6 +239,7 @@ export function ChatThread({
   return (
     <div
       ref={listRef}
+      onScroll={handleScroll}
       className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-8 overflow-y-auto pb-6 pt-9"
     >
       {header}

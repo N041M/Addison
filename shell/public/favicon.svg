@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <!-- Addison — the lowercase-a tile with the lavender dot
-       (docs/design-brief-dark/brand/, "Addison Logo Mark", 16px ramp step).
-       The tile stays dark on every background — brand rule, never themed. -->
-  <rect width="16" height="16" rx="2" fill="#16171B"/>
-  <rect x="0.5" y="0.5" width="15" height="15" rx="1.5" fill="none" stroke="#26272B"/>
-  <text x="3" y="14.5" font-family="'Helvetica Neue',Helvetica,Arial,sans-serif" font-size="12" font-weight="500" letter-spacing="-0.04em" fill="#E9E9E7">a</text>
-  <circle cx="12" cy="4" r="2" fill="#B4A9F5"/>
-</svg>

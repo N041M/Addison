@@ -160,7 +160,18 @@ export function scrambleElement(el: Element | null | undefined, delayMs = 0): ()
     });
 
     const start = nowMs();
+    // The last frame THIS loop wrote. React can rewrite the same text node
+    // mid-run — renaming a conversation while its sidebar row is scrambling is
+    // the real case — and from that moment every frame here is built from a
+    // string that is no longer true, ending with the completion path restoring
+    // it permanently: the old name comes back and stays. So the loop abandons a
+    // node that no longer holds its own last frame instead of finishing over it.
+    let written = orig;
     interval = setInterval(() => {
+      if (node.nodeValue !== written) {
+        stop();
+        return;
+      }
       const elapsed = nowMs() - start;
       let out = "";
       let done = true;
@@ -177,6 +188,7 @@ export function scrambleElement(el: Element | null | undefined, delayMs = 0): ()
         }
       }
       node.nodeValue = out;
+      written = out;
       if (done) {
         // The one line that matters: the exact original string, restored.
         node.nodeValue = orig;
@@ -196,7 +208,9 @@ export function scrambleElement(el: Element | null | undefined, delayMs = 0): ()
 // "Motion → Streaming reply"; prototype.html `send` ~line 475). A ~14-character
 // scrambled window trails the received tail and resolves left→right at ~5
 // characters per 38ms tick, so an answer settles as it lands instead of
-// materialising a paragraph at a time.
+// materialising a paragraph at a time — speeding up when it has fallen behind
+// text that has already arrived, because a display that is minutes behind the
+// answer is not an animation, it is a stall.
 //
 // The property that matters here is the same one `scrambleElement` owes: the
 // display can lag the truth, but it may never INVENT it. So the window's leading
@@ -233,7 +247,13 @@ export function revealAdvanceFor(length: number): number {
 }
 
 export interface StreamScrambleOptions {
-  /** Chars per tick. Defaults to the streaming rate (`STREAM_ADVANCE_CHARS`). */
+  /**
+   * Chars per tick, for text whose full length is already known (a reveal).
+   * Omitted — the streaming case, where more is still arriving — the rate
+   * ADAPTS to the backlog: the prototype's tempo while the display is keeping
+   * up, faster while it is behind. A non-finite value is ignored rather than
+   * honoured (see the clamp in `createStreamScramble`).
+   */
   advanceChars?: number;
   /** Called once, after the frame that lands on the exact received text. */
   onDone?: () => void;
@@ -262,13 +282,30 @@ export function createStreamScramble(
   onFrame: (display: string) => void,
   options: StreamScrambleOptions = {},
 ): StreamScramble {
-  const advance = options.advanceChars ?? STREAM_ADVANCE_CHARS;
+  // A fixed rate is honoured only when it is a usable number. A NaN or Infinity
+  // advance leaves `front` non-finite, so `resolved >= n` is never true: the
+  // interval spins for the life of the app, and — because useTurn only clears
+  // its overlay when the reveal reports done — the message would stay scrambled
+  // and un-markdowned forever. Anything unusable falls through to the adaptive
+  // rate, which is always finite.
+  const fixedAdvance =
+    typeof options.advanceChars === "number" && Number.isFinite(options.advanceChars)
+      ? Math.max(1, Math.floor(options.advanceChars))
+      : null;
   const pool = POOLS[(Math.random() * POOLS.length) | 0];
   let received = "";
   // The window's leading edge, in characters. Everything before
   // `front - STREAM_WINDOW_CHARS` is resolved; the span between is scrambled.
   let front = 0;
   let interval: ReturnType<typeof setInterval> | null = null;
+  // The display has reached the end of what has arrived (the engine is idle).
+  let caughtUp = false;
+  // The streaming (no fixed rate) catch-up rate, in chars per tick.
+  let adaptiveAdvance = STREAM_ADVANCE_CHARS;
+  // `onDone` is documented "called once" and consumers TEAR DOWN on it — useTurn
+  // drops the overlay and releases the engine — so a second call after a later
+  // push would dismantle a reveal it never started.
+  let doneFired = false;
 
   function stop(): void {
     if (interval !== null) clearInterval(interval);
@@ -277,6 +314,21 @@ export function createStreamScramble(
 
   function tick(): void {
     const n = received.length;
+    // How much has arrived but is not yet resolved on screen.
+    const behind = n - Math.max(0, Math.min(n, front - STREAM_WINDOW_CHARS));
+    // No fixed rate means text is still arriving. Hold the prototype's tempo
+    // while the display keeps up, but never let it fall further than one reveal
+    // window behind text the app is ALREADY holding: at a flat 5 chars/tick a
+    // 50,000-character answer takes six minutes to show, and the reader is left
+    // looking at 390 characters of an answer that has completely arrived. The
+    // rate only ever ratchets UP until the display catches up — recomputing it
+    // from the shrinking backlog every tick decays it geometrically, which
+    // stretches one burst across several windows instead of the one it is
+    // sized for.
+    if (fixedAdvance === null) {
+      adaptiveAdvance = Math.max(adaptiveAdvance, revealAdvanceFor(behind));
+    }
+    const advance = fixedAdvance ?? adaptiveAdvance;
     // Clamp to `n + window`: at that point the resolved edge has reached the end
     // of what has arrived, so the leading edge can never run ahead of the text
     // and then "resolve" characters the model has not sent.
@@ -297,8 +349,13 @@ export function createStreamScramble(
     // message back to its normal (markdown) rendering without the caller having
     // to guess when the animation ended by comparing strings.
     if (resolved >= n) {
+      caughtUp = true;
+      adaptiveAdvance = STREAM_ADVANCE_CHARS;
       stop();
-      options.onDone?.();
+      if (!doneFired) {
+        doneFired = true;
+        options.onDone?.();
+      }
     }
   }
 
@@ -309,7 +366,18 @@ export function createStreamScramble(
         onFrame(received);
         return;
       }
-      if (interval === null) interval = setInterval(tick, TICK_MS);
+      if (interval !== null) return; // already running; it will pick `next` up
+      // The FIRST frame is emitted SYNCHRONOUSLY, before any timer exists. The
+      // caller sets "this message is being revealed" and receives this frame in
+      // one React batch; scheduling the first frame 38ms out instead meant the
+      // settled answer was committed with no overlay over it — so it rendered
+      // once in full, as formatted markdown, and dissolved into glyphs a frame
+      // later (review 2026-07-26).
+      caughtUp = false;
+      tick();
+      // `tick` may already have landed on the whole string (a short answer at a
+      // high rate); starting an interval then would restart a resolved engine.
+      if (!caughtUp) interval = setInterval(tick, TICK_MS);
     },
     stop,
   };

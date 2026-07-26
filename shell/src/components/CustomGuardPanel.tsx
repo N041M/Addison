@@ -96,10 +96,10 @@ export function CustomGuardPanel({
   const { guards, guardsLoaded, busy, error, handleSave } = state;
 
   if (!connected) {
-    return <SurfaceRow name="These settings appear here once Addison's engine is connected." />;
+    return <SurfaceRow wrap name="These settings appear here once Addison's engine is connected." />;
   }
   if (!guardsLoaded || !guards) {
-    return <SurfaceRow name="Loading your settings…" />;
+    return <SurfaceRow wrap name="Loading your settings…" />;
   }
 
   // A pick is a "weakening" when it moves to a later (weaker) index in that

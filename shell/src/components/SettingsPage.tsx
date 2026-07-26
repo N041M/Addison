@@ -444,7 +444,7 @@ export function ApiKeys({
   const byId = new Map(providers.map((p) => [p.id, p]));
   return (
     <>
-      <SurfaceRow name="Keys go straight to your computer's keychain and are never shown again — not even here." />
+      <SurfaceRow wrap name="Keys go straight to your computer's keychain and are never shown again — not even here." />
       {KEY_PROVIDERS.map((p) => (
         <ProviderRow
           key={p.id}
@@ -823,7 +823,7 @@ export function ProfileCard({
       )}
 
       {profile.flags.headlessCli && (
-        <SurfaceRow
+        <SurfaceRow wrap
           name="For scripts: Addison's engine speaks JSON-RPC on stdio."
           value="python -m agent_core.main"
         />

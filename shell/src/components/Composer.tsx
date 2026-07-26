@@ -2,10 +2,24 @@
 // docs/design-brief-dark, "Screens → Composer").
 //
 // No card, no border box: a borderless 15px textarea over a single 1px top rule
-// that brightens from `track` to `track-hi` while the row has focus. To its
-// right sit the two controls the person actually reaches for — the model label
-// (mono, opens the per-message menu) and a 30px circle that is Send, and becomes
-// the real Stop while a turn runs. One line of mono microcopy sits under it.
+// in `track`. To its right sit the two controls the person actually reaches for
+// — the model label (mono, opens the per-message menu) and a 30px circle that is
+// Send, and becomes the real Stop while a turn runs. One line of mono microcopy
+// sits under it.
+//
+// THAT TOP RULE IS THE COMPOSER'S FOCUS INDICATOR, and it is the only one: the
+// textarea opts out of the global focus ring in styles.css, because a 2px
+// rectangle around text that has no box of its own is a border the design does
+// not have. The brief specifies the focused rule as `track` → `track-hi`; that
+// was measured at 1.14:1 idle → 1.55:1 focused against the page in light mode
+// (dark: 1.31 → 1.75) — a 1px hairline with a 1.35:1 state change, which fails
+// WCAG 2.4.11 and, for readers of 54 and 68, is not an indicator at all. So
+// focus paints the rule 2px in `accent` instead (4.83:1 light / 9.25:1 dark
+// against the page; 4.22:1 / 7.06:1 against the idle rule). The extra pixel of
+// border is taken back out of the padding on the same selector, so nothing in
+// the row moves when it lights up. Accessibility floor over brief fidelity —
+// the carve-out in styles.css claims it "removes a duplicate indicator, never
+// the only one", and this is what makes that sentence true.
 //
 // It carries NO horizontal padding of its own: `main` supplies the 40px gutter
 // (16px below md), and doubling it was the misalignment phase 1 flagged — the
@@ -127,7 +141,10 @@ export function Composer({
           gets the full 840px, and the controls sit where the eye expects
           them, under the last line. Resting height stays two-deep (one text
           line + the strip), so the Settings-level alignment holds. */}
-      <div className="mx-auto w-full max-w-[840px] border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-track-hi">
+      {/* `focus-within:pt-[5px]` is not a nudge: it pays for the second pixel of
+          border (pt-1.5 = 6px → 5px), so lighting the rule up never shifts the
+          text under it. See the focus note in the file header. */}
+      <div className="mx-auto w-full max-w-[840px] border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-t-2 focus-within:border-accent focus-within:pt-[5px]">
         <textarea
           ref={textareaRef}
           data-composer=""

@@ -69,7 +69,7 @@ export function WorkspaceTrustPanel({
     state;
 
   if (!connected) {
-    return <SurfaceRow name="These settings appear here once Addison's engine is connected." />;
+    return <SurfaceRow wrap name="These settings appear here once Addison's engine is connected." />;
   }
 
   async function choose() {
@@ -123,7 +123,7 @@ export function WorkspaceTrustPanel({
       {notice && <SurfaceRow name={notice} />}
 
       {!rootsLoaded ? (
-        <SurfaceRow name="Looking for your trusted folders…" />
+        <SurfaceRow wrap name="Looking for your trusted folders…" />
       ) : roots.length === 0 ? (
         <SurfaceRow
           name="No trusted folders yet"

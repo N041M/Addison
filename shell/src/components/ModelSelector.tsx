@@ -19,8 +19,16 @@
 //
 // ACCESSIBILITY IS NOT RESTYLED AWAY. The readers are 54 and 68: the label stays
 // a real button (aria-haspopup="listbox"), the model list stays a role="listbox"
-// with role="option" rows and Arrow/Home/End/Enter/Escape, focus moves into the
-// list on open and back to the label on close, and outside-click / Tab dismiss.
+// with role="option" rows and Arrow/Home/End/Enter, focus moves into the list on
+// open and back to the label on close, and outside-click dismisses.
+//
+// TAB WALKS THE PANEL, it does not leave it. Tab used to close the menu
+// outright, which meant the three `aria-pressed` Effort buttons could never take
+// focus: a keyboard user could choose a model but never the effort the composer
+// label is advertising back at them ("Claude Opus 4.8 · high"). Tab now cycles
+// list → effort → list; Escape is the way out and returns focus to the label.
+// When there is no Effort section there is nothing to cycle to, so Tab keeps its
+// old behaviour and leaves.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelRole } from "../types/protocol";
@@ -175,6 +183,7 @@ export function ModelSelector({
   const rootRef = useRef<HTMLDivElement | null>(null);
   const labelRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const effortRef = useRef<HTMLDivElement | null>(null);
   const listboxId = useId();
   const optionId = (i: number) => `${listboxId}-opt-${i}`;
 
@@ -246,17 +255,44 @@ export function ModelSelector({
         e.preventDefault();
         if (options[activeIndex]) pickModel(options[activeIndex]);
         break;
-      case "Escape":
-        e.preventDefault();
-        close();
-        break;
-      case "Tab":
-        // Let focus leave naturally, but dismiss the menu.
-        close(false);
-        break;
       default:
         break;
     }
+    // Escape and Tab are handled once, on the panel, so they behave the same
+    // whether focus is on the list or on an Effort button.
+  }
+
+  /** The panel's tab ring, in DOM order: the model listbox, then each Effort
+   * button. */
+  function panelStops(): HTMLElement[] {
+    const stops: HTMLElement[] = [];
+    if (listRef.current) stops.push(listRef.current);
+    if (effortRef.current) {
+      stops.push(...Array.from(effortRef.current.querySelectorAll<HTMLElement>("button")));
+    }
+    return stops;
+  }
+
+  function onPanelKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const stops = panelStops();
+    if (stops.length < 2) {
+      // Nothing else in here to reach (a model with no effort levels, or a local
+      // one): let focus leave naturally and take the menu with it, as before.
+      close(false);
+      return;
+    }
+    e.preventDefault();
+    const i = stops.indexOf(document.activeElement as HTMLElement);
+    const next = e.shiftKey
+      ? stops[(i <= 0 ? stops.length : i) - 1]
+      : stops[(i + 1) % stops.length];
+    next.focus();
   }
 
   return (
@@ -279,7 +315,10 @@ export function ModelSelector({
           // a full model name there squeezes the message down to a keyhole.
           "max-w-[110px] truncate font-mono text-[10.5px] transition-colors max-md:min-h-[44px] md:max-w-[180px] " +
           (open ? "text-muted" : "text-disabled hover:text-muted ") +
-          (dimmed ? " opacity-60" : "") +
+          // Dark only. On light, `disabled` at 60% measured 1.55:1 against the
+          // paper — the label that names the model in effect was the least
+          // readable text in the app. The light ramp carries the dimming now.
+          (dimmed ? " dark:opacity-60" : "") +
           (blockOpen ? " cursor-not-allowed" : "")
         }
       >
@@ -289,12 +328,18 @@ export function ModelSelector({
 
       {open && (
         <div
+          onKeyDown={onPanelKeyDown}
           // `w-max` over the 196px floor: a model picker that abbreviates the
           // model name ("Claude Opus 4…") is asking people to choose between
           // things it won't show them. The panel grows to its content and only
           // truncates past 320px, where a provider-suffixed name would otherwise
           // push the menu off the column.
-          className="absolute bottom-[26px] right-0 z-30 flex w-max min-w-[196px] max-w-[320px] animate-[fadeRise_.2s_ease_both] flex-col rounded-[6px] border border-rail bg-panel p-1.5 shadow-menu"
+          //
+          // The height clamp is the viewport one: the menu opens upward from the
+          // composer, so in a short window it ran past the top of the app and
+          // over the header (measured at 1280×420: menu top 76, header bottom
+          // 77). It scrolls instead of climbing.
+          className="no-scrollbar absolute bottom-[26px] right-0 z-30 flex max-h-[calc(100vh-160px)] w-max min-w-[196px] max-w-[320px] animate-[fadeRise_.2s_ease_both] flex-col overflow-y-auto rounded-[6px] border border-rail bg-panel p-1.5 shadow-menu"
           role="presentation"
         >
           <div className="px-2.5 pb-2 pt-1.5 text-[10px] font-medium tracking-[.04em] text-faint">
@@ -349,7 +394,11 @@ export function ModelSelector({
               <div className="px-2.5 pb-2 pt-3 text-[10px] font-medium tracking-[.04em] text-faint">
                 Effort
               </div>
-              <div role="group" aria-label="How thorough Addison should be">
+              <div
+                ref={effortRef}
+                role="group"
+                aria-label="How thorough Addison should be"
+              >
                 {effortLevels.map((level) => {
                   const active = activeEffort === level.id;
                   return (

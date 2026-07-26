@@ -72,17 +72,17 @@ export function SnapshotsSurface({
     <Surface title="Snapshots" description={SNAPSHOTS_DESCRIPTION} pinned={pinned}>
       {state.warning && (
         <SurfaceSection label="Worth knowing">
-          <SurfaceRow name={state.warning} />
+          <SurfaceRow wrap name={state.warning} />
         </SurfaceSection>
       )}
       {state.notice && (
         <SurfaceSection label="What just happened">
-          <SurfaceRow name={state.notice} />
+          <SurfaceRow wrap name={state.notice} />
         </SurfaceSection>
       )}
       {groups.length === 0 ? (
         <SurfaceSection label="Restore points">
-          <SurfaceRow name={snapshotsEmptyLine(connected, state.snapshotsLoaded)} />
+          <SurfaceRow wrap name={snapshotsEmptyLine(connected, state.snapshotsLoaded)} />
         </SurfaceSection>
       ) : (
         groups.map((group) => (

@@ -145,15 +145,19 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   }
 
   if (!loaded) {
-    return <SurfaceRow name="Looking for your routines…" />;
+    return <SurfaceRow wrap name="Looking for your routines…" />;
   }
 
   if (routines.length === 0) {
-    return (
-      <SurfaceRow
-        name="None yet"
-        value={connected ? "saved steps appear here" : "not connected"}
-      />
+    // "None yet" is a claim about the person's own saved routines, and while the
+    // engine is down this surface cannot see them — it never asked. Saying it
+    // anyway would be the surface asserting a fact it doesn't have (the sibling
+    // sections all keep this distinction), so the disconnected case gets its own
+    // sentence and no count-like value beside it.
+    return connected ? (
+      <SurfaceRow name="None yet" value="saved steps appear here" />
+    ) : (
+      <SurfaceRow wrap name="You can see and run your saved routines here once Addison's engine is connected." />
     );
   }
 

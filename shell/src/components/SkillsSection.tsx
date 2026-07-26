@@ -87,11 +87,11 @@ export function SkillsSection({ connected, skills: state }: Props) {
   }
 
   if (!connected) {
-    return <SurfaceRow name="Your skills appear here once Addison's engine is connected." />;
+    return <SurfaceRow wrap name="Your skills appear here once Addison's engine is connected." />;
   }
 
   if (!skillsLoaded) {
-    return <SurfaceRow name="Looking for your skills…" />;
+    return <SurfaceRow wrap name="Looking for your skills…" />;
   }
 
   return (

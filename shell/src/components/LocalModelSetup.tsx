@@ -94,7 +94,7 @@ export function LocalModelSetup({ connected, roles, setup, onStartSetup }: Props
       </SurfaceRow>
 
       {!connected && (
-        <SurfaceRow name="Setting up a local model needs the desktop app. You can look over the choices here, but downloading starts once Addison is connected." />
+        <SurfaceRow wrap name="Setting up a local model needs the desktop app. You can look over the choices here, but downloading starts once Addison is connected." />
       )}
 
       {LOCAL_MODEL_CHOICES.map((choice) => {

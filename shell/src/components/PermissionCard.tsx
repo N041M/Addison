@@ -49,18 +49,25 @@ export function PermissionCard({ request, onRespond }: Props) {
           {command}
         </p>
       )}
-      <div className="mt-3 flex flex-wrap items-baseline gap-5">
+      {/* Both answers are REAL targets, on every screen. These two buttons are
+          what authorises a destructive command, and they were 14.5px tall on
+          desktop — under WCAG 2.2 SC 2.5.8's 24×24 floor, and separated only by
+          hue, for readers of 54 and 68. They are now 30px (the send button's
+          desktop size) and 44px under `md`, with Allow carrying the accent FILL
+          so the one obvious choice stays obvious without the copy changing.
+          Every sentence on this card is still the core's, verbatim. */}
+      <div className="mt-3 flex flex-wrap items-center gap-4">
         <button
           type="button"
           onClick={() => onRespond(true)}
-          className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+          className="inline-flex h-[30px] shrink-0 items-center justify-center rounded-menu bg-accent px-3.5 text-[12px] font-medium text-on-accent transition-opacity hover:opacity-90 max-md:h-11"
         >
           Allow
         </button>
         <button
           type="button"
           onClick={() => onRespond(false)}
-          className="text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
+          className="inline-flex h-[30px] shrink-0 items-center justify-center rounded-menu px-2.5 text-[12px] text-muted transition-colors hover:bg-track hover:text-ink max-md:h-11"
         >
           Not now
         </button>
