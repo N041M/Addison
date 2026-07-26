@@ -282,8 +282,10 @@ for personas 54 and 68), the sharp-corners rule, and the "never a generic-AI or
 vendor look" constraints in this section are **unchanged** — only the surface palette
 moved from light to dark.
 
-**Amended 2026-07 (v3) — the "Fern" redesign.** The visual direction has moved
-again, from the dark terminal look to **"Fern"**: warm paper neutrals + one
+**Amended 2026-07 (v3) — the "Fern" redesign.** *(Superseded by v4 below on
+2026-07-26. Kept for the record; `docs/design-brief-fern/` remains in the tree as
+history and is no longer authoritative for anything.)* The visual direction has
+moved again, from the dark terminal look to **"Fern"**: warm paper neutrals + one
 fern-green accent, a serif "correspondence" message body (Source Serif 4) beside a
 Public Sans UI, a blocky-vs-rounded shape rule, and a light-default **class-driven
 dark mode**. The in-repo brief at **`docs/design-brief-fern/`** (README + `.dc.html`
@@ -293,6 +295,39 @@ the surface/type/shape move — the layout/IA and accessibility rules of this se
 are unchanged. (Note the shape rule itself changed: rounded cards/pills are now part
 of the system — "rounded = ownable/actionable" — so the earlier sharp-corners rule no
 longer applies.)
+
+**Amended 2026-07-26 (v4) — the dark "correspondence-instrument" direction.
+This is the current direction; it supersedes every note above.** From the
+owner's design handoff: a **calm, text-first dark UI** — near-black paper
+(`#0C0C0D`), hairline separators, and one soft **violet accent** (`#B4A9F5`)
+reserved for actions, selection rails and live state, never for decoration.
+**System type only** — `'Helvetica Neue'` for UI beside `ui-monospace` for
+machine facts. The serif voice and every bundled font are **retired**: there is
+no `@font-face` in the app and no `font-serif` token to reach for.
+
+The **shape rule changed again**, and v3's is now void: selection/active is a
+**2px accent left rail**, section labels sit on 2px rules, and rows are
+separated by hairlines. Bordered panels are reserved for **floating chrome**
+(popovers, menus, the modal) at 5–8px radii — there are no cards and no pills.
+Settings, Tools, Snapshots and Build-a-widget are **in-window surfaces** that
+replace the chat column, not the "settings drawer" of the original text above.
+Motion is the signature: the character-scramble (`shell/src/lib/scramble.ts`)
+plus fadeRise/fadeDrop, all no-ops under `prefers-reduced-motion`.
+
+**Dark is the designed reference; light is a derived translation** — identical
+structure, different values — and the theme stays class-driven three-way
+(light / dark / system, default **system**). The brand mark is the
+**lowercase-`a` tile**; the earlier service-bell mark is retired.
+
+**`docs/design-brief-dark/` is authoritative** — `README.md` + `prototype.html`
+are the designer's pixel-perfect reference, `IMPLEMENTATION.md` records the
+binding prototype→app mapping, and the tokens in `shell/tailwind.config.js`
+implement it. As with every amendment before it, only the surface/type/shape
+move: the layout/IA and the accessibility rules of this section are
+**unchanged**, and personas 54 and 68 still govern legibility. One clarification,
+because the avoid-list below could be misread: the violet accent is a **single
+flat colour**, and the ban on purple/indigo **gradients**, glassmorphism,
+sparkle/bot iconography and shimmer is unchanged.
 
 **Visual design direction (binding for the step-7 build).** Addison must not look like
 a generic AI chat product. Explicitly avoid the default aesthetic AI-generated frontends

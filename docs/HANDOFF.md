@@ -133,13 +133,15 @@ content exists nowhere else (delete a routine / widget / note, change a note)
 **refuse the change** if the snapshot cannot be taken; the three recoverable ones
 proceed and raise a **sticky warning** that only a successful manual save clears.
 
-**Frontend.** The Settings **"Restore points"** card (never called "Snapshots" in
-any user-facing string), placed directly under Profile. Fern-filled restore button
-(never the rose `danger` token — a recovery is not a destruction), a two-step
-inline confirm carrying the consequence copy plus a profile-change sentence and a
-genesis sentence when they apply, the target always named with its timestamp
-before the button, and the blocky **Permanent** tag with no Remove control on
-anchors. QA steps: **TESTING-CHECKLIST §13a**.
+**Frontend.** The Settings **"Restore points"** section (never called
+"Snapshots" in any user-facing string), placed directly under Profile, plus the
+Restore-points modal and the Snapshots surface that share its rows by value. The
+restore action is **accent, never the rose `danger` token** — a recovery is not a
+destruction — with a two-step inline confirm carrying the consequence copy plus a
+profile-change sentence and a genesis sentence when they apply, the target always
+named with its timestamp and **kept on screen through the confirm**, and the
+blocky **Permanent** tag (small caps on a 2px accent rule) with no Remove control
+on anchors. QA steps: **TESTING-CHECKLIST §13a**.
 
 **Two decisions worth internalising before you extend it:**
 
@@ -1180,13 +1182,27 @@ report never arrived.
   contradiction between existing docs *and saying why*, because the doc set had two
   rival schemas and nothing stated precedence. Reuse the shape for steps 5–8.
 - **One PR per change, straight to `master`.** CI must be green.
-- **Binding UI direction — the "Fern" redesign.** `docs/design-brief-fern/` is
-  authoritative for tokens, type, shape, copy. Warm paper neutrals + one
-  fern-green accent; serif message body (Source Serif 4), Public Sans UI, IBM
-  Plex Mono for machine facts; **blocky = live annotation, rounded =
-  ownable/actionable**; light default + class-driven dark, now with a
-  **three-way Light/Dark/Match-this-computer** setting. Plain language for
-  personas 54/68; never AI tropes or vendor branding.
+- **Binding UI direction — the dark redesign (v4, adopted 2026-07-26).**
+  `docs/design-brief-dark/` is authoritative for tokens, type, shape and copy:
+  `README.md` + `prototype.html` are the designer's pixel-perfect reference, and
+  **`IMPLEMENTATION.md` records the binding prototype→app mapping** — read it
+  before restyling anything, because it is where "demo content is never shipped,
+  real features are restyled and never de-wired" is written down. Near-black
+  paper (`#0C0C0D`), hairline separators, one soft violet accent (`#B4A9F5`) for
+  actions/selection/live state only; **system type only** — no bundled fonts, no
+  `@font-face`, no serif. Shape: selection is a **2px accent left rail**,
+  sections sit on 2px rules, rows are hairline-separated, and bordered panels are
+  reserved for floating chrome (popover 7px, modal 8px, menu 6px) — no cards, no
+  pills. Signature motion: the character-scramble (`shell/src/lib/scramble.ts`)
+  + fadeRise/fadeDrop, all no-ops under `prefers-reduced-motion`. Dark is the
+  designed reference and light a derived translation; the theme stays three-way
+  Light/Dark/Match-this-computer, default **Match this computer**. The mark is
+  the lowercase-`a` tile (`AddisonMark.tsx`); the service bell is retired, and
+  the OS icon set is regenerated from it via
+  `docs/design-brief-dark/brand/build-app-icon.sh`. Plain language for personas
+  54/68; never AI tropes or vendor branding.
+  **This supersedes the "Fern" direction** — `docs/design-brief-fern/` stays in
+  the tree as history and is authoritative for nothing.
 - Verify UI changes in the browser preview where possible; note that the
   disconnected preview can't exercise the live core (no conversations, no skill
   persistence) — cover those with unit/component tests instead.

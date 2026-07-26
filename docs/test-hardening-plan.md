@@ -495,8 +495,9 @@ by types, or not at all.
   the number or do not write the test.
 
 **Do not automate — verify by looking:**
-- **"Does it look right in dark mode."** Contrast, rhythm, whether the fern accent reads as
-  decoration, whether the serif/sans pairing holds. A jsdom test asserting class strings here
+- **"Does it look right in dark mode."** Contrast, rhythm, whether the violet accent stays
+  reserved for actions and live state instead of reading as decoration, whether the
+  sans/mono pairing holds. A jsdom test asserting class strings here
   **passes while the screen is wrong** — strictly worse than an honest manual checklist. Keep it in
   TESTING-CHECKLIST §13.
 - **`MermaidDiagram` SVG output, animation timings, font loading.**

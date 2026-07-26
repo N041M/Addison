@@ -351,7 +351,8 @@ erDiagram
 
 ## Widgets and usage tables
 
-These back the widget rail (§3 of the Fern brief). Neither holds secrets.
+These back the widget rail (`docs/design-brief-dark/IMPLEMENTATION.md`, "Layout
+& chrome → Right rail"). Neither holds secrets.
 
 ```mermaid
 erDiagram

@@ -11,7 +11,7 @@
 // import from here; keep the two in lockstep.
 
 export type ThemeChoice = "light" | "dark" | "system";
-export type ResolvedTheme = "light" | "dark";
+type ResolvedTheme = "light" | "dark";
 
 // Absent, empty, and unrecognised values all map to "system" — "Match this
 // computer" is the default as of the 2026-07-25 dark redesign, so a machine set

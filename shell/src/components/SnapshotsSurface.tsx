@@ -22,7 +22,7 @@ import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { Snapshot } from "../types/ui";
 import type { ReactNode } from "react";
 
-export const SNAPSHOTS_DESCRIPTION =
+const SNAPSHOTS_DESCRIPTION =
   "Addison saves a restore point before anything risky, so you can always go back to a setup that worked.";
 
 /** Today / This week / Older — in that order, and only the ones with rows. */

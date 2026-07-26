@@ -25,14 +25,14 @@ import { RowAction, SurfaceRow } from "./Surface";
 // quantization jargon. `id` is the Ollama tag the core pulls; it is used for the
 // call, not shown as the primary label.
 // ---------------------------------------------------------------------------
-export interface LocalModelChoice {
+interface LocalModelChoice {
   id: string;
   name: string;
   metaLabel: string;
   note?: string;
 }
 
-export const LOCAL_MODEL_CHOICES: LocalModelChoice[] = [
+const LOCAL_MODEL_CHOICES: LocalModelChoice[] = [
   {
     id: "llama3.2:3b",
     name: "Light and quick",

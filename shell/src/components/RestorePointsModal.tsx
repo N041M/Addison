@@ -43,7 +43,7 @@ const FOCUSABLE =
  *
  * An absent mode is treated as "safe", the same convention as `ProfileState.mode`
  * (an old core with no OPEN mode at all). */
-export function footerNote(mode?: "safe" | "open"): string {
+function footerNote(mode?: "safe" | "open"): string {
   return mode === "open"
     ? "some actions can't be undone · restores never delete your files"
     : "everything can be undone · restores never delete your files";

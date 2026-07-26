@@ -46,7 +46,7 @@ STAT_SOURCES: tuple[str, ...] = ("tokens_month", "provider_latency", "connection
 # "command" is OPEN-mode only; validate_widget_spec gates it on the mode.
 WIDGET_KINDS: tuple[str, ...] = ("routine", "stat", "command")
 
-MAX_PINNED = 6          # at most six pinned widget cards (design-brief-fern §3)
+MAX_PINNED = 6          # at most six pinned widget rows in the rail
 MAX_TITLE_LEN = 60      # plain, short titles only
 
 # A routine id is a uuid (or another plain slug). This deliberately rejects

@@ -157,8 +157,6 @@ export function useConversations({
   };
 }
 
-export type ConversationsState = ReturnType<typeof useConversations>;
-
 // Coerce a stored row's role string to the display union. Loaded history holds
 // only user + assistant rows; anything unexpected is shown as an assistant line
 // rather than dropped.

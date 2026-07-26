@@ -49,7 +49,7 @@ export const CONSEQUENCE =
 /** Appended when the target is the very first restore point: going back there
  * throws away everything set up since install, which the base sentence's "go
  * back to how they were" does not convey on its own. */
-export const GENESIS_CONSEQUENCE =
+const GENESIS_CONSEQUENCE =
   "This is Addison as it was first installed, so your services, notes, widgets and routines are cleared.";
 
 export function formatWhen(createdAt: number): string {

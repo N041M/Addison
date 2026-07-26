@@ -226,8 +226,12 @@ glyphs hover to `ink`.
   `shell/src/components/AddisonMark.tsx` (construction ratios + the sheet's
   exact sampled sizes; the tile stays dark in BOTH themes — fixed hex, never
   tokens), used in the header (22px + wordmark, brandbook §10) and the
-  first-run splash (44px above the greeting); `shell/public/favicon.svg` is the
-  16px ramp step. **The header shows the mark ALONE** — the brandbook's APP
+  first-run splash (44px above the greeting). The favicon is
+  **`shell/public/favicon.png`**, a raster deliberately: the SVG version drew the
+  "a" with a `<text>` element, so its letterform and size depended on whichever
+  font the rasterising platform resolved (measured: a 15–20% bbox difference off
+  macOS). It is rendered once from `brand/favicon-master.svg` in this directory
+  and is therefore identical everywhere. **The header shows the mark ALONE** — the brandbook's APP
   HEADER application pairs it with an "Addison" wordmark, but that is redundant
   in the app's own chrome and it spent the view title's width budget (owner
   decision 2026-07-26). The **Tauri OS icon set is regenerated** from the mark

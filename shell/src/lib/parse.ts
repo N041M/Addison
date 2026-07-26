@@ -61,7 +61,7 @@ export function normalizeProfile(result: unknown): ProfileState | null {
 }
 
 /** One fill-in-each-time routine variable, as surfaced by the core. */
-export interface RoutineVariable {
+interface RoutineVariable {
   name: string;
   prompt: string;
   default: string | null;

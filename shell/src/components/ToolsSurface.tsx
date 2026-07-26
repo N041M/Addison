@@ -22,7 +22,7 @@ import type { ProviderInfo } from "../ipc/client";
 import type { RoleOption, WorkspaceRoot } from "../types/ui";
 import type { ReactNode } from "react";
 
-export const TOOLS_DESCRIPTION =
+const TOOLS_DESCRIPTION =
   "What Addison can reach on this computer. Connect only what you're comfortable with.";
 
 export function ToolsSurface({

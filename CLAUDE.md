@@ -383,15 +383,18 @@ replay tool calls through the exact same registry + gate as the live loop.
 ## Build order (spec §11 — build in sequence, each independently testable)
 
 Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
-(3) `PermissionGate`. Also shipped past the numbered sequence: the Fern UI
-redesign, and the **widget rail** — declarative routine/stat widgets
+(3) `PermissionGate`. Also shipped past the numbered sequence: the UI wave, and
+the **widget rail** — declarative routine/stat widgets
 (`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
-substrate (§4.8) that feeds the token meter + connections cards. The Fern wave
-is complete through its final PR: multi-provider API keys, the three-column
+substrate (§4.8) that feeds the token meter + connections rows. The wave is
+complete through its final PR: multi-provider API keys, the three-column
 app shell + in-window Settings, widgets/tray, class-driven dark mode, the
-**first-run pine banner** (`FirstRunBanner.tsx` — setup steps, launch-only
-skip, serif time-of-day greeting) with the bell favicon bundled from
-`shell/public/`, and a both-themes QA pass (TESTING-CHECKLIST §13). Also shipped:
+**first-run block** (`FirstRunBanner.tsx` — setup steps, launch-only skip,
+time-of-day greeting) with the favicon bundled from `shell/public/`, and a
+both-themes QA pass (TESTING-CHECKLIST §13). *(That wave shipped under the Fern
+direction; the surfaces were restyled to the dark v4 direction on 2026-07-26 —
+the pine card, the serif voice, the bundled fonts and the bell mark are all
+retired. The features themselves were restyled, never de-wired.)* Also shipped:
 the **mode-scoped safety backend** (owner decision 2026-07-19, `agent_core/policy.py`)
 — the SAFE/OPEN split derived 1:1 from the profile, `run_command` (dev-only),
 mode-aware `ToolRegistry.visible_tools` + `PermissionGate.authorize`, routine/widget

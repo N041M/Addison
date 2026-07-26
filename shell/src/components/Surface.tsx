@@ -104,7 +104,7 @@ export function SurfaceSection({ id, label, children }: SurfaceSectionProps) {
 
 /** How an action reads. `danger` is for real destructive controls only — a
  * restore is a recovery and is never styled with it (HANDOFF rule). */
-export type RowActionTone = "accent" | "muted" | "danger";
+type RowActionTone = "accent" | "muted" | "danger";
 
 interface RowActionProps {
   children: ReactNode;

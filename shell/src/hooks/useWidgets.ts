@@ -153,8 +153,6 @@ export function useWidgets({ connected, railOpen, setStatusBanner }: UseWidgetsA
   };
 }
 
-export type WidgetsState = ReturnType<typeof useWidgets>;
-
 // Light copy of the routine library for the rail: just enough to prompt for a
 // routine widget's variables on Run. Mirrors RoutineLibrary's normalizer.
 function normalizeRailRoutines(result: unknown): RailRoutine[] {

@@ -48,14 +48,14 @@ const JITTER_SHARE = 0.25;
 const REVERSE_CHANCE = 0.15;
 
 /** Delay applied to a click-triggered scramble (prototype: `scrambleEl(el, 40)`). */
-export const CLICK_DELAY_MS = 40;
+const CLICK_DELAY_MS = 40;
 
 /** The elements the initial-load pass scrambles (staggered). */
 export const INITIAL_SCRAMBLE_SELECTOR =
   "[data-scramble], [data-scramble-live], [data-greeting]";
 
 /** The elements the global click handler will scramble when clicked. */
-export const CLICK_SCRAMBLE_SELECTOR =
+const CLICK_SCRAMBLE_SELECTOR =
   "[data-scramble],[data-scramble-live],[data-scramble-click]";
 
 // --- The motion flag --------------------------------------------------------
@@ -222,7 +222,7 @@ export function scrambleElement(el: Element | null | undefined, delayMs = 0): ()
 // the *display* is scrambled (useTurn keeps them apart, and a test pins it).
 
 /** Width of the scrambled window trailing the resolved text. */
-export const STREAM_WINDOW_CHARS = 14;
+const STREAM_WINDOW_CHARS = 14;
 /** How far the window's leading edge advances per tick. */
 export const STREAM_ADVANCE_CHARS = 5;
 
@@ -238,7 +238,7 @@ export const STREAM_ADVANCE_CHARS = 5;
  * is not an animation, it is a wait. So the rate ADAPTS to keep the reveal
  * bounded, and never drops below the prototype's tempo for short answers.
  */
-export const REVEAL_TARGET_MS = 1100;
+const REVEAL_TARGET_MS = 1100;
 
 /** Chars-per-tick for revealing a finished answer of `length` characters. */
 export function revealAdvanceFor(length: number): number {
@@ -246,7 +246,7 @@ export function revealAdvanceFor(length: number): number {
   return Math.max(STREAM_ADVANCE_CHARS, Math.ceil(length / ticks));
 }
 
-export interface StreamScrambleOptions {
+interface StreamScrambleOptions {
   /**
    * Chars per tick, for text whose full length is already known (a reveal).
    * Omitted — the streaming case, where more is still arriving — the rate

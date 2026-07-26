@@ -116,9 +116,10 @@ universally; invariants 2–7 hold in every mode, without exception. See
   bundled or endorsed in the app.
 - A widget rail of small, declarative cards — routine run-buttons, a token
   meter, connection status — proposed by Addison in chat and pinned by you.
-- A three-column interface ("Fern"): conversation sidebar, a serif
-  correspondence-style chat with Markdown and Mermaid rendering, and the
-  widget rail — warm and calm, light and dark themes, in-window settings.
+- A three-column interface: conversation sidebar, a text-first chat with
+  Markdown and Mermaid rendering, and the widget rail — a calm, near-black
+  surface with one violet accent, system type, light and dark themes, and
+  in-window settings that are pages rather than pop-ups.
 
 ## Quickstart
 

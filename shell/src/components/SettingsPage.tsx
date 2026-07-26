@@ -106,9 +106,9 @@ interface Props {
 /** Stable ids so first-run's "Start setup" and the "not set up yet" row can
  * scroll to the right section inside the surface's own scroller. */
 export const API_KEYS_SECTION_ID = "settings-api-keys";
-export const LOCAL_MODEL_SECTION_ID = "settings-local-model";
+const LOCAL_MODEL_SECTION_ID = "settings-local-model";
 
-export const SETTINGS_DESCRIPTION =
+const SETTINGS_DESCRIPTION =
   "Everything lives on this computer. Nothing leaves it without asking you first.";
 
 // The API-key provider rows (multi-provider, owner decision 2026-07-18). ``kind``

@@ -510,7 +510,7 @@ function bucketConversations(conversations: ConversationSummary[]): {
 
 // HH:MM today · the weekday within the last week · a short date beyond that ·
 // nothing at all when there is no usable timestamp.
-export function formatRowTime(startedAt: number, now: Date = new Date()): string {
+function formatRowTime(startedAt: number, now: Date = new Date()): string {
   if (!startedAt) return "";
   const d = new Date(startedAt * 1000);
   if (Number.isNaN(d.getTime())) return "";

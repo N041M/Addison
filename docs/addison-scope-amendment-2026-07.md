@@ -57,9 +57,14 @@ Three lessons drive this amendment:
 A butler acts when asked and never uninvited, handles the messy parts so you
 don't have to, remembers how you like things, and — crucially — is *discreet
 and reversible*: a good butler never puts the house in a state you can't
-restore. This is already encoded in Addison's mark (the service bell: "ring, and
-Addison comes"), its "approachable by default, powerful on request" thesis, and
-the guidance-skills + memory work (a butler that learns your preferences).
+restore. This is already encoded in its "approachable by default, powerful on
+request" thesis and the guidance-skills + memory work (a butler that learns your
+preferences). *(As written, this sentence also cited Addison's mark — the service
+bell, "ring, and Addison comes". **Superseded 2026-07-26:** the bell was retired
+with the dark redesign and the mark is now the lowercase-`a` tile. The identity
+argument stands on its own; only the illustration is gone. See
+`docs/design-brief-dark/IMPLEMENTATION.md`, "Explicitly out / kept as-is →
+Brand".)*
 
 The amendment sharpens the two surfaces:
 
