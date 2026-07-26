@@ -141,6 +141,16 @@ function renderPanel(state: GuardsCardState) {
   render(<CustomGuardPanel connected={true} guards={state} />);
 }
 
+// REDESIGN NOTE (dark direction, phase 3): each guard option is now a surface
+// ROW — the frozen copy is the row's name, the chosen one carries a mono
+// "selected ✓", and every other offers an accent "choose". Picking therefore
+// means pressing that row's action, not the copy itself. The action's accessible
+// name repeats the option (a page of buttons all saying "choose" is unusable
+// with a screen reader), which is what lets this helper stay this short.
+function chooseFor(copy: string): HTMLElement {
+  return screen.getByRole("button", { name: `Choose: ${copy}` });
+}
+
 describe("the Custom guard panel", () => {
   it("shows the frozen intro and both guards' option copy, byte-for-byte", () => {
     renderPanel(guardsStateWith());
@@ -173,7 +183,7 @@ describe("the Custom guard panel", () => {
     // Current non_destructive; picking `none` asks MORE often (tightening).
     const state = guardsStateWith();
     renderPanel(state);
-    fireEvent.click(screen.getByText(SCOPE_NONE));
+    fireEvent.click(chooseFor(SCOPE_NONE));
     expect(screen.queryByText(WEAKENING_CONFIRM)).toBeNull();
     expect(state.handleSave).toHaveBeenCalledWith({ autoGrantScope: "none" });
   });
@@ -183,7 +193,7 @@ describe("the Custom guard panel", () => {
       guards: { ...GUARDS, destructiveCard: "session" },
     });
     renderPanel(state);
-    fireEvent.click(screen.getByText(CARD_PER_INVOCATION));
+    fireEvent.click(chooseFor(CARD_PER_INVOCATION));
     expect(screen.queryByText(WEAKENING_CONFIRM)).toBeNull();
     expect(state.handleSave).toHaveBeenCalledWith({ destructiveCard: "per_invocation" });
   });
@@ -194,7 +204,7 @@ describe("the Custom guard panel", () => {
     const state = guardsStateWith();
     renderPanel(state);
 
-    fireEvent.click(screen.getByText(CARD_SESSION));
+    fireEvent.click(chooseFor(CARD_SESSION));
     // Step one only warns; nothing has been saved yet.
     expect(state.handleSave).not.toHaveBeenCalled();
     expect(screen.getByText(WEAKENING_CONFIRM)).toBeTruthy();
@@ -208,7 +218,7 @@ describe("the Custom guard panel", () => {
   it("also gates the broader scope weakening (non_destructive → everything)", () => {
     const state = guardsStateWith();
     renderPanel(state);
-    fireEvent.click(screen.getByText(SCOPE_EVERYTHING));
+    fireEvent.click(chooseFor(SCOPE_EVERYTHING));
     expect(state.handleSave).not.toHaveBeenCalled();
     expect(screen.getByText(WEAKENING_CONFIRM)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -218,7 +228,7 @@ describe("the Custom guard panel", () => {
   it("lets the person back out of a weakening without saving", () => {
     const state = guardsStateWith();
     renderPanel(state);
-    fireEvent.click(screen.getByText(CARD_SESSION));
+    fireEvent.click(chooseFor(CARD_SESSION));
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(state.handleSave).not.toHaveBeenCalled();
     expect(screen.queryByText(WEAKENING_CONFIRM)).toBeNull();
@@ -268,18 +278,30 @@ function renderProfileCard(profile: ProfileState, onSetProfile = vi.fn()) {
   return onSetProfile;
 }
 
+// REDESIGN NOTE (dark direction, phase 3): the segmented Simple/Developer control
+// became ONE profile row — mono "{Profile} · local" with a single accent "switch
+// to …" action, per the brief's Settings section list. Custom's route in is
+// unchanged in every way that matters: it is absent from the DOM until
+// "Advanced…" is pressed, and turning it on still costs two more presses with
+// the core's own description in between. Only the shape of the Simple/Developer
+// control moved, so these tests now name the row and its action.
+const TURN_ON_CUSTOM = "Turn on the Custom profile";
+
 describe("the Profile card's Advanced… disclosure", () => {
   it("keeps Custom out of the DOM until the disclosure is opened", () => {
     renderProfileCard(PROFILE_WITH_CUSTOM);
-    // The basic profiles are the plain segmented control; Custom is not shown.
-    expect(screen.getByRole("button", { name: "Simple" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Developer" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Custom" })).toBeNull();
+    // The profile row states where you are and offers the one basic switch.
+    expect(screen.getByText("Simple · local")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "switch to Developer" })).toBeTruthy();
+    // Custom is nowhere — not as a row, not as a control, not as its description.
+    expect(screen.queryByText("Custom")).toBeNull();
+    expect(screen.queryByRole("button", { name: TURN_ON_CUSTOM })).toBeNull();
     expect(screen.queryByText(CUSTOM_DESCRIPTION)).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced…" }));
     // Now Custom and its honest description appear.
-    expect(screen.getByRole("button", { name: "Custom" })).toBeTruthy();
+    expect(screen.getByText("Custom")).toBeTruthy();
+    expect(screen.getByRole("button", { name: TURN_ON_CUSTOM })).toBeTruthy();
     expect(screen.getByText(CUSTOM_DESCRIPTION)).toBeTruthy();
   });
 
@@ -288,7 +310,7 @@ describe("the Profile card's Advanced… disclosure", () => {
     const onSet = renderProfileCard(PROFILE_WITH_CUSTOM);
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced…" }));
-    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("button", { name: TURN_ON_CUSTOM }));
     // Step one: not yet switched.
     expect(onSet).not.toHaveBeenCalled();
 
@@ -306,7 +328,7 @@ describe("the Profile card's Advanced… disclosure", () => {
   it("lets the person back out of the first confirm step without switching", () => {
     const onSet = renderProfileCard(PROFILE_WITH_CUSTOM);
     fireEvent.click(screen.getByRole("button", { name: "Advanced…" }));
-    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("button", { name: TURN_ON_CUSTOM }));
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(onSet).not.toHaveBeenCalled();
     // The step-two commit button is gone.
@@ -317,7 +339,27 @@ describe("the Profile card's Advanced… disclosure", () => {
     renderProfileCard({ ...PROFILE_WITH_CUSTOM, activeProfile: "custom", mode: "open" });
     // No click needed — the active profile is never hidden from the person in it.
     expect(screen.getByText(CUSTOM_DESCRIPTION)).toBeTruthy();
-    expect(screen.getByText("In use")).toBeTruthy();
+    expect(screen.getByText("in use ✓")).toBeTruthy();
+    // And the row that is already in use offers nothing to press.
+    expect(screen.queryByRole("button", { name: TURN_ON_CUSTOM })).toBeNull();
+  });
+
+  it("asks before a step UP in what Addison may do, and never a browser dialog", () => {
+    // Simple → Developer widens what Addison is allowed to do, so it is confirmed
+    // inline first. (Switching back is a tightening and goes straight through.)
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const onSet = renderProfileCard(PROFILE_WITH_CUSTOM);
+    fireEvent.click(screen.getByRole("button", { name: "switch to Developer" }));
+    expect(onSet).not.toHaveBeenCalled();
+    expect(
+      screen.getByText(
+        "Developer profile lets Addison act more freely on this computer. You can switch back anytime.",
+      ),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Switch" }));
+    expect(onSet).toHaveBeenCalledWith("developer");
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });
 
@@ -390,7 +432,6 @@ function renderSettings(profile: ProfileState) {
       onClearDiagnostics={noop}
       theme="light"
       onSetTheme={noop}
-      onOpenMenu={noop}
     />,
   );
 }

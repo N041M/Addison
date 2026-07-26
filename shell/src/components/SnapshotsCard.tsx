@@ -1,23 +1,37 @@
-// Restore points — the Settings face of GLOBAL FLOOR G3 (guaranteed rollback).
+// Restore points — the frontend face of GLOBAL FLOOR G3 (guaranteed rollback).
 //
-// The story this card exists for (amendment §1): someone asked their assistant
-// to make things cheaper, it broke their setup, and the rewind didn't work. So
-// the copy here is written for the moment AFTER something has gone wrong, for a
+// The story this file exists for (amendment §1): someone asked their assistant to
+// make things cheaper, it broke their setup, and the rewind didn't work. So the
+// copy here is written for the moment AFTER something has gone wrong, for a
 // reader who is 54 or 68 and is not enjoying themselves. Plain words, no jargon,
-// and the target of "Restore" is always named before the click — a recovery
+// and the target of a restore is always named before the click — a recovery
 // button you press blind isn't a recovery, it's a second gamble.
 //
-// Fern shape rule (docs/design-brief-fern, contract §11.2): the restore button is
-// rounded and fern-filled, because it is yours to act on and because it is a
-// RECOVERY. It is never the danger token — that token is for errors, and going
-// back to a setup that worked is the opposite of a destructive act. The
-// "Permanent" mark on a G4 anchor is blocky (square, 2px left rule, small caps),
-// because it is Addison telling you something about the record; there is no
-// control there to round off.
+// Three pieces, all in the dark direction's row idiom:
+//
+//   * `RestorePointsSection` — the Settings section: the one-action summary row
+//     ("Going back to …" + "restore"), the honest no-target sentences, the
+//     sticky capture-failure warning, and the way through to the full list.
+//   * `SnapshotRows`         — the list itself, shared BY VALUE between the
+//     Restore-points modal and the Snapshots surface, so the two can never drift
+//     into disagreeing about what a permanent row may do.
+//   * `SaveSnapshotAction`   — "save one now" (the modal header's control).
+//
+// SHAPE RULES THAT ARE SAFETY RULES, not styling:
+//   * A restore is NEVER the danger token. Going back to a setup that worked is
+//     the opposite of a destructive act; the rose token is for deleting things.
+//   * The "Permanent" mark on a G4 anchor is blocky (square, 2px accent rule,
+//     small caps) because it is Addison telling you something about the record,
+//     and it carries NO Remove control — the core refuses to delete the row, and
+//     a button that can only fail makes a guarantee look like a bug.
+//   * Every confirm is inline and two-step. A browser confirm() cannot carry the
+//     consequence copy, and the consequence copy is the entire point.
 
 import { useState } from "react";
 import type { SnapshotsState } from "../hooks/useSnapshots";
+import type { Snapshot } from "../types/ui";
 import { GENESIS_LABEL } from "../ipc/client";
+import { PermanentTag, RowAction, RowConfirm, SurfaceRow } from "./Surface";
 
 /** Frozen consequence copy (contract §11.2, on §11.3 item 12's byte-for-byte
  * list). This sentence lives on THIS side of the wire only, and deliberately so:
@@ -28,17 +42,17 @@ import { GENESIS_LABEL } from "../ipc/client";
  * only assertion of this one is in snapshots.test.ts. Say what comes back AND
  * what doesn't, so nobody hesitates over whether restoring costs them their
  * conversations. */
-const CONSEQUENCE =
+export const CONSEQUENCE =
   "Your settings, services, notes, widgets and routines go back to how they were. " +
   "Your chats and your saved keys aren't touched.";
 
 /** Appended when the target is the very first restore point: going back there
  * throws away everything set up since install, which the base sentence's "go
  * back to how they were" does not convey on its own. */
-const GENESIS_CONSEQUENCE =
+export const GENESIS_CONSEQUENCE =
   "This is Addison as it was first installed, so your services, notes, widgets and routines are cleared.";
 
-function formatWhen(createdAt: number): string {
+export function formatWhen(createdAt: number): string {
   try {
     return new Date(createdAt * 1000).toLocaleString(undefined, {
       month: "short",
@@ -51,9 +65,10 @@ function formatWhen(createdAt: number): string {
   }
 }
 
-/** The card's `action`-slot control, outlined rather than filled — saving a
- * restore point is a quiet housekeeping act beside the card's real primary. */
-export function SaveSnapshotButton({
+/** "save one now" — the modal header's control. Saving a restore point is a
+ * quiet housekeeping act, and a successful one is what clears the core's sticky
+ * capture-failure warning (the hook re-reads the list afterwards). */
+export function SaveSnapshotAction({
   connected,
   snapshots: state,
 }: {
@@ -61,31 +76,32 @@ export function SaveSnapshotButton({
   snapshots: SnapshotsState;
 }) {
   return (
-    <button
-      type="button"
+    <RowAction
+      mono
       disabled={!connected || state.busy}
       onClick={() => void state.handleCreateSnapshot()}
-      className="shrink-0 rounded-sm border border-line bg-transparent px-3 py-1.5 text-xs font-medium text-ink-soft hover:border-muted disabled:opacity-50"
     >
-      Save a restore point now
-    </button>
+      save one now
+    </RowAction>
   );
 }
 
-export function SnapshotsCard({
+// ---------------------------------------------------------------------------
+// The Settings section
+// ---------------------------------------------------------------------------
+
+export function RestorePointsSection({
   connected,
   snapshots: state,
+  onOpenAll,
 }: {
   connected: boolean;
   snapshots: SnapshotsState;
+  /** Opens the full restore-points list (the modal). */
+  onOpenAll: () => void;
 }) {
-  // Held until the person confirms or backs out. Inline, never window.confirm() —
-  // a native dialog can't carry the consequence copy and can't be styled to say
-  // calmly that this is a recovery.
+  // Held until the person confirms or backs out. Inline, never window.confirm().
   const [confirming, setConfirming] = useState(false);
-  // The permanent row whose per-row "Restore this one" is mid-confirm, if any.
-  // Same inline two-step idiom as the one-action restore above.
-  const [restoreConfirmId, setRestoreConfirmId] = useState<string | null>(null);
 
   const {
     snapshots,
@@ -97,218 +113,206 @@ export function SnapshotsCard({
     notice,
     busy,
     handleRestoreLastWorking,
-    handleRestoreSnapshot,
-    handleDeleteSnapshot,
   } = state;
 
   const target = snapshots.find((s) => s.id === lastWorkingId);
   const targetName = lastWorkingLabel ?? target?.reasonLabel;
   const canRestore = connected && Boolean(targetName);
 
+  // One string, so the sentence a person reads is one sentence — the
+  // profile-change line is APPENDED, never substituted, because a restore can
+  // move you between profiles and so between how freely Addison may act.
+  const consequence = [
+    CONSEQUENCE,
+    lastWorkingProfileChange,
+    targetName === GENESIS_LABEL ? GENESIS_CONSEQUENCE : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div>
+    <>
       {/* The core's sticky notice that an automatic restore point couldn't be
           saved. It stays until the person saves one themselves. */}
-      {warning && <p className="mb-3 text-fine leading-relaxed text-ink-soft">{warning}</p>}
+      {warning && <SurfaceRow name={warning} />}
 
-      {/* Name the target, then offer the button. Never the other way round. */}
-      {canRestore && targetName && (
-        <div className="mb-3">
-          <p className="text-meta text-ink-soft">
-            Going back to <span className="font-semibold text-ink">{targetName}</span>
-            {/* `text-muted`, not `text-faint`: measured against `bg-paper`, faint is
-                2.5:1 in light and 4.0:1 in dark, both under the 4.5:1 AA floor — and
-                this is 10.5px, for readers of 54 and 68 (design-doc §7.1). Muted
-                measures 4.7:1 and 6.3:1 and still sits below the label, so the
-                hierarchy survives. This is the line that says WHICH setup the button
-                is about to restore; unreadable is not an option on it. */}
-            {target && (
-              <span className="ml-1.5 font-mono text-label text-muted">
-                {formatWhen(target.createdAt)}
-              </span>
-            )}
-          </p>
-          {!confirming && (
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirming(true)}
-              className="mt-2.5 rounded-sm bg-fern px-4 py-2 text-meta font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50 max-md:min-h-[44px]"
-            >
-              Restore to the last working state
-            </button>
-          )}
-          {confirming && (
-            <div className="mt-3 rounded-card bg-fern-tint px-[15px] py-[13px]">
-              <p className="text-fine leading-relaxed text-ink-soft">
-                {CONSEQUENCE}
-                {/* Appended, never substituted: a restore can move you between
-                    profiles — and so between how freely Addison may act — and
-                    the sentence above never said so. */}
-                {lastWorkingProfileChange && ` ${lastWorkingProfileChange}`}
-                {targetName === GENESIS_LABEL && ` ${GENESIS_CONSEQUENCE}`}
-              </p>
-              <div className="mt-2.5 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setConfirming(false);
-                    void handleRestoreLastWorking();
-                  }}
-                  className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
-                >
-                  Restore
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirming(false)}
-                  className="text-xs font-medium text-ink-soft hover:text-muted"
-                >
-                  Not now
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+      {/* Name the target, then offer the action. Never the other way round. */}
+      {canRestore && targetName && !confirming && (
+        <SurfaceRow
+          name={
+            <>
+              Going back to <span className="text-ink">{targetName}</span>
+            </>
+          }
+          value={target ? formatWhen(target.createdAt) : undefined}
+          action="restore"
+          actionAriaLabel="Restore to the last working state"
+          actionDisabled={busy}
+          onAction={() => setConfirming(true)}
+        />
+      )}
+      {canRestore && targetName && confirming && (
+        <SurfaceRow
+          name={consequence}
+          actions={
+            <>
+              <RowAction
+                disabled={busy}
+                onClick={() => {
+                  setConfirming(false);
+                  void handleRestoreLastWorking();
+                }}
+              >
+                Restore
+              </RowAction>
+              <RowAction tone="muted" onClick={() => setConfirming(false)}>
+                Not now
+              </RowAction>
+            </>
+          }
+        />
       )}
 
-      {/* Restore points exist, but the one-action button has no target — G3's two
-          honest silences. Without a line here the card lists restore points with
-          no button and no reason, and the reader most in need of the floor reads
-          that silence as the floor being broken. So Addison names which silence
-          this is. Same quiet `text-meta text-muted` idiom (and AA reasoning) as
-          the empty-state copy below — this is Addison telling you something, not
-          a control, so it is one <p>, no button, no border.
+      {/* Restore points exist, but the one-action restore has no target — G3's
+          two honest silences. Without a line here the surface lists restore
+          points with no way to use them and no reason, and the reader most in
+          need of the floor reads that silence as the floor being broken. So
+          Addison names which silence this is.
 
           Imprecision accepted here: the core's 'unreadable' walk outcome is
           indistinguishable from 'identical' on this wire — both arrive as "rows
           exist, at least one verified, no target" — so the second sentence
-          covers both. The wire's `why` field is the future fix if that
-          distinction ever has to be drawn; do not add a wire field now. */}
+          covers both. */}
       {snapshotsLoaded && connected && snapshots.length > 0 && !targetName && (
-        <p className="mb-3 text-meta text-muted">
-          {snapshots.some((s) => s.verifiedWorking)
-            ? "Your setup already matches your last working setup, so there's nothing to go back to right now."
-            : "None of these has been seen working yet, so the restore button isn't ready. It appears after Addison next answers you."}
-        </p>
+        <SurfaceRow
+          name={
+            snapshots.some((s) => s.verifiedWorking)
+              ? "Your setup already matches your last working setup, so there's nothing to go back to right now."
+              : "None of these has been seen working yet, so the restore button isn't ready. It appears after Addison next answers you."
+          }
+        />
       )}
 
       {/* The outcome of the last save/restore/remove, in plain words. Stays put
           rather than fading — this is a sentence someone re-reads. */}
-      {notice && <p className="mb-3 text-fine leading-relaxed text-ink-soft">{notice}</p>}
+      {notice && <SurfaceRow name={notice} />}
 
-      {!snapshotsLoaded ? (
-        <p className="text-meta text-muted">Looking for your restore points…</p>
-      ) : snapshots.length === 0 ? (
-        <p className="text-meta text-muted">
-          {connected
-            ? "None yet. Addison saves the first one as soon as it has something to remember."
-            : "Your restore points appear here once Addison's engine is connected."}
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-2">
-          {snapshots.map((snap) => (
-            <li key={snap.id} className="rounded border border-line bg-paper px-[14px] py-2.5">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0 flex-1">
-                  {/* G4: a permanent row says so, blockily. */}
-                  {snap.undeletable && <PermanentTag />}
-                  <p className="text-action font-semibold text-ink">{snap.reasonLabel}</p>
-                  {/* Same AA reasoning as the destination line above. This is the
-                      field a person reads to choose WHICH restore point to click —
-                      "Working setup, yesterday 14:02" — so it is the last place in
-                      the app that should be set at 2.5:1. */}
-                  <p className="mt-0.5 font-mono text-label text-muted">
-                    {formatWhen(snap.createdAt)}
-                  </p>
-                </div>
-                {/* A permanent row has NO Remove control — the core refuses to
-                    delete it, and offering a button that can only fail would make
-                    the guarantee look like a bug. What it gets instead is its own
-                    "Restore this one": these are the anchors (the G4 rows and
-                    genesis), the points most worth being able to return to by name
-                    (contract D7). Fern-filled and rounded, like the one-action
-                    restore — a recovery, never the danger token.
-
-                    An ordinary row keeps only Remove. `text-muted` rather than
-                    `text-faint` for the same AA reason as the timestamps: quiet is
-                    right for the only control that deletes something, unreadable at
-                    2.5:1 is not. */}
-                {snap.undeletable
-                  ? restoreConfirmId !== snap.id && (
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => setRestoreConfirmId(snap.id)}
-                        className="shrink-0 rounded-sm bg-fern px-3 py-1.5 text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50 max-md:min-h-[44px]"
-                      >
-                        Restore this one
-                      </button>
-                    )
-                  : (
-                      <button
-                        type="button"
-                        onClick={() => void handleDeleteSnapshot(snap.id)}
-                        className="shrink-0 text-xs font-medium text-muted hover:text-danger"
-                      >
-                        Remove
-                      </button>
-                    )}
-              </div>
-              {/* The per-row confirm — names the row before the click (never a
-                  blind recovery), then the same consequence copy the one-action
-                  restore shows. Two-step and inline, never window.confirm(). */}
-              {snap.undeletable && restoreConfirmId === snap.id && (
-                <div className="mt-2.5 rounded-card bg-fern-tint px-[15px] py-[13px]">
-                  <p className="text-meta text-ink-soft">
-                    Going back to <span className="font-semibold text-ink">{snap.reasonLabel}</span>
-                    <span className="ml-1.5 font-mono text-label text-muted">
-                      {formatWhen(snap.createdAt)}
-                    </span>
-                  </p>
-                  <p className="mt-2 text-fine leading-relaxed text-ink-soft">
-                    {CONSEQUENCE}
-                    {snap.reasonLabel === GENESIS_LABEL && ` ${GENESIS_CONSEQUENCE}`}
-                  </p>
-                  <div className="mt-2.5 flex flex-wrap items-center gap-3">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        setRestoreConfirmId(null);
-                        void handleRestoreSnapshot(snap.id);
-                      }}
-                      className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
-                    >
-                      Restore
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRestoreConfirmId(null)}
-                      className="text-xs font-medium text-ink-soft hover:text-muted"
-                    >
-                      Not now
-                    </button>
-                  </div>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+      <SurfaceRow
+        name="All restore points"
+        value={allPointsValue(connected, snapshotsLoaded, snapshots.length)}
+        action="open"
+        onAction={onOpenAll}
+      />
+    </>
   );
 }
 
-// The blocky "PERMANENT" annotation (design-brief-fern shape rule: blocky = a
-// live annotation Addison is showing you). Square edges, 2px left fern rule,
-// small caps — this row was saved when a safety setting was turned off, so it
-// stays for good. Matches WidgetRail's DevTag exactly.
-function PermanentTag() {
+function allPointsValue(connected: boolean, loaded: boolean, count: number): string {
+  if (!connected) return "not connected";
+  if (!loaded) return "looking…";
+  return count === 0 ? "none yet" : String(count);
+}
+
+// ---------------------------------------------------------------------------
+// The shared list of rows (modal + Snapshots surface)
+// ---------------------------------------------------------------------------
+
+export function SnapshotRows({
+  connected,
+  snapshots: state,
+  rows,
+}: {
+  connected: boolean;
+  snapshots: SnapshotsState;
+  /** The rows to render. Callers may pass a recency-grouped subset; the row
+   * anatomy and the permanent-row semantics are identical either way. */
+  rows: Snapshot[];
+}) {
+  // The permanent row whose per-row "Restore this one" is mid-confirm, if any.
+  const [restoreConfirmId, setRestoreConfirmId] = useState<string | null>(null);
+  const { busy, restoredId, handleRestoreSnapshot, handleDeleteSnapshot } = state;
+
   return (
-    <span className="mb-1 inline-block border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
-      Permanent
-    </span>
+    <>
+      {rows.map((snap) => {
+        const restored = restoredId === snap.id;
+        const confirmingThis = snap.undeletable && restoreConfirmId === snap.id;
+        return (
+          <SurfaceRow
+            key={snap.id}
+            // G4: a permanent row says so, blockily.
+            tag={snap.undeletable ? <PermanentTag /> : undefined}
+            name={snap.reasonLabel}
+            value={formatWhen(snap.createdAt)}
+            actions={
+              restored ? (
+                <span className="shrink-0 font-mono text-[10.5px] text-accent">restored ✓</span>
+              ) : snap.undeletable ? (
+                // A permanent row has NO Remove control — the core refuses to
+                // delete it. What it gets instead is its own "Restore this one":
+                // these are the anchors (the G4 rows and genesis), the points
+                // most worth being able to return to by name (contract D7).
+                // Accent, never the danger token — a recovery, not a loss.
+                !confirmingThis && (
+                  <RowAction
+                    disabled={!connected || busy}
+                    ariaLabel={`Restore this one: ${snap.reasonLabel}`}
+                    onClick={() => setRestoreConfirmId(snap.id)}
+                  >
+                    Restore this one
+                  </RowAction>
+                )
+              ) : (
+                // An ordinary row keeps only Remove. The one-action way back is
+                // the summary row's restoreLastWorking, in Settings.
+                <RowAction
+                  tone="danger"
+                  disabled={!connected}
+                  ariaLabel={`Remove ${snap.reasonLabel}`}
+                  onClick={() => void handleDeleteSnapshot(snap.id)}
+                >
+                  Remove
+                </RowAction>
+              )
+            }
+          >
+            {/* The per-row confirm — names the row before the click (never a
+                blind recovery), then the same consequence copy the one-action
+                restore shows. Two-step and inline, never window.confirm(). */}
+            {confirmingThis && (
+              <RowConfirm
+                busy={busy}
+                confirmLabel="Restore"
+                onConfirm={() => {
+                  setRestoreConfirmId(null);
+                  void handleRestoreSnapshot(snap.id);
+                }}
+                onCancel={() => setRestoreConfirmId(null)}
+              >
+                <p className="m-0">
+                  Going back to <span className="text-ink">{snap.reasonLabel}</span>
+                  <span className="ml-1.5 font-mono text-[10.5px] text-muted">
+                    {formatWhen(snap.createdAt)}
+                  </span>
+                </p>
+                <p className="m-0 mt-2">
+                  {snap.reasonLabel === GENESIS_LABEL
+                    ? `${CONSEQUENCE} ${GENESIS_CONSEQUENCE}`
+                    : CONSEQUENCE}
+                </p>
+              </RowConfirm>
+            )}
+          </SurfaceRow>
+        );
+      })}
+    </>
   );
+}
+
+/** The one-line state of the list, when there are no rows to show. Kept out of
+ * `SnapshotRows` so the modal and the surface can place it themselves. */
+export function snapshotsEmptyLine(connected: boolean, loaded: boolean): string {
+  if (!connected) return "Your restore points appear here once Addison's engine is connected.";
+  if (!loaded) return "Looking for your restore points…";
+  return "None yet. Addison saves the first one as soon as it has something to remember.";
 }

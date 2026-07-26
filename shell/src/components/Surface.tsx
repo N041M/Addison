@@ -23,8 +23,12 @@
 // row. Fabricated state on a page about what Addison can reach, or about the ways
 // back it has saved, would be a lie in exactly the place a person is checking
 // whether they can trust the thing (IMPLEMENTATION.md, standing rule 1).
+//
+// `pinned` is the one slot above the title, and it exists for a safety reason:
+// a permission card that is waiting on an answer blocks the turn, so it must be
+// visible on whatever page the person is standing on — never only on chat.
 
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 
 /** The DOM id App's view transitions animate. Only one surface exists at a time. */
 export const SURFACE_ID = "addison-surface";
@@ -32,36 +36,24 @@ export const SURFACE_ID = "addison-surface";
 interface SurfaceProps {
   title: string;
   description?: string;
-  children?: ReactNode;
   /**
-   * "column" (default) is the designed reading column: 580px, its own scroll,
-   * fade-masked. "raw" drops the width, scroll and mask, and is a TEMPORARY
-   * accommodation for a page that still brings its own scroller and layout —
-   * today only SettingsPage, which phase 3 rebuilds into sections and rows.
-   * Nesting that page inside a 580px masked scroller would give it two
-   * scrollbars and clip its cards; the enter/leave transitions still apply.
+   * Rendered ABOVE the title, inside the same reading column: status banners and
+   * — the reason this slot exists — a pending permission card. A question that
+   * is holding a turn open must never be invisible because the person walked to
+   * Settings while it was on screen.
    */
-  variant?: "column" | "raw";
+  pinned?: ReactNode;
+  children?: ReactNode;
 }
 
-export function Surface({ title, description, children, variant = "column" }: SurfaceProps) {
-  if (variant === "raw") {
-    return (
-      <div id={SURFACE_ID} className="flex min-h-0 w-full flex-1 flex-col">
-        {children}
-      </div>
-    );
-  }
-
+export function Surface({ title, description, pinned, children }: SurfaceProps) {
   return (
     <div
       id={SURFACE_ID}
       className="no-scrollbar fade-mask-y flex w-full max-w-[580px] flex-col overflow-y-auto pb-6 pt-9"
     >
-      <div
-        data-surf="1"
-        className="shrink-0 text-[20px] tracking-display text-ink"
-      >
+      {pinned && <div className="mb-5 flex shrink-0 flex-col gap-2">{pinned}</div>}
+      <div data-surf="1" className="shrink-0 text-[20px] tracking-display text-ink">
         {title}
       </div>
       {description && (
@@ -78,6 +70,8 @@ export function Surface({ title, description, children, variant = "column" }: Su
 }
 
 interface SurfaceSectionProps {
+  /** Optional DOM id — used by the one-shot scroll requests (first-run → API keys). */
+  id?: string;
   label: string;
   children?: ReactNode;
 }
@@ -87,14 +81,78 @@ interface SurfaceSectionProps {
  * the enter/leave stagger animates `surface.children`, and the inline animation
  * here is what plays on a plain re-render.
  */
-export function SurfaceSection({ label, children }: SurfaceSectionProps) {
+export function SurfaceSection({ id, label, children }: SurfaceSectionProps) {
   return (
-    <div className="mb-[26px] shrink-0 animate-[fadeRise_.35s_ease_both]">
-      <div className="border-l-2 border-rail pl-3.5 text-[11px] font-medium tracking-[.04em] text-faint">
+    <div
+      id={id}
+      // The fade mask eats the first 32px of the column, so a scrolled-to section
+      // stops below it rather than under it.
+      className="mb-[26px] shrink-0 scroll-mt-10 animate-[fadeRise_.35s_ease_both]"
+    >
+      <div
+        data-surf="1"
+        className="border-l-2 border-rail pl-3.5 text-[11px] font-medium tracking-[.04em] text-faint"
+      >
         {label}
       </div>
       <div className="mt-2.5 flex flex-col">{children}</div>
     </div>
+  );
+}
+
+/** How an action reads. `danger` is for real destructive controls only — a
+ * restore is a recovery and is never styled with it (HANDOFF rule). */
+export type RowActionTone = "accent" | "muted" | "danger";
+
+interface RowActionProps {
+  children: ReactNode;
+  /** Receives the click event so an anchored popover can measure its trigger. */
+  onClick?: (event: MouseEvent<HTMLButtonElement>) => void;
+  disabled?: boolean;
+  /** Screen-reader name. A page of rows whose every control says "choose" is
+   * unusable without one. */
+  ariaLabel?: string;
+  tone?: RowActionTone;
+  /** Machine-fact actions (a skill's `on`/`off`) read in mono, like values. */
+  mono?: boolean;
+  title?: string;
+}
+
+/**
+ * The action at the right of a row. Exported so a row that genuinely needs two
+ * of them (replace + remove) can compose them itself through `actions`.
+ */
+export function RowAction({
+  children,
+  onClick,
+  disabled = false,
+  ariaLabel,
+  tone = "accent",
+  mono = false,
+  title,
+}: RowActionProps) {
+  const toneClass =
+    tone === "danger"
+      ? "text-muted hover:text-danger"
+      : tone === "muted"
+        ? "text-muted hover:text-ink"
+        : "text-accent hover:text-ink";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || !onClick}
+      aria-label={ariaLabel}
+      title={title}
+      className={
+        "shrink-0 transition-colors disabled:cursor-not-allowed disabled:text-disabled " +
+        "disabled:hover:text-disabled max-md:min-h-[44px] " +
+        (mono ? "font-mono text-[10.5px] " : "text-[12px] ") +
+        toneClass
+      }
+    >
+      {children}
+    </button>
   );
 }
 
@@ -106,9 +164,17 @@ interface SurfaceRowProps {
   /** The action's label ("change", "restore", "open"). Rendered as accent text. */
   action?: ReactNode;
   /** Omit to render `action` as plain text — a state, not a control. */
-  onAction?: () => void;
+  onAction?: (event: MouseEvent<HTMLButtonElement>) => void;
+  /** Screen-reader name for the action, when its label alone is ambiguous. */
+  actionAriaLabel?: string;
   /** Disables the action without removing it (a busy or unavailable step). */
   actionDisabled?: boolean;
+  /** How the action reads. `danger` only for real destructive controls. */
+  actionTone?: RowActionTone;
+  /** Two or more controls in the action slot — replaces `action`/`onAction`. */
+  actions?: ReactNode;
+  /** A blocky annotation above the name (the G4 "Permanent" tag). */
+  tag?: ReactNode;
   /** Optional block under the row (an inline confirm, a form) — full width. */
   children?: ReactNode;
 }
@@ -118,11 +184,16 @@ export function SurfaceRow({
   value,
   action,
   onAction,
+  actionAriaLabel,
   actionDisabled = false,
+  actionTone = "accent",
+  actions,
+  tag,
   children,
 }: SurfaceRowProps) {
   return (
     <div className="border-t border-line px-0.5 py-[13px] text-[12px]">
+      {tag}
       <div className="flex items-baseline gap-3">
         <span data-surf="1" className="min-w-0 text-ink-soft">
           {name}
@@ -131,22 +202,73 @@ export function SurfaceRow({
         {value != null && value !== "" && (
           <span className="shrink-0 font-mono text-[10.5px] text-muted">{value}</span>
         )}
-        {action != null &&
+        {actions ? (
+          <span className="flex shrink-0 items-baseline gap-3">{actions}</span>
+        ) : (
+          action != null &&
           action !== "" &&
           (onAction ? (
-            <button
-              type="button"
+            <RowAction
               onClick={onAction}
               disabled={actionDisabled}
-              className="shrink-0 text-[12px] text-accent transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
+              ariaLabel={actionAriaLabel}
+              tone={actionTone}
             >
               {action}
-            </button>
+            </RowAction>
           ) : (
             <span className="shrink-0 text-[12px] text-muted">{action}</span>
-          ))}
+          ))
+        )}
       </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * The inline two-step confirm used across the surfaces (a restore, a profile
+ * switch, a weakening save, a folder grant). Never a browser dialog: a native
+ * confirm() cannot carry the consequence copy, and the copy is the point.
+ */
+export function RowConfirm({
+  children,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+  busy = false,
+  cancelLabel = "Not now",
+}: {
+  children: ReactNode;
+  confirmLabel: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  busy?: boolean;
+  cancelLabel?: string;
+}) {
+  return (
+    <div className="mt-2.5 border-l-2 border-rail pl-3.5">
+      <div className="text-[12px] leading-[1.55] text-ink-soft">{children}</div>
+      <div className="mt-2.5 flex flex-wrap items-baseline gap-5">
+        <RowAction onClick={onConfirm} disabled={busy}>
+          {confirmLabel}
+        </RowAction>
+        <RowAction onClick={onCancel} tone="muted">
+          {cancelLabel}
+        </RowAction>
+      </div>
+    </div>
+  );
+}
+
+/** The blocky "Permanent" annotation on a G4 anchor row — square edges, a 2px
+ * accent left rule, small caps. Addison telling you something about the record;
+ * there is no control there to round off, and no Remove beside it because the
+ * core refuses to delete the row. */
+export function PermanentTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-accent pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-accent">
+      Permanent
+    </span>
   );
 }

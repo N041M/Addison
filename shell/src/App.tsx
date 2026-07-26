@@ -21,12 +21,13 @@
 // Theme is class-driven and persisted in localStorage ("addison.theme") as one of
 // "light" | "dark" | "system"; the default is now "system" (Match this computer).
 //
-// PHASE NOTE (redesign 1/4): the chat column's internals — ChatThread, Composer,
-// the cards — and SettingsPage still carry their Fern-era styling. They are fully
-// wired and rendering; phases 2–3 restyle them in place. Nothing here fakes a
-// control or hides a real one to make the new chrome look finished.
+// FLOATING CHROME LIVES HERE, not inside a surface: the anchored model popup and
+// the Restore points modal are both `position: fixed`, and a surface section
+// carries a fadeRise transform (`both` fill), which would make a fixed child
+// resolve against the section instead of the viewport. App owns them, so Escape
+// can also be ordered honestly: drawer, then modal, then the surface itself.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Method, type PermissionRequest, type ActivityUpdate } from "./types/protocol";
 import type { DisplayMessage, LocalSetupState, ProfileState, View } from "./types/ui";
 import {
@@ -54,7 +55,15 @@ import {
   RoutineProposalCard,
   type RoutineProposal,
 } from "./components/RoutineProposalCard";
-import { SettingsPage, API_KEYS_SECTION_ID } from "./components/SettingsPage";
+import {
+  SettingsPage,
+  API_KEYS_SECTION_ID,
+  resolveCloudModel,
+} from "./components/SettingsPage";
+import { ModelPopup, type ModelPopupOption, type PopupAnchor } from "./components/ModelPopup";
+import { RestorePointsModal } from "./components/RestorePointsModal";
+import { ToolsSurface } from "./components/ToolsSurface";
+import { SnapshotsSurface } from "./components/SnapshotsSurface";
 import { FirstRunBanner } from "./components/FirstRunBanner";
 import { Banner } from "./components/Banner";
 import { MobileDrawer } from "./components/MobileDrawer";
@@ -150,7 +159,16 @@ export function App() {
   const [startedUnconfigured, setStartedUnconfigured] = useState<boolean | null>(null);
   const [firstRunDismissed, setFirstRunDismissed] = useState(false);
   // One-shot Settings scroll request (first-run "Start setup" → API-keys card).
+  // The clear callback is memoised on purpose: SettingsPage schedules the scroll
+  // on a short timer and cancels it in the effect's cleanup, so a NEW function
+  // identity on every App render would cancel and reschedule the timer forever
+  // and the scroll would never actually happen.
   const [settingsScrollTarget, setSettingsScrollTarget] = useState<string | null>(null);
+  const clearSettingsScrollTarget = useCallback(() => setSettingsScrollTarget(null), []);
+  // The two pieces of floating chrome (see the file header for why they live
+  // here): the anchored model popup's click point, and the Restore points modal.
+  const [modelAnchor, setModelAnchor] = useState<PopupAnchor | null>(null);
+  const [restorePointsOpen, setRestorePointsOpen] = useState(false);
   // Bumped to focus the composer for the "say hello" nudge when first-run reaches
   // step 2 (a provider connected during this launch).
   const [composerFocusSignal, setComposerFocusSignal] = useState(0);
@@ -284,6 +302,15 @@ export function App() {
       if (viewTimer.current) clearTimeout(viewTimer.current);
     };
   }, []);
+
+  // Leaving Settings takes its floating chrome with it — an anchored popup or a
+  // modal left over a page that is no longer there points at nothing.
+  useEffect(() => {
+    if (view !== "settings") {
+      setModelAnchor(null);
+      setRestorePointsOpen(false);
+    }
+  }, [view]);
 
   const isSurface = view !== "chat";
   const viewTitle =
@@ -665,10 +692,15 @@ export function App() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
-        // The mobile drawer takes Escape first, before it would fall through to
-        // leaving a surface.
+        // Innermost thing first, always: the drawer, then the modal over the
+        // surface, and only then the surface itself. (The model popup handles
+        // Escape in the capture phase, so it never reaches this listener.)
         if (drawerOpen) {
           setDrawerOpen(false);
+          return;
+        }
+        if (restorePointsOpen) {
+          setRestorePointsOpen(false);
           return;
         }
         if (view !== "chat") {
@@ -686,7 +718,7 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, connected, controlsBusy, drawerOpen]);
+  }, [view, connected, controlsBusy, drawerOpen, restorePointsOpen]);
 
   // --- Render ---------------------------------------------------------------
   // The two movable blocks: the "Addison's work" annotation and the consent card
@@ -749,18 +781,85 @@ export function App() {
   // acknowledgement that the safety posture is different. Nothing louder.
   const profileModeNote = profile?.mode === "open" ? "open" : undefined;
 
-  // The sidebar's two machine facts. Both are REAL: the count of folders Addison
-  // may work in (Developer/Custom only — Simple has none by construction, and
-  // then the policy mode is the honest thing to show), and how many restore
-  // points exist right now.
-  const trustedRoots = workspaceState.rootsLoaded ? workspaceState.roots.length : 0;
-  const toolsHint =
-    trustedRoots > 0
-      ? `${trustedRoots} folder${trustedRoots === 1 ? "" : "s"}`
-      : profile?.mode;
+  // Workspace trust is a Developer/Custom surface, keyed off the ACTIVE PROFILE
+  // and never the policy mode (Phase-2 step 5). Trust rows outlive a profile
+  // switch core-side, so a Simple-profile person must not see them here either —
+  // the Tools page is not a back door to a surface Settings hides.
+  const showTrustedFolders =
+    profile?.activeProfile === "developer" || profile?.activeProfile === "custom";
+  const trustedRoots =
+    showTrustedFolders && workspaceState.rootsLoaded ? workspaceState.roots : [];
+  const connectedProviders = models.providers.filter((p) => p.connected);
+  const readyLocalModels =
+    models.roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
+
+  // The sidebar's two machine facts, both REAL: how many things Addison can
+  // actually reach right now (exactly what the Tools surface lists), and how many
+  // restore points exist. With nothing reachable there is no honest count to
+  // show, so the policy mode takes the slot instead.
+  const reachableCount =
+    connectedProviders.length + readyLocalModels.length + trustedRoots.length;
+  const toolsHint = reachableCount > 0 ? String(reachableCount) : profile?.mode;
   const snapshotsHint = snapshotsState.snapshotsLoaded
     ? String(snapshotsState.snapshots.length)
     : undefined;
+
+  // The engine/status banners, shown in whichever column the person is looking
+  // at. On a surface they ride in its `pinned` slot together with the consent
+  // card — a question that is holding a turn open must never be invisible
+  // because someone walked to Settings while it was on screen (the widget rail,
+  // which normally carries it, is not on a surface).
+  const banners =
+    !connected || statusBanner ? (
+      <>
+        {!connected && (
+          <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
+        )}
+        {statusBanner && (
+          <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
+        )}
+      </>
+    ) : null;
+  const surfacePinned =
+    banners || consentBlock ? (
+      <>
+        {consentBlock}
+        {banners}
+      </>
+    ) : undefined;
+
+  // The anchored model popup's rows: the SAME real catalog the composer's menu
+  // reads (cloud models from the connected providers + whatever is set up
+  // locally), and picking one writes the SAME default state. `free` is never
+  // inferred — only the core may call a model free.
+  const defaultCloudId = resolveCloudModel(models.cloudModels, models.selectedCloudModel)?.id;
+  const activeLocalId = models.selectedLocalModel ?? readyLocalModels[0]?.id;
+  const providerCount = new Set(
+    models.cloudModels.map((m) => m.provider).filter((p): p is string => Boolean(p)),
+  ).size;
+  const modelPopupOptions: ModelPopupOption[] = [
+    ...models.cloudModels.map((m) => ({
+      key: `primary:${m.id}`,
+      label: providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label,
+      note: m.free ? "free" : "quality",
+      selected: models.selectedRole !== "local" && m.id === defaultCloudId,
+      onPick: () => {
+        models.handleChangeDefaultCloudModel(m.id);
+        setModelAnchor(null);
+      },
+    })),
+    ...readyLocalModels.map((m) => ({
+      key: `local:${m.id}`,
+      label: m.label,
+      note: "local",
+      selected: models.selectedRole === "local" && m.id === activeLocalId,
+      onPick: () => {
+        models.handleChangeDefaultRole("local");
+        models.handleSelectModel("local", m.id);
+        setModelAnchor(null);
+      },
+    })),
+  ];
 
   // An empty conversation shows the greeting stack (ChatThread's empty state),
   // not a message. The seeded "welcome" line is RETIRED by the redesign: an
@@ -820,7 +919,7 @@ export function App() {
           the two live controls on the right. */}
       <header className="relative z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-6 py-4">
         <span className="flex min-w-0 items-center gap-4">
-          {isSurface ? (
+          {isSurface && (
             <button
               type="button"
               onClick={() => changeView("chat")}
@@ -830,7 +929,12 @@ export function App() {
             >
               ←
             </button>
-          ) : isMobile ? (
+          )}
+          {/* On a narrow window the sidebar is a drawer, and the ☰ is the ONLY
+              way to it — including from a surface, where the ← alone would
+              strand a phone user with no way to reach Tools, Snapshots or their
+              chats without going back to the thread first. */}
+          {isMobile ? (
             <button
               type="button"
               onClick={() => setDrawerOpen(true)}
@@ -840,15 +944,17 @@ export function App() {
               ☰
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => setSideOpen((v) => !v)}
-              title={sideOpen ? "Hide chats" : "Show chats"}
-              aria-label={sideOpen ? "Hide chats" : "Show chats"}
-              className="shrink-0 text-[12px] text-disabled transition-colors hover:text-ink"
-            >
-              {sideOpen ? "«" : "»"}
-            </button>
+            !isSurface && (
+              <button
+                type="button"
+                onClick={() => setSideOpen((v) => !v)}
+                title={sideOpen ? "Hide chats" : "Show chats"}
+                aria-label={sideOpen ? "Hide chats" : "Show chats"}
+                className="shrink-0 text-[12px] text-disabled transition-colors hover:text-ink"
+              >
+                {sideOpen ? "«" : "»"}
+              </button>
+            )
           )}
           <span
             ref={titleRef}
@@ -916,15 +1022,8 @@ export function App() {
           <div className="flex min-h-0 flex-1 justify-center">
             {view === "chat" ? (
               <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
-                {(!connected || statusBanner) && (
-                  <div className="flex w-full max-w-[580px] flex-col gap-2 pt-3">
-                    {!connected && (
-                      <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-                    )}
-                    {statusBanner && (
-                      <Banner message={statusBanner} onDismiss={() => setStatusBanner(null)} />
-                    )}
-                  </div>
+                {banners && (
+                  <div className="flex w-full max-w-[580px] flex-col gap-2 pt-3">{banners}</div>
                 )}
                 <ChatThread
                   messages={threadMessages}
@@ -974,85 +1073,49 @@ export function App() {
                 />
               </div>
             ) : view === "settings" ? (
-              // PHASE NOTE (redesign 3/4): SettingsPage still brings its own
-              // header, scroller and card layout, so it renders in the "raw"
-              // surface — the transitions apply, the 580px reading column does
-              // not. Phase 3 rebuilds it as sections and rows and drops this
-              // variant.
-              <Surface variant="raw" title="Settings">
-                <SettingsPage
-                  connected={connected}
-                  notice={
-                    (!connected || statusBanner) && (
-                      <>
-                        {!connected && (
-                          <Banner message="Addison's engine isn't connected. You can look around, but I can't chat just yet." />
-                        )}
-                        {statusBanner && (
-                          <Banner
-                            message={statusBanner}
-                            onDismiss={() => setStatusBanner(null)}
-                          />
-                        )}
-                      </>
-                    )
-                  }
-                  models={models}
-                  skills={skillsState}
-                  snapshots={snapshotsState}
-                  guards={guardsState}
-                  routing={routingState}
-                  workspace={workspaceState}
-                  profile={profile}
-                  onSetProfile={handleSetProfile}
-                  diagnostics={diagnostics}
-                  onClearDiagnostics={clearDiagnostics}
-                  theme={themeChoice}
-                  onSetTheme={setThemeChoice}
-                  onOpenMenu={() => setDrawerOpen(true)}
-                  scrollTarget={settingsScrollTarget}
-                  onScrolled={() => setSettingsScrollTarget(null)}
-                />
-              </Surface>
+              <SettingsPage
+                connected={connected}
+                pinned={surfacePinned}
+                models={models}
+                skills={skillsState}
+                snapshots={snapshotsState}
+                guards={guardsState}
+                routing={routingState}
+                workspace={workspaceState}
+                profile={profile}
+                onSetProfile={handleSetProfile}
+                diagnostics={diagnostics}
+                onClearDiagnostics={clearDiagnostics}
+                theme={themeChoice}
+                onSetTheme={setThemeChoice}
+                onOpenModelPopup={setModelAnchor}
+                onOpenRestorePoints={() => setRestorePointsOpen(true)}
+                scrollTarget={settingsScrollTarget}
+                onScrolled={clearSettingsScrollTarget}
+              />
             ) : view === "tools" ? (
-              <Surface
-                title="Tools"
-                description="What Addison can reach on this computer. Connect only what you're comfortable with."
-              >
-                <SurfaceSection label="Still being built">
-                  <SurfaceRow
-                    name="This page doesn't list anything yet."
-                    value="coming in this build"
-                  />
-                  <SurfaceRow
-                    name="What Addison can reach today is in Settings."
-                    action="open"
-                    onAction={() => changeView("settings")}
-                  />
-                </SurfaceSection>
-              </Surface>
+              <ToolsSurface
+                connected={connected}
+                pinned={surfacePinned}
+                providers={models.providers}
+                roles={models.roles}
+                trustedRoots={trustedRoots}
+                showTrustedFolders={showTrustedFolders}
+                workspaceBusy={workspaceState.busy}
+                onAddKey={handleStartSetup}
+                onStopTrusting={(dir) => void workspaceState.handleRevoke(dir)}
+              />
             ) : view === "snapshots" ? (
-              <Surface
-                title="Snapshots"
-                description="Addison saves a restore point before anything risky, so you can always go back to a setup that worked."
-              >
-                <SurfaceSection label="Still being built">
-                  <SurfaceRow
-                    name="The full list of restore points isn't here yet."
-                    value="coming in this build"
-                  />
-                  <SurfaceRow
-                    name="Your restore points"
-                    value={snapshotsHint ? `${snapshotsHint} saved` : undefined}
-                    action="open in Settings"
-                    onAction={() => changeView("settings")}
-                  />
-                </SurfaceSection>
-              </Surface>
+              <SnapshotsSurface
+                connected={connected}
+                pinned={surfacePinned}
+                snapshots={snapshotsState}
+              />
             ) : (
               <Surface
                 title="Build a widget"
                 description="Describe what you want to keep an eye on, and Addison turns it into a small card in the right rail."
+                pinned={surfacePinned}
               >
                 <SurfaceSection label="Ideas to start from">
                   {WIDGET_IDEAS.map((idea) => (
@@ -1060,6 +1123,7 @@ export function App() {
                       key={idea.prompt}
                       name={idea.name}
                       action="use"
+                      actionAriaLabel={`Use the idea: ${idea.name}`}
                       onAction={() => seedWidgetIdea(idea.prompt)}
                     />
                   ))}
@@ -1098,7 +1162,11 @@ export function App() {
           >
             <WidgetRail
               work={workBlock}
-              consent={consentBlock}
+              // On a surface the consent card is pinned at the top of the
+              // surface column instead (Surface's `pinned`) — the rail is
+              // collapsed to zero width there, so a card left in it would be a
+              // blocking question nobody can see or answer.
+              consent={isSurface ? null : consentBlock}
               developer={profileModeNote === "open"}
               widgets={widgetsState.widgets}
               stats={widgetsState.stats}
@@ -1146,6 +1214,24 @@ export function App() {
             onCloseDrawer={closeDrawer}
           />
         </MobileDrawer>
+      )}
+
+      {/* Floating chrome, outside every animated container (see the file
+          header). Both are reached from Settings and both close on Escape —
+          the modal through the handler above, the popup in the capture phase. */}
+      {modelAnchor && modelPopupOptions.length > 0 && (
+        <ModelPopup
+          anchor={modelAnchor}
+          options={modelPopupOptions}
+          onClose={() => setModelAnchor(null)}
+        />
+      )}
+      {restorePointsOpen && (
+        <RestorePointsModal
+          connected={connected}
+          snapshots={snapshotsState}
+          onClose={() => setRestorePointsOpen(false)}
+        />
       )}
     </div>
   );
