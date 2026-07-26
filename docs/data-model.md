@@ -32,7 +32,6 @@ erDiagram
     conversations ||--o{ messages : contains
     conversations ||--o{ memory_facts : sources
     conversations ||--o{ routines : "created from"
-    conversations ||--o{ conversations : "continued from"
     routines ||--o{ routine_runs : logs
 
     conversations {
@@ -40,13 +39,13 @@ erDiagram
         TEXT title
         INTEGER started_at
         TEXT provider_id
-        TEXT summary "v2 substrate, inert in v1"
-        TEXT continued_from_conversation_id FK "v2 substrate, inert in v1"
+        TEXT summary "v2"
+        TEXT continued_from_conversation_id FK "v2, self-FK"
     }
     messages {
         TEXT id PK
         TEXT conversation_id FK
-        TEXT role "user, assistant, or tool"
+        TEXT role "user|assistant|tool"
         TEXT content
         TEXT tool_call_id
         INTEGER created_at
@@ -68,14 +67,14 @@ erDiagram
         INTEGER updated_at
         INTEGER run_count
         INTEGER last_run_at
-        TEXT created_in_mode "safe or open - hides OPEN routines under Simple"
+        TEXT created_in_mode "safe|open"
     }
     routine_runs {
         TEXT id PK
         TEXT routine_id FK
         INTEGER started_at
         INTEGER completed_at
-        TEXT status "running, completed, failed, cancelled"
+        TEXT status "running|completed|failed|cancelled"
         TEXT step_log_json
     }
 ```
@@ -126,7 +125,7 @@ erDiagram
         TEXT scope_details
     }
     workspace_trust {
-        TEXT root PK "canonical absolute directory path"
+        TEXT root PK "canonical abs path"
         INTEGER granted_at
     }
     device_identity {
@@ -135,11 +134,11 @@ erDiagram
         INTEGER created_at
     }
     provider_config {
-        TEXT provider_id PK "anthropic, openai, google or custom"
+        TEXT provider_id PK "4 known ids"
         INTEGER connected
         INTEGER added_at
-        TEXT base_url "custom OpenAI-compatible server only"
-        TEXT catalog_json "optional cached model catalog"
+        TEXT base_url "custom server only"
+        TEXT catalog_json "cached catalog"
         INTEGER last_check_ok
         INTEGER updated_at
     }
@@ -159,15 +158,15 @@ erDiagram
         TEXT id PK
         INTEGER created_at
         TEXT trigger "auto or on_command"
-        TEXT reason "closed slug set; never free text"
-        INTEGER payload_version "state_blob format version"
-        TEXT state_blob "captured config row-image JSON"
-        TEXT state_fingerprint "sha256 of the canonical blob"
-        INTEGER verified_working "a turn completed against this config"
-        INTEGER undeletable "1 = permanent: G4 anchor or genesis"
-        INTEGER captures_binary "1 only when a build ref was obtained"
-        TEXT binary_ref "app build reference, anchors only; NEVER bytes"
-        TEXT created_in_mode "safe, open or custom - DISPLAY ONLY"
+        TEXT reason "closed slug set"
+        INTEGER payload_version
+        TEXT state_blob "row-image JSON"
+        TEXT state_fingerprint "sha256"
+        INTEGER verified_working "a turn ran on it"
+        INTEGER undeletable "permanent"
+        INTEGER captures_binary
+        TEXT binary_ref "build ref, never bytes"
+        TEXT created_in_mode "DISPLAY ONLY"
     }
 ```
 

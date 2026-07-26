@@ -172,51 +172,70 @@ mixins in `agent_core/rpc/` — one module per method namespace (`conversation`,
 the sole camelCase mapper at the wire boundary for its own namespace.
 
 ```mermaid
-flowchart TB
-    Server["JsonRpcServer (main.py + rpc/ mixins): IPC, persistence, wiring"]
-    Orch["Orchestrator: the single fan-in over the three packages"]
+flowchart LR
+    Server["JsonRpcServer<br/>main.py + rpc/ mixins"]
+
+    Server --> Orch["Orchestrator<br/>the single fan-in"]
+    Server --> RE["RoutineEngine<br/>replays a saved plan"]
+    Server --> SM["SnapshotManager<br/>app-state restore, G3"]
+    Server --> Store[("Store<br/>SQLite")]
+    SM --> Store
+```
+
+The three packages the orchestrator fans into. They **never import each other** —
+`orchestrator.py` is the only module that knows all three, which is what keeps the
+routine engine replaying calls through the live registry rather than a copy of it.
+
+```mermaid
+flowchart LR
+    Orch["Orchestrator"]
 
     subgraph tools["tools/"]
-        TR["ToolRegistry: undo check at registration"]
-        Tool["Typed tools: calculator, read_file, save_file, ..."]
-        MCP["McpClient (Phase-2 step 7, not built): external MCP tools"]
+        direction TB
+        TR["ToolRegistry<br/>undo check at registration"]
+        TR --> Tool["typed tools:<br/>calculator, read_file, save_file, …"]
+        TR --> MCP["McpClient<br/>step 7, not built"]
     end
+
     subgraph providers["providers/"]
-        MR["ModelRouter: resolve provider per turn + routing strategy"]
-        Prov["AnthropicProvider, OpenAIProvider, GoogleProvider, OllamaProvider, SetupAssistantProvider"]
+        direction TB
+        MR["ModelRouter<br/>resolves per turn + strategy"]
+        MR --> Prov["Anthropic · OpenAI · Google<br/>Ollama · Setup-Assistant relay"]
     end
+
     subgraph routines["routines/"]
-        RE["RoutineEngine: replays a declarative plan"]
-        RBL["RoutineBuilder and RoutineLibrary"]
+        direction TB
+        RE["RoutineEngine"]
+        RBL["RoutineBuilder · RoutineLibrary"]
     end
 
-    PG["PermissionGate: mode-aware + workspace-trust"]
-    UM["UndoManager"]
-    SM["SnapshotManager: app-state snapshots + restore (G3)"]
-    Store["Store: SQLite"]
-
-    Server --> Orch
-    Server --> RE
-    Server --> SM
-    Orch --> MR
-    MR --> Prov
     Orch --> TR
-    TR --> Tool
-    TR --> MCP
+    Orch --> MR
+    Orch -.->|"same instances, below"| RE
+```
+
+**The shared instances are the safety property.** The live conversation and a saved
+routine are handed the *same* three objects, so a routine can never out-permission
+the conversation that created it:
+
+```mermaid
+flowchart LR
+    Orch["Orchestrator<br/>live conversation"]
+    RE["RoutineEngine<br/>saved routine"]
+
+    TR["one ToolRegistry"]
+    PG["one PermissionGate<br/>mode-aware + workspace-trust"]
+    UM["one UndoManager"]
+    Store[("Store<br/>SQLite")]
+
+    Orch --> TR
     Orch --> PG
     Orch --> UM
     RE --> TR
     RE --> PG
     RE --> UM
     UM --> Store
-    SM --> Store
-    RBL --> Store
-    Server --> Store
 ```
-
-The shared instances are the point of the diagram: the `Orchestrator` and the
-`RoutineEngine` are handed the **same** `ToolRegistry`, `PermissionGate`, and
-`UndoManager` objects, so a routine can never out-permission the live conversation.
 
 Component by component:
 
