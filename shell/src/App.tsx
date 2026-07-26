@@ -861,15 +861,12 @@ export function App() {
     })),
   ];
 
-  // An empty conversation shows the greeting stack (ChatThread's empty state),
-  // not a message. The seeded "welcome" line is RETIRED by the redesign: an
-  // invitation is not something Addison already said, and the stack says the
-  // same thing in the surface's own voice. It still counts as empty here so a
-  // conversation that has only that seed lands on the stack too.
-  const threadEmpty =
-    turn.messages.length === 0 ||
-    (turn.messages.length === 1 && turn.messages[0]?.id === "welcome");
-  const threadMessages = threadEmpty ? [] : turn.messages;
+  // The thread is handed straight to ChatThread, which decides for itself
+  // whether it is empty and shows the greeting stack instead. The seeded
+  // "welcome" line is RETIRED by the redesign — an invitation is not something
+  // Addison already said, and the stack says the same thing in the surface's
+  // own voice — so there is no longer a seed to filter out on the way in.
+  //
   // The first-run block rides inside that stack while first-run is active (step
   // 1 = nothing configured; step 2 = a provider connected during this launch,
   // which also focuses the composer for the "say hello" nudge).
@@ -1026,7 +1023,7 @@ export function App() {
                   <div className="flex w-full max-w-[580px] flex-col gap-2 pt-3">{banners}</div>
                 )}
                 <ChatThread
-                  messages={threadMessages}
+                  messages={turn.messages}
                   onRetry={turn.handleRetry}
                   retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
                   onRewindTo={handleRewindTo}

@@ -1,7 +1,9 @@
 // MobileDrawer — the left slide-over that hosts the Sidebar below the md
-// breakpoint (Fern mobile layout, handoff mobile bullet §1). Desktop keeps the
-// static 216px sidebar; on a narrow window that column is hidden and the same
-// Sidebar component slides in here (280px, `side` bg, a scrim behind it).
+// breakpoint (docs/design-brief-dark, "Layout & chrome → Mobile": keep the
+// existing drawer structure, restyled to the tokens). Desktop keeps the static
+// sidebar column; on a narrow window that column is hidden and the same Sidebar
+// component slides in here (280px, `paper` bg from Sidebar's drawer variant, a
+// scrim behind it).
 //
 // This is CHROME around the existing Sidebar, not a fork: App renders
 // `<MobileDrawer open={drawerOpen} onClose={…}><Sidebar variant="drawer" …/></MobileDrawer>`.

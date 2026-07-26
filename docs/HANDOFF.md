@@ -1146,8 +1146,11 @@ report never arrived.
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
-- `shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets moved
-  inline on mobile) — delete or repurpose.
+- ~~`shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets
+  moved inline on mobile) — delete or repurpose.~~ **CLOSED (2026-07-25, dark
+  redesign phase 4):** deleted, along with the now-unreachable `"sheet"` variant
+  in `WidgetRail` and the `sheet-in` keyframe. The narrow-window layout keeps the
+  drawer + inline widgets the dark brief asks for.
 - **~~Three loose ends left by step 1~~ — ALL THREE CLOSED (2026-07-24, step 2 +
   its rigor pass):** `RestoreResult.providers_needing_a_key` was dropped (the
   keychain probe in `rpc/snapshots.py` computes the names itself — a field would

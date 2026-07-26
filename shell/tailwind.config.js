@@ -47,77 +47,20 @@ export default {
         danger: withOpacity("--c-danger"),
         // Overlay scrim behind the modal — the same value in both themes.
         scrim: "rgb(var(--c-scrim) / 0.55)",
-
-        // --- TEMPORARY legacy aliases --------------------------------------
-        // TODO(redesign phase 4): remove legacy aliases.
-        // Phases 2–3 restyle ChatThread/Composer/SettingsPage and the cards; until
-        // then those components still name Fern tokens. Each alias points at its
-        // nearest dark-direction equivalent so the app keeps compiling AND keeps
-        // rendering in the new palette (never a half-old one) while the wave lands.
-        fern: withOpacity("--c-accent"),
-        "fern-deep": withOpacity("--c-accent"),
-        "fern-tint": withOpacity("--c-panel"),
-        surface: withOpacity("--c-panel"),
-        side: withOpacity("--c-paper"),
-        hair: withOpacity("--c-line"),
-        rule: withOpacity("--c-rail"),
-        dash: withOpacity("--c-rail"),
-        // The pine first-run block is retired by the brief; its tokens survive
-        // only so FirstRunBanner keeps rendering until phase 2 replaces it.
-        pine: withOpacity("--c-panel"),
-        "pine-soft": withOpacity("--c-muted"),
-        "pine-ink": withOpacity("--c-ink"),
-        cream: withOpacity("--c-ink"),
-        "pine-body": withOpacity("--c-ink-soft"),
-        "pine-muted": withOpacity("--c-muted"),
-        "pine-line": withOpacity("--c-rail"),
-        notice: withOpacity("--c-muted"),
-        "notice-tint": withOpacity("--c-panel"),
       },
       fontFamily: {
-        // System stacks only — every bundled OFL woff2 and @font-face is gone.
+        // System stacks only — every bundled OFL woff2 and @font-face is gone,
+        // and so is the serif voice: there is no `font-serif` token to reach for.
         sans: ['"Helvetica Neue"', "Helvetica", "Arial", "sans-serif"],
         mono: ["ui-monospace", '"SF Mono"', "Menlo", "monospace"],
-        // TODO(redesign phase 4): remove legacy aliases.
-        // The serif voice is retired. `font-serif` survives as an alias to the UI
-        // stack so the not-yet-restyled components (ChatThread, FirstRunBanner,
-        // SettingsPage) render in the new type language rather than a leftover
-        // serif; phases 2–3 delete the classes, phase 4 deletes this line.
-        serif: ['"Helvetica Neue"', "Helvetica", "Arial", "sans-serif"],
       },
-      fontSize: {
-        // TODO(redesign phase 4): remove legacy aliases.
-        // The dark direction's type scale is expressed as literal px utilities
-        // (text-[15.5px], text-[11px], …) — the prototype's inline sizes, which
-        // is what "pixel-perfect" means here. These named Fern sizes stay only
-        // for components phases 2–3 have yet to restyle.
-        tag: "9.5px",
-        tick: "10px",
-        label: "10.5px",
-        fact: "11px",
-        fine: "11.5px",
-        hint: "12px",
-        meta: "12.5px",
-        control: "13px",
-        action: "13.5px",
-        row: "14px",
-        body: "15px",
-        message: "17px",
-        glyph: "19px",
-        title: "20px",
-        headline: "24px",
-        greeting: "26px",
-      },
+      // No named fontSize scale: the dark direction's type scale is expressed as
+      // literal px utilities (text-[15.5px], text-[11px], …) — the prototype's
+      // inline sizes, which is what "pixel-perfect" means here.
       letterSpacing: {
-        // `display` (-0.01em) survives the redesign: it is the surface-title and
-        // greeting tightening the brief calls for.
+        // The surface-title and greeting tightening the brief calls for. The only
+        // named tracking the design has; everything else is a literal.
         display: "-0.01em",
-        // TODO(redesign phase 4): remove legacy aliases (logo/emphasis/caps*).
-        logo: "-0.02em",
-        emphasis: "0.02em",
-        caps: "0.06em",
-        "caps-wide": "0.09em",
-        "caps-wider": "0.11em",
       },
       borderRadius: {
         // Dark direction: popover 7px, modal 8px, composer menu 6px, menu rows
@@ -125,14 +68,6 @@ export default {
         menu: "5px",
         popover: "7px",
         modal: "8px",
-        // TODO(redesign phase 4): remove legacy aliases (sm = the 6px composer
-        // menu radius, DEFAULT = the 8px modal radius — kept for the components
-        // phases 2–3 still own).
-        sm: "6px",
-        DEFAULT: "8px",
-        card: "10px",
-        banner: "12px",
-        pill: "999px",
       },
       boxShadow: {
         // Floating chrome only. Both flip with the theme (values in styles.css).
@@ -140,9 +75,6 @@ export default {
         modal: "var(--shadow-modal)",
         // The composer's model menu (design-brief-dark: 0 12px 32px rgba(0,0,0,.5)).
         menu: "var(--shadow-menu)",
-        // TODO(redesign phase 4): remove legacy aliases.
-        soft: "var(--shadow-popover)",
-        banner: "var(--shadow-popover)",
       },
     },
   },

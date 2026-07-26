@@ -37,13 +37,11 @@ interface Props {
   /** The consent card (PermissionCard), when a permission is pending. */
   consent?: ReactNode;
   /**
-   * "rail" is the desktop right column (232px, own scroll). "sheet" is the
-   * narrow-window bottom sheet (BottomSheet supplies the chrome + drag handle):
-   * the same content flows to fill the sheet and scroll within it. "inline"
-   * flows in the chat thread's own scroll on mobile. On mobile consent renders
-   * inline in the thread, so `consent` is not passed in sheet mode.
+   * "rail" is the desktop right column (232px, own scroll). "inline" flows in
+   * the chat thread's own scroll on the narrow-window layout, at the foot of
+   * the messages — there is no side column there to hold it.
    */
-  variant?: "rail" | "sheet" | "inline";
+  variant?: "rail" | "inline";
   /**
    * OPEN/Developer mode is active — surface the small "dev" annotation on
    * dev-created items (command widgets, and any widget/routine whose
@@ -102,7 +100,6 @@ export function WidgetRail({
 
   const hasUsage = (stats?.tokensMonth.total ?? 0) > 0;
   const connections = stats?.connections ?? [];
-  const isSheet = variant === "sheet";
   const isInline = variant === "inline";
 
   function toggleTray() {
@@ -118,11 +115,9 @@ export function WidgetRail({
       aria-label="Your widgets"
       className={
         "flex flex-col " +
-        (isSheet
-          ? "no-scrollbar min-h-0 flex-1 overflow-y-auto pb-4"
-          : isInline
-            ? "w-full pt-2"
-            : "no-scrollbar h-full w-[232px] shrink-0 overflow-y-auto pb-5 pt-9")
+        (isInline
+          ? "w-full pt-2"
+          : "no-scrollbar h-full w-[232px] shrink-0 overflow-y-auto pb-5 pt-9")
       }
     >
       {/* The live annotation and the consent card ride at the top of the rail,

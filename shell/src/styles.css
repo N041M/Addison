@@ -69,33 +69,6 @@
   --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
-/* TODO(redesign phase 4): remove legacy aliases.
-   Fern-era variable names, kept ONLY because a handful of not-yet-restyled
-   places read the channels directly in JS (WidgetRail's connection dots) or in
-   the markdown layer below. Each points at its dark-direction equivalent, so
-   nothing renders in the retired palette. The Tailwind class aliases live in
-   tailwind.config.js and are removed in the same pass. */
-:root,
-.dark {
-  --c-side: var(--c-paper);
-  --c-surface: var(--c-panel);
-  --c-hair: var(--c-line);
-  --c-fern: var(--c-accent);
-  --c-fern-deep: var(--c-accent);
-  --c-fern-tint: var(--c-panel);
-  --c-rule: var(--c-rail);
-  --c-dash: var(--c-rail);
-  --c-pine: var(--c-panel);
-  --c-pine-soft: var(--c-muted);
-  --c-pine-ink: var(--c-ink);
-  --c-cream: var(--c-ink);
-  --c-pine-body: var(--c-ink-soft);
-  --c-pine-muted: var(--c-muted);
-  --c-pine-line: var(--c-rail);
-  --c-notice: var(--c-muted);
-  --c-notice-tint: var(--c-panel);
-}
-
 /* Base document. System sans at 13px — the prototype's root size; every screen
    sets its own sizes on top (message body 15.5px/1.65, rows 12px, section
    labels 11px, mono meta 10–10.5px). */
@@ -242,10 +215,10 @@ summary,
   );
 }
 
-/* TODO(redesign phase 4): remove legacy aliases.
-   Mobile chrome motion (drawer + bottom sheet + scrim) and the in-place
-   fade-rise still used by the not-yet-restyled cards. Phase 2 folds these into
-   the four keyframes above. */
+/* Mobile chrome motion — the slide-over drawer and the scrim behind it, in and
+   out (MobileDrawer). These move a whole panel rather than easing a line of text
+   into place, and each has a real exit the component waits on before unmounting,
+   so they stay separate from the four text keyframes above. */
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -277,37 +250,6 @@ summary,
   to {
     transform: translateX(-100%);
   }
-}
-@keyframes sheet-in {
-  from {
-    transform: translateY(100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-@keyframes fade-rise {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-/* TODO(redesign phase 4): remove legacy aliases. The thin-scrollbar column is
-   Fern-era; the dark direction hides scrollbars everywhere. */
-.thread-scroll {
-  scrollbar-width: thin;
-  scrollbar-color: rgb(var(--c-line)) transparent;
-}
-.thread-scroll::-webkit-scrollbar {
-  width: 10px;
-}
-.thread-scroll::-webkit-scrollbar-thumb {
-  background-color: rgb(var(--c-line));
-  border: 3px solid rgb(var(--c-paper));
 }
 
 /* Respect users who ask the OS for reduced motion. Every animation in this app

@@ -456,9 +456,9 @@ export const ipc = {
   // because `snapshot.restore` is a frozen method string (§11.3 item 7) that
   // step 2 must not have to re-derive. snapshots.test.ts covers it so it cannot
   // rot in the meantime. If you add a per-row Restore, it follows §11.2: the
-  // fern-filled two-step INLINE confirm, never window.confirm(), never the
-  // danger token — going back to a setup that worked is a recovery, not a
-  // destructive act.
+  // accent two-step INLINE confirm, never window.confirm(), never the danger
+  // token — going back to a setup that worked is a recovery, not a destructive
+  // act.
   restoreSnapshot: (id: string): Promise<SnapshotRestoreResult> =>
     call(Method.SnapshotRestore, { id }).then(parseSnapshotRestore),
   restoreLastWorking: (): Promise<SnapshotRestoreResult> =>

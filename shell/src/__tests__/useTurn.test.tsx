@@ -74,6 +74,19 @@ beforeEach(() => {
   });
 });
 
+// The dark redesign retired the seeded "welcome" assistant line: an untouched
+// chat renders ChatThread's greeting stack, which is only reachable when the
+// thread is genuinely empty (ChatThread's `isEmpty`). App hands `turn.messages`
+// straight through with no filtering now, so a seed reintroduced here would put
+// a message Addison never sent on screen and suppress the stack. This is the
+// test that says the thread starts empty.
+describe("a new thread", () => {
+  it("starts with no messages, so the empty state can show", () => {
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    expect(result.current.messages).toEqual([]);
+  });
+});
+
 describe("useTurn race guard", () => {
   it("drops a result that arrives after Stop", async () => {
     const args = makeArgs();

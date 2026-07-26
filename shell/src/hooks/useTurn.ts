@@ -10,14 +10,6 @@ import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
 import { createStreamScramble, isMotionEnabled, type StreamScramble } from "../lib/scramble";
 
-export const WELCOME: DisplayMessage = {
-  id: "welcome",
-  role: "assistant",
-  content:
-    "Hello — I'm Addison. Tell me what you'd like help with, and I'll ask first " +
-    "before doing anything on your computer. You can always undo.",
-};
-
 interface UseTurnArgs {
   connected: boolean;
   setStatusBanner: (text: string | null) => void;
@@ -51,7 +43,11 @@ export function useTurn({
   refreshConversations,
   refreshStats,
 }: UseTurnArgs) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([WELCOME]);
+  // An empty thread is empty. The redesign RETIRED the seeded "welcome" line:
+  // an invitation is not something Addison already said, so an untouched chat
+  // shows ChatThread's greeting stack instead (docs/design-brief-dark,
+  // "Screens → Chat empty state").
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isWorking, setIsWorking] = useState(false);
   const [permission, setPermission] = useState<PermissionRequest | null>(null);
 
