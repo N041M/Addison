@@ -308,8 +308,13 @@ relaxes exactly these four, and only as spelled out above.
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()` — a tool that genuinely can't be undone stays LOW and
    read-only. This registration check is the single most important test in the
-   codebase (spec §9). (The ONLY exception is a `dev_only` registration, which is
-   never in the SAFE view; it exists solely for OPEN mode.)
+   codebase (spec §9). (The ONLY exception is an **`allow_missing_undo`**
+   registration, which is never in the SAFE view; it exists solely for OPEN mode.
+   *Naming precision added 2026-07-27:* this said `dev_only`, which step 5 split
+   into two independent dimensions — `open_only` for visibility and
+   `allow_missing_undo` for the exemption. `dev_only=True` survives as a
+   convenience alias setting both, so the old wording was not wrong, but the
+   exemption is the second flag and `registry.py` is the authority.)
 3. **A Routine never gets permissions beyond what the user granted live** — no
    privilege escalation via automation. It uses the *same* `ToolRegistry` and
    `PermissionGate` instances as the live orchestrator, in **both** modes: the

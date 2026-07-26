@@ -35,6 +35,11 @@ reason; they went stale twice in a day, and a stale number reads as a claim.
 
 ## Working conventions (established with the user)
 
+- **Every change goes PR → `master` directly.** The stacked-PR era is over: no
+  stacked chains, no long-lived branches. *(This line was nearly lost in the
+  2026-07-27 documentation restructure — it lived only in a "where the project
+  stands" bullet, which is status-shaped prose, so it was dropped when that bullet
+  was rewritten. It is a convention, so it belongs here.)*
 - **A commit that changes a documented rule amends the doc, in the same commit.**
   This is the defect the project has now shipped three times — once by re-adding
   the sentence its own changeset falsified, and once by leaving a branch-state
