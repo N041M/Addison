@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Addison app icon. Apple's macOS grid: an 824x824 rounded rect centred in
+       1024 with 100px margins. Geometry from docs/design-brief-dark/brand/
+       "Addison Logo Mark" CONSTRUCTION table, at the DOCK panel's larger radius
+       (~22.5% vs the in-app 9%). Tile stays dark on every background. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#16171B"/>
+  <rect x="105" y="105" width="814" height="814" rx="180" fill="none" stroke="#26272B" stroke-width="10"/>
+  <text x="248" y="821" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="500" font-size="568" letter-spacing="-22.7" fill="#E9E9E7">a</text>
+  <circle cx="714" cy="310" r="95" fill="#B4A9F5"/>
+</svg>

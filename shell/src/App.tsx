@@ -917,18 +917,12 @@ export function App() {
           the two live controls on the right. */}
       <header className="relative z-10 flex shrink-0 items-center justify-between gap-4 border-b border-line px-6 py-4">
         <span className="flex min-w-0 items-center gap-4">
-          {/* The mark + wordmark, far left (brandbook §10 "APP HEADER": 22px
-              tile, 10px gap, wordmark 13/500/-.01em ink-soft). Decorative
-              pairing — the tile is aria-hidden and the word is plain text. */}
-          <span className="flex shrink-0 items-center gap-2.5">
-            <AddisonMark size={22} />
-            <span
-              data-scramble="80"
-              className="text-[13px] font-medium tracking-[-.01em] text-ink-soft"
-            >
-              Addison
-            </span>
-          </span>
+          {/* The mark alone, far left. The brandbook's APP HEADER application
+              pairs it with an "Addison" wordmark; that pairing is redundant in
+              the app's own chrome — the tile already says it, and the word was
+              spending the view title's width budget (the title truncated at
+              320px). Owner decision 2026-07-26. */}
+          <AddisonMark size={22} />
           {isSurface && (
             <button
               type="button"

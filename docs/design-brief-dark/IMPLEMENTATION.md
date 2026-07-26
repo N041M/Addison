@@ -227,8 +227,16 @@ glyphs hover to `ink`.
   exact sampled sizes; the tile stays dark in BOTH themes — fixed hex, never
   tokens), used in the header (22px + wordmark, brandbook §10) and the
   first-run splash (44px above the greeting); `shell/public/favicon.svg` is the
-  16px ramp step. The Tauri OS icon set (`shell/src-tauri/icons/`) still
-  carries the bell — regenerating it is tracked as a follow-up.
+  16px ramp step. **The header shows the mark ALONE** — the brandbook's APP
+  HEADER application pairs it with an "Addison" wordmark, but that is redundant
+  in the app's own chrome and it spent the view title's width budget (owner
+  decision 2026-07-26). The **Tauri OS icon set is regenerated** from the mark
+  (`shell/src-tauri/icons/`, 2026-07-26): master at
+  `docs/design-brief-dark/brand/app-icon.svg`, built on Apple's macOS grid (an
+  824×824 tile centred in 1024 with 100px margins) at the DOCK panel's larger
+  ~22.5% corner radius, rasterised through QuickLook and `sips`, `.icns` via
+  `iconutil`, `.ico` as a PNG-embedded container. Regenerate with
+  `docs/design-brief-dark/brand/build-app-icon.sh`.
 - All permission/consent flows, offers (endpoint/cost-plan), widget/routine
   proposal cards: same logic, restyled (hairline rows on `panel`/flat, accent
   actions, mono values).
