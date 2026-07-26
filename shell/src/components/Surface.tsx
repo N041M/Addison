@@ -195,6 +195,9 @@ export function SurfaceRow({
     <div className="border-t border-line px-0.5 py-[13px] text-[12px]">
       {tag}
       <div className="flex items-baseline gap-3">
+        {/* Names stay on lh `normal` — the prototype's rows are single-line and
+            this keeps row heights pixel-exact; copy that wraps belongs in the
+            row's children slot, which carries leading-[1.55]. */}
         <span data-surf="1" className="min-w-0 text-ink-soft">
           {name}
         </span>

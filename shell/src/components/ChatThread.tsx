@@ -9,7 +9,8 @@
 //
 // THREAD: one centred 580px column, 32px between turns, behind the vertical fade
 // mask with the scrollbar hidden. A turn is an 11px label ("You" `disabled` /
-// "Addison" `ink`) over a 15.5px/1.65 body — `ink-soft` for what you wrote,
+// "Addison" `accent` — owner decision 2026-07-26, a deliberate deviation from
+// the prototype's `ink` label) over a 15.5px/1.65 body — `ink-soft` for what you wrote,
 // `ink` for what Addison wrote. Assistant answers keep their markdown/mermaid
 // rendering; a 7×14px blinking block rides after the text while a reply streams.
 //
@@ -293,7 +294,10 @@ function MessageRow({
           data-scramble-live="140"
           className={
             "text-[11px] font-medium tracking-[.04em] " +
-            (isAddison ? "text-ink" : "text-disabled")
+            // Addison's sender label is ACCENT, not the prototype's `ink` —
+            // owner decision 2026-07-26 ("change the colour of the addison
+            // name to purple"), one deliberate deviation from the handoff.
+            (isAddison ? "text-accent" : "text-disabled")
           }
         >
           {label}

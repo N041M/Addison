@@ -88,7 +88,14 @@ body {
   color: rgb(var(--c-ink));
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: 13px;
-  line-height: 1.5;
+  /* The prototype sets NO global line-height: every single-line label, row,
+     chip and title sits on `normal`, and only the pieces the handoff names
+     carry an explicit leading (messages 1.65, textarea 1.5, descriptions
+     1.55–1.6). A global 1.5 made each of them ~25% taller and drifted the
+     whole vertical rhythm (header +4px, sidebar stack +3.5px, footer −6.5px)
+     — measured against the prototype at 1280×720, 2026-07-26. Multi-line
+     copy keeps its own leading-[…] classes. */
+  line-height: normal;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   /* Calm theme cross-fade when Appearance flips (softened below for reduced

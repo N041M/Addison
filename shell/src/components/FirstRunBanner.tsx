@@ -77,7 +77,7 @@ function StepRow({ state, text }: { state: "current" | "done" | "later"; text: s
   const note = state === "current" ? "now" : state === "done" ? "done ✓" : "next";
   return (
     <div className="flex items-baseline gap-3 border-t border-line px-0.5 py-[13px] text-[12px]">
-      <span className={"min-w-0 " + tone}>{text}</span>
+      <span className={"min-w-0 leading-[1.55] " + tone}>{text}</span>
       <span className="flex-1" />
       <span
         className={
