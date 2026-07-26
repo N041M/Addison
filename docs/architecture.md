@@ -60,7 +60,8 @@ flowchart LR
 ```
 
 `shell/src-tauri/src/main.rs` registers exactly those three webview commands and
-spawns the core. There is a fifth module, `updater.rs`, but it is a **nine-line
+spawns the core. There is a sixth module, `updater.rs` (beside `agent_process`,
+`app_build`, `filesystem`, `ipc` and `keychain`), but it is a **nine-line
 comment stub with no code**: `tauri-plugin-updater` is not wired up, and
 auto-update is a **Phase-3** item (see G4 below, where this matters).
 
@@ -103,7 +104,8 @@ declarative skills/widgets/routines rows. A snapshot is taken **automatically** 
 any risky or sweeping change (a guard toggle, a provider/endpoint change, a bulk
 "make it cheaper" reconfiguration, a mode switch) and can also be taken **on command**
 from the Settings card, or by **asking Addison** — the LOW, **capture-only**
-`snapshot_now` registry tool (`agent_core/tools/snapshot_now.py`), in both v1 profiles.
+`snapshot_now` registry tool (`agent_core/tools/snapshot_now.py`), in all three
+profiles (Simple, Developer and Custom).
 It holds a **late-bound** reference to the `SnapshotManager` (the registry is built
 before the worker thread builds the manager), so before the store is up it answers
 "can't save a restore point just yet" rather than failing; once up, it makes the same
@@ -289,7 +291,7 @@ Component by component:
   **shipped** a bounded **routing strategy** layer beside this substrate — deliberately
   beside, not on it: `resolve_chain(strategy, candidates, head_model_id, custom_order)`
   is a pure module function in `providers/router.py` that orders `RoutingCandidate`s,
-  and the attempt loop (cooldown, per-turn deadline, mid-turn advance) is orchestrator
+  and the attempt loop (cooldown, per-attempt deadline, mid-turn advance) is orchestrator
   machinery. Three named strategies plus a Developer/Custom ordered chain:
   **quality_first** (the default; strongest capable model, degrade down),
   **cost_first**, **local_only** (no model call leaves the machine — resolved before

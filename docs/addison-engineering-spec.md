@@ -1121,7 +1121,7 @@ stronger model rather than failing, with a plain-language note ("X was busy, so 
 used your local model") and a light provider **cooldown** instead of hammering a
 failing endpoint. (§13 Q5 — how much confidence-based escalation ships now — is
 **half-resolved**, 2026-07-24: the **availability** half shipped, escalate/degrade
-on unavailable, rate-limit or network failure, with the cooldown, the per-turn
+on unavailable, rate-limit or network failure, with the cooldown, the per-attempt
 deadline, and the plain "[X] was busy, so Addison used [Y]" note. The **confidence**
 half — quality-based escalation — remains v2 substrate, untouched.)
 
@@ -1408,18 +1408,27 @@ sequenced after Phase-2 steps 6–8. See the Phase-3 note at the end of §11.)*
 
 These are hard constraints, not preferences — flag to the user if any of these appear to conflict with a specific implementation request rather than silently working around them:
 
-> **Read items 1, 2, 6 and 7 through the mode-scoped model (owner decision
+> **Read items 1, 2 and 7 through the mode-scoped model (owner decision
 > 2026-07-19) — the flat list below is the SAFE-mode statement.** SAFE mode holds
-> all seven byte-for-byte. **OPEN mode (Developer/Custom) relaxes exactly four of
-> them and nothing else:** item 1 — the `dev_only` `run_command` tool exists
+> all seven byte-for-byte. **OPEN mode (Developer/Custom) relaxes exactly four
+> things and nothing else:** (a) item 1 — the `dev_only` `run_command` tool exists
 > (`agent_core/tools/run_command.py`), absent from `registry.visible_tools(SAFE)`
-> and refusing to run under SAFE as a belt; item 2 — a `dev_only` registration may
-> omit `undo()` (the flag split into `open_only` for visibility and
+> and refusing to run under SAFE as a belt; (b) item 2 — a `dev_only` registration
+> may omit `undo()` (the flag split into `open_only` for visibility and
 > `allow_missing_undo` for the exemption, so `write_project_file` is hidden from
-> SAFE **and** still undo-enforced at registration); item 6 — see the §6 automation
-> note, and G2 still forbids Addison triggering *itself*; item 7 — the amendment
-> note below. **Items 3, 4 and 5 never relax, in any mode.** OPEN means fewer
-> prompts, not no gate: the gate still runs and logs on every call.
+> SAFE **and** still undo-enforced at registration); (c) a routine step or a widget
+> may carry a `command` kind; (d) the permission gate auto-grants non-destructive
+> calls, prompting only for destructive ones. Item 7's "profiles are never a
+> security boundary" framing is restated by the mode-scoped model — see the
+> amendment note below. **Items 3, 4, 5 and 6 never relax, in any mode.** In
+> particular **OPEN does not relax item 6**: G2 forbids Addison triggering itself in
+> every mode, nothing in `policy.py` or the registry makes scheduling
+> mode-dependent, and item 6's reinterpretation (Addison *authors* automation, the
+> OS runs it — see the §6 automation note) is amendment-level and
+> mode-independent, not an OPEN-mode relaxation. It is also **not built**: the
+> automation keyword gate and author-OS-run automation are Phase-2 step 8, *not
+> started*. OPEN means fewer prompts, not no gate: the gate still runs and logs on
+> every call.
 
 1. No tool may execute arbitrary shell commands or unrestricted code. The Routine Engine (§6) is declarative for the same reason.
 2. Every `risk_tier != LOW` tool must have a real `undo()`, enforced at registration (§4.2) — not a convention, a runtime check that raises if violated.

@@ -36,6 +36,10 @@ Then five of the eight steps from the July 2026 scope amendment:
 5. **The coding harness.** Typed file tools bounded to folders you have trusted,
    with a workspace trust table behind them.
 
+Also built, outside that sequence: the thread renders as a window of about thirty
+messages instead of the whole conversation, which is what makes a long chat open
+quickly.
+
 ## Next
 
 Three steps are left in that sequence. They are independent enough to take in any
@@ -55,12 +59,6 @@ back to a previous app binary, and Secure Enclave identity. `updater.rs` is a ni
 line stub today. There is also an approved plan for a Developer review surface in
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md), which is
 blocked on steps 6, 7 and 8 and has not been started.
-
-## Waiting on a branch
-
-Thread windowing lives on `windowed-thread` and is not merged. It renders a long
-conversation as a window of about thirty messages instead of all of them, which is
-what makes a long chat open quickly.
 
 ## Deliberately not being built
 

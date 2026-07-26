@@ -72,11 +72,14 @@ sit on a server, and your device only signs requests with a keypair whose privat
 half stays in the keychain.
 
 **Addison never starts work on its own.** Nothing runs on a schedule or after a
-delay it picked. Every action starts from something you did. The design does allow
-Addison to write automation that your operating system runs later, such as a cron
-entry or a watcher script, with the operating system running it and Addison only
-having written it, and with a keyword you type yourself needed to arm it. That part
-is specified but not built. Addison cannot write automation today.
+delay it picked. Every action starts from something you did.
+
+If you ask it to, Addison can save a file, so it can write out a script the same way
+it writes out any other file, and you approve that write like any other. What it
+can't do is install one, arm one, or put anything on a schedule. The plan is for it
+to be able to set up automation that your operating system runs, with a keyword you
+type yourself needed to arm it, and that part is specified but not built. Either
+way, the operating system would be the thing running it, never Addison.
 
 **You can always get back.** Neither you nor the model can leave Addison in a state
 you can't get out of. It saves a restore point by itself before anything risky, like

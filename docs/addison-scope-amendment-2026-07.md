@@ -631,6 +631,10 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
    ships now vs. stays substrate. **(HALF-RESOLVED, Phase-2 step 3, 2026-07-24:
    the AVAILABILITY half shipped — escalate/degrade on unavailable, rate-limit
    or network failure, with per-provider cooldown, a per-turn deadline, and the
+   <!-- SHIPPED AS: a per-ATTEMPT deadline, not per-turn. `_FALLBACK_BUDGET_SECONDS`
+   (orchestrator.py) is "a real per-attempt deadline, not a between gate", so one
+   hanging candidate cannot consume the whole budget. This line is the origin of a
+   per-turn phrasing that had spread to four other documents. -->
    plain "[X] was busy, so Addison used [Y]" note. The CONFIDENCE half — quality
    -based escalation — remains v2 substrate, untouched.)**
 6. **MCP tools in SAFE** — the exact companion constraint (read-only only? a

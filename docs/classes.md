@@ -166,9 +166,13 @@ symlink nor an ancestor gets around it. `rpc/workspace.is_trusted(resolved_path,
 roots, data_dir)` is the *confinement* predicate: match a granted root **then** apply
 the floor, so a root somehow planted over the data dir still confines nothing. Both
 are store-free by construction — the caller supplies the roots — which is what keeps
-the gate store-free. `WorkspaceMixin` wires the same resolver into the orchestrator,
-the routine engine and the widget rail as `trust_check`, so grant time and authorize
-time can never drift.
+the gate store-free. `WorkspaceMixin` wires the same resolver into the orchestrator and
+the routine engine as `trust_check` (`main.py`), so grant time and authorize time can
+never drift. Those are the only two wirings: the widget command path consults no
+resolver at all, because it passes `trusted=False` unconditionally — a Run pill must
+always card, so it is strictly stricter and needs no answer from the resolver. (The
+docstring on `rpc/workspace._is_trusted_path` says "orchestrator / routine engine /
+widget rail"; the third is not wired.)
 
 **`SnapshotManager` shipped in Phase-2 step 1**, so its members below are real and the
 signatures are the ones in `agent_core/snapshots/snapshot_manager.py`. Three names in
@@ -274,7 +278,8 @@ restore path has to work when any of those is broken. For the same reason **rest
 never a registry tool and never passes the `PermissionGate`**: a gate that could deny a
 restore would make "the restore path is itself unbreakable" false. The only
 model-facing snapshot surface is a **LOW, capture-only** `snapshot_now` tool
-(`agent_core/tools/snapshot_now.py`, in both v1 profiles) that may add a row and
+(`agent_core/tools/snapshot_now.py`, in all three profiles — Simple, Developer and
+Custom all carry `_V1_TOOL_IDS`) that may add a row and
 nothing else — it reaches the `SnapshotManager` through a **late-bound** ref (the
 registry is built before the manager exists, so it answers "can't save yet" until the
 store is up) and calls only `capture(...)`, never restore/delete/prune.
@@ -335,7 +340,7 @@ version was indistinguishable from cost-first at two-model pools. The companion 
 is a single "prefer quality / prefer free" toggle. On failure the turn falls forward
 gracefully: only on a provider-unavailable failure (a rejected request or bad key ends
 the turn instead), with a plain note ("[X] was busy, so Addison used [Y]."), an
-in-memory per-provider cooldown, a per-turn deadline, and an "Answered with a free
+in-memory per-provider cooldown, a per-attempt deadline, and an "Answered with a free
 model." chip whenever routing — not an explicit pick — chose a free model.
 
 ```mermaid
@@ -457,7 +462,7 @@ for one question — *may I try the next candidate?* Only `ProviderUnavailable` 
 The strategy layer lives beside the router, not on it:
 `resolve_chain(strategy, candidates, head_model_id, *, custom_order)` is a pure
 function — store-free, holding no cooldown state — that orders `RoutingCandidate`s,
-while the attempt loop (per-send continuation, cooldown, the per-turn deadline) is
+while the attempt loop (per-send continuation, cooldown, the per-attempt deadline) is
 orchestrator machinery. The router itself still answers one question: which provider
 instance serves this role and model name. `DirectAPIProvider`
 (`providers/direct_api_provider.py`) is not a fifth adapter but a BYOK wrapper
@@ -510,7 +515,7 @@ classDiagram
         +detail
     }
     class RoutineBuilder {
-        +propose_from_recent_actions(conversation, n) Routine
+        +propose_from_recent_actions(conversation, n_messages) Routine
         +preview(draft, tool_registry)
         +save(draft, conversation_id) Routine
     }

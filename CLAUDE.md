@@ -81,9 +81,10 @@ arrives directly, via a routine command step, or via a command widget. The card
 carries the exact command text (truncated ~120 chars) so the user knows precisely
 what they are approving each time; a "Not now" is honoured for the rest of the
 turn (don't-nag), then cleared. Destructiveness is per-call
-(`tools/base.call_is_destructive`): `run_command` classifies its own command via a
-conservative read-only allowlist (see its docstring); any other tool is
-destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
+(`tools/base.call_is_destructive`): `run_command` reports **destructive
+unconditionally** — the read-only allowlist that used to classify it was DELETED in
+#48 after being defeated three ways, so every command cards, `ls` included (see its
+docstring); any other tool is destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
 session-grant model in both modes — per-invocation is specific to destructive dev
 actions.
 
@@ -109,7 +110,9 @@ than working around it silently):
   self-scheduling, in any mode. Addison *may author* automation the OS runs (a
   launchd/cron entry, a watcher script) — like Claude Code scaffolding a cron job;
   the OS runs it, Addison never fires itself. Running/arming a powerful action
-  requires a **user-typed keyword prefix** (e.g. `!run …`); because it is
+  **will require** a **user-typed keyword prefix** (e.g. `!run …`) — designed, and
+  **not built**: it is Phase-2 step 8 and there is no keyword-gate code in the tree,
+  so nothing today can author or arm automation. Because it is
   user-typed, observed/injected content can never supply it, so the prefix is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
   "no scheduling in v1" wording.)
@@ -162,8 +165,10 @@ and rebuilds in the same session.
 - **Restore is an RPC path, never a registry tool, and never passes the
   `PermissionGate`** — a gate that could deny a restore would make "the restore
   path is itself unbreakable" false. The only model-facing snapshot surface that
-  will ever exist is a **LOW, capture-only** `snapshot_now` tool (step 2): it may
-  only ever ADD a row, never restore and never delete.
+  will ever exist is the **LOW, capture-only** `snapshot_now` tool, which **shipped**
+  (`agent_core/tools/snapshot_now.py`, in `_V1_TOOL_IDS`): it may
+  only ever ADD a row, never restore and never delete, and an AST source test holds
+  it to `capture` alone.
 - **What is captured** is a declared table set *and* a declared column set
   (`agent_core/snapshots/scope.py`). Tests fail the build if any schema table, or
   any column of a captured table, is neither captured nor explicitly excluded —
@@ -396,7 +401,7 @@ built in, not work outstanding. The live sequence is the **Phase-2 order** below
 
 Also shipped past the numbered sequence: the UI wave, and
 the **widget rail** — declarative routine/stat widgets
-(`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
+(`agent_core/widgets.py`, invariant 4) plus the `usage_log` token/latency
 substrate (§4.8) that feeds the token meter + connections rows. The wave is
 complete through its final PR: multi-provider API keys, the three-column
 app shell + in-window Settings, widgets/tray, class-driven dark mode, the
@@ -433,7 +438,8 @@ host — both are tracked in `docs/HANDOFF.md`, not silently accepted.
 **Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
 dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem**
 (floor G3; `agent_core/snapshots/`, the `config_snapshots` table, the `snapshot.*`
-RPC namespace, seven auto-capture hooks + the verified-working site, the sidecar
+RPC namespace, the auto-capture hooks (seven at step 1; nine sites today) + the
+verified-working site, the sidecar
 cold-start recovery path, and the Settings "Restore points" card. Its single most
 important test, `test_restore_always_works_from_a_broken_config`, passes; the
 subsystem is described above under the floors), (2) **DONE (2026-07-24) — the
@@ -508,9 +514,12 @@ in the `provider_config` table; the custom base URL is the ONE permitted `http:/
 case (validated http(s)://). The orchestrator stays provider-agnostic — capability
 differences via `ProviderCapabilities`, never `isinstance`.
 
-**Routing & free models (scope amendment 2026-07-20).** Routing gains four named
-strategies — quality-first (default; strong→weak degrade), cost-first, local-only,
-balanced — plus a Developer custom builder; the companion sees a single
+**Routing & free models (scope amendment 2026-07-20).** Routing gains **three**
+named strategies — quality-first (default; strong→weak degrade), cost-first and
+local-only — plus a Developer custom chain. (The amendment drafted a fourth,
+**balanced**; it was **CUT from v1** by owner decision, §10.1, because it was
+provably identical to cost-first at two-model pools. `ROUTING_STRATEGIES` in
+`providers/router.py` is the authority.) The companion sees a single
 prefer-quality/prefer-free toggle. Strong-first with graceful fallback + provider
 cooldown; a visible "answered with a free model" disclaimer when a free model
 answers. Addison must be useful **without a paid frontier key** (local Ollama +
@@ -539,14 +548,16 @@ subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a
 above). Building a downgrade path into the recovery floor would put a second,
 uncoordinated binary-replacement mechanism on a collision course with
 `updater.rs`, and it would be the one piece of the floor that could itself brick
-the app. The rest of the step-1 deferrals — the `snapshot_now` tool and the anchor
-minting caller (step 2), `_valid_http_url` credential hardening (step 4), the
-permanent distrust of Addison's own data directory (step 5), `tool_grants` capture
-(step 2, and then as an INTERSECT) — are itemised with their reasons in
+the app. Of the step-1 deferrals, only **`tool_grants` capture** is still open (and
+would then need to be an INTERSECT). The rest have LANDED and are no longer
+deferrals: the `snapshot_now` tool and the anchor-minting caller
+(`rpc/guards.py`), `_valid_http_url` credential hardening (`rpc/providers.py`),
+and the permanent distrust of Addison's own data directory
+(`policy.py::_protected_dirs`). The ledger with each one's reasoning is in
 `docs/HANDOFF.md`.
 
 **Pulled forward by the amendment** (build per the Phase-2 order above, not
-opportunistically): the four **named routing strategies** + custom, free/no-frontier
+opportunistically): the **named routing strategies** + custom, free/no-frontier
 models + extensible endpoints, the **snapshot/rollback** subsystem (now built), the **Custom**
 profile, the **coding harness + workspace-trust**, **capability-tiered widgets**,
 the **MCP client**, and OS-authored automation behind the **keyword gate**.
@@ -561,7 +572,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest ../tests/ -q          # safety-invariant tests must pass
 
-# Shell (from shell/) — once step 7 lands
+# Shell (from shell/)
 npm install
 npm run tauri dev
 ```

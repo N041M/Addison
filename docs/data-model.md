@@ -336,11 +336,17 @@ erDiagram
     flags plus `binary_ref`), because a rebuild from sidecars alone would otherwise quietly
     convert every G4 anchor into an ordinary deletable row.
     - **`meta.restored_to`** *(additive, step 1)* — the snapshot id a restore landed on,
-      written **only** on a `pre_restore` row. It is what makes the rollback walk survive a
-      relaunch: the walk's position is held in memory during a session, but a restart between
-      two clicks would otherwise rewind it and put the user straight back into the config they
-      had just escaped. `_recorded_restore_target` reads the newest `pre_restore` row's
-      payload to recover it. Additive by construction — an ordinary payload keeps the exact
+      written **only** on a `pre_restore` row. It is the **second** on-disk copy of the walk's
+      position. What makes the rollback walk survive a relaunch — the walk's position is held
+      in memory during a session, but a restart between two clicks would otherwise rewind it
+      and put the user straight back into the config they had just escaped — is written twice:
+      the primary copy is a plain note file beside the sidecars (`_WALK_NOTE_FILE =
+      "walk-position"`, written by `_note_restored` after **every** restore that landed,
+      including the sidecar arm), and `_recorded_restore_target` reads that note **first**,
+      falling back to the newest `pre_restore` row's `meta.restored_to`. The note is
+      deliberately not a `.json` name: `recover_payloads_from_disk` and `_sweep_sidecars` both
+      key off that suffix, so a `.json` note would be read as a payload by one and deleted as
+      an orphan by the other. Additive by construction — an ordinary payload keeps the exact
       bytes it has always had, and every existing reader ignores the key.
     - **Which restores write a `pre_restore` row, and which cannot** *(stated with its
       exceptions — the earlier text claimed the guarantee flat)*. "Clicking Restore is itself

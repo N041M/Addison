@@ -54,9 +54,9 @@ sequenceDiagram
     ORC->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted)
     Note over PG,WV: SAFE and not yet granted: permission.requestGrant<br/>then permission.respond, see flow 2
     PG-->>ORC: GRANTED
+    Note over ORC: on_activity(tool_id, label, detail) -> tool.activityUpdate<br/>emitted BEFORE execute, so the panel names the destination<br/>before the call goes out
     ORC->>TL: execute(args, context)
     TL-->>ORC: ToolResult with snapshot
-    Note over ORC: on_activity(tool_id, label, detail) -> tool.activityUpdate
     ORC->>UM: record(snapshot)
     ORC->>PR: provider.send with the tool_result appended
     PR-->>ORC: final assistant text
@@ -68,7 +68,8 @@ sequenceDiagram
 ## 2. Permission grant round-trip
 
 The orchestrator (and routine engine) call the mode-aware `authorize(tool_id, mode,
-destructive, detail)` before every call (`policy.py`). In SAFE mode this prompts for
+destructive, detail)` before every call (`permissions/gate.py`; `policy.py` supplies
+`PolicyMode`, `GuardConfig` and `mode_for_profile`). In SAFE mode this prompts for
 every not-yet-granted tool; in OPEN mode it auto-allows a non-destructive call
 (recorded in the activity log) and prompts **per invocation** for a destructive one —
 no prior grant carries over, and the card's description names the exact command being
@@ -273,7 +274,7 @@ sequenceDiagram
     SRV->>BR: get_provider_key(provider)
     BR->>SH: keychain.getProviderKey {provider}
     SH-->>BR: key (core-ward only, one request)
-    SRV->>P: one tiny request — Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI + custom GET {base}/v1/models
+    SRV->>P: one tiny request — Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI GET /v1/models, custom GET {base}/models<br/>(a custom base URL normally already ends in /v1)
     P-->>SRV: 200 ok, or 401/timeout
     Note over SRV: a restore point is taken per connect ATTEMPT, before it<br/>(reason "provider_connect", or "add_endpoint" for a custom server)
     Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false, so provider.list shows it off
@@ -338,12 +339,12 @@ sequenceDiagram
     SM->>ST: insert row image of the config tables (keychain excluded)
     SM->>SM: also write the payload to a 0600 JSON sidecar
     ST-->>SM: snapshotId
-    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint)
+    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint) —<br/>except that it flips the flag on a PERMANENT row whose<br/>fingerprint matches byte for byte (data-model.md)
 
     Note over WV,SRV: on-command — Settings "Restore points" card
     WV->>SRV: snapshot.create
     SRV->>SM: capture(trigger="on_command", reason="user_request")
-    SM->>ST: capture (deletable, unless minted as a Custom anchor)
+    SM->>ST: capture (always deletable — an anchor comes only from<br/>mint_anchor, via guards.set)
     SRV-->>WV: {ok: true, snapshotId}
 
     Note over WV,SRV: the one-action button — no argument, by design
@@ -370,8 +371,9 @@ Four things the diagram cannot show:
   offers "Restore this one" beside a permanent row — the row a user cannot delete and
   might most need to reach — which calls `useSnapshots.handleRestoreSnapshot` →
   `ipc.restoreSnapshot` → `snapshot.restore {id}`, and handles the outcome exactly as
-  the one-action button does. Ordinary rows still offer save / restore-to-last-working
-  / remove and no per-row jump.
+  the one-action button does — behind a two-step inline confirm that names the row
+  first, never a blind recovery. An ordinary row's only action is **Remove**; saving a
+  restore point and restore-to-last-working are card-level controls, not per-row ones.
 - **A restore is an RPC path, never a registry tool, and never passes the permission
   gate** — a gate that could deny a restore would make "the restore path is itself
   unbreakable" false.
@@ -392,8 +394,9 @@ turn's reply never carries an actionable payload. After the turn, the frontend t
 *user's own words* against a deliberately narrow keyword pattern (`useOffers.ts`) and, if
 it matches, asks the core for the plan; the core's plan is **canned in code** — a fixed
 note and the fixed `cost_first` strategy — so a card can never be armed by the model's
-answer. The core enforces the same rule on its side by reading `role=="user"` messages
-only.
+answer. The core needs no message read at all here: `costPlan.propose` returns constants,
+so there is nothing for the model to influence (the `role=="user"`-only read belongs to
+flow 11, where a base URL has to be extracted from somewhere).
 
 ```mermaid
 sequenceDiagram
@@ -432,7 +435,10 @@ G1 (as in flow 7); an auto-snapshot makes it one-click reversible. The same plum
 connect an MCP server (flow 15). Shipped in Phase-2 step 4, with the same
 model-authors-nothing shape as flow 10: the **core** extracts a base URL from the current
 turn's *user* messages — never assistant content, never a pasted wall of text — validates
-it, and holds it for an explicit confirm.
+it, and returns it for an explicit confirm. It **holds nothing**: the frontend renders the
+card from that reply and sends the base URL back on `endpoint.confirmAdd`, which
+re-validates it through the same `_base_url_problem` gate. That differs from the widget
+draft precedent (flow 8), where the core does hold the draft between propose and confirm.
 
 ```mermaid
 sequenceDiagram
@@ -446,14 +452,14 @@ sequenceDiagram
     SRV-->>WV: an ordinary prose answer
     Note over WV: the user's own text matches the add-a-server pattern
     WV->>SRV: endpoint.proposeFromConversation
-    Note over SRV: read role=="user" messages only, extract + validate a base URL,<br/>hold it. Nothing to add -> {none: true}, silently
+    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it — nothing is held. Nothing to add -> {none: true}, silently
     SRV-->>WV: {baseUrl, isLocalOrLan}
     Note over WV: EndpointProposalCard — key pasted here goes to the keychain,<br/>never into a chat frame
     WV->>SH: invoke store_provider_key("custom", key)
     WV->>SRV: endpoint.confirmAdd {baseUrl, accept: true}
-    Note over SRV: runs provider.connect("custom", baseUrl) — one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop)
     SRV->>SM: capture(trigger="auto", reason="add_endpoint")
     SM->>ST: config captured — proceeds with a sticky warning if capture fails
+    Note over SRV: runs provider.connect("custom", baseUrl) — one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop). The restore point above is<br/>one per connect ATTEMPT, taken before it (as in flow 7)
     SRV-->>WV: {ok: true} — endpoint now in the picker union
 ```
 
@@ -559,7 +565,7 @@ user's standing default model — a strategy orders only the fallback tail, so r
 never overrides a deliberate choice. The turn falls forward only on a
 **provider-unavailable** failure (429, 5xx, network); a rejected request or a bad key
 ends the turn at once, because the next provider would just get the same bad request.
-The cooldown is in-memory, and the per-turn deadline is threaded into each attempt so
+The cooldown is in-memory, and the per-attempt deadline is threaded into each attempt so
 one hanging candidate cannot stall the turn.
 
 ```mermaid
@@ -571,7 +577,7 @@ sequenceDiagram
 
     ORC->>RC: routing_chain(role, model_name)
     Note over RC: head = the user's default — strategy orders the tail
-    RC-->>ORC: [A, B, ...] (cooled providers skipped)
+    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown —<br/>the orchestrator skips cooled providers over this result)
     ORC->>A: send(..., timeout=budget remaining)
     alt A answers
         A-->>ORC: response
