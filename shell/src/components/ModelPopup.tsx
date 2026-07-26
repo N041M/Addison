@@ -16,6 +16,7 @@
 // the frontend's authority (CLAUDE.md, Phase-2 step 4).
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isMotionEnabled } from "../lib/scramble";
 
 /** Panel geometry — the prototype's numbers, kept as named constants because the
  * positioning maths reads as nonsense without them. */
@@ -46,16 +47,47 @@ export interface PopupAnchor {
   y: number;
 }
 
+/** How long the popup takes to fade out. Matches the .12s it fades in on. */
+const EXIT_MS = 120;
+
 export function ModelPopup({
   anchor,
   options,
+  open = true,
   onClose,
 }: {
   anchor: PopupAnchor;
   options: ModelPopupOption[];
+  /**
+   * False starts the close animation; the popup unmounts itself when it
+   * finishes. The exit lives HERE rather than at the call site because several
+   * things close this popup — Escape, an outside click, picking a model, a
+   * profile change — and a caller that forgot would put the old behaviour back
+   * for that one path. It faded in and then vanished on a frame (reported
+   * 2026-07-26: "it just plops out").
+   */
+  open?: boolean;
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Kept up for the length of the exit, then gone.
+  const [exiting, setExiting] = useState(false);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      setExiting(false);
+      return;
+    }
+    if (!wasOpen.current) return;
+    wasOpen.current = false;
+    if (!isMotionEnabled()) return;
+    setExiting(true);
+    const timer = setTimeout(() => setExiting(false), EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  // Derived rather than state, so the panel exists on the render that opens it.
+  const present = open || exiting;
   const selectedIndex = Math.max(
     0,
     options.findIndex((o) => o.selected),
@@ -82,6 +114,7 @@ export function ModelPopup({
   // Outside click and Escape both close. Escape is handled here, and stops
   // propagating, so it closes the popup rather than leaving the whole surface.
   useEffect(() => {
+    if (!open) return; // a closing popup answers nothing
     function onDown(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
@@ -97,15 +130,24 @@ export function ModelPopup({
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey, true);
     };
-  }, [onClose]);
+  }, [onClose, open]);
+
+  if (!present) return null;
 
   return (
     <div
       ref={ref}
       role="listbox"
       aria-label="Which cloud model Addison uses by default"
+      // Out of the a11y tree the moment it starts closing — see ModelSelector.
+      aria-hidden={!open}
       style={{ left: `${left}px`, top: `${top}px`, width: `${PANEL_WIDTH}px` }}
-      className="fixed z-50 animate-[fade_.12s_ease_both] rounded-popover bg-panel px-4 py-1.5 shadow-popover"
+      className={
+        "fixed z-50 rounded-popover bg-panel px-4 py-1.5 shadow-popover " +
+        (open
+          ? "animate-[fade_.12s_ease_both]"
+          : "pointer-events-none animate-[fade-out_.12s_ease_both]")
+      }
     >
       {options.map((o, i) => (
         <div

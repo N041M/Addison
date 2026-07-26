@@ -98,8 +98,19 @@ export function WidgetRail({
   const pinned = widgets.filter((w) => w.pinned);
   const unpinned = widgets.filter((w) => !w.pinned);
 
-  const hasUsage = (stats?.tokensMonth.total ?? 0) > 0;
-  const connections = stats?.connections ?? [];
+  // Which core-computed sources a PINNED widget already shows. The ambient rows
+  // below stand down for those, or the same facts appear twice: a pinned
+  // "Connections" widget draws the connection rows, and the ambient block drew
+  // them again underneath it (reported 2026-07-26 — the rail read Ollama, the
+  // Anthropic API, the token meter, then Ollama and the Anthropic API again).
+  // Pinned only, deliberately: a widget sitting in the collapsed tray is not on
+  // screen, so there the ambient row is the only place those facts appear.
+  const shownBySource = new Set(
+    pinned.flatMap((w) => (w.spec.kind === "stat" ? [w.spec.source] : [])),
+  );
+
+  const hasUsage = (stats?.tokensMonth.total ?? 0) > 0 && !shownBySource.has("tokens_month");
+  const connections = shownBySource.has("connections") ? [] : (stats?.connections ?? []);
   const isInline = variant === "inline";
 
   function toggleTray() {

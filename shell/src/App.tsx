@@ -177,6 +177,12 @@ export function App() {
   // The two pieces of floating chrome (see the file header for why they live
   // here): the anchored model popup's click point, and the Restore points modal.
   const [modelAnchor, setModelAnchor] = useState<PopupAnchor | null>(null);
+  // The last place the model popup opened, kept after `modelAnchor` clears so it
+  // can fade out where it was instead of disappearing on a frame.
+  const [lastModelAnchor, setLastModelAnchor] = useState<PopupAnchor | null>(null);
+  useEffect(() => {
+    if (modelAnchor) setLastModelAnchor(modelAnchor);
+  }, [modelAnchor]);
   const [restorePointsOpen, setRestorePointsOpen] = useState(false);
   // Bumped to focus the composer for the "say hello" nudge when first-run reaches
   // step 2 (a provider connected during this launch).
@@ -1269,9 +1275,15 @@ export function App() {
       {/* Floating chrome, outside every animated container (see the file
           header). Both are reached from Settings and both close on Escape —
           the modal through the handler above, the popup in the capture phase. */}
-      {modelAnchor && modelPopupOptions.length > 0 && (
+      {/* `lastModelAnchor`, not `modelAnchor`: the popup has to stay on screen
+          at the place it opened while it fades out, and `modelAnchor` is already
+          null by then. Several paths close it (Escape, an outside click, picking
+          a model, a profile change), and driving the exit off `open` means every
+          one of them animates without having to remember to. */}
+      {lastModelAnchor && modelPopupOptions.length > 0 && (
         <ModelPopup
-          anchor={modelAnchor}
+          anchor={lastModelAnchor}
+          open={Boolean(modelAnchor)}
           options={modelPopupOptions}
           onClose={() => setModelAnchor(null)}
         />

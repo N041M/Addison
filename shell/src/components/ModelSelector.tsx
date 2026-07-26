@@ -31,6 +31,7 @@
 // old behaviour and leaves.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
 
@@ -96,6 +97,11 @@ interface Option {
   note: string;
   current: boolean;
 }
+
+/** How long the menu takes to fade back down. Shorter than the .2s it rises on:
+ * an exit that matches its entrance reads as sluggish, because nobody is waiting
+ * to read anything on the way out. */
+const MENU_EXIT_MS = 140;
 
 export function ModelSelector({
   roles,
@@ -179,6 +185,30 @@ export function ModelSelector({
 
   // ---- Menu open/close + keyboard state -----------------------------------
   const [open, setOpen] = useState(false);
+  // The menu stays mounted for the length of its exit. Without this it faded and
+  // rose IN and then vanished on a single frame when it closed — "it just plops
+  // out" (reported 2026-07-26). Every close path goes through `setOpen(false)`
+  // (Escape, an outside click, picking a model or an effort, the composer being
+  // blocked mid-turn), so driving the exit off `open` covers all of them.
+  const [exiting, setExiting] = useState(false);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      setExiting(false);
+      return;
+    }
+    if (!wasOpen.current) return; // never opened, nothing to animate away
+    wasOpen.current = false;
+    if (!isMotionEnabled()) return;
+    setExiting(true);
+    const timer = setTimeout(() => setExiting(false), MENU_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  // DERIVED, not state: the panel has to exist on the very render that opens it,
+  // or the effect below has nothing to move focus to and the menu opens with
+  // focus stranded on <body>. Asking for it a render later cost exactly that.
+  const menuPresent = open || exiting;
   const [activeIndex, setActiveIndex] = useState(currentIndex);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const labelRef = useRef<HTMLButtonElement | null>(null);
@@ -326,7 +356,7 @@ export function ModelSelector({
         {activeEffortLabel ? ` · ${activeEffortLabel.toLowerCase()}` : ""}
       </button>
 
-      {open && (
+      {menuPresent && (
         <div
           onKeyDown={onPanelKeyDown}
           // `w-max` over the 196px floor: a model picker that abbreviates the
@@ -339,8 +369,17 @@ export function ModelSelector({
           // composer, so in a short window it ran past the top of the app and
           // over the header (measured at 1280×420: menu top 76, header bottom
           // 77). It scrolls instead of climbing.
-          className="no-scrollbar absolute bottom-[26px] right-0 z-30 flex max-h-[calc(100vh-160px)] w-max min-w-[196px] max-w-[320px] animate-[fadeRise_.2s_ease_both] flex-col overflow-y-auto rounded-[6px] border border-rail bg-panel p-1.5 shadow-menu"
+          className={
+            "no-scrollbar absolute bottom-[26px] right-0 z-30 flex max-h-[calc(100vh-160px)] w-max min-w-[196px] max-w-[320px] flex-col overflow-y-auto rounded-[6px] border border-rail bg-panel p-1.5 shadow-menu " +
+            (open
+              ? "animate-[fadeRise_.2s_ease_both]"
+              : "pointer-events-none animate-[fadeDrop_.14s_ease_both]")
+          }
           role="presentation"
+          // While it fades out the menu is a picture, not a control: out of the
+          // a11y tree, and not clickable. Screen readers and tests both see it
+          // gone the moment it closes, which is what "closed" should mean.
+          aria-hidden={!open}
         >
           <div className="px-2.5 pb-2 pt-1.5 text-[10px] font-medium tracking-[.04em] text-faint">
             Answer with
