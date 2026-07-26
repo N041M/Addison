@@ -71,6 +71,25 @@ const SUGGESTIONS = ["Tidy my Downloads folder", "Draft an email", "Plan the wee
 const ROW_STAGGER_MS = 70;
 const TEXT_STAGGER_MS = 40;
 
+// Which conversation the stagger last played for. MODULE scope, not a ref:
+// ChatThread unmounts whenever a surface replaces the chat column, so an
+// instance ref forgets across the round trip — opening a chat FROM Settings
+// remounted a fresh component whose mount-skip swallowed the change, and the
+// switch played no stagger and no scramble (user report, 2026-07-26).
+// `undefined` means "no thread has painted yet this session" — that first
+// paint belongs to App's initial scramble pass. Only one ChatThread ever
+// renders at a time, so module scope cannot cross wires.
+let lastStaggeredConversation: string | null | undefined = undefined;
+
+/** Test-only: forget the session's stagger history between test cases. */
+export function resetThreadStaggerForTests() {
+  lastStaggeredConversation = undefined;
+}
+
+/** How many trailing rows animate on a switch — the ones the bottom-scrolled
+ * viewport can actually show. Everything above the fold stays still. */
+const STAGGER_ROWS = 12;
+
 export function ChatThread({
   messages,
   onRetry,
@@ -85,7 +104,6 @@ export function ChatThread({
 }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
-  const seenConversation = useRef<string | null | undefined>(undefined);
 
   // The thread shows the human turns; live tool steps live in the widget rail /
   // work block, so tool messages aren't repeated here.
@@ -101,21 +119,33 @@ export function ChatThread({
   }, [messages, streamDisplay, header, footer]);
 
   // Opening another conversation: the rows rise in one after another and their
-  // labels/bodies resolve out of the scramble behind them. Mount is skipped —
-  // App's initial pass owns the first paint.
+  // labels/bodies resolve out of the scramble behind them. The session's very
+  // first paint is skipped — App's initial pass owns it (module-scope key above,
+  // so a remount can't swallow a real switch).
+  //
+  // Only the LAST `STAGGER_ROWS` rows animate: the thread opens scrolled to the
+  // bottom, so those are the ones on screen — and a real conversation can hold
+  // hundreds of turns, where animating every row means a forced layout and a
+  // 38ms-tick scramble timer PER ROW. That work was a measurable part of "some
+  // chats take longer to open than others" (user report, 2026-07-26); rows
+  // above the fold get nothing, which is also what the eye sees either way.
+  // One reflow for the whole batch, not one per row.
   useEffect(() => {
-    if (seenConversation.current === undefined) {
-      seenConversation.current = conversationKey ?? null;
+    const key = conversationKey ?? null;
+    if (lastStaggeredConversation === undefined) {
+      lastStaggeredConversation = key;
       return;
     }
-    if (seenConversation.current === (conversationKey ?? null)) return;
-    seenConversation.current = conversationKey ?? null;
+    if (lastStaggeredConversation === key) return;
+    lastStaggeredConversation = key;
     const list = listRef.current;
     if (!list || !isMotionEnabled()) return;
-    Array.from(list.children).forEach((child, i) => {
-      const el = child as HTMLElement;
+    const rows = Array.from(list.children).slice(-STAGGER_ROWS) as HTMLElement[];
+    rows.forEach((el) => {
       el.style.animation = "none";
-      el.getBoundingClientRect(); // force reflow so the restart is seen
+    });
+    list.getBoundingClientRect(); // one reflow so every restart is seen
+    rows.forEach((el, i) => {
       el.style.animation = `fadeRise .38s ease both ${i * ROW_STAGGER_MS}ms`;
       el.querySelectorAll("[data-msg-text], [data-scramble-live]").forEach((text, j) => {
         // Leaf text only: a rendered markdown body has element children and is

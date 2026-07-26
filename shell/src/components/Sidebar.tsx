@@ -25,7 +25,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary, View } from "../types/ui";
-import { isMotionEnabled } from "../lib/scramble";
+import { isMotionEnabled, scrambleElement } from "../lib/scramble";
 
 interface Props {
   conversations: ConversationSummary[];
@@ -394,6 +394,8 @@ function ConversationRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(c.title);
   const inputRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLSpanElement>(null);
+  const wasActive = useRef(active);
 
   useEffect(() => {
     if (editing) {
@@ -401,6 +403,18 @@ function ConversationRow({
       inputRef.current?.select();
     }
   }, [editing]);
+
+  // Clicking a chat scrambles its title as it becomes the active row — the
+  // prototype's activeId-change behaviour (its `[data-chat-title]` pass). Only
+  // on the transition: re-renders of an already-active row stay still, and the
+  // first paint belongs to App's initial pass. scrambleElement itself no-ops
+  // under reduced motion.
+  useEffect(() => {
+    if (active && !wasActive.current && titleRef.current) {
+      scrambleElement(titleRef.current, 0);
+    }
+    wasActive.current = active;
+  }, [active]);
 
   function startEditing() {
     setDraft(c.title);
@@ -452,7 +466,7 @@ function ConversationRow({
         (active ? "border-accent text-ink" : "border-transparent text-muted")
       }
     >
-      <span data-chat-title="1" className="min-w-0 flex-1 truncate">
+      <span ref={titleRef} data-chat-title="1" className="min-w-0 flex-1 truncate">
         {c.title}
       </span>
       {formatRowTime(c.startedAt) && (
