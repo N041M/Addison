@@ -1,6 +1,14 @@
 # Addison
 
+A desktop assistant that runs on your own computer, asks before it touches
+anything, and can undo what it did.
+
 [![ci](https://github.com/N041M/Addison/actions/workflows/ci.yml/badge.svg)](https://github.com/N041M/Addison/actions/workflows/ci.yml)
+![local-first](https://img.shields.io/badge/local--first-SQLite%20on%20your%20disk-B4A9F5)
+![keys](https://img.shields.io/badge/API%20keys-OS%20keychain%20only-B4A9F5)
+![platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Tauri%202-2e2e33)
+
+![Addison's chat window: a three-column shell with the conversation in the middle, a composed message in the composer, and the first-run setup block](docs/screenshots/hero.png)
 
 Addison is a desktop assistant that runs on your own computer. It is built for
 people who don't write code. It asks in plain language before it does anything on
@@ -14,6 +22,24 @@ If you do write code, there is a Developer profile. It lets Addison read and edi
 files in folders you have trusted, and run commands that you confirm one at a time.
 Switching profile changes what Addison can reach and how often it asks you. It does
 not switch off any of the guarantees below.
+
+## A look around
+
+### Light and dark
+
+The dark direction is the designed reference; light is a derived translation. The
+theme follows your system by default.
+
+| Dark | Light |
+|---|---|
+| ![Addison in dark mode](docs/screenshots/hero.png) | ![Addison in light mode](docs/screenshots/hero-light.png) |
+
+### Settings
+
+Plain language, and honest about what is not set up yet. Keys go straight to the
+keychain — the window never sees them again.
+
+![Addison's settings: sections for where Addison thinks, which model answers, API keys, and running a model on this computer](docs/screenshots/settings.png)
 
 ## How it is put together
 

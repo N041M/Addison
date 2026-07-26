@@ -3,14 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Addison desktop shell — Tauri + React frontend (engineering-spec §1.2)",
+  "description": "Addison desktop shell \u2014 Tauri + React frontend (engineering-spec \u00a71.2)",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "lint": "eslint src",
     "test": "vitest run",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -34,6 +35,7 @@
     "eslint-plugin-react-hooks": "^5.1.0",
     "globals": "^15.14.0",
     "jsdom": "^24.1.3",
+    "playwright": "^1.62.0",
     "postcss": "^8",
     "tailwindcss": "^3",
     "typescript": "^5",

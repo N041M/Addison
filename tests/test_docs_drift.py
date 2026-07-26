@@ -29,7 +29,11 @@ def markdown_files() -> list[Path]:
 
 
 def test_every_markdown_link_resolves():
-    """A relative link that points at nothing.
+    """A relative link — or an embedded image — that points at nothing.
+
+    Covers `![...](...)` as well as `[...](...)`, because the README now embeds
+    generated screenshots and a deleted or renamed PNG would otherwise break the
+    front page silently.
 
     Cheap, mechanical, and it has already caught a real break: the safety model was
     split into its own file and one link kept a path relative to the repo root

@@ -10,6 +10,12 @@ launch terminal. Findings get converted into automated coverage afterwards.
 Cheap-model tip: export `ADDISON_MODEL=claude-haiku-4-5` before launching if
 you want the whole pass to cost pennies; steps 9–10 exercise the picker anyway.
 
+**If a surface changed, retake the screenshots.** `docs/screenshots/` is generated
+from the real frontend — `cd shell && npm run screenshots` with the dev server up.
+The shell, empty state, composer, Settings, theme tokens and scramble timing are
+all captured; a change to any of them dates the README's front page. See
+[`screenshots/MANIFEST.md`](screenshots/MANIFEST.md).
+
 **Which branch to run.** `master`. Sections 13, 13a, 13b and 14 describe the
 **dark v4** UI, which merged with **PR #58** on 2026-07-26 — no branch switch is
 needed any more. (This paragraph used to send you to `redesign/dark-v2`; that
