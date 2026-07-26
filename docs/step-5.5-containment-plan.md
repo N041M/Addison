@@ -57,10 +57,12 @@ So **one approved command deletes the entire recovery floor** — database, side
 genesis row, and every `undeletable` G4 anchor. The `RAISE(ABORT)` triggers protect
 rows *inside* a live database; nothing protects the file the database lives in.
 
-CLAUDE.md currently states G3 as *"Neither the user nor the model can drive Addison
-into an unrecoverable state"* and *"the restore path is itself unbreakable."* In
-OPEN mode that is false. The code comment in `policy.py` is honest — it claims only
-that the floor cannot be erased *"with no card."* The doc is not.
+G3 was stated as *"Neither the user nor the model can drive Addison into an
+unrecoverable state"* and *"the restore path is itself unbreakable"* — **in OPEN mode
+both are false.** [`SAFETY.md`](SAFETY.md) owns that wording and now carries the
+qualification; this plan is what would let the qualification be removed again. The
+code comment in `policy.py` was always honest about it — it claims only that the
+floor cannot be erased *"with no card."* The docs were not.
 
 This has a precedent to follow: G4's promise was narrowed from "captures the app
 binary" to "records a build reference" because **the repo must not carry a floor its

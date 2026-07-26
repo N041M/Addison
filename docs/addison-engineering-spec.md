@@ -29,11 +29,11 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
 
 **What the amendment adds/changes (all Phase-2):**
 
-- **G3 (new global floor) — guaranteed rollback.** Neither user nor model can
-  drive Addison into an unrecoverable state; a one-action restore to the last
-  **verified-working** config always exists and the restore path is itself
-  unbreakable. Realised with **app-state snapshots** — taken automatically before
-  any risky/sweeping change *and* on command. See the §1.4 / §3 / §4.9 notes.
+- **G3 (new global floor) — guaranteed rollback.** Defined in
+  **[`SAFETY.md`](SAFETY.md)**, which owns the floor and its current scope
+  (it holds in SAFE and is overclaimed in OPEN). Realised here with **app-state
+  snapshots** — taken automatically before any risky/sweeping change *and* on
+  command; see the §1.4 / §3 / §4.9 notes for the mechanism.
 - **Undeletable anchor (new fourth floor).** Turning a safety guard **off** in
   Custom mode mints a permanent, non-deletable snapshot of the last
   verified-working state, which also **records the app build it was minted on**.
@@ -904,10 +904,10 @@ The Developer profile deliberately reuses surfaces that already exist for other 
 **Why this exists.** The motivating failure was a non-technical user who asked his
 setup to "make the models run as cheaply as possible" and bricked it
 *permanently* — the built-in rewind did not fire, and he had no way back. G3 is
-the floor that makes that structurally impossible: **neither the user nor the
-model can drive Addison into an unrecoverable configuration; at all times a
-one-action restore to a last-known-working state exists, and the restore path is
-itself unbreakable.**
+the floor written to make that structurally impossible. **[`SAFETY.md`](SAFETY.md)
+states G3 and its current scope** — do not restate it here; the guarantee holds in
+SAFE and is presently overclaimed in OPEN, and that qualification has already been
+lost once by being copied without it.
 
 Distinct from **§4.5 Rewind & Self-Repair**, which undoes *tool actions* and
 truncates *conversation history*. The snapshot subsystem restores *Addison's own

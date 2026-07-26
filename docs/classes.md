@@ -279,7 +279,8 @@ itself.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the
 restore path has to work when any of those is broken. For the same reason **restore is
 never a registry tool and never passes the `PermissionGate`**: a gate that could deny a
-restore would make "the restore path is itself unbreakable" false. The only
+restore would make "the restore path is itself unbreakable" false
+([`SAFETY.md`](SAFETY.md) owns that claim and its scope). The only
 model-facing snapshot surface is a **LOW, capture-only** `snapshot_now` tool
 (`agent_core/tools/snapshot_now.py`, in all three profiles — Simple, Developer and
 Custom all carry `_V1_TOOL_IDS`) that may add a row and

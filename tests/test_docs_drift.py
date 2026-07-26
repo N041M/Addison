@@ -79,6 +79,57 @@ def test_data_model_er_diagrams_cover_every_schema_table():
     )
 
 
+def test_g3s_guarantee_never_appears_without_its_scope():
+    """`docs/SAFETY.md` owns the floors. Six copies of G3's normative sentence lived
+    in three other authoritative documents, and every one asserted *"the restore path
+    is itself unbreakable"* **without** the qualification that it holds in SAFE and
+    is overclaimed in OPEN — so correcting the floor took four commits and still left
+    three files disagreeing.
+
+    The rule enforced here is deliberately the weaker, checkable one: a document may
+    mention the guarantee, but **its scope must be within reach** — a link to
+    `SAFETY.md`, the word "overclaimed", or a reference to step 5.5. Distinguishing
+    "asserting" from "merely discussing" is a judgement a regex cannot make, and an
+    earlier draft of this test grew three special cases trying. Requiring the caveat
+    nearby needs no judgement and catches the defect that actually happened, which
+    was dropping the caveat in the copy.
+
+    `CLAUDE.md` is exempt: it is the auto-loaded short form and carries the rule with
+    its qualification. The retired amendment is exempt as a record of the original
+    wording.
+    """
+    guarantee = re.compile(
+        r"restore path is itself unbreakable|drive Addison into an unrecoverable",
+        re.I,
+    )
+    allowed = {"docs/SAFETY.md", "CLAUDE.md", "docs/addison-scope-amendment-2026-07.md"}
+    # A restatement is acceptable when its own neighbourhood either defers to the
+    # owner or carries the caveat. Checked over a WINDOW, not a line: every real
+    # instance in the tree has its qualifier on the next line or the one after, and a
+    # line-by-line rule flagged all three of them.
+    excused = re.compile(r"SAFETY\.md|overclaim|step 5\.5|step-5\.5", re.I)
+    # Wide enough to cover a long table row, whose qualifier sits in the same cell.
+    WINDOW = 500
+
+    offenders: list[str] = []
+    for md in markdown_files():
+        rel = md.relative_to(REPO).as_posix()
+        if rel in allowed:
+            continue
+        text = md.read_text()
+        for match in guarantee.finditer(text):
+            lo = max(0, match.start() - WINDOW)
+            if excused.search(text[lo : match.end() + WINDOW]):
+                continue
+            line_no = text.count("\n", 0, match.start()) + 1
+            line = text.split("\n")[line_no - 1].strip()
+            offenders.append(f"{rel}:{line_no}: {line[:90]}")
+    assert not offenders, (
+        "G3's guarantee is stated outside docs/SAFETY.md — link to it instead, or the "
+        "OPEN-mode caveat gets dropped in the copy:\n  " + "\n  ".join(offenders)
+    )
+
+
 def test_the_retired_amendment_is_never_granted_precedence():
     """The 2026-07-20 scope amendment was folded into the specs and retired
     2026-07-27. It kept a *"where we differ, the amendment wins"* rule long after its

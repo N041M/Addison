@@ -94,12 +94,15 @@ A note on tension: goal 8 pulls somewhat against goals 1 and 7. Local models req
 **Amended 2026-07-20 — two goals added, one sharpened.** The butler framing (§1)
 firms the recovery goals into hard guarantees and adds a keyless-usefulness goal:
 
-10. **Guaranteed rollback (the safety definition).** At all times there exists a
-    one-action restore to a **last-known-working** state, and that restore path is
-    itself unbreakable — neither the user nor the model can drive Addison into an
-    unrecoverable configuration. This is a superset of goal 7 (which undoes a
-    *tool action*); goal 10 restores whole-app *configuration* via snapshots, and
-    is the load-bearing global floor **G3** (§9). "Safety" for Addison means this.
+10. **Guaranteed rollback (the safety definition).** A one-action restore to a
+    last-known-working state always exists. As a *product goal* this is a superset
+    of goal 7 — goal 7 undoes a *tool action*, goal 10 restores whole-app
+    *configuration* via snapshots. "Safety" for Addison means this.
+    **The floor's exact wording, and how far it currently reaches, are owned by
+    [`SAFETY.md`](SAFETY.md)** (global floor **G3**). Do not restate them here: the
+    guarantee holds in SAFE and is presently overclaimed in OPEN, and a copy made
+    without that qualification is how this document came to assert something its own
+    code does not do.
 11. **Useful without a paid frontier key.** The companion persona (§5) will not
     set up frontier billing, so Addison must do real work on legitimate free/local
     models — and let a user add new OpenAI-compatible endpoints by simply asking
@@ -820,7 +823,9 @@ user clicks through and a prompt-injection could try to talk around, so it is
 **not** the safety net. The snapshot is.
 
 **G3 — guaranteed rollback (new global floor).** *Neither the user nor the model
-can drive Addison into an unrecoverable configuration. At all times there exists a
+can drive Addison into an unrecoverable configuration — see
+[`SAFETY.md`](SAFETY.md), which owns the exact wording and its OPEN-mode caveat. At
+all times there exists a
 one-action restore to a last-known-working state, and that restore path is itself
 unbreakable.* Realised with **app-state snapshots**:
 

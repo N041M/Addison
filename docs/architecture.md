@@ -97,10 +97,9 @@ What each process may and may not do:
 *Built in Phase-2 step 1 — `agent_core/snapshots/`, the `config_snapshots` table, the
 `snapshot.*` RPC namespace, and the Settings "Restore points" card.*
 
-The scope amendment adds a fourth global floor, **G3**: neither the user nor the
-model can drive Addison into an unrecoverable configuration — at all times there is a
-one-action restore to a **last verified-working** state, and the restore path is
-itself unbreakable. It is realised by the **SnapshotManager**, which takes
+The 2026-07-20 scope change added a fourth global floor, **G3 — guaranteed
+rollback**, defined in **[`SAFETY.md`](SAFETY.md)** along with its current scope.
+Architecturally what matters is that it is realised by the **SnapshotManager**, which takes
 point-in-time copies of Addison's *mutable state* — settings, active profile/mode,
 routing choice and guard toggles, provider configuration metadata, and the
 declarative skills/widgets/routines rows. A snapshot is taken **automatically** before
@@ -150,6 +149,7 @@ subsystem is described here at all:
   the Store and nothing else — no provider, router, profile, policy mode, tool registry
   or permission gate. Restore is an RPC path, **never a registry tool and never gated**:
   a gate that could deny a restore would make "the restore path is itself unbreakable"
+  ([`SAFETY.md`](SAFETY.md) owns that claim and its OPEN-mode scope)
   false.
 - **Every payload is written twice** — into the row, and into a `0600` JSON sidecar
   beside the database. If SQLite itself will not open, `snapshot.list` and
