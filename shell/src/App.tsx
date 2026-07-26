@@ -373,10 +373,11 @@ export function App() {
         if (!text) return;
         // The delta lands on the pending message as the TRUE text; useTurn also
         // feeds the streaming scramble, which decorates the DISPLAY only.
-        // TODO(streaming): real streaming needs two more edits — the final
-        // result's `finalText` must append to (not overwrite) streamed content in
-        // useTurn's runTurn, and this handler must target the message by id, not
-        // the `pending` flag.
+        // Today the core emits this ONCE per turn with the whole answer — the
+        // RPC result carries only message ids, so this is the sole delivery path
+        // for the text. `appendStreamedText` already targets the message by turn
+        // id rather than the `pending` flag, so per-token deltas need no change
+        // here; what real streaming still needs is on the core side.
         turn.appendStreamedText(text);
       }),
     );

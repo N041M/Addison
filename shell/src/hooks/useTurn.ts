@@ -80,12 +80,28 @@ export function useTurn({
   // the overlay as part of settling, which would kill a reveal on the frame it
   // started; this is what tells it to leave the reveal alone.
   const revealingRef = useRef(false);
+  // Whether the engine is idle at the end of everything it has been handed. It
+  // reports this itself (`onDone`), and the turn's `finally` needs the answer:
+  // an engine still resolving text at settle time is animating text that has
+  // ALREADY fully arrived, which is a reveal in everything but name and must be
+  // allowed to finish. Nothing running counts as caught up.
+  const caughtUpRef = useRef(true);
 
   function endStream() {
     streamRef.current?.stop();
     streamRef.current = null;
     streamTextRef.current = "";
     revealingRef.current = false;
+    caughtUpRef.current = true;
+    setStreamDisplay(null);
+    setStreamMessageId(null);
+  }
+
+  /** Hand a settled message back to its normal (markdown) rendering. */
+  function releaseOverlay() {
+    revealingRef.current = false;
+    streamTextRef.current = "";
+    streamRef.current = null;
     setStreamDisplay(null);
     setStreamMessageId(null);
   }
@@ -122,20 +138,17 @@ export function useTurn({
     streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame), {
       advanceChars: revealAdvanceFor(text.length),
       // Hand the message back to its normal rendering (markdown, links, code)
-      // the instant the text has fully resolved.
+      // the instant the text has fully resolved. `releaseOverlay` also drops the
+      // spent engine: `appendStreamedText` only builds one when `streamRef` is
+      // empty, so an engine left sitting here is one a later chunk gets pushed
+      // into — at the reveal's rate, from the reveal's own leading edge, with no
+      // `streamMessageId` set. That path is now closed at the other end too (a
+      // chunk with no live turn is dropped); this keeps "streamRef holds an
+      // engine that can still be pushed to" true on its own rather than by the
+      // other end's grace.
       onDone: () => {
-        revealingRef.current = false;
-        streamTextRef.current = "";
-        // Release the finished engine. `appendStreamedText` only builds one when
-        // `streamRef` is empty, so a spent reveal left sitting here is an engine
-        // a later chunk gets pushed into — at the reveal's rate, from the
-        // reveal's own leading edge, with no `streamMessageId` set. That path is
-        // now closed at the other end too (a chunk with no live turn is
-        // dropped); this keeps "streamRef holds an engine that can still be
-        // pushed to" true on its own rather than by the other end's grace.
-        streamRef.current = null;
-        setStreamDisplay(null);
-        setStreamMessageId(null);
+        caughtUpRef.current = true;
+        releaseOverlay();
       },
     });
     streamRef.current.push(text);
@@ -167,11 +180,27 @@ export function useTurn({
       return;
     }
     streamTextRef.current += text;
+    caughtUpRef.current = false;
     if (!streamRef.current) {
       setStreamMessageId(targetId);
       // No `advanceChars`: the answer's full length is unknown while it is still
       // arriving, so the engine paces itself against the backlog instead.
-      streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame));
+      streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame), {
+        onDone: () => {
+          caughtUpRef.current = true;
+          // Catching up mid-turn is a PAUSE between deltas, not the end of the
+          // answer: keep the engine and the overlay so the next chunk resumes
+          // from the leading edge. Releasing here would drop the engine, and the
+          // next chunk would build a fresh one and push the whole accumulated
+          // prefix into it — re-animating the answer from character zero.
+          //
+          // Once the turn has settled there is no next chunk, so the engine has
+          // just landed on the final text and the message can go back to its
+          // normal rendering. `revealingRef` is what the turn's `finally` sets to
+          // say so.
+          if (revealingRef.current) releaseOverlay();
+        },
+      });
     }
     streamRef.current.push(streamTextRef.current);
   }
@@ -241,11 +270,15 @@ export function useTurn({
           return m;
         }),
       );
-      // Nothing streamed (the core sends the answer whole), so the text would
-      // otherwise appear in a single frame. Reveal it with the scramble instead.
-      // Guarded on an empty `streamTextRef`: if the core ever does start
-      // emitting `streamChunk`, the answer has already been animated as it
-      // arrived and re-revealing it would replay text the person just read.
+      // The reply arrived with no `streamChunk` at all, so the text would appear
+      // in a single frame. Reveal it with the scramble instead.
+      //
+      // In production this branch does not run: the core delivers the answer as
+      // one `conversation.streamChunk` (the RPC result carries only ids, no
+      // text), so `streamTextRef` is already full and `finalText` is null. The
+      // scramble for that case is the engine `appendStreamedText` started, which
+      // the `finally` below now lets finish. This stays as the fallback for a
+      // reply that does carry its text in the result.
       if (!streamTextRef.current && finalText) {
         revealFinalText(assistantId, finalText);
       }
@@ -300,6 +333,17 @@ export function useTurn({
         // its real content (which the result may just have replaced wholesale)
         // — UNLESS that content is currently being revealed, which is an
         // animation over text that has already landed. It ends itself.
+        //
+        // An engine still mid-resolve at this moment is exactly that case, and
+        // this is where every real turn lands. The core sends the whole answer as
+        // a single `streamChunk` immediately before returning the result, so the
+        // engine starts and the turn settles within the same handful of
+        // milliseconds — and killing it here meant one 15-character frame of
+        // noise and then the entire answer, which is why replies appeared to
+        // arrive whole (owner report 2026-07-26). Nothing further is coming for
+        // this turn, so the engine is finishing a reveal: promote it to one and
+        // let its `onDone` release the overlay.
+        if (!caughtUpRef.current && streamRef.current) revealingRef.current = true;
         if (!revealingRef.current) endStream();
         // A turn just landed: refresh the sidebar so a new chat's auto-title
         // appears, and adopt the launch conversation as current if we didn't

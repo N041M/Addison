@@ -229,8 +229,8 @@ export const STREAM_ADVANCE_CHARS = 5;
 /**
  * Roughly how long a whole-answer REVEAL should take, end to end.
  *
- * The core does not stream (`conversation.streamChunk` is declared in the
- * protocol and never emitted), so an answer arrives complete and would
+ * The core does not stream token by token: it emits the finished answer as a
+ * single `conversation.streamChunk`, so the text arrives complete and would
  * otherwise appear in one frame. Revealing it with the same scramble language
  * is the prototype's own behaviour — its canned reply is likewise whole, and it
  * animates it — but the prototype's fixed 5-chars-per-tick only reads well at

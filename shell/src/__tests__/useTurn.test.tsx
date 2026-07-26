@@ -272,7 +272,13 @@ describe("streamed text vs. the streaming scramble", () => {
     expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
   });
 
-  it("drops the overlay when the turn settles, so the real answer shows", async () => {
+  // Settling does NOT cut the animation off where it stands. This is the whole
+  // reason replies looked like they arrived whole: the core sends the entire
+  // answer as one chunk immediately before returning the result, so the engine
+  // and the settle land milliseconds apart, and a `finally` that killed the
+  // engine left one frame of noise followed by the finished answer (owner report
+  // 2026-07-26). Text that has fully arrived is a reveal, so it gets to finish.
+  it("lets a mid-resolve animation finish after the turn settles", async () => {
     const { result } = sendAndStream();
 
     await act(async () => {
@@ -280,7 +286,47 @@ describe("streamed text vs. the streaming scramble", () => {
       await flushMicrotasks();
     });
 
+    // Settled, with the true text committed in full — and still resolving.
+    const settled = result.current.messages.at(-1)!;
+    expect(settled).toMatchObject({ pending: false, content: TRUE_TEXT });
+    expect(result.current.streamMessageId).toBe(settled.id);
+    expect(result.current.streamDisplay).not.toBeNull();
+    expect(result.current.streamDisplay).not.toBe(TRUE_TEXT);
+
+    // ...and once it lands, the message goes back to its normal rendering.
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
     expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  // The counterpart guard: an engine that has ALREADY caught up when the turn
+  // settles is spent, and settling must clear it rather than promote it to a
+  // reveal that never ends (nothing would call `onDone` a second time).
+  it("clears a spent overlay when the turn settles", async () => {
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40); // resolve everything that arrived
+    });
+    // Caught up, but the overlay STAYS: more of the answer may still be coming,
+    // and dropping it here would hand the next chunk a fresh engine that
+    // re-animates the whole prefix from character zero. It holds the exact text,
+    // so the only visible difference is that markdown is not parsed yet.
+    expect(result.current.streamDisplay).toBe(TRUE_TEXT);
+
+    await act(async () => {
+      deferreds[0].resolve({ text: TRUE_TEXT });
+      await flushMicrotasks();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
     expect(result.current.messages.at(-1)).toMatchObject({
       pending: false,
       content: TRUE_TEXT,
@@ -315,10 +361,11 @@ describe("streamed text vs. the streaming scramble", () => {
   });
 });
 
-// The core does not stream (`conversation.streamChunk` is declared in
-// protocol.py and never emitted), so an answer arrives whole and used to appear
-// in a single frame. It is now revealed with the same scramble language (owner
-// request 2026-07-26). The honesty property from the streaming block above
+// A reply whose text arrives in the RPC result rather than as a `streamChunk`.
+// The core does NOT take this path today (it emits the whole answer as one
+// chunk, and its result carries only message ids), so this covers the fallback
+// in `runTurn` — and it is the shape a reveal takes when the full length is
+// known up front. The honesty property from the streaming block above
 // carries over unchanged and is the reason these tests exist: the overlay is
 // DECORATION over text that is already committed, so an interrupted reveal can
 // never cost the reader a character of the answer.
