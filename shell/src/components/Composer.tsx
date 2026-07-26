@@ -138,7 +138,11 @@ export function Composer({
           rows={1}
           placeholder={placeholder}
           aria-label="Message to Addison"
-          className="block w-full resize-none overflow-y-auto border-0 bg-transparent pb-[2px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
+          // `bespoke-scroll` (styles.css) swaps the native overlay bar — which
+          // drew over the text once the textarea went full-width — for the 4px
+          // floated thumb; the stable gutter reserves its lane up front so the
+          // text never reflows the moment a draft starts to scroll.
+          className="bespoke-scroll block w-full resize-none overflow-y-auto border-0 bg-transparent pb-[2px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none [scrollbar-gutter:stable] placeholder:text-disabled disabled:text-muted"
           style={{ maxHeight: `${MAX_TEXTAREA_PX}px` }}
         />
         {/* pt-3, not a token nudge: the visual space above the send button is

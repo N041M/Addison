@@ -137,6 +137,37 @@ textarea[data-composer]:focus-visible {
   outline: none;
 }
 
+/* The bespoke scrollbar (owner request 2026-07-26) — for the one scroller
+   whose scrolling has to stay VISIBLE: the composer's textarea. The design
+   hides every reading scroller (.no-scrollbar, per the prototype), but a
+   max-height draft needs an affordance, and the native overlay bar drew on
+   top of the text once the textarea went full-width. This is a 4px thumb in
+   the rail color, floated 4px off the right edge (the transparent-border +
+   padding-box clip trick), no track, brightening on hover like every other
+   quiet control. Pair it with a right padding on the scroller so text never
+   runs under the thumb — the gutter IS the "moved" scrollbar lane. */
+/* NO `scrollbar-width`/`scrollbar-color` here, deliberately: once the standard
+   property is set, Chromium and Safari 18+ IGNORE the ::-webkit-scrollbar
+   pseudos below and fall back to a thin OVERLAY bar — the exact overlap this
+   class exists to remove (measured: clientWidth stayed equal to offsetWidth).
+   The app only ever runs in WKWebView and Chromium, both of which take the
+   webkit path; there is no Firefox target to fall back for. */
+.bespoke-scroll::-webkit-scrollbar {
+  width: 12px;
+}
+.bespoke-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.bespoke-scroll::-webkit-scrollbar-thumb {
+  background-color: rgb(var(--c-rail));
+  border-radius: 999px;
+  border: 4px solid transparent;
+  background-clip: padding-box;
+}
+.bespoke-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(var(--c-track-hi));
+}
+
 /* Calm interaction motion — a short color ease on the things you hover, press,
    or select. Held to 150ms so state changes feel settled rather than flashy.
    Only color-family properties transition, so nothing ever shifts size. */
