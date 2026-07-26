@@ -108,7 +108,7 @@ describe("ActivityPanel destination line", () => {
   });
 
   it("sets the destination in mono, as a machine fact rather than prose", () => {
-    // design-brief-fern: mono is for machine facts only. An address is a fact, and
+    // design-brief-dark: mono is for machine facts only. An address is a fact, and
     // it reading as a fact is what makes an unfamiliar one catch the eye.
     const { container } = render(
       <ActivityPanel isWorking={false} current={null} activities={[PAGE_READ]} />,

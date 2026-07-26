@@ -4,11 +4,23 @@
 //   (a) `parseSnapshotList` fails CLOSED. A row we can't identify or date is a
 //       row the card could offer as a way back and then fail to restore, so it
 //       is dropped rather than shown.
-//   (b) the card itself, rendered for real, because three of its properties are
-//       promises the core cannot keep on its own: the restore is behind a
+//   (b) the surface itself, rendered for real, because three of its properties
+//       are promises the core cannot keep on its own: the restore is behind a
 //       two-step INLINE confirm (never a browser dialog), a permanent G4 row
 //       offers no Remove control, and a failed restore says one plain sentence
 //       instead of a stack trace.
+//
+// REDESIGN NOTE (dark direction, phase 3): the single "Restore points" card
+// became two pieces — `RestorePointsSection` (the Settings section: the
+// one-action summary row + the honest no-target sentences) and `SnapshotRows`
+// (the list, shared by the Restore-points modal and the Snapshots surface). The
+// assertions below are unchanged in MEANING; each now renders whichever piece
+// owns the behaviour it is about. Two mechanical consequences:
+//   * the one-action control is an accent "restore" row action whose accessible
+//     name is still "Restore to the last working state" — the name is what the
+//     test pins, because that is what a screen reader announces;
+//   * the Settings section no longer lists the rows, so the target name appears
+//     once there rather than twice.
 //
 // The component half uses React.createElement rather than JSX so this file can
 // keep the `.ts` name the contract's ownership plan froze.
@@ -17,7 +29,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { createElement } from "react";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import { parseSnapshotList } from "../ipc/client";
-import { SnapshotsCard } from "../components/SnapshotsCard";
+import { RestorePointsSection, SnapshotRows, formatWhen } from "../components/SnapshotsCard";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { Snapshot } from "../types/ui";
 
@@ -135,6 +147,7 @@ function stateWith(over: Partial<SnapshotsState> = {}): SnapshotsState {
     lastWorkingProfileChange: undefined,
     warning: undefined,
     notice: null,
+    restoredId: undefined,
     busy: false,
     refreshSnapshots: vi.fn(),
     handleCreateSnapshot: vi.fn(async () => {}),
@@ -145,16 +158,54 @@ function stateWith(over: Partial<SnapshotsState> = {}): SnapshotsState {
   };
 }
 
+/** The Settings section: the one-action way back and the honest silences. */
 function renderCard(state: SnapshotsState) {
-  render(createElement(SnapshotsCard, { connected: true, snapshots: state }));
+  render(
+    createElement(RestorePointsSection, {
+      connected: true,
+      snapshots: state,
+      onOpenAll: vi.fn(),
+    }),
+  );
+}
+
+/** The shared list of rows — what the Restore-points modal and the Snapshots
+ * surface both render. Permanent-row semantics live here. */
+function renderRows(state: SnapshotsState, connected = true) {
+  render(
+    createElement(SnapshotRows, { connected, snapshots: state, rows: state.snapshots }),
+  );
 }
 
 describe("the restore points card", () => {
   it("names the target before offering the button — never a click into the dark", () => {
     renderCard(stateWith());
-    // Twice: once naming the restore target, once as its row in the list.
-    expect(screen.getAllByText("Working setup")).toHaveLength(2);
+    // Named once, in the summary row; the section itself no longer lists rows.
+    expect(screen.getAllByText("Working setup")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Restore to the last working state" })).toBeTruthy();
+  });
+
+  it("keeps the target and its timestamp on screen THROUGH the confirm", () => {
+    // The press itself is the moment that matters: if the naming line is swapped
+    // out for the consequence copy, the person confirms with the target off
+    // screen — a recovery pressed blind, which is the one thing this surface
+    // exists to prevent (HANDOFF: "the target always named with its timestamp
+    // before the button"). Regression guard: an earlier build gated this row
+    // behind `!confirming`.
+    const when = formatWhen(ROW.createdAt);
+    expect(when).not.toBe("");
+    renderCard(stateWith());
+    expect(screen.getByText("Working setup")).toBeTruthy();
+    expect(screen.getByText(when)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore to the last working state" }));
+    expect(screen.getByText(CONSEQUENCE)).toBeTruthy();
+    expect(screen.getByText("Working setup")).toBeTruthy();
+    expect(screen.getByText(when)).toBeTruthy();
+    // And only one live restore control while the confirm is up.
+    expect(
+      screen.queryByRole("button", { name: "Restore to the last working state" }),
+    ).toBeNull();
   });
 
   it("requires the two-step inline confirm, and never a browser confirm()", () => {
@@ -209,11 +260,11 @@ describe("the restore points card", () => {
       undeletable: true,
       capturesBinary: true,
     };
-    renderCard(stateWith({ snapshots: [anchor, ROW] }));
+    renderRows(stateWith({ snapshots: [anchor, ROW] }));
     expect(screen.getByText("Permanent")).toBeTruthy();
     // Exactly one Remove button: the ordinary row's. Offering one on the anchor
     // would make a guarantee look like a bug the moment it was pressed.
-    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Remove/ })).toHaveLength(1);
   });
 
   it("renders a failed restore as one plain sentence, not a stack trace", () => {
@@ -255,30 +306,51 @@ const ANCHOR: Snapshot = {
   undeletable: true,
   capturesBinary: true,
 };
+/** A second permanent row, an hour later — a different id, a different label and
+ * a different timestamp, so a by-id restore that quietly used the first row in
+ * the list (or the first row's date) cannot pass. */
+const SECOND_ANCHOR: Snapshot = {
+  ...ANCHOR,
+  id: "anchor-2",
+  createdAt: ROW.createdAt + 3_600,
+  reasonLabel: "Before turning the second guard off",
+};
 const NO_ONE_ACTION_TARGET = { lastWorkingId: undefined, lastWorkingLabel: undefined } as const;
 
 describe("the per-row restore on permanent rows", () => {
   it("offers Restore this one on permanent rows only; ordinary rows keep Remove", () => {
-    renderCard(stateWith({ snapshots: [ANCHOR, ROW], ...NO_ONE_ACTION_TARGET }));
-    expect(screen.getAllByRole("button", { name: "Restore this one" })).toHaveLength(1);
+    renderRows(stateWith({ snapshots: [ANCHOR, ROW], ...NO_ONE_ACTION_TARGET }));
+    expect(screen.getAllByRole("button", { name: /^Restore this one/ })).toHaveLength(1);
     // The ordinary row keeps Remove; the permanent one never shows it.
-    expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^Remove/ })).toHaveLength(1);
   });
 
-  it("names the row, then restores it BY ID through a two-step inline confirm", () => {
+  it("names the row, then restores THAT row by id — never simply the first one", () => {
+    // TWO permanent rows, and the SECOND is the one pressed. With a single-row
+    // list `rows[0].id` and `snap.id` are the same string, so the worst failure
+    // this surface can have — confirm one restore point, restore a different one
+    // — was indistinguishable from correct behaviour.
     const confirmSpy = vi.spyOn(window, "confirm");
-    const state = stateWith({ snapshots: [ANCHOR], ...NO_ONE_ACTION_TARGET });
-    renderCard(state);
+    const state = stateWith({ snapshots: [ANCHOR, SECOND_ANCHOR], ...NO_ONE_ACTION_TARGET });
+    renderRows(state);
 
-    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: `Restore this one: ${SECOND_ANCHOR.reasonLabel}` }),
+    );
     // Step one names the row and shows the consequence; nothing has run.
     expect(state.handleRestoreSnapshot).not.toHaveBeenCalled();
     expect(screen.getByText(CONSEQUENCE)).toBeTruthy();
-    // The row is named in the confirm as well as in its list row.
-    expect(screen.getAllByText("Before turning a guard off").length).toBeGreaterThanOrEqual(2);
+    // The row the person pressed is named in the confirm as well as in its list
+    // row; the other row is still named exactly once, in its own row.
+    expect(screen.getAllByText(SECOND_ANCHOR.reasonLabel)).toHaveLength(2);
+    expect(screen.getAllByText(ANCHOR.reasonLabel)).toHaveLength(1);
+    // …with the pressed row's own timestamp beside it, not its neighbour's.
+    expect(screen.getAllByText(formatWhen(SECOND_ANCHOR.createdAt))).toHaveLength(2);
+    expect(screen.getAllByText(formatWhen(ANCHOR.createdAt))).toHaveLength(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
-    expect(state.handleRestoreSnapshot).toHaveBeenCalledWith("anchor");
+    expect(state.handleRestoreSnapshot).toHaveBeenCalledWith(SECOND_ANCHOR.id);
+    expect(state.handleRestoreSnapshot).not.toHaveBeenCalledWith(ANCHOR.id);
     // The one-action restore is untouched — this is the by-id path.
     expect(state.handleRestoreLastWorking).not.toHaveBeenCalled();
     expect(confirmSpy).not.toHaveBeenCalled();
@@ -287,13 +359,38 @@ describe("the per-row restore on permanent rows", () => {
 
   it("lets the person back out of a per-row restore without restoring", () => {
     const state = stateWith({ snapshots: [ANCHOR], ...NO_ONE_ACTION_TARGET });
-    renderCard(state);
-    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    renderRows(state);
+    fireEvent.click(screen.getByRole("button", { name: /^Restore this one/ }));
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(state.handleRestoreSnapshot).not.toHaveBeenCalled();
     expect(screen.queryByText(CONSEQUENCE)).toBeNull();
     // The trigger is back.
-    expect(screen.getByRole("button", { name: "Restore this one" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Restore this one/ })).toBeTruthy();
+  });
+
+  it("marks ONLY the row the hook says was restored, and retires its trigger", () => {
+    // This is the component half: `restoredId` names one row, so exactly that
+    // row gets the tick and loses its trigger while its neighbour keeps both.
+    // (Rendering with the prop set two ways proves only that the component reads
+    // a prop — that the tick waits for a REAL {ok:true} is a property of the hook
+    // and is driven click-by-click in restoreFeedback.test.tsx.)
+    renderRows(stateWith({ snapshots: [ANCHOR, SECOND_ANCHOR], ...NO_ONE_ACTION_TARGET }));
+    expect(screen.queryByText("restored ✓")).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^Restore this one/ })).toHaveLength(2);
+    cleanup();
+
+    renderRows(
+      stateWith({
+        snapshots: [ANCHOR, SECOND_ANCHOR],
+        restoredId: SECOND_ANCHOR.id,
+        ...NO_ONE_ACTION_TARGET,
+      }),
+    );
+    expect(screen.getAllByText("restored ✓")).toHaveLength(1);
+    const triggers = screen.getAllByRole("button", { name: /^Restore this one/ });
+    expect(triggers.map((b) => b.getAttribute("aria-label"))).toEqual([
+      `Restore this one: ${ANCHOR.reasonLabel}`,
+    ]);
   });
 
   it("warns that restoring the genesis point clears everything, in the per-row confirm", () => {
@@ -303,13 +400,54 @@ describe("the per-row restore on permanent rows", () => {
       reasonLabel: "Addison as first installed",
       undeletable: true,
     };
-    renderCard(stateWith({ snapshots: [genesis], ...NO_ONE_ACTION_TARGET }));
-    fireEvent.click(screen.getByRole("button", { name: "Restore this one" }));
+    renderRows(stateWith({ snapshots: [genesis], ...NO_ONE_ACTION_TARGET }));
+    fireEvent.click(screen.getByRole("button", { name: /^Restore this one/ }));
     expect(
       screen.getByText(
         `${CONSEQUENCE} This is Addison as it was first installed, so your services, notes, widgets and routines are cleared.`,
       ),
     ).toBeTruthy();
+  });
+});
+
+// --- a restore is never styled with the danger token (HANDOFF rule) ---------
+//
+// "Going back to a setup that worked is the opposite of a destructive act; the
+// rose token is for deleting things" (this file's header, and the HANDOFF rule
+// it quotes). Nothing pinned it, so a restore control could quietly be re-toned
+// to `danger` and every test would still pass — and the person who most needs to
+// press it would be looking at a control coloured like the one that destroys
+// things. `RowAction`'s danger tone is the only source of a `danger` class in a
+// row action, so its ABSENCE on every restore control is the assertion, with the
+// Remove button as the positive control that keeps it from being vacuous.
+
+describe("the colour of a restore", () => {
+  const isDanger = (b: HTMLElement) => /danger/.test(b.className);
+
+  it("tones every restore control as accent, never danger", () => {
+    renderCard(stateWith());
+    const trigger = screen.getByRole("button", { name: "Restore to the last working state" });
+    expect(trigger.className).toContain("text-accent");
+    expect(isDanger(trigger)).toBe(false);
+
+    fireEvent.click(trigger);
+    const confirm = screen.getByRole("button", { name: "Restore" });
+    expect(confirm.className).toContain("text-accent");
+    expect(isDanger(confirm)).toBe(false);
+    cleanup();
+
+    renderRows(stateWith({ snapshots: [ANCHOR, ROW], ...NO_ONE_ACTION_TARGET }));
+    const perRow = screen.getByRole("button", { name: /^Restore this one/ });
+    expect(perRow.className).toContain("text-accent");
+    expect(isDanger(perRow)).toBe(false);
+
+    fireEvent.click(perRow);
+    expect(isDanger(screen.getByRole("button", { name: "Restore" }))).toBe(false);
+
+    // The positive control: Remove really does destroy something, so it DOES
+    // carry the token. Without this the assertions above could pass on a build
+    // where the token had simply been renamed.
+    expect(isDanger(screen.getByRole("button", { name: /^Remove/ }))).toBe(true);
   });
 });
 
@@ -366,9 +504,10 @@ describe("the restore points card — no target, but points exist", () => {
 
     cleanup();
     render(
-      createElement(SnapshotsCard, {
+      createElement(RestorePointsSection, {
         connected: false,
         snapshots: stateWith({ snapshots: [ROW], ...NO_TARGET }),
+        onOpenAll: vi.fn(),
       }),
     );
     expect(screen.queryByText(SILENCE_UNVERIFIED)).toBeNull();
@@ -379,10 +518,10 @@ describe("the restore points card — no target, but points exist", () => {
 describe("the save control", () => {
   it("asks the core to save a restore point", async () => {
     const state = stateWith();
-    const { SaveSnapshotButton } = await import("../components/SnapshotsCard");
-    render(createElement(SaveSnapshotButton, { connected: true, snapshots: state }));
+    const { SaveSnapshotAction } = await import("../components/SnapshotsCard");
+    render(createElement(SaveSnapshotAction, { connected: true, snapshots: state }));
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Save a restore point now" }));
+      fireEvent.click(screen.getByRole("button", { name: "save one now" }));
     });
     expect(state.handleCreateSnapshot).toHaveBeenCalledTimes(1);
   });

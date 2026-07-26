@@ -57,9 +57,14 @@ Three lessons drive this amendment:
 A butler acts when asked and never uninvited, handles the messy parts so you
 don't have to, remembers how you like things, and — crucially — is *discreet
 and reversible*: a good butler never puts the house in a state you can't
-restore. This is already encoded in Addison's mark (the service bell: "ring, and
-Addison comes"), its "approachable by default, powerful on request" thesis, and
-the guidance-skills + memory work (a butler that learns your preferences).
+restore. This is already encoded in its "approachable by default, powerful on
+request" thesis and the guidance-skills + memory work (a butler that learns your
+preferences). *(As written, this sentence also cited Addison's mark — the service
+bell, "ring, and Addison comes". **Superseded 2026-07-26:** the bell was retired
+with the dark redesign and the mark is now the lowercase-`a` tile. The identity
+argument stands on its own; only the illustration is gone. See
+`docs/design-brief-dark/IMPLEMENTATION.md`, "Explicitly out / kept as-is →
+Brand".)*
 
 The amendment sharpens the two surfaces:
 
@@ -293,6 +298,13 @@ are user-tunable — and only its prompting guards.
   boundary, the keyword gate's strictness). The user may **never** touch the
   floors: G1, G2, G3, and the undeletable-anchor rule are not in the Custom
   panel at all.
+  > **What shipped (Phase-2 step 2, 2026-07-24): two of those four are dials.**
+  > `policy.GuardConfig` carries `destructive_card` and `auto_grant_scope`, each a
+  > closed vocabulary with a total strictness order whose defaults are today's OPEN
+  > gate byte-for-byte. The other two named here are not tunable and were not built
+  > as such: **workspace trust** is granted and revoked per directory (§8.2), not
+  > dialled, and the **keyword gate** is Phase-2 step 8 and does not exist yet. The
+  > sentence about the floors is unchanged and holds.
 
 **The Custom-mode safety contract:**
 
@@ -619,6 +631,10 @@ undeletable-anchor rule** — none of which any mode or guard can switch off.
    ships now vs. stays substrate. **(HALF-RESOLVED, Phase-2 step 3, 2026-07-24:
    the AVAILABILITY half shipped — escalate/degrade on unavailable, rate-limit
    or network failure, with per-provider cooldown, a per-turn deadline, and the
+   <!-- SHIPPED AS: a per-ATTEMPT deadline, not per-turn. `_FALLBACK_BUDGET_SECONDS`
+   (orchestrator.py) is "a real per-attempt deadline, not a between gate", so one
+   hanging candidate cannot consume the whole budget. This line is the origin of a
+   per-turn phrasing that had spread to four other documents. -->
    plain "[X] was busy, so Addison used [Y]" note. The CONFIDENCE half — quality
    -based escalation — remains v2 substrate, untouched.)**
 6. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
@@ -655,8 +671,11 @@ fails if the column ever appears in a filter position.
 
 **Phase 0 — this document** (done): the shared design, awaiting greenlight.
 
-**Phase 1 — authoritative docs (no code).** On greenlight, update every doc that
-matters to reflect the shift, *before touching code*:
+**Phase 1 — authoritative docs (no code)** (done — the five documents below were
+updated before any Phase-2 code landed; they have been revised again since, as each
+step shipped and as the *this* document's drafted shapes met the implementation).
+On greenlight, update every doc that matters to reflect the shift, *before touching
+code*:
 
 - `CLAUDE.md` — identity, the G1/G2/G3 + anchor floors, the Simple/Developer/
   Custom model, harness/workspace-trust, automation keyword gate, routing, free
@@ -686,24 +705,59 @@ code-widget and MCP steps depend on):
    `mint_anchor()` is fully implemented with no caller, because the Custom guard toggle
    that mints an anchor is step 2.
 2. **Custom profile + guard model** (`policy.py`) + the undeletable-anchor rule.
+   **SHIPPED 2026-07-24.** Custom derives OPEN with a `GuardConfig` overlay, and
+   **two** settings-backed prompting guards ship rather than the four §7 lists:
+   `destructive_card` (`per_invocation` > `session`) and `auto_grant_scope`
+   (`none` > `non_destructive` > `everything`). Weakening mints the G4 anchor
+   **first**, with fingerprint dedupe, and the change is refused if the anchor
+   cannot mint. A destructive "Ask once" approval lives in a dedicated session set
+   the SAFE path structurally never reads, and every profile switch revokes all
+   grants. Guards are effective only under Custom — Simple and Developer stay
+   byte-for-byte.
 3. **Routing strategies** (4 + custom) + companion prefer-quality/prefer-free
    toggle + free-model disclaimer + graceful fallback/cooldown.
+   **SHIPPED 2026-07-24 — as *three* + custom**, since Balanced was cut in the same
+   step (§10.1). Fallback is a per-send continuation; cross-provider mid-turn
+   advance is forbidden in v1; the chain head is a FREEZE (the user's standing
+   default, never overridden by rank); `local_only` outranks even the explicit
+   picker and resolves *before* the Setup-Assistant relay branch, so no model call
+   leaves the machine under it.
 4. **Free-model endpoints** — first-class legit free/local + add-by-prompt
    (shared plumbing with connecting an MCP server, step 7).
+   **SHIPPED 2026-07-24.** The pinned-request mechanism was factored out of
+   `read_web_page` into `agent_core/net_vetting.py` so `provider.connect`'s
+   validation GET adopts the same SSRF/DNS-rebinding defence instead of growing a
+   weaker copy. Both flows are propose/confirm RPCs whose fields are core-derived or
+   canned, never model-authored, and `costPlan.apply` refuses if its restore point
+   cannot be minted. The free chip stays **Ollama-only** — no cloud model ever
+   claims free.
 5. **Harness + workspace-trust** (OPEN) — the trust boundary the powerful
-   capabilities below depend on.
+   capabilities below depend on. **SHIPPED 2026-07-24**, narrower than §8.2 drafted
+   it — read §8.2's amended note before building on this: `run_command` always
+   cards, trust is excluded from snapshots, confinement is a separate predicate from
+   prompting, and the data-directory floor outranks any granted root.
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers + safe storage
    (buildable in all modes); capability-tier gating so SAFE stays non-destructive
    and higher tiers add code-backed/system-capable widgets; make `primary.txt`
-   capability-aware.
+   capability-aware. **NOT STARTED** (2026-07-26).
 7. **MCP client integration** — external tools surfaced through the registry +
    gate, mode-scoped (OPEN under workspace-trust; SAFE read-only/undo-able only).
-8. **Automation keyword gate** + author-OS-run automation.
+   **NOT STARTED** (2026-07-26).
+8. **Automation keyword gate** + author-OS-run automation. **NOT STARTED**
+   (2026-07-26).
 
 Each code step remains independently testable and ships behind the same gate as
 today. (Steps 3–4 are companion-facing and independent of the harness, so they
 can proceed in parallel with 5–8 once 1–2 land.)
+
+**Status 2026-07-26: steps 1–5 are built and merged; 6–8 are not started.** Those
+three are also the prerequisites for the Phase-3 Developer **review surface**
+(`docs/phase-3-review-surface-plan.md`, approved 2026-07-25, not started), which
+redefines Phase 3 as packaging **and** a review surface — file tree over trusted
+roots, read-only viewer, a diff of Addison's live edits, per-file revert. The three
+§13 questions still genuinely open — Q1 (keyword syntax), Q6 (MCP in SAFE), Q7
+(widget kinds/grammar) — are exactly the ones belonging to steps 6–8.
 
 ---
 

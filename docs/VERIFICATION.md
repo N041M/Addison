@@ -1,34 +1,47 @@
 # Addison — Verification Runbook
 
-Every check that must pass before the current work (testing-pass fixes,
-commit `bb94d06`, plus the three-agent cleanup sweep on top) is committed and
-PR'd. Companion to `TESTING-CHECKLIST.md` (the manual desktop pass); this file
-is the *coordinator's* list — automated gates, scripted end-to-end proofs, and
-review obligations.
+The *coordinator's* list: automated gates, scripted end-to-end proofs, and the
+review obligations that a green CI run does not cover. Companion to
+`TESTING-CHECKLIST.md`, which is the manual desktop pass and owns every
+"open the app and look at it" step — this file does not duplicate them.
 
-## 1. Automated gates (all four must be green, from repo root)
+Run this before any wave is committed and PR'd. **Green gates are not the bar**
+— see HANDOFF.md, "Read this first: the standard this repo is held to".
+
+## 1. Automated gates (all must be green, from repo root)
 
 ```bash
-# Python: full suite (790+ tests; agents may only ever raise the count)
+# Python: full suite. Agents may only ever raise the count.
 agent_core/.venv/bin/python -m pytest tests/ -q
 
-# Python lint
+# Python lint + types
 agent_core/.venv/bin/ruff check agent_core tests
+npx --yes pyright                      # config: pyrightconfig.json
 
-# Frontend: strict tsc + vite, zero errors
-cd shell && npm run build
+# Frontend: lint, strict tsc, vitest, vite build
+cd shell && npm run lint && npx tsc --noEmit && npm test && npm run build
 
-# Rust shell: 38+ tests, plus clippy if available
+# Rust shell
 cd shell/src-tauri && cargo test && cargo clippy --all-targets
 ```
 
+No test-count thresholds are written here on purpose. They went stale twice in a
+day, and a stale number reads as a claim — run the suite and read the number off
+the run. `.github/workflows/ci.yml` runs the same three job groups on every PR
+and on every push to `master`.
+
+From a **git worktree**, prefix pytest with `PYTHONPATH=$PWD` and use the main
+checkout's interpreter — the venv lives in `/Users/karel/Desktop/Addison`.
+
 ## 2. Live-driver end-to-end proofs (real API, pennies on haiku)
 
-Pattern documented in `HANDOFF.md` ("live-driver pattern"); ready-made scripts
-from this session exist in the session scratchpad but do not persist — the
-mechanics are: spawn `agent_core/.venv/bin/python -m agent_core.main` with
-`ADDISON_DB_PATH` at a tmp dir, play the shell from a reader thread, answer
-permission cards, cap turns, `modelId: claude-haiku-4-5`.
+Pattern documented in `HANDOFF.md` ("The live-driver pattern"); the scripts are
+written per session and do not persist. The mechanics: spawn
+`agent_core/.venv/bin/python -m agent_core.main` with `ADDISON_DB_PATH` at a tmp
+dir, play the Rust shell from a reader thread, answer permission cards, cap
+turns, `modelId: claude-haiku-4-5`. **Never point a driver at `~/.addison`** —
+`live_db_guard` blocks it, and the guard exists because a probe script once wrote
+an undeletable row into the owner's real database.
 
 Scenarios that must pass (each was proven once; rerun after any core change):
 
@@ -49,85 +62,116 @@ Scenarios that must pass (each was proven once; rerun after any core change):
    core on the SAME `ADDISON_DB_PATH` → chatting still works (idempotent
    conversation row).
 
-## 3. Post-agent-sweep review (coordinator, before commit)
+Phase-2 added two more that have been driven live once each and are worth
+rerunning when their surfaces change: the **Custom-profile flow** (dispatch,
+G4 anchor mint, anchor dedupe, the D7 re-weaken notice, C6 under SAFE, and
+`snapshot_now` writing through `main()`'s late-bound holder), and **routing**
+(a real turn carrying `answeredWith`, the vanished-custom-chain-id note, and
+`test_local_only_never_reaches_the_relay`'s live counterpart).
 
-Diff review of every safety-critical file touched by the cleanup agents,
-against the invariants (CLAUDE.md §safety):
+## 3. Safety-critical diff review (coordinator, before commit)
 
-- [ ] `agent_core/tools/registry.py` — undo-required-at-registration intact.
+Any wave that touches these files gets a read-through against the invariants in
+CLAUDE.md, not just a green run:
+
+- [ ] `agent_core/tools/registry.py` — undo-required-at-registration intact
+      (`undo` present, own, **and callable**); `open_only` /
+      `allow_missing_undo` still two separate dimensions.
 - [ ] `agent_core/permissions/gate.py` — grant/deny semantics unchanged
-      (denials one turn only; grants persist; no new bypass).
+      (denials one turn only; grants persist; no new bypass); destructive calls
+      never enter the coarse SAFE flow under any `auto_grant_scope`.
+- [ ] `agent_core/policy.py` — `mode_for_profile` still derives OPEN from
+      Developer **and** Custom; guards effective only under Custom.
+- [ ] `agent_core/snapshots/snapshot_manager.py` — still imports stdlib plus the
+      two schema-mirroring leaves and nothing else; retention and payload
+      version still module constants; no query filters on `created_in_mode`.
+- [ ] `agent_core/snapshots/scope.py` — every new table and every new column of a
+      captured table is explicitly captured or explicitly excluded.
 - [ ] `agent_core/snapshots/undo_manager.py` — redo stays opt-in per tool;
       new actions clear the redo stack.
+- [ ] `agent_core/net_vetting.py` — resolve → vet → connect to the vetted IP →
+      follow no redirects → re-vet every hop; `credential_headers` stay a
+      separate parameter and never cross an origin.
 - [ ] `agent_core/providers/anthropic_provider.py` + `models_catalog.py` — no
       key material in errors/logs; key strip/validate intact.
 - [ ] `shell/src-tauri/src/filesystem.rs` — `created`/`deleted` allowlist
-      gates structurally unchanged; create_new (never overwrite) preserved.
-- [ ] `shell/src-tauri/src/keychain.rs` — no key ever logged or in an error.
+      gates structurally unchanged; create_new (never overwrite) preserved; the
+      data-dir refusal still canonicalizes the whole path, not just the parent.
+- [ ] `shell/src-tauri/src/keychain.rs` — no key ever logged or in an error; no
+      keychain response carries the ed25519 private seed.
 - [ ] `agent_core/protocol.py` ↔ `shell/src/types/protocol.ts` — method
-      strings byte-identical (drift test also enforces).
+      strings byte-identical (drift test also enforces), and **every new payload
+      a frontend parser consumes has a fixture** in `tests/ipc_fixtures.py`.
 - [ ] Module boundary: `tools/`, `providers/`, `routines/` still don't import
-      each other (`grep` the imports).
+      each other (`tests/test_module_boundaries.py` also enforces).
 - [ ] No user-facing string reworded without reason; no jargon introduced.
 
-## 4. Open items flagged by the cleanup agents (verify or decide)
+## 4. Open items (verify or decide)
 
-- [ ] **RoutineLibrary shared `values`** (frontend agent): one routine's
-      entered variable values may leak into another's run. Verify the core's
-      routine engine ignores unknown variable names and applies defaults;
-      otherwise scope values per routine.
-- [ ] **Stream-chunk turn correlation** (frontend agent): after Stop → new
-      send, an abandoned turn's chunks could append to the new pending
-      message. Needs a core cancel method or messageId correlation —
-      polish-phase design decision, record it in the roadmap.
-- [ ] **Routine engine crash-on-raise** (Python agent — FIXED, verify): a tool
-      that *raised* (e.g. save refusal via the bridge) crashed the whole
-      routine run, bypassed the on_failure policy, and stranded the
-      `routine_runs` row at status 'running'. Now a failed step, same as the
-      live orchestrator; 3 regression tests. Re-run the manual routine loop —
-      this likely explains the "routines are iffy" report.
-- [ ] **Double keychain probe per message** (Python agent — FIXED): one probe
-      per turn instead of two blocking Core→Shell round-trips.
-- [ ] **Empty-text sendMessage** (Python agent — OPEN): the JSON-RPC path has
-      no empty-text guard (the CLI does); an empty message would persist a
-      blank user turn that the rollback doesn't remove. Unreachable through
-      the composer today — decide whether to add the guard.
-- [ ] **Local-setup pre-flight HTTP on the read loop** (Python agent — OPEN):
-      `is_running()` can block frame delivery up to 5s; availableRoles was
-      moved off the read loop for exactly this reason. Design tension for the
-      polish phase.
-- [ ] Stale docstrings/dead-looking-but-seam items the agents flagged
-      (PermissionRequest dataclass, router.register, openai_provider claim,
-      default_cloud_model([]) defensive gap) — human calls, none urgent.
+Everything here was checked against the tree on 2026-07-26.
 
-## 5. Manual desktop retests still owed (user, in the app)
+- [ ] **RoutineLibrary shares one `values` map across routines**
+      (`shell/src/components/RoutineLibrary.tsx`). The engine is safe against
+      *unknown* names — `routines/engine.py` builds defaults from
+      `routine.variables` and `resolve_template` only reads names the template
+      mentions — so a stray key is inert. The live edge is a **name collision**:
+      fill routine A's `path`, then run routine B without input, and B's default
+      `path` is overridden by A's value. Scope `values` per routine id, or clear
+      it when `filling` changes.
+- [ ] **Empty-text `sendMessage` has no guard.** `_run_send_message`
+      (`agent_core/rpc/conversation.py`) reads `params.get("text", "")` and never
+      checks it; the CLI does. An empty message would persist a blank user turn
+      that the rollback doesn't remove. Unreachable through the composer today —
+      decide whether to add the guard.
+- [ ] **Local-setup pre-flight HTTP runs on the read loop.**
+      `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch
+      handler and calls `is_running()`, which can block frame delivery up to 5s.
+      `availableRoles` was moved off the read loop for exactly this reason. Same
+      shape as `shell.pickDirectory` blocking the worker on a modal dialog.
+- [ ] **Stale docstrings / dead-looking-but-seam items** flagged by an earlier
+      cleanup sweep and carried forward **unverified**: the `PermissionRequest`
+      dataclass (`permissions/gate.py`), `ModelRouter.register`
+      (`providers/router.py`), a claim in `openai_provider.py`, and
+      `default_cloud_model([])`'s defensive gap (`models_catalog.py`). All four
+      symbols still exist; whether the original observations still hold has not
+      been re-checked. Human calls, none urgent — re-verify or delete the line.
 
-After relaunching `npm run tauri dev` (Rust changed → recompiles):
+### Closed since this file was last written
 
-- [ ] **Rewind** — "Rewind to here" on a user message: it leaves the thread,
-      its text lands in the composer, nothing runs until Send; after Send the
-      model shows no memory of the rewound-away turns.
-- [ ] **Undo → "Do it again"** — save a file, Undo (gone in Finder), redo
-      button appears; "Do it again" restores the identical file; the redo
-      button disappears after any new tool action.
-- [ ] **Engine kill** (`pkill -f agent_core.main`) — "stopped — restarting…"
-      then "Addison's engine restarted — you can keep chatting."; chat AND
-      the model picker work normally afterwards (catalog re-synced). A second
-      kill stays down with the restart-the-app notice.
-- [ ] **Routines, full loop, twice** — propose → save → Run now → "Done —
-      every step finished." → run again (second run: expect the save step to
-      refuse politely if the file still exists — by design) → Remove.
-- [ ] **Stop button** — send, hit Stop, send a new message immediately: the
-      stopped answer must NOT reappear, and the new turn must not be
-      interrupted (the agent-fixed race).
+- **Routine engine crash-on-raise** — a tool that *raised* crashed the run,
+  bypassed the `on_failure` policy and stranded the `routine_runs` row at
+  `running`. Fixed; a raise is now a failed step, same as the live orchestrator.
+  (Note the residual in HANDOFF.md: the dev-only guard in `routines/engine.py`
+  re-implements `on_failure` inline instead of falling through to the canonical
+  block.)
+- **Double keychain probe per message** — one probe per turn.
+- **Stream-chunk turn correlation** — `useTurn` holds `currentTurnRef`; Stop and
+  every new turn reassign it, and a result arriving from an abandoned turn is
+  dropped rather than overwriting "(Stopped.)" or a later answer.
 
-## 6. Known-open polish items (not blockers, tracked for the polish phase)
+## 5. Manual desktop pass
 
-- Raw markdown (`**bold**`) rendered literally in the thread.
-- "Not now" on the permission card phrased by the model as a malfunction
-  ("didn't go through") in some replies.
-- Routine-save affordance discoverability (small link in the activity strip).
-- Undo button lingers when the undo stack is empty (plain no-op message).
-- Stream-chunk turn correlation (see §4).
-- Conversation list & local search; scoped consent ("always allow");
-  cost visibility — the adopted roadmap items.
+Owned entirely by **`TESTING-CHECKLIST.md`** — run it there rather than keeping a
+second, drifting copy here. Note its branch warning: the visual sections describe
+the dark v4 UI, which is on `redesign/dark-v2` and not on `master`.
+
+## 6. Known-open polish items
+
+- **Local conversation search.** The sidebar lists real conversations grouped
+  Today / Earlier and renames on double-click, but there is no search field.
+- **Scoped consent ("always allow" per site).** A SAFE grant is keyed by tool id,
+  so after the first card every later `read_web_page` is ungated and
+  model-addressed. Visibility is the mitigation that shipped (the Activity Panel
+  names the host); narrowing the grant to a site is a permission-gate change.
+- **"Not now" phrased by the model as a malfunction** ("didn't go through") in
+  some replies.
+- **Routine-save affordance discoverability** — a small link in the activity
+  strip.
+- **`primary.txt` widget guidance is interim-correct only.** It tells the model
+  Addison cannot build custom-app widgets. True of today's code; wrong as a
+  statement of the amendment's intent. Rewrite capability-aware in Phase-2 step 6.
+
+Raw-markdown rendering, the conversation list, the token/cost meter and the
+lingering empty-stack Undo button were all on this list and have all shipped
+(`Markdown.tsx`, `Sidebar.tsx`, the rail's "Tokens this month", and the header's
+`hasUndoableActions` guard).

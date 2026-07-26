@@ -37,13 +37,18 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
 - **Simple / Developer / Custom mode model + capability tiers** (§4.10). Custom is
   reachable only deep in Settings behind extra confirmation and tunes *prompting*
   guards **only** — never the floors.
-- **Workspace-trust** (§4.10): a user-granted, snapshotted project directory where
+- **Workspace-trust** (§4.10): a user-granted project directory where
   the OPEN harness acts without a per-action card — the gate still *runs and logs*
   on every call; outside the workspace the per-invocation destructive card is
-  unchanged.
+  unchanged. *(Corrected against what shipped, Phase-2 step 5, 2026-07-24: trust is
+  **excluded** from snapshots, not "snapshotted", and `run_command` **always** cards.
+  See the shipped note in §4.10.)*
 - **Routing-strategy abstraction** (§4.11): quality-first / cost-first / local-only
-  / balanced + a Developer-only Custom builder; strong-first degrade-down default,
+  + a Developer-only Custom builder; strong-first degrade-down default,
   a visible "answered with a free model" disclaimer, graceful fallback + cooldown.
+  *(**Balanced** was in the amendment's list of four and was **cut from v1** by owner
+  decision 2026-07-24 — amendment §10.1. The shipped vocabulary is three named
+  strategies plus Custom.)*
 - **MCP client** (§4.12): Addison *consumes* external MCP tools through the
   **existing tool registry + permission gate** — never a side channel, never an
   MCP server/gateway.
@@ -170,16 +175,21 @@ places them in the architecture.
   *prompting* guards are user-tunable — never the floors. Capabilities are
   **tiered**: SAFE admits only non-destructive capability; higher tiers admit
   code-backed / system-capable capability (tools, widgets, MCP tools). See §4.10.
-- **Workspace-trust (OPEN harness).** A user-granted, snapshotted **project
-  directory** inside which the OPEN harness acts freely — the gate still *runs and
-  logs* every call, it just doesn't *prompt* within the trusted scope; outside it,
-  destructive actions raise the per-invocation card exactly as today. This
-  reconciles the agentic coding loop (dozens of edits/runs) with the per-call
-  gate. See §4.10.
+- **Workspace-trust (OPEN harness).** A user-granted **project
+  directory** inside which the OPEN harness's *typed, path-bounded file tools* act
+  freely — the gate still *runs and logs* every call, it just doesn't *prompt*
+  within the trusted scope; outside it, destructive actions raise the
+  per-invocation card exactly as today. This
+  reconciles the agentic coding loop (dozens of edits) with the per-call
+  gate. See §4.10. *(Two corrections against what shipped, Phase-2 step 5,
+  2026-07-24: trust is **excluded from snapshots** — the word "snapshotted" was
+  removed here rather than left standing — and **`run_command` always cards**, so
+  "runs" is not inside the trusted scope. Reasons in §4.10.)*
 - **Routing-strategy abstraction.** The per-request `ModelRouter` (§4.1.1) gains a
-  **strategy** layer — quality-first / cost-first / local-only / balanced, plus a
+  **strategy** layer — quality-first / cost-first / local-only, plus a
   Developer-only Custom builder — with strong-first degrade-down default, a
   free-model disclaimer, and graceful fallback + provider cooldown. See §4.11.
+  *(**Balanced** was cut from v1 by owner decision 2026-07-24 — amendment §10.1.)*
 - **MCP client surface.** Addison consumes external MCP servers/tools as an MCP
   **client** (never a server or gateway), surfacing their tools through the
   **existing `ToolRegistry` + `PermissionGate`**. Connecting a server is
@@ -551,6 +561,13 @@ now **declares the capability/tier it needs**, checked at save/render against th
 active mode. SAFE admits only the non-destructive set; higher tiers admit
 code-backed / system-capable kinds.
 
+> **Still provisional as of 2026-07-26 — Phase-2 step 6 is NOT built.** The shipped
+> widget vocabulary is still the step-0 one in `agent_core/widgets.py`
+> (`routine` / `stat` launchers, plus the OPEN-only `command`). `WidgetCapability`,
+> the interactive display kinds, and the tier check below do not exist yet; amendment
+> §13 Q7 is still open. Nothing here has been contradicted by code — it has simply
+> not been implemented.
+
 ```python
 # Phase-2, provisional — exact kind list & capability grammar are OPEN (amendment §13 Q7).
 class WidgetCapability(str, Enum):
@@ -573,13 +590,23 @@ class WidgetCapability(str, Enum):
 so it lives alongside the existing provider/settings rows and is captured by
 snapshots.
 
+> **SHIPPED 2026-07-24 (Phase-2 step 3) — with `BALANCED` cut.** The sketch below
+> is kept for the record; the shipped vocabulary is the closed set
+> `quality_first | cost_first | local_only | custom`, defined as module constants in
+> `agent_core/providers/router.py` and validated in `agent_core/rpc/routing.py`
+> (an absent *or* unknown value resolves to `quality_first`). **`BALANCED` does not
+> exist in the code** — owner decision 2026-07-24, amendment §10.1: the drafted
+> policy was provably identical to cost-first at two-model pools and ignored
+> latency, and a control that behaves identically to another is a lie in a picker.
+> It returns when a real latency-aware algorithm exists.
+
 ```python
-# Phase-2, provisional.
+# SUPERSEDED — kept for the record; see the note above for the shipped vocabulary.
 class RoutingStrategy(str, Enum):
     QUALITY_FIRST = "quality_first"   # default — strongest capable, degrade down
     COST_FIRST    = "cost_first"
     LOCAL_ONLY    = "local_only"
-    BALANCED      = "balanced"
+    BALANCED      = "balanced"        # CUT from v1 (owner decision 2026-07-24)
     CUSTOM        = "custom"          # Developer-only builder
 # Persisted as an app_settings/provider-config field (non-secret). The companion
 # surface exposes only a "prefer quality / prefer free" toggle over this (§4.11).
@@ -955,6 +982,42 @@ fine-grained per-tool `undo()` (§4.5) *and* a whole-config restore (this sectio
 
 ### 4.10 Amendment 2026-07-20: Simple / Developer / Custom + capability tiers + workspace-trust
 
+> **SHIPPED in two pieces — Phase-2 step 2 (Custom + guards, 2026-07-24) and step 5
+> (harness + workspace-trust, 2026-07-24).** Read this section through the two
+> corrections below; where they and the body disagree, they are the authority.
+> **Capability tiers for widgets (step 6) are NOT built** — the tier grammar
+> described here still applies only to tools and to the mode-scoped registry view.
+>
+> **1. Two prompting guards ship, not four.** The body lists four tunable guards
+> (destructive card, auto-grant scope, workspace-trust boundary, keyword-gate
+> strictness). `agent_core/policy.py` defines **two** — `destructive_card`
+> (`per_invocation` > `session`) and `auto_grant_scope`
+> (`none` > `non_destructive` > `everything`) — each a closed vocabulary with a
+> total strictness order, whose defaults are today's OPEN gate byte-for-byte. The
+> other two are not tunable today: the workspace-trust boundary is granted and
+> revoked per directory rather than dialled, and the keyword gate is step 8 and does
+> not exist. Weakening (a move to a strictly lower rank, and only that) mints the G4
+> anchor **first**, and the change is refused if the anchor cannot mint.
+>
+> **2. Workspace trust is NOT snapshotted, and `run_command` is NOT trust-suppressed.**
+> Both are stated the other way round below and both are wrong; the reasoning is in
+> amendment §8.2's shipped note. Trust is standing consent that suppresses cards, so
+> capturing it would let the deliberately-ungated one-action restore **reinstate a
+> trust the user had revoked** — it is excluded on the `tool_grants` precedent
+> (`agent_core/snapshots/scope.py`). And trust suppresses the card only for the
+> **typed, path-bounded, undoable** file tools, whose effect *is* their `path`
+> argument; `run_command`'s `affected_path` is `None`, confinement never governs it,
+> and it always cards.
+>
+> **3. Two predicates the body does not distinguish.** **Confinement** ("is this
+> path inside a trusted root" — permission to TOUCH) is separate from **prompting**
+> ("may the card be skipped"). A path-bounded tool whose resolved path is outside
+> every trusted root is hard-refused *before* `execute`, LOW and MEDIUM alike; the
+> path is resolved once and handed to `execute` via `ExecutionContext.resolved_path`,
+> never re-read from `args`. And the **data-directory floor outranks any root**:
+> Addison's own data directory and the G3 sidecars under it can never sit inside the
+> trust boundary in either direction (`policy.workspace_trust_allows`).
+
 **The third profile.** The mode stays derived from the profile (2026-07-19 model,
 `policy.py` `mode_for_profile`: Simple→SAFE, Developer→OPEN). The amendment adds
 **Custom**, reachable only deep in Settings behind additional questioning, whose
@@ -963,9 +1026,13 @@ auto-grant scope, the workspace-trust boundary, the keyword-gate strictness. The
 user may **never** touch the floors: G1, G2, G3, and the undeletable-anchor rule
 are **absent from the Custom panel entirely**. The Custom safety contract: it
 lives deep behind extra confirmation; turning any guard *off* mints the
-undeletable anchor (§4.9); the floors simply cannot be switched off. (Whether
-Custom is reachable from Simple directly or only via Developer is open — §13 Q3;
-current lean: reachable-but-deep regardless.)
+undeletable anchor (§4.9); the floors simply cannot be switched off. *(§13 Q3 —
+whether Custom is reachable from Simple directly or only via Developer — is
+**RESOLVED**, 2026-07-24, as the lean: reachable from any profile, deep and
+questioned. `profile.get` marks the Custom entry `advanced: true`; the frontend
+renders it only behind an "Advanced…" disclosure, and selecting it runs a two-step
+inline confirm carrying the honest capability description before `profile.set`
+fires.)*
 
 **Capability tiers.** A capability tier gates *what a tool / widget / MCP tool may
 do*, mapped from the mode: **SAFE → non-destructive capability only**; **OPEN /
@@ -978,21 +1045,54 @@ OPEN auto-grants non-destructive calls and raises a **per-invocation card for
 every destructive one**, with no memory between them — correct for a chat butler,
 *hostile* to a coding loop (dozens of edits/runs). Resolution:
 
-- The user grants a **project directory** — an explicit, snapshotted act.
-- **Inside** the trusted workspace, OPEN acts freely: edits/runs flow without a
+- The user grants a **project directory** — an explicit act. *(Not snapshotted —
+  see correction 2 above.)*
+- **Inside** the trusted workspace, OPEN acts freely: edits flow without a
   card per action. **The gate still runs and logs on every call** — it just
-  doesn't *prompt* within the trusted scope.
+  doesn't *prompt* within the trusted scope. *(Edits only. `run_command` always
+  cards — see correction 2 above.)*
 - **Outside** the workspace (system paths, other directories, the keychain, the
   network beyond configured providers), destructive actions still raise the
   per-invocation card exactly as today.
-- Trust is scoped, revocable, and snapshotted; revoking it or leaving the
+- Trust is scoped and revocable; revoking it or leaving the
   directory restores prompting. Every mutating tool keeps its `undo()`
-  (invariant 2), and the workspace sits under the G3 snapshot floor.
+  (invariant 2), and the workspace sits under the G3 snapshot floor. *(Trust rows
+  themselves are excluded from snapshots — correction 2 above; a restore never
+  resurrects a revoked trust.)*
 
 The per-invocation card is **not weakened globally — it is *scoped*** to a
 directory the user deliberately trusted.
 
 ### 4.11 Amendment 2026-07-20: Model routing strategies + free models
+
+> **SHIPPED — Phase-2 step 3 (routing strategies) and step 4 (free-model
+> endpoints), both 2026-07-24.** Three things about the shipped build are not in
+> the body below and govern where they differ:
+>
+> - **Balanced was cut** (owner decision 2026-07-24, amendment §10.1). Three named
+>   strategies plus Custom ship; see the §3 routing-config note.
+> - **What the fallback actually is.** Fallback is a **per-send continuation**;
+>   cross-provider mid-turn advance is forbidden in v1. A structured provider
+>   exception hierarchy in `providers/base.py` distinguishes *unavailable* from
+>   *rejected/auth*, so a bad request is never amplified by retrying it elsewhere.
+>   The per-provider cooldown and the per-attempt deadline are module constants, not
+>   settings. The chain head is a FREEZE — the user's standing default, never
+>   overridden by rank — and `local_only` outranks even the explicit picker and is
+>   resolved **before** the Setup-Assistant relay branch, so no model call leaves
+>   the machine under it.
+> - **The free chip is Ollama-only.** `answeredWith` carries the resolved
+>   per-attempt identity, and the "Answered with a free model." chip appears only
+>   when `free && routed`. **No cloud model ever claims free** — Google's free tier
+>   is information shown to the user, never a routing flag.
+>
+> Step 4 additionally factored the pinned-request mechanism out of `read_web_page`
+> into `agent_core/net_vetting.py`, so `provider.connect`'s validation GET adopts
+> the same SSRF/DNS-rebinding defence (resolve → vet → connect to the vetted IP with
+> the name in `Host` + TLS SNI → follow no redirects → re-vet every hop) with the
+> vetting decision as a parameter. Both the add-endpoint and "make it cheaper" flows
+> are propose/confirm RPCs whose fields are core-derived or canned, **never
+> model-authored**, and `costPlan.apply` REFUSES if its restore point cannot be
+> minted.
 
 Brings the v1 substrate (capability flags + explicit picker, §4.1.1) toward
 bounded auto-selection — a **strategy** layer over `ModelRouter.resolve()`, not a
@@ -1003,7 +1103,10 @@ builder:
   cheaper/free on unavailability, rate-limit, or budget.
 - **Cost-first** — cheapest capable, escalate only when needed.
 - **Local-only** — never leaves the machine (privacy); local models only.
-- **Balanced** — weighs capability, cost, and latency.
+- ~~**Balanced** — weighs capability, cost, and latency.~~ **CUT from v1**, owner
+  decision 2026-07-24 (amendment §10.1). It returns when a real latency-aware
+  algorithm exists; the latency substrate (`usage_log`) already ships, and step 3
+  fixed a pre-existing mis-attribution in it.
 - **Custom** — a routing builder, **Developer only**.
 
 **Exposure per surface.** Companion (Simple): a single **"prefer quality / prefer
@@ -1016,8 +1119,11 @@ answer. When a **free** model answers, a visible **"answered with a free model"*
 disclaimer is shown. On unavailability/rate-limit, routing **falls forward** to a
 stronger model rather than failing, with a plain-language note ("X was busy, so I
 used your local model") and a light provider **cooldown** instead of hammering a
-failing endpoint. (How much confidence-based escalation ships now vs. stays v2
-substrate is open — §13 Q5.)
+failing endpoint. (§13 Q5 — how much confidence-based escalation ships now — is
+**half-resolved**, 2026-07-24: the **availability** half shipped, escalate/degrade
+on unavailable, rate-limit or network failure, with the cooldown, the per-attempt
+deadline, and the plain "[X] was busy, so Addison used [Y]" note. The **confidence**
+half — quality-based escalation — remains v2 substrate, untouched.)
 
 **Free / no-frontier-required models.** Addison must be genuinely useful **without
 a paid frontier key** (central to the companion persona). Only **legitimate**
@@ -1032,6 +1138,13 @@ farming, TLS/JA3-JA4 fingerprint spoofing (detection evasion — never built), t
 quota-sharing, MCP/A2A-as-a-*gateway*, and 11-engine token compression.
 
 ### 4.12 Amendment 2026-07-20: MCP client (Addison consumes external tools)
+
+> **NOT BUILT as of 2026-07-26.** This is Phase-2 step 7 and nothing in it exists in
+> the tree — no MCP client, no server config table, no RPC namespace. Amendment §13
+> Q6 (the exact SAFE constraint, and how MCP tool metadata declares undo-ability) is
+> genuinely still open; do not treat the shape below as settled. The one part that
+> already holds mechanically is invariant 2, which will keep a mutating, no-undo MCP
+> tool out of the SAFE view whatever else is decided.
 
 Addison works with MCP as a **client** — it *consumes* external MCP servers/tools
 — **not** as an MCP server or gateway (the OmniRoute-style thing still declined).
@@ -1284,11 +1397,38 @@ JSON-RPC 2.0 methods, implemented in `agent_core/main.py` and called from `shell
 
 Keep `protocol.py` (Agent Core) and `types/protocol.ts` (frontend) hand-synced for v1 — a code-generation step (e.g., generating TS types from the Python dataclasses) is a reasonable Phase 3 improvement, not a v1 requirement.
 
+*(Phase 3 is no longer packaging-and-tooling only. Since 2026-07-25 it also carries
+the Developer **review surface** — file tree, read-only viewer, diff of Addison's
+live edits, per-file revert — scoped in `docs/phase-3-review-surface-plan.md` and
+sequenced after Phase-2 steps 6–8. See the Phase-3 note at the end of §11.)*
+
 ---
 
 ## 8. Security Constraints (non-negotiable, restated for the implementer)
 
 These are hard constraints, not preferences — flag to the user if any of these appear to conflict with a specific implementation request rather than silently working around them:
+
+> **Read items 1, 2 and 7 through the mode-scoped model (owner decision
+> 2026-07-19) — the flat list below is the SAFE-mode statement.** SAFE mode holds
+> all seven byte-for-byte. **OPEN mode (Developer/Custom) relaxes exactly four
+> things and nothing else:** (a) item 1 — the `dev_only` `run_command` tool exists
+> (`agent_core/tools/run_command.py`), absent from `registry.visible_tools(SAFE)`
+> and refusing to run under SAFE as a belt; (b) item 2 — a `dev_only` registration
+> may omit `undo()` (the flag split into `open_only` for visibility and
+> `allow_missing_undo` for the exemption, so `write_project_file` is hidden from
+> SAFE **and** still undo-enforced at registration); (c) a routine step or a widget
+> may carry a `command` kind; (d) the permission gate auto-grants non-destructive
+> calls, prompting only for destructive ones. Item 7's "profiles are never a
+> security boundary" framing is restated by the mode-scoped model — see the
+> amendment note below. **Items 3, 4, 5 and 6 never relax, in any mode.** In
+> particular **OPEN does not relax item 6**: G2 forbids Addison triggering itself in
+> every mode, nothing in `policy.py` or the registry makes scheduling
+> mode-dependent, and item 6's reinterpretation (Addison *authors* automation, the
+> OS runs it — see the §6 automation note) is amendment-level and
+> mode-independent, not an OPEN-mode relaxation. It is also **not built**: the
+> automation keyword gate and author-OS-run automation are Phase-2 step 8, *not
+> started*. OPEN means fewer prompts, not no gate: the gate still runs and logs on
+> every call.
 
 1. No tool may execute arbitrary shell commands or unrestricted code. The Routine Engine (§6) is declarative for the same reason.
 2. Every `risk_tier != LOW` tool must have a real `undo()`, enforced at registration (§4.2) — not a convention, a runtime check that raises if violated.
@@ -1360,7 +1500,15 @@ constraint open — §13 Q6.)
 
 Explicitly out of scope for the initial implementation pass — do not add these without checking back against the design doc's roadmap:
 
-- OpenAI/Google providers (Anthropic only for the first working build)
+- ~~OpenAI/Google providers (Anthropic only for the first working build)~~
+  **SUPERSEDED by owner decision 2026-07-18, and shipped.** OpenAI, Google, and an
+  OpenAI-compatible **custom server** are v1 alongside Anthropic. Keys are stored
+  per provider id in the OS keychain (`provider-key:{provider}`, with the legacy
+  `provider-key:primary` Anthropic entry auto-migrating on first read), non-secret
+  connection metadata lives in `provider_config`, and every connected provider's
+  models fold into one picker union. G1 is unchanged: `provider.list` / `connect`
+  responses carry status and metadata only. The "Anthropic only" line was a
+  *build-order* instruction for the first working loop (§11 step 4), and it is spent.
 - Automatic task-based model routing / auto-switching — **planned for v2** (§4.1.1), deliberately deferred; v1 routing is explicit/user-selected only. (Multiple local models with an explicit picker — item B — *is* in v1; only the *automatic* choice among them is v2.)
 - The Model Cascade module (draft → refine, §6.8) — **planned for v2**; v1 ships only its substrate (`RoutineStep.model_id`, per-step named-model pinning). It is a Routine-based *module*, never orchestrator/router core.
 - The Context Budget Manager / automatic long-conversation continuation — **planned for v2** (§4.8); v1 ships only its substrate (the `conversations.summary` + `continued_from_conversation_id` columns and full-transcript persistence, step 6). Orchestrator machinery only — never a registry tool.
@@ -1373,11 +1521,12 @@ Explicitly out of scope for the initial implementation pass — do not add these
 the amendment; the boundaries are deliberately narrow:
 
 - **Model routing** — bounded **strategies now ship** (quality-first / cost-first /
-  local-only / balanced + Custom, §4.11), superseding the old "explicit picker
-  only" line as Phase-2. **Still deferred:** *fully-automatic task classification*
-  (choosing the model from the task itself). Strategies are user-selected policies
-  with a strong-first, transparent, degrade-down default — not a hidden per-task
-  classifier. How much confidence-based escalation ships now is open (§13 Q5).
+  local-only + Custom, §4.11; **Balanced was cut** 2026-07-24), superseding the old
+  "explicit picker only" line as Phase-2. **Still deferred:** *fully-automatic task
+  classification* (choosing the model from the task itself). Strategies are
+  user-selected policies with a strong-first, transparent, degrade-down default —
+  not a hidden per-task classifier. Of §13 Q5, the **availability** half of
+  escalation shipped in step 3; the **confidence** half stays v2 substrate.
 - **Scheduling** — **still no self-trigger by Addison** (G2 holds). What the
   amendment *adds* is "Addison **authors** OS-run automation, the **OS** runs it"
   (§6) — this is not a scheduler inside `RoutineEngine`, so the §6.7 deferral of an
@@ -1421,24 +1570,60 @@ of that pass); code then follows in **dependency order, safety floor first**:
    snapshots and the app **build reference** recorded by Custom anchors.
    **Shipped 2026-07-20** — see the note at the head of §4.9.
 2. **Custom profile + guard model** (`policy.py`) + the **undeletable-anchor rule**
-   (§4.9, §4.10).
-3. **Routing strategies** (4 + Custom) + the companion prefer-quality/prefer-free
-   toggle + free-model disclaimer + graceful fallback/cooldown (§4.11).
+   (§4.9, §4.10). **Shipped 2026-07-24** — two settings-backed prompting guards, not
+   four; see the note at the head of §4.10.
+3. **Routing strategies** (3 + Custom, after Balanced was cut) + the companion
+   prefer-quality/prefer-free toggle + free-model disclaimer + graceful
+   fallback/cooldown (§4.11). **Shipped 2026-07-24.**
 4. **Free-model endpoints** — first-class legit free/local + add-by-prompt (shares
-   plumbing with connecting an MCP server, step 7) (§4.11).
+   plumbing with connecting an MCP server, step 7) (§4.11). **Shipped 2026-07-24.**
 5. **Harness + workspace-trust** (OPEN) — the trust boundary the powerful
-   capabilities below depend on (§4.10).
+   capabilities below depend on (§4.10). **Shipped 2026-07-24** — read §4.10's head
+   note before building on it; two of that section's sentences were wrong.
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers + safe storage (buildable
    in all modes); capability-tier gating; make `primary.txt` capability-aware
-   (§3 note, §8 note).
+   (§3 note, §8 note). **Not started.**
 7. **MCP client integration** — external tools through the registry + gate,
-   mode-scoped (§4.12).
-8. **Automation keyword gate** + author-OS-run automation (§6).
+   mode-scoped (§4.12). **Not started.**
+8. **Automation keyword gate** + author-OS-run automation (§6). **Not started.**
+
+**Status as of 2026-07-26:** steps 1–5 are built and merged; 6–8 are not started,
+and they are the three prerequisites the Phase-3 review surface waits on (see the
+Phase-3 note below).
 
 Each Phase-2 step stays independently testable and ships behind the same gate as
 today. Steps 3–4 are companion-facing and independent of the harness, so they can
-proceed in parallel with 5–8 once 1–2 land. Open questions to resolve *during* the
-doc/spec pass, not invent past, are the amendment's §13 (keyword syntax, snapshot
-retention, Custom reachability, verified-working definition, auto-routing depth,
-MCP-in-SAFE constraint, widget kinds/grammar, anchor binary capture).
+proceed in parallel with 5–8 once 1–2 land. Of the amendment's §13 open questions,
+**snapshot retention (Q2), Custom reachability (Q3), the verified-working definition
+(Q4) and anchor binary capture (Q8) are resolved**, and **auto-routing depth (Q5) is
+half-resolved** — each with its reasoning recorded inline there; do not reopen them.
+Still genuinely open: **keyword-gate syntax (Q1), the MCP-in-SAFE constraint (Q6),
+and the widget kinds/capability grammar (Q7)** — all three belong to steps 6–8,
+which are not started.
+
+### Phase 3 — redefined 2026-07-25: packaging *and* the Developer review surface
+
+This spec has described Phase 3 as packaging work only — installer signing and
+notarisation, the auto-updater, and the IPC codegen improvement noted at the end of
+§7. **`docs/phase-3-review-surface-plan.md` (approved 2026-07-25, not started) adds
+a second track to that phase:** a Developer/OPEN **review surface** — a file tree
+over trusted roots, a read-only viewer, a real diff of every edit Addison has made
+that is still live on disk, and per-file revert.
+
+The reason it belongs to a phase, not a patch: step 5 gave the harness the ability
+to edit a real project, and the only evidence of an edit today is a one-line
+Activity Panel entry and a LIFO "Undo last action". G3 gives a guaranteed way back
+for *config*; nothing yet gives a person a way to **see** what changed in *code*
+before deciding to roll it back. The surface adds **zero new execution surface and
+zero new model capability** — it is a flow and trust layer — but it carries a real
+cost the plan states plainly: Monaco requires widening the webview CSP with
+`style-src 'unsafe-inline'`, globally, for one window.
+
+It is **sequenced after Phase-2 steps 6, 7 and 8**, none of which are built. Read
+the plan before starting either Phase-3 track.
+
+Note that **restoring a previous app binary remains a Phase-3 updater item and is
+not implemented** (owner decision 2026-07-20, §4.9): `shell/src-tauri/src/updater.rs`
+is an unwired stub, and a second binary-replacement mechanism inside the G3 recovery
+floor would collide with it.

@@ -5,6 +5,14 @@
 import type { ChatMessage, ModelRole } from "./protocol";
 import { asRecord } from "../lib/parse";
 
+/**
+ * Which in-window view is showing (docs/design-brief-dark, "Screens"). "chat" is
+ * the live conversation; the other four are SURFACES — they replace the chat
+ * column (the right rail hides entirely, the sidebar stays) and are left with
+ * the header's ← or Escape.
+ */
+export type View = "chat" | "settings" | "tools" | "snapshots" | "widgets";
+
 /** A message as rendered in the thread, with transient display flags. */
 export interface DisplayMessage extends ChatMessage {
   /** Assistant message still receiving streamed chunks. */
@@ -113,6 +121,16 @@ export interface CloudModel {
    */
   provider?: string;
   providerLabel?: string;
+  /**
+   * Whether this is a genuinely free model, as the CORE reports it. The composer
+   * menu's note reads "free" only when this is true — the frontend never infers
+   * it from a price, a provider name, or a "free tier" claim (CLAUDE.md, Phase-2
+   * step 4: no cloud model ever claims free; the free chip stays Ollama-only).
+   * `agent_core`'s CloudModel.to_wire currently omits the field, so today every
+   * cloud row honestly reads "quality"; parsing it defensively means the day the
+   * core does send it, the note is the core's fact rather than our guess.
+   */
+  free?: boolean;
 }
 
 /**

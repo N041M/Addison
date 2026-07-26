@@ -166,13 +166,26 @@ const FULL_STATE: RoutingState = {
 // ---------------------------------------------------------------------------
 // (c) the Simple toggle surface
 // ---------------------------------------------------------------------------
+// REDESIGN NOTE (dark direction, phase 3): every option is now a surface ROW —
+// the copy is the row's name, the chosen one carries a mono "selected ✓" and no
+// control at all (there is nothing to do to it), and each other offers an accent
+// "choose" whose accessible name repeats the option. So "which one is selected"
+// is asserted through the value + the absence of its action rather than through
+// aria-pressed, and picking means pressing that row's action.
+function chooseFor(label: string): HTMLElement {
+  return screen.getByRole("button", { name: `Choose: ${label}` });
+}
+
 describe("the routing toggle (Simple)", () => {
   it("renders exactly two options with the frozen copy, byte-for-byte", () => {
     renderCard(TOGGLE_STATE);
     const group = screen.getByRole("group", { name: "How Addison picks a model" });
-    expect(within(group).getAllByRole("button")).toHaveLength(2);
     expect(screen.getByText(PREFER_QUALITY)).toBeTruthy();
     expect(screen.getByText(PREFER_FREE)).toBeTruthy();
+    // Two options, and exactly one of them is offered as a choice — the other is
+    // the one already in effect.
+    expect(within(group).getAllByRole("button")).toHaveLength(1);
+    expect(within(group).getByText("selected ✓")).toBeTruthy();
   });
 
   it("shows no full-picker strategy labels and no jargon", () => {
@@ -185,22 +198,22 @@ describe("the routing toggle (Simple)", () => {
   it("maps Prefer free → cost_first and Prefer quality → quality_first", () => {
     // From quality_first, picking Prefer free maps to cost_first.
     const s1 = renderCard(TOGGLE_STATE);
-    fireEvent.click(screen.getByText(PREFER_FREE));
+    fireEvent.click(chooseFor(PREFER_FREE));
     expect(s1.handleSetStrategy).toHaveBeenCalledWith("cost_first");
     cleanup();
 
     // From cost_first, picking Prefer quality maps to quality_first.
     const s2 = renderCard({ ...TOGGLE_STATE, strategy: "cost_first" });
-    fireEvent.click(screen.getByText(PREFER_QUALITY));
+    fireEvent.click(chooseFor(PREFER_QUALITY));
     expect(s2.handleSetStrategy).toHaveBeenCalledWith("quality_first");
   });
 
   it("marks the current strategy as the selected option", () => {
     renderCard({ ...TOGGLE_STATE, strategy: "cost_first" });
-    const free = screen.getByText(PREFER_FREE).closest("button");
-    const quality = screen.getByText(PREFER_QUALITY).closest("button");
-    expect(free?.getAttribute("aria-pressed")).toBe("true");
-    expect(quality?.getAttribute("aria-pressed")).toBe("false");
+    // The one in effect states itself and offers nothing; the other is choosable.
+    expect(screen.queryByRole("button", { name: `Choose: ${PREFER_FREE}` })).toBeNull();
+    expect(chooseFor(PREFER_QUALITY)).toBeTruthy();
+    expect(screen.getByText("selected ✓")).toBeTruthy();
   });
 });
 
@@ -218,7 +231,7 @@ describe("the routing full picker (Developer / Custom)", () => {
 
   it("picking a strategy saves it", () => {
     const state = renderCard(FULL_STATE);
-    fireEvent.click(screen.getByText("Local only"));
+    fireEvent.click(chooseFor("Local only"));
     expect(state.handleSetStrategy).toHaveBeenCalledWith("local_only");
   });
 
@@ -241,8 +254,9 @@ describe("the routing full picker (Developer / Custom)", () => {
 
   it("adds and removes chain members, saving the full list", () => {
     const state = renderCard({ ...FULL_STATE, strategy: "custom", customChain: ["m-a"] });
-    // Add Model C via the select.
-    fireEvent.change(screen.getByLabelText("Add a model"), { target: { value: "m-c" } });
+    // Add Model C — the native select became one "add" row per model not yet in
+    // the chain, in the same row idiom as everything else on the surface.
+    fireEvent.click(screen.getByRole("button", { name: "Add Model C" }));
     // Remove Model A.
     fireEvent.click(screen.getByRole("button", { name: "Remove Model A" }));
     fireEvent.click(screen.getByRole("button", { name: "Save order" }));

@@ -1,10 +1,11 @@
-// The Custom-profile guard panel (Phase-2 step 2, contract D2/D8).
+// The Custom-profile guard panel (Phase-2 step 2, contract D2/D8), in the dark
+// direction's row idiom.
 //
 // It shows ONLY under the Custom profile, and it contains ONLY the two prompting
 // guards — nothing that can touch a global floor (G1/G2/G3/G4). That is a frozen
 // invariant (contract Scope): a toggle that controls nothing, sitting in a safety
 // panel, is a lie in the worst possible place. So this file has exactly two
-// controls, forever.
+// controls, forever, and a test counts the `role="group"`s to keep it that way.
 //
 // What the guards change is how OFTEN Addison asks before acting — never whether
 // it can go back to a working setup. The panel says so out loud (the intro), and
@@ -12,16 +13,15 @@
 // permanent-restore-point confirm BEFORE saving. Tightening — asking more often —
 // goes straight through: making yourself safer needs no ceremony.
 //
-// Fern shape rule (docs/design-brief-fern): every control here is rounded,
-// because it is the person's to act on, and the fern accent marks the chosen
-// option and the confirm's primary. There is NO danger token anywhere in this
-// panel — turning a guard down is a choice, not a destructive act, and the way
-// back (the anchor) is a recovery. The one blocky note is the permanent-anchor
-// promise, which is Addison telling you something, not a control.
+// There is NO danger token anywhere in this panel: turning a guard down is a
+// choice, not a destructive act, and the way back (the anchor) is a recovery. The
+// one thing that is not a control is the permanent-anchor promise, which is
+// Addison telling you something.
 
 import { useState } from "react";
 import type { GuardsCardState } from "../hooks/useGuards";
 import type { DestructiveCardGuard, AutoGrantScopeGuard } from "../types/ui";
+import { RowConfirm, SurfaceRow } from "./Surface";
 
 // --- Frozen copy (contract D8) — byte-for-byte. -----------------------------
 
@@ -96,14 +96,10 @@ export function CustomGuardPanel({
   const { guards, guardsLoaded, busy, error, handleSave } = state;
 
   if (!connected) {
-    return (
-      <p className="text-meta text-muted">
-        These settings appear here once Addison&rsquo;s engine is connected.
-      </p>
-    );
+    return <SurfaceRow wrap name="These settings appear here once Addison's engine is connected." />;
   }
   if (!guardsLoaded || !guards) {
-    return <p className="text-meta text-muted">Loading your settings&hellip;</p>;
+    return <SurfaceRow wrap name="Loading your settings…" />;
   }
 
   // A pick is a "weakening" when it moves to a later (weaker) index in that
@@ -145,8 +141,8 @@ export function CustomGuardPanel({
   }
 
   return (
-    <div>
-      <p className="mb-3.5 text-fine leading-relaxed text-ink-soft">{PANEL_INTRO}</p>
+    <>
+      <SurfaceRow name={PANEL_INTRO} />
 
       <GuardGroup
         label="Asking again for risky actions"
@@ -154,109 +150,86 @@ export function CustomGuardPanel({
         options={DESTRUCTIVE_CARD_OPTIONS}
         busy={busy}
         onPick={(v) => pick("destructiveCard", v)}
+        confirm={
+          pending?.guard === "destructiveCard" ? (
+            <RowConfirm
+              busy={busy}
+              confirmLabel="Save"
+              onConfirm={confirmWeakening}
+              onCancel={() => setPending(null)}
+            >
+              {WEAKENING_CONFIRM}
+            </RowConfirm>
+          ) : null
+        }
       />
-      {pending?.guard === "destructiveCard" && (
-        <WeakeningConfirm busy={busy} onConfirm={confirmWeakening} onCancel={() => setPending(null)} />
-      )}
 
-      <div className="mt-4">
-        <GuardGroup
-          label="Which actions to ask about"
-          selected={guards.autoGrantScope}
-          options={AUTO_GRANT_SCOPE_OPTIONS}
-          busy={busy}
-          onPick={(v) => pick("autoGrantScope", v)}
-        />
-      </div>
-      {pending?.guard === "autoGrantScope" && (
-        <WeakeningConfirm busy={busy} onConfirm={confirmWeakening} onCancel={() => setPending(null)} />
-      )}
+      <GuardGroup
+        label="Which actions to ask about"
+        selected={guards.autoGrantScope}
+        options={AUTO_GRANT_SCOPE_OPTIONS}
+        busy={busy}
+        onPick={(v) => pick("autoGrantScope", v)}
+        confirm={
+          pending?.guard === "autoGrantScope" ? (
+            <RowConfirm
+              busy={busy}
+              confirmLabel="Save"
+              onConfirm={confirmWeakening}
+              onCancel={() => setPending(null)}
+            >
+              {WEAKENING_CONFIRM}
+            </RowConfirm>
+          ) : null
+        }
+      />
 
       {/* A refused save (a bad value, or the anchor couldn't be saved so nothing
           changed) in the core's own already-plain words — never a stack trace. */}
-      {error && <p className="mt-3 text-fine leading-relaxed text-ink-soft">{error}</p>}
-    </div>
+      {error && <SurfaceRow name={error} />}
+    </>
   );
 }
 
-/** One guard's options, as a vertical list of selectable rows. Rounded (yours to
- * act on), the chosen one marked with the fern tint — the same selection cue as
- * the profile and appearance controls. */
+/** One guard's options, as rows. The chosen one carries a mono `chosen ✓`; every
+ * other offers an accent "choose". Each control's accessible name repeats the
+ * option, because a surface whose every button says "choose" is unusable to
+ * anyone not looking at the screen. */
 function GuardGroup({
   label,
   selected,
   options,
   busy,
   onPick,
+  confirm,
 }: {
   label: string;
   selected: string;
   options: { value: string; copy: string }[];
   busy: boolean;
   onPick: (value: string) => void;
+  confirm: React.ReactNode;
 }) {
   return (
     <div role="group" aria-label={label}>
-      <span className="text-control text-ink-soft">{label}</span>
-      <div className="mt-2 flex flex-col gap-1.5">
-        {options.map((o) => {
-          const active = o.value === selected;
-          return (
-            <button
-              key={o.value}
-              type="button"
-              aria-pressed={active}
-              disabled={busy}
-              onClick={() => onPick(o.value)}
-              className={
-                "rounded-md border px-3.5 py-2.5 text-left text-fine leading-relaxed transition-colors " +
-                "disabled:opacity-50 max-md:min-h-[44px] " +
-                (active
-                  ? "border-fern bg-fern-tint text-ink"
-                  : "border-line bg-paper text-ink-soft hover:border-muted")
-              }
-            >
-              {o.copy}
-            </button>
-          );
-        })}
+      <div className="px-0.5 pb-1 pt-[18px] text-[11px] font-medium tracking-[.04em] text-faint">
+        {label}
       </div>
-    </div>
-  );
-}
-
-/** The permanent-restore-point confirm shown before a weakening save. Fern-tinted
- * and rounded like the restore confirm in SnapshotsCard — a recovery promise, not
- * a warning, so no danger token. */
-function WeakeningConfirm({
-  busy,
-  onConfirm,
-  onCancel,
-}: {
-  busy: boolean;
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <div className="mt-3 rounded-card bg-fern-tint px-[15px] py-[13px]">
-      <p className="text-fine leading-relaxed text-ink-soft">{WEAKENING_CONFIRM}</p>
-      <div className="mt-2.5 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={onConfirm}
-          className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className="text-xs font-medium text-ink-soft hover:text-muted"
-        >
-          Not now
-        </button>
-      </div>
+      {options.map((o) => {
+        const active = o.value === selected;
+        return (
+          <SurfaceRow
+            key={o.value}
+            name={o.copy}
+            value={active ? "selected ✓" : undefined}
+            action={active ? undefined : "choose"}
+            actionAriaLabel={`Choose: ${o.copy}`}
+            actionDisabled={busy}
+            onAction={active ? undefined : () => onPick(o.value)}
+          />
+        );
+      })}
+      {confirm}
     </div>
   );
 }

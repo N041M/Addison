@@ -1,14 +1,19 @@
-// Routine library — engineering-spec §6.5.
+// Routine library — engineering-spec §6.5, in the dark direction's row idiom.
 //
-// Lists saved routines with name, description, last-run time, "Run now"
-// (prompting first for any variables without defaults), and delete. v1 has no
-// step editing (§6.5/§10): structural changes are "delete and recreate via
-// conversation", so the only affordances here are run, rename-free metadata
-// display, and remove. Plain language throughout; no jargon.
+// Lists saved routines with name, a mono run summary, "Run" (prompting first for
+// any variables without defaults), and remove. v1 has no step editing (§6.5/§10):
+// structural changes are "delete and recreate via conversation", so the only
+// affordances here are run, metadata display, and remove. Plain language
+// throughout; no jargon.
+//
+// Remove is the one control on this surface that keeps the `danger` token — it
+// really does destroy something the person made, and the two-press confirm
+// ("Really remove?") is unchanged.
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
 import { asRecord, normalizeVariables } from "../lib/parse";
+import { RowAction, SurfaceRow } from "./Surface";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
 // `routine.list` ONLY under the Developer profile; they are rendered READ-ONLY
@@ -140,123 +145,104 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   }
 
   if (!loaded) {
-    return <p className="text-meta text-muted">Looking for your routines…</p>;
+    return <SurfaceRow wrap name="Looking for your routines…" />;
   }
 
   if (routines.length === 0) {
-    return (
-      <p className="text-meta text-muted">
-        {connected
-          ? "None yet. After Addison does something for you, look for " +
-            "“Save these steps as a routine” — saved ones appear here."
-          : "You can see and run your saved routines here once Addison's engine is connected."}
-      </p>
+    // "None yet" is a claim about the person's own saved routines, and while the
+    // engine is down this surface cannot see them — it never asked. Saying it
+    // anyway would be the surface asserting a fact it doesn't have (the sibling
+    // sections all keep this distinction), so the disconnected case gets its own
+    // sentence and no count-like value beside it.
+    return connected ? (
+      <SurfaceRow name="None yet" value="saved steps appear here" />
+    ) : (
+      <SurfaceRow wrap name="You can see and run your saved routines here once Addison's engine is connected." />
     );
   }
 
   return (
-    <ul className="flex flex-col gap-2">
+    <>
       {routines.map((routine) => (
-        <li
+        <SurfaceRow
           key={routine.id}
-          className="rounded border border-line bg-paper px-[14px] py-2.5"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              {developer && routine.createdInMode === "open" && (
-                <span className="mb-0.5 inline-block border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
-                  Dev
-                </span>
-              )}
-              <p className="text-action font-semibold text-ink">{routine.name}</p>
-              <p className="mt-px text-fine text-faint">{runSummary(routine)}</p>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
+          tag={
+            developer && routine.createdInMode === "open" ? (
+              <span className="mb-1 inline-block border-l-2 border-accent pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-accent">
+                Dev
+              </span>
+            ) : undefined
+          }
+          name={routine.name}
+          value={runSummary(routine)}
+          actions={
+            <>
+              <RowAction
                 disabled={running === routine.id}
+                ariaLabel={`Run ${routine.name}`}
                 onClick={() => startRun(routine)}
-                className="rounded-pill bg-fern-tint px-[14px] py-1.5 text-xs font-semibold text-fern-deep hover:opacity-85 disabled:opacity-60"
               >
                 {running === routine.id ? "Running…" : "Run"}
-              </button>
-              <button
-                type="button"
+              </RowAction>
+              <RowAction
+                tone="danger"
+                ariaLabel={`Remove ${routine.name}`}
                 onClick={() => removeRoutine(routine.id)}
-                className="px-1 py-1.5 text-xs font-medium text-faint hover:text-muted"
               >
                 {confirmingDelete === routine.id ? "Really remove?" : "Remove"}
-              </button>
+              </RowAction>
+            </>
+          }
+        >
+          {filling === routine.id && (
+            <div className="mt-2.5 border-l-2 border-rail pl-3.5">
+              {routine.variables
+                .filter((v) => !v.default)
+                .map((v) => (
+                  <label key={v.name} className="mb-2 block text-[12px] text-ink-soft">
+                    {v.prompt}
+                    <input
+                      type="text"
+                      value={values[v.name] ?? ""}
+                      onChange={(e) =>
+                        setValues((prev) => ({ ...prev, [v.name]: e.target.value }))
+                      }
+                      className="mt-1 block w-full border-b border-line bg-transparent py-1 font-mono text-[11px] text-ink outline-none focus:border-track-hi"
+                    />
+                  </label>
+                ))}
+              <div className="mt-2 flex items-baseline gap-5">
+                <RowAction onClick={() => void executeRun(routine)}>Start</RowAction>
+                <RowAction tone="muted" onClick={() => setFilling(null)}>
+                  Cancel
+                </RowAction>
+              </div>
             </div>
-          </div>
+          )}
 
-            {filling === routine.id && (
-              <div className="mt-3 rounded border border-line bg-paper p-3">
-                {routine.variables
-                  .filter((v) => !v.default)
-                  .map((v) => (
-                    <label key={v.name} className="mb-2 block text-sm font-medium text-ink-soft">
-                      {v.prompt}
-                      <input
-                        type="text"
-                        value={values[v.name] ?? ""}
-                        onChange={(e) =>
-                          setValues((prev) => ({ ...prev, [v.name]: e.target.value }))
-                        }
-                        className="mt-1 w-full rounded border border-line bg-surface px-3 py-2 text-base text-ink"
-                      />
-                    </label>
-                  ))}
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void executeRun(routine)}
-                    className="rounded-sm bg-fern px-3 py-1.5 text-sm font-semibold text-on-accent hover:bg-fern-deep"
-                  >
-                    Start
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setFilling(null)}
-                    className="rounded-sm border border-line bg-surface px-3 py-1.5 text-sm font-medium text-ink-soft"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
+          {outcome[routine.id] && (
+            <p className="m-0 mt-2 text-[12px] leading-[1.55] text-ink-soft">
+              {outcome[routine.id].detail}
+            </p>
+          )}
 
-            {outcome[routine.id] && (
-              <p
-                className={
-                  "mt-2 text-sm " +
-                  (outcome[routine.id].ok ? "text-fern-deep" : "text-ink-soft")
+          {exposeRoutinePlan && routine.planSteps && routine.planSteps.length > 0 && (
+            <div className="mt-2">
+              <RowAction
+                mono
+                onClick={() =>
+                  setPlanOpen((prev) => ({ ...prev, [routine.id]: !prev[routine.id] }))
                 }
+                ariaLabel={planOpen[routine.id] ? "Hide plan" : "View plan"}
               >
-                {outcome[routine.id].detail}
-              </p>
-            )}
-
-            {exposeRoutinePlan && routine.planSteps && routine.planSteps.length > 0 && (
-              <div className="mt-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setPlanOpen((prev) => ({ ...prev, [routine.id]: !prev[routine.id] }))
-                  }
-                  aria-expanded={Boolean(planOpen[routine.id])}
-                  className="text-xs font-medium text-muted hover:text-ink-soft"
-                >
-                  {planOpen[routine.id] ? "Hide plan" : "View plan"}
-                </button>
-                {planOpen[routine.id] && (
-                  <PlanView steps={routine.planSteps} />
-                )}
-              </div>
-            )}
-          </li>
-        ))}
-      </ul>
+                {planOpen[routine.id] ? "hide plan" : "view plan"}
+              </RowAction>
+              {planOpen[routine.id] && <PlanView steps={routine.planSteps} />}
+            </div>
+          )}
+        </SurfaceRow>
+      ))}
+    </>
   );
 }
 
@@ -265,12 +251,9 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
 // the plan is legible to a developer.
 function PlanView({ steps }: { steps: PlanStep[] }) {
   return (
-    <ol className="mt-2 space-y-2 rounded border border-line bg-paper p-3 font-mono text-xs text-ink-soft">
+    <ol className="mt-2 border-l-2 border-rail pl-3.5 font-mono text-[10.5px] leading-[1.6] text-ink-soft">
       {steps.map((step, i) => (
-        <li
-          key={step.stepId || i}
-          className="border-t border-line pt-2 first:border-t-0 first:pt-0"
-        >
+        <li key={step.stepId || i} className="border-t border-line pt-2 first:border-t-0 first:pt-0">
           <div className="text-ink">
             <span className="text-muted">step</span> {step.stepId || `#${i + 1}`}{" "}
             <span className="text-muted">·</span> {step.toolId}
@@ -285,7 +268,7 @@ function PlanView({ steps }: { steps: PlanStep[] }) {
               <span className="text-muted">on failure</span> {step.onFailure}
             </div>
           )}
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap">
+          <pre className="m-0 mt-1 overflow-x-auto whitespace-pre-wrap">
             {formatArgs(step.argsTemplate)}
           </pre>
         </li>
@@ -304,14 +287,14 @@ function formatArgs(args: unknown): string {
 }
 
 function runSummary(routine: RoutineRow): string {
-  if (!routine.runCount) return "Never run yet";
+  if (!routine.runCount) return "never run yet";
   const times = routine.runCount === 1 ? "once" : `${routine.runCount} times`;
-  if (!routine.lastRunAt) return `Run ${times}`;
+  if (!routine.lastRunAt) return `run ${times}`;
   const when = new Date(routine.lastRunAt * 1000).toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
   });
-  return `Run ${times} — last on ${when}`;
+  return `run ${times} · last ${when}`;
 }
 
 function normalizeRoutines(result: unknown): RoutineRow[] {

@@ -1,0 +1,700 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+html, body, #root { height:100%; }
+body { margin:0; background:#0C0C0D; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; }
+a { color:#B4A9F5; text-decoration:none; }
+a:hover { color:#E9E9E7; }
+textarea::placeholder { color:#55575C; }
+@keyframes fadeRise { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fade { from { opacity:0; } to { opacity:1; } }
+@keyframes fadeDrop { from { opacity:1; transform:translateY(0); } to { opacity:0; transform:translateY(6px); } }
+@keyframes blink { 0%,49% { opacity:1; } 50%,100% { opacity:0; } }
+</style>
+</helmet>
+<div style="display:flex; flex-direction:column; height:100vh; background:#0C0C0D; color:#E9E9E7; font-size:13px; overflow:hidden; position:relative">
+  <header style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #1E1F22; padding:16px 24px; flex-shrink:0; position:relative; z-index:10">
+    <span style="display:flex; align-items:center; gap:16px; min-width:0">
+      <span onClick="{{ goBack }}" title="Back to chat" style="display:{{ backBtnDisplay }}; color:#909398; font-size:13px; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">←</span>
+      <span onClick="{{ toggleSide }}" title="{{ sideLabel }}" style="display:{{ sideBtnDisplay }}; color:#55575C; font-size:12px; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">{{ sideIcon }}</span>
+      <span id="om-title" data-scramble-live="0" style="font-size:13px; font-weight:500; color:#B9BBBE; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ title }}</span>
+    </span>
+    <span style="display:flex; align-items:center; gap:22px; font-size:12px; flex-shrink:0">
+      <span data-scramble="320" style="color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">Undo last action</span>
+      <span onClick="{{ toggleRail }}" title="{{ railLabel }}" style="display:{{ railBtnDisplay }}; color:#55575C; font-size:12px; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">{{ railIcon }}</span>
+    </span>
+  </header>
+  <main style="flex:1; min-width:0; min-height:0; display:flex; position:relative; gap:44px; padding:0 40px">
+      <div style="flex-shrink:0; overflow:hidden; transition:width .35s ease, opacity .25s ease, margin-right .35s ease, transform .35s ease; width:{{ sideW }}; opacity:{{ sideO }}; margin-right:{{ sideM }}; transform:{{ sideX }}">
+        <div style="width:212px; height:100%; box-sizing:border-box; display:flex; flex-direction:column; gap:22px; padding:36px 0 6px; overflow-y:auto; scrollbar-width:none">
+          <div style="border-left:2px solid #2E2F33; padding-left:14px; flex-shrink:0; margin-top:4px">
+            <div data-scramble="160" style="font-size:11px; font-weight:500; letter-spacing:.04em; color:#6E7076">Workspace</div>
+            <div style="display:flex; flex-direction:column; gap:9px; margin-top:11px; font-size:12px">
+              <div style="display:flex; align-items:baseline; justify-content:space-between; cursor:pointer; color:#909398; transition:color .15s" style-hover="color:#E9E9E7" onClick="{{ openTools }}"><span>Tools</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">IDE</span></div>
+              <div style="display:flex; align-items:baseline; justify-content:space-between; cursor:pointer; color:#909398; transition:color .15s" style-hover="color:#E9E9E7" onClick="{{ openSnapshots }}"><span>Snapshots</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">3</span></div>
+            </div>
+          </div>
+          <div data-scramble="60" onClick="{{ newChat }}" style="font-size:12px; color:#B4A9F5; cursor:pointer; flex-shrink:0; transition:color .15s" style-hover="color:#E9E9E7">＋ New chat</div>
+          <sc-for list="{{ groups }}" as="k" hint-placeholder-count="2">
+            <div style="flex-shrink:0; animation:fadeRise .3s ease both">
+              <div onClick="{{ k.toggle }}" style="display:flex; align-items:baseline; justify-content:space-between; padding-bottom:10px; cursor:pointer">
+                <span style="font-size:11px; font-weight:500; letter-spacing:.04em; color:#6E7076">{{ k.label }}</span>
+                <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">{{ k.hint }}</span>
+              </div>
+              <div data-group="{{ k.key }}" style="display:flex; flex-direction:column; gap:2px; font-size:12px">
+                <sc-for list="{{ k.rows }}" as="c" hint-placeholder-count="2">
+                  <div onClick="{{ c.open }}" style="display:flex; align-items:baseline; justify-content:space-between; gap:8px; border-left:2px solid {{ c.rail }}; padding:6px 0 6px 12px; cursor:pointer; animation:fadeRise .3s ease both; transition:color .15s; color:{{ c.fg }}" style-hover="color:#E9E9E7">
+                    <span data-chat-title="1" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ c.title }}</span>
+                    <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C; flex-shrink:0">{{ c.time }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="margin-top:auto; flex-shrink:0; display:flex; flex-direction:column; gap:3px; padding-bottom:69px">
+            <div data-scramble="520" onClick="{{ openSettings }}" style="font-size:12px; border-left:2px solid {{ settingsRail }}; padding:6px 0 2px 12px; color:{{ settingsFg }}; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">Settings</div>
+            <div style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C; padding-left:14px">{{ profileNote }}</div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1; min-width:0; display:flex; flex-direction:column">
+      <div style="flex:1; min-height:0; display:flex; justify-content:center">
+        <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+          <div style="flex:1; width:100%; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; position:relative">
+            <div style="position:absolute; inset:15% 10%; pointer-events:none; background-image:radial-gradient(1px 1px at 18% 30%, rgba(233,233,231,.3) 50%, transparent 51%), radial-gradient(1px 1px at 72% 18%, rgba(233,233,231,.22) 50%, transparent 51%), radial-gradient(1px 1px at 88% 62%, rgba(233,233,231,.18) 50%, transparent 51%), radial-gradient(1px 1px at 34% 78%, rgba(233,233,231,.2) 50%, transparent 51%), radial-gradient(1.5px 1.5px at 55% 45%, rgba(169,157,242,.25) 50%, transparent 51%)"></div>
+            <div data-greeting="" style="font-size:26px; letter-spacing:-.01em; color:#E9E9E7; position:relative">{{ greeting }}</div>
+            <div style="font-size:14px; color:#909398; position:relative; animation:fadeRise .6s ease both .6s">Ask anything, or hand me a chore. Everything can be undone.</div>
+            <div style="display:flex; flex-wrap:wrap; justify-content:center; gap:22px; margin-top:12px; position:relative; animation:fadeRise .6s ease both .9s">
+              <sc-for list="{{ suggestions }}" as="g" hint-placeholder-count="3">
+                <div onClick="{{ g.use }}" style="font-size:12px; color:#B4A9F5; white-space:nowrap; flex-shrink:0; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">{{ g.text }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ notEmpty }}" hint-placeholder-val="{{ false }}">
+          <div id="om-thread" style="width:100%; max-width:580px; display:flex; flex-direction:column; gap:32px; padding:36px 0 24px; overflow-y:auto; scrollbar-width:none; mask-image:linear-gradient(180deg, transparent, #000 32px, #000 calc(100% - 20px), transparent)">
+            <sc-for list="{{ messages }}" as="m" hint-placeholder-count="2">
+              <div style="animation:fadeRise .4s ease both; flex-shrink:0">
+                <div data-scramble-live="140" style="font-size:11px; font-weight:500; letter-spacing:.04em; color:{{ m.labelColor }}">{{ m.label }}</div>
+                <p style="margin:8px 0 0; font-size:15.5px; line-height:1.65; white-space:pre-wrap; color:{{ m.color }}"><span data-msg-text="1">{{ m.content }}</span><span style="display:{{ m.cursor }}; width:7px; height:14px; background:#E9E9E7; margin-left:3px; vertical-align:-1px; animation:blink 1.1s step-start infinite"></span></p>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isSurface }}" hint-placeholder-val="{{ false }}">
+          <div id="om-surface" style="width:100%; max-width:580px; display:flex; flex-direction:column; padding:36px 0 24px; overflow-y:auto; scrollbar-width:none; mask-image:linear-gradient(180deg, transparent, #000 32px, #000 calc(100% - 20px), transparent)">
+            <sc-if value="{{ surfBackShow }}" hint-placeholder-val="{{ false }}">
+              <div onClick="{{ surfBackAct }}" style="flex-shrink:0; margin-bottom:14px; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#B4A9F5; cursor:pointer; width:fit-content; transition:color .15s" style-hover="color:#E9E9E7">← back to Settings</div>
+            </sc-if>
+            <div data-surf="1" style="font-size:20px; letter-spacing:-.01em; color:#E9E9E7; flex-shrink:0">{{ surfTitle }}</div>
+            <p data-surf="1" style="margin:10px 0 26px; font-size:13px; line-height:1.6; color:#909398; flex-shrink:0">{{ surfDesc }}</p>
+            <sc-for list="{{ surfSections }}" as="sec" hint-placeholder-count="2">
+              <div style="flex-shrink:0; margin-bottom:26px; animation:fadeRise .35s ease both">
+                <div style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:500; letter-spacing:.04em; color:#6E7076">{{ sec.label }}</div>
+                <div style="display:flex; flex-direction:column; margin-top:10px">
+                  <sc-for list="{{ sec.rows }}" as="r" hint-placeholder-count="2">
+                    <div style="border-top:1px solid #1E1F22; padding:13px 2px; display:flex; align-items:baseline; gap:12px; font-size:12px">
+                      <span data-surf="1" style="color:#B9BBBE">{{ r.name }}</span>
+                      <span style="flex:1"></span>
+                      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#909398">{{ r.value }}</span>
+                      <span onClick="{{ r.act }}" style="color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">{{ r.action }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+      </div>
+      <sc-if value="{{ isChat }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:0 0 22px; position:relative">
+        <div style="margin:0 auto; max-width:840px; display:flex; align-items:flex-end; gap:10px; padding:6px 2px 0; transition:border-color .2s; border-top:1px solid {{ composerBorder }}">
+          <textarea id="om-ta" rows="1" placeholder="{{ placeholder }}" value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onKey }}" onFocus="{{ onFocus }}" onBlur="{{ onBlur }}" style="flex:1; resize:none; border:none; outline:none; background:transparent; color:#E9E9E7; font-family:inherit; font-size:15px; line-height:1.5; padding:9px 0 10px; max-height:180px; overflow-y:auto"></textarea>
+          <div style="display:flex; align-items:center; gap:12px; padding-bottom:5px">
+            <span style="position:relative; display:inline-flex">
+              <span data-scramble="440" onClick="{{ toggleModelMenu }}" style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:{{ modelLabelFg }}; cursor:pointer; transition:color .15s" style-hover="color:#909398">{{ modelLabel }}</span>
+              <sc-if value="{{ modelMenuOpen }}" hint-placeholder-val="{{ false }}">
+                <div id="om-model-menu" style="position:absolute; bottom:26px; right:0; min-width:196px; background:#141518; border:1px solid #2E2F33; border-radius:6px; padding:6px; box-shadow:0 12px 32px rgba(0,0,0,.5); display:flex; flex-direction:column; animation:fadeRise .2s ease both; z-index:30">
+                  <div style="font-size:10px; font-weight:500; letter-spacing:.04em; color:#6E7076; padding:6px 10px 8px">Answer with</div>
+                  <sc-for list="{{ modelOptions }}" as="mo" hint-placeholder-count="3">
+                    <div onClick="{{ mo.pick }}" style="display:flex; align-items:baseline; gap:10px; padding:7px 10px; border-radius:4px; cursor:pointer; transition:background .15s" style-hover="background:#1E1F22">
+                      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:{{ mo.fg }}">{{ mo.name }}</span>
+                      <span style="flex:1"></span>
+                      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:{{ mo.noteFg }}">{{ mo.note }}</span>
+                    </div>
+                  </sc-for>
+                  <div style="border-top:1px solid #1E1F22; margin-top:6px; padding:8px 10px 4px; font-size:10px; font-family:ui-monospace, 'SF Mono', Menlo, monospace; color:#55575C">picked per message · default in Settings</div>
+                </div>
+              </sc-if>
+            </span>
+            <div onClick="{{ send }}" style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; display:flex; align-items:center; justify-content:center; cursor:pointer; font-size:15px; transition:background .2s, color .2s, border-color .2s; border:1px solid {{ sendBd }}; background:{{ sendBg }}; color:{{ sendFg }}">↑</div>
+          </div>
+        </div>
+        <p data-scramble="960" style="margin:10px auto 0; width:fit-content; text-align:center; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#3C3E42">enter to send · everything can be undone</p>
+      </div>
+      </sc-if>
+      </div>
+      <div style="flex-shrink:0; overflow:hidden; transition:width .35s ease, opacity .25s ease, margin-left .35s ease, transform .35s ease; width:{{ railW }}; opacity:{{ railO }}; margin-left:{{ railM }}; transform:{{ railX }}">
+        <div style="width:232px; height:100%; box-sizing:border-box; display:flex; flex-direction:column; gap:0; padding:36px 0 20px; overflow-y:auto; scrollbar-width:none">
+          <sc-if value="{{ hasSteps }}" hint-placeholder-val="{{ false }}">
+            <div style="padding-bottom:20px; flex-shrink:0">
+              <div style="border-left:2px solid #2E2F33; padding-left:14px">
+                <div data-scramble="640" style="font-size:11px; font-weight:500; letter-spacing:.04em; color:#6E7076">Addison's work</div>
+                <div style="display:flex; flex-direction:column; gap:9px; margin-top:11px; font-size:12px">
+                  <sc-for list="{{ steps }}" as="s" hint-placeholder-count="2">
+                    <div style="animation:fadeRise .3s ease both; display:flex; align-items:center; gap:8px; color:{{ s.color }}"><span style="width:5px; height:5px; border-radius:50%; flex-shrink:0; background:{{ s.dot }}; animation:{{ s.anim }}"></span><span>{{ s.text }}</span></div>
+                  </sc-for>
+                </div>
+              </div>
+              <div data-scramble="720" style="margin-top:12px; font-size:12px; padding-left:16px; color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">Save as routine</div>
+            </div>
+          </sc-if>
+          <div style="border-top:1px solid #1E1F22; padding:13px 2px; display:flex; flex-direction:column; gap:9px; flex-shrink:0">
+            <div style="display:flex; justify-content:space-between; font-size:12px; color:#909398"><span data-scramble="780">Tokens this week</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px">{{ tokens }}</span></div>
+            <div style="height:2px; background:#26272B"><div style="height:2px; background:#E9E9E7; transition:width .4s; width:{{ tokenPct }}"></div></div>
+          </div>
+          <div style="border-top:1px solid #1E1F22; padding:13px 2px; display:flex; justify-content:space-between; align-items:baseline; font-size:12px; flex-shrink:0">
+            <span data-scramble="840" style="color:#B9BBBE">Tidy Downloads</span>
+            <span data-scramble-click="1" style="font-weight:500; color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">Run</span>
+          </div>
+          <div data-scramble="900" onClick="{{ openWidgets }}" style="border-top:1px solid #1E1F22; padding:13px 2px; font-size:12px; color:#55575C; cursor:pointer; transition:color .15s; flex-shrink:0" style-hover="color:#909398">＋ Ask Addison to build a widget</div>
+        </div>
+    </div>
+  </main>
+  <sc-if value="{{ modelPopOpen }}" hint-placeholder-val="{{ false }}">
+    <div id="om-model-pop" style="position:fixed; left:{{ modelPopX }}; top:{{ modelPopY }}; width:270px; background:#141518; border-radius:7px; padding:6px 16px; box-shadow:0 0 0 .5px rgba(255,255,255,.07), 0 18px 48px rgba(0,0,0,.65); z-index:50; animation:fade .12s ease both">
+      <sc-for list="{{ modelPopOptions }}" as="mo" hint-placeholder-count="3">
+        <div onClick="{{ mo.pick }}" style="display:flex; align-items:baseline; gap:10px; padding:12px 2px 12px 12px; border-top:1px solid {{ mo.line }}; border-left:2px solid {{ mo.rail }}; font-size:12px; color:{{ mo.fg }}; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">
+          <span>{{ mo.name }}</span>
+          <span style="flex:1"></span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:{{ mo.noteFg }}">{{ mo.note }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </sc-if>
+  <sc-if value="{{ snapModalOpen }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeSnapModal }}" style="position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:40; display:flex; align-items:center; justify-content:center; animation:fade .2s ease both">
+      <div onClick="{{ stopClick }}" style="width:440px; max-width:88vw; max-height:70vh; overflow-y:auto; scrollbar-width:none; background:#141518; border:1px solid #2E2F33; border-radius:8px; padding:18px 22px 16px; box-shadow:0 24px 64px rgba(0,0,0,.6); animation:fadeRise .25s ease both">
+        <div style="display:flex; align-items:baseline; gap:12px; padding-bottom:4px">
+          <span style="font-size:15px; letter-spacing:-.01em; color:#E9E9E7">Restore points</span>
+          <span style="flex:1"></span>
+          <span data-scramble-click="1" style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">save one now</span>
+          <span onClick="{{ closeSnapModal }}" style="color:#55575C; font-size:13px; cursor:pointer; transition:color .15s; padding-left:6px" style-hover="color:#E9E9E7">✕</span>
+        </div>
+        <p style="margin:2px 0 14px; font-size:12px; line-height:1.55; color:#909398">Addison saves one before anything risky, so you can always go back to a setup that worked.</p>
+        <sc-for list="{{ snapRows }}" as="r" hint-placeholder-count="3">
+          <div style="border-top:1px solid #1E1F22; padding:12px 2px; display:flex; align-items:baseline; gap:12px; font-size:12px">
+            <span style="color:#B9BBBE">{{ r.name }}</span>
+            <span style="flex:1"></span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#909398">{{ r.value }}</span>
+            <span onClick="{{ r.act }}" style="color:#B4A9F5; cursor:pointer; transition:color .15s" style-hover="color:#E9E9E7">{{ r.action }}</span>
+          </div>
+        </sc-for>
+        <div style="border-top:1px solid #1E1F22; padding:10px 2px 2px; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">everything can be undone · restores never delete your files</div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;motion&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Animation&quot;}}">
+class Component extends DCLogic {
+  state = {
+    order: ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'],
+    chats: {
+      c1: { title: 'Renaming vacation photos', time: '14:02', group: 'today',
+        messages: [
+          { role: 'user', content: 'Can you go through the photos in my Vacation folder and rename them so they sort by date?' },
+          { role: 'assistant', content: 'Done. I renamed the 24 photos in Vacation so they sort by date \u2014 each one is now the day it was taken plus the place, like 2026-06-14 lisbon-harbor.jpg.\n\nI kept every original name, so one click puts them back if you change your mind.' }
+        ],
+        steps: [ { text: 'Read Vacation folder · 24 items', done: true }, { text: 'Renamed 24 files', done: true }, { text: 'Wrote summary', done: true } ] },
+      c2: { title: 'Draft reply to the landlord', time: '09:41', group: 'today',
+        messages: [
+          { role: 'user', content: 'Draft a polite reply to my landlord about the heater still being broken.' },
+          { role: 'assistant', content: 'Here\u2019s a draft you can send as-is or edit:\n\n\u201cHello Mr. Duben, thank you for sending someone last week. Unfortunately the heater stopped working again the next day. Could we arrange another visit this week? Happy to be home any afternoon.\u201d\n\nI haven\u2019t sent anything \u2014 it\u2019s just a draft.' }
+        ],
+        steps: [ { text: 'Drafted message', done: true } ] },
+      c3: { title: 'Weekly budget check', time: 'Mon', group: 'earlier',
+        messages: [
+          { role: 'user', content: 'How did last week look against the budget?' },
+          { role: 'assistant', content: 'You spent 4,120 K\u010d of the 5,000 K\u010d weekly budget \u2014 about 18% under. Groceries were the biggest line at 1,850 K\u010d.' }
+        ], steps: [] },
+      c4: { title: 'Wi-fi troubleshooting', time: 'Sun', group: 'earlier',
+        messages: [
+          { role: 'user', content: 'The wi-fi keeps dropping in the evening. What can I check?' },
+          { role: 'assistant', content: 'Three quick things to try: move the router away from the TV, switch it to the 5 GHz network, and restart it once \u2014 most evening drops are neighbours crowding the 2.4 GHz band.' }
+        ], steps: [] },
+      c5: { title: 'Passport renewal checklist', time: 'Sat', group: 'earlier',
+        messages: [
+          { role: 'user', content: 'What do I need to renew my passport?' },
+          { role: 'assistant', content: 'Three things: your current passport, one biometric photo, and the fee \u2014 600 K\u010d at the town office. Takes about 30 days.' }
+        ], steps: [] },
+      c6: { title: 'Grandkids visit planning', time: 'Fri', group: 'earlier',
+        messages: [
+          { role: 'user', content: 'The grandkids are coming next weekend \u2014 help me plan.' },
+          { role: 'assistant', content: 'Saturday: zoo in the morning while it\u2019s cool, pancakes at home for lunch. Sunday: the pool opens at 9. I put both on your calendar as drafts.' }
+        ], steps: [] },
+      c7: { title: 'Printer not printing', time: 'Thu', group: 'earlier',
+        messages: [
+          { role: 'user', content: 'The printer says offline again.' },
+          { role: 'assistant', content: 'Fixed \u2014 it had fallen off the wi-fi after the router restart. I reconnected it and printed a test page. If it happens again, the same one-click fix is saved as a routine.' }
+        ], steps: [] }
+    },
+    activeId: 'c1', draft: '', working: false, railOpen: true, sideOpen: true, focused: false, modelIdx: 0, nextId: 8, expanded: {},
+    view: 'chat', profile: 'Simple', toolConn: { email: false, browser: false }, snapRestored: {},
+    answerPolicy: 'Quality first', appearance: 'Match this computer', keys: { anthropic: true, openai: false, google: false, server: false }, localSetup: {}
+  };
+  models = ['Sonnet 4.5 · quality', 'Haiku 4.5 · free', 'Llama 3 · local'];
+
+  componentDidMount() {
+    this.scramble('[data-scramble], [data-scramble-live], [data-greeting]');
+    this._greetKey = this.greetKey();
+    this._chatKey = this.state.activeId;
+    this._viewKey = this.state.view;
+    this.syncDom();
+    this._clickH = (e) => {
+      if (this.state.modelMenuOpen && !e.target.closest('#om-model-menu') && !e.target.closest('[data-scramble="440"]')) this.setState({ modelMenuOpen: false });
+      if (this.state.modelPick && !e.target.closest('#om-model-pop')) this.setState({ modelPick: null });
+      const leaf = e.target.closest('[data-scramble],[data-scramble-live],[data-scramble-click]');
+      let targets = [];
+      if (leaf && leaf.children.length === 0) targets = [leaf];
+      targets.forEach((el) => this.scrambleEl(el, 40));
+    };
+    document.addEventListener('click', this._clickH);
+  }
+  componentWillUnmount() {
+    document.removeEventListener('click', this._clickH);
+  }
+  componentDidUpdate() {
+    this.syncDom();
+    if (this.state.view !== this._viewKey) {
+      this._viewKey = this.state.view;
+      const tEl = document.getElementById('om-title');
+      if (tEl) this.scrambleEl(tEl, 0);
+      document.querySelectorAll('[data-surf]').forEach((el, i) => { if (el.children.length === 0) this.scrambleEl(el, i * 45); });
+      const surf = document.getElementById('om-surface');
+      if (surf && !(this.props.motion === false)) {
+        Array.from(surf.children).forEach((ch, i) => {
+          ch.style.animation = 'none';
+          void ch.offsetWidth;
+          ch.style.animation = 'fadeRise .35s ease both ' + (i * 40) + 'ms';
+        });
+      }
+    }
+    const ek = JSON.stringify(this.state.expanded);
+    if (ek !== this._expKey) {
+      const first = this._expKey === undefined;
+      this._expKey = ek;
+      const skip = this._skipRowAnim;
+      this._skipRowAnim = false;
+      if (!first && !skip && !(this.props.motion === false)) {
+        document.querySelectorAll('[data-chat-title]').forEach((el) => {
+          const row = el.parentElement;
+          row.style.animation = 'none';
+          void row.offsetWidth;
+          row.style.animation = 'fadeRise .3s ease both';
+        });
+      }
+    }
+    if (this.state.activeId !== this._chatKey) {
+      this._chatKey = this.state.activeId;
+      const activeTitle = this.state.chats[this.state.activeId].title;
+      document.querySelectorAll('[data-chat-title]').forEach((el) => { if (el.textContent === activeTitle) this.scrambleEl(el, 0); });
+      const th = document.getElementById('om-thread');
+      if (th && !(this.props.motion === false)) {
+        Array.from(th.children).forEach((ch, i) => {
+          ch.style.animation = 'none';
+          void ch.offsetWidth;
+          ch.style.animation = 'fadeRise .38s ease both ' + (i * 70) + 'ms';
+          ch.querySelectorAll('[data-msg-text], [data-scramble-live]').forEach((el, j) => {
+            if (el.children.length === 0) this.scrambleEl(el, i * 70 + j * 40);
+          });
+        });
+      }
+    }
+    const k = this.greetKey();
+    if (k !== this._greetKey) {
+      this._greetKey = k;
+      this.scramble('[data-scramble-live], [data-greeting]');
+    }
+  }
+  expandGroup(g) {
+    clearTimeout(this._collapseT);
+    this._collapseT = null;
+    this._collapsing = null;
+    this._skipRowAnim = true;
+    this.setState({ expanded: { ...this.state.expanded, [g]: true } }, () => {
+      if (this.props.motion === false) return;
+      const box = document.querySelector('[data-group="' + g + '"]');
+      if (box) Array.from(box.children).slice(3).forEach((el) => {
+        el.style.animation = 'none';
+        void el.offsetWidth;
+        el.style.animation = 'fadeRise .3s ease both';
+      });
+    });
+  }
+  changeView(v) {
+    if (v === this.state.view) return;
+    clearTimeout(this._viewT);
+    const commit = () => { this._prevView = this.state.view; this.setState({ view: v }); };
+    const surf = document.getElementById('om-surface');
+    if (this.props.motion === false || !surf) return commit();
+    Array.from(surf.children).forEach((ch) => {
+      ch.style.animation = 'none';
+      void ch.offsetWidth;
+      ch.style.animation = 'fadeDrop .25s ease both';
+    });
+    this._viewT = setTimeout(commit, 240);
+  }
+  cancelCollapse(g) {
+    clearTimeout(this._collapseT);
+    this._collapseT = null;
+    this._collapsing = null;
+    this._skipRowAnim = false;
+    const box = document.querySelector('[data-group="' + g + '"]');
+    if (box) Array.from(box.children).forEach((el) => {
+      el.style.animation = 'none';
+      void el.offsetWidth;
+      el.style.animation = 'fadeRise .3s ease both';
+    });
+  }
+  collapseGroup(g) {
+    const commit = () => {
+      this._skipRowAnim = true;
+      this.setState({ expanded: { ...this.state.expanded, [g]: false } }, () => {
+        const b = document.querySelector('[data-group="' + g + '"]');
+        if (b) Array.from(b.children).forEach((el) => { el.style.animation = ''; });
+      });
+    };
+    const box = document.querySelector('[data-group="' + g + '"]');
+    if (!box || this.props.motion === false) return commit();
+    const exiting = Array.from(box.children).slice(3);
+    if (!exiting.length) return commit();
+    exiting.forEach((el) => {
+      el.style.animation = 'none';
+      void el.offsetWidth;
+      el.style.animation = 'fadeDrop .3s ease both';
+    });
+    clearTimeout(this._collapseT);
+    this._collapsing = g;
+    this._collapseT = setTimeout(() => { this._collapseT = null; this._collapsing = null; commit(); }, 290);
+  }
+  greetKey() {
+    const c = this.state.chats[this.state.activeId];
+    return this.state.activeId + ':' + (c && c.messages.length === 0 ? '1' : '0');
+  }
+  viewTitle() {
+    const names = { settings: 'Settings', tools: 'Tools', snapshots: 'Snapshots', widgets: 'Build a widget' };
+    return names[this.state.view] || this.state.chats[this.state.activeId].title;
+  }
+  syncDom() {
+    const tEl = document.getElementById('om-title');
+    if (tEl && !tEl.__scrambling) {
+      const t = this.viewTitle();
+      if (tEl.textContent !== t) tEl.textContent = t;
+    }
+    const rt = this._rowTitles || [];
+    document.querySelectorAll('[data-chat-title]').forEach((el, i) => {
+      if (!el.__scrambling && rt[i] != null && el.textContent !== rt[i]) el.textContent = rt[i];
+    });
+    const el = document.getElementById('om-thread');
+    if (el) el.scrollTop = el.scrollHeight;
+    const ta = document.getElementById('om-ta');
+    if (ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 180) + 'px'; }
+  }
+  scrambleEl(el, delay) {
+    if (this.props.motion === false) return;
+    if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    if (el.__scrambling) return;
+    el.__scrambling = true;
+    setTimeout(() => {
+      const node = el.firstChild;
+      if (!node || node.nodeType !== 3 || el.childNodes.length !== 1) { el.__scrambling = false; return; }
+      const orig = node.nodeValue;
+      if (!orig.trim()) { el.__scrambling = false; return; }
+      const pools = ['ABCDEFGHIKLMNOPRSTUVXYZ0234689', 'abcdefghikmnoprstuvxyz<>/', '#%&*+=-\u00b7:;<>/'];
+      const pool = pools[(Math.random() * pools.length) | 0];
+      const r = () => pool[(Math.random() * pool.length) | 0];
+      const n = orig.length;
+      const D = 620 + Math.random() * 180;
+      const order = [...Array(n).keys()];
+      if (Math.random() < 0.15) order.reverse();
+      const resolveAt = new Array(n);
+      order.forEach((ci, k) => { resolveAt[ci] = (k / Math.max(1, n - 1)) * D * 0.75 + Math.random() * D * 0.25; });
+      const start = performance.now();
+      const iv = setInterval(() => {
+        const t = performance.now() - start;
+        let out = '', done = true;
+        for (let i = 0; i < n; i++) {
+          const c = orig[i];
+          if (/\s/.test(c)) { out += c; continue; }
+          if (t >= resolveAt[i]) out += c;
+          else { done = false; out += r(); }
+        }
+        node.nodeValue = out;
+        if (done) { node.nodeValue = orig; el.__scrambling = false; clearInterval(iv); }
+      }, 38);
+    }, delay);
+  }
+  scramble(sel) {
+    document.querySelectorAll(sel).forEach((el, idx) => {
+      const d = (+el.getAttribute('data-scramble') || +el.getAttribute('data-scramble-live') || 0) + (idx % 5) * 40;
+      this.scrambleEl(el, d);
+    });
+  }
+  patchChat(id, fn) {
+    this.setState((s) => {
+      const c = s.chats[id]; if (!c) return null;
+      return { chats: { ...s.chats, [id]: fn({ ...c, messages: c.messages.slice(), steps: c.steps.slice() }) } };
+    });
+  }
+  send = () => {
+    const text = this.state.draft.trim();
+    if (!text || this.state.working) return;
+    const id = this.state.activeId;
+    this.patchChat(id, (c) => {
+      c.messages.push({ role: 'user', content: text });
+      if (c.title === 'New conversation') c.title = text.length > 34 ? text.slice(0, 34) + '\u2026' : text;
+      c.steps = [];
+      return c;
+    });
+    this.setState({ draft: '', working: true });
+    const addStep = (t) => this.patchChat(id, (c) => { c.steps.push({ text: t, done: false }); return c; });
+    const finishSteps = () => this.patchChat(id, (c) => { c.steps = c.steps.map((s) => ({ ...s, done: true })); return c; });
+    setTimeout(() => addStep('Reading your request'), 350);
+    setTimeout(() => { this.patchChat(id, (c) => { c.steps[0] && (c.steps[0].done = true); return c; }); addStep('Gathering what I need'); }, 1000);
+    setTimeout(() => { this.patchChat(id, (c) => { c.steps[1] && (c.steps[1].done = true); return c; }); addStep('Writing answer'); }, 1650);
+    const reply = 'Happy to help \u2014 here\u2019s where I landed after a first look.\n\nI haven\u2019t changed anything on your computer yet. Tell me to go ahead and I\u2019ll do it step by step, and every step can be undone afterwards.';
+    setTimeout(() => {
+      this.patchChat(id, (c) => { c.messages.push({ role: 'assistant', content: '' }); return c; });
+      const pools = ['ABCDEFGHIKLMNOPRSTUVXYZ0234689', 'abcdefghikmnoprstuvxyz<>/', '#%&*+=-\u00b7:;<>/'];
+      const pool = pools[(Math.random() * pools.length) | 0];
+      const r = () => pool[(Math.random() * pool.length) | 0];
+      const n = reply.length;
+      let front = 0;
+      const WIN = 14;
+      const iv = setInterval(() => {
+        front += 5;
+        const resolved = Math.min(n, Math.max(0, front - WIN));
+        let out = reply.slice(0, resolved);
+        for (let i = resolved; i < Math.min(n, front); i++) out += /\s/.test(reply[i]) ? reply[i] : r();
+        const done = resolved >= n;
+        this.patchChat(id, (c) => {
+          const m = c.messages[c.messages.length - 1];
+          if (m && m.role === 'assistant') m.content = done ? reply : out;
+          return c;
+        });
+        if (done) { clearInterval(iv); finishSteps(); this.setState({ working: false }); }
+      }, 38);
+    }, 2100);
+  };
+  newChat = () => {
+    if (this.state.working) return;
+    const id = 'c' + this.state.nextId;
+    this.setState((s) => ({
+      nextId: s.nextId + 1,
+      order: [id, ...s.order],
+      chats: { ...s.chats, [id]: { title: 'New conversation', time: 'now', group: 'today', messages: [], steps: [] } },
+      activeId: id, view: 'chat'
+    }));
+  };
+  renderVals() {
+    const s = this.state;
+    const active = s.chats[s.activeId];
+    const mk = (id) => {
+      const c = s.chats[id];
+      const isActive = id === s.activeId;
+      return { title: c.title, time: c.time,
+        rail: isActive && s.view === 'chat' ? '#B4A9F5' : 'transparent',
+        fg: isActive && s.view === 'chat' ? '#E9E9E7' : '#909398',
+        open: () => { if (!this.state.working) this.setState({ activeId: id, view: 'chat' }); } };
+    };
+    const groups = [['today', 'Today'], ['earlier', 'Earlier']].map(([g, label]) => {
+      const ids = s.order.filter((id) => (g === 'today' ? s.chats[id].group === 'today' : s.chats[id].group !== 'today'));
+      const exp = !!s.expanded[g];
+      const rows = (exp ? ids : ids.slice(0, 3)).map(mk);
+      if (!exp && ids.length > 3) rows.push({
+        title: (ids.length - 3) + ' more\u2026', time: '', rail: 'transparent', fg: '#55575C',
+        open: () => this.expandGroup(g)
+      });
+      return {
+        key: g,
+        label,
+        hint: exp && ids.length > 3 ? 'collapse' : ids.length + (ids.length === 1 ? ' chat' : ' chats'),
+        toggle: () => {
+          if (ids.length <= 3) return;
+          if (this._collapseT && this._collapsing === g) return this.cancelCollapse(g);
+          if (exp) this.collapseGroup(g);
+          else this.expandGroup(g);
+        },
+        rows
+      };
+    }).filter((k) => k.rows.length > 0);
+    this._rowTitles = groups.reduce((a, k) => a.concat(k.rows.map((r) => r.title)), []);
+    const messages = active.messages.map((m, i) => ({
+      label: m.role === 'user' ? 'You' : 'Addison',
+      labelColor: m.role === 'user' ? '#55575C' : '#E9E9E7',
+      color: m.role === 'user' ? '#B9BBBE' : '#E9E9E7',
+      content: m.content,
+      cursor: (s.working && m.role === 'assistant' && i === active.messages.length - 1) ? 'inline-block' : 'none'
+    }));
+    const h = new Date().getHours();
+    const canSend = Boolean(s.draft.trim()) && !s.working;
+    const cycle = () => this.setState({ modelIdx: (this.state.modelIdx + 1) % this.models.length });
+    const useWidget = (t) => () => {
+      this.setState({ draft: 'Build me a widget: ' + t });
+      this.changeView('chat');
+      setTimeout(() => { const ta = document.getElementById('om-ta'); if (ta) ta.focus(); }, 320);
+    };
+    const surfaces = {
+      settings: { title: 'Settings', desc: 'Everything lives on this computer. Nothing leaves it without asking you first.', sections: [
+        { label: 'Where Addison thinks', rows: [
+          { name: 'Cloud \u2014 ' + this.models[s.modelIdx].split(' \u00b7 ')[0], value: 'default \u2713', action: '', act: null },
+          { name: 'On this computer', value: 'not set up yet', action: 'set up', act: () => this.setState({ view: 'settings' }) },
+          { name: 'Cloud model', value: this.models[s.modelIdx], action: 'change', act: (e) => {
+            e.stopPropagation();
+            const r = e.target.getBoundingClientRect();
+            this.setState({ modelPick: { x: r.right, y: r.top + r.height / 2 } });
+          } } ] },
+        { label: 'Which model answers', rows: ['Quality first', 'Cost first', 'Local only', 'Custom order'].map((p) => ({
+          name: p, value: s.answerPolicy === p ? 'selected \u2713' : '', action: s.answerPolicy === p ? '' : 'choose',
+          act: s.answerPolicy === p ? null : () => this.setState({ answerPolicy: p }) })) },
+        { label: 'API keys', rows: [
+          { name: 'Anthropic', value: s.keys.anthropic ? 'key saved \u2713' : 'not connected', action: s.keys.anthropic ? 'remove' : 'add key', act: () => this.setState({ keys: { ...this.state.keys, anthropic: !this.state.keys.anthropic } }) },
+          { name: 'OpenAI', value: s.keys.openai ? 'key saved \u2713' : 'not connected', action: s.keys.openai ? 'remove' : 'add key', act: () => this.setState({ keys: { ...this.state.keys, openai: !this.state.keys.openai } }) },
+          { name: 'Google', value: s.keys.google ? 'key saved \u2713' : 'not connected', action: s.keys.google ? 'remove' : 'add key', act: () => this.setState({ keys: { ...this.state.keys, google: !this.state.keys.google } }) },
+          { name: 'Your own server', value: s.keys.server ? 'connected \u2713' : 'OpenAI-compatible \u00b7 http://\u2026', action: s.keys.server ? 'disconnect' : 'connect', act: () => this.setState({ keys: { ...this.state.keys, server: !this.state.keys.server } }) } ] },
+        { label: 'Run a model on this computer', rows: [['light', 'Light and quick', '2 GB download \u00b7 needs 8 GB memory'], ['balanced', 'Balanced', '4.7 GB download \u00b7 needs 16 GB memory'], ['capable', 'Most capable', '9 GB download \u00b7 needs 32 GB memory']].map(([k, n, v]) => ({
+          name: n, value: s.localSetup[k] ? 'ready \u2713' : v, action: s.localSetup[k] ? '' : 'set up',
+          act: s.localSetup[k] ? null : () => this.setState({ localSetup: { ...this.state.localSetup, [k]: true } }) })) },
+        { label: 'Routines', rows: [
+          { name: 'None yet', value: 'saved steps appear here', action: '', act: null } ] },
+        { label: 'Skills', rows: [
+          { name: 'None yet', value: 'short notes on how you like things done', action: 'add a skill', act: null } ] },
+        { label: 'Profile', rows: [
+          { name: 'Profile', value: s.profile + ' \u00b7 local', action: s.profile === 'Simple' ? 'switch to Developer' : 'switch to Simple', act: () => this.setState({ profile: this.state.profile === 'Simple' ? 'Developer' : 'Simple' }) },
+          { name: 'Appearance', value: s.appearance, action: 'change', act: () => { const o = ['Light', 'Dark', 'Match this computer']; this.setState({ appearance: o[(o.indexOf(this.state.appearance) + 1) % o.length] }); } },
+          { name: 'What Addison calls you', value: 'Jana', action: '', act: null } ] },
+        { label: 'Folders Addison may work in', rows: [
+          { name: 'No trusted folders yet', value: 'Addison asks before each file change', action: 'choose a folder\u2026', act: null } ] },
+        { label: 'Restore points', rows: [
+          { name: 'Going back to Working setup', value: '22 Jul at 0:56', action: 'restore', act: () => this.setState({ snapModal: true }) },
+          { name: 'All restore points', value: '', action: 'open', act: () => this.setState({ snapModal: true }) } ] },
+        { label: 'Diagnostics', rows: [
+          { name: 'Engine errors', value: 'nothing to show yet', action: '', act: null } ] } ] },
+      tools: { title: 'Tools', desc: 'What Addison can reach on this computer. Connect only what you\u2019re comfortable with.', sections: [
+        { label: 'Connected', rows: [
+          { name: 'IDE', value: 'connected', action: '', act: null },
+          { name: 'Files', value: 'connected', action: '', act: null },
+          { name: 'Calendar', value: 'connected', action: '', act: null } ] },
+        { label: 'Available', rows: [
+          { name: 'Email', value: s.toolConn.email ? 'connected' : 'not connected', action: s.toolConn.email ? 'disconnect' : 'connect', act: () => this.setState({ toolConn: { ...this.state.toolConn, email: !this.state.toolConn.email } }) },
+          { name: 'Browser', value: s.toolConn.browser ? 'connected' : 'not connected', action: s.toolConn.browser ? 'disconnect' : 'connect', act: () => this.setState({ toolConn: { ...this.state.toolConn, browser: !this.state.toolConn.browser } }) } ] } ] },
+      snapshots: { title: 'Snapshots', desc: 'Addison saves a snapshot before every change it makes, so anything can be put back.', sections: [
+        { label: 'This week', rows: [
+          { name: 'Before renaming vacation photos', value: 'Today 14:02', action: s.snapRestored.s1 ? 'restored \u2713' : 'restore', act: () => this.setState({ snapRestored: { ...this.state.snapRestored, s1: true } }) },
+          { name: 'Before drafting landlord reply', value: 'Today 09:41', action: s.snapRestored.s2 ? 'restored \u2713' : 'restore', act: () => this.setState({ snapRestored: { ...this.state.snapRestored, s2: true } }) },
+          { name: 'Before printer reconnect', value: 'Thu 18:12', action: s.snapRestored.s3 ? 'restored \u2713' : 'restore', act: () => this.setState({ snapRestored: { ...this.state.snapRestored, s3: true } }) } ] } ] },
+      widgets: { title: 'Build a widget', desc: 'Describe what you want to keep an eye on, and Addison turns it into a small card in the right rail.', sections: [
+        { label: 'Ideas to start from', rows: [
+          { name: 'Bus departures from your stop', value: '', action: 'use', act: useWidget('bus departures from my stop') },
+          { name: 'Weather for the cottage weekend', value: '', action: 'use', act: useWidget('weather for the cottage this weekend') },
+          { name: 'Name-day calendar', value: '', action: 'use', act: useWidget('whose name day it is today') } ] } ] }
+    };
+    const surf = surfaces[s.view];
+    return {
+      groups, messages,
+      greeting: h < 5 ? 'Still up?' : h < 12 ? 'Good morning.' : h < 18 ? 'Good afternoon.' : 'Good evening.',
+      placeholder: s.working ? 'Addison is working\u2026' : 'Write to Addison\u2026',
+      suggestions: ['Tidy my Downloads folder', 'Draft an email', 'Plan the weekend'].map((t) => ({
+        text: t,
+        use: () => { this.setState({ draft: t }); const ta = document.getElementById('om-ta'); if (ta) ta.focus(); }
+      })),
+      title: this.viewTitle(),
+      isEmpty: s.view === 'chat' && active.messages.length === 0,
+      notEmpty: s.view === 'chat' && active.messages.length > 0,
+      isChat: s.view === 'chat',
+      isSurface: Boolean(surf),
+      surfBackShow: false,
+      surfBackAct: () => this.changeView('settings'),
+      modelPopOpen: !!s.modelPick,
+      modelPopX: s.modelPick ? Math.max(12, s.modelPick.x - 250) + 'px' : '0px',
+      modelPopY: s.modelPick ? Math.max(12, s.modelPick.y - 14 - s.modelIdx * 29) + 'px' : '0px',
+      modelPopOptions: this.models.map((m, i) => {
+        const [name, note] = m.split(' \u00b7 ');
+        const sel = i === s.modelIdx;
+        return { name, note, fg: sel ? '#E9E9E7' : '#B9BBBE', rail: sel ? '#B4A9F5' : 'transparent', noteFg: sel ? '#B4A9F5' : '#909398', line: i === 0 ? 'transparent' : '#1E1F22',
+          pick: () => this.setState({ modelIdx: i, modelPick: null }) };
+      }),
+      snapModalOpen: !!s.snapModal,
+      closeSnapModal: () => this.setState({ snapModal: false }),
+      stopClick: (e) => e.stopPropagation(),
+      snapRows: [['s1', 'Before changing how models are picked', '25 Jul at 19:06'], ['s2', 'You saved this', '22 Jul at 0:58'], ['s3', 'Working setup', '22 Jul at 0:56'], ['s4', 'Before deleting a widget', '22 Jul at 0:54'], ['s5', 'Your setup before this update \u00b7 permanent', '21 Jul at 0:28']].map(([k, name, value]) => ({
+        name, value, action: s.snapRestored[k] ? 'restored \u2713' : 'restore',
+        act: s.snapRestored[k] ? null : () => this.setState({ snapRestored: { ...this.state.snapRestored, [k]: true } }) })),
+      surfTitle: surf ? surf.title : '',
+      surfDesc: surf ? surf.desc : '',
+      surfSections: surf ? surf.sections : [],
+      openTools: () => this.changeView(s.view === 'tools' ? 'chat' : 'tools'),
+      openSnapshots: () => this.changeView(s.view === 'snapshots' ? 'chat' : 'snapshots'),
+      openSettings: () => this.changeView(s.view === 'settings' ? 'chat' : 'settings'),
+      openWidgets: () => this.changeView(s.view === 'widgets' ? 'chat' : 'widgets'),
+      profileNote: s.profile + ' profile \u00b7 local',
+      settingsRail: s.view === 'settings' ? '#B4A9F5' : 'transparent',
+      settingsFg: s.view === 'settings' ? '#E9E9E7' : '#909398',
+      steps: active.steps.map((st) => ({ text: st.text, color: st.done ? '#909398' : '#E9E9E7', dot: st.done ? '#55575C' : '#E9E9E7', anim: st.done ? 'none' : 'blink 1.1s step-start infinite' })),
+      hasSteps: active.steps.length > 0,
+      railW: s.railOpen && s.view === 'chat' ? '232px' : '0px',
+      railO: s.railOpen && s.view === 'chat' ? 1 : 0,
+      railM: s.railOpen && s.view === 'chat' ? '0px' : '-44px',
+      railX: s.railOpen && s.view === 'chat' ? 'translateX(0)' : 'translateX(16px)',
+      railBtnDisplay: s.view === 'chat' ? 'inline' : 'none',
+      backBtnDisplay: s.view === 'chat' ? 'none' : 'inline',
+      sideBtnDisplay: s.view === 'chat' ? 'inline' : 'none',
+      goBack: () => this.changeView('chat'),
+      railIcon: s.railOpen ? '»' : '«',
+      railLabel: s.railOpen ? 'Hide widgets' : 'Show widgets',
+      toggleRail: () => this.setState({ railOpen: !this.state.railOpen }),
+      sideIcon: s.sideOpen ? '«' : '»',
+      sideW: s.sideOpen ? '212px' : '0px',
+      sideO: s.sideOpen ? 1 : 0,
+      sideX: s.sideOpen ? 'translateX(0)' : 'translateX(-16px)',
+      sideM: s.sideOpen ? '0px' : '-44px',
+      sideLabel: s.sideOpen ? 'Hide chats' : 'Show chats',
+      toggleSide: () => this.setState({ sideOpen: !this.state.sideOpen }),
+      tokens: '128k / 380k', tokenPct: '34%',
+      draft: s.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onKey: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.send(); } },
+      onFocus: () => this.setState({ focused: true }),
+      onBlur: () => this.setState({ focused: false }),
+      composerBorder: s.focused ? '#3A3B40' : '#26272B',
+      send: this.send,
+      newChat: this.newChat,
+      sendBd: canSend ? '#B4A9F5' : '#26272B',
+      sendBg: canSend ? '#B4A9F5' : 'transparent',
+      sendFg: canSend ? '#100E22' : '#55575C',
+      modelLabel: this.models[s.modelIdx],
+      modelLabelFg: s.modelMenuOpen ? '#909398' : '#55575C',
+      modelMenuOpen: !!s.modelMenuOpen,
+      toggleModelMenu: () => this.setState({ modelMenuOpen: !this.state.modelMenuOpen }),
+      modelOptions: this.models.map((m, i) => {
+        const [name, note] = m.split(' \u00b7 ');
+        const sel = i === s.modelIdx;
+        return { name, note: sel ? note + ' \u2713' : note, fg: sel ? '#E9E9E7' : '#909398', noteFg: sel ? '#B4A9F5' : '#55575C',
+          pick: () => this.setState({ modelIdx: i, modelMenuOpen: false }) };
+      }),
+      cycleModel: cycle
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -6,13 +6,16 @@
 > snapshot + restore (G3), the "make it cheaper" orchestration, adding an endpoint by
 > prompt, workspace-trust + the keyword-gated powerful action, building a widget
 > (SAFE safe-vocabulary vs. higher-tier code-backed), routing degrade-with-disclaimer,
-> and an MCP tool call through the existing gate. Names in the new flows are illustrative
-> where the amendment leaves them open (marked Phase-2); the shapes are authoritative.
-> **Flows 9 and 14 are the exceptions — snapshot/restore shipped in Phase-2 step 1 and
-> routing in step 3, so their names are real** (step 2 also made flow 9's per-row
-> restore live). The `reason` slugs quoted in flows 10, 11 and 12 are the reserved
-> entries of that vocabulary (`snapshot_manager.REASONS`), so they are real too, even
-> though the flows around them are not built yet.
+> and an MCP tool call through the existing gate. Phase-2 steps 1–5 have since landed,
+> so most of those flows are now real code and the names in them are the ones in the
+> modules: **flow 9** (snapshots, step 1), **flow 10** ("make it cheaper", step 4),
+> **flow 11** (add an endpoint, step 4), **flow 14** (routing, step 3), and the
+> workspace-trust half of **flow 12** (step 5). Two are still unbuilt and are marked
+> where they appear: the **keyword gate** in flow 12 (step 8), and **flow 13**'s
+> capability tiers and interactive widget kinds (step 6). **Flow 15** (MCP, step 7) is
+> unbuilt in its entirety. The `reason` slugs quoted throughout are entries of the
+> closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
+> around them is not.
 
 Sequence diagrams for the main flows across the three processes. Method and function
 names match the code. Every Core-to-webview frame in these diagrams actually reaches
@@ -45,13 +48,13 @@ sequenceDiagram
     Note over SRV: _read_loop, _dispatch, queued to the turn worker
     SRV->>SRV: _run_send_message
     SRV->>ORC: run_turn(conversation, role, model, effort)
-    ORC->>PR: provider.send(messages, tools, effort)
+    ORC->>PR: provider.send(messages, tools, effort, timeout)
     PR-->>ORC: response with tool_calls
-    ORC->>PG: check(tool_id)
-    PG-->>ORC: NOT_YET_ASKED
-    ORC->>PG: request(tool_id), blocks for the UI
-    Note over PG,WV: permission.requestGrant then permission.respond, see flow 2
+    Note over ORC: BEFORE the gate: refuse_if_dev_only_outside_open(tool_id, mode),<br/>then confinement — call_affected_path resolved once, refused if<br/>outside every trusted root, carried on context.resolved_path
+    ORC->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted)
+    Note over PG,WV: SAFE and not yet granted: permission.requestGrant<br/>then permission.respond, see flow 2
     PG-->>ORC: GRANTED
+    Note over ORC: on_activity(tool_id, label, detail) -> tool.activityUpdate<br/>emitted BEFORE execute, so the panel names the destination<br/>before the call goes out
     ORC->>TL: execute(args, context)
     TL-->>ORC: ToolResult with snapshot
     ORC->>UM: record(snapshot)
@@ -65,7 +68,8 @@ sequenceDiagram
 ## 2. Permission grant round-trip
 
 The orchestrator (and routine engine) call the mode-aware `authorize(tool_id, mode,
-destructive, detail)` before every call (`policy.py`). In SAFE mode this prompts for
+destructive, detail)` before every call (`permissions/gate.py`; `policy.py` supplies
+`PolicyMode`, `GuardConfig` and `mode_for_profile`). In SAFE mode this prompts for
 every not-yet-granted tool; in OPEN mode it auto-allows a non-destructive call
 (recorded in the activity log) and prompts **per invocation** for a destructive one —
 no prior grant carries over, and the card's description names the exact command being
@@ -75,6 +79,18 @@ keyed by the tool id, emits the card, and blocks; the answering frame arrives on
 read loop and wakes the worker. A SAFE grant is remembered (destructive-OPEN approvals
 are not); a "Not now" only lasts the rest of the current turn.
 
+Two OPEN-path modulations the diagram folds into one branch. Under the **Custom**
+profile a `GuardConfig` shifts how often the gate asks: `auto_grant_scope='none'` sends
+*non-destructive* calls through the SAFE-style coarse flow, `'everything'` auto-grants
+everything (still recorded, still logged), and `destructive_card='session'` remembers a
+destructive approval — in a dedicated set the SAFE `check()` path structurally never
+reads, so it can never leak into Simple. A destructive call never falls into the coarse
+flow, under any scope: a coarse grant carries no per-call text, so one approved `ls`
+would silently authorize every later `rm -rf`. And `trusted=True` — set only for a
+confined, undoable file edit inside a trusted root — makes a destructive call
+card-free, except that it does *not* override a turn-scoped "Not now" or Custom's
+strictest `auto_grant_scope='none'`.
+
 ```mermaid
 sequenceDiagram
     participant ORC as Orchestrator
@@ -82,8 +98,8 @@ sequenceDiagram
     participant SRV as Core server
     participant WV as React webview
 
-    ORC->>PG: authorize(tool_id, mode, destructive, detail)
-    alt OPEN mode and not destructive
+    ORC->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted)
+    alt OPEN mode and (not destructive, or trusted)
         Note over PG: auto-grant, record in activity log
         PG-->>ORC: GRANTED (no card)
     else SAFE mode, or a destructive OPEN call
@@ -170,8 +186,11 @@ the same `ToolRegistry`, `PermissionGate`, and `UndoManager` instances as the li
 loop, so it can never gain permissions the user has not already granted live. The run
 carries the current policy mode (`policy.py`): a dev-created routine is refused before
 this flow starts when in SAFE mode; an OPEN-mode `command` step runs through the
-`run_command` dev-only tool on those same instances, so a destructive command still
-stops to ask.
+`run_command` dev-only tool on those same instances, so it stops to ask **every time**.
+Two properties the engine shares with the live turn rather than reimplementing: the
+dev-only refusal and the confinement check both run at dispatch, *before* the gate and
+before `execute`; and a routine step passes `trusted=False` unconditionally, so a
+trusted workspace can never make a stored, replayable step card-free.
 
 ```mermaid
 sequenceDiagram
@@ -189,8 +208,9 @@ sequenceDiagram
     SRV->>RE: run(routine, variables)
     Note over RE: topologically_sorted, then resolve_template per step
     loop each step
-        RE->>PG: authorize(tool_id, mode, destructive)
-        Note over PG: SAFE prompts — OPEN auto-allows non-destructive, prompts destructive
+        Note over RE: same pre-gate checks as the live turn:<br/>refuse_if_dev_only_outside_open, then confinement
+        RE->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted=False)
+        Note over PG: SAFE prompts — OPEN auto-allows non-destructive, prompts destructive.<br/>trusted is always False here, so a saved command step always cards
         PG-->>RE: GRANTED or DENIED
         RE->>TL: execute(resolved_args, context)
         TL-->>RE: ToolResult
@@ -254,9 +274,10 @@ sequenceDiagram
     SRV->>BR: get_provider_key(provider)
     BR->>SH: keychain.getProviderKey {provider}
     SH-->>BR: key (core-ward only, one request)
-    SRV->>P: one tiny request (GET models / generateContent probe)
+    SRV->>P: one tiny request — Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI GET /v1/models, custom GET {base}/models<br/>(a custom base URL normally already ends in /v1)
     P-->>SRV: 200 ok, or 401/timeout
-    Note over SRV: on ok — record connected + added_at in provider_config,<br/>register the provider's models in the union
+    Note over SRV: a restore point is taken per connect ATTEMPT, before it<br/>(reason "provider_connect", or "add_endpoint" for a custom server)
+    Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false, so provider.list shows it off
     SRV-->>UI: {ok: true} or {ok: false, error}
     UI->>SRV: provider.list + model.availableRoles (refresh)
 ```
@@ -318,12 +339,12 @@ sequenceDiagram
     SM->>ST: insert row image of the config tables (keychain excluded)
     SM->>SM: also write the payload to a 0600 JSON sidecar
     ST-->>SM: snapshotId
-    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint)
+    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint) —<br/>except that it flips the flag on a PERMANENT row whose<br/>fingerprint matches byte for byte (data-model.md)
 
     Note over WV,SRV: on-command — Settings "Restore points" card
     WV->>SRV: snapshot.create
     SRV->>SM: capture(trigger="on_command", reason="user_request")
-    SM->>ST: capture (deletable, unless minted as a Custom anchor)
+    SM->>ST: capture (always deletable — an anchor comes only from<br/>mint_anchor, via guards.set)
     SRV-->>WV: {ok: true, snapshotId}
 
     Note over WV,SRV: the one-action button — no argument, by design
@@ -335,7 +356,7 @@ sequenceDiagram
     SM-->>SRV: RestoreResult
     SRV-->>WV: {ok, snapshotId, detail, binaryMismatch?}
 
-    Note over WV,SRV: shipped in step 2 — "Restore this one" on permanent rows
+    Note over WV,SRV: step 2 — "Restore this one", offered on permanent rows
     WV->>SRV: snapshot.restore {id}
     SRV->>SM: restore(snapshot_id)
 ```
@@ -346,13 +367,13 @@ Four things the diagram cannot show:
   restore that changes zero bytes is a no-op dressed as a recovery — the friend's dead
   end again. So **each click steps back one distinct proven configuration**; two bad
   changes deep, the user clicks twice.
-- **Per-row restore is not a shipped surface.** The `snapshot.restore {id}` method
-  and its `ipc.restoreSnapshot` wrapper exist and are tested, but **nothing calls
-  them**: the Restore points card offers save, restore-to-last-working, and remove,
-  and no per-row restore. Jumping straight to a chosen point is step-2 work, which
-  is also what needs the targeted path (the anchor). Until then the one-action
-  button is the only way back, by design — see `docs/HANDOFF.md`, where this is
-  tracked as an open residual.
+- **Per-row restore shipped in step 2, on permanent rows only.** `SnapshotsCard`
+  offers "Restore this one" beside a permanent row — the row a user cannot delete and
+  might most need to reach — which calls `useSnapshots.handleRestoreSnapshot` →
+  `ipc.restoreSnapshot` → `snapshot.restore {id}`, and handles the outcome exactly as
+  the one-action button does — behind a two-step inline confirm that names the row
+  first, never a blind recovery. An ordinary row's only action is **Remove**; saving a
+  restore point and restore-to-last-working are card-level controls, not per-row ones.
 - **A restore is an RPC path, never a registry tool, and never passes the permission
   gate** — a gate that could deny a restore would make "the restore path is itself
   unbreakable" false.
@@ -365,69 +386,103 @@ Four things the diagram cannot show:
 ## 10. "Make it cheaper" orchestration
 
 The exact request that bricked the friend becomes the *safest* thing to ask (amendment §11).
-Addison **previews** two reversible changes — a guidance **skill** and a cheaper **model /
-routing** choice — **auto-snapshots** before applying, and offers **one-click Restore**. The
+Addison **previews** two reversible changes — a guidance **skill** and a cheaper **routing**
+choice — **auto-snapshots** before applying, and offers **one-click Restore**. The
 bricking scenario is structurally impossible: previewed, reversible, floored by G3.
+Shipped in Phase-2 step 4, and the shape matters: **the model authors none of it.** The
+turn's reply never carries an actionable payload. After the turn, the frontend tests the
+*user's own words* against a deliberately narrow keyword pattern (`useOffers.ts`) and, if
+it matches, asks the core for the plan; the core's plan is **canned in code** — a fixed
+note and the fixed `cost_first` strategy — so a card can never be armed by the model's
+answer. The core needs no message read at all here: `costPlan.propose` returns constants,
+so there is nothing for the model to influence (the `role=="user"`-only read belongs to
+flow 11, where a base URL has to be extracted from somewhere).
 
 ```mermaid
 sequenceDiagram
     participant WV as React webview
     participant SRV as Core server
-    participant ORC as Orchestrator
     participant SM as SnapshotManager
     participant ST as Store
 
     WV->>SRV: conversation.sendMessage ("make the models as cheap as possible")
-    SRV->>ORC: run_turn(...)
-    Note over ORC: compose a plan — a guidance skill<br/>+ switch default role's model / lean cost-first
-    ORC-->>WV: proposed plan card ("I'll add this note and switch to [cheaper model] — apply?")
-    Note over WV: user taps Apply / Not now
+    SRV-->>WV: an ordinary prose answer — nothing actionable rides on it
+    Note over WV: after the turn, the user's OWN text matches the cheaper pattern
+    WV->>SRV: costPlan.propose
+    Note over SRV: canned constants — skill name, full instructions text,<br/>strategy "cost_first". No store read, nothing derived
+    SRV-->>WV: {skillName, skillInstructions, strategy}
+    Note over WV: CostPlanCard — "Apply" / "Not now"
     WV->>SRV: costPlan.apply {accept: true}
+    Note over SRV: validate the canned skill first — if already in effect,<br/>do nothing at all, no snapshot and no write
     SRV->>SM: capture(trigger="auto", reason="make_it_cheaper")
     SM->>ST: capture config/state (keys excluded)
-    SRV->>ST: write guidance skill + update provider_config / routing_strategy
-    SRV-->>WV: {ok: true, undoable: true}
+    Note over SRV: capture FAILS -> the whole apply is REFUSED, nothing changes
+    SRV->>ST: apply_cost_plan — skill + routing_strategy in ONE commit
+    SRV-->>WV: {ok: true, snapshotId}
     Note over WV: one-click "Restore" -> flow 9 restore (last verified-working)
 ```
+
+Why apply refuses on a failed capture while `routing.set` merely warns: this is a
+compound, conversationally-initiated degradation for the at-risk persona — terser
+answers *and* changed model selection, in one click — whose only recovery is the restore
+point. A bare strategy toggle can just be flipped back. The asymmetry is deliberate.
 
 ## 11. Add an endpoint by prompting
 
 Adding a model endpoint in plain language (amendment §5, §6.2) is **reversible config**, not
 altering Addison. Addison registers a provider row; the key goes straight to the keychain per
-G1 (as in flow 7); an auto-snapshot makes it one-click reversible. The same plumbing connects
-an MCP server (flow 15).
+G1 (as in flow 7); an auto-snapshot makes it one-click reversible. The same plumbing will
+connect an MCP server (flow 15). Shipped in Phase-2 step 4, with the same
+model-authors-nothing shape as flow 10: the **core** extracts a base URL from the current
+turn's *user* messages — never assistant content, never a pasted wall of text — validates
+it, and returns it for an explicit confirm. It **holds nothing**: the frontend renders the
+card from that reply and sends the base URL back on `endpoint.confirmAdd`, which
+re-validates it through the same `_base_url_problem` gate. That differs from the widget
+draft precedent (flow 8), where the core does hold the draft between propose and confirm.
 
 ```mermaid
 sequenceDiagram
     participant WV as React webview
     participant SRV as Core server
-    participant ORC as Orchestrator
     participant SM as SnapshotManager
     participant SH as Rust shell keychain
     participant ST as Store (provider_config)
 
     WV->>SRV: conversation.sendMessage ("add this OpenAI-compatible server at <base>")
-    SRV->>ORC: run_turn(...)
-    Note over ORC: recognize an add-endpoint intent — confirm base URL + which key
-    ORC-->>WV: confirm card (base URL, "paste the key into the secure field")
-    Note over WV: key entered in the shell's field, never a chat frame
-    WV->>SH: invoke store_provider_key(provider, key)
-    WV->>SRV: provider.connect(provider, baseUrl)
-    Note over SRV: validate with one tiny request (flow 7), record non-secret metadata
+    SRV-->>WV: an ordinary prose answer
+    Note over WV: the user's own text matches the add-a-server pattern
+    WV->>SRV: endpoint.proposeFromConversation
+    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it — nothing is held. Nothing to add -> {none: true}, silently
+    SRV-->>WV: {baseUrl, isLocalOrLan}
+    Note over WV: EndpointProposalCard — key pasted here goes to the keychain,<br/>never into a chat frame
+    WV->>SH: invoke store_provider_key("custom", key)
+    WV->>SRV: endpoint.confirmAdd {baseUrl, accept: true}
     SRV->>SM: capture(trigger="auto", reason="add_endpoint")
-    SM->>ST: (config captured for one-click undo)
+    SM->>ST: config captured — proceeds with a sticky warning if capture fails
+    Note over SRV: runs provider.connect("custom", baseUrl) — one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop). The restore point above is<br/>one per connect ATTEMPT, taken before it (as in flow 7)
     SRV-->>WV: {ok: true} — endpoint now in the picker union
 ```
 
 ## 12. Workspace-trust grant and a keyword-gated powerful action
 
 The harness (Developer/OPEN) reconciles the agentic loop with the per-invocation card
-(amendment §8.2, §9). The user grants a **project directory** (a snapshotted act); **inside**
-it, non-destructive and routine edits/runs flow without a card (the gate still *runs and
-logs*). **Outside** it — and to **run or arm a powerful/elevated action** — a **user-typed
-keyword prefix** (e.g. `!run …`; exact syntax Phase-2, §13) is required. Because the prefix is
-a keystroke from the human, observed content can never forge it — it doubles as an injection
-barrier.
+(amendment §8.2, §9). Workspace trust shipped in Phase-2 step 5; the keyword gate is step
+8 and is **not built**. The essential correction to the amendment's framing: trust is
+**two** predicates, not one.
+
+- **Confinement — permission to *touch*.** A path-bounded tool (`read_project_file`,
+  `write_project_file`) may only ever act on a path inside a currently-trusted root.
+  Outside, it is hard-refused at dispatch, before the gate and before `execute`, at LOW
+  and MEDIUM alike. This is not a card the user can approve past.
+- **The `trusted` flag — permission to skip the *card*.** Only that: it is set only for
+  those same typed, path-bounded, undoable tools. **`run_command` always cards**, in
+  every trusted folder, because its `affected_path` is `None` — so confinement never
+  governs it and the caller can never mark it trusted (owner decision 2026-07-24).
+
+Addison's own data directory can never be trusted, at grant time or at authorize time.
+And the path is resolved **once** and handed to `execute` on
+`ExecutionContext.resolved_path`, so the path confinement approved is the exact path
+that gets written.
 
 ```mermaid
 sequenceDiagram
@@ -438,26 +493,37 @@ sequenceDiagram
     participant PG as PermissionGate
     participant TL as Tool
 
+    WV->>SRV: workspace.pickDirectory (relays the shell's native folder picker)
     WV->>SRV: workspace.grantTrust {directory}
+    Note over SRV: absolute + existing? realpath it. Addison's own data dir<br/>is refused at the door — the floor, not a warning
     SRV->>SM: capture(trigger="auto", reason="workspace_trust")
-    SRV-->>WV: ok (trust scoped, revocable)
+    SRV-->>WV: {ok: true, directory} (canonical root, revocable)
 
-    Note over WV,ORC: ordinary edit/run inside the trusted directory
+    Note over WV,ORC: an edit inside the trusted directory
     WV->>SRV: conversation.sendMessage ("fix the failing test")
-    ORC->>PG: authorize(tool_id, OPEN, destructive, path)
-    Note over PG: path in trusted workspace -> auto-grant + log (no card)
+    Note over ORC: resolve the path once — inside a trusted root, so not refused
+    ORC->>PG: authorize(write_project_file, OPEN, destructive=true, trusted=true)
+    Note over PG: card-free, still recorded + logged — the harness payoff
     PG-->>ORC: GRANTED
-    ORC->>TL: execute(...)
+    ORC->>TL: execute(args, context.resolved_path)
 
-    Note over WV,ORC: a powerful/armed action needs the typed keyword
-    WV->>SRV: conversation.sendMessage ("!run deploy.sh")
-    Note over ORC: keyword prefix present (user-typed — injected content can't supply it)
-    ORC->>PG: authorize(run_command, OPEN, destructive=true, detail)
-    Note over PG: outside trust / powerful -> per-invocation card (flow 2), exact command shown
+    Note over WV,ORC: a command in the SAME trusted directory
+    ORC->>PG: authorize(run_command, OPEN, destructive=true, detail, trusted=false)
+    Note over PG: per-invocation card (flow 2), exact command shown — every time
     PG-->>ORC: GRANTED or DENIED
 ```
 
+*Not built (step 8):* the **keyword gate** — a user-typed prefix (e.g. `!run …`; exact
+syntax open, §13) required to run or arm a powerful action. Because a prefix is a
+keystroke from the human, observed content can never forge it, so it doubles as an
+injection barrier. Nothing in `agent_core/` implements it today.
+
 ## 13. Build a widget — SAFE safe-vocabulary vs. higher-tier code-backed
+
+**Phase-2 step 6 — not built.** Today's shipped flow is flow 8, and today's vocabulary is
+three kinds (`routine`, `stat`, and `command` in OPEN only); there is no
+`required_capabilities`, no capability tier, and no interactive kind. What follows is the
+target shape.
 
 Widgets are buildable in **every** mode; the mode gates the **capability**, not whether one
 can be built (amendment §8.4). A SAFE request for a to-do widget produces a real checklist
@@ -499,7 +565,7 @@ user's standing default model — a strategy orders only the fallback tail, so r
 never overrides a deliberate choice. The turn falls forward only on a
 **provider-unavailable** failure (429, 5xx, network); a rejected request or a bad key
 ends the turn at once, because the next provider would just get the same bad request.
-The cooldown is in-memory, and the per-turn deadline is threaded into each attempt so
+The cooldown is in-memory, and the per-attempt deadline is threaded into each attempt so
 one hanging candidate cannot stall the turn.
 
 ```mermaid
@@ -511,7 +577,7 @@ sequenceDiagram
 
     ORC->>RC: routing_chain(role, model_name)
     Note over RC: head = the user's default — strategy orders the tail
-    RC-->>ORC: [A, B, ...] (cooled providers skipped)
+    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown —<br/>the orchestrator skips cooled providers over this result)
     ORC->>A: send(..., timeout=budget remaining)
     alt A answers
         A-->>ORC: response
@@ -527,6 +593,9 @@ sequenceDiagram
 ```
 
 ## 15. MCP tool call through the existing gate
+
+**Phase-2 step 7 — not built.** No module in `agent_core/` implements an MCP client
+today; the names below are the target shape, not code.
 
 Addison is an MCP **client**, not a server/gateway (amendment §8.5). External MCP tools are
 surfaced through the **existing registry and permission gate** — never a side channel — so

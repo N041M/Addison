@@ -1,7 +1,8 @@
 // The workspace-trust panel — the Settings face of the coding-harness trust
-// boundary (Phase-2 step 5, contract D6). It is shown ONLY on the Developer and
-// Custom surfaces (keyed off the active profile, never the policy mode); Simple
-// never sees it. That gate lives in SettingsPage.
+// boundary (Phase-2 step 5, contract D6), in the dark direction's row idiom. It
+// is shown ONLY on the Developer and Custom surfaces (keyed off the active
+// profile, never the policy mode); Simple never sees it. That gate lives in
+// SettingsPage.
 //
 // What trusting a folder does, said out loud here and honestly: inside a trusted
 // folder Addison's typed file tools read and edit WITHOUT asking before each
@@ -9,15 +10,15 @@
 // ask every time. That last sentence is load-bearing: this panel never claims the
 // shell is undoable or restore-covered, because it isn't (contract D6 [F2]).
 //
-// Fern shape rule (docs/design-brief-fern): every control here is rounded, because
-// it is the person's to act on, and the fern accent marks the confirm's primary.
 // Trusting a folder means Addison will ask LESS often, so — like the Custom guard
-// panel — it is gated behind an inline confirm before anything is granted; it is
-// never a browser confirm(), which couldn't carry the honest cost line. Revoking
-// makes Addison ask first again (a tightening), so it goes straight through.
+// panel — it is gated behind an inline two-step confirm before anything is
+// granted; it is never a browser confirm(), which couldn't carry the honest cost
+// line. Revoking makes Addison ask first again (a tightening), so it goes
+// straight through.
 
 import { useState } from "react";
 import type { WorkspaceCardState } from "../hooks/useWorkspace";
+import { RowConfirm, SurfaceRow } from "./Surface";
 
 // --- Frozen copy (contract D6) — byte-for-byte. -----------------------------
 
@@ -34,6 +35,9 @@ const STANDING_LINE =
 const GRANT_CONFIRM =
   "While Addison works in this folder it won't ask before each file change, and " +
   "everything is logged. Trust this folder?";
+
+/** The accent action that opens the OS folder picker. */
+const CHOOSE_ACTION = "choose a folder…";
 
 function formatWhen(grantedAt?: number): string {
   if (!grantedAt) return "";
@@ -65,11 +69,7 @@ export function WorkspaceTrustPanel({
     state;
 
   if (!connected) {
-    return (
-      <p className="text-meta text-muted">
-        These settings appear here once Addison&rsquo;s engine is connected.
-      </p>
-    );
+    return <SurfaceRow wrap name="These settings appear here once Addison's engine is connected." />;
   }
 
   async function choose() {
@@ -89,94 +89,77 @@ export function WorkspaceTrustPanel({
   }
 
   return (
-    <div>
-      <p className="mb-3.5 text-fine leading-relaxed text-ink-soft">{STANDING_LINE}</p>
-
-      {!pendingDir && (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void choose()}
-          className="rounded-sm bg-fern px-4 py-2 text-meta font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50 max-md:min-h-[44px]"
-        >
-          Choose a folder to trust&hellip;
-        </button>
-      )}
+    <>
+      <SurfaceRow name={STANDING_LINE} />
 
       {/* The grant confirm — names the picked folder before the click, then the
           honest cost line, then the commit. Two-step (pick, then confirm) and
           inline, never window.confirm(). */}
       {pendingDir && (
-        <div className="rounded-card bg-fern-tint px-[15px] py-[13px]">
-          <p className="font-mono text-label text-ink-soft" data-testid="pending-dir">
-            {pendingDir}
-          </p>
-          <p className="mt-2 text-fine leading-relaxed text-ink-soft">{GRANT_CONFIRM}</p>
-          <div className="mt-2.5 flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void confirmGrant()}
-              className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
-            >
-              Trust this folder
-            </button>
-            <button
-              type="button"
-              onClick={() => setPendingDir(null)}
-              className="text-xs font-medium text-ink-soft hover:text-muted"
-            >
-              Not now
-            </button>
-          </div>
-        </div>
+        <SurfaceRow
+          name={
+            <span data-testid="pending-dir" className="break-all font-mono text-[11px] text-ink">
+              {pendingDir}
+            </span>
+          }
+        >
+          <RowConfirm
+            busy={busy}
+            confirmLabel="Trust this folder"
+            onConfirm={() => void confirmGrant()}
+            onCancel={() => setPendingDir(null)}
+          >
+            {GRANT_CONFIRM}
+          </RowConfirm>
+        </SurfaceRow>
       )}
 
       {/* A refused grant (the data-dir refusal, or a folder that doesn't exist) in
           the core's own already-plain words — never a stack trace. */}
-      {error && <p className="mt-3 text-fine leading-relaxed text-ink-soft">{error}</p>}
+      {error && <SurfaceRow name={error} />}
 
       {/* The outcome of the last revoke, in plain words. Stays put rather than
           fading — a sentence someone re-reads. */}
-      {notice && <p className="mt-3 text-fine leading-relaxed text-ink-soft">{notice}</p>}
+      {notice && <SurfaceRow name={notice} />}
 
-      {/* The trusted-roots list, each with a "Stop trusting" control. */}
-      <div className="mt-4">
-        {!rootsLoaded ? (
-          <p className="text-meta text-muted">Looking for your trusted folders&hellip;</p>
-        ) : roots.length === 0 ? (
-          <p className="text-meta text-muted">
-            No trusted folders yet. Choose one above and Addison can work in it without asking
-            before each file change.
-          </p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {roots.map((root) => (
-              <li
-                key={root.directory}
-                className="flex items-start justify-between gap-3 rounded border border-line bg-paper px-[14px] py-2.5"
-              >
-                <div className="min-w-0 flex-1">
-                  <p className="break-all font-mono text-label text-ink">{root.directory}</p>
-                  {root.grantedAt ? (
-                    <p className="mt-0.5 text-fine text-faint">
-                      Trusted {formatWhen(root.grantedAt)}
-                    </p>
-                  ) : null}
-                </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handleRevoke(root.directory)}
-                  className="shrink-0 text-xs font-medium text-muted hover:text-danger disabled:opacity-50"
-                >
-                  Stop trusting
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+      {!rootsLoaded ? (
+        <SurfaceRow wrap name="Looking for your trusted folders…" />
+      ) : roots.length === 0 ? (
+        <SurfaceRow
+          name="No trusted folders yet"
+          value="Addison asks before each file change"
+          action={pendingDir ? undefined : CHOOSE_ACTION}
+          actionDisabled={busy}
+          onAction={pendingDir ? undefined : () => void choose()}
+        />
+      ) : (
+        <>
+          {roots.map((root) => (
+            <SurfaceRow
+              key={root.directory}
+              name={
+                <span className="break-all font-mono text-[11px] text-ink-soft">
+                  {root.directory}
+                </span>
+              }
+              value={root.grantedAt ? `trusted ${formatWhen(root.grantedAt)}` : undefined}
+              action="Stop trusting"
+              actionAriaLabel={`Stop trusting ${root.directory}`}
+              actionTone="danger"
+              actionDisabled={busy}
+              onAction={() => void handleRevoke(root.directory)}
+            />
+          ))}
+          {!pendingDir && (
+            <SurfaceRow
+              name="Another folder"
+              action={CHOOSE_ACTION}
+              actionDisabled={busy}
+              onAction={() => void choose()}
+            />
+          )}
+        </>
+      )}
+    </>
   );
 }

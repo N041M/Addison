@@ -1,19 +1,30 @@
-// First-run pine banner — the setup nudge shown in the chat column on a fresh,
-// unconfigured launch (design-brief-fern README §5, directions option 5a).
+// First-run setup block — the nudge shown in the chat column on a fresh,
+// unconfigured launch (DARK direction; docs/design-brief-dark, "Screens → Chat
+// empty state": *the pine banner is REPLACED by this empty state plus a
+// first-run block restyled into the row idiom*).
 //
-// The pine banner is the ONE high-contrast block in the Fern palette: pine bg,
-// cream text, 12px radius, the `pine` lift shadow. It never inverts between
-// themes, so its text colors are fixed tokens (pine-soft / pine-ink / cream /
-// pine-body / pine-muted / pine-line — see styles.css) rather than the usual
-// light↔dark pairs.
+// The Fern pine card is gone — no filled block, no cream, no serif. What is left
+// is the same two steps as hairline rows under a section label, an accent "Start
+// setup" action, and the launch-only "Skip for now" beside it. It rides inside
+// the empty state's centred stack (ChatThread), under the greeting.
 //
-// Two steps: (1) connect a model, (2) say hello. Step 1 is current on a fresh
-// launch; once a provider connects during this launch the banner advances to
-// step 2 and the copy flips to a "say hello" nudge (App focuses the composer).
-// "Start setup" opens Settings on the API-keys card; "Skip for now" dismisses
-// the banner for this launch only (no persistence — it returns next launch while
-// nothing is configured). Below the pine card, on a fresh launch with an empty
-// thread, a serif time-of-day greeting replaces the normal welcome message.
+// The behaviour is untouched: step 1 is current on a fresh launch; once a
+// provider connects during this launch the block advances to step 2 and the copy
+// flips to a "say hello" nudge (App focuses the composer). "Start setup" opens
+// Settings on the API-keys card; "Skip for now" dismisses for this launch only
+// (plain state, deliberately not persisted — it returns next launch while
+// nothing is configured).
+//
+// EVERY LINE HERE IS ON A HEIGHT BUDGET, and that is the reason for the single
+// header row and the one-line step copy. This block is the last thing in the
+// empty state's stack, inside a scroller whose scrollbar is hidden by design
+// (ChatThread's `no-scrollbar fade-mask-y`), so anything that falls past the
+// fold has a 20px fade as its only cue. Measured on the first version at
+// 1280×620: the scroller was 380px tall over 479px of content and "Start setup"
+// — the one action a brand-new user has — sat 38px BELOW the scroller's bottom
+// edge, off screen, on the very first launch. The block was 184px; it is now
+// ~120px, which brings both actions back inside the fold at that size. Adding a
+// line here spends that margin: check it at 1280×620 before you do.
 
 interface Props {
   /** 1 = connect a model (fresh), 2 = say hello (a provider connected this launch). */
@@ -22,108 +33,80 @@ interface Props {
   onStartSetup: () => void;
   /** Dismiss for this launch only (plain state, no persistence). */
   onSkip: () => void;
-  /** Show the serif greeting below the card (first-run + empty thread only). */
-  showGreeting: boolean;
 }
 
-export function FirstRunBanner({ step, onStartSetup, onSkip, showGreeting }: Props) {
+export function FirstRunBanner({ step, onStartSetup, onSkip }: Props) {
   return (
-    <div className="flex flex-col gap-9">
-      <section
-        aria-label="First-time setup"
-        className="rounded-banner bg-pine px-7 py-6 text-cream shadow-banner"
-      >
-        <div className="flex items-baseline justify-between gap-3">
-          <p className="text-label font-semibold uppercase tracking-caps-wider text-pine-soft">
-            First-time setup · step {step} of 2
-          </p>
-          <button
-            type="button"
-            onClick={onSkip}
-            className="text-meta font-medium text-pine-muted hover:text-cream"
-          >
-            Skip for now
-          </button>
-        </div>
-
-        <h2 className="mt-2.5 font-serif text-headline font-medium text-pine-ink">
+    <section aria-label="First-time setup" className="w-full text-left">
+      {/* Sentence and progress on ONE row, in the same idiom as the step rows
+          below (text left, mono note right). Stacked as a label over a sentence
+          it cost 22px of the height budget above for two lines that say one
+          thing between them. */}
+      <div className="flex items-baseline gap-3 border-l-2 border-rail pl-3.5">
+        <p className="m-0 min-w-0 text-[12px] text-ink-soft">
           {step === 1 ? "Let's get Addison ready." : "You're set up. Say hello to Addison."}
-        </h2>
+        </p>
+        <span className="flex-1" />
+        <span className="shrink-0 font-mono text-[10px] text-faint">
+          first-time setup · {step} of 2
+        </span>
+      </div>
 
-        <div className="mt-4 flex flex-col gap-2.5">
-          <StepRow
-            state={step === 1 ? "current" : "done"}
-            n={1}
-            text="Choose where Addison thinks — connect a cloud account, or download a model that stays on this computer."
-          />
-          <StepRow
-            state={step === 2 ? "current" : "later"}
-            n={2}
-            text="Say hello — Addison introduces itself and asks what you need."
-          />
-        </div>
+      <div className="mt-2 flex flex-col">
+        {/* Both rows are measured to hold ONE line at the narrowest column the
+            app has (297px of text width at a 375px window) — see the height
+            budget in the file header. The longer versions wrapped to two lines
+            each and pushed "Start setup" off the bottom of a short window. */}
+        <StepRow
+          state={step === 1 ? "current" : "done"}
+          text="Connect a cloud account, or a model that stays here."
+        />
+        <StepRow
+          state={step === 2 ? "current" : "later"}
+          text="Say hello — Addison introduces itself."
+        />
+      </div>
 
+      <div className="mt-3 flex items-baseline gap-5 pl-0.5">
         {step === 1 && (
           <button
             type="button"
             onClick={onStartSetup}
-            className="mt-[18px] rounded-[7px] bg-cream px-6 py-2.5 text-row font-semibold text-pine hover:bg-pine-ink"
+            className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
           >
             Start setup
           </button>
         )}
-      </section>
-
-      {showGreeting && (
-        <div>
-          <h1 className="font-serif text-greeting font-medium tracking-display text-ink">
-            {greeting()}
-          </h1>
-          <p className="mt-2 text-body text-muted">
-            Tell me what you'd like help with — I'll ask before doing anything, and
-            you can always undo.
-          </p>
-        </div>
-      )}
-    </div>
+        <button
+          type="button"
+          onClick={onSkip}
+          className="text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
+        >
+          Skip for now
+        </button>
+      </div>
+    </section>
   );
 }
 
-// One numbered step. current = cream-filled circle with pine number; done =
-// cream-filled circle with a pine check; later = outlined circle, muted number.
-function StepRow({
-  state,
-  n,
-  text,
-}: {
-  state: "current" | "done" | "later";
-  n: number;
-  text: string;
-}) {
-  const circle =
-    state === "later"
-      ? "border border-pine-line text-pine-muted"
-      : "bg-cream text-pine";
-  const bodyColor = state === "later" ? "text-pine-muted" : "text-pine-body";
+// One step, as a hairline row: what it is, then a mono word for where it stands.
+// "done ✓" only ever appears for a step that really is done.
+function StepRow({ state, text }: { state: "current" | "done" | "later"; text: string }) {
+  const tone =
+    state === "current" ? "text-ink-soft" : state === "done" ? "text-muted" : "text-disabled";
+  const note = state === "current" ? "now" : state === "done" ? "done ✓" : "next";
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex items-baseline gap-3 border-t border-line px-0.5 py-[9px] text-[12px]">
+      <span className={"min-w-0 leading-[1.55] " + tone}>{text}</span>
+      <span className="flex-1" />
       <span
         className={
-          "flex h-6 w-6 shrink-0 items-center justify-center rounded-pill text-meta font-semibold " +
-          circle
+          "shrink-0 font-mono text-[10px] " +
+          (state === "current" ? "text-accent" : "text-disabled")
         }
       >
-        {state === "done" ? "✓" : n}
+        {note}
       </span>
-      <p className={"mt-px text-row " + bodyColor}>{text}</p>
     </div>
   );
-}
-
-// Time-of-day greeting: morning 5–12, afternoon 12–18, evening otherwise.
-function greeting(): string {
-  const h = new Date().getHours();
-  if (h >= 5 && h < 12) return "Good morning.";
-  if (h >= 12 && h < 18) return "Good afternoon.";
-  return "Good evening.";
 }

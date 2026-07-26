@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 1024 1024">
+  <!-- Addison app icon. Apple's macOS grid: an 824x824 rounded rect centred in
+       1024 with 100px margins. Geometry from docs/design-brief-dark/brand/
+       "Addison Logo Mark" CONSTRUCTION table, at the DOCK panel's larger radius
+       (~22.5% vs the in-app 9%). Tile stays dark on every background.
+
+       WIDTH/HEIGHT ARE 100%, NOT 1024. Given a pixel size QuickLook fits the art
+       top-left and pads the rest with WHITE — 14.5% of the canvas, measured — so
+       every icon built before this carried a white band down its right edge and
+       along its bottom, and the tile was scaled and off-centre besides. A
+       percentage size with an explicit preserveAspectRatio fills the canvas.
+       Both viewBox and output are square, so "none" distorts nothing.
+
+       QuickLook also flattens onto white, which is fatal for an app icon: the
+       area outside the rounded tile must be TRANSPARENT or the dock shows a
+       white square. build-app-icon.sh restores that alpha afterwards from this
+       file's own geometry (the margin and radius below). Keep them in step. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#16171B"/>
+  <rect x="105" y="105" width="814" height="814" rx="180" fill="none" stroke="#26272B" stroke-width="10"/>
+  <text x="248" y="821" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="500" font-size="568" letter-spacing="-22.7" fill="#E9E9E7">a</text>
+  <circle cx="714" cy="310" r="95" fill="#B4A9F5"/>
+</svg>

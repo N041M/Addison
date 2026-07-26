@@ -1,4 +1,4 @@
-# Addison — Session Handoff (2026-07-24)
+# Addison — Session Handoff (2026-07-26)
 
 For the next working session. Read **CLAUDE.md** first (repo law), then
 **`docs/addison-scope-amendment-2026-07.md`** (the adopted scope shift — it
@@ -7,30 +7,37 @@ owner-decision note supersedes it), then this.
 
 **Next up: Phase-2 step 6 (widget capability tiers + expanded safe vocabulary;
 make `primary.txt` capability-aware), then 7 (MCP client) and 8 (the automation
-keyword gate).** Steps 4 (free-model endpoints, add-by-prompt, "make it cheaper")
-and 5 (coding harness + workspace-trust) are **BUILT — 2026-07-24**, on the
-`step4-step5` branch; see "What shipped 07-24: steps 4 + 5" below, **and read its
-post-build rigor pass before trusting any of it.**
+keyword gate).** Those three are the only unbuilt Phase-2 steps. **Phase-2 steps
+1–5 are all BUILT and merged** — step 1 (the snapshot/rollback floor, G3, PR #47,
+plus the ledger retirement in #51), step 2 (Custom profile + guards + the G4
+anchor caller, #52), step 3 (routing strategies, #54), and steps 4 + 5
+(free-model endpoints and the coding harness + workspace-trust, #56). Each has a
+"What shipped" section below, **and each one's post-build rigor pass is where the
+real defects were — read those before trusting any of it.**
 
 **Two queued, contract-first, not started:** rework local-model setup
 (state-aware — not-downloaded → one-click download plus a source link;
 downloaded → how to connect it; and more open-source models), and skills
 file-upload (an uploaded text file's contents become the skill's guidance text —
 editable, previewed, size-limited).
-**Step 3 (routing strategies) is BUILT** — 2026-07-24, the
-`step3-routing-strategies` branch; see "What shipped 07-24: step 3" below.
-Step 1 (the snapshot/rollback floor, G3) is **merged**; the **step-1 ledger is
-retired** (2026-07-24, `retire-step1-ledger`): `snapshot_now` as a LOW
-capture-only tool, the Restore card's honest no-verified-target line, and the
-source-level lock on the verified-flag narrowing
-(`test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing`).
-**Phase-2 step 2 is BUILT** (2026-07-24, `step2-custom-profile-guards` — see
-"What shipped 07-24: step 2" below).
 
-**Everything through PR #49 is on `master`.** Open, stacked in order:
-**PR #50** (signing trust fix + handoff rewrite) → **PR #51** (ledger
-retirement) → the step-2 PR. Merge in that order; each later diff shrinks to
-its own commit once its parent merges.
+**Branch and PR state (verified 2026-07-26).** **There are no open pull
+requests**; everything through **PR #57** (`fix/keychain-double-prompt`) is on
+`master`. Two branches are pushed and **not merged**:
+
+- **`redesign/dark-v2`** — 15 commits ahead of `master`. The whole dark v4
+  redesign, the adversarial-review fix wave (`1241026`) and the docs wave
+  (`ee38dbe`). See "What shipped 07-25 → 07-26" below. **It is the checked-out
+  branch and carries all the newest work — start here, not on `master`.**
+- **`windowed-thread`** — `redesign/dark-v2` plus one commit (`8503b18`,
+  rendering the thread as a window rather than the whole conversation). **Thread
+  windowing is not on `master` and not on `redesign/dark-v2`** — it lives only
+  here. Do not describe it as shipped.
+
+`archive/thread-window-wip` (the windowing experiment plus its scratch harness)
+and `archive/icon-gen-wip` (an alternative icon-generation approach) are parked
+work from worktrees, kept only so the attempts are recoverable. Neither is
+intended for merge.
 
 ## Read this first: the standard this repo is held to
 
@@ -59,20 +66,26 @@ reason; they went stale twice in a day, and a stale number reads as a claim.
 - The whole v1 build order (engineering-spec §11, steps 1–11) is implemented and
   **merged to `master`**. No open PRs, no stacked chain — the stacked-PR era is
   over; every change now goes PR → `master` directly.
-- **A major scope amendment was adopted 2026-07-20.** Phase 1 (docs) landed;
-  **Phase-2 step 1 (the snapshot/restore subsystem, floor G3) is now built.**
-  Addison is a **butler**: Developer = a Claude-Code-class **coding harness**;
-  Simple = an all-in-one **companion**; a new **Custom** profile tunes prompting
-  guards. Safety is redefined as **guaranteed rollback**, and as of this session
-  that redefinition has code and tests behind it.
-- **Gates, all green:** pytest (several hundred tests + 1 xfail, and climbing
-  every round), **pyright 0 errors** (repo-wide; the remaining diagnostics are
-  `reportMissingImports` for `pytest`/`httpx`, pre-existing — pyright has no
-  venv), ruff clean, vitest across 8 files, ESLint clean, `tsc --noEmit` +
-  `vite build` clean, Rust `cargo test` clean. **Exact counts are deliberately
-  not written down here** — they went stale twice in one day and a stale number
-  reads as a claim. Run the gates; the commands are under "Environment facts".
-  **Green gates are not the bar — see "How step 1 was verified" below.**
+- **A major scope amendment was adopted 2026-07-20.** Phase 1 (docs) landed, and
+  **Phase-2 steps 1–5 are all built and merged** (G3 snapshots; Custom profile +
+  guards + the G4 anchor; routing strategies; free-model endpoints; the coding
+  harness + workspace-trust). Addison is a **butler**: Developer = a
+  Claude-Code-class **coding harness**; Simple = an all-in-one **companion**; a
+  **Custom** profile tunes prompting guards. Safety is redefined as **guaranteed
+  rollback**, and that redefinition has code and tests behind it. **Steps 6, 7
+  and 8 are not started.**
+- **The UI is mid-redesign on `redesign/dark-v2`, not on `master`.** The dark v4
+  direction is fully implemented on that branch; `master` still carries the Fern
+  UI. Anything this document says about the app's appearance describes
+  `redesign/dark-v2`.
+- **Gates, all green** on `redesign/dark-v2`: pytest, **pyright 0 errors**
+  (repo-wide; the remaining diagnostics are `reportMissingImports` for
+  `pytest`/`httpx`, pre-existing — pyright has no venv), ruff clean, vitest,
+  ESLint clean, `tsc --noEmit` + `vite build` clean, Rust `cargo test` clean.
+  **Exact counts are deliberately not written down here** — they went stale twice
+  in one day and a stale number reads as a claim. Run the gates; the commands are
+  under "Environment facts". **Green gates are not the bar — see "How step 1 was
+  verified" below.**
 - **CI exists** — `.github/workflows/ci.yml`, three jobs (python:
   ruff·pyright·pytest / frontend: eslint·tsc·vitest·build / rust: cargo test) on
   every PR and push to `master`. Keep it green.
@@ -133,13 +146,15 @@ content exists nowhere else (delete a routine / widget / note, change a note)
 **refuse the change** if the snapshot cannot be taken; the three recoverable ones
 proceed and raise a **sticky warning** that only a successful manual save clears.
 
-**Frontend.** The Settings **"Restore points"** card (never called "Snapshots" in
-any user-facing string), placed directly under Profile. Fern-filled restore button
-(never the rose `danger` token — a recovery is not a destruction), a two-step
-inline confirm carrying the consequence copy plus a profile-change sentence and a
-genesis sentence when they apply, the target always named with its timestamp
-before the button, and the blocky **Permanent** tag with no Remove control on
-anchors. QA steps: **TESTING-CHECKLIST §13a**.
+**Frontend.** The Settings **"Restore points"** section (never called
+"Snapshots" in any user-facing string), placed directly under Profile, plus the
+Restore-points modal and the Snapshots surface that share its rows by value. The
+restore action is **accent, never the rose `danger` token** — a recovery is not a
+destruction — with a two-step inline confirm carrying the consequence copy plus a
+profile-change sentence and a genesis sentence when they apply, the target always
+named with its timestamp and **kept on screen through the confirm**, and the
+blocky **Permanent** tag (small caps on a 2px accent rule) with no Remove control
+on anchors. QA steps: **TESTING-CHECKLIST §13a**.
 
 **Two decisions worth internalising before you extend it:**
 
@@ -178,8 +193,9 @@ anchors. QA steps: **TESTING-CHECKLIST §13a**.
   interactions + calm animations; Settings uses the ☰ drawer idiom (#35);
   sidebar always present on desktop (#36); mobile bell removed and **widgets
   moved inline into the chat screen** (#37, #39); drawer close-arrow + slide-out
-  animation on every close path (#38); **app icon is now the bell** (#40);
-  **rename chats by double-clicking the sidebar title** (#42).
+  animation on every close path (#38); the app icon became the bell (#40 — the
+  bell was **retired** by the dark v4 redesign; the mark is now the lowercase-`a`
+  tile); **rename chats by double-clicking the sidebar title** (#42).
 - **Skills** (#41): user-authored **declarative guidance notes** appended to the
   transient per-turn system prompt. They can *steer* but never widen what Addison
   may do — the registry + gate stay the sole authority. Plus two seeded in-house
@@ -600,6 +616,111 @@ change. The 182 are a separate decision (see Known gaps) and **must not be
 bulk-fixed** — many `BLE001` hits are the deliberate broad `except` in the recovery
 paths, where swallowing is the point.
 
+## What shipped 07-25 → 07-26 — the dark v4 redesign wave (`redesign/dark-v2`)
+
+**Unmerged.** Fifteen commits on `redesign/dark-v2`, pushed, no PR open. Nothing
+in this section is on `master`.
+
+**The redesign itself, in four commits** (`b86887a` → `cb35125`), against
+`docs/design-brief-dark/` — `README.md` + `prototype.html` are the designer's
+reference and **`IMPLEMENTATION.md` records the binding prototype→app mapping**.
+Read that file before restyling anything: it is where "demo content is never
+shipped, real features are restyled and never de-wired" is written down, and the
+whole wave was built to it.
+
+- **1/4 — tokens, motion, chrome.** The dark token table in
+  `shell/tailwind.config.js`, the character-scramble engine
+  (`shell/src/lib/scramble.ts`), and the header/sidebar/surface shell.
+- **2/4 — the chat column.** Empty state, thread, composer, the streaming
+  scramble, the widget rail.
+- **3/4 — the surfaces.** Settings, Tools, Snapshots, Build a widget, the model
+  popup, the restore modal.
+- **4/4 — cleanup, all of it verified unreferenced first.** The Fern alias blocks
+  in `tailwind.config.js` and the `--c-fern*`/`--c-pine*` indirection in
+  `styles.css` are gone, along with the `serif` family, the named fontSize scale,
+  the old radii/shadows, `BottomSheet.tsx`, `BellLogo.tsx` and `WidgetRail`'s
+  unreachable `variant="sheet"`. **The `WELCOME` seed is retired** — a new thread
+  now starts genuinely empty, which is what makes `ChatThread` render the
+  greeting stack; `App`'s `threadEmpty`/`threadMessages` filter existed only to
+  hide that seed and is gone. A mutation-proven test pins the empty start.
+
+Then eleven follow-ups: the prototype's line-height model and the accent Addison
+sender label (`f600015`); the sidebar-title scramble on chat switch, with the
+stagger surviving remounts and capped at the viewport (`69b9d30`); Settings
+levelled with the composer and the **lowercase-`a` mark** adopted in header,
+splash and favicon (`c3d2aab` — the service bell is retired); the composer
+wrapping full-width over a controls strip with its max-height on the line grid
+(`a37e173`, `63429fa`); a bespoke composer scrollbar in its own reserved lane
+(`b0ae132`); revealing a *finished* answer with the scramble rather than showing
+it whole (`d8493e6`); and dropping the redundant header wordmark plus
+regenerating the OS icon set from the mark (`2c3a2e3`, via
+`docs/design-brief-dark/brand/build-app-icon.sh`).
+
+### `1241026` — the bugs the adversarial review found
+
+The redesign's own rigor pass, and the reason the wave is worth trusting. Every
+fix in it is mutation-proven. Grouped as the commit groups them:
+
+- **Motion.** The reveal no longer paints the finished answer before hiding it
+  (the first frame is emitted synchronously, in the same commit that sets the
+  target); a reveal no longer scroll-jails the thread (auto-scroll follows only a
+  reader already at the bottom); the animation path cleans up on unmount;
+  adopting the launch conversation's id no longer replays the switch stagger;
+  `onDone` fires once and a finished engine is not reused; the streaming path
+  adapts its rate and can never display text it has not committed.
+- **Surfaces.** The one-action restore names its target and timestamp **through**
+  the confirm again — that was a **regression against `master`**, on the G3
+  surface. The restore modal moves, traps and restores focus. The footer's undo
+  promise is now **mode-scoped** (`footerNote` in `RestorePointsModal.tsx`),
+  because `run_command` is SAFE-2's one explicit exemption under OPEN and a
+  footer promising "everything can be undone" contradicted the profile card two
+  sections away. Routines no longer claim "None yet" while the engine is
+  unreachable. Consent answers have real hit targets, with Allow dominant by fill
+  rather than hue.
+- **Chrome.** A pending consent card is hoisted above the modal/drawer scrim that
+  had made it unanswerable, and the modal's focus trap deliberately includes it —
+  a consent surface behind a scrim is a safety failure, not a cosmetic one.
+  Collapsed columns are inert instead of holding invisible focus stops; Effort is
+  reachable by keyboard; the drawer scrim darkens in both themes; light-mode text
+  meets AA (ghost 1.53 → 4.61, disabled 2.17 → 4.97, faint 2.94 → 5.43) and the
+  scrollbar thumb has its own token at 3.22; the rail sheds before the reading
+  column is squeezed; row names truncate and rows carrying sentences wrap.
+- **What the tests were doing.** The frontend suite went 238 → 302. `Composer`
+  **had no test file at all and all 11 mutations against it survived**; the
+  reduced-motion guard could be deleted with the suite still green; the switch
+  stagger had no coverage; and **two G3 tests passed while restoring the wrong
+  snapshot**. That is the standing failure mode of this repo, found again, in the
+  same shape.
+- Also: the favicon is now a raster rendered from a checked-in master
+  (`docs/design-brief-dark/brand/favicon-master.svg` → `shell/public/favicon.png`),
+  so the mark no longer depends on the rasterising platform's fonts.
+
+### `ee38dbe` — the docs wave
+
+Adds **`docs/phase-3-review-surface-plan.md`** — a bespoke review surface for the
+Developer/OPEN profile, approved 2026-07-25 and **blocked on Phase-2 steps 6, 7
+and 8**. It **redefines what Phase 3 means**: four documents scoped that phase as
+packaging, signing, notarisation, the updater, binary restore and Secure-Enclave
+identity, and the plan adds a Developer surface alongside them. The redefinition
+was written back into those four places rather than left to be discovered.
+
+The rest of the wave brings the tree's account of itself back in line with what
+is built: the dark direction in `CLAUDE.md` and the design doc, **TESTING-CHECKLIST
+rewritten around the surfaces as they now are**, and `data-model.md` /
+the scope amendment / `IMPLEMENTATION.md` updated where the code had moved past
+the prose. Code side is cleanup only — exports nothing outside their module
+imports are now module-private (`CLICK_DELAY_MS`, `CLICK_SCRAMBLE_SELECTOR`,
+`STREAM_WINDOW_CHARS`, `REVEAL_TARGET_MS`, `ConversationsState`, `OffersState`
+and the two offer banners). No behaviour changes.
+
+### Not shipped: thread windowing
+
+`8503b18` on the **`windowed-thread`** branch renders the thread as a window
+rather than the whole conversation. It is `redesign/dark-v2` plus that one
+commit, pushed, unmerged, and **not present on either `master` or
+`redesign/dark-v2`**. If a doc or a comment implies the thread is windowed today,
+it is wrong.
+
 ## The scope amendment in one screen (read the full doc)
 
 - **Identity** — butler. Developer = coding harness + Addison's safety/QoL;
@@ -690,6 +811,14 @@ Then:
 7. **MCP client** tools through the registry + gate (SAFE: read-only/undo-able
    only — invariant 2 enforces it).
 8. **Automation keyword gate** + author-OS-run automation.
+
+**6, 7 and 8 are the only unbuilt steps, and they are the real next work.**
+Downstream of all three sits **`docs/phase-3-review-surface-plan.md`** (approved
+2026-07-25) — a bespoke review surface for the Developer/OPEN profile, explicitly
+blocked on 6, 7 and 8. It also redefines Phase 3: that phase is no longer only
+packaging / signing / notarisation / the updater / binary restore /
+Secure-Enclave identity, and the four documents that scoped it that way were
+amended to say so.
 
 Steps 3–4 (companion-facing) can run in parallel with 5–8 once 1–2 land.
 Close the amendment's **§13 open questions** as you go. **Three are now closed —
@@ -1146,8 +1275,11 @@ report never arrived.
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
-- `shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets moved
-  inline on mobile) — delete or repurpose.
+- ~~`shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets
+  moved inline on mobile) — delete or repurpose.~~ **CLOSED (2026-07-25, dark
+  redesign phase 4):** deleted, along with the now-unreachable `"sheet"` variant
+  in `WidgetRail` and the `sheet-in` keyframe. The narrow-window layout keeps the
+  drawer + inline widgets the dark brief asks for.
 - **~~Three loose ends left by step 1~~ — ALL THREE CLOSED (2026-07-24, step 2 +
   its rigor pass):** `RestoreResult.providers_needing_a_key` was dropped (the
   keychain probe in `rpc/snapshots.py` computes the names itself — a field would
@@ -1177,13 +1309,27 @@ report never arrived.
   contradiction between existing docs *and saying why*, because the doc set had two
   rival schemas and nothing stated precedence. Reuse the shape for steps 5–8.
 - **One PR per change, straight to `master`.** CI must be green.
-- **Binding UI direction — the "Fern" redesign.** `docs/design-brief-fern/` is
-  authoritative for tokens, type, shape, copy. Warm paper neutrals + one
-  fern-green accent; serif message body (Source Serif 4), Public Sans UI, IBM
-  Plex Mono for machine facts; **blocky = live annotation, rounded =
-  ownable/actionable**; light default + class-driven dark, now with a
-  **three-way Light/Dark/Match-this-computer** setting. Plain language for
-  personas 54/68; never AI tropes or vendor branding.
+- **Binding UI direction — the dark redesign (v4, adopted 2026-07-26).**
+  `docs/design-brief-dark/` is authoritative for tokens, type, shape and copy:
+  `README.md` + `prototype.html` are the designer's pixel-perfect reference, and
+  **`IMPLEMENTATION.md` records the binding prototype→app mapping** — read it
+  before restyling anything, because it is where "demo content is never shipped,
+  real features are restyled and never de-wired" is written down. Near-black
+  paper (`#0C0C0D`), hairline separators, one soft violet accent (`#B4A9F5`) for
+  actions/selection/live state only; **system type only** — no bundled fonts, no
+  `@font-face`, no serif. Shape: selection is a **2px accent left rail**,
+  sections sit on 2px rules, rows are hairline-separated, and bordered panels are
+  reserved for floating chrome (popover 7px, modal 8px, menu 6px) — no cards, no
+  pills. Signature motion: the character-scramble (`shell/src/lib/scramble.ts`)
+  + fadeRise/fadeDrop, all no-ops under `prefers-reduced-motion`. Dark is the
+  designed reference and light a derived translation; the theme stays three-way
+  Light/Dark/Match-this-computer, default **Match this computer**. The mark is
+  the lowercase-`a` tile (`AddisonMark.tsx`); the service bell is retired, and
+  the OS icon set is regenerated from it via
+  `docs/design-brief-dark/brand/build-app-icon.sh`. Plain language for personas
+  54/68; never AI tropes or vendor branding.
+  **This supersedes the "Fern" direction** — `docs/design-brief-fern/` stays in
+  the tree as history and is authoritative for nothing.
 - Verify UI changes in the browser preview where possible; note that the
   disconnected preview can't exercise the live core (no conversations, no skill
   persistence) — cover those with unit/component tests instead.
@@ -1191,7 +1337,9 @@ report never arrived.
 
 ## Tracked thread: macOS keychain prompts
 
-**STATUS 2026-07-25: root causes confirmed and FIXED (working tree, uncommitted).**
+**STATUS 2026-07-25: root causes confirmed and FIXED. Merged as PR #57**
+(`fix/keychain-double-prompt`, commit `5e435dd`) — this is the newest thing on
+`master`, and `redesign/dark-v2` is built on top of it.
 The unexplained multi-prompt symptom was diagnosed by a multi-agent audit with
 adversarial verification and fixed the same day. What it was, in one breath: the
 device identity had no session cache (two OS reads per relay message —
@@ -1293,8 +1441,7 @@ Two things the next session needs to know:
   `security find-identity -v -p codesigning` reports **0 valid identities** and the
   script correctly refuses. This step was missing from the first version of the
   instructions and is where the owner got stuck; the script now detects that exact
-  state and says so. (That fix is on the unpushed `fix-signing-instructions`
-  branch.)
+  state and says so. (That fix merged as PR #50.)
 - **`cargo` strips the signature on every rebuild**, so `./scripts/sign-dev-binary.sh`
   must be re-run after each build. This is a step someone will forget. Wiring it
   into the dev loop was offered and **not** done, because `tauri dev` builds and
@@ -1302,22 +1449,22 @@ Two things the next session needs to know:
   the binary separately — a workflow change the owner has not agreed to. Ask before
   imposing it.
 
-**⚠️ ONE SYMPTOM REMAINS UNEXPLAINED, and it may be a real bug.** The owner
-reported **three prompts in a single launch** (one process, confirmed by `ps`).
-Signing explains prompts *across* rebuilds; it does not explain three within one
-process, because `KEY_CACHE` should collapse provider-key reads to one. The
-untested hypothesis: a failing `provider-key:anthropic` read cascades to the legacy
-`provider-key:primary` (which still exists on that machine, orphaned — the
-migration only fires when the new entry is ABSENT), and then, with no key
-resolving, the turn falls through to the Setup Assistant relay, which reads
-`device-identity`. That would be three prompts naming **three different items** and
-would mean the first read is *failing*, not merely being re-asked. **The diagnostic
-is cheap: macOS names the item in the dialog.** Same name three times = three
-launches, benign. Three different names = chase it. Do not assume signing closed
-this until the owner confirms.
+**The multi-prompt symptom was the unexplained one, and the 07-25 audit above
+explained it.** The owner reported **three prompts in a single launch** (one
+process, confirmed by `ps`). Signing explained prompts *across* rebuilds but not
+three within one process, because `KEY_CACHE` should collapse provider-key reads
+to one. The hypothesis recorded here was that a failing `provider-key:anthropic`
+read fell through to the Setup Assistant relay, which then read `device-identity`
+twice with no cache — three prompts naming **three different items**. That is
+what the audit found and fixed: the three-way key-read seam (a failed read is now
+distinguishable from "nothing saved" and answers on-machine instead of routing to
+the relay), `DEVICE_CACHE`, and the orphaned legacy entry as the resurrection
+source. **The diagnostic stays cheap if it ever recurs: macOS names the item in
+the dialog.** Same name three times = three launches, benign. Three different
+names = the cascade is back.
 
-Original diagnosis below, still accurate. Two independent causes were confirmed
-against the tree.
+Original diagnosis below. Cause 1 is unchanged; cause 2 has since been fixed
+(`DEVICE_CACHE`) and is kept for the reasoning.
 
 **1. Dev builds are ad-hoc signed, so the ACL is invalidated on every rebuild.**
 `codesign -dv` on `shell/src-tauri/target/debug/addison` reports
@@ -1328,7 +1475,8 @@ identity, so **every rebuild presents itself as a different application** and th
 ACL is discarded. Clicking Always Allow in development is therefore not sticky,
 and never can be while the signature is ad-hoc.
 
-**2. `ensure_device_keypair()` is not covered by `KEY_CACHE`.** `KEY_CACHE`
+**2. `ensure_device_keypair()` is not covered by `KEY_CACHE`. — FIXED 2026-07-25**
+by `DEVICE_CACHE` (keychain.rs), one OS read per launch. `KEY_CACHE`
 (`keychain.rs`) caches *provider* keys, and `get_provider_key` consults it first —
 one OS read per provider per launch. `ensure_device_keypair` calls
 `entry.get_password()` directly with no cache, so the Setup Assistant relay path
@@ -1359,7 +1507,10 @@ legacy entry — but only on a read that finds **no** per-provider entry. Once
 never revisited. So a legacy entry orphans permanently whenever the migration's
 best-effort delete failed, or whenever the user saved an Anthropic key under the
 new scheme before any read triggered the migration. `delete_provider_key`
-("Remove") deletes only the per-provider account, so **Remove does not remove it
-either** — a stale key can sit in the user's keychain after they believe they
-deleted it. Small, but it is a G1-adjacent surprise and worth a targeted
-best-effort cleanup of `provider-key:primary` in `delete_provider_key`.
+("Remove") then deleted only the per-provider account, so a stale key sat in the
+user's keychain after they believed they had deleted it — and the next read
+resurrected it through the migration fallback. **FIXED 2026-07-25:**
+`delete_provider_key_blocking` now deletes `provider-key:primary` as well when
+the provider is the legacy one; a missing legacy entry counts as success, a real
+failure is reported because the key genuinely is still on the machine, and the
+retry is idempotent.

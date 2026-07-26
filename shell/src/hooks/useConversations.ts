@@ -6,7 +6,6 @@
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { ConversationSummary, DisplayMessage } from "../types/ui";
 import { ipc, isEngineConnected } from "../ipc/client";
-import { WELCOME } from "./useTurn";
 
 interface UseConversationsArgs {
   connected: boolean;
@@ -78,7 +77,9 @@ export function useConversations({
       .newConversation()
       .then((id) => {
         resetTransientState();
-        setMessages([WELCOME]);
+        // A new chat starts genuinely empty, which is what puts the greeting
+        // stack on screen (ChatThread's empty state).
+        setMessages([]);
         setCurrentConversationId(id);
         setConversationTitle(null);
         setScreen("chat");
@@ -155,8 +156,6 @@ export function useConversations({
     handleRenameConversation,
   };
 }
-
-export type ConversationsState = ReturnType<typeof useConversations>;
 
 // Coerce a stored row's role string to the display union. Loaded history holds
 // only user + assistant rows; anything unexpected is shown as an assistant line

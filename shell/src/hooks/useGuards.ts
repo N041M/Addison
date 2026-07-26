@@ -27,7 +27,7 @@ interface UseGuardsArgs {
 }
 
 /** The patch a save sends — only the guard(s) that changed. */
-export interface GuardPatch {
+interface GuardPatch {
   destructiveCard?: DestructiveCardGuard;
   autoGrantScope?: AutoGrantScopeGuard;
 }

@@ -56,11 +56,15 @@ truth, there is no separately-persisted mode (`agent_core/policy.py`,
   no gate* — the gate still runs (and logs) on every call.
 - **Custom profile → a user-tuned surface** (scope amendment 2026-07-20; deep in
   Settings, behind extra confirmation). The user may loosen/tighten the *prompting*
-  guards (per-invocation destructive card, auto-grant scope, the workspace-trust
-  boundary, keyword-gate strictness) — **never** the global floors. Turning any
-  guard OFF and saving mints an **undeletable snapshot anchor** (which records the
-  app build it was minted on — see G4), so weakening safety always leaves a
-  guaranteed way back.
+  guards — **never** the global floors. **TWO guards exist** (`GuardConfig`,
+  `policy.py`): the per-invocation destructive card, and the auto-grant scope. The
+  amendment also describes a workspace-trust dial and a keyword-gate dial; neither
+  is built, and the panel grows them **as those capabilities land, never before** —
+  a toggle that controls nothing, in a safety panel, is a lie in the worst possible
+  place. (Workspace trust today is granted and revoked per folder, not dialled; the
+  keyword gate is Phase-2 step 8 and does not exist.) Turning any guard OFF and
+  saving mints an **undeletable snapshot anchor** (which records the app build it
+  was minted on — see G4), so weakening safety always leaves a guaranteed way back.
 
 Organizing principle (amendment): **reversible data/config** (endpoints, models,
 guards, skills, widgets, routines — all snapshotted and one-action reversible) vs.
@@ -77,9 +81,10 @@ arrives directly, via a routine command step, or via a command widget. The card
 carries the exact command text (truncated ~120 chars) so the user knows precisely
 what they are approving each time; a "Not now" is honoured for the rest of the
 turn (don't-nag), then cleared. Destructiveness is per-call
-(`tools/base.call_is_destructive`): `run_command` classifies its own command via a
-conservative read-only allowlist (see its docstring); any other tool is
-destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
+(`tools/base.call_is_destructive`): `run_command` reports **destructive
+unconditionally** — the read-only allowlist that used to classify it was DELETED in
+#48 after being defeated three ways, so every command cards, `ls` included (see its
+docstring); any other tool is destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
 session-grant model in both modes — per-invocation is specific to destructive dev
 actions.
 
@@ -105,7 +110,9 @@ than working around it silently):
   self-scheduling, in any mode. Addison *may author* automation the OS runs (a
   launchd/cron entry, a watcher script) — like Claude Code scaffolding a cron job;
   the OS runs it, Addison never fires itself. Running/arming a powerful action
-  requires a **user-typed keyword prefix** (e.g. `!run …`); because it is
+  **will require** a **user-typed keyword prefix** (e.g. `!run …`) — designed, and
+  **not built**: it is Phase-2 step 8 and there is no keyword-gate code in the tree,
+  so nothing today can author or arm automation. Because it is
   user-typed, observed/injected content can never supply it, so the prefix is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
   "no scheduling in v1" wording.)
@@ -158,8 +165,10 @@ and rebuilds in the same session.
 - **Restore is an RPC path, never a registry tool, and never passes the
   `PermissionGate`** — a gate that could deny a restore would make "the restore
   path is itself unbreakable" false. The only model-facing snapshot surface that
-  will ever exist is a **LOW, capture-only** `snapshot_now` tool (step 2): it may
-  only ever ADD a row, never restore and never delete.
+  will ever exist is the **LOW, capture-only** `snapshot_now` tool, which **shipped**
+  (`agent_core/tools/snapshot_now.py`, in `_V1_TOOL_IDS`): it may
+  only ever ADD a row, never restore and never delete, and an AST source test holds
+  it to `capture` alone.
 - **What is captured** is a declared table set *and* a declared column set
   (`agent_core/snapshots/scope.py`). Tests fail the build if any schema table, or
   any column of a captured table, is neither captured nor explicitly excluded —
@@ -352,63 +361,68 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **Plain language, no jargon** in any user-facing string (tool labels,
   permission cards, errors). No stack traces reach the user — errors become a
   plain message + one suggested next step.
-- **UI (step 7+): distinct, non-AI look — "Fern" direction (v3, amended
-  2026-07)** (design-doc §7.1). Never the generic AI-chat aesthetic (purple
-  gradients, glassmorphism, sparkle/bot icons, shimmer) and never a model
-  vendor's branding (no cream/terracotta, no steel blue). The direction is a
-  **warm, calm "correspondence" look**: warm paper neutrals + one **fern-green**
-  accent (Addison's voice, primary actions, live state — never decoration), the
-  message body in a **serif** (Source Serif 4) beside a plain **Public Sans** UI
-  and **IBM Plex Mono** for machine facts only. One honest **shape rule** —
-  **blocky things are live annotations** (square edges, 2px left rules, small-caps
-  labels: "Addison's work", section labels, active sidebar item) and **rounded
-  things are yours to own/act on** (6px small buttons · 8px inputs/rows · 10px
-  cards/composer · 12px banners · 999px pills). **Light by default with a
-  class-driven dark mode** (`darkMode:"class"`, persisted as `addison.theme`);
-  type stays compact-but-legible for older readers (personas 54 and 68). Fonts
-  are the **one exception to "system stacks only"**: the three families are
-  **bundled as OFL woff2** in `shell/src/assets/fonts/` with `@font-face` —
-  CSP-safe because bundled, never hotlinked (strict `default-src 'self'`), always
-  with system fallbacks. **`docs/design-brief-fern` is authoritative** for tokens,
-  type, shape, and copy; the tokens in **shell/tailwind.config.js** implement it.
-  This **supersedes the earlier dark terminal-adjacent look** (which superseded
-  design-doc §7.1's cool-slate palette); §7.1's layout/IA and accessibility rules
-  are unchanged.
+- **UI (step 7+): distinct, non-AI look — the dark "correspondence-instrument"
+  direction (v4, adopted 2026-07-26 from the owner's design handoff)**.
+  **`docs/design-brief-dark/` is authoritative** — `README.md` + `prototype.html`
+  are the designer's pixel-perfect reference, `IMPLEMENTATION.md` records the
+  binding prototype→app mapping (demo content is never shipped; real features are
+  restyled, never de-wired); the tokens in **shell/tailwind.config.js** implement
+  it. The direction: a **calm, text-first dark UI** — near-black paper
+  (`#0C0C0D`), hairline separators, one **violet accent** (`#B4A9F5`) reserved
+  for actions, selection rails, and live state (never decoration), **system type
+  only** ('Helvetica Neue' UI beside `ui-monospace` machine facts — the earlier
+  bundled-font exception is retired, no @font-face). Shape rule: selection/active
+  is a **2px accent left rail**; sections sit on 2px rules; hairline-row surfaces,
+  with floating chrome (popovers/menus/modal, 5–8px radii) the only
+  bordered-panel elements. Signature motion: the **character-scramble**
+  (`shell/src/lib/scramble.ts`) + fadeRise/fadeDrop transitions, all no-ops under
+  `prefers-reduced-motion`. **Dark is the designed reference; light is a derived
+  translation** — the theme stays class-driven three-way (light/dark/system,
+  default **system**, persisted as `addison.theme`). Still never generic-AI
+  styling beyond the sanctioned flat accent (no gradients, glassmorphism,
+  sparkle/bot icons, shimmer) and never a model vendor's branding. This
+  **supersedes the Fern "warm correspondence" direction (v3,
+  `docs/design-brief-fern`, kept as history)**, which superseded the dark
+  terminal-adjacent look, which superseded design-doc §7.1's cool-slate palette;
+  §7.1's layout/IA and accessibility rules are unchanged (personas 54 and 68
+  still govern legibility).
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 
-## Build order (spec §11 — build in sequence, each independently testable)
+## Build order
 
-Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
-(3) `PermissionGate`. Also shipped past the numbered sequence: the Fern UI
-redesign, and the **widget rail** — declarative routine/stat widgets
-(`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
-substrate (§4.8) that feeds the token meter + connections cards. The Fern wave
-is complete through its final PR: multi-provider API keys, the three-column
+**The v1 sequence (spec §11, steps 1–11) is complete and merged**: schema +
+dataclasses, `ToolRegistry` + the undo check, the `PermissionGate`,
+`AnthropicProvider` + `ModelRouter` + the orchestration loop, the remaining tools
+and their `undo()`, the `UndoManager`, the Tauri shell + IPC, Routines, the Setup
+Assistant relay, Ollama + the full router, and Profiles. **No file is marked
+`TODO(step N)` any more** — that sequence now records the order the system was
+built in, not work outstanding. The live sequence is the **Phase-2 order** below.
+
+Also shipped past the numbered sequence: the UI wave, and
+the **widget rail** — declarative routine/stat widgets
+(`agent_core/widgets.py`, invariant 4) plus the `usage_log` token/latency
+substrate (§4.8) that feeds the token meter + connections rows. The wave is
+complete through its final PR: multi-provider API keys, the three-column
 app shell + in-window Settings, widgets/tray, class-driven dark mode, the
-**first-run pine banner** (`FirstRunBanner.tsx` — setup steps, launch-only
-skip, serif time-of-day greeting) with the bell favicon bundled from
-`shell/public/`, and a both-themes QA pass (TESTING-CHECKLIST §13). Also shipped:
+**first-run block** (`FirstRunBanner.tsx` — setup steps, launch-only skip,
+time-of-day greeting) with the favicon bundled from `shell/public/`, and a
+both-themes QA pass (TESTING-CHECKLIST §13). *(That wave shipped under the Fern
+direction; the surfaces were restyled to the dark v4 direction on 2026-07-26 —
+the pine card, the serif voice, the bundled fonts and the bell mark are all
+retired. The features themselves were restyled, never de-wired.)* Also shipped:
 the **mode-scoped safety backend** (owner decision 2026-07-19, `agent_core/policy.py`)
 — the SAFE/OPEN split derived 1:1 from the profile, `run_command` (dev-only),
 mode-aware `ToolRegistry.visible_tools` + `PermissionGate.authorize`, routine/widget
-`command` kinds + `created_in_mode` hiding. The **frontend PR is next**: Settings
-copy for the two profiles/modes (honest about what OPEN relaxes and the two GLOBAL
-invariants that never do), the auto-grant/destructive-prompt UI, and rendering the
-`mode` field now carried on `profile.get`/`profile.set`.
+`command` kinds + `created_in_mode` hiding — together with the frontend that goes
+with it: Settings copy for the profiles and modes (honest about what OPEN relaxes
+and the global floors that never do), the auto-grant/destructive-prompt UI, and the
+`mode` field carried on `profile.get`/`profile.set`.
 
-Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
-**CLI-only** — get a working chat-with-tools loop before touching the shell.
-Then (5) remaining tools + their `undo()`, (6) `UndoManager`, (7) Tauri shell +
-IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router, (11)
-Profiles — the Simple/Developer split, which now ALSO derives the policy mode
-(policy.py): Developer = OPEN mode reshapes the visible tool set and the gate's
-prompting, but NEVER the global floors. The permission gate is mode-aware
-(`authorize`), not profile-blind — the earlier "never the permission gate"
-framing is superseded by the mode-scoped model above.
-
-Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
-section — implement them in order, not opportunistically.
+Profiles (step 11) also derive the policy mode (`policy.py`): Developer = OPEN mode
+reshapes the visible tool set and the gate's prompting, but NEVER the global floors.
+The permission gate is mode-aware (`authorize`), not profile-blind — the earlier
+"never the permission gate" framing is superseded by the mode-scoped model above.
 
 Also shipped alongside step 1: **`read_web_page`** (`agent_core/tools/read_web_page.py`)
 — LOW, read-only, in the **Simple** tool set, because answering *from* a page rather
@@ -424,7 +438,8 @@ host — both are tracked in `docs/HANDOFF.md`, not silently accepted.
 **Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
 dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem**
 (floor G3; `agent_core/snapshots/`, the `config_snapshots` table, the `snapshot.*`
-RPC namespace, seven auto-capture hooks + the verified-working site, the sidecar
+RPC namespace, the auto-capture hooks (seven at step 1; nine sites today) + the
+verified-working site, the sidecar
 cold-start recovery path, and the Settings "Restore points" card. Its single most
 important test, `test_restore_always_works_from_a_broken_config`, passes; the
 subsystem is described above under the floors), (2) **DONE (2026-07-24) — the
@@ -479,7 +494,9 @@ Routine steps and command widgets pass `trusted=False` unconditionally), (6)
 **widget capability tiers + expanded safe vocabulary** (to-do/checklist, note,
 timer), (7) **MCP client** tools via the registry + gate, (8) the **automation
 keyword gate** + author-OS-run automation.
-Steps 3–4 (companion) can run in parallel with 5–8 once 1–2 land.
+**Steps 1–5 are built; 6, 7 and 8 are what remains**, and they are independent
+enough to be taken in any order — 6 is companion-facing, 7 and 8 add capability
+through the existing registry + gate.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 
@@ -497,9 +514,12 @@ in the `provider_config` table; the custom base URL is the ONE permitted `http:/
 case (validated http(s)://). The orchestrator stays provider-agnostic — capability
 differences via `ProviderCapabilities`, never `isinstance`.
 
-**Routing & free models (scope amendment 2026-07-20).** Routing gains four named
-strategies — quality-first (default; strong→weak degrade), cost-first, local-only,
-balanced — plus a Developer custom builder; the companion sees a single
+**Routing & free models (scope amendment 2026-07-20).** Routing gains **three**
+named strategies — quality-first (default; strong→weak degrade), cost-first and
+local-only — plus a Developer custom chain. (The amendment drafted a fourth,
+**balanced**; it was **CUT from v1** by owner decision, §10.1, because it was
+provably identical to cost-first at two-model pools. `ROUTING_STRATEGIES` in
+`providers/router.py` is the authority.) The companion sees a single
 prefer-quality/prefer-free toggle. Strong-first with graceful fallback + provider
 cooldown; a visible "answered with a free model" disclaimer when a free model
 answers. Addison must be useful **without a paid frontier key** (local Ollama +
@@ -528,14 +548,16 @@ subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a
 above). Building a downgrade path into the recovery floor would put a second,
 uncoordinated binary-replacement mechanism on a collision course with
 `updater.rs`, and it would be the one piece of the floor that could itself brick
-the app. The rest of the step-1 deferrals — the `snapshot_now` tool and the anchor
-minting caller (step 2), `_valid_http_url` credential hardening (step 4), the
-permanent distrust of Addison's own data directory (step 5), `tool_grants` capture
-(step 2, and then as an INTERSECT) — are itemised with their reasons in
+the app. Of the step-1 deferrals, only **`tool_grants` capture** is still open (and
+would then need to be an INTERSECT). The rest have LANDED and are no longer
+deferrals: the `snapshot_now` tool and the anchor-minting caller
+(`rpc/guards.py`), `_valid_http_url` credential hardening (`rpc/providers.py`),
+and the permanent distrust of Addison's own data directory
+(`policy.py::_protected_dirs`). The ledger with each one's reasoning is in
 `docs/HANDOFF.md`.
 
 **Pulled forward by the amendment** (build per the Phase-2 order above, not
-opportunistically): the four **named routing strategies** + custom, free/no-frontier
+opportunistically): the **named routing strategies** + custom, free/no-frontier
 models + extensible endpoints, the **snapshot/rollback** subsystem (now built), the **Custom**
 profile, the **coding harness + workspace-trust**, **capability-tiered widgets**,
 the **MCP client**, and OS-authored automation behind the **keyword gate**.
@@ -550,7 +572,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest ../tests/ -q          # safety-invariant tests must pass
 
-# Shell (from shell/) — once step 7 lands
+# Shell (from shell/)
 npm install
 npm run tauri dev
 ```

@@ -3,19 +3,17 @@
 // a mechanical move: the logic — especially the currentTurnRef race guards that
 // drop late results from stopped/superseded turns — is unchanged.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/protocol";
 import type { DisplayMessage } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
-
-export const WELCOME: DisplayMessage = {
-  id: "welcome",
-  role: "assistant",
-  content:
-    "Hello — I'm Addison. Tell me what you'd like help with, and I'll ask first " +
-    "before doing anything on your computer. You can always undo.",
-};
+import {
+  createStreamScramble,
+  isMotionEnabled,
+  revealAdvanceFor,
+  type StreamScramble,
+} from "../lib/scramble";
 
 interface UseTurnArgs {
   connected: boolean;
@@ -50,13 +48,133 @@ export function useTurn({
   refreshConversations,
   refreshStats,
 }: UseTurnArgs) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([WELCOME]);
+  // An empty thread is empty. The redesign RETIRED the seeded "welcome" line:
+  // an invitation is not something Addison already said, so an untouched chat
+  // shows ChatThread's greeting stack instead (docs/design-brief-dark,
+  // "Screens → Chat empty state").
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isWorking, setIsWorking] = useState(false);
   const [permission, setPermission] = useState<PermissionRequest | null>(null);
 
   const [currentActivity, setCurrentActivity] = useState<ActivityUpdate | null>(null);
   const [activities, setActivities] = useState<ActivityUpdate[]>([]);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
+
+  // --- Streamed text: the truth, and the decoration over it -----------------
+  // `messages` always holds the TRUE streamed text — that is what is committed
+  // to state, what a retry/rewind reads, and what lands in the store. The
+  // scramble is a DISPLAY overlay held here: ChatThread renders `streamDisplay`
+  // in place of the pending message's content while it is non-null, and the
+  // moment the turn settles the overlay is dropped and the real content shows.
+  // Scrambled glyphs must never be able to reach the message content — see
+  // `__tests__/streaming.test.tsx`, which pins exactly that.
+  const [streamDisplay, setStreamDisplay] = useState<string | null>(null);
+  // WHICH message the overlay decorates. The streaming path could key off the
+  // `pending` flag, but the reveal below outlives it — the answer has landed,
+  // so the message is settled while its text is still resolving — and an id is
+  // the only thing that stays true across that moment.
+  const [streamMessageId, setStreamMessageId] = useState<string | null>(null);
+  const streamRef = useRef<StreamScramble | null>(null);
+  const streamTextRef = useRef("");
+  // True only while a finished answer is resolving. The turn's `finally` clears
+  // the overlay as part of settling, which would kill a reveal on the frame it
+  // started; this is what tells it to leave the reveal alone.
+  const revealingRef = useRef(false);
+
+  function endStream() {
+    streamRef.current?.stop();
+    streamRef.current = null;
+    streamTextRef.current = "";
+    revealingRef.current = false;
+    setStreamDisplay(null);
+    setStreamMessageId(null);
+  }
+
+  // Nothing else stops the animation when this hook goes away. The engine is a
+  // plain 38ms interval holding a closure over this hook's setters, so a reveal
+  // running when the webview swaps the chat out (or the app tears down) would
+  // keep ticking and keep calling setState on a dead hook, forever. Refs only —
+  // an unmount cleanup must not touch state.
+  useEffect(() => {
+    return () => {
+      streamRef.current?.stop();
+      streamRef.current = null;
+      revealingRef.current = false;
+    };
+  }, []);
+
+  /**
+   * Reveal a FINISHED answer with the scramble, instead of having it appear in
+   * one frame. The core doesn't stream, so without this every reply plops in
+   * whole (owner request 2026-07-26); the prototype animates its canned reply
+   * the same way.
+   *
+   * The overlay is display only — `messages` already holds the true text before
+   * this runs, so a rewind, retry, copy or store read can never see a scrambled
+   * glyph, and an interrupted reveal costs the reader nothing but the animation.
+   */
+  function revealFinalText(messageId: string, text: string) {
+    if (!isMotionEnabled() || !text) return;
+    streamRef.current?.stop();
+    streamTextRef.current = text;
+    revealingRef.current = true;
+    setStreamMessageId(messageId);
+    streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame), {
+      advanceChars: revealAdvanceFor(text.length),
+      // Hand the message back to its normal rendering (markdown, links, code)
+      // the instant the text has fully resolved.
+      onDone: () => {
+        revealingRef.current = false;
+        streamTextRef.current = "";
+        // Release the finished engine. `appendStreamedText` only builds one when
+        // `streamRef` is empty, so a spent reveal left sitting here is an engine
+        // a later chunk gets pushed into — at the reveal's rate, from the
+        // reveal's own leading edge, with no `streamMessageId` set. That path is
+        // now closed at the other end too (a chunk with no live turn is
+        // dropped); this keeps "streamRef holds an engine that can still be
+        // pushed to" true on its own rather than by the other end's grace.
+        streamRef.current = null;
+        setStreamDisplay(null);
+        setStreamMessageId(null);
+      },
+    });
+    streamRef.current.push(text);
+  }
+
+  /**
+   * A `conversation.streamChunk` delta arrived. Appends it to the pending
+   * message (the true text) and, when motion is on, feeds the scramble engine
+   * so the tail resolves out of the noise as it lands.
+   */
+  function appendStreamedText(text: string) {
+    if (!text) return;
+    // Which message this chunk belongs to. Keyed on the running turn, NOT on the
+    // `pending` flag: the flag is cleared the moment the result lands while the
+    // overlay lives on through the reveal, so a chunk arriving in that gap used
+    // to be committed to nothing and displayed anyway — the reader watched a
+    // sentence resolve that no message held, and it vanished when the overlay
+    // dropped. No live turn means no message to append to, so the chunk is
+    // dropped rather than shown: the display may lag the truth, never exceed it.
+    const targetId = currentTurnRef.current;
+    if (!targetId) return;
+    setMessages((prev) =>
+      prev.map((m) => (m.id === targetId ? { ...m, content: m.content + text } : m)),
+    );
+    if (!isMotionEnabled()) {
+      // Reduced motion / motion off: no overlay at all, so the text just
+      // appends. Cheaper than running an engine that emits the input unchanged.
+      setStreamDisplay(null);
+      return;
+    }
+    streamTextRef.current += text;
+    if (!streamRef.current) {
+      setStreamMessageId(targetId);
+      // No `advanceChars`: the answer's full length is unknown while it is still
+      // arriving, so the engine paces itself against the backlog instead.
+      streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame));
+    }
+    streamRef.current.push(streamTextRef.current);
+  }
   // Identifies the turn whose IPC result may still touch shared turn state (the
   // assistant message, isWorking, the activity line). Stop and every new turn
   // reassign it, so a result arriving late from an abandoned turn — the core has
@@ -81,6 +199,7 @@ export function useTurn({
     setCurrentActivity(null);
     setPermission(null);
     setIsWorking(true);
+    endStream();
 
     try {
       // Deliver the *effective* model for the active role. For "local", fall
@@ -122,6 +241,14 @@ export function useTurn({
           return m;
         }),
       );
+      // Nothing streamed (the core sends the answer whole), so the text would
+      // otherwise appear in a single frame. Reveal it with the scramble instead.
+      // Guarded on an empty `streamTextRef`: if the core ever does start
+      // emitting `streamChunk`, the answer has already been animated as it
+      // arrived and re-revealing it would replay text the person just read.
+      if (!streamTextRef.current && finalText) {
+        revealFinalText(assistantId, finalText);
+      }
       // Composer path: if the user's own words asked for a widget, a model server,
       // or a cheaper setup, draft the matching card from the just-finished turn.
       // Nothing is saved or applied until they press the card's button.
@@ -169,6 +296,11 @@ export function useTurn({
         currentTurnRef.current = null;
         setIsWorking(false);
         setCurrentActivity(null);
+        // The answer is settled: drop the display overlay so the message shows
+        // its real content (which the result may just have replaced wholesale)
+        // — UNLESS that content is currently being revealed, which is an
+        // animation over text that has already landed. It ends itself.
+        if (!revealingRef.current) endStream();
         // A turn just landed: refresh the sidebar so a new chat's auto-title
         // appears, and adopt the launch conversation as current if we didn't
         // know its id yet. Usage changed too, so refresh the token meter.
@@ -199,6 +331,8 @@ export function useTurn({
     currentTurnRef.current = null;
     setIsWorking(false);
     setCurrentActivity(null);
+    // Stop shows what actually arrived, not a half-scrambled tail of it.
+    endStream();
     setMessages((prev) =>
       prev.map((m) =>
         m.pending
@@ -217,6 +351,7 @@ export function useTurn({
     setCurrentActivity(null);
     setPermission(null);
     setLastUserText(null);
+    endStream();
   }
 
   return {
@@ -230,6 +365,9 @@ export function useTurn({
     currentActivity,
     setCurrentActivity,
     lastUserText,
+    streamDisplay,
+    streamMessageId,
+    appendStreamedText,
     handleSend,
     handleRetry,
     handleStop,

@@ -129,6 +129,11 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         default: true,
         provider: "anthropic",
         providerLabel: "Anthropic",
+        // The core's to_wire does NOT send `free` for cloud models — every
+        // curated cloud model is paid, and the free chip stays Ollama-only. The
+        // parser therefore lands on false for all three, which is what makes the
+        // composer menu's note read "quality" rather than a guess.
+        free: false,
       },
       {
         id: "claude-haiku-4-5-20251001",
@@ -137,6 +142,7 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         default: false,
         provider: "anthropic",
         providerLabel: "Anthropic",
+        free: false,
       },
       {
         id: "gpt-fixture",
@@ -145,6 +151,7 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         default: false,
         provider: "openai",
         providerLabel: "OpenAI",
+        free: false,
       },
     ]);
   });

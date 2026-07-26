@@ -29,12 +29,12 @@ const WANTS_CHEAPER =
 
 // Plain, and each names where the change lives so the person can find — and undo
 // — it. Both live in Settings, alongside the restore points.
-export const ENDPOINT_ADDED_BANNER = "Added your server — it's in Settings under your services.";
-export const COST_PLAN_APPLIED_BANNER =
+const ENDPOINT_ADDED_BANNER = "Added your server — it's in Settings under your services.";
+const COST_PLAN_APPLIED_BANNER =
   "Addison will keep answers short and prefer cheaper models. Your previous setup is " +
   "saved as a restore point in Settings.";
 
-export interface OffersState {
+interface OffersState {
   endpointProposal: EndpointProposal | null;
   costPlan: CostPlan | null;
   /** Called with the user's own text after a turn finishes. */

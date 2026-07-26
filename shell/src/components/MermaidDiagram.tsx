@@ -44,8 +44,8 @@ export function MermaidDiagram({ code }: Props) {
         // Lazy, code-split import: keeps mermaid out of the initial chunk.
         const mermaid = await import("mermaid");
         if (!initialized) {
-          // Match the app theme at first render: "neutral" on the light Fern
-          // paper, "dark" on the dark surface. Mermaid initializes once per
+          // Match the app theme at first render: "neutral" on the light
+          // `paper`, "dark" on the dark one. Mermaid initializes once per
           // session, so already-rendered diagrams don't live-switch when the
           // theme flips — they pick up the new theme the next time one renders.
           const isDark = document.documentElement.classList.contains("dark");

@@ -6,10 +6,11 @@
 // that behavior: a late result must never resurrect stopped text or clobber a
 // newer turn's answer, and must not re-enable the composer.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useTurn } from "../hooks/useTurn";
 import { ipc } from "../ipc/client";
+import { setMotionEnabled } from "../lib/scramble";
 
 // The hook only touches ipc.sendMessage on the tested paths; mock the whole
 // module so no Tauri context is needed (RawError is a type — erased at build).
@@ -70,6 +71,19 @@ beforeEach(() => {
     const d = deferred<unknown>();
     deferreds.push(d);
     return d.promise;
+  });
+});
+
+// The dark redesign retired the seeded "welcome" assistant line: an untouched
+// chat renders ChatThread's greeting stack, which is only reachable when the
+// thread is genuinely empty (ChatThread's `isEmpty`). App hands `turn.messages`
+// straight through with no filtering now, so a seed reintroduced here would put
+// a message Addison never sent on screen and suppress the stack. This is the
+// test that says the thread starts empty.
+describe("a new thread", () => {
+  it("starts with no messages, so the empty state can show", () => {
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    expect(result.current.messages).toEqual([]);
   });
 });
 
@@ -169,5 +183,273 @@ describe("useTurn race guard", () => {
     expect(assistant.failed).toBeFalsy();
     expect(assistant.pending).toBe(false);
     expect(result.current.isWorking).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streamed text: the scramble is a DECORATION, and the store never sees it.
+//
+// The streaming animation writes random glyphs into the tail of an arriving
+// answer. If those glyphs could reach the message content, they would reach
+// everything downstream of it: Retry re-sends the last user text but a rewind
+// re-seeds the composer from message content, and the thread's own copy is what
+// a person reads back later. A motion flourish that can put "#%&*" inside a
+// sentence Addison wrote is not a flourish. So the true text and the displayed
+// text are two different values, and this is the test that says so.
+// ---------------------------------------------------------------------------
+describe("streamed text vs. the streaming scramble", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setMotionEnabled(true);
+  });
+
+  const CHUNKS = ["Happy to help — ", "here is where I landed ", "after a first look."];
+  const TRUE_TEXT = CHUNKS.join("");
+
+  function sendAndStream() {
+    const args = makeArgs();
+    const rendered = renderHook(() => useTurn(args));
+    act(() => {
+      rendered.result.current.handleSend("have a look");
+    });
+    act(() => {
+      for (const chunk of CHUNKS) rendered.result.current.appendStreamedText(chunk);
+    });
+    return { args, ...rendered };
+  }
+
+  it("commits the true text to state while the display is still scrambled", () => {
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2); // mid-flight: the window is over the tail
+    });
+
+    // What is COMMITTED is the model's text, byte for byte...
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: true,
+      content: TRUE_TEXT,
+    });
+    // ...and what is DISPLAYED is three ticks' worth of window (5 chars each:
+    // one emitted synchronously by the first `push`, two from the timer), whose
+    // contents are still noise rather than the answer's opening words.
+    const display = result.current.streamDisplay!;
+    expect(display).toHaveLength(15);
+    expect(display).not.toBe(TRUE_TEXT.slice(0, 15));
+  });
+
+  // A chunk belongs to a TURN, not to whatever message happens to be flagged
+  // `pending`. Keying on the flag meant a chunk arriving after the answer had
+  // settled — the flag is cleared then, but the overlay lives on through the
+  // reveal — was committed to nothing and displayed anyway: the reader watched a
+  // sentence resolve out of the glyphs that no message contained, and it
+  // vanished when the overlay dropped. The display may lag the truth. It may
+  // never exceed it.
+  it("drops a chunk that has no live turn to attach it to", async () => {
+    const { result } = sendAndStream();
+
+    await act(async () => {
+      deferreds[0].resolve({ text: TRUE_TEXT });
+      await flushMicrotasks();
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 40); // any reveal is long over
+    });
+    expect(result.current.streamDisplay).toBeNull();
+
+    act(() => {
+      result.current.appendStreamedText(" One more thing.");
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
+  });
+
+  it("drops the overlay when the turn settles, so the real answer shows", async () => {
+    const { result } = sendAndStream();
+
+    await act(async () => {
+      deferreds[0].resolve({ text: TRUE_TEXT });
+      await flushMicrotasks();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  it("drops the overlay on Stop, and keeps what actually arrived", () => {
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38);
+      result.current.handleStop();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  it("adds no overlay at all with motion off — the text just appends", () => {
+    setMotionEnabled(false);
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
+  });
+});
+
+// The core does not stream (`conversation.streamChunk` is declared in
+// protocol.py and never emitted), so an answer arrives whole and used to appear
+// in a single frame. It is now revealed with the same scramble language (owner
+// request 2026-07-26). The honesty property from the streaming block above
+// carries over unchanged and is the reason these tests exist: the overlay is
+// DECORATION over text that is already committed, so an interrupted reveal can
+// never cost the reader a character of the answer.
+describe("revealing an answer that arrived whole", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setMotionEnabled(true);
+  });
+
+  const ANSWER = "Done — I renamed the 24 photos so they sort by date.";
+
+  async function sendAndLand(text: unknown = { text: ANSWER }) {
+    const args = makeArgs();
+    const rendered = renderHook(() => useTurn(args));
+    act(() => {
+      rendered.result.current.handleSend("rename my photos");
+    });
+    await act(async () => {
+      deferreds[0].resolve(text);
+      await flushMicrotasks();
+    });
+    return rendered;
+  }
+
+  // The overlay has to be in place on the SAME commit that settles the message.
+  // It wasn't: `setStreamMessageId` and the settled message batched together
+  // while the first frame was still 38ms away, so `streamDisplay` was null for
+  // that commit and ChatThread rendered the finished answer in full — parsed
+  // markdown, final layout — before it dissolved into glyphs and jumped back to
+  // plain text. One flash of the whole answer, then a reveal of it (review
+  // 2026-07-26). Nothing here advances a timer: that is the point.
+  it("has the overlay in place on the very commit that settles the answer", async () => {
+    const { result } = await sendAndLand();
+
+    const last = result.current.messages.at(-1)!;
+    expect(last).toMatchObject({ pending: false, content: ANSWER });
+    expect(result.current.streamMessageId).toBe(last.id);
+    expect(result.current.streamDisplay).toHaveLength(5); // one tick, at t=0
+    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 5));
+  });
+
+  it("commits the true answer immediately, and shows it resolving", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2);
+    });
+
+    // Committed: the real answer, in full, from the moment it landed.
+    const last = result.current.messages.at(-1)!;
+    expect(last).toMatchObject({ pending: false, content: ANSWER });
+    // Displayed: three ticks of window (the synchronous first frame plus two
+    // from the timer) — noise, not the answer's opening words.
+    expect(result.current.streamMessageId).toBe(last.id);
+    expect(result.current.streamDisplay).toHaveLength(15);
+    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 15));
+  });
+
+  // The engine is a bare 38ms interval closed over this hook's setters. Nothing
+  // else stops it: a reveal running when the chat column is swapped out (or the
+  // app torn down) went on ticking and setting state on a dead hook for as long
+  // as the webview lived.
+  it("stops the reveal when the hook unmounts", async () => {
+    const { unmount } = await sendAndLand();
+
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("lands on the exact answer and hands the message back", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    // Overlay gone (so ChatThread renders markdown again), text intact.
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+
+  it("does not reveal with motion off — the answer is simply there", async () => {
+    setMotionEnabled(false);
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+
+  it("never scrambles a failed turn's message — an error reads at once", async () => {
+    const args = makeArgs();
+    const { result } = renderHook(() => useTurn(args));
+    act(() => {
+      result.current.handleSend("do the thing");
+    });
+    await act(async () => {
+      deferreds[0].reject(new Error("I couldn't reach the model."));
+      await flushMicrotasks();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 4);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      failed: true,
+      content: "I couldn't reach the model.",
+    });
+  });
+
+  it("abandons the reveal on Stop, leaving the whole answer readable", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2);
+      result.current.handleStop();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
   });
 });

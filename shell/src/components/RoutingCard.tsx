@@ -1,4 +1,5 @@
-// How Addison picks which model answers (Phase-2 step 3, contract D5/D7/D8).
+// How Addison picks which model answers (Phase-2 step 3, contract D5/D7/D8), in
+// the dark direction's row idiom.
 //
 // One card, two surfaces — the CORE decides which (routing.surface), never this
 // component:
@@ -10,15 +11,18 @@
 //     an ordered chain builder over the connected-models union — add / remove /
 //     reorder, saved as one full list.
 //
-// Fern shape rule (docs/design-brief-fern): every control here is rounded (the
-// person's to act on) and the fern accent marks the chosen option. A refused save
-// renders as one plain sentence — it arrives already user-ready from the core
-// (including the "couldn't save the restore point, so nothing changed" line that
-// guards a custom-chain overwrite).
+// Every row reads the same way as the rest of the surface: the chosen option
+// carries a mono `selected ✓` and no control (there is nothing to do to it), and
+// each other offers an accent "choose" whose accessible name repeats the option,
+// because a page whose every button says "choose" is unusable to anyone not
+// looking at the screen. A refused save renders as one plain sentence — it
+// arrives already user-ready from the core (including the "couldn't save the
+// restore point, so nothing changed" line that guards a custom-chain overwrite).
 
 import { useEffect, useState } from "react";
 import type { RoutingCardState } from "../hooks/useRouting";
 import type { RoutingStrategy } from "../types/ui";
+import { RowAction, SurfaceRow } from "./Surface";
 
 // --- Frozen copy (contract D8) — byte-for-byte. -----------------------------
 
@@ -56,118 +60,78 @@ export function RoutingCard({
   const { routing, routingLoaded, busy, error, handleSetStrategy, handleSaveChain } = state;
 
   if (!connected) {
-    return (
-      <p className="text-meta text-muted">
-        This appears here once Addison&rsquo;s engine is connected.
-      </p>
-    );
+    return <SurfaceRow wrap name="This appears here once Addison’s engine is connected." />;
   }
   if (!routingLoaded || !routing) {
-    return <p className="text-meta text-muted">Loading your settings&hellip;</p>;
+    return <SurfaceRow wrap name="Loading your settings…" />;
   }
 
   return (
-    <div>
+    <>
       {routing.surface === "toggle" ? (
-        <ToggleSurface
-          selected={routing.strategy}
-          busy={busy}
-          onPick={(s) => void handleSetStrategy(s)}
-        />
+        <div role="group" aria-label="How Addison picks a model">
+          {TOGGLE_OPTIONS.map((o) => (
+            <StrategyRow
+              key={o.strategy}
+              label={o.copy}
+              active={o.strategy === routing.strategy}
+              busy={busy}
+              onPick={() => void handleSetStrategy(o.strategy)}
+            />
+          ))}
+        </div>
       ) : (
-        <FullSurface
-          selected={routing.strategy}
-          available={routing.availableStrategies}
-          chain={routing.customChain}
-          models={models}
-          busy={busy}
-          onPick={(s) => void handleSetStrategy(s)}
-          onSaveChain={(c) => void handleSaveChain(c)}
-        />
+        <>
+          <div role="group" aria-label="How Addison picks a model">
+            {routing.availableStrategies.map((s) => (
+              <StrategyRow
+                key={s}
+                label={STRATEGY_LABELS[s]}
+                active={s === routing.strategy}
+                busy={busy}
+                onPick={() => void handleSetStrategy(s)}
+              />
+            ))}
+          </div>
+          {/* The chain builder appears only for the Custom-order strategy. */}
+          {routing.strategy === "custom" && (
+            <ChainBuilder
+              chain={routing.customChain}
+              models={models}
+              busy={busy}
+              onSave={(c) => void handleSaveChain(c)}
+            />
+          )}
+        </>
       )}
 
       {/* A refused save in the core's own already-plain words — never a stack trace. */}
-      {error && <p className="mt-3 text-fine leading-relaxed text-ink-soft">{error}</p>}
-    </div>
+      {error && <SurfaceRow name={error} />}
+    </>
   );
 }
 
-// --- Simple: the two-option toggle -----------------------------------------
-function ToggleSurface({
-  selected,
+/** One selectable strategy. The chosen one is a statement, not a control. */
+function StrategyRow({
+  label,
+  active,
   busy,
   onPick,
 }: {
-  selected: RoutingStrategy;
+  label: string;
+  active: boolean;
   busy: boolean;
-  onPick: (strategy: RoutingStrategy) => void;
+  onPick: () => void;
 }) {
   return (
-    <div role="group" aria-label="How Addison picks a model">
-      <div className="flex flex-col gap-1.5">
-        {TOGGLE_OPTIONS.map((o) => {
-          const active = o.strategy === selected;
-          return (
-            <button
-              key={o.strategy}
-              type="button"
-              aria-pressed={active}
-              disabled={busy || active}
-              onClick={() => onPick(o.strategy)}
-              className={optionClass(active)}
-            >
-              {o.copy}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// --- Developer / Custom: the full picker + chain builder --------------------
-function FullSurface({
-  selected,
-  available,
-  chain,
-  models,
-  busy,
-  onPick,
-  onSaveChain,
-}: {
-  selected: RoutingStrategy;
-  available: RoutingStrategy[];
-  chain: string[];
-  models: RoutingCardModel[];
-  busy: boolean;
-  onPick: (strategy: RoutingStrategy) => void;
-  onSaveChain: (chain: string[]) => void;
-}) {
-  return (
-    <div>
-      <div role="group" aria-label="How Addison picks a model" className="flex flex-col gap-1.5">
-        {available.map((s) => {
-          const active = s === selected;
-          return (
-            <button
-              key={s}
-              type="button"
-              aria-pressed={active}
-              disabled={busy || active}
-              onClick={() => onPick(s)}
-              className={optionClass(active)}
-            >
-              {STRATEGY_LABELS[s]}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* The chain builder appears only for the Custom-order strategy. */}
-      {selected === "custom" && (
-        <ChainBuilder chain={chain} models={models} busy={busy} onSave={onSaveChain} />
-      )}
-    </div>
+    <SurfaceRow
+      name={label}
+      value={active ? "selected ✓" : undefined}
+      action={active ? undefined : "choose"}
+      actionAriaLabel={`Choose: ${label}`}
+      actionDisabled={busy}
+      onAction={active ? undefined : onPick}
+    />
   );
 }
 
@@ -210,129 +174,88 @@ function ChainBuilder({
   }
 
   return (
-    <div className="mt-3 rounded-card border border-line bg-paper px-[15px] py-[13px]">
-      <p className="text-fine leading-relaxed text-ink-soft">
-        Addison tries these in order, top first, and moves down when one can&rsquo;t answer.
-      </p>
+    <>
+      <SurfaceRow wrap name="Addison tries these in order, top first, and moves down when one can’t answer." />
 
       {draft.length === 0 ? (
-        <p className="mt-2.5 text-fine text-faint">
-          No models yet. Add one below to build the order.
-        </p>
+        <SurfaceRow name="No models yet" value="add one below to build the order" />
       ) : (
-        <ol className="mt-2.5 flex flex-col gap-1.5">
-          {draft.map((id, i) => (
-            <li
-              key={id}
-              className="flex items-center justify-between gap-2 rounded-md border border-line bg-surface px-3 py-2"
-            >
-              <span className="min-w-0 truncate text-fine text-ink">
-                <span className="mr-1.5 font-mono text-label text-faint">{i + 1}</span>
+        draft.map((id, i) => (
+          <SurfaceRow
+            key={id}
+            name={
+              <>
+                <span className="mr-1.5 font-mono text-[10.5px] text-faint">{i + 1}</span>
                 {labelFor(id)}
-              </span>
-              <span className="flex shrink-0 items-center gap-1.5">
-                <IconButton label={`Move ${labelFor(id)} up`} disabled={busy || i === 0} onClick={() => move(i, -1)}>
+              </>
+            }
+            actions={
+              <>
+                <RowAction
+                  mono
+                  ariaLabel={`Move ${labelFor(id)} up`}
+                  disabled={busy || i === 0}
+                  onClick={() => move(i, -1)}
+                >
                   ↑
-                </IconButton>
-                <IconButton
-                  label={`Move ${labelFor(id)} down`}
+                </RowAction>
+                <RowAction
+                  mono
+                  ariaLabel={`Move ${labelFor(id)} down`}
                   disabled={busy || i === draft.length - 1}
                   onClick={() => move(i, 1)}
                 >
                   ↓
-                </IconButton>
-                <IconButton label={`Remove ${labelFor(id)}`} disabled={busy} onClick={() => remove(i)}>
+                </RowAction>
+                <RowAction
+                  mono
+                  tone="danger"
+                  ariaLabel={`Remove ${labelFor(id)}`}
+                  disabled={busy}
+                  onClick={() => remove(i)}
+                >
                   ✕
-                </IconButton>
-              </span>
-            </li>
-          ))}
-        </ol>
+                </RowAction>
+              </>
+            }
+          />
+        ))
       )}
 
       {notInChain.length > 0 && (
-        <div className="mt-2.5">
-          <label htmlFor="routing-add-model" className="block text-fine font-medium text-muted">
+        <div>
+          <div className="px-0.5 pb-1 pt-[18px] text-[11px] font-medium tracking-[.04em] text-faint">
             Add a model
-          </label>
-          <select
-            id="routing-add-model"
-            value=""
-            disabled={busy}
-            onChange={(e) => {
-              add(e.target.value);
-              e.target.value = "";
-            }}
-            className="mt-1 block w-full rounded-sm border border-line bg-surface px-3 py-2 text-control text-ink disabled:opacity-50"
-          >
-            <option value="" disabled>
-              Choose a model to add&hellip;
-            </option>
-            {notInChain.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          </div>
+          {notInChain.map((m) => (
+            <SurfaceRow
+              key={m.id}
+              name={m.label}
+              action="add"
+              actionAriaLabel={`Add ${m.label}`}
+              actionDisabled={busy}
+              onAction={() => add(m.id)}
+            />
+          ))}
         </div>
       )}
 
-      <div className="mt-3 flex items-center gap-3">
-        <button
-          type="button"
-          disabled={busy || !dirty}
-          onClick={() => onSave(draft)}
-          className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
-        >
-          Save order
-        </button>
-        {dirty && (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => setDraft(chain)}
-            className="text-xs font-medium text-ink-soft hover:text-muted disabled:opacity-50"
-          >
-            Undo changes
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function IconButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string;
-  disabled: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-      className="flex h-7 w-7 items-center justify-center rounded-md border border-line bg-paper text-glyph text-ink-soft hover:border-muted disabled:opacity-40 max-md:h-11 max-md:w-11"
-    >
-      <span aria-hidden="true">{children}</span>
-    </button>
-  );
-}
-
-/** One selectable option row — rounded (yours to act on), the chosen one marked
- * with the fern tint. Shared by both surfaces and the strategy picker. */
-function optionClass(active: boolean): string {
-  return (
-    "rounded-md border px-3.5 py-2.5 text-left text-fine leading-relaxed transition-colors " +
-    "disabled:cursor-default max-md:min-h-[44px] " +
-    (active
-      ? "border-fern bg-fern-tint text-ink"
-      : "border-line bg-paper text-ink-soft hover:border-muted disabled:opacity-50")
+      <SurfaceRow
+        name="Model order"
+        value={dirty ? "not saved yet" : "saved"}
+        actions={
+          <>
+            <RowAction disabled={busy || !dirty} onClick={() => onSave(draft)}>
+              Save order
+            </RowAction>
+            {dirty && (
+              <RowAction tone="muted" disabled={busy} onClick={() => setDraft(chain)}>
+                Undo changes
+              </RowAction>
+            )}
+          </>
+        }
+      />
+    </>
   );
 }

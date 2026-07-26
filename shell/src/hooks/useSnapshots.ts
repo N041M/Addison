@@ -45,6 +45,11 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
   const [warning, setWarning] = useState<string | undefined>();
   // The last save/restore/remove outcome, in the card's own words.
   const [notice, setNotice] = useState<string | null>(null);
+  // The row a restore ACTUALLY landed on, so its row can say "restored ✓". Set
+  // only from an {ok:true} reply — a refused or failed restore leaves it alone,
+  // because a row claiming it was restored when it wasn't is the one lie this
+  // floor cannot afford.
+  const [restoredId, setRestoredId] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
   const refreshSnapshots = useCallback(() => {
@@ -101,6 +106,7 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
         // the core appended; `binaryMismatch` says the point was saved on a
         // different version of Addison. Both are plain sentences from the core.
         setNotice([res.detail, res.binaryMismatch].filter(Boolean).join(" ") || "Your setup is back.");
+        setRestoredId(res.snapshotId ?? lastWorkingId);
         onRestored?.();
       } else {
         setNotice(res.error ?? "There's no saved working setup to go back to yet.");
@@ -128,6 +134,7 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
         setNotice(
           [res.detail, res.binaryMismatch].filter(Boolean).join(" ") || "Your setup is back.",
         );
+        setRestoredId(res.snapshotId ?? id);
         onRestored?.();
       } else {
         setNotice(res.error ?? "There's no saved working setup to go back to yet.");
@@ -160,6 +167,7 @@ export function useSnapshots({ connected, onRestored }: UseSnapshotsArgs) {
     lastWorkingProfileChange,
     warning,
     notice,
+    restoredId,
     busy,
     refreshSnapshots,
     handleCreateSnapshot,

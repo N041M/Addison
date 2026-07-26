@@ -64,25 +64,25 @@ export function CostPlanCard({ plan, onDismiss, onApplied }: Props) {
   return (
     <section
       aria-label="Switch to cheaper models?"
-      className="animate-[fade-rise_160ms_ease-out] border-t border-line bg-surface px-6 py-4"
+      className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3"
     >
-      <h3 className="text-base font-semibold text-ink">Switch to cheaper models?</h3>
+      <h3 className="m-0 text-[12px] font-medium text-ink">Switch to cheaper models?</h3>
 
-      <p className="mt-2 text-sm font-semibold text-ink-soft">{plan.skillName}</p>
-      <p className="mt-1 whitespace-pre-wrap border-l-2 border-line pl-4 text-sm text-ink-soft">
+      <p className="m-0 mt-2 text-[12px] font-medium text-ink-soft">{plan.skillName}</p>
+      <p className="m-0 mt-1.5 whitespace-pre-wrap border-l-2 border-rail pl-3.5 text-[12px] leading-[1.6] text-ink-soft">
         {plan.skillInstructions}
       </p>
 
-      <p className="mt-3 text-sm text-muted">{SUMMARY}</p>
+      <p className="m-0 mt-2.5 text-[12px] leading-[1.55] text-muted">{SUMMARY}</p>
 
-      {status === "error" && <p className="mt-2 text-fine text-danger">{error}</p>}
+      {status === "error" && <p className="m-0 mt-2 text-[12px] text-danger">{error}</p>}
 
-      <div className="mt-4 flex gap-3">
+      <div className="mt-3 flex items-baseline gap-5">
         <button
           type="button"
           onClick={() => void apply()}
           disabled={working}
-          className="rounded-pill bg-fern px-5 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
+          className="text-[12px] text-accent transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           {working ? "Saving…" : "Make it cheaper"}
         </button>
@@ -90,7 +90,7 @@ export function CostPlanCard({ plan, onDismiss, onApplied }: Props) {
           type="button"
           onClick={decline}
           disabled={working}
-          className="rounded-sm px-2 py-2 text-sm font-medium text-muted hover:text-ink-soft disabled:opacity-50"
+          className="text-[12px] text-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           Not now
         </button>

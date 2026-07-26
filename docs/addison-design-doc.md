@@ -137,9 +137,13 @@ principles that put them there:
   (§9). This is what makes the motivating monitor (background poll + notify)
   buildable while keeping G2 intact.
 - **Automatic model routing — now in scope, as bounded strategies.** Previously
-  deferred to v2 (§11), auto-routing ships as **four named strategies**
+  deferred to v2 (§11), auto-routing ships as **three named strategies**
   (quality-first — the default and *strong-first, degrade-down*; cost-first;
-  local-only; balanced) plus a Developer-only Custom builder. It is capped: the
+  local-only) plus a Developer-only Custom builder. *(The amendment listed
+  **four**. **Balanced was cut from v1** by owner decision 2026-07-24 — amendment
+  §10.1: the drafted policy was provably identical to cost-first at two-model pools
+  and ignored latency, and a control that behaves identically to another is a lie in
+  a picker. It returns when a real latency-aware algorithm exists.)* It is capped: the
   companion sees only a "prefer quality / prefer free" toggle, a free model's
   answer is labelled as such, and fallback is graceful over a handful of
   connected providers, never OmniRoute-style farming (§7.3, §11).
@@ -222,6 +226,12 @@ land across the component design; each is detailed where it belongs, but collect
 here for orientation. All ship in **Phase 2** (post-greenlight, §11); details the
 amendment leaves open are marked **Phase-2** at §14.
 
+*(Status 2026-07-26 — the five below did not land together. **Built:** the snapshot
+subsystem, free-model endpoints + add-by-prompt, and the "make it cheaper" flow.
+**Not started:** capability-tiered widgets (Phase-2 step 6) and the MCP client
+(step 7) — the shipped widget vocabulary is still `routine` / `stat` plus the
+OPEN-only `command`, and there is no MCP client in the tree. See §11.)*
+
 - **Snapshot / restore subsystem (the safety floor).** A point-in-time copy of
   Addison's *mutable state* (settings, provider config, routing choice, skills,
   widgets, routines) — taken automatically before any risky/sweeping change *and*
@@ -282,8 +292,10 @@ for personas 54 and 68), the sharp-corners rule, and the "never a generic-AI or
 vendor look" constraints in this section are **unchanged** — only the surface palette
 moved from light to dark.
 
-**Amended 2026-07 (v3) — the "Fern" redesign.** The visual direction has moved
-again, from the dark terminal look to **"Fern"**: warm paper neutrals + one
+**Amended 2026-07 (v3) — the "Fern" redesign.** *(Superseded by v4 below on
+2026-07-26. Kept for the record; `docs/design-brief-fern/` remains in the tree as
+history and is no longer authoritative for anything.)* The visual direction has
+moved again, from the dark terminal look to **"Fern"**: warm paper neutrals + one
 fern-green accent, a serif "correspondence" message body (Source Serif 4) beside a
 Public Sans UI, a blocky-vs-rounded shape rule, and a light-default **class-driven
 dark mode**. The in-repo brief at **`docs/design-brief-fern/`** (README + `.dc.html`
@@ -294,7 +306,59 @@ are unchanged. (Note the shape rule itself changed: rounded cards/pills are now 
 of the system — "rounded = ownable/actionable" — so the earlier sharp-corners rule no
 longer applies.)
 
-**Visual design direction (binding for the step-7 build).** Addison must not look like
+**Amended 2026-07-26 (v4) — the dark "correspondence-instrument" direction.
+This is the current direction; it supersedes every note above.** From the
+owner's design handoff: a **calm, text-first dark UI** — near-black paper
+(`#0C0C0D`), hairline separators, and one soft **violet accent** (`#B4A9F5`)
+reserved for actions, selection rails and live state, never for decoration.
+**System type only** — `'Helvetica Neue'` for UI beside `ui-monospace` for
+machine facts. The serif voice and every bundled font are **retired**: there is
+no `@font-face` in the app and no `font-serif` token to reach for.
+
+The **shape rule changed again**, and v3's is now void: selection/active is a
+**2px accent left rail**, section labels sit on 2px rules, and rows are
+separated by hairlines. Bordered panels are reserved for **floating chrome**
+(popovers, menus, the modal) at 5–8px radii — there are no cards and no pills.
+Settings, Tools, Snapshots and Build-a-widget are **in-window surfaces** that
+replace the chat column, not the "settings drawer" of the original text above.
+Motion is the signature: the character-scramble (`shell/src/lib/scramble.ts`)
+plus fadeRise/fadeDrop, all no-ops under `prefers-reduced-motion`.
+
+**Dark is the designed reference; light is a derived translation** — identical
+structure, different values — and the theme stays class-driven three-way
+(light / dark / system, default **system**). The brand mark is the
+**lowercase-`a` tile**; the earlier service-bell mark is retired.
+
+**`docs/design-brief-dark/` is authoritative** — `README.md` + `prototype.html`
+are the designer's pixel-perfect reference, `IMPLEMENTATION.md` records the
+binding prototype→app mapping, and the tokens in `shell/tailwind.config.js`
+implement it. As with every amendment before it, only the surface/type/shape
+move: the layout/IA and the accessibility rules of this section are
+**unchanged**, and personas 54 and 68 still govern legibility. One clarification,
+because the avoid-list below could be misread: the violet accent is a **single
+flat colour**, and the ban on purple/indigo **gradients**, glassmorphism,
+sparkle/bot iconography and shimmer is unchanged.
+
+**Visual design direction (originally binding for the step-7 build; its *palette
+and shape* clauses are superseded — read it with the v4 note above).** This
+paragraph is the original v1 statement and is kept intact because most of it is
+still in force. Two clauses in it are not, and they are the ones a reader is most
+likely to lift: **"a quiet cool-slate neutral palette with one deep steel-blue
+accent"** and **"sharp corners (no rounded cards/buttons)"**. Both were replaced by
+the chain of amendments above — the current answer is near-black paper with one
+violet accent, and floating chrome at 5–8px radii. A third clause is narrowed
+rather than dropped: **"no decorative motion"** now means no *shimmer/"thinking"*
+tropes, because v4 makes motion the signature (the character-scramble plus
+fadeRise/fadeDrop) — and it stays honest to the original intent because every one
+of those animations is a **no-op under `prefers-reduced-motion`**. Everything else here still
+governs: the ban on the generic-AI aesthetic, the ban on resembling a model
+vendor's identity, no decorative taglines or filler, real typographic hierarchy
+tuned for personas 54 and 68, obvious navigation, and personality from language
+rather than visual tropes. The one thing to read carefully: the avoid-list bans
+purple/indigo **gradients**, and v4's violet is a **single flat colour** — those do
+not conflict.
+
+Addison must not look like
 a generic AI chat product. Explicitly avoid the default aesthetic AI-generated frontends
 converge on: purple/indigo gradients, glassmorphism, sparkle/bot iconography, shimmer
 "thinking" effects, dark hero panels, and the centered-bubbles "assistant app" template.
@@ -656,12 +720,25 @@ amendment sharpens the two surfaces and adds a third:
   but a genuine agentic loop over a **real project directory**: read/edit/create
   files, run builds and tests, iterate. To keep the gate from prompting on every
   edit, OPEN gains a **workspace-trust** model: the user grants a project
-  directory (an explicit, snapshotted act); *inside* it OPEN acts freely (the gate
-  still runs and logs, it just doesn't prompt); *outside* it (system paths, the
+  directory (an explicit act); *inside* it OPEN's typed file tools act freely (the
+  gate still runs and logs, it just doesn't prompt); *outside* it (system paths, the
   keychain, the network beyond configured providers) destructive actions still
   raise the per-invocation card. Every mutating tool keeps its `undo()`, and the
   workspace sits under the snapshot floor (§9) — fine-grained undo *and* whole-
   config restore.
+
+  > *Corrected against what shipped (Phase-2 step 5, 2026-07-24; amendment §8.2's
+  > shipped note is the authority).* Two words above were wrong in the amendment and
+  > have been removed here rather than left standing. **Granting a trust is not a
+  > "snapshotted" act** — trust rows are deliberately **excluded** from snapshots on
+  > the `tool_grants` precedent, because trust is standing consent that suppresses
+  > cards, and capturing it would let the deliberately-ungated one-action restore
+  > reinstate a trust the user had revoked. A recovery floor must not be a
+  > privilege-escalation vector. And **"acts freely" covers edits, not runs**:
+  > `run_command` **always** cards, in a trusted directory or out of it, because a
+  > command's `cwd` is a convenience and never an effect bound. Trust suppresses the
+  > card only for the typed, path-bounded, undoable file tools, whose effect *is*
+  > their `path` argument.
 - **Custom → a user-tuned surface.** A third profile, reachable only deep in
   Settings behind additional questioning. The user may loosen or tighten the
   *prompting* guards (the per-invocation destructive card, the auto-grant scope,
@@ -669,9 +746,19 @@ amendment sharpens the two surfaces and adds a third:
   floors, which are absent from the Custom panel entirely. The contract: turning
   any guard *off* mints an **undeletable anchor** (§9), so lowering your own
   protections always leaves a guaranteed way back. You can lower the prompts; you
-  can never lower the floor. *(Open question §14: whether Custom is reachable from
-  Simple directly or only via Developer; current lean is reachable-but-deep
-  regardless.)*
+  can never lower the floor.
+
+  > *What shipped (Phase-2 step 2, 2026-07-24).* **Two** of those four guards are
+  > tunable, not four: the destructive card (`per_invocation` > `session`) and the
+  > auto-grant scope (`none` > `non_destructive` > `everything`). The other two are
+  > not dials — workspace trust is granted and revoked per directory, and the
+  > keyword gate is Phase-2 step 8 and does not exist yet. The anchor is minted
+  > **before** the weakening is applied, and the change is **refused** if the anchor
+  > cannot mint. Guards are effective only under Custom; Simple and Developer stay
+  > byte-for-byte as before. **§14's open question about Custom's reachability is
+  > RESOLVED** as the lean: reachable from any profile, deep and questioned — an
+  > "Advanced…" disclosure plus a two-step inline confirm carrying the honest
+  > capability description.
 
 The load-bearing principle above holds unchanged in spirit — a profile is
 configuration, not a second codebase or a way to switch safety off — but is now
@@ -789,7 +876,7 @@ injected content can never forge.
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only (snapshots exclude keys, reinforcing this). |
 | **G2** | Addison never triggers itself; it may *author* OS-run automation, but the OS runs it — no scheduler in Addison (§4). |
 | **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is unbreakable. |
-| **Anchor** | Weakening a guard in Custom mode mints an undeletable, binary-capturing recovery point. |
+| **Anchor** (**G4** in `CLAUDE.md` and in code — the same rule under two names) | Weakening a guard in Custom mode mints an **undeletable** recovery point that **records the app build it was minted on** — a short build *reference* (`{"version", "identifier"}`), never the binary. *(This row read "binary-capturing" until 2026-07-26, contradicting the owner decision three paragraphs above; corrected. Restoring a binary is a Phase-3 updater item and is not implemented.)* |
 
 **Impossible for anyone, in any mode:** editing Addison's code, removing a floor,
 deleting the undeletable anchor, or reaching a state with no restore. This is how
@@ -829,8 +916,37 @@ Build the free relay (§7.5.1): integrate at least one, ideally two, free hosted
 **Phase 3 — Polish & distribution**
 Installer signing/notarization for macOS/Windows, auto-update pipeline, a real landing page, expand tool set carefully (email drafting, calendar look-ups) — always tiered by risk per §7.4. Rewind/self-repair (§7.9) ships no later than this phase — it's a trust prerequisite for widening the tool set, not a nice-to-have that comes after.
 
+> **Amended 2026-07-25 — Phase 3 is no longer packaging-only.**
+> **`docs/phase-3-review-surface-plan.md`** (approved 2026-07-25, **not started**)
+> adds a second track to this phase: a Developer/OPEN **review surface** — a file
+> tree over trusted roots, a read-only viewer, a real **diff** of every edit Addison
+> has made that is still live on disk, and per-file revert.
+>
+> Why it belongs here rather than in a patch: the Phase-2 harness (§7.11) can now
+> edit a real project, and the only evidence of an edit today is a one-line Activity
+> Panel entry and a LIFO "Undo last action". G3 guarantees a way back for *config*;
+> nothing yet lets a person **see** what changed in *code* before deciding to roll it
+> back — and you cannot judge a rollback you were never shown. The surface adds
+> **zero new execution surface and zero new model capability** (no typing into files,
+> no save, no terminal, no run button), which is what makes it shippable at this
+> size; its one real cost, stated plainly in the plan, is that Monaco requires
+> widening the webview CSP with `style-src 'unsafe-inline'` globally.
+>
+> It is sequenced **after Phase-2 steps 6, 7 and 8**, none of which are built.
+> Note also that **restoring a previous app binary stays a Phase-3 updater item and
+> is not implemented** — `shell/src-tauri/src/updater.rs` is an unwired stub.
+
 **Phase 4 — OpenAI/Google cloud adapters**
 Add OpenAI and Google adapters (§7.3.1) alongside Anthropic. This is deliberately sequenced after the trust-building phases (rewind, polish) rather than the MVP.
+
+> **Superseded by owner decision 2026-07-18 — this phase was pulled into v1 and has
+> shipped.** OpenAI, Google, and an OpenAI-compatible **custom server** ship
+> alongside Anthropic, with keys stored per provider id in the OS keychain and every
+> connected provider's models folded into one picker union. The sequencing argument
+> above did not survive contact with the multi-provider decision; the trust
+> machinery it wanted to wait for (the gate, undo-at-registration, key isolation) was
+> already in place, and G1 is unchanged — provider responses carry status and
+> metadata only.
 
 **Revision — local model support moved into v1, not deferred to Phase 4.** The engineering implementation spec (`addison-engineering-spec.md`) pulls Ollama integration and the `LOCAL` model role into the initial build, sequenced as the *last* v1 implementation step (after the core loop, tool set, undo system, and BYOK/Setup Assistant path all work) rather than into a later roadmap phase — see that document's §4.1, §4.1.2, and §11 for the concrete architecture (a `ModelRouter` resolving per-request between `PRIMARY` and `LOCAL` roles, both configurable and reachable at once) and build order. The hardware-gating and "Basic tool support" caveats from §7.3.2 below still apply in full; only the *timing* changed, not the caution around local-model reliability.
 
@@ -856,12 +972,20 @@ three bars — persona fit (§5), full compatibility with every safety invariant
    (new/rename/archive) plus full-text search over the transcripts Addison
    already stores in SQLite (Hermes's FTS approach; OpenClaw's session
    management). "Find that thing we talked about" is a core persona need; all
-   local, user-deletable. → *UI/UX polish → Phase 3.*
+   local, user-deletable. → *UI/UX polish → Phase 3.* **Half shipped:** multiple
+   conversations (list, rename, per-conversation transcripts) ship —
+   `conversation.list` / `conversation.rename`. **Full-text search does not**, and
+   there is no FTS index; that half is still open.
 4. **Folder-scoped workspace grant** — an explicitly user-granted folder
    ("Addison may use Documents/Addison") enforced in the Rust shell,
    complementing the picker-scoped handles (seen in Manus and Cowork). Widens
    file usefulness without widening trust: still shell-brokered, still
-   undo-backed, plainly bounded. → *Phase 3 (expand tool set carefully).*
+   undo-backed, plainly bounded. → ~~*Phase 3*~~ **SHIPPED as Phase-2 step 5**
+   (2026-07-24) — the `workspace_trust` table, the `workspace.*` RPC, and the two
+   OPEN-only path-bounded file tools. It arrived earlier than this line planned and
+   in a narrower form: **Developer/Custom only**, with the core hard-refusing an
+   out-of-root path before `execute` and the Rust shell independently refusing
+   Addison's own data directory. See §7.11 and §9.
 5. **Routine sharing (export/import)** — a routine's declarative plan as a
    file another Addison can import (Goose's portable Recipes; skill-registry
    ecosystems). Plans are data (§7.9/no-code invariant); an imported routine
@@ -876,6 +1000,16 @@ three bars — persona fit (§5), full compatibility with every safety invariant
 
 **Explicitly deferred beyond Phase 5:** multi-agent orchestration, scheduled/always-on agents, shell-level tool access.
 
+> *Amended by the mode-scoped model (owner decision 2026-07-19) and the butler
+> amendment.* Two of those three moved. **Shell-level tool access exists in OPEN
+> mode** as a single `dev_only` tool, `run_command` — absent from the SAFE registry
+> view and refusing to run under SAFE, always carding per invocation, never
+> trust-suppressed. It is not a default tool in any profile, which is the non-goal
+> in §4 that still holds. **Scheduling** is reconciled rather than repealed: Addison
+> may *author* OS-run automation behind a user-typed keyword prefix (Phase-2 step 8,
+> not built), but **G2** — Addison never triggers itself — is a floor and does not
+> move. Multi-agent orchestration is unchanged and still deferred.
+
 **Amended 2026-07-20 — the butler wave (docs first, then code).** The scope
 amendment sequences its own work as *authoritative docs updated before any code*,
 then code in dependency order with the **safety floor built first**. As a roadmap
@@ -887,26 +1021,35 @@ track (post-greenlight):
    and the app **build reference** recorded by Custom anchors (§9). **Shipped
    2026-07-20**; binary *restore* was descoped to Phase 3 (see §9).
 2. **Custom profile + guard model** (`policy.py`) + the undeletable-anchor rule
-   (§7.11).
-3. **Routing strategies** (four named + Custom) + the companion prefer-quality /
-   prefer-free toggle + free-model disclaimer + graceful fallback/cooldown (§7.3).
+   (§7.11). **Shipped 2026-07-24** — two tunable prompting guards, not four; see
+   §7.11.
+3. **Routing strategies** (three named + Custom, after Balanced was cut) + the
+   companion prefer-quality / prefer-free toggle + free-model disclaimer + graceful
+   fallback/cooldown (§7.3). **Shipped 2026-07-24.**
 4. **Free-model endpoints** — first-class legit free/local + add-by-prompt
-   (shared plumbing with connecting an MCP server, step 7).
+   (shared plumbing with connecting an MCP server, step 7). **Shipped 2026-07-24.**
 5. **Harness + workspace-trust** (OPEN) — the trust boundary the powerful
-   capabilities below depend on (§7.11).
+   capabilities below depend on (§7.11). **Shipped 2026-07-24** — narrower than
+   drafted; read §7.11's correction note first.
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers and safe storage
    (buildable in all modes), capability-tier gating, capability-aware guidance.
+   **Not started.**
 7. **MCP client integration** — external tools through the registry + gate,
    mode-scoped (OPEN under workspace-trust; SAFE read-only / undo-able only).
-8. **Automation keyword gate** + author-OS-run automation (§4, §9).
+   **Not started.**
+8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Not started.**
+
+**Status as of 2026-07-26:** steps 1–5 are built and merged; 6–8 are not started.
+Those three are also the prerequisites for the Phase-3 **review surface**
+(`docs/phase-3-review-surface-plan.md`) — see the Phase-3 note above.
 
 Steps 3–4 are companion-facing and independent of the harness, so they can run in
 parallel with 5–8 once 1–2 land. Each step stays independently testable behind the
 same gate as today. Note this **supersedes** the earlier "automatic model routing
-is v2" line above for the *bounded-strategy* form — the four strategies ship in
+is v2" line above for the *bounded-strategy* form — the named strategies ship in
 this wave; unbounded/confidence-based auto-selection depth remains a Phase-2 open
-question (§14).
+question (§14, Q13 — now half-answered).
 
 ---
 
@@ -973,31 +1116,62 @@ built-in schedulers).
 4. Does the target persona (Mira, Petr) actually want an open-ended chat agent, or would a narrower set of guided workflows ("summarize this," "draft this email") test better than a blank chat box? Worth a small round of user interviews before Phase 1.
 5. For action rewind (§7.9): full-copy snapshots are simpler to implement correctly but cost more disk space; diff-based snapshots are cheaper but riskier to get wrong for binary files (PDFs, images). Worth prototyping both against real test files before committing.
 6. For messaging (Phase 5): is Telegram-first the right call, or does the target persona overwhelmingly already live in WhatsApp, making Telegram a technically-easier but practically-unused first channel? Worth checking with the same testers from Phase 1 rather than assuming.
-7. For model support (§7.3): is OpenAI or Google the higher-value second cloud provider to add first, and is that decision driven by user demand or just "which adapter is easiest to build"? Worth resisting the latter as the deciding factor.
+7. For model support (§7.3): is OpenAI or Google the higher-value second cloud provider to add first, and is that decision driven by user demand or just "which adapter is easiest to build"? Worth resisting the latter as the deciding factor. **Moot since the owner decision of 2026-07-18** — the question assumed a sequence, and both shipped together in v1 alongside an OpenAI-compatible custom server.
 8. Local models (§7.3.2) serve a meaningfully different user than personas Mira/Petr — more privacy-conscious, more technical, likely price-sensitive. Is that user actually part of Addison's target market, or a different product wearing the same shell? Worth being explicit about before investing in Phase 4, since it changes who Phase 4 is user-tested with.
 
 **Amended 2026-07-20 — open questions from the butler amendment (to resolve during
 the docs/spec update; all Phase-2).**
 
+*(Status 2026-07-26: of the eight below, **10, 11, 12 and 16 are resolved** and
+**13 is half-resolved**, each with its reasoning recorded inline and in amendment
+§13 — do not reopen them. **9, 14 and 15 are genuinely still open**, and all three
+belong to Phase-2 steps 6–8, which are not started.)*
+
 9. **Keyword-gate syntax** — the exact user-typed prefix (`!run`, `arm:`, `sudo:`…)
    and the precise set of actions it gates (running/arming powerful or OS-automation
-   actions in the harness, not ordinary chat) (§4, §9).
-10. **Snapshot retention** — how many ordinary snapshots to keep, and how anchors
-    accumulate (every weakening, or a single most-recent working anchor) (§9).
-11. **Custom reachability** — from Simple directly, or only via Developer first
-    (current lean: reachable-but-deep regardless of starting profile) (§7.11).
-12. **Verified-working definition** — precisely which "successful turn" marks a
-    config good (any completed turn, or one with no error and no rolled-back
-    action?) (§9).
+   actions in the harness, not ordinary chat) (§4, §9). **Still open** — Phase-2
+   step 8, not started.
+10. ~~**Snapshot retention**~~ — **RESOLVED 2026-07-20 (Phase-2 step 1).** Keep the
+    most recent **50 or 30 days, whichever keeps more**, with two exemptions written
+    into the SQL rather than left to a caller: permanent rows, and the newest **two**
+    verified-working rows. Two, not one: the restore walk skips any verified row
+    whose fingerprint matches the current config, so a single exempt row could be
+    exactly the one the walk skips, leaving the floor with no target. **Every
+    weakening mints a new anchor**; anchors never prune. The "single most-recent
+    anchor" alternative was rejected because replacing an undeletable row would
+    require the one `DELETE … WHERE undeletable = 1` that G4 says must not exist.
+    (Amendment §13 Q2.)
+11. ~~**Custom reachability**~~ — **RESOLVED 2026-07-24 (Phase-2 step 2), as the
+    lean:** reachable from any profile, deep and questioned. `profile.get` marks the
+    Custom entry `advanced: true`; the frontend renders it only behind an
+    "Advanced…" disclosure, and selecting it runs a two-step inline confirm carrying
+    the honest capability description before `profile.set` fires. (Amendment §13 Q3.)
+12. ~~**Verified-working definition**~~ — **RESOLVED 2026-07-20 (Phase-2 step 1):
+    any turn whose response was sent.** A tool failure is deliberately not a turn
+    failure; the "no rolled-back action" variant was rejected for coupling config
+    health to file-level regret over an unbounded window. The mark captures the
+    **current** config as a new verified row rather than flagging the pre-change row
+    — that config never ran. Honest residual: the predicate is satisfied by
+    configurations that are *degraded* rather than dead, so two bad changes deep the
+    user clicks Restore twice; that is bounded and the card names its target before
+    each click. (Amendment §13 Q4, as amended by `4c7ae78` for the one narrowed case
+    where a permanent row's fingerprint matches byte for byte.)
 13. **Auto-routing depth now vs. v2** — how much confidence-based escalation ships
     in the bounded strategies now versus stays substrate for later (§7.3, §11).
+    **HALF-RESOLVED 2026-07-24 (Phase-2 step 3):** the **availability** half shipped
+    — escalate/degrade on unavailable, rate-limit or network failure, with a
+    per-provider cooldown, a per-attempt deadline, and the plain "[X] was busy, so
+    Addison used [Y]" note. The **confidence** half — quality-based escalation —
+    remains v2 substrate and is untouched. (Amendment §13 Q5.)
 14. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
     curated allowlist? dev-only?) and how MCP tool metadata declares undo-ability
-    (§7.4).
+    (§7.4). **Still open** — Phase-2 step 7, not started.
 15. **Widget capability tiers & vocabulary** — the exact safe interactive kinds,
     how a widget spec *declares* the capabilities it needs, how the tier check maps
     capabilities → mode, and how code-backed widgets are managed alongside
-    declarative ones (§7 note, §7.9).
+    declarative ones (§7 note, §7.9). **Still open** — Phase-2 step 6, not started;
+    the shipped widget vocabulary is still `routine` / `stat` plus the OPEN-only
+    `command`.
 16. ~~**Anchor binary capture**~~ — **RESOLVED 2026-07-20: a version pin, capture
     only.** The anchor records `{"version", "identifier"}`; a copy-on-write bundle was
     rejected as platform-dependent and too large to keep an anchor undeletable.

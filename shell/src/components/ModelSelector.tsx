@@ -1,31 +1,37 @@
-// Model picker — sits at the bottom of the composer (design-doc §7.3.3, §7.3.4;
-// Fern direction, docs/design-brief-fern README §2).
+// The composer's model label + its menu (DARK direction; docs/design-brief-dark,
+// "Screens → Composer model menu"). Replaces the Fern popover.
 //
-// One compact control: a muted IBM Plex Mono text pill reading
-// "«model» · «effort» ▾" that opens a small popover *upward* (it lives at the
-// bottom of the screen). The popover lists the cloud models by their names
-// (e.g. "Claude Opus 4.8") — every model the configured key can access — and,
-// when a model runs on this computer too, those under a plain "On this computer"
-// group. Choosing an entry sets the role AND the model together, so there is no
-// separate Cloud/On-this-computer toggle to reason about.
+// The label is a mono 10.5px machine fact at the right of the composer row;
+// clicking it opens a small panel ABOVE it, anchored bottom-right: an "Answer
+// with" header over rows of `name … note`, where the note reads `local` for a
+// model on this computer and `quality` for a cloud one, and the selected row
+// carries a ✓ in accent. When the chosen cloud model offers levels of effort, an
+// "Effort" section follows in the same row idiom. A footer hint says where the
+// permanent choice lives: this menu is per message.
 //
-// When the chosen model offers levels of effort, a small segmented control
-// appears below a hair divider, labelled by the API's own plain wording
-// (e.g. "thorough"). It is hidden entirely for models with no effort control,
-// and for models on this computer.
+// ROWS ARE THE REAL CATALOG. Every entry comes from `model.availableRoles` —
+// cloud models from the connected providers, plus whatever is set up under the
+// local role. `free` is never assumed: the note says so only if the core's own
+// flag says so, and no cloud model carries it today (agent_core's CloudModel
+// keeps `free` off the wire, and the free chip stays Ollama-only — CLAUDE.md,
+// Phase-2 step 4). Inventing it here would be the app claiming a model costs
+// nothing on its own authority.
 //
-// This replaces a native <select> + a separate effort pill group, so it must not
-// regress accessibility for readers who are 54 and 68: the pill is a real button
-// (aria-haspopup="listbox"), the menu is a role="listbox" with role="option"
-// rows and full keyboard support (Arrow/Home/End/Enter/Escape), outside-click and
-// Tab close it, and focus moves into the list on open and back to the pill on
-// close.
+// ACCESSIBILITY IS NOT RESTYLED AWAY. The readers are 54 and 68: the label stays
+// a real button (aria-haspopup="listbox"), the model list stays a role="listbox"
+// with role="option" rows and Arrow/Home/End/Enter, focus moves into the list on
+// open and back to the label on close, and outside-click dismisses.
 //
-// Visual direction is binding (CLAUDE.md; Fern direction): the model name/tag in
-// IBM Plex Mono (a "machine fact"), one fern-green accent for the selected row,
-// plain language — never a generic AI-chat look.
+// TAB WALKS THE PANEL, it does not leave it. Tab used to close the menu
+// outright, which meant the three `aria-pressed` Effort buttons could never take
+// focus: a keyboard user could choose a model but never the effort the composer
+// label is advertising back at them ("Claude Opus 4.8 · high"). Tab now cycles
+// list → effort → list; Escape is the way out and returns focus to the label.
+// When there is no Effort section there is nothing to cycle to, so Tab keeps its
+// old behaviour and leaves.
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
 
@@ -79,16 +85,23 @@ function defaultCloud(models: CloudModel[]): CloudModel | undefined {
   return models.find((m) => m.default) ?? models[0];
 }
 
-/** One selectable row in the popover, flattened across cloud + local. */
+/** One selectable row in the menu, flattened across cloud + local. */
 interface Option {
   role: ModelRole;
   id: string;
   /** Row label (may carry a provider suffix when several providers connected). */
   label: string;
-  /** Compact label for the pill itself (never provider-suffixed). */
+  /** Compact label for the composer's own label (never provider-suffixed). */
   pillLabel: string;
+  /** The mono note at the right of the row: "local" | "free" | "quality". */
+  note: string;
   current: boolean;
 }
+
+/** How long the menu takes to fade back down. Shorter than the .2s it rises on:
+ * an exit that matches its entrance reads as sluggish, because nobody is waiting
+ * to read anything on the way out. */
+const MENU_EXIT_MS = 140;
 
 export function ModelSelector({
   roles,
@@ -110,7 +123,7 @@ export function ModelSelector({
   const locals = usingPlaceholder ? [] : localModels;
   // Two distinct notions: `blockOpen` (a turn is running — don't let the picker
   // open at all) vs `dimmed`/inert placeholder mode (disconnected design review —
-  // the pill is dimmed but the popover still opens so the catalog is *browsable*;
+  // the label is dimmed but the menu still opens so the catalog is *browsable*;
   // picking is a no-op until a real engine is connected).
   const blockOpen = Boolean(disabled);
   const dimmed = Boolean(disabled) || usingPlaceholder;
@@ -122,7 +135,7 @@ export function ModelSelector({
   const onLocal = selectedRole === "local" && locals.length > 0;
 
   // Effort only applies to the chosen cloud model; local models never carry it.
-  const effortLevels = onLocal ? [] : activeCloud?.effortLevels ?? [];
+  const effortLevels = onLocal ? [] : (activeCloud?.effortLevels ?? []);
 
   // Which level reads as active. App keeps `selectedEffort` reconciled to the
   // model, but fall back to the middle/default level so a sensible one is always
@@ -135,19 +148,19 @@ export function ModelSelector({
 
   // Attribute each model to its provider ("GPT-4.1 — OpenAI") only when more than
   // one provider is connected — with a single provider the suffix is just noise.
-  const providerCount = new Set(
-    cloud.map((m) => m.provider).filter((p): p is string => Boolean(p)),
-  ).size;
+  const providerCount = new Set(cloud.map((m) => m.provider).filter((p): p is string => Boolean(p)))
+    .size;
   const cloudRowLabel = (m: CloudModel) =>
     providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label;
 
-  const localHeaderShown = locals.length > 0;
   const options: Option[] = [
     ...cloud.map((m) => ({
       role: "primary" as ModelRole,
       id: m.id,
       label: cloudRowLabel(m),
       pillLabel: m.label,
+      // Only the core may call a model free (see the file header).
+      note: m.free ? "free" : "quality",
       current: !onLocal && m.id === activeCloud?.id,
     })),
     ...locals.map((m) => ({
@@ -155,28 +168,52 @@ export function ModelSelector({
       id: m.id,
       label: m.label,
       pillLabel: m.label,
+      note: "local",
       current: onLocal && m.id === activeLocalId,
     })),
   ];
-  const firstLocalIndex = localHeaderShown ? cloud.length : -1;
   const currentIndex = Math.max(
     0,
     options.findIndex((o) => o.current),
   );
 
-  // The pill text: the active model's compact label, plus its effort word when
-  // the model has one. The screenshot reads "Claude Opus 4.8 · thorough ▾".
-  const pillModelLabel = onLocal
-    ? locals.find((m) => m.id === activeLocalId)?.label ?? activeLocalId ?? "Model"
-    : activeCloud?.label ?? "Model";
+  // The composer's label: the active model, plus its effort word when it has one.
+  const activeLabel = onLocal
+    ? (locals.find((m) => m.id === activeLocalId)?.label ?? activeLocalId ?? "Model")
+    : (activeCloud?.label ?? "Model");
   const activeEffortLabel = effortLevels.find((l) => l.id === activeEffort)?.label;
 
-  // ---- Popover open/close + keyboard state --------------------------------
+  // ---- Menu open/close + keyboard state -----------------------------------
   const [open, setOpen] = useState(false);
+  // The menu stays mounted for the length of its exit. Without this it faded and
+  // rose IN and then vanished on a single frame when it closed — "it just plops
+  // out" (reported 2026-07-26). Every close path goes through `setOpen(false)`
+  // (Escape, an outside click, picking a model or an effort, the composer being
+  // blocked mid-turn), so driving the exit off `open` covers all of them.
+  const [exiting, setExiting] = useState(false);
+  const wasOpen = useRef(false);
+  useEffect(() => {
+    if (open) {
+      wasOpen.current = true;
+      setExiting(false);
+      return;
+    }
+    if (!wasOpen.current) return; // never opened, nothing to animate away
+    wasOpen.current = false;
+    if (!isMotionEnabled()) return;
+    setExiting(true);
+    const timer = setTimeout(() => setExiting(false), MENU_EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
+  // DERIVED, not state: the panel has to exist on the very render that opens it,
+  // or the effect below has nothing to move focus to and the menu opens with
+  // focus stranded on <body>. Asking for it a render later cost exactly that.
+  const menuPresent = open || exiting;
   const [activeIndex, setActiveIndex] = useState(currentIndex);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const pillRef = useRef<HTMLButtonElement | null>(null);
+  const labelRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const effortRef = useRef<HTMLDivElement | null>(null);
   const listboxId = useId();
   const optionId = (i: number) => `${listboxId}-opt-${i}`;
 
@@ -187,7 +224,7 @@ export function ModelSelector({
       setActiveIndex(currentIndex);
       listRef.current?.focus();
     }
-    // Only re-run when the popover toggles.
+    // Only re-run when the menu toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -208,9 +245,15 @@ export function ModelSelector({
     return () => document.removeEventListener("mousedown", onDown);
   }, [open]);
 
+  // A turn starting while the menu is open would leave a menu over a composer
+  // that can no longer act on it.
+  useEffect(() => {
+    if (blockOpen) setOpen(false);
+  }, [blockOpen]);
+
   function close(returnFocus = true) {
     setOpen(false);
-    if (returnFocus) pillRef.current?.focus();
+    if (returnFocus) labelRef.current?.focus();
   }
 
   function pickModel(o: Option) {
@@ -242,55 +285,106 @@ export function ModelSelector({
         e.preventDefault();
         if (options[activeIndex]) pickModel(options[activeIndex]);
         break;
-      case "Escape":
-        e.preventDefault();
-        close();
-        break;
-      case "Tab":
-        // Let focus leave naturally, but dismiss the popover.
-        close(false);
-        break;
       default:
         break;
     }
+    // Escape and Tab are handled once, on the panel, so they behave the same
+    // whether focus is on the list or on an Effort button.
+  }
+
+  /** The panel's tab ring, in DOM order: the model listbox, then each Effort
+   * button. */
+  function panelStops(): HTMLElement[] {
+    const stops: HTMLElement[] = [];
+    if (listRef.current) stops.push(listRef.current);
+    if (effortRef.current) {
+      stops.push(...Array.from(effortRef.current.querySelectorAll<HTMLElement>("button")));
+    }
+    return stops;
+  }
+
+  function onPanelKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+      return;
+    }
+    if (e.key !== "Tab") return;
+    const stops = panelStops();
+    if (stops.length < 2) {
+      // Nothing else in here to reach (a model with no effort levels, or a local
+      // one): let focus leave naturally and take the menu with it, as before.
+      close(false);
+      return;
+    }
+    e.preventDefault();
+    const i = stops.indexOf(document.activeElement as HTMLElement);
+    const next = e.shiftKey
+      ? stops[(i <= 0 ? stops.length : i) - 1]
+      : stops[(i + 1) % stops.length];
+    next.focus();
   }
 
   return (
-    <div ref={rootRef} className="relative min-w-0">
+    <span ref={rootRef} className="relative inline-flex min-w-0">
       <button
-        ref={pillRef}
+        ref={labelRef}
         type="button"
+        data-scramble="440"
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={blockOpen}
         aria-label={
           activeEffortLabel
-            ? `Model: ${pillModelLabel}, effort ${activeEffortLabel}. Choose model and effort.`
-            : `Model: ${pillModelLabel}. Choose model.`
+            ? `Model: ${activeLabel}, effort ${activeEffortLabel}. Choose model and effort.`
+            : `Model: ${activeLabel}. Choose model.`
         }
         onClick={() => !blockOpen && setOpen((v) => !v)}
-        className={[
-          "flex max-w-full items-center gap-1 rounded-sm px-1 py-0.5 font-mono text-hint transition-colors",
-          "text-muted hover:text-ink-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-fern/40",
-          "max-md:min-h-[44px] max-md:px-1.5",
-          dimmed ? "opacity-60" : "",
-          blockOpen ? "cursor-not-allowed" : "",
-        ].join(" ")}
+        className={
+          // Narrower on a phone: the label shares one row with the textarea, and
+          // a full model name there squeezes the message down to a keyhole.
+          "max-w-[110px] truncate font-mono text-[10.5px] transition-colors max-md:min-h-[44px] md:max-w-[180px] " +
+          (open ? "text-muted" : "text-disabled hover:text-muted ") +
+          // Dark only. On light, `disabled` at 60% measured 1.55:1 against the
+          // paper — the label that names the model in effect was the least
+          // readable text in the app. The light ramp carries the dimming now.
+          (dimmed ? " dark:opacity-60" : "") +
+          (blockOpen ? " cursor-not-allowed" : "")
+        }
       >
-        <span className="truncate">
-          {pillModelLabel}
-          {activeEffortLabel ? ` · ${activeEffortLabel.toLowerCase()}` : ""}
-        </span>
-        <span aria-hidden="true" className="shrink-0">
-          ▾
-        </span>
+        {activeLabel}
+        {activeEffortLabel ? ` · ${activeEffortLabel.toLowerCase()}` : ""}
       </button>
 
-      {open && (
+      {menuPresent && (
         <div
-          className="absolute bottom-full left-0 z-20 mb-1.5 min-w-[240px] max-w-[320px] animate-[fade-rise_140ms_ease-out] overflow-hidden rounded-card border border-line bg-surface shadow-soft"
+          onKeyDown={onPanelKeyDown}
+          // `w-max` over the 196px floor: a model picker that abbreviates the
+          // model name ("Claude Opus 4…") is asking people to choose between
+          // things it won't show them. The panel grows to its content and only
+          // truncates past 320px, where a provider-suffixed name would otherwise
+          // push the menu off the column.
+          //
+          // The height clamp is the viewport one: the menu opens upward from the
+          // composer, so in a short window it ran past the top of the app and
+          // over the header (measured at 1280×420: menu top 76, header bottom
+          // 77). It scrolls instead of climbing.
+          className={
+            "no-scrollbar absolute bottom-[26px] right-0 z-30 flex max-h-[calc(100vh-160px)] w-max min-w-[196px] max-w-[320px] flex-col overflow-y-auto rounded-[6px] border border-rail bg-panel p-1.5 shadow-menu " +
+            (open
+              ? "animate-[fadeRise_.2s_ease_both]"
+              : "pointer-events-none animate-[fadeDrop_.14s_ease_both]")
+          }
           role="presentation"
+          // While it fades out the menu is a picture, not a control: out of the
+          // a11y tree, and not clickable. Screen readers and tests both see it
+          // gone the moment it closes, which is what "closed" should mean.
+          aria-hidden={!open}
         >
+          <div className="px-2.5 pb-2 pt-1.5 text-[10px] font-medium tracking-[.04em] text-faint">
+            Answer with
+          </div>
+
           <div
             ref={listRef}
             role="listbox"
@@ -298,42 +392,52 @@ export function ModelSelector({
             aria-label="Which model Addison uses"
             aria-activedescendant={optionId(activeIndex)}
             onKeyDown={onListKeyDown}
-            className="max-h-[40vh] overflow-y-auto py-1 focus:outline-none thread-scroll"
+            className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
             {options.map((o, i) => (
-              <div key={`${o.role}:${o.id}`}>
-                {i === firstLocalIndex && (
-                  <div className="px-3 pb-1 pt-2 text-label font-semibold uppercase tracking-caps-wide text-faint">
-                    On this computer
-                  </div>
-                )}
-                <div
-                  id={optionId(i)}
-                  role="option"
-                  aria-selected={o.current}
-                  onClick={() => pickModel(o)}
-                  onMouseEnter={() => setActiveIndex(i)}
-                  className={[
-                    "mx-1 flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 font-mono text-hint",
-                    o.current ? "bg-fern-tint text-fern-deep" : "text-ink-soft",
-                    i === activeIndex && !o.current ? "bg-hair" : "",
-                  ].join(" ")}
+              <div
+                key={`${o.role}:${o.id}`}
+                id={optionId(i)}
+                role="option"
+                aria-selected={o.current}
+                onClick={() => pickModel(o)}
+                onMouseEnter={() => setActiveIndex(i)}
+                className={
+                  "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
+                  (i === activeIndex ? "bg-line" : "")
+                }
+              >
+                <span
+                  className={
+                    "min-w-0 truncate font-mono text-[10.5px] " +
+                    (o.current ? "text-ink" : "text-muted")
+                  }
                 >
-                  <span className="w-3 shrink-0 text-fern-deep" aria-hidden="true">
-                    {o.current ? "✓" : ""}
-                  </span>
-                  <span className="truncate">{o.label}</span>
-                </div>
+                  {o.label}
+                </span>
+                <span className="flex-1" />
+                <span
+                  className={
+                    "shrink-0 font-mono text-[10px] " +
+                    (o.current ? "text-accent" : "text-disabled")
+                  }
+                >
+                  {o.current ? `${o.note} ✓` : o.note}
+                </span>
               </div>
             ))}
           </div>
 
           {effortLevels.length > 0 && (
-            <div className="border-t border-line px-2.5 py-2">
-              <div className="px-0.5 pb-1.5 text-label font-semibold uppercase tracking-caps-wide text-faint">
+            <>
+              <div className="px-2.5 pb-2 pt-3 text-[10px] font-medium tracking-[.04em] text-faint">
                 Effort
               </div>
-              <div role="group" aria-label="How thorough Addison should be" className="flex gap-1">
+              <div
+                ref={effortRef}
+                role="group"
+                aria-label="How thorough Addison should be"
+              >
                 {effortLevels.map((level) => {
                   const active = activeEffort === level.id;
                   return (
@@ -344,22 +448,32 @@ export function ModelSelector({
                       onClick={() => {
                         if (!usingPlaceholder) onSelectEffort(level.id);
                       }}
-                      className={[
-                        "rounded-sm px-2.5 py-1 text-hint font-medium transition-colors",
-                        active
-                          ? "bg-fern-tint text-fern-deep"
-                          : "text-muted hover:bg-hair hover:text-ink",
-                      ].join(" ")}
+                      className="flex w-full items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] text-left transition-colors hover:bg-line"
                     >
-                      {level.label}
+                      <span
+                        className={
+                          "min-w-0 truncate font-mono text-[10.5px] " +
+                          (active ? "text-ink" : "text-muted")
+                        }
+                      >
+                        {level.label}
+                      </span>
+                      <span className="flex-1" />
+                      {active && (
+                        <span className="shrink-0 font-mono text-[10px] text-accent">✓</span>
+                      )}
                     </button>
                   );
                 })}
               </div>
-            </div>
+            </>
           )}
+
+          <div className="mt-1.5 border-t border-line px-2.5 pb-1 pt-2 font-mono text-[10px] text-disabled">
+            picked per message · default in Settings
+          </div>
         </div>
       )}
-    </div>
+    </span>
   );
 }

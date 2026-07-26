@@ -44,6 +44,11 @@ import type { ProfileState } from "../types/ui";
 afterEach(cleanup);
 
 // --- Frozen copy (contract D6) — byte-for-byte. -----------------------------
+// REDESIGN NOTE (dark direction, phase 3): the filled "Choose a folder to trust…"
+// button became the accent action on the empty/trailing row, worded as the brief
+// words it. The frozen COPY — the standing line and the grant confirm — is
+// untouched; only the label of the control that opens the OS picker moved.
+const CHOOSE_ACTION = "choose a folder…";
 const STANDING_LINE =
   "Inside a trusted folder, Addison reads and edits files without asking first — " +
   "each change is logged and can be undone. Commands it runs still ask every time.";
@@ -174,7 +179,7 @@ describe("the workspace-trust panel", () => {
 
     // Step one: pick a folder. The picker resolves, the confirm appears with the
     // frozen copy and the picked path — but nothing is granted yet.
-    fireEvent.click(screen.getByRole("button", { name: "Choose a folder to trust…" }));
+    fireEvent.click(screen.getByRole("button", { name: CHOOSE_ACTION }));
     expect(await screen.findByText(GRANT_CONFIRM)).toBeTruthy();
     expect(screen.getByTestId("pending-dir").textContent).toBe(DIR);
     expect(state.handleGrant).not.toHaveBeenCalled();
@@ -190,7 +195,7 @@ describe("the workspace-trust panel", () => {
   it("does nothing when the picker is cancelled (null)", async () => {
     const state = stateWith({ pickDirectory: vi.fn(async () => null) });
     renderPanel(state);
-    fireEvent.click(screen.getByRole("button", { name: "Choose a folder to trust…" }));
+    fireEvent.click(screen.getByRole("button", { name: CHOOSE_ACTION }));
     // Give the async pick a tick to settle; no confirm, no grant.
     await Promise.resolve();
     expect(screen.queryByText(GRANT_CONFIRM)).toBeNull();
@@ -200,7 +205,7 @@ describe("the workspace-trust panel", () => {
   it("lets the person back out of the grant confirm without granting", async () => {
     const state = stateWith();
     renderPanel(state);
-    fireEvent.click(screen.getByRole("button", { name: "Choose a folder to trust…" }));
+    fireEvent.click(screen.getByRole("button", { name: CHOOSE_ACTION }));
     await screen.findByText(GRANT_CONFIRM);
     fireEvent.click(screen.getByRole("button", { name: "Not now" }));
     expect(screen.queryByText(GRANT_CONFIRM)).toBeNull();
@@ -225,9 +230,11 @@ describe("the workspace-trust panel", () => {
     renderPanel(state);
     expect(screen.getByText("/a/one")).toBeTruthy();
     expect(screen.getByText("/b/two")).toBeTruthy();
-    const revokeButtons = screen.getAllByRole("button", { name: "Stop trusting" });
+    // Each revoke names its own folder: a column of identical "Stop trusting"
+    // buttons is the shape in which someone revokes the wrong one.
+    const revokeButtons = screen.getAllByRole("button", { name: /^Stop trusting/ });
     expect(revokeButtons).toHaveLength(2);
-    fireEvent.click(revokeButtons[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Stop trusting /b/two" }));
     expect(state.handleRevoke).toHaveBeenCalledWith("/b/two");
   });
 
@@ -238,7 +245,7 @@ describe("the workspace-trust panel", () => {
 
   it("shows a quiet placeholder when the engine isn't connected", () => {
     render(<WorkspaceTrustPanel connected={false} workspace={stateWith()} />);
-    expect(screen.queryByRole("button", { name: "Choose a folder to trust…" })).toBeNull();
+    expect(screen.queryByRole("button", { name: CHOOSE_ACTION })).toBeNull();
     expect(screen.getByText(/once Addison.s engine is connected/i)).toBeTruthy();
   });
 });
@@ -367,7 +374,6 @@ function renderSettings(profile: ProfileState, withWorkspace = true) {
       onClearDiagnostics={noop}
       theme="light"
       onSetTheme={noop}
-      onOpenMenu={noop}
     />,
   );
 }

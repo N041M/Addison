@@ -1,0 +1,1080 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+html, body, #root { height:100%; }
+body { margin:0; background:#0C0C0D; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; }
+a { color:#B4A9F5; text-decoration:none; }
+a:hover { color:#E9E9E7; }
+@keyframes blink { 0%,49% { opacity:1; } 50%,100% { opacity:0; } }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+</style>
+</helmet>
+<div style="background:#0C0C0D; color:#E9E9E7; font-size:13px">
+
+  <section data-screen-label="Cover" style="min-height:100vh; box-sizing:border-box; padding:72px 72px 56px; display:flex; flex-direction:column; gap:40px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; letter-spacing:.08em; color:#55575C">BRANDBOOK · v1 · JULY 2026</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; letter-spacing:.08em; color:#55575C">INTERNAL</span>
+    </div>
+    <div style="flex:1; display:flex; flex-direction:column; justify-content:center; gap:34px">
+      <span style="width:112px; height:112px; border-radius:10px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 14px 20px; box-sizing:border-box; position:relative">
+        <span style="font-size:77px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+        <span style="position:absolute; top:16px; right:16px; width:26px; height:26px; border-radius:50%; background:#B4A9F5"></span>
+      </span>
+      <div style="display:flex; flex-direction:column; gap:18px; max-width:620px">
+        <h1 style="margin:0; font-size:62px; font-weight:500; letter-spacing:-.03em; line-height:1.02; color:#E9E9E7">Addison</h1>
+        <p style="margin:0; font-size:18px; line-height:1.55; color:#B9BBBE; text-wrap:pretty">An assistant that lives on your computer, does real work in plain language, and never makes a change you can't take back.</p>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; font-weight:500; color:#B4A9F5">everything can be undone</span>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:0; border-top:1px solid #1E1F22">
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">01</span> Positioning</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">02</span> Principles</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">03</span> Logo</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">04</span> Colour</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">05</span> Type</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">06</span> Layout</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">07</span> Motion</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">08</span> Voice</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">09</span> UI</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C"><span style="color:#6E7076">10</span> Applications</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">11</span> Component states</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">12</span> Screen states</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">13</span> Interaction</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">14</span> Content rules</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">15</span> Accessibility</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">16</span> Copy library</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">17</span> Visual scripts</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">18</span> Redlines</span>
+      <span style="display:flex; gap:14px; padding:16px 26px 0 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5"><span style="color:#6E7076">19</span> Tokens</span>
+    </div>
+    <div style="display:flex; gap:26px; flex-wrap:wrap; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; letter-spacing:.06em; color:#55575C">
+      <span style="border-left:2px solid #2E2F33; padding-left:12px">PART I · 01–10 · BRAND</span>
+      <span style="border-left:2px solid #B4A9F5; padding-left:12px">PART II · 11–19 · BUILD SPEC</span>
+    </div>
+  </section>
+
+  <section data-screen-label="01 Positioning" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">01</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">POSITIONING</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">who it is for, and what it is not</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:44px">
+      <div style="flex:1; min-width:340px; display:flex; flex-direction:column; gap:24px">
+        <p style="margin:0; font-size:24px; line-height:1.45; letter-spacing:-.015em; color:#E9E9E7; text-wrap:pretty">Addison is for people who own a computer they don't fully trust themselves with.</p>
+        <p style="margin:0; font-size:14.5px; line-height:1.7; color:#909398; text-wrap:pretty">It does the chores — files, drafts, bookings, small fixes — and explains what it did in the words the person would have used. Every action is reversible, and it says so in the interface, not in the small print.</p>
+      </div>
+      <div style="width:392px; display:flex; flex-direction:column; gap:0">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">THE FRAME</span>
+        <div style="display:flex; flex-direction:column; margin-top:12px; font-size:12.5px">
+          <span style="display:flex; gap:16px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">is</span><span style="color:#B9BBBE">a careful assistant with hands</span></span>
+          <span style="display:flex; gap:16px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">is not</span><span style="color:#B9BBBE">a chatbot, an oracle, a coworker</span></span>
+          <span style="display:flex; gap:16px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">for</span><span style="color:#B9BBBE">households, not teams</span></span>
+          <span style="display:flex; gap:16px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">runs</span><span style="color:#B9BBBE">on this computer, by default</span></span>
+          <span style="display:flex; gap:16px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">promises</span><span style="color:#B4A9F5">everything can be undone</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="02 Principles" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">02</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">PRINCIPLES</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">design decisions resolve here</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:260px; border-left:2px solid #B4A9F5; padding-left:16px; display:flex; flex-direction:column; gap:10px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">01</span>
+        <span style="font-size:17px; font-weight:500; letter-spacing:-.015em; color:#E9E9E7">Reversible before clever</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">If a feature can't be undone, it needs a restore point, a preview, or a smaller scope.</span>
+      </div>
+      <div style="flex:1; min-width:260px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:10px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">02</span>
+        <span style="font-size:17px; font-weight:500; letter-spacing:-.015em; color:#E9E9E7">Quiet by default</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">One accent, hairline structure, no chrome. Attention is spent on the person's own words.</span>
+      </div>
+      <div style="flex:1; min-width:260px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:10px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">03</span>
+        <span style="font-size:17px; font-weight:500; letter-spacing:-.015em; color:#E9E9E7">Show the work</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">Steps are visible while they happen, and stay visible afterwards as a record.</span>
+      </div>
+      <div style="flex:1; min-width:260px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:10px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">04</span>
+        <span style="font-size:17px; font-weight:500; letter-spacing:-.015em; color:#E9E9E7">Household language</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">No tokens, models, prompts, or agents in the surface. Say what happened to which files.</span>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="03 Logo" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">03</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">LOGO</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">dark slab · lowercase a · lavender dot</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:56px; flex-wrap:wrap">
+      <span style="width:172px; height:172px; border-radius:14px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 21px 31px; box-sizing:border-box; position:relative; flex-shrink:0">
+        <span style="font-size:118px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+        <span style="position:absolute; top:25px; right:25px; width:40px; height:40px; border-radius:50%; background:#B4A9F5"></span>
+      </span>
+      <div style="display:flex; flex-direction:column; gap:28px">
+        <span style="display:flex; align-items:center; gap:20px">
+          <span style="width:64px; height:64px; border-radius:6px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 8px 12px; box-sizing:border-box; position:relative; flex-shrink:0">
+            <span style="font-size:44px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:9px; right:9px; width:15px; height:15px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="font-size:36px; font-weight:500; letter-spacing:-.025em; color:#E9E9E7">Addison</span>
+        </span>
+        <div style="display:flex; align-items:flex-end; gap:24px">
+          <span style="width:34px; height:34px; border-radius:3px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 4px 6px; box-sizing:border-box; position:relative">
+            <span style="font-size:24px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:5px; right:5px; width:8px; height:8px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="width:20px; height:20px; border-radius:2px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 2px 4px; box-sizing:border-box; position:relative">
+            <span style="font-size:14px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:3px; right:3px; width:5px; height:5px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="width:16px; height:16px; border-radius:2px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 1px 3px; box-sizing:border-box; position:relative">
+            <span style="font-size:12px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:2px; right:2px; width:4px; height:4px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C; padding-bottom:2px">64 · 34 · 20 · 16 px</span>
+        </div>
+      </div>
+      <div style="width:360px; display:flex; flex-direction:column; gap:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">CONSTRUCTION</span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px; margin-top:12px"><span style="flex:1; color:#B9BBBE">tile</span><span>#16171B · radius 9% · 1px #26272B</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">letter</span><span>Helvetica 500 · 69% · baseline left</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">dot</span><span>#B4A9F5 · 23% · inset 14%</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">clear space</span><span>½ tile width, all sides</span></span>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px; margin-top:6px">
+      <div style="flex:1; min-width:300px; background:#F6F4EF; border:1px solid #D5D0C7; border-radius:8px; padding:22px 26px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#78756E">ON LIGHT — TILE STAYS DARK</span>
+        <span style="display:flex; align-items:center; gap:18px">
+          <span style="width:56px; height:56px; border-radius:5px; background:#100E09; display:flex; align-items:flex-end; padding:0 0 7px 10px; box-sizing:border-box; position:relative; flex-shrink:0">
+            <span style="font-size:39px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#F6F4EF">a</span>
+            <span style="position:absolute; top:8px; right:8px; width:13px; height:13px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="font-size:26px; font-weight:500; letter-spacing:-.025em; color:#100E09">Addison</span>
+        </span>
+      </div>
+      <div style="flex:1; min-width:300px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 26px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">NEVER</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:9px 2px">Recolour the tile, or fill it with the accent</span>
+          <span style="border-top:1px solid #1E1F22; padding:9px 2px">Set the letter in another typeface or weight</span>
+          <span style="border-top:1px solid #1E1F22; padding:9px 2px">Move the dot, outline it, or add a second one</span>
+          <span style="border-top:1px solid #1E1F22; padding:9px 2px">Add gradients, glows, shadows, or a stroke</span>
+          <span style="border-top:1px solid #1E1F22; padding:9px 2px">Place the mark on imagery without a solid tile</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="04 Colour" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">04</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COLOUR</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">dark is the origin · one accent only</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:14px">
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:#0C0C0D; box-shadow:inset 0 0 0 1px #26272B"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Ground</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">#0C0C0D · page, thread</span>
+      </div>
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:#16171B"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Raised</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">#16171B · menus, modals, tile</span>
+      </div>
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:#B4A9F5"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Lavender</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">#B4A9F5 · actions, active rail</span>
+      </div>
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:#E9E9E7"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Ink</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">#E9E9E7 · primary text</span>
+      </div>
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:linear-gradient(90deg,#B9BBBE 0 33%,#909398 33% 66%,#55575C 66%)"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Text steps</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">B9BBBE · 909398 · 55575C</span>
+      </div>
+      <div style="flex:1; min-width:170px; display:flex; flex-direction:column; gap:10px">
+        <span style="height:96px; border-radius:6px; background:linear-gradient(90deg,#1E1F22 0 50%,#2E2F33 50%)"></span>
+        <span style="font-size:12.5px; font-weight:500; color:#B9BBBE">Structure</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">1E1F22 hairline · 2E2F33 rail</span>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px; margin-top:6px">
+      <div style="flex:1; min-width:340px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">RULES</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Lavender marks what a person can act on — links, run, restore, the active row. Never decoration.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">No second accent, no status greens or reds. Danger is phrased in words, plus a restore point.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Structure is hairlines and 2px rails, never boxes-in-boxes or filled cards.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Max two surface levels: ground and raised.</span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:340px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">LIGHT THEMES — DIMMED PAPER, NEVER WHITE</span>
+        <div style="display:flex; flex-direction:column; gap:10px; margin-top:2px">
+          <span style="display:flex; align-items:center; gap:12px">
+            <span style="display:flex; gap:0; border-radius:4px; overflow:hidden; flex-shrink:0">
+              <span style="width:34px; height:30px; background:#E9E6E0"></span><span style="width:34px; height:30px; background:#F6F4EF"></span><span style="width:34px; height:30px; background:#453F35"></span><span style="width:34px; height:30px; background:#4B3C9E"></span>
+            </span>
+            <span style="font-size:12.5px; color:#B9BBBE">Warm paper</span>
+            <span style="flex:1"></span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">default light</span>
+          </span>
+          <span style="display:flex; align-items:center; gap:12px">
+            <span style="display:flex; gap:0; border-radius:4px; overflow:hidden; flex-shrink:0">
+              <span style="width:34px; height:30px; background:#E4E7E9"></span><span style="width:34px; height:30px; background:#F2F4F6"></span><span style="width:34px; height:30px; background:#3A424B"></span><span style="width:34px; height:30px; background:#2F3AA8"></span>
+            </span>
+            <span style="font-size:12.5px; color:#B9BBBE">Cool slate</span>
+          </span>
+          <span style="display:flex; align-items:center; gap:12px">
+            <span style="display:flex; gap:0; border-radius:4px; overflow:hidden; flex-shrink:0">
+              <span style="width:34px; height:30px; background:#EDE6D8"></span><span style="width:34px; height:30px; background:#F9F5EC"></span><span style="width:34px; height:30px; background:#4A4434"></span><span style="width:34px; height:30px; background:#95341A"></span>
+            </span>
+            <span style="font-size:12.5px; color:#B9BBBE">Cream</span>
+          </span>
+          <span style="font-size:12.5px; line-height:1.6; color:#909398; border-top:1px solid #1E1F22; padding-top:10px; margin-top:2px">In light themes every text step darkens two stops and small type gains a weight — the dark-mode greys go invisible on paper.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="05 Type" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">05</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">TYPOGRAPHY</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">two faces, no exceptions</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:56px">
+      <div style="flex:1; min-width:360px; display:flex; flex-direction:column; gap:20px">
+        <span style="font-size:48px; font-weight:500; letter-spacing:-.03em; line-height:1; color:#E9E9E7">Helvetica Neue</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">400 · 500 only · fallback Helvetica, Arial</span>
+        <span style="font-size:15.5px; line-height:1.65; color:#B9BBBE; max-width:520px; text-wrap:pretty">Everything a person reads: their own words, Addison's answers, titles, settings. Tight tracking on large sizes, none below 16px.</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:34px; font-weight:500; letter-spacing:-.03em; color:#E9E9E7; margin-top:14px">SF Mono</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">500 · ui-monospace, Menlo</span>
+        <span style="font-size:15.5px; line-height:1.65; color:#B9BBBE; max-width:520px; text-wrap:pretty">Machine facts only: times, counts, sizes, model names, filenames, footnotes. Never for sentences.</span>
+      </div>
+      <div style="width:452px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SCALE</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C">
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">62 / 500</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:19px; letter-spacing:-.02em; color:#E9E9E7">Brand display</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">26 / 500</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:17px; letter-spacing:-.015em; color:#E9E9E7">Greeting, empty states</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">20 / 500</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:15px; color:#E9E9E7">Surface titles</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">15.5/400</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:14px; color:#B9BBBE">Messages · line-height 1.65</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">13 / 500</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:13px; color:#B9BBBE">Header, chrome</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">12 / 400</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:12px; color:#909398">Lists, rows, settings</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">11 / 600</span><span style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SECTION LABELS · +.05em</span></span>
+          <span style="display:flex; align-items:baseline; gap:14px; border-top:1px solid #1E1F22; padding:11px 2px"><span style="width:52px; flex-shrink:0">10 / 500</span><span style="color:#909398">mono footnotes, counts, times</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="06 Layout" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">06</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">LAYOUT & STRUCTURE</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">rails and hairlines, no cards</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:44px">
+      <div style="flex:1; min-width:420px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">THREE COLUMNS, BOTH SIDES COLLAPSIBLE</span>
+        <span style="display:flex; gap:14px; height:150px; align-items:stretch">
+          <span style="width:96px; border-left:2px solid #2E2F33; padding-left:12px; display:flex; flex-direction:column; gap:8px">
+            <span style="height:8px; background:#26272B; border-radius:1px"></span>
+            <span style="height:8px; background:#1E1F22; border-radius:1px"></span>
+            <span style="height:8px; background:#1E1F22; border-radius:1px"></span>
+            <span style="flex:1"></span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">212 chats</span>
+          </span>
+          <span style="flex:1; display:flex; flex-direction:column; gap:10px; align-items:center; justify-content:flex-end; border-bottom:1px solid #1E1F22; padding-bottom:10px">
+            <span style="width:100%; max-width:280px; height:8px; background:#26272B; border-radius:1px"></span>
+            <span style="width:100%; max-width:280px; height:8px; background:#1E1F22; border-radius:1px"></span>
+            <span style="flex:1"></span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">thread max 580 · composer max 840</span>
+          </span>
+          <span style="width:110px; border-left:2px solid #2E2F33; padding-left:12px; display:flex; flex-direction:column; gap:8px">
+            <span style="height:8px; background:#26272B; border-radius:1px"></span>
+            <span style="height:8px; background:#1E1F22; border-radius:1px"></span>
+            <span style="flex:1"></span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">232 work</span>
+          </span>
+        </span>
+      </div>
+      <div style="width:392px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">MEASUREMENTS</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">spacing</span><span>2 · 6 · 9 · 14 · 22 · 36 · 44</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">column gap</span><span>44px between panes</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">rail</span><span>2px · 12–16px indent</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">hairline</span><span>1px #1E1F22 · rows only</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">radius</span><span>0 rows · 6–8 raised · 50% dots</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">scroll edges</span><span>32px top mask · 20px bottom</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">hit target</span><span>44px minimum on touch</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="07 Motion" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">07</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">MOTION</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">text resolves, panels breathe</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:280px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:11px">
+        <span style="font-size:15px; font-weight:500; color:#E9E9E7">Scramble reveal</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">620–800ms · per character</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">Labels and answers land letter by letter — the machine is thinking in the open. Once per element, never on re-render.</span>
+      </div>
+      <div style="flex:1; min-width:280px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:11px">
+        <span style="font-size:15px; font-weight:500; color:#E9E9E7">Fade rise / drop</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">300–400ms · 6px · 40–70ms stagger</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">Rows, messages and surfaces enter upward and leave downward. Views drop out before the next rises.</span>
+      </div>
+      <div style="flex:1; min-width:280px; border-left:2px solid #2E2F33; padding-left:16px; display:flex; flex-direction:column; gap:11px">
+        <span style="font-size:15px; font-weight:500; color:#E9E9E7">Panels</span>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">350ms ease · width, opacity, 16px slide</span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">Side and work rails collapse by animating width — content never reflows twice.</span>
+      </div>
+      <div style="flex:1; min-width:280px; border-left:2px solid #B4A9F5; padding-left:16px; display:flex; flex-direction:column; gap:11px">
+        <span style="font-size:15px; font-weight:500; color:#E9E9E7">Working state</span>
+        <span style="display:flex; align-items:center; gap:9px; font-size:13px; color:#E9E9E7"><span style="width:5px; height:5px; border-radius:50%; background:#E9E9E7; animation:{{ pulseAnim }}"></span>Writing answer<span style="width:7px; height:14px; background:#E9E9E7; margin-left:2px; animation:{{ blinkAnim }}"></span></span>
+        <span style="font-size:13px; line-height:1.65; color:#909398">One blinking dot for the live step, one block cursor for streaming text. Nothing else moves while Addison works.</span>
+      </div>
+    </div>
+    <span style="font-size:12.5px; color:#909398; border-top:1px solid #1E1F22; padding-top:14px">All motion is suppressed under <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; color:#B9BBBE">prefers-reduced-motion</span> — the interface must be identical standing still.</span>
+  </section>
+
+  <section data-screen-label="08 Voice" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">08</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">VOICE & TONE</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">plain, finished, reversible</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:44px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SAY THIS</span>
+        <div style="display:flex; flex-direction:column; gap:12px">
+          <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:14.5px; line-height:1.6; color:#E9E9E7">Done. I renamed the 24 photos in Vacation so they sort by date. I kept every original name.</span>
+          <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:14.5px; line-height:1.6; color:#E9E9E7">I haven't sent anything — it's just a draft.</span>
+          <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:14.5px; line-height:1.6; color:#E9E9E7">Tell me to go ahead and I'll do it step by step.</span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">NOT THIS</span>
+        <div style="display:flex; flex-direction:column; gap:12px">
+          <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:14.5px; line-height:1.6; color:#55575C">Task completed successfully! ✨ 24 assets processed.</span>
+          <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:14.5px; line-height:1.6; color:#55575C">Executing agentic file-rename pipeline with 4 tool calls.</span>
+          <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:14.5px; line-height:1.6; color:#55575C">As an AI assistant, I'm unable to guarantee the outcome.</span>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px; border-top:1px solid #1E1F22; padding-top:18px">
+      <div style="flex:1; min-width:300px; display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px"><span style="color:#B9BBBE">Past tense for work done</span> — present only while it happens.</span>
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px"><span style="color:#B9BBBE">Name the thing</span> — file names, folders, counts, amounts.</span>
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px"><span style="color:#B9BBBE">State the way back</span> whenever something changed.</span>
+      </div>
+      <div style="flex:1; min-width:300px; display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px">No exclamation marks, no emoji, no praise for the user.</span>
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px">No jargon: tokens, prompts, agents, pipelines, context.</span>
+        <span style="border-top:1px solid #1E1F22; padding:10px 2px">Buttons are verbs in lower case: run, restore, add key.</span>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="09 UI" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">09</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">UI VOCABULARY</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">the parts everything is built from</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:300px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">LIST ROW · ACTIVE + REST</span>
+        <div style="display:flex; flex-direction:column; gap:2px; font-size:12px">
+          <span style="display:flex; justify-content:space-between; border-left:2px solid #B4A9F5; padding:6px 0 6px 12px; color:#E9E9E7"><span>Renaming vacation photos</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">14:02</span></span>
+          <span style="display:flex; justify-content:space-between; border-left:2px solid transparent; padding:6px 0 6px 12px; color:#909398"><span>Draft reply to the landlord</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">09:41</span></span>
+          <span style="display:flex; justify-content:space-between; border-left:2px solid transparent; padding:6px 0 6px 12px; color:#55575C"><span>2 more…</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:300px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SETTINGS ROW</span>
+        <div style="display:flex; flex-direction:column; font-size:12px">
+          <span style="display:flex; align-items:baseline; gap:12px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="color:#B9BBBE">Anthropic</span><span style="flex:1"></span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#909398">key saved ✓</span><span style="color:#B4A9F5">remove</span></span>
+          <span style="display:flex; align-items:baseline; gap:12px; border-top:1px solid #1E1F22; padding:12px 2px"><span style="color:#B9BBBE">On this computer</span><span style="flex:1"></span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; color:#909398">not set up yet</span><span style="color:#B4A9F5">set up</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:300px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COMPOSER</span>
+        <div style="display:flex; align-items:flex-end; gap:10px; border-top:1px solid #26272B; padding-top:8px">
+          <span style="flex:1; font-size:15px; color:#55575C; padding:6px 0 8px">Write to Addison…</span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C; padding-bottom:12px">Sonnet 4.5 · quality</span>
+          <span style="width:30px; height:30px; border-radius:50%; background:#B4A9F5; color:#100E22; display:flex; align-items:center; justify-content:center; font-size:15px; margin-bottom:4px">↑</span>
+        </div>
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#3C3E42; text-align:center">enter to send · everything can be undone</span>
+      </div>
+      <div style="flex:1; min-width:300px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">WORK LIST + METER</span>
+        <div style="border-left:2px solid #2E2F33; padding-left:14px; display:flex; flex-direction:column; gap:9px; font-size:12px">
+          <span style="display:flex; align-items:center; gap:8px; color:#909398"><span style="width:5px; height:5px; border-radius:50%; background:#55575C"></span>Read Vacation folder · 24 items</span>
+          <span style="display:flex; align-items:center; gap:8px; color:#E9E9E7"><span style="width:5px; height:5px; border-radius:50%; background:#E9E9E7; animation:{{ pulseAnim }}"></span>Renaming 24 files</span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:8px; border-top:1px solid #1E1F22; padding-top:12px">
+          <span style="display:flex; justify-content:space-between; font-size:12px; color:#909398"><span>Tokens this week</span><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px">128k / 380k</span></span>
+          <span style="height:2px; background:#26272B; display:block"><span style="height:2px; width:34%; background:#E9E9E7; display:block"></span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="10 Applications" style="padding:72px; display:flex; flex-direction:column; gap:34px">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">10</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">APPLICATIONS</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">where the brand actually shows up</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:340px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">APP HEADER</span>
+        <span style="display:flex; align-items:center; gap:16px; background:#0C0C0D; border:1px solid #1E1F22; border-radius:6px; padding:12px 16px">
+          <span style="display:flex; align-items:center; gap:10px">
+            <span style="width:22px; height:22px; border-radius:3px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 2px 4px; box-sizing:border-box; position:relative">
+              <span style="font-size:16px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+              <span style="position:absolute; top:3px; right:3px; width:5px; height:5px; border-radius:50%; background:#B4A9F5"></span>
+            </span>
+            <span style="font-size:13px; font-weight:500; letter-spacing:-.01em; color:#B9BBBE">Addison</span>
+          </span>
+          <span style="flex:1"></span>
+          <span style="font-size:12px; color:#B4A9F5">Undo last action</span>
+        </span>
+      </div>
+      <div style="flex:1; min-width:340px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SPLASH · FIRST RUN</span>
+        <span style="background:#0C0C0D; border:1px solid #1E1F22; border-radius:6px; padding:26px 22px; display:flex; flex-direction:column; align-items:center; gap:14px">
+          <span style="width:44px; height:44px; border-radius:5px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 6px 8px; box-sizing:border-box; position:relative">
+            <span style="font-size:30px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:6px; right:6px; width:10px; height:10px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="font-size:17px; font-weight:500; letter-spacing:-.015em; color:#E9E9E7">Good evening.</span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">everything runs on this computer</span>
+        </span>
+      </div>
+      <div style="flex:1; min-width:340px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:16px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">DOCK / DESKTOP ICONS</span>
+        <span style="display:flex; align-items:flex-end; gap:16px; background:#0C0C0D; border:1px solid #1E1F22; border-radius:6px; padding:16px">
+          <span style="width:52px; height:52px; border-radius:12px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 7px 10px; box-sizing:border-box; position:relative">
+            <span style="font-size:36px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:7px; right:7px; width:12px; height:12px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="width:36px; height:36px; border-radius:8px; background:#16171B; box-shadow:inset 0 0 0 1px #26272B; display:flex; align-items:flex-end; padding:0 0 5px 7px; box-sizing:border-box; position:relative">
+            <span style="font-size:25px; font-weight:500; letter-spacing:-.04em; line-height:.8; color:#E9E9E7">a</span>
+            <span style="position:absolute; top:5px; right:5px; width:8px; height:8px; border-radius:50%; background:#B4A9F5"></span>
+          </span>
+          <span style="flex:1"></span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">radius scales with the tile</span>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="Part II" style="padding:56px 72px; border-top:1px solid #1E1F22; border-bottom:1px solid #1E1F22; display:flex; align-items:baseline; gap:20px; flex-wrap:wrap">
+    <span style="font-size:30px; font-weight:500; letter-spacing:-.025em; color:#E9E9E7">Part II — build spec</span>
+    <span style="flex:1"></span>
+    <span style="font-size:13.5px; line-height:1.6; color:#909398; max-width:520px; text-wrap:pretty">Everything below is binding for implementation. Where a value here disagrees with a mock, this document wins; where it is silent, copy the dark prototype.</span>
+  </section>
+
+  <section data-screen-label="11 Component states" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">11</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COMPONENT STATES</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">every interactive part, every state</span>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:420px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">LIST ROW (CHAT, SNAPSHOT, WIDGET)</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">rest</span><span>text #909398 · rail transparent</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">hover</span><span>text #E9E9E7 · 150ms · no bg change</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">active/current</span><span>text #E9E9E7 · rail 2px #B4A9F5</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">focus (kbd)</span><span>rail 2px #B4A9F5 + outline 1px #3A3B40 offset 2px</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">pressed</span><span>opacity .7 · no translate</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">disabled</span><span>text #3C3E42 · cursor default · while working</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">skeleton</span><span>8px bar #1E1F22 · no shimmer</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:420px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SEND BUTTON · 30px CIRCLE</span>
+        <div style="display:flex; align-items:center; gap:22px; padding:4px 0 6px">
+          <span style="display:flex; flex-direction:column; align-items:center; gap:7px">
+            <span style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; border:1px solid #26272B; color:#55575C; display:flex; align-items:center; justify-content:center; font-size:15px">↑</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">empty</span>
+          </span>
+          <span style="display:flex; flex-direction:column; align-items:center; gap:7px">
+            <span style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; border:1px solid #B4A9F5; background:#B4A9F5; color:#100E22; display:flex; align-items:center; justify-content:center; font-size:15px">↑</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">ready</span>
+          </span>
+          <span style="display:flex; flex-direction:column; align-items:center; gap:7px">
+            <span style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; border:1px solid #C6BEFA; background:#C6BEFA; color:#100E22; display:flex; align-items:center; justify-content:center; font-size:15px">↑</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">hover</span>
+          </span>
+          <span style="display:flex; flex-direction:column; align-items:center; gap:7px">
+            <span style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; border:1px solid #26272B; color:#3C3E42; display:flex; align-items:center; justify-content:center; font-size:15px">↑</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">working</span>
+          </span>
+          <span style="display:flex; flex-direction:column; align-items:center; gap:7px">
+            <span style="width:30px; height:30px; border-radius:50%; box-sizing:border-box; border:1px solid #B4A9F5; background:#B4A9F5; color:#100E22; display:flex; align-items:center; justify-content:center; font-size:15px; outline:1px solid #3A3B40; outline-offset:2px">↑</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:9.5px; font-weight:500; color:#55575C">focus</span>
+          </span>
+        </div>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">enabled when</span><span>draft.trim() ≠ "" and not working</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">transition</span><span>bg/color/border 200ms</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">no spinner</span><span>progress lives in the work list</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:420px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">TEXT ACTION (RUN, RESTORE, ADD KEY)</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">rest</span><span>#B4A9F5 · no underline</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">hover</span><span>#E9E9E7 · 150ms</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">in progress</span><span>label → "running…" · #909398 · not clickable</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">done</span><span>label → "restored ✓" / "ran ✓" · #909398 · stays 8s</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">failed</span><span>label → "try again" · value column carries the reason</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">destructive</span><span>same styling · confirmation is a sentence, not a red button</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:420px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:22px 24px; display:flex; flex-direction:column; gap:14px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COMPOSER + POPOVER</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">top border</span><span>#26272B → #3A3B40 on focus · 200ms</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">textarea</span><span>1 row · grows to 180px then scrolls</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">placeholder</span><span>#55575C · "Write to Addison…" / "Addison is working…"</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">popover</span><span>#16171B · radius 7 · ring .5px rgba(255,255,255,.07) · shadow 0 18 48 rgba(0,0,0,.65)</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">open/close</span><span>fade 120ms · closes on outside click, Esc, or pick</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">placement</span><span>aligned to the trigger row · flips to stay 12px inside the viewport</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:80px; flex-shrink:0; color:#B9BBBE">modal</span><span>overlay rgba(0,0,0,.55) · 440px · max-height 70vh · Esc closes</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="12 Screen states" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">12</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SCREEN STATES</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">what the person sees when it isn't the happy path</span>
+    </div>
+    <div style="display:flex; flex-direction:column; font-size:12.5px">
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">First run</span><span style="flex:1; min-width:280px; color:#909398">Greeting + one line + three suggestions. No tour, no modal, no account. Settings shows "On this computer — not set up yet".</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Empty chat</span><span style="flex:1; min-width:280px; color:#909398">Greeting by hour (&lt;5 "Still up?" · &lt;12 morning · &lt;18 afternoon · else evening). Work rail hidden until there are steps.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Working</span><span style="flex:1; min-width:280px; color:#909398">Composer accepts typing but not sending. Step list appends as work happens; live step is white with a pulsing dot. Streaming answer carries the block cursor. Switching chats is blocked while working.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Long-running (&gt;20s)</span><span style="flex:1; min-width:280px; color:#909398">Step text gains an elapsed mono counter; a "stop" text action appears beside the live step. Stopping keeps completed steps and says what was already done.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Needs permission</span><span style="flex:1; min-width:280px; color:#909398">Work pauses; the step reads what is being asked for ("Needs access to Documents"), with "allow once" and "allow always" as text actions. Never a system-style dialog.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Failed</span><span style="flex:1; min-width:280px; color:#909398">Failed step turns #909398 with a hollow dot; Addison's message states what stopped it, what it did change, and offers "try again". No error codes in the thread — codes live in Settings → Diagnostics.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Offline / no key</span><span style="flex:1; min-width:280px; color:#909398">Model label reads "on this computer" or "no model yet"; sending offers to set one up. Local chats, snapshots and settings stay fully usable.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Quota near limit</span><span style="flex:1; min-width:280px; color:#909398">Meter bar stays white to 90%, then the row's number turns #B4A9F5 with "switch to local" beside it. No banner, no colour alarm.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Undo in flight</span><span style="flex:1; min-width:280px; color:#909398">Header action reads "undoing…"; on completion, an assistant message states what was put back. Undo is never silent.</span></span>
+      <span style="display:flex; gap:20px; flex-wrap:wrap; border-top:1px solid #1E1F22; padding:13px 2px"><span style="width:150px; flex-shrink:0; color:#B9BBBE">Loading a chat</span><span style="flex:1; min-width:280px; color:#909398">Skeleton bars in place of rows/messages for &gt;150ms only; below that, render straight to content.</span></span>
+    </div>
+  </section>
+
+  <section data-screen-label="13 Interaction" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">13</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">INTERACTION & KEYBOARD</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">including what undo actually covers</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">KEYS</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">Enter</span><span>send · Shift+Enter newline</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">Esc</span><span>close popover, then modal, then blur composer</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">⌘N</span><span>new chat · focus composer</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">⌘Z</span><span>undo last action (same as header)</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">⌘, </span><span>Settings · ⌘\ chats · ⌘⇧\ work rail</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">↑ / ↓</span><span>move through chat list when it has focus</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">Tab order</span><span>composer → send → model → chats → work rail → header</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">UNDO — SCOPE</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px"><span style="color:#B9BBBE">One action = one turn of work.</span> Undo reverts every file, calendar and setting change made by the most recent assistant turn, as one unit.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">A restore point is written before the first change of a turn, and named after the request.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Undo does not delete files it created outside its own turn, and never removes the person's own edits made afterwards — if it detects them, it asks first.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Messages are not undone; the thread keeps the record, with a line saying it was reverted.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Anything irreversible (sending mail, paying, deleting outside a trusted folder) requires an explicit go-ahead in the thread and is labelled "can't be undone".</span>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">POINTER & SCROLL</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Thread pins to the bottom while streaming; scrolling up releases the pin until the person returns to the bottom.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Scrollbars are hidden; edges are masked 32px top / 20px bottom so content fades rather than cuts.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Group headers toggle expand/collapse; a second click during the collapse animation cancels it.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Rails remember their open state per person, restored on launch.</span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">WINDOW</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Below 1100px the work rail collapses first; below 860px the chat list collapses too and both become overlays.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Minimum supported window 720 × 560. Thread keeps its 580px measure and centres.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Work continues while the window is closed to the tray; steps are replayed in order on reopen without re-animating.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="14 Content rules" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">14</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">CONTENT & DATA RULES</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">formats, limits, grouping</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">chat title</span><span>first message, 34 chars, then "…"</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">row overflow</span><span>single line, ellipsis; time never truncates</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">time — today</span><span>24h HH:MM</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">time — week</span><span>weekday short (Mon)</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">time — older</span><span>"22 Jul", add year past 12 months</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">groups</span><span>Today · Earlier · 3 rows shown, then "N more…"</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">counts</span><span>"1 chat" / "4 chats" · localised plurals</span></span>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">file names</span><span>verbatim, mono, never re-cased</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">sizes</span><span>GB/MB, one decimal (4.7 GB)</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">money</span><span>local format with currency (4 120 Kč)</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">meter</span><span>"128k / 380k" · k above 1000 · bar = used/limit</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">model names</span><span>"Sonnet 4.5 · quality" — name, dot, plain-word note</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">status values</span><span>lower case + "✓" when settled ("key saved ✓")</span></span>
+        <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:110px; flex-shrink:0; color:#B9BBBE">step text</span><span>verb first, object second, count last · ≤ 48 chars</span></span>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="15 Accessibility" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">15</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">ACCESSIBILITY</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">non-negotiable minimums</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">APPROVED TEXT PAIRS ON #0C0C0D</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#E9E9E7">#E9E9E7</span><span>any size · body and headings</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#B9BBBE">#B9BBBE</span><span>any size · secondary body</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#B4A9F5">#B4A9F5</span><span>any size · actions and links</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#909398">#909398</span><span>≥ 12px only</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#6E7076">#6E7076</span><span>labels ≥ 11px semibold only</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#55575C">#55575C</span><span>mono metadata only · never a lone meaning</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:96px; flex-shrink:0; color:#3C3E42">#3C3E42</span><span>decorative footnotes · duplicated elsewhere</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">BEHAVIOUR</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Focus is always visible: 1px #3A3B40 outline, 2px offset, in addition to any rail. Never remove outlines.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Hit targets: 44px minimum on touch, 30px on pointer. The 2px rail is decoration — the whole row is the target.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Colour is never the only signal: active rows also carry white text, live steps also carry a moving dot.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Streaming text is announced once, complete, via a polite live region — not character by character.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Step list is a live region; permission requests move focus to the request.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Under reduced motion: no scramble, no fades, no pulse — the block cursor becomes static, and everything renders in final position.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Full keyboard operation, including every text action; the app works at 200% OS text size with no clipped rows.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="16 Copy library" style="padding:72px; display:flex; flex-direction:column; gap:34px">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">16</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COPY LIBRARY</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">ship these strings · {braces} are values</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:420px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">CHROME</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#B9BBBE">
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">composer</span><span>Write to Addison…</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">composer.busy</span><span>Addison is working…</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">composer.hint</span><span>enter to send · everything can be undone</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">empty.sub</span><span>Ask anything, or hand me a chore. Everything can be undone.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">undo</span><span>Undo last action → undoing… → Put back {n} files.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">rail.empty</span><span>＋ Ask Addison to build a widget</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">snapshots.note</span><span>everything can be undone · restores never delete your files</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:420px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">MOMENTS THAT MATTER</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#B9BBBE">
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">before change</span><span>I'll change {n} files in {folder}. I'm saving a restore point first.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">after change</span><span>Done. {what happened, in your words}. I kept every original name.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">permission</span><span>I need to look in {folder} to do this. Allow once, or always?</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">failed</span><span>I stopped at {step}. Nothing was changed. Want me to try again?</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">partly failed</span><span>I renamed {n} of {total} and stopped. The {n} are still renamed — say the word and I'll put them back.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">irreversible</span><span>This one can't be undone: {action}. Say go ahead and I'll do it.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">no model</span><span>I don't have a model to think with yet. Add a key, or set one up on this computer.</span></span>
+          <span style="display:flex; gap:14px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="width:118px; flex-shrink:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; color:#55575C">near limit</span><span>You've used most of this week's cloud allowance. I can carry on with the model on this computer.</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="17 Visual scripts" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">17</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">VISUAL SCRIPTS</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">the identity is behaviour, not ornament</span>
+    </div>
+
+    <p style="margin:0; max-width:760px; font-size:17px; line-height:1.55; letter-spacing:-.01em; color:#B9BBBE; text-wrap:pretty">Addison has almost no graphic language: no illustration, no icon set, one accent. What people recognise instead is a small set of <span style="color:#E9E9E7">scripts</span> — recurring devices that always mean the same thing. Break one and the product stops feeling like Addison, even if every colour is correct.</p>
+
+    <div style="display:flex; flex-direction:column; gap:12px">
+      <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">THE GRAMMAR — FOUR MARKS, FOUR MEANINGS</span>
+      <div style="display:flex; flex-direction:column; font-size:12.5px">
+        <span style="display:flex; gap:20px; flex-wrap:wrap; align-items:center; border-top:1px solid #1E1F22; padding:13px 2px">
+          <span style="width:52px; flex-shrink:0; display:flex; justify-content:center"><span style="width:2px; height:22px; background:#B4A9F5"></span></span>
+          <span style="width:120px; flex-shrink:0; color:#B9BBBE">vertical rail</span>
+          <span style="flex:1; min-width:260px; color:#909398">belonging and place — "this row is where you are", "these items are one group"</span>
+        </span>
+        <span style="display:flex; gap:20px; flex-wrap:wrap; align-items:center; border-top:1px solid #1E1F22; padding:13px 2px">
+          <span style="width:52px; flex-shrink:0; display:flex; justify-content:center"><span style="width:7px; height:7px; border-radius:50%; background:#E9E9E7"></span></span>
+          <span style="width:120px; flex-shrink:0; color:#B9BBBE">dot</span>
+          <span style="flex:1; min-width:260px; color:#909398">state of a piece of work — white and moving is live, grey and still is finished</span>
+        </span>
+        <span style="display:flex; gap:20px; flex-wrap:wrap; align-items:center; border-top:1px solid #1E1F22; padding:13px 2px">
+          <span style="width:52px; flex-shrink:0; display:flex; justify-content:center"><span style="width:36px; height:1px; background:#2E2F33"></span></span>
+          <span style="width:120px; flex-shrink:0; color:#B9BBBE">hairline</span>
+          <span style="flex:1; min-width:260px; color:#909398">one fact per line — structure without boxes, cards or fills</span>
+        </span>
+        <span style="display:flex; gap:20px; flex-wrap:wrap; align-items:center; border-top:1px solid #1E1F22; padding:13px 2px">
+          <span style="width:52px; flex-shrink:0; display:flex; justify-content:center"><span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; font-weight:500; color:#909398">10:42</span></span>
+          <span style="width:120px; flex-shrink:0; color:#B9BBBE">monospace</span>
+          <span style="flex:1; min-width:260px; color:#909398">the machine speaking about itself — times, counts, sizes, model names. Never a sentence.</span>
+        </span>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:430px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:16px">
+        <div style="display:flex; align-items:baseline; gap:12px">
+          <span style="font-size:15px; font-weight:500; letter-spacing:-.01em; color:#E9E9E7">Script 01 — the scramble reveal</span>
+          <span style="flex:1"></span>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#B4A9F5">signature</span>
+        </div>
+        <p style="margin:0; font-size:13.5px; line-height:1.65; color:#909398; text-wrap:pretty">Text arrives as noise and resolves character by character. It is the one expressive thing the product does, and it carries the whole promise: <span style="color:#B9BBBE">you are watching a machine work, in the open, on your own words</span>. It replaces spinners, progress bars and typing dots — Addison never shows an abstract loader.</p>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">duration</span><span>620–800ms per element, randomised</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">resolve order</span><span>left to right, 75% ordered + 25% jitter · 15% of runs reverse</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">frame</span><span>38ms tick · whitespace never scrambles</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">pools</span><span>one per run: caps · lowercase+&lt;&gt;/ · symbols</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">stagger</span><span>40–70ms between neighbours · labels lead, values follow</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:9px 2px"><span style="width:104px; flex-shrink:0; color:#B9BBBE">streaming</span><span>14-character noise window ahead of resolved text, 5 chars/tick</span></span>
+        </div>
+        <div style="display:flex; flex-direction:column; gap:0; font-size:12.5px; border-top:1px solid #1E1F22; padding-top:12px">
+          <span style="display:flex; gap:12px; padding:6px 2px"><span style="width:44px; flex-shrink:0; color:#B4A9F5">fires</span><span style="flex:1; color:#909398">on first mount, on view change, on chat switch, on a streaming answer, and once per element on click</span></span>
+          <span style="display:flex; gap:12px; padding:6px 2px"><span style="width:44px; flex-shrink:0; color:#55575C">never</span><span style="flex:1; color:#909398">on re-render, on text the person typed, on numbers already on screen, twice on the same element, or under reduced motion</span></span>
+          <span style="display:flex; gap:12px; padding:6px 2px"><span style="width:44px; flex-shrink:0; color:#55575C">rule</span><span style="flex:1; color:#909398">only leaf text nodes scramble — never a node containing markup, and the final value must be identical to the value it started with</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:430px; display:flex; flex-direction:column; gap:26px">
+        <div style="background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:14px">
+          <span style="font-size:15px; font-weight:500; letter-spacing:-.01em; color:#E9E9E7">Script 02 — the rail</span>
+          <p style="margin:0; font-size:13.5px; line-height:1.65; color:#909398; text-wrap:pretty">A 2px line to the left of things, indented 12–16px. Grey it groups; lavender it locates. It is the only container the product owns — no card, no border box, no filled selection.</p>
+          <div style="display:flex; gap:26px; flex-wrap:wrap; padding-top:2px">
+            <span style="border-left:2px solid #2E2F33; padding-left:14px; display:flex; flex-direction:column; gap:6px">
+              <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">GROUP</span>
+              <span style="font-size:12px; color:#909398">heading owns the rail</span>
+            </span>
+            <span style="border-left:2px solid #B4A9F5; padding-left:14px; display:flex; flex-direction:column; gap:6px">
+              <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">HERE</span>
+              <span style="font-size:12px; color:#E9E9E7">current row or view</span>
+            </span>
+          </div>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C; border-top:1px solid #1E1F22; padding-top:10px">one lavender rail visible per pane · never two</span>
+        </div>
+        <div style="background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:14px">
+          <span style="font-size:15px; font-weight:500; letter-spacing:-.01em; color:#E9E9E7">Script 03 — the dot and the cursor</span>
+          <p style="margin:0; font-size:13.5px; line-height:1.65; color:#909398; text-wrap:pretty">A 5px dot per step of work, and a 7×14px block cursor at the end of text being written. Together they are the entire progress language.</p>
+          <div style="display:flex; flex-direction:column; gap:9px; border-left:2px solid #2E2F33; padding-left:14px; font-size:12.5px">
+            <span style="display:flex; align-items:center; gap:9px; color:#909398"><span style="width:5px; height:5px; border-radius:50%; background:#55575C"></span>done · #55575C, still</span>
+            <span style="display:flex; align-items:center; gap:9px; color:#E9E9E7"><span style="width:5px; height:5px; border-radius:50%; background:#E9E9E7; animation:{{ pulseAnim }}"></span>live · #E9E9E7, 1.1s pulse</span>
+            <span style="display:flex; align-items:center; gap:9px; color:#909398"><span style="width:5px; height:5px; border-radius:50%; box-shadow:inset 0 0 0 1px #55575C"></span>stopped or failed · hollow, still</span>
+            <span style="display:flex; align-items:center; gap:9px; color:#E9E9E7">writing<span style="width:7px; height:14px; background:#E9E9E7; animation:{{ blinkAnim }}"></span></span>
+          </div>
+          <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C; border-top:1px solid #1E1F22; padding-top:10px">exactly one live dot at a time · no percentages, no spinners</span>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SCRIPT 04 — HAIRLINE ROWS & FADED EDGES</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Every list is name · value · action on one line, separated by 1px #1E1F22 — settings, snapshots, tools and diagnostics all share the row.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">The row is the component. Adding a card, a fill or a second border around it is the most common way to break the look.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Scroll areas hide their scrollbars and mask 32px at the top, 20px at the bottom — content fades out rather than being cut by a line.</span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">WHY IT MATTERS — AND WHERE IT STOPS</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">The scripts exist so the product can be honest cheaply: work is visible, place is obvious, and machine facts are visually separated from human sentences.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">They are not a theme. Do not scramble marketing copy, do not put rails on a website hero, do not animate the logo.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">If a new surface needs a device the four scripts can't express, it is usually the surface that is wrong.</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="18 Redlines" style="padding:72px; display:flex; flex-direction:column; gap:34px; border-bottom:1px solid #1E1F22">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">18</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">REDLINES</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">measured against the dark build · px</span>
+    </div>
+
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:430px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:18px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">CHAT LIST ROW</span>
+        <div style="display:flex; align-items:stretch; gap:0">
+          <span style="width:2px; background:#B4A9F5; flex-shrink:0"></span>
+          <span style="width:12px; flex-shrink:0; border-top:1px dashed #3C3E42; border-bottom:1px dashed #3C3E42; margin:6px 0"></span>
+          <span style="flex:1; display:flex; align-items:baseline; justify-content:space-between; gap:8px; padding:6px 0; font-size:12px; color:#E9E9E7">
+            <span>Renaming vacation photos</span>
+            <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">14:02</span>
+          </span>
+        </div>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">rail</span><span>2 wide · full row height</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">rail → text</span><span>12</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">vertical padding</span><span>6 top · 6 bottom · row 26 tall</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">row → row</span><span>2 gap · no separator inside a group</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">title → time</span><span>8 minimum · title ellipsises first</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">group header</span><span>11/600 +.05em · 10 below · 22 above next group</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">pane</span><span>212 wide · 36 top pad · 44 gap to thread</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:430px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:18px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">COMPOSER</span>
+        <div style="display:flex; flex-direction:column; gap:0">
+          <span style="height:1px; background:#26272B"></span>
+          <div style="display:flex; align-items:flex-end; gap:10px; padding:6px 2px 0">
+            <span style="flex:1; font-size:15px; line-height:1.5; color:#55575C; padding:9px 0 10px">Write to Addison…</span>
+            <span style="display:flex; align-items:center; gap:12px; padding-bottom:5px">
+              <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#55575C">Sonnet 4.5 · quality</span>
+              <span style="width:30px; height:30px; border-radius:50%; background:#B4A9F5; color:#100E22; display:flex; align-items:center; justify-content:center; font-size:15px">↑</span>
+            </span>
+          </div>
+          <span style="margin:10px auto 0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#3C3E42">enter to send · everything can be undone</span>
+        </div>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">max width</span><span>840 · centred · 40 page gutters</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">top border</span><span>1 · 6 above text · 2 side inset</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">textarea</span><span>15/1.5 · pad 9 top 10 bottom · max height 180</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">text → controls</span><span>10 · controls sit 5 above the baseline</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">model → send</span><span>12</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">send</span><span>30 circle · glyph 15 · 1 border</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">hint</span><span>10 above · 22 to window bottom</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:430px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:18px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">THREAD MESSAGE</span>
+        <div style="display:flex; flex-direction:column; gap:0; max-width:340px">
+          <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#E9E9E7">Addison</span>
+          <p style="margin:8px 0 0; font-size:15.5px; line-height:1.65; color:#E9E9E7">Done. I renamed the 24 photos in Vacation so they sort by date.</p>
+        </div>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">measure</span><span>580 max · centred · 36 top pad · 24 bottom</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">label → body</span><span>8</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">message → message</span><span>32</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">label</span><span>You #55575C · Addison #E9E9E7</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">body</span><span>15.5/1.65 · You #B9BBBE · Addison #E9E9E7</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">paragraphs</span><span>blank line preserved · no bubbles, no avatars</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">cursor</span><span>7 × 14 · 3 left of it · sits on the last line</span></span>
+        </div>
+      </div>
+
+      <div style="flex:1; min-width:430px; background:#101114; border:1px solid #1E1F22; border-radius:8px; padding:24px 26px; display:flex; flex-direction:column; gap:18px">
+        <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">SETTINGS ROW & WORK RAIL</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">settings row</span><span>13 vertical pad · 2 side · 1 top hairline</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">row columns</span><span>name · flex spacer · value · action · 12 gaps</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">section</span><span>label 11/600 · 10 to first row · 26 between sections</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">surface head</span><span>title 20 · 10 to description · 26 below</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">work rail</span><span>232 wide · 36 top pad · steps 9 apart</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">step</span><span>dot 5 · 8 to text · rail indent 14</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">meter</span><span>bar 2 tall · #26272B track · 9 below its row</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:8px 2px"><span style="width:118px; flex-shrink:0; color:#B9BBBE">header</span><span>16 / 24 pad · 1 bottom hairline · items 22 apart</span></span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section data-screen-label="19 Tokens" style="padding:72px; display:flex; flex-direction:column; gap:34px">
+    <div style="display:flex; align-items:baseline; gap:18px; border-bottom:1px solid #1E1F22; padding-bottom:16px">
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#B4A9F5">19</span>
+      <span style="font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">TOKENS</span>
+      <span style="flex:1"></span>
+      <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; color:#55575C">copy straight into the build</span>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px; align-items:flex-start">
+      <div style="flex:1; min-width:430px; background:#16171B; border:1px solid #1E1F22; border-radius:8px; padding:20px 22px; display:flex; flex-direction:column; gap:12px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; letter-spacing:.05em; color:#6E7076">THEME.CSS — DARK (SOURCE OF TRUTH)</span>
+        <pre style="margin:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; font-weight:500; line-height:1.75; color:#B9BBBE; white-space:pre-wrap">:root {
+  --ground:#0C0C0D;   --raised:#16171B;
+  --hairline:#1E1F22; --track:#26272B;
+  --rail:#2E2F33;     --focus:#3A3B40;
+  --faint:#3C3E42;    --muted:#55575C;
+  --label:#6E7076;    --secondary:#909398;
+  --near:#B9BBBE;     --ink:#E9E9E7;
+  --accent:#B4A9F5;   --on-accent:#100E22;
+
+  --font:'Helvetica Neue',Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,'SF Mono',Menlo,monospace;
+
+  --s-1:2px;  --s-2:6px;  --s-3:9px;
+  --s-4:14px; --s-5:22px; --s-6:36px; --s-7:44px;
+
+  --r-raised:7px; --r-tile:9%; --r-round:50%;
+  --w-side:212px; --w-work:232px;
+  --w-thread:580px; --w-composer:840px;
+
+  --t-fast:150ms; --t-base:200ms;
+  --t-enter:350ms; --t-scramble:700ms;
+  --stagger:40ms;
+}</pre>
+      </div>
+      <div style="flex:1; min-width:430px; background:#16171B; border:1px solid #1E1F22; border-radius:8px; padding:20px 22px; display:flex; flex-direction:column; gap:12px">
+        <span style="font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10px; font-weight:500; letter-spacing:.05em; color:#6E7076">TOKENS.JSON — THEMES</span>
+        <pre style="margin:0; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:11px; font-weight:500; line-height:1.75; color:#B9BBBE; white-space:pre-wrap">{
+  "dark": {
+    "ground":"#0C0C0D","raised":"#16171B",
+    "hairline":"#1E1F22","track":"#26272B",
+    "rail":"#2E2F33","focus":"#3A3B40",
+    "faint":"#3C3E42","muted":"#55575C",
+    "label":"#6E7076","secondary":"#909398",
+    "near":"#B9BBBE","ink":"#E9E9E7",
+    "accent":"#B4A9F5","onAccent":"#100E22"
+  },
+  "lightWarm": {
+    "ground":"#E9E6E0","raised":"#F6F4EF",
+    "hairline":"#D5D0C7","track":"#C9C3B8",
+    "rail":"#B4AEA2","focus":"#8A857B",
+    "faint":"#7C7669","muted":"#6B6559",
+    "label":"#575146","secondary":"#453F35",
+    "near":"#2A251C","ink":"#100E09",
+    "accent":"#4B3C9E","onAccent":"#F6F4EF"
+  },
+  "lightCool": { "ground":"#E4E7E9","accent":"#2F3AA8" },
+  "lightCream": { "ground":"#EDE6D8","accent":"#95341A" }
+}</pre>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px">
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">USING THEM</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Dark is the source of truth; light themes swap the same 14 names. Nothing in the app may reference a raw hex.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Light themes also apply two type corrections: every text step darkens two stops, and 10–11px labels gain one weight (500 → 600).</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">The logo tile is not themed — it stays #16171B (or #100E09 on paper) in every theme.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Adding a token requires a reason in §04 or §17; adding a colour requires this document to change first.</span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:400px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">DEFINITION OF DONE</span>
+        <div style="display:flex; flex-direction:column; font-size:12.5px; color:#909398">
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Every state in §11 and §12 implemented, including failed and permission.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Keyboard map from §13 complete, undo scope honoured, focus visible everywhere.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">Reduced-motion path renders every screen identically without animation.</span>
+          <span style="border-top:1px solid #1E1F22; padding:10px 2px">All four light themes and dark pass §15 contrast; strings come from §16, not from code.</span>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex; flex-wrap:wrap; gap:26px; border-top:1px solid #1E1F22; padding-top:22px">
+      <div style="flex:1; min-width:340px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #2E2F33; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">FILES IN THIS PROJECT</span>
+        <div style="display:flex; flex-direction:column; font-family:ui-monospace, 'SF Mono', Menlo, monospace; font-size:10.5px; font-weight:500; color:#909398">
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">Addison Prototype v2</span><span>dark · the reference build</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">…Light · Cool · Cream</span><span>light themes</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">Addison Logo Mark</span><span>the mark, sizes, construction</span></span>
+          <span style="display:flex; gap:12px; border-top:1px solid #1E1F22; padding:10px 2px"><span style="flex:1; color:#B9BBBE">Addison Logo</span><span>explorations · 1a–3e</span></span>
+        </div>
+      </div>
+      <div style="flex:1; min-width:340px; display:flex; flex-direction:column; gap:12px">
+        <span style="border-left:2px solid #B4A9F5; padding-left:14px; font-size:11px; font-weight:600; letter-spacing:.05em; color:#6E7076">IF IN DOUBT</span>
+        <p style="margin:0; font-size:14.5px; line-height:1.65; color:#B9BBBE; text-wrap:pretty">Remove something. Then check the person can still see what Addison did, and how to take it back.</p>
+      </div>
+    </div>
+  </section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;animateDemos&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Demos&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const on = this.props.animateDemos !== false;
+    return {
+      pulseAnim: on ? 'pulse 1.1s ease-in-out infinite' : 'none',
+      blinkAnim: on ? 'blink 1.1s step-start infinite' : 'none'
+    };
+  }
+}
+</script>
+</body>
+</html>
