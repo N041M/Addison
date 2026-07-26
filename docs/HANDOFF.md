@@ -1058,6 +1058,27 @@ everything still open is below, and the closed rows went to git.
   share one block; it was written this way to keep a diff small, which was the
   wrong trade for a branch nobody exercises often.
 
+**Open design questions, each blocking a specific step** (moved here from the scope
+amendment's §13 when that document was retired, 2026-07-27 — the other four §13
+questions were resolved during steps 1–3 and went with it):
+
+- **Keyword-gate syntax (blocks step 8).** The exact prefix (`!run`, `arm:`,
+  `sudo:` …) and the precise set of actions it gates. Owner's reading: running or
+  arming powerful / OS-automation actions in the harness, never ordinary chat.
+- **MCP tools in SAFE (blocks step 7).** Read-only only, a curated allowlist, or
+  dev-only? And how MCP tool metadata declares undo-ability. **A server declares
+  its own risk, so this cannot be taken on trust** — see the sharpened note in the
+  spec's MCP section and item 4 of the step-5.5 plan.
+- **Widget capability tiers and vocabulary (blocks step 6).** The exact safe
+  interactive kinds (to-do/checklist, note, timer …), how a widget spec *declares*
+  the capabilities it needs, how the tier check maps capabilities → mode, and how
+  code-backed widgets are listed alongside declarative ones.
+- **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
+  shipped in step 3: escalate/degrade on unavailable, rate-limit or network
+  failure, with per-provider cooldown, a per-**attempt** deadline and the plain
+  "X was busy, so Addison used Y" note. The CONFIDENCE half — quality-based
+  escalation — remains v2 substrate, untouched.
+
 **Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)** — that file had become a
 second live-issue register holding items this one did not have. All checked
 against the tree on 2026-07-26:

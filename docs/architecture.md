@@ -1,6 +1,9 @@
 # Architecture
 
-> **Amended 2026-07-20** — see [Scope Amendment](addison-scope-amendment-2026-07.md).
+> **Amended 2026-07-20** by the scope amendment, which was folded into the
+> authoritative docs and **retired 2026-07-27**. Floors, modes and guards are
+> owned by [`SAFETY.md`](SAFETY.md); status by [`../ROADMAP.md`](../ROADMAP.md).
+> Do not consult the amendment to settle a question — it is a historical record.
 > Adds the snapshot/restore subsystem (global floor **G3**, guaranteed rollback), a
 > third **Custom** profile, a **workspace-trust** boundary for the coding-agent
 > harness, an **MCP client** surface over the existing registry + gate, and named

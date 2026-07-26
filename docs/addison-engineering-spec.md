@@ -6,15 +6,20 @@ Companion document: `addison-design-doc.md` (product/UX rationale). This documen
 
 ---
 
-## Amendment — 2026-07-20 (owner-approved scope amendment)
+## What the 2026-07-20 scope amendment changed (folded in — this spec governs)
 
-**This spec has an authoritative amendment layered on top of it.** Read
-`docs/addison-scope-amendment-2026-07.md` (owner-approved 2026-07-20) alongside
-this document. Where the amendment and the unamended body below conflict, **the
-amendment governs**; each affected section carries an inline `Amendment 2026-07-20`
-note pointing back here. The amendment does **not** repeal any existing safety
-invariant — it adds one global floor, adds a fourth, reinterprets one, and sharpens
-the product identity around them.
+**There is no amendment to read alongside this document.** The 2026-07-20 scope
+amendment was folded into this spec and retired on 2026-07-27; it is now a
+historical record of *how* these decisions were reached, not a layer on top of
+them. **Where this spec and that document differ, this spec wins** — the reverse
+of the rule that used to be printed here, and the reason it is being stated
+explicitly rather than silently deleted.
+
+The safety floors, the two policy modes, the Custom guards and the snapshot
+subsystem are owned by **[`docs/SAFETY.md`](SAFETY.md)**, not by this spec and not
+by that amendment. This section summarises what changed so the inline
+`Amendment 2026-07-20` notes further down still make sense; those notes are now
+markers of *when* a rule arrived, not pointers to a governing document.
 
 **Identity.** Addison is a *butler*: acts when asked, never uninvited, and is
 discreet and reversible — it never puts the house in a state you can't restore.

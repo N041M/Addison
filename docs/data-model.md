@@ -1,7 +1,9 @@
 # Data model
 
-> **Scope amendment 2026-07-20** — see
-> [`addison-scope-amendment-2026-07.md`](addison-scope-amendment-2026-07.md).
+> **Amended 2026-07-20** by the scope amendment, which was folded into the
+> authoritative docs and **retired 2026-07-27**. Floors, modes and guards are
+> owned by [`SAFETY.md`](SAFETY.md); status by [`../ROADMAP.md`](../ROADMAP.md).
+> Do not consult the amendment to settle a question — it is a historical record.
 > Adds the guaranteed-rollback floor (G3) and its **snapshot** store (auto + on-command,
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server

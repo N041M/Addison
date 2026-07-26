@@ -199,10 +199,14 @@ one where they disagree:
   reasoning, including the two non-technical people it is designed around.
 - [docs/addison-engineering-spec.md](docs/addison-engineering-spec.md), the original
   build brief.
+- [docs/SAFETY.md](docs/SAFETY.md), the safety model in full: the four floors, the
+  two policy modes, the Custom guards and the snapshot subsystem. Anything about
+  safety is decided here.
 - [docs/addison-scope-amendment-2026-07.md](docs/addison-scope-amendment-2026-07.md),
-  the July 2026 scope change: the butler idea, the three profiles, guaranteed
-  rollback, MCP as a client, routing strategies and free models. It overrides both
-  documents above it where they differ.
+  the July 2026 scope change that introduced the butler idea, the three profiles,
+  guaranteed rollback, MCP as a client, routing strategies and free models. It was
+  folded into the documents above and **retired on 2026-07-27** — kept for the story
+  behind those decisions, not to settle questions about them.
 - [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md), an
   approved plan for a Developer review surface that hasn't been started.
 

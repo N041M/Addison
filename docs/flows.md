@@ -1,7 +1,9 @@
 # Runtime flows
 
-> **Scope amendment 2026-07-20** — see
-> [`addison-scope-amendment-2026-07.md`](addison-scope-amendment-2026-07.md).
+> **Amended 2026-07-20** by the scope amendment, which was folded into the
+> authoritative docs and **retired 2026-07-27**. Floors, modes and guards are
+> owned by [`SAFETY.md`](SAFETY.md); status by [`../ROADMAP.md`](../ROADMAP.md).
+> Do not consult the amendment to settle a question — it is a historical record.
 > Flows 1–8 are unchanged. Flows 9–15 are **new** and cover the amendment:
 > snapshot + restore (G3), the "make it cheaper" orchestration, adding an endpoint by
 > prompt, workspace-trust + the keyword-gated powerful action, building a widget

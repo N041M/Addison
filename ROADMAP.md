@@ -2,10 +2,9 @@
 
 Where Addison actually is, as of 2026-07-26.
 
-This file holds status only. The reasoning behind any of it lives in
-[CLAUDE.md](CLAUDE.md), the
-[scope amendment](docs/addison-scope-amendment-2026-07.md) and
-[docs/HANDOFF.md](docs/HANDOFF.md). If this file and one of those disagree about
+This file holds status only, and it is the **only** place that does. The reasoning
+behind any of it lives in [CLAUDE.md](CLAUDE.md), [docs/SAFETY.md](docs/SAFETY.md)
+and [docs/HANDOFF.md](docs/HANDOFF.md). If this file and one of those disagree about
 what a thing *is*, they win. If they disagree about whether it is *built*, check the
 tree, because the prose here has been wrong before.
 
@@ -22,7 +21,7 @@ OpenAI, Google, and any OpenAI-compatible server), the widget rail with its toke
 and latency data, conversation history, skills, Markdown and Mermaid rendering, and
 the mode-scoped safety model where the profile decides the policy mode.
 
-Then five of the eight steps from the July 2026 scope amendment:
+Then five of the eight steps from the July 2026 scope change:
 
 1. **Snapshot and restore.** Restore points, saved automatically before risky
    changes and on request, written to the database and to plain files beside it so a

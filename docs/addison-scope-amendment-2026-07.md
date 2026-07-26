@@ -1,23 +1,33 @@
 # Addison — Scope Amendment (2026-07-20)
 
-**Status:** ADOPTED 2026-07-20 (Phase 1 — docs). Owner greenlit. The authoritative
-docs (`CLAUDE.md`, `docs/architecture.md`, `docs/data-model.md`, `docs/flows.md`,
-`docs/classes.md`, `docs/addison-design-doc.md`, `docs/addison-engineering-spec.md`)
-are being updated to match. Code follows in the phased order in §14.
+**Status: HISTORICAL RECORD. Retired as an authoritative document 2026-07-27.**
 
-> **Update 2026-07-20 — Phase-2 step 1 has shipped.** The snapshot/restore subsystem
-> (G3) is built. Two owner decisions taken during that step **correct wording in this
-> document**, and the corrections are inline where the original claims were made:
-> the anchor **records a build reference, it does not capture or restore the app
-> binary** (§3.1, §3.3, §12, §13 Q8 — binary restore is now a Phase-3 updater item),
-> and §13's Q2, Q4 and Q8 are resolved and marked as such. Where this document and the
-> inline decision notes differ, **the notes win** — they describe what exists.
+> **Do not read this to find out what is true.** Its Phase 1 was "docs first" —
+> fold this amendment into the authoritative documents — and that fold **is
+> complete**: every topic below (the Custom profile, workspace trust, free
+> endpoints, routing strategies, G3, G4, MCP-as-client) is carried substantively
+> by `docs/addison-design-doc.md`, `docs/addison-engineering-spec.md` and
+> `docs/SAFETY.md` today.
+>
+> What was never done was retiring it, so it kept a precedence rule —
+> *"where it and the two specs differ, the amendment wins"* — that made every
+> reader replay a merge which had already happened. Six of the ten falsehoods
+> found in this doc set during the 2026-07-26/27 passes traced to that chain.
+>
+> **Authoritative today:** `docs/SAFETY.md` (floors, modes, guards),
+> `docs/addison-engineering-spec.md` (build brief), `docs/addison-design-doc.md`
+> (product rationale), `ROADMAP.md` (status), `docs/HANDOFF.md` → "Known gaps"
+> (the four §13 questions that are still open moved there).
+>
+> **Kept because it is the only place that holds them:** §1's motivating story —
+> the OpenClaw user whose setup bricked, which is *why* G3 exists — and the
+> dated owner decisions in §§3–13, which explain how the current rules were
+> arrived at. Read it as minutes, not as law.
 
 **Amends:** the mode-scoped safety model (owner decision 2026-07-19), the v1
 scope lines on scheduling and auto-routing, and the product framing of the
-Simple/Developer split. It does **not** repeal the existing safety invariants;
-it adds one global floor, reinterprets one, and sharpens the identity around
-them.
+Simple/Developer split. It did **not** repeal any existing safety invariant;
+it added one global floor, reinterpreted one, and sharpened the identity.
 
 **One-line summary:** Addison is a butler. Its Developer surface becomes a
 real coding-agent harness (Claude-Code-class) and its Simple surface an

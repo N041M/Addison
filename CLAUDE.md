@@ -1,20 +1,28 @@
 # CLAUDE.md
 
-Guidance for working in this repository. Read the specs before non-trivial
-work — this file is the short version, they are authoritative:
+Guidance for working in this repository. This file is the short form; the
+documents below are authoritative for their own topics, and **each topic has
+exactly one owner** — a second mention anywhere is a link, never a copy.
 
-- `docs/addison-design-doc.md` — product/UX rationale (the *why*)
-- `docs/addison-engineering-spec.md` — build brief
-- `docs/addison-scope-amendment-2026-07.md` — **the 2026-07-20 scope amendment:
-  butler identity; Developer = coding harness / Simple = companion / new Custom
-  profile; the guaranteed-rollback floor (G3); widgets buildable in all modes,
-  capability-gated; MCP client; routing strategies; free / no-frontier models.
-  Where it and the two specs differ, the amendment wins.**
+| Topic | Owner |
+|---|---|
+| Floors, modes, guards, snapshots, SAFE invariants | [`docs/SAFETY.md`](docs/SAFETY.md) |
+| Build brief — schema, IPC, subsystems | `docs/addison-engineering-spec.md` |
+| Product and UX rationale (the *why*) | `docs/addison-design-doc.md` |
+| What is built / next / not being built | [`ROADMAP.md`](ROADMAP.md) |
+| Live issues and open design questions | `docs/HANDOFF.md` → "Known gaps" |
+| Gates and verification | `docs/VERIFICATION.md` |
+
+There is **no precedence chain any more.** The 2026-07-20 scope amendment was
+retired on 2026-07-27: its content had already been folded into the documents
+above, but it kept a *"where we differ, the amendment wins"* rule that made every
+reader replay a merge that had already happened. It is now a historical record —
+minutes, not law. Do not cite it to settle a question.
 
 ## What this is
 
 Addison is a local-first desktop **butler** — **approachable by default and
-powerful on request** (scope amendment 2026-07-20). Its default audience is
+powerful on request**. Its default audience is
 non-technical users (personas "Mira", 54, and "Petr", 68 — design-doc §5), served
 by the **Simple** profile as an all-in-one **companion**. Technical users get the
 opt-in **Developer** profile: a **Claude-Code-class coding-agent harness** (real
@@ -145,135 +153,34 @@ replay tool calls through the exact same registry + gate as the live loop.
 
 ## Build order
 
-**The v1 sequence (spec §11, steps 1–11) is complete and merged**: schema +
-dataclasses, `ToolRegistry` + the undo check, the `PermissionGate`,
-`AnthropicProvider` + `ModelRouter` + the orchestration loop, the remaining tools
-and their `undo()`, the `UndoManager`, the Tauri shell + IPC, Routines, the Setup
-Assistant relay, Ollama + the full router, and Profiles. **No file is marked
-`TODO(step N)` any more** — that sequence now records the order the system was
-built in, not work outstanding. The live sequence is the **Phase-2 order** below.
+**[ROADMAP.md](ROADMAP.md) owns status** — what is built, what is next, what is
+deliberately not being built. This section held a second copy and the two drifted;
+it now holds only what a *builder* needs that status does not convey.
 
-Also shipped past the numbered sequence: the UI wave, and
-the **widget rail** — declarative routine/stat widgets
-(`agent_core/widgets.py`, invariant 4) plus the `usage_log` token/latency
-substrate (§4.8) that feeds the token meter + connections rows. The wave is
-complete through its final PR: multi-provider API keys, the three-column
-app shell + in-window Settings, widgets/tray, class-driven dark mode, the
-**first-run block** (`FirstRunBanner.tsx` — setup steps, launch-only skip,
-time-of-day greeting) with the favicon bundled from `shell/public/`, and a
-both-themes QA pass (TESTING-CHECKLIST §13). *(That wave shipped under the Fern
-direction; the surfaces were restyled to the dark v4 direction on 2026-07-26 —
-the pine card, the serif voice, the bundled fonts and the bell mark are all
-retired. The features themselves were restyled, never de-wired.)* Also shipped:
-the **mode-scoped safety backend** (owner decision 2026-07-19, `agent_core/policy.py`)
-— the SAFE/OPEN split derived 1:1 from the profile, `run_command` (dev-only),
-mode-aware `ToolRegistry.visible_tools` + `PermissionGate.authorize`, routine/widget
-`command` kinds + `created_in_mode` hiding — together with the frontend that goes
-with it: Settings copy for the profiles and modes (honest about what OPEN relaxes
-and the global floors that never do), the auto-grant/destructive-prompt UI, and the
-`mode` field carried on `profile.get`/`profile.set`.
+The v1 sequence (spec §11, steps 1–11) is complete and merged, as are Phase-2
+steps 1–5 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
+strategies, free-model endpoints, the coding harness + workspace-trust). **No file
+is marked `TODO(step N)` any more** — that sequence records the order the system
+was built in, not work outstanding.
 
-Profiles (step 11) also derive the policy mode (`policy.py`): Developer = OPEN mode
-reshapes the visible tool set and the gate's prompting, but NEVER the global floors.
-The permission gate is mode-aware (`authorize`), not profile-blind — the earlier
-"never the permission gate" framing is superseded by the mode-scoped model above.
+What remains, and the one dependency that is not obvious from the list:
 
-Also shipped alongside step 1: **`read_web_page`** (`agent_core/tools/read_web_page.py`)
-— LOW, read-only, in the **Simple** tool set, because answering *from* a page rather
-than handing over a link is the companion's core job. It is the first SAFE tool that
-sends a request to an address the **model** picks, so every URL and every redirect hop
-is vetted by **resolved IP** and the connection is **pinned** to the address that was
-vetted (SSRF + DNS-rebinding closed). Outward reach is bounded by **visibility, not
-per-site grants** (owner decision 2026-07-20): `permission_detail` names the site and
-the Activity Panel shows it on every granted call, in both modes and on the routine
-path as well. The grant is still per tool id, and the panel names the *requested*
-host — both are tracked in `docs/HANDOFF.md`, not silently accepted.
+- **5.5 — containment for the OPEN harness**
+  ([plan](docs/step-5.5-containment-plan.md)). Not new capability: step 5 shipped
+  `run_command` without re-establishing the property design-doc §9's first
+  mitigation protected, which is why **G3 is currently overclaimed in OPEN**
+  ([docs/SAFETY.md](docs/SAFETY.md)). Ship its pre-gate denylist first.
+- **6 — widget capability tiers**, companion-facing and independent.
+- **7 — MCP client.** **Downstream of 5.5's audit log**, because the spec promises
+  MCP tools are "gated, logged, undo-aware" and no log exists — and downstream of
+  the SAFE-constraint question in "Known gaps", because a server declares its own
+  risk and admitting a tool to SAFE on that say-so breaks SAFE invariant 2 through
+  a path the registration check cannot see.
+- **8 — the automation keyword gate** + author-OS-run automation. Until it exists,
+  nothing in the tree can author or arm automation, so G2 holds trivially.
 
-**Scope amendment (2026-07-20) — Phase-2 build order**, after this doc pass and in
-dependency order (amendment §14): (1) **DONE — the snapshot/restore subsystem**
-(floor G3; `agent_core/snapshots/`, the `config_snapshots` table, the `snapshot.*`
-RPC namespace, the auto-capture hooks (seven at step 1; nine sites today) + the
-verified-working site, the sidecar
-cold-start recovery path, and the Settings "Restore points" card. Its single most
-important test, `test_restore_always_works_from_a_broken_config`, passes; the
-subsystem is described above under the floors), (2) **DONE (2026-07-24) — the
-Custom profile + guard model + the G4 anchor caller** (`policy.py`: Custom derives
-OPEN with a `GuardConfig` overlay; two settings-backed prompting guards —
-`guard_destructive_card` per_invocation>session, `guard_auto_grant_scope`
-none>non_destructive>everything; weakening a guard mints the undeletable anchor
-FIRST via `guards.set`, with fingerprint dedupe, and refuses the change if the
-anchor cannot mint; a destructive "Ask once" approval lives in a dedicated
-session set the SAFE path structurally never reads, and every profile switch
-revokes all grants; guards are EFFECTIVE only under Custom — Simple/Developer
-stay byte-for-byte), (3) **DONE (2026-07-24) — routing strategies**
-(quality-first default / cost-first / local-only / Developer custom chain —
-**Balanced cut from v1 by owner decision**, see amendment §10.1; the companion
-sees one prefer-quality/prefer-free toggle; a structured provider exception
-hierarchy in `providers/base.py` distinguishes unavailable from rejected/auth
-so fallback never amplifies a bad request; fallback is per-send continuation
-with cross-provider mid-turn advance forbidden in v1, a per-provider cooldown
-and a real per-attempt deadline, all module constants; the FREEZE is the chain
-head = the user's standing default, never overridden by rank; `local_only`
-outranks even the explicit picker and is resolved BEFORE the Setup-Assistant
-relay branch — no model call leaves the machine; `answeredWith` + the
-"Answered with a free model." chip when `free && routed`; usage rows now carry
-the RESOLVED per-attempt identity, fixing a pre-existing mis-attribution),
-(4) **DONE (2026-07-24) — free-model endpoints** (add-an-endpoint-by-prompt +
-"make it cheaper"; the whole pinned-request mechanism factored out of
-`read_web_page` into `agent_core/net_vetting.py` so the `provider.connect`
-validation GET adopts the same SSRF/rebinding defence instead of growing a weaker
-copy — resolve → vet → connect to the vetted IP with the name in `Host` + TLS SNI
-→ follow no redirects → re-vet every hop, with the vetting DECISION as a parameter
-so the LAN endpoint policy and the public-web policy share one mechanism; both
-flows are propose/confirm RPCs whose fields are **core-derived or canned**, never
-model-authored; `costPlan.apply` REFUSES if its restore point cannot be minted and
-persists skill + strategy in ONE atomic commit; the free chip stays Ollama-only —
-**no cloud model ever claims free**, Google's free tier is information, not a
-routing flag),
-(5) **DONE (2026-07-24) — harness + workspace-trust** (OPEN; two typed,
-path-bounded, OPEN-only file tools + a `workspace_trust` table and `workspace.*`
-RPC. **CONFINEMENT is a predicate separate from prompting**: a path-bounded tool
-whose resolved path is outside every trusted root is hard-refused *before*
-`execute`, LOW and MEDIUM alike, which is permission-to-TOUCH; the gate's
-`trusted` bool is only permission-to-skip-the-card. The path is resolved ONCE and
-handed to `execute` via `ExecutionContext.resolved_path`, never re-read from
-`args` — check one path, act on another is the TOCTOU gap. The registry's
-`dev_only` split into `open_only` (visibility) + `allow_missing_undo` (the
-exemption) so `write_project_file` is hidden from SAFE **and** undo-enforced at
-registration. **Owner decision 2026-07-24: trust suppresses cards ONLY for the
-typed, path-bounded, undoable file tools — `run_command` ALWAYS cards**, its
-`affected_path` is None so confinement never governs it. Trust is **excluded from
-snapshots** on the `tool_grants` precedent — see G3's "never captured" list.
-Routine steps and command widgets pass `trusted=False` unconditionally), (6)
-**widget capability tiers + expanded safe vocabulary** (to-do/checklist, note,
-timer), (7) **MCP client** tools via the registry + gate, (8) the **automation
-keyword gate** + author-OS-run automation.
-**Steps 1–5 are built. What remains is 5.5, 6, 7 and 8** — 6 is companion-facing,
-7 and 8 add capability through the existing registry + gate, and those three are
-independent enough to be taken in any order.
-
-**(5.5) — containment for the OPEN harness**
-([docs/step-5.5-containment-plan.md](docs/step-5.5-containment-plan.md), proposed
-2026-07-26). Not a new capability: it is step 5's unfinished half. Step 5 shipped
-`run_command` and did **not** re-establish the property design-doc §9's first
-mitigation ("capability allow-list, not a shell") was protecting — see the G3
-scope correction above. Contents: move `run_command` behind the **ShellBridge**
-(today it is the only tool that reaches the OS without crossing it, contra spec
-§1.3, which is *why* it has no second enforcement layer); a **Seatbelt** profile
-generated from the live `workspace_trust` roots, so trust finally bounds the shell
-and not just the typed file tools; a **pre-gate denylist** that cannot be approved
-away, checked at the same site as CONFINEMENT; **secret redaction** on tool output
-before it reaches a provider; and a `tool_audit` table (**excluded** from
-snapshots, on the `tool_grants` precedent). A sandbox is **not** a guard — it never
-appears in the Custom panel and has no toggle, and this changes blast radius, never
-prompting: `run_command` still always cards. **Step 7 is downstream of the audit
-log and of closing amendment §13's MCP SAFE-constraint question** — §8.5 promises
-MCP tools are "gated, logged, undo-aware" and there is no log, and a server's
-self-declared "read-only" cannot admit a tool to SAFE without breaking invariant 2
-through a path the registry check cannot see.
-
-For *status* — what is built versus planned — [ROADMAP.md](ROADMAP.md) is the
-single source; this section is the reasoning, and the two have drifted before.
+When adding a capability, ask which profile and tier surfaces it — do not leak
+developer affordances into Simple.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 
@@ -307,7 +214,7 @@ surfaced or endorsed in-app. **MCP is a *client* capability** (consume external
 tools through the existing registry + gate; SAFE admits only read-only/undo-able
 ones), never a server/gateway.
 
-## Do NOT build yet (spec §10; reconciled with the 2026-07-20 amendment)
+## Do NOT build yet
 
 Still deferred: **fully-automatic task classification** for routing (the *choice
 logic* that picks a strategy per task — v2; the four *named* strategies below ship
@@ -333,7 +240,7 @@ and the permanent distrust of Addison's own data directory
 (`policy.py::_protected_dirs`). The ledger with each one's reasoning is in
 `docs/HANDOFF.md`.
 
-**Pulled forward by the amendment** (build per the Phase-2 order above, not
+**Pulled forward by the 2026-07-20 scope change** (build per the order above, not
 opportunistically): the **named routing strategies** + custom, free/no-frontier
 models + extensible endpoints, the **snapshot/rollback** subsystem (now built), the **Custom**
 profile, the **coding harness + workspace-trust**, **capability-tiered widgets**,
