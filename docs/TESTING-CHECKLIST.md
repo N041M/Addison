@@ -10,11 +10,11 @@ launch terminal. Findings get converted into automated coverage afterwards.
 Cheap-model tip: export `ADDISON_MODEL=claude-haiku-4-5` before launching if
 you want the whole pass to cost pennies; steps 9–10 exercise the picker anyway.
 
-**Which branch to run.** Sections 13, 13a, 13b and 14 describe the **dark v4**
-UI, which lives on **`redesign/dark-v2`** and is **not on `master`** (as of
-2026-07-26 that branch is pushed and unmerged; `master` still carries the Fern
-look). Check out `redesign/dark-v2` before running the visual sections, or every
-one of them will fail for the wrong reason.
+**Which branch to run.** `master`. Sections 13, 13a, 13b and 14 describe the
+**dark v4** UI, which merged with **PR #58** on 2026-07-26 — no branch switch is
+needed any more. (This paragraph used to send you to `redesign/dark-v2`; that
+branch is now fully contained in `master`, and the Fern look is gone from the
+tree rather than merely superseded.)
 
 **Known gaps — not bugs, don't file them** (HANDOFF.md "Known gaps"):
 drafting a message reports "Opening email drafts isn't available yet."; there is

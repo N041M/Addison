@@ -152,8 +152,9 @@ Everything here was checked against the tree on 2026-07-26.
 ## 5. Manual desktop pass
 
 Owned entirely by **`TESTING-CHECKLIST.md`** — run it there rather than keeping a
-second, drifting copy here. Note its branch warning: the visual sections describe
-the dark v4 UI, which is on `redesign/dark-v2` and not on `master`.
+second, drifting copy here. Its visual sections describe the dark v4 UI, which is
+on `master` as of PR #58 (2026-07-26); the branch warning that used to live here
+and there is retired.
 
 ## 6. Known-open polish items
 

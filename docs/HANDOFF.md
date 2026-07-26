@@ -21,23 +21,34 @@ downloaded → how to connect it; and more open-source models), and skills
 file-upload (an uploaded text file's contents become the skill's guidance text —
 editable, previewed, size-limited).
 
-**Branch and PR state (verified 2026-07-26).** **There are no open pull
-requests**; everything through **PR #57** (`fix/keychain-double-prompt`) is on
-`master`. Two branches are pushed and **not merged**:
+**Branch and PR state (re-verified 2026-07-26, after PR #58 merged).** **There
+are no open pull requests.** **`master` is now the branch that carries
+everything** — work from it, not from `redesign/dark-v2`.
 
-- **`redesign/dark-v2`** — 15 commits ahead of `master`. The whole dark v4
-  redesign, the adversarial-review fix wave (`1241026`) and the docs wave
-  (`ee38dbe`). See "What shipped 07-25 → 07-26" below. **It is the checked-out
-  branch and carries all the newest work — start here, not on `master`.**
-- **`windowed-thread`** — `redesign/dark-v2` plus one commit (`8503b18`,
-  rendering the thread as a window rather than the whole conversation). **Thread
-  windowing is not on `master` and not on `redesign/dark-v2`** — it lives only
-  here. Do not describe it as shipped.
+- **PR #58 is merged** (`a22badd`, 2026-07-26): the dark v4 redesign, the
+  adversarial-review fix wave, the docs passes, the brand/icon fixes **and thread
+  windowing**, all at once. `redesign/dark-v2` is still pushed but is now fully
+  contained in `master` and safe to delete.
+- **Four commits landed after that merge** and are the current tip: the brand
+  icon-pipeline fix (`cc70ea8`), the pointer-glow revert (`e98828c`), the widget
+  rail / model-menu fixes (`3ab1159`) and the starfield removal (`07cc9ee`). See
+  "What shipped 07-26 — after PR #58" below.
+- **`windowed-thread` no longer exists**, locally or on the remote. Its one
+  commit was rewritten as `839bcff` and merged with #58. **Thread windowing IS
+  shipped** — an earlier version of this file said the opposite in three places.
 
 `archive/thread-window-wip` (the windowing experiment plus its scratch harness)
 and `archive/icon-gen-wip` (an alternative icon-generation approach) are parked
 work from worktrees, kept only so the attempts are recoverable. Neither is
 intended for merge.
+
+**How this section went stale, since the same trap is still open.** Everything
+above was written by `7444c8e` ("bring every document back in line with the
+tree") *while the redesign was still unmerged* — accurate at the time, false
+about ninety minutes later when #58 merged, because a merge changes what a
+branch-state paragraph asserts without touching the file that asserts it. Nothing
+in the gates catches that. When you merge, re-read this section and "Where the
+project stands" before anything else.
 
 ## Read this first: the standard this repo is held to
 
@@ -74,11 +85,12 @@ reason; they went stale twice in a day, and a stale number reads as a claim.
   **Custom** profile tunes prompting guards. Safety is redefined as **guaranteed
   rollback**, and that redefinition has code and tests behind it. **Steps 6, 7
   and 8 are not started.**
-- **The UI is mid-redesign on `redesign/dark-v2`, not on `master`.** The dark v4
-  direction is fully implemented on that branch; `master` still carries the Fern
-  UI. Anything this document says about the app's appearance describes
-  `redesign/dark-v2`.
-- **Gates, all green** on `redesign/dark-v2`: pytest, **pyright 0 errors**
+- **The dark v4 UI is on `master`** (PR #58). The Fern direction is gone from the
+  tree, not merely superseded — the alias blocks, the serif family, the bundled
+  fonts and the bell mark were all removed in the 4/4 cleanup. Anything this
+  document says about the app's appearance describes `master`.
+  `docs/design-brief-fern/` is kept as history only.
+- **Gates, all green** on `master`: pytest, **pyright 0 errors**
   (repo-wide; the remaining diagnostics are `reportMissingImports` for
   `pytest`/`httpx`, pre-existing — pyright has no venv), ruff clean, vitest,
   ESLint clean, `tsc --noEmit` + `vite build` clean, Rust `cargo test` clean.
@@ -616,10 +628,11 @@ change. The 182 are a separate decision (see Known gaps) and **must not be
 bulk-fixed** — many `BLE001` hits are the deliberate broad `except` in the recovery
 paths, where swallowing is the point.
 
-## What shipped 07-25 → 07-26 — the dark v4 redesign wave (`redesign/dark-v2`)
+## What shipped 07-25 → 07-26 — the dark v4 redesign wave (PR #58)
 
-**Unmerged.** Fifteen commits on `redesign/dark-v2`, pushed, no PR open. Nothing
-in this section is on `master`.
+**Merged to `master`** as `a22badd` on 2026-07-26. Everything in this section
+is on `master`. (It described itself as unmerged until the merge made that false;
+see the note in the branch-state section above.)
 
 **The redesign itself, in four commits** (`b86887a` → `cb35125`), against
 `docs/design-brief-dark/` — `README.md` + `prototype.html` are the designer's
@@ -713,13 +726,53 @@ imports are now module-private (`CLICK_DELAY_MS`, `CLICK_SCRAMBLE_SELECTOR`,
 `STREAM_WINDOW_CHARS`, `REVEAL_TARGET_MS`, `ConversationsState`, `OffersState`
 and the two offer banners). No behaviour changes.
 
-### Not shipped: thread windowing
+### Shipped: thread windowing (`839bcff`)
 
-`8503b18` on the **`windowed-thread`** branch renders the thread as a window
-rather than the whole conversation. It is `redesign/dark-v2` plus that one
-commit, pushed, unmerged, and **not present on either `master` or
-`redesign/dark-v2`**. If a doc or a comment implies the thread is windowed today,
-it is wrong.
+**This section previously said the opposite.** Thread windowing came in with #58
+and is on `master`; the `windowed-thread` branch and its `8503b18` no longer
+exist. If a doc or comment implies the thread renders the whole conversation, it
+is wrong.
+
+Opening a conversation used to render react-markdown (and mermaid) for every
+settled message in one commit. The thread now renders a trailing window of 30
+rows and extends upward by 30 when the reader reaches the top, holding scroll
+position across the prepend — 272 DOM nodes instead of 3602 on a 400-message
+conversation, and 30 markdown parses instead of 400. Nothing below 30 messages
+changes. The window is a count of rows hidden at the **top**, never a trailing
+slice: a message arriving mid-stream must lengthen the window at the bottom
+rather than drop the topmost rendered row from under someone who has scrolled up.
+Pinned by `shell/src/__tests__/threadWindow.test.tsx`.
+
+## What shipped 07-26 — after PR #58, direct on `master`
+
+Four commits, all owner-reported from a running app rather than found by a gate.
+
+- **`cc70ea8` — the icon pipeline was building onto a white plate.** QuickLook,
+  the rasteriser both build scripts use, fits art top-left and pads the rest of
+  the canvas with **white** (measured: 37px of 256), and flattens onto white — so
+  every icon carried a white band down its right edge and along its bottom, and
+  the app icon's rounded tile came back sitting in an opaque white square. Giving
+  both masters a percentage size with an explicit `preserveAspectRatio` fixes it.
+  The cause was under the whole pipeline, not in the artwork.
+- **`e98828c` — the pointer glow is reverted.** Owner decision: it was
+  decoration, and the accent is reserved for actions, selection and live state.
+  Removed whole — component, stylesheet block, the mount in `App`, its five
+  tests — so `styles.css` is byte-identical to before it landed and CLAUDE.md
+  needs no exception written for it. The icon fixes from the same commit stay.
+- **`3ab1159` — the widget rail said everything twice.** It draws pinned widgets
+  *and* adds core-computed rows (the token meter, the connection list), with
+  nothing stopping both from showing the same source: with the seeded
+  "Connections" widget pinned the rail read Ollama, Anthropic, the meter, then
+  Ollama and Anthropic again. Ambient rows now stand down for any source a
+  **pinned** widget already shows — pinned only, because a widget in the
+  collapsed tray is not on screen and the ambient row is then the only place
+  those facts appear. Same commit fixed both model menus vanishing for a frame.
+- **`07cc9ee` — the empty-state starfield is gone.** Reported as "a pixel or
+  something akin to it" beside the greeting. It was not an artifact: it was the
+  prototype's starfield, implemented as the exact radial-gradient stack from
+  `prototype.html:72`, and the brief does ask for it. At 1280x800 it is five 1px
+  dots over a 464x276 box, two of them landing on the type. At that density it
+  never reads as a field — it reads as dust, or as a dead pixel next to a word.
 
 ## What shipped 07-26 — per-token streaming (`streaming-replies`)
 
@@ -1423,8 +1476,8 @@ report never arrived.
 ## Tracked thread: macOS keychain prompts
 
 **STATUS 2026-07-25: root causes confirmed and FIXED. Merged as PR #57**
-(`fix/keychain-double-prompt`, commit `5e435dd`) — this is the newest thing on
-`master`, and `redesign/dark-v2` is built on top of it.
+(`fix/keychain-double-prompt`, commit `5e435dd`). PR #58 and everything after it
+sits on top of this.
 The unexplained multi-prompt symptom was diagnosed by a multi-agent audit with
 adversarial verification and fixed the same day. What it was, in one breath: the
 device identity had no session cache (two OS reads per relay message —
