@@ -1,5 +1,12 @@
 # Handoff: Addison UI Redesign ("Fern")
 
+> **SUPERSEDED (2026-07-26).** The app's shipped look is now the dark
+> "correspondence-instrument" direction — see **`docs/design-brief-dark/`**
+> (authoritative: its `README.md` + `prototype.html` are the designer's
+> reference, `IMPLEMENTATION.md` the binding prototype→app mapping) and the UI
+> bullet in `CLAUDE.md`. This Fern bundle is kept as history only; do not
+> implement from it.
+
 ## Overview
 Complete redesign of the Addison desktop app (repo: `N041M/Addison`, Tauri + React + Tailwind in `shell/`). Replaces the current cool-slate single-window chat with a warm, calm three-column layout: conversation sidebar, correspondence-style chat, and a user-owned widget rail. Adds an in-window settings page, multi-provider API keys, dark mode, a first-run setup banner, and a service-bell logo.
 

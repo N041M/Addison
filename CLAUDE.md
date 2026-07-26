@@ -352,28 +352,31 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **Plain language, no jargon** in any user-facing string (tool labels,
   permission cards, errors). No stack traces reach the user — errors become a
   plain message + one suggested next step.
-- **UI (step 7+): distinct, non-AI look — "Fern" direction (v3, amended
-  2026-07)** (design-doc §7.1). Never the generic AI-chat aesthetic (purple
-  gradients, glassmorphism, sparkle/bot icons, shimmer) and never a model
-  vendor's branding (no cream/terracotta, no steel blue). The direction is a
-  **warm, calm "correspondence" look**: warm paper neutrals + one **fern-green**
-  accent (Addison's voice, primary actions, live state — never decoration), the
-  message body in a **serif** (Source Serif 4) beside a plain **Public Sans** UI
-  and **IBM Plex Mono** for machine facts only. One honest **shape rule** —
-  **blocky things are live annotations** (square edges, 2px left rules, small-caps
-  labels: "Addison's work", section labels, active sidebar item) and **rounded
-  things are yours to own/act on** (6px small buttons · 8px inputs/rows · 10px
-  cards/composer · 12px banners · 999px pills). **Light by default with a
-  class-driven dark mode** (`darkMode:"class"`, persisted as `addison.theme`);
-  type stays compact-but-legible for older readers (personas 54 and 68). Fonts
-  are the **one exception to "system stacks only"**: the three families are
-  **bundled as OFL woff2** in `shell/src/assets/fonts/` with `@font-face` —
-  CSP-safe because bundled, never hotlinked (strict `default-src 'self'`), always
-  with system fallbacks. **`docs/design-brief-fern` is authoritative** for tokens,
-  type, shape, and copy; the tokens in **shell/tailwind.config.js** implement it.
-  This **supersedes the earlier dark terminal-adjacent look** (which superseded
-  design-doc §7.1's cool-slate palette); §7.1's layout/IA and accessibility rules
-  are unchanged.
+- **UI (step 7+): distinct, non-AI look — the dark "correspondence-instrument"
+  direction (v4, adopted 2026-07-26 from the owner's design handoff)**.
+  **`docs/design-brief-dark/` is authoritative** — `README.md` + `prototype.html`
+  are the designer's pixel-perfect reference, `IMPLEMENTATION.md` records the
+  binding prototype→app mapping (demo content is never shipped; real features are
+  restyled, never de-wired); the tokens in **shell/tailwind.config.js** implement
+  it. The direction: a **calm, text-first dark UI** — near-black paper
+  (`#0C0C0D`), hairline separators, one **violet accent** (`#B4A9F5`) reserved
+  for actions, selection rails, and live state (never decoration), **system type
+  only** ('Helvetica Neue' UI beside `ui-monospace` machine facts — the earlier
+  bundled-font exception is retired, no @font-face). Shape rule: selection/active
+  is a **2px accent left rail**; sections sit on 2px rules; hairline-row surfaces,
+  with floating chrome (popovers/menus/modal, 5–8px radii) the only
+  bordered-panel elements. Signature motion: the **character-scramble**
+  (`shell/src/lib/scramble.ts`) + fadeRise/fadeDrop transitions, all no-ops under
+  `prefers-reduced-motion`. **Dark is the designed reference; light is a derived
+  translation** — the theme stays class-driven three-way (light/dark/system,
+  default **system**, persisted as `addison.theme`). Still never generic-AI
+  styling beyond the sanctioned flat accent (no gradients, glassmorphism,
+  sparkle/bot icons, shimmer) and never a model vendor's branding. This
+  **supersedes the Fern "warm correspondence" direction (v3,
+  `docs/design-brief-fern`, kept as history)**, which superseded the dark
+  terminal-adjacent look, which superseded design-doc §7.1's cool-slate palette;
+  §7.1's layout/IA and accessibility rules are unchanged (personas 54 and 68
+  still govern legibility).
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 
