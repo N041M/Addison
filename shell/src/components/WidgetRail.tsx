@@ -98,19 +98,47 @@ export function WidgetRail({
   const pinned = widgets.filter((w) => w.pinned);
   const unpinned = widgets.filter((w) => !w.pinned);
 
-  // Which core-computed sources a PINNED widget already shows. The ambient rows
-  // below stand down for those, or the same facts appear twice: a pinned
-  // "Connections" widget draws the connection rows, and the ambient block drew
-  // them again underneath it (reported 2026-07-26 — the rail read Ollama, the
-  // Anthropic API, the token meter, then Ollama and the Anthropic API again).
-  // Pinned only, deliberately: a widget sitting in the collapsed tray is not on
-  // screen, so there the ambient row is the only place those facts appear.
-  const shownBySource = new Set(
-    pinned.flatMap((w) => (w.spec.kind === "stat" ? [w.spec.source] : [])),
-  );
+  // ONE RULE: a core-computed source is drawn by the first thing on screen that
+  // claims it, and nothing draws it again.
+  //
+  // The rail has three things that can say the same sentence — pinned widgets,
+  // widgets in an open tray, and the ambient rows it adds itself — so there are
+  // three ways to say it twice, and two of them shipped:
+  //
+  //   * ambient vs pinned — reported 2026-07-26 and fixed then: the rail read
+  //     Ollama, the Anthropic API, the token meter, then Ollama and the
+  //     Anthropic API again.
+  //   * pinned vs pinned — reported 2026-07-27 with a screenshot. The 07-26 fix
+  //     only taught the AMBIENT rows to stand down, so two pinned widgets on one
+  //     source still drew it twice. `ConnectionsBody` renders its title
+  //     conditionally, so the second one appears as bare dotted rows that look
+  //     exactly like the ambient block — which is why it read as the old bug
+  //     coming back rather than as a new one.
+  //   * ambient vs an OPEN tray — never reported; found while fixing the above.
+  //     The 07-26 rule keyed on `pinned` because "a widget in the collapsed tray
+  //     is not on screen." True while it is closed; opening the tray put it on
+  //     screen without letting it claim its source.
+  //
+  // Keying on "visible, and first to claim" rather than on `pinned` collapses all
+  // three into one condition, so a fourth arrangement cannot produce a fourth
+  // variant of the same bug.
+  const claimed = new Set<WidgetStatSource>();
+  /** True if this widget should draw. Records its source so nothing repeats it. */
+  function claimsItsSource(w: Widget): boolean {
+    if (w.spec.kind !== "stat") return true; // routine/command widgets never collide
+    if (claimed.has(w.spec.source)) return false;
+    claimed.add(w.spec.source);
+    return true;
+  }
 
-  const hasUsage = (stats?.tokensMonth.total ?? 0) > 0 && !shownBySource.has("tokens_month");
-  const connections = shownBySource.has("connections") ? [] : (stats?.connections ?? []);
+  // Order matters: pinned draws first, so it claims first. Tray widgets only claim
+  // when the tray is OPEN, because a closed tray draws nothing — and then the
+  // ambient row is genuinely the only place those facts appear.
+  const pinnedToDraw = pinned.filter(claimsItsSource);
+  const trayToDraw = trayOpen ? unpinned.filter(claimsItsSource) : unpinned;
+
+  const hasUsage = (stats?.tokensMonth.total ?? 0) > 0 && !claimed.has("tokens_month");
+  const connections = claimed.has("connections") ? [] : (stats?.connections ?? []);
   const isInline = variant === "inline";
 
   function toggleTray() {
@@ -138,7 +166,7 @@ export function WidgetRail({
       {consent && <div className="shrink-0 pb-5">{consent}</div>}
 
       {/* Pinned stored widgets. */}
-      {pinned.map((w) => (
+      {pinnedToDraw.map((w) => (
         <WidgetRow
           key={w.id}
           widget={w}
@@ -177,7 +205,7 @@ export function WidgetRail({
       {unpinned.length > 0 && (
         <>
           {trayOpen &&
-            unpinned.map((w) => (
+            trayToDraw.map((w) => (
               <WidgetRow
                 key={w.id}
                 widget={w}

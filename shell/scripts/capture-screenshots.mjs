@@ -29,6 +29,14 @@ const TARGET = process.env.ADDISON_URL ?? "http://localhost:5173";
 const OUT = new URL("../../docs/screenshots/", import.meta.url).pathname;
 const VIEWPORT = { width: 1440, height: 900 };
 
+// One message, used by both theme shots so the light/dark pair in the README is
+// actually comparable. A reload clears the composer, so it has to be re-typed
+// after `setTheme` — the first light shot went out with an empty composer and
+// the "engine isn't connected" placeholder showing.
+const COMPOSED =
+  "Rename the photos in my Downloads folder so they sort by date, and tell me " +
+  "what you changed before you touch anything.";
+
 mkdirSync(OUT, { recursive: true });
 
 const browser = await chromium.launch({ channel: "chrome" });
@@ -39,8 +47,6 @@ const context = await browser.newContext({
 });
 const page = await context.newPage();
 
-// Dark is the designed reference (the theme is class-driven and persisted).
-await page.addInitScript(() => localStorage.setItem("addison.theme", "dark"));
 await page.goto(TARGET, { waitUntil: "networkidle" });
 
 // The greeting stack scrambles in on mount. `waitForTextToSettle` (below —
@@ -77,6 +83,25 @@ async function shot(name, prepare) {
   console.log(`  ${name}.png`);
 }
 
+/**
+ * Switch theme and reload.
+ *
+ * NOT an `addInitScript`: that runs on EVERY navigation, so pinning the theme
+ * that way meant the reload below re-applied it and the "light" shot came out
+ * dark — shipped that way for one commit (reported 2026-07-27). localStorage
+ * survives a reload on its own, so setting it once and reloading is both simpler
+ * and actually correct.
+ */
+async function setTheme(theme) {
+  await page.evaluate((t) => localStorage.setItem("addison.theme", t), theme);
+  await page.reload({ waitUntil: "networkidle" });
+  await waitForTextToSettle();
+}
+
+async function composeMessage() {
+  await page.getByRole("textbox", { name: /Message to Addison/i }).fill(COMPOSED);
+}
+
 async function openBothColumns() {
   for (const label of ["Show chats", "Show widgets"]) {
     const button = page.getByRole("button", { name: label });
@@ -87,16 +112,12 @@ async function openBothColumns() {
 
 console.log("capturing:");
 
+// Dark is the designed reference; light is a derived translation.
+await setTheme("dark");
+
 // 1. The hero: full three-column shell, first-run block, a composed message.
 await openBothColumns();
-await shot("hero", async () => {
-  await page
-    .getByRole("textbox", { name: /Message to Addison/i })
-    .fill(
-      "Rename the photos in my Downloads folder so they sort by date, and tell " +
-        "me what you changed before you touch anything.",
-    );
-});
+await shot("hero", composeMessage);
 
 // 2. Settings — the profile/mode surface, where the safety model is user-facing.
 await shot("settings", async () => {
@@ -111,10 +132,9 @@ await shot("settings", async () => {
 
 // 5. Light theme, since the theme is a three-way and light is a real surface.
 await shot("hero-light", async () => {
-  await page.evaluate(() => localStorage.setItem("addison.theme", "light"));
-  await page.reload({ waitUntil: "networkidle" });
-  await waitForTextToSettle();
+  await setTheme("light");
   await openBothColumns();
+  await composeMessage();
 });
 
 await browser.close();

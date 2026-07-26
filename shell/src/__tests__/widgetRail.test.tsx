@@ -124,3 +124,48 @@ describe("the model menus close with an animation", () => {
     expect(panel!.className).toContain("pointer-events-none");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported again from a running app, 2026-07-27, with a screenshot: the rail
+// showed "Connections / Ollama / Anthropic API", the token meter, and then
+// Ollama and the Anthropic API a SECOND time. The 07-26 fix suppresses the
+// ambient rows for any source a pinned widget shows, so that collision is
+// closed — which means the surviving duplicate is one it never considered:
+// TWO pinned widgets on the same source. Nothing dedupes widget against widget.
+//
+// `ConnectionsBody` renders its title conditionally, so a second connections
+// widget saved without a title draws exactly the bare dotted rows in the
+// screenshot, with nothing to distinguish it from the ambient block.
+// ---------------------------------------------------------------------------
+describe("two pinned widgets on the same source", () => {
+  it("does not draw the same connection rows twice", () => {
+    renderRail([
+      statWidget("w1", "connections", true),
+      { id: "w2", pinned: true, spec: { kind: "stat", source: "connections" } } as Widget,
+    ]);
+    // One row per connection, however many widgets claim that source.
+    expect(screen.getAllByText("Anthropic API")).toHaveLength(1);
+    expect(screen.getAllByText("Ollama · this computer")).toHaveLength(1);
+  });
+
+  it("does not draw the token meter twice", () => {
+    renderRail([
+      statWidget("t1", "tokens_month", true),
+      { id: "t2", pinned: true, spec: { kind: "stat", source: "tokens_month" } } as Widget,
+    ]);
+    // The meter renders "106k / 380k" when a limit is known, so match the pair.
+    expect(screen.getAllByText("106k / 380k")).toHaveLength(1);
+  });
+
+  // The 07-26 fix suppressed ambient rows for PINNED widgets only, reasoning that
+  // "a widget sitting in the collapsed tray is not on screen, so there the ambient
+  // row is the only place those facts appear." That is right — while the tray is
+  // CLOSED. Open it and the tray widget is on screen too, so the ambient row
+  // becomes the second copy. The rule was correct; its condition was `pinned`
+  // where it needed to be "pinned, or visible in an open tray".
+  it("stands the ambient rows down when an OPEN tray already shows that source", () => {
+    renderRail([statWidget("w1", "connections", false)]);
+    fireEvent.click(screen.getByRole("button", { name: /1 more widget/i }));
+    expect(screen.getAllByText("Anthropic API")).toHaveLength(1);
+  });
+});
