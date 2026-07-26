@@ -19,30 +19,30 @@ export function WidgetProposalCard({ proposal, onAdd, onCancel }: Props) {
   return (
     <section
       aria-label="Add this widget?"
-      className="animate-[fade-rise_160ms_ease-out] border-t border-line bg-surface px-6 py-4"
+      className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3"
     >
-      <h3 className="text-base font-semibold text-ink">
+      <h3 className="m-0 text-[12px] font-medium text-ink">
         Addison wants to add a widget: {proposal.title}
       </h3>
       {proposal.summary && (
-        <p className="mt-1 text-sm text-muted">{proposal.summary}</p>
+        <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{proposal.summary}</p>
       )}
-      <p className="mt-2 font-mono text-fact text-faint">
+      <p className="m-0 mt-2 font-mono text-[10px] text-disabled">
         {proposal.kind === "routine" ? "runs a saved routine" : "shows a value from Addison"}
       </p>
 
-      <div className="mt-4 flex gap-3">
+      <div className="mt-3 flex items-baseline gap-5">
         <button
           type="button"
           onClick={onAdd}
-          className="rounded-pill bg-fern px-5 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep"
+          className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
         >
           Add widget
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-sm px-2 py-2 text-sm font-medium text-muted hover:text-ink-soft"
+          className="text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
         >
           Not now
         </button>

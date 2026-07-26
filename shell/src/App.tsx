@@ -329,12 +329,13 @@ export function App() {
         const params = p as StreamChunkParams;
         const text = params.text ?? params.delta ?? params.content ?? "";
         if (!text) return;
-        // TODO(streaming): real streaming needs two edits — the final result's
-        // `finalText` must append to (not overwrite) streamed content in useTurn's
-        // runTurn, and this handler must target the message by id, not the `pending` flag.
-        turn.setMessages((prev) =>
-          prev.map((m) => (m.pending ? { ...m, content: m.content + text } : m)),
-        );
+        // The delta lands on the pending message as the TRUE text; useTurn also
+        // feeds the streaming scramble, which decorates the DISPLAY only.
+        // TODO(streaming): real streaming needs two more edits — the final
+        // result's `finalText` must append to (not overwrite) streamed content in
+        // useTurn's runTurn, and this handler must target the message by id, not
+        // the `pending` flag.
+        turn.appendStreamedText(text);
       }),
     );
 
@@ -761,22 +762,23 @@ export function App() {
     ? String(snapshotsState.snapshots.length)
     : undefined;
 
-  // First-run render pieces. The banner rides in the chat column above the
-  // thread while first-run is active; the greeting replaces the welcome message
-  // only at step 1 (nothing configured yet) with an otherwise-empty thread. Once
-  // a provider connects (step 2), the normal welcome returns so Addison
-  // "introduces itself" per the step-2 copy.
-  const threadEmpty = turn.messages.length === 1 && turn.messages[0]?.id === "welcome";
-  const showGreeting = firstRunActive && !anyConfigured && threadEmpty;
-  const threadMessages = showGreeting
-    ? turn.messages.filter((m) => m.id !== "welcome")
-    : turn.messages;
+  // An empty conversation shows the greeting stack (ChatThread's empty state),
+  // not a message. The seeded "welcome" line is RETIRED by the redesign: an
+  // invitation is not something Addison already said, and the stack says the
+  // same thing in the surface's own voice. It still counts as empty here so a
+  // conversation that has only that seed lands on the stack too.
+  const threadEmpty =
+    turn.messages.length === 0 ||
+    (turn.messages.length === 1 && turn.messages[0]?.id === "welcome");
+  const threadMessages = threadEmpty ? [] : turn.messages;
+  // The first-run block rides inside that stack while first-run is active (step
+  // 1 = nothing configured; step 2 = a provider connected during this launch,
+  // which also focuses the composer for the "say hello" nudge).
   const firstRunHeader = firstRunActive ? (
     <FirstRunBanner
       step={anyConfigured ? 2 : 1}
       onStartSetup={handleStartSetup}
       onSkip={() => setFirstRunDismissed(true)}
-      showGreeting={showGreeting}
     />
   ) : undefined;
 
@@ -930,6 +932,9 @@ export function App() {
                   retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
                   onRewindTo={handleRewindTo}
                   showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
+                  streamDisplay={turn.streamDisplay}
+                  conversationKey={conversationsState.currentConversationId}
+                  onSuggestion={(text) => setComposerSeed(text)}
                   header={firstRunHeader}
                   footer={
                     <>

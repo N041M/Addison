@@ -22,10 +22,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
+  createStreamScramble,
   scrambleElement,
   setMotionEnabled,
   isMotionEnabled,
   prefersReducedMotion,
+  STREAM_ADVANCE_CHARS,
+  STREAM_WINDOW_CHARS,
 } from "../lib/scramble";
 
 const FAKE = [
@@ -178,5 +181,98 @@ describe("scrambleElement", () => {
 
     vi.advanceTimersByTime(2000);
     expect(el.textContent).toBe(frozen);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The streaming variant. The window math is worth pinning tick by tick because
+// the failure it prevents is not a visual one: an engine that lets the window
+// run past the received text would be rendering characters the model has not
+// sent yet, which — in a scramble — means showing the person plausible glyphs in
+// the position of words Addison has not actually written.
+// ---------------------------------------------------------------------------
+describe("createStreamScramble", () => {
+  const TEXT = "Happy to help — here is where I landed after a first look at it.";
+
+  function collect() {
+    const frames: string[] = [];
+    return { frames, engine: createStreamScramble((f) => frames.push(f)) };
+  }
+
+  it("advances the window five characters a tick and resolves what it leaves behind", () => {
+    const { frames, engine } = collect();
+    engine.push(TEXT);
+
+    for (let tick = 1; tick <= 4; tick++) {
+      vi.advanceTimersByTime(38);
+      const frame = frames[frames.length - 1];
+      const front = tick * STREAM_ADVANCE_CHARS;
+      const resolved = Math.max(0, front - STREAM_WINDOW_CHARS);
+      // The frame is exactly as long as the window's leading edge...
+      expect(frame).toHaveLength(Math.min(TEXT.length, front));
+      // ...its head is the real text, character for character...
+      expect(frame.slice(0, resolved)).toBe(TEXT.slice(0, resolved));
+      // ...and the tail behind it is not (something in there is still noise).
+      if (front > resolved) expect(frame.slice(resolved)).not.toBe(TEXT.slice(resolved, front));
+    }
+  });
+
+  it("never renders more than has been received, however long it runs", () => {
+    const { frames, engine } = collect();
+    const head = TEXT.slice(0, 20);
+    engine.push(head);
+
+    // Far longer than the window needs — the engine must idle at the tail rather
+    // than inventing the rest of the sentence.
+    vi.advanceTimersByTime(38 * 40);
+    for (const frame of frames) expect(frame.length).toBeLessThanOrEqual(head.length);
+    expect(frames[frames.length - 1]).toBe(head);
+
+    // And when the rest arrives it picks up from there, still bounded.
+    engine.push(TEXT);
+    vi.advanceTimersByTime(38 * 40);
+    for (const frame of frames) expect(frame.length).toBeLessThanOrEqual(TEXT.length);
+  });
+
+  it("lands on the exact received text", () => {
+    const { frames, engine } = collect();
+    engine.push(TEXT);
+    vi.advanceTimersByTime(38 * 40);
+    expect(frames[frames.length - 1]).toBe(TEXT);
+  });
+
+  it("passes whitespace through untouched", () => {
+    const { frames, engine } = collect();
+    const WITH_BREAK = "Reading your request\nand writing an answer for you now";
+    engine.push(WITH_BREAK);
+
+    vi.advanceTimersByTime(38 * 3);
+    const frame = frames[frames.length - 1];
+    for (let i = 0; i < frame.length; i++) {
+      if (/\s/.test(WITH_BREAK[i])) expect(frame[i]).toBe(WITH_BREAK[i]);
+    }
+  });
+
+  it("is a hard no-op with motion off — the text simply appends", () => {
+    setMotionEnabled(false);
+    const { frames, engine } = collect();
+
+    engine.push("Happy to");
+    engine.push("Happy to help");
+    // No timer was ever scheduled: advancing changes nothing.
+    vi.advanceTimersByTime(38 * 40);
+
+    expect(frames).toEqual(["Happy to", "Happy to help"]);
+  });
+
+  it("stops emitting once torn down", () => {
+    const { frames, engine } = collect();
+    engine.push(TEXT);
+    vi.advanceTimersByTime(38);
+    engine.stop();
+    const after = frames.length;
+
+    vi.advanceTimersByTime(38 * 40);
+    expect(frames).toHaveLength(after);
   });
 });

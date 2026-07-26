@@ -1,20 +1,35 @@
-// Chat thread — the scrollable message column (Fern direction; design-brief-fern).
+// The chat column — the empty state and the message thread (DARK direction;
+// docs/design-brief-dark, "Screens → Chat empty state / Thread").
 //
-// Correspondence, not chat bubbles: left-aligned rows with a small-caps sender
-// label above each (YOU faint / ADDISON fern-deep) and the message body in the
-// Source Serif 4 "correspondence" voice (17px/1.7). 26px between turns, no
-// borders, no bubbles. Streamed assistant text is appended to an in-progress
-// message and finalized when the sendMessage response lands (handled in App).
+// EMPTY: a centred greeting stack over a faint dotted starfield — the
+// time-of-day greeting (scrambling in), one subline, and three suggestion chips
+// that fill the composer. It REPLACES the seeded "welcome" message: an empty
+// chat is an invitation, not a message Addison already sent. The first-run block
+// (FirstRunBanner) rides in the same stack when a launch starts unconfigured.
 //
-// This component is JUST the message column now: it owns its own scroll (hidden
-// scrollbar, its content capped at 580px). The header, widget rail, and composer
-// are laid out around it by App. A `footer` slot renders after the messages,
-// inside the scroll — App puts the consent card and "Addison's work" block there
-// when the widget rail is hidden.
+// THREAD: one centred 580px column, 32px between turns, behind the vertical fade
+// mask with the scrollbar hidden. A turn is an 11px label ("You" `disabled` /
+// "Addison" `ink`) over a 15.5px/1.65 body — `ink-soft` for what you wrote,
+// `ink` for what Addison wrote. Assistant answers keep their markdown/mermaid
+// rendering; a 7×14px blinking block rides after the text while a reply streams.
+//
+// TWO THINGS THAT ARE DELIBERATE, not stylistic:
+//
+//   * While a message is `pending` its body renders as PLAIN pre-wrap text, and
+//     it becomes markdown the moment the turn settles. The streaming scramble
+//     puts random glyphs in the tail; feeding those to a markdown parser 26
+//     times a second would make a stray `#` a heading for one frame and reflow
+//     the answer under the reader's eyes.
+//   * Switching conversations staggers the rows in and re-scrambles them, but a
+//     body is only scrambled when it is a single text node. A rendered markdown
+//     body has element children, and the engine's leaf guard would skip it
+//     anyway — this check makes that refusal explicit rather than incidental, so
+//     a rendered answer is never rewritten by an animation.
 
 import { useEffect, useRef, type ReactNode } from "react";
 import type { DisplayMessage } from "../types/ui";
 import { Markdown } from "./Markdown";
+import { isMotionEnabled, scrambleElement } from "../lib/scramble";
 
 interface Props {
   messages: DisplayMessage[];
@@ -28,7 +43,16 @@ interface Props {
    * message. Off (and absent) for Simple, so its thread is byte-identical.
    */
   showTechnicalDetails?: boolean;
-  /** Rendered before the messages, inside the scroll (first-run banner + greeting). */
+  /**
+   * The scrambled DISPLAY text for the message still streaming (useTurn). The
+   * message's own `content` stays the true text — this only decorates it.
+   */
+  streamDisplay?: string | null;
+  /** Which conversation is on screen; a change staggers + re-scrambles the rows. */
+  conversationKey?: string | null;
+  /** Fills the composer from an empty-state suggestion chip. */
+  onSuggestion?: (text: string) => void;
+  /** Rendered with the empty stack, and above the messages once there are any. */
   header?: ReactNode;
   /** Rendered after the last message, inside the scroll (consent + work inline). */
   footer?: ReactNode;
@@ -39,40 +63,94 @@ const SENDER_LABEL: Record<string, string> = {
   assistant: "Addison",
 };
 
+/** The three chips, verbatim from the prototype. They only fill the composer. */
+const SUGGESTIONS = ["Tidy my Downloads folder", "Draft an email", "Plan the weekend"];
+
+/** Per-row stagger when a conversation is opened (prototype: 70ms / 40ms). */
+const ROW_STAGGER_MS = 70;
+const TEXT_STAGGER_MS = 40;
+
 export function ChatThread({
   messages,
   onRetry,
   retryAvailable,
   onRewindTo,
   showTechnicalDetails = false,
+  streamDisplay,
+  conversationKey,
+  onSuggestion,
   header,
   footer,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const seenConversation = useRef<string | null | undefined>(undefined);
 
-  // Correspondence view shows the human turns; live tool steps live in the
-  // widget rail / work block, so tool messages aren't repeated here.
+  // The thread shows the human turns; live tool steps live in the widget rail /
+  // work block, so tool messages aren't repeated here.
   const visible = messages.filter((m) => m.role !== "tool");
+  const isEmpty = visible.length === 0;
 
-  // Keep the newest content in view without any fancy motion. Skip it entirely
-  // when there are no messages yet: on first run the header (pine banner +
-  // greeting) is the content, and it must stay at the top rather than being
-  // scrolled out of sight.
+  // Keep the newest content in view. Skipped while the thread is empty: the
+  // greeting stack is the content then, and it must stay put.
   useEffect(() => {
-    if (visible.length === 0) return;
+    if (isEmpty) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, header, footer]);
-  const lastAssistantId = [...visible].reverse().find((m) => m.role === "assistant" && !m.pending)?.id;
+  }, [messages, streamDisplay, header, footer]);
+
+  // Opening another conversation: the rows rise in one after another and their
+  // labels/bodies resolve out of the scramble behind them. Mount is skipped —
+  // App's initial pass owns the first paint.
+  useEffect(() => {
+    if (seenConversation.current === undefined) {
+      seenConversation.current = conversationKey ?? null;
+      return;
+    }
+    if (seenConversation.current === (conversationKey ?? null)) return;
+    seenConversation.current = conversationKey ?? null;
+    const list = listRef.current;
+    if (!list || !isMotionEnabled()) return;
+    Array.from(list.children).forEach((child, i) => {
+      const el = child as HTMLElement;
+      el.style.animation = "none";
+      el.getBoundingClientRect(); // force reflow so the restart is seen
+      el.style.animation = `fadeRise .38s ease both ${i * ROW_STAGGER_MS}ms`;
+      el.querySelectorAll("[data-msg-text], [data-scramble-live]").forEach((text, j) => {
+        // Leaf text only: a rendered markdown body has element children and is
+        // left alone (see the file header).
+        if (text.children.length === 0) {
+          scrambleElement(text, i * ROW_STAGGER_MS + j * TEXT_STAGGER_MS);
+        }
+      });
+    });
+  }, [conversationKey]);
+
+  const lastAssistantId = [...visible]
+    .reverse()
+    .find((m) => m.role === "assistant" && !m.pending)?.id;
+
+  if (isEmpty) {
+    return (
+      <div className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col overflow-y-auto">
+        <EmptyState header={header} onSuggestion={onSuggestion} />
+        {footer && <div className="shrink-0 pb-6">{footer}</div>}
+      </div>
+    );
+  }
 
   return (
-    <div className="no-scrollbar flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-[26px] overflow-y-auto py-[30px]">
+    <div
+      ref={listRef}
+      className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-8 overflow-y-auto pb-6 pt-9"
+    >
       {header}
 
       {visible.map((m) => (
         <MessageRow
           key={m.id}
           message={m}
+          display={m.pending && streamDisplay != null ? streamDisplay : m.content}
           canRewind={m.role === "user" && Boolean(m.storeId)}
           canRetry={m.id === lastAssistantId && retryAvailable}
           onRewindTo={onRewindTo}
@@ -88,8 +166,95 @@ export function ChatThread({
   );
 }
 
+// ---------------------------------------------------------------------------
+// The empty state: greeting, subline, chips — and the starfield behind them.
+// ---------------------------------------------------------------------------
+function EmptyState({
+  header,
+  onSuggestion,
+}: {
+  header?: ReactNode;
+  onSuggestion?: (text: string) => void;
+}) {
+  const greetingRef = useRef<HTMLDivElement>(null);
+
+  // The greeting resolves out of the scramble whenever this stack appears — on
+  // launch, and again on every new chat. (`data-greeting` also puts it in App's
+  // initial load pass; the engine refuses to run twice on one element, so the
+  // two paths can never fight over the same text node.)
+  useEffect(() => {
+    scrambleElement(greetingRef.current, 0);
+  }, []);
+
+  return (
+    // `m-auto`, not `flex-1 justify-center`: centring a flex CHILD that is
+    // taller than its scroll container puts the overflow above the scroll
+    // origin, where it can never be reached. With auto margins the stack sits in
+    // the middle while there is room and scrolls normally once there isn't — so
+    // the first-run block's actions stay reachable on a short window.
+    <div className="relative m-auto flex w-full shrink-0 flex-col items-center gap-[14px] py-9">
+      {/* The starfield — a few 1px dots, one of them accent. Decoration only:
+          it never intercepts a click. */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-[10%] inset-y-[15%]"
+        style={{
+          backgroundImage: [
+            "radial-gradient(1px 1px at 18% 30%, rgb(var(--c-ink) / .3) 50%, transparent 51%)",
+            "radial-gradient(1px 1px at 72% 18%, rgb(var(--c-ink) / .22) 50%, transparent 51%)",
+            "radial-gradient(1px 1px at 88% 62%, rgb(var(--c-ink) / .18) 50%, transparent 51%)",
+            "radial-gradient(1px 1px at 34% 78%, rgb(var(--c-ink) / .2) 50%, transparent 51%)",
+            "radial-gradient(1.5px 1.5px at 55% 45%, rgb(var(--c-accent) / .25) 50%, transparent 51%)",
+          ].join(", "),
+        }}
+      />
+
+      <h1
+        ref={greetingRef}
+        data-greeting=""
+        className="relative m-0 text-[26px] font-normal tracking-display text-ink"
+      >
+        {greeting()}
+      </h1>
+      <p className="relative m-0 animate-[fadeRise_.6s_ease_both_.6s] text-[14px] text-muted">
+        Ask anything, or hand me a chore. Everything can be undone.
+      </p>
+      {/* gap-x only: each chip already carries a 44px touch height below md, so
+          a vertical gap on top of it would open a canyon between wrapped rows. */}
+      <div className="relative mt-3 flex animate-[fadeRise_.6s_ease_both_.9s] flex-wrap justify-center gap-x-[22px] gap-y-0">
+        {SUGGESTIONS.map((text) => (
+          <button
+            key={text}
+            type="button"
+            onClick={() => onSuggestion?.(text)}
+            className="shrink-0 whitespace-nowrap text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+
+      {header && <div className="relative mt-6 w-full max-w-[420px]">{header}</div>}
+    </div>
+  );
+}
+
+// Time-of-day greeting (prototype: `greeting`). Before 5 the day hasn't started.
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 5) return "Still up?";
+  if (h < 12) return "Good morning.";
+  if (h < 18) return "Good afternoon.";
+  return "Good evening.";
+}
+
+// ---------------------------------------------------------------------------
+// One turn.
+// ---------------------------------------------------------------------------
 interface RowProps {
   message: DisplayMessage;
+  /** What to render — the true content, or the streaming overlay over it. */
+  display: string;
   canRewind: boolean;
   canRetry: boolean;
   onRewindTo: (messageId: string) => void;
@@ -99,6 +264,7 @@ interface RowProps {
 
 function MessageRow({
   message,
+  display,
   canRewind,
   canRetry,
   onRewindTo,
@@ -107,23 +273,27 @@ function MessageRow({
 }: RowProps) {
   const label = SENDER_LABEL[message.role] ?? message.role;
   const isAddison = message.role === "assistant";
-  const showWriting = message.pending && message.content.length === 0;
   const showRaw = showTechnicalDetails && message.failed && Boolean(message.raw);
   // The free-model disclaimer (Phase-2 step 3, contract D5 [S-b]). Renders ONLY
   // when a free model answered a turn the user did not choose it for — both
   // booleans come from the core; the frontend never re-derives `routed`. Not an
   // error, so no danger tone: it's Addison telling you which model replied.
   const showFreeChip = Boolean(message.answeredWith?.free && message.answeredWith?.routed);
+  // Markdown once the turn has settled; plain text while it streams (header).
+  const asMarkdown = isAddison && !message.failed && !message.pending;
+  // Nothing has arrived yet. The blinking block alone would be a shrug; the
+  // honest sentence stays, and the block rides after it (pending copy is kept
+  // word for word from the Fern build).
+  const showWriting = message.pending && display.length === 0;
 
   return (
-    // A gentle opacity fade as each turn arrives (opacity only — never shifts
-    // layout). Disabled wholesale under prefers-reduced-motion (styles.css).
-    <div className="group animate-[fade-in_200ms_ease]">
+    <div className="group shrink-0 animate-[fadeRise_.4s_ease_both]">
       <div className="flex items-baseline justify-between gap-3">
         <span
+          data-scramble-live="140"
           className={
-            "text-label font-semibold uppercase tracking-caps-wider " +
-            (isAddison ? "text-fern-deep" : "text-faint")
+            "text-[11px] font-medium tracking-[.04em] " +
+            (isAddison ? "text-ink" : "text-disabled")
           }
         >
           {label}
@@ -132,51 +302,55 @@ function MessageRow({
           <button
             type="button"
             onClick={() => message.storeId && onRewindTo(message.storeId)}
-            className="text-xs font-medium text-muted opacity-0 transition-opacity hover:text-fern-deep focus:opacity-100 group-hover:opacity-100"
+            className="font-mono text-[10px] text-disabled opacity-0 transition-opacity hover:text-ink focus:opacity-100 group-hover:opacity-100 max-md:opacity-100"
           >
             Rewind to here
           </button>
         )}
       </div>
 
-      {showWriting ? (
-        <p className="mt-1.5 font-serif text-message italic leading-[1.7] text-muted">
-          Addison is writing…
-        </p>
-      ) : isAddison && !message.failed ? (
-        // Assistant answers render as markdown (with mermaid + code highlighting).
-        // The markdown body inherits the serif "correspondence" voice. User input
-        // and failed turns stay plain text — never markdown-render what the user
-        // typed, and keep error copy verbatim.
-        <div className="mt-1.5 font-serif text-message leading-[1.7] text-ink">
-          <Markdown content={message.content} pending={message.pending} />
+      {asMarkdown ? (
+        <div className="mt-2 text-[15.5px] leading-[1.65] text-ink">
+          <Markdown content={message.content} pending={false} />
         </div>
       ) : (
         <p
           className={
-            "mt-1.5 whitespace-pre-wrap font-serif text-message leading-[1.7] " +
-            (message.failed ? "text-danger" : "text-ink")
+            "m-0 mt-2 whitespace-pre-wrap text-[15.5px] leading-[1.65] " +
+            (message.failed
+              ? "text-danger"
+              : showWriting
+                ? "text-muted"
+                : isAddison
+                  ? "text-ink"
+                  : "text-ink-soft")
           }
         >
-          {message.content}
+          <span data-msg-text="1">{showWriting ? "Addison is writing…" : display}</span>
+          {message.pending && (
+            // The block cursor riding the streamed tail (7×14px, blinking).
+            <span
+              aria-hidden="true"
+              className="ml-[3px] inline-block h-[14px] w-[7px] animate-[blink_1.1s_step-start_infinite] bg-ink align-[-1px]"
+            />
+          )}
         </p>
       )}
 
       {showFreeChip && (
-        // Blocky annotation (square edges, 2px left rule, small-caps) — the "live
-        // annotation" shape, matching the Permanent / In-use tags. The DOM text is
-        // the frozen sentence verbatim; CSS small-caps is styling only.
-        <p className="mt-2 border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
+        // A live annotation, not an error: the 2px rule + small label idiom the
+        // rest of the surface uses. The DOM text is the frozen sentence verbatim.
+        <p className="m-0 mt-2.5 border-l-2 border-rail pl-2.5 text-[11px] font-medium tracking-[.04em] text-faint">
           Answered with a free model.
         </p>
       )}
 
       {showRaw && (
-        <details className="mt-2">
-          <summary className="cursor-pointer text-xs font-medium text-muted hover:text-ink-soft">
+        <details className="mt-2.5">
+          <summary className="cursor-pointer font-mono text-[10px] text-disabled transition-colors hover:text-muted">
             Technical details
           </summary>
-          <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded border border-line bg-surface px-3 py-2 font-mono text-xs text-ink-soft">
+          <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap rounded-[5px] border border-line bg-panel px-3 py-2 font-mono text-[10.5px] text-ink-soft">
             {message.raw}
           </pre>
         </details>
@@ -186,7 +360,7 @@ function MessageRow({
         <button
           type="button"
           onClick={onRetry}
-          className="mt-2 text-sm font-medium text-muted hover:text-fern-deep"
+          className="mt-2.5 text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
         >
           Retry this answer
         </button>

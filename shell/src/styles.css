@@ -38,6 +38,9 @@
   --shadow-popover:
     0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 18px 48px rgba(0, 0, 0, 0.18);
   --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.2);
+  /* The composer's model menu — a shallower lift than the anchored popover
+     (design-brief-dark, "Composer model menu"). */
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.14);
 }
 
 .dark {
@@ -63,6 +66,7 @@
   --shadow-popover:
     0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 18px 48px rgba(0, 0, 0, 0.65);
   --shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.6);
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.5);
 }
 
 /* TODO(redesign phase 4): remove legacy aliases.
@@ -141,6 +145,16 @@ textarea::placeholder {
 :focus-visible {
   outline: 2px solid rgb(var(--c-accent));
   outline-offset: 2px;
+}
+
+/* The composer's textarea is the one control that opts out of the ring. It has
+   no box of its own — it is text sitting on the page under a single hairline —
+   so a 2px rectangle around it is a border the design does not have. Focus is
+   still shown, by the thing that was designed to show it: the composer's top
+   rule brightens from `track` to `track-hi` for as long as the row holds focus
+   (Composer.tsx). This removes a duplicate indicator, never the only one. */
+textarea[data-composer]:focus-visible {
+  outline: none;
 }
 
 /* Calm interaction motion — a short color ease on the things you hover, press,
@@ -309,14 +323,19 @@ summary,
 }
 
 /* --------------------------------------------------------------------------
-   Rendered markdown in assistant messages (Markdown.tsx). Retuned to the dark
-   direction's tokens; code and tables are mono on `panel` blocks with `line`
-   hairlines. Phase 2 owns the message body itself — this layer only stops the
-   retired serif from rendering.
+   Rendered markdown in assistant messages (Markdown.tsx). The message row sets
+   the body scale (15.5px / 1.65) and this layer inherits it, so a rendered
+   answer and a plain one are the same voice — headings and code are the only
+   things that step away from it, and they step in em, never in px.
+
+   Code and tables are mono on `panel` blocks with `line` hairlines and small
+   (4–5px) radii: they are machine facts inside a sentence, not floating cards.
    -------------------------------------------------------------------------- */
 @layer components {
   .markdown-body {
     font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: inherit;
+    line-height: inherit;
   }
   .markdown-body > :first-child {
     margin-top: 0;
@@ -393,10 +412,10 @@ summary,
   /* Inline code + fenced blocks: mono on `panel`, hairline border. */
   .markdown-body code {
     font-family: ui-monospace, "SF Mono", Menlo, monospace;
-    font-size: 12px;
+    font-size: 11.5px;
     background-color: rgb(var(--c-panel));
     border: 1px solid rgb(var(--c-line));
-    border-radius: 5px;
+    border-radius: 4px;
     padding: 0.05em 0.35em;
   }
   .markdown-body pre {
@@ -404,11 +423,12 @@ summary,
     padding: 0.75em 0.9em;
     background-color: rgb(var(--c-panel));
     border: 1px solid rgb(var(--c-line));
-    border-radius: 7px;
+    border-radius: 5px;
     overflow-x: auto;
   }
   .markdown-body pre code {
-    font-size: 12px;
+    font-size: 11.5px;
+    line-height: 1.6;
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -425,16 +445,19 @@ summary,
     height: auto;
   }
 
-  /* GFM tables: collapsed hairline grid, quiet small-caps headers. */
+  /* GFM tables: collapsed hairline grid, quiet small-caps headers, mono cells —
+     a table is a grid of machine facts. */
   .markdown-body table {
     margin: 0.75em 0;
     border-collapse: collapse;
-    font-size: 0.95em;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px;
+    background-color: rgb(var(--c-panel));
   }
   .markdown-body th,
   .markdown-body td {
     border: 1px solid rgb(var(--c-line));
-    padding: 0.35em 0.6em;
+    padding: 0.4em 0.7em;
     text-align: left;
     vertical-align: top;
   }

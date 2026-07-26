@@ -1,17 +1,20 @@
-// Widget rail — the right column of the Fern app shell (design-brief-fern README
-// §3, handoff §4). 270px, `paper` background, its own thin-scrollbar scroll.
-// Hideable via the chat header's rail toggle.
+// Widget rail — the right column (DARK direction; docs/design-brief-dark,
+// "Right rail"). 232px, no background of its own, its own hidden-scrollbar
+// scroll. Top to bottom: the "Addison's work" block during and after a task,
+// then hairline-separated rows — the token meter, the stored widgets, whatever
+// connections the core reports — and a footer row that opens the Build-a-widget
+// surface.
 //
-// Order (handoff): YOUR WIDGETS header (+ Edit) → widget cards (pinned stored
-// widgets, then the implicit token meter + connections cards) → overflow tray
-// (unpinned stored widgets) → "＋ Ask Addison to build a widget" → Addison's
-// work → consent card.
+// The Fern cards are gone: a widget is a ROW now (name — spacer — mono value, or
+// name — accent action), separated by 1px `line` top borders, which is the same
+// row anatomy the sidebar and the surfaces use.
 //
 // SAFETY: widgets are DECLARATIVE specs only (agent_core/widgets.py). A routine
 // widget runs a saved routine through the EXISTING run path (its own gates apply
-// at run time); a stat widget DISPLAYS a core-computed value. There is no code,
-// expression, or template anywhere here — the rail only renders specs and calls
-// the typed ipc for actions.
+// at run time); a stat widget DISPLAYS a core-computed value; a command widget's
+// Run goes to the core's widget.run, which re-checks the mode and raises the
+// per-invocation card before anything executes. There is no code, expression, or
+// template anywhere here — the rail only renders specs and calls the typed ipc.
 
 import { useState, type ReactNode } from "react";
 import type { WidgetRunResult } from "../ipc/client";
@@ -34,24 +37,23 @@ interface Props {
   /** The consent card (PermissionCard), when a permission is pending. */
   consent?: ReactNode;
   /**
-   * "rail" is the desktop right column (270px, own scroll). "sheet" is the
+   * "rail" is the desktop right column (232px, own scroll). "sheet" is the
    * narrow-window bottom sheet (BottomSheet supplies the chrome + drag handle):
-   * the same content flows to fill the sheet and scroll within it. On mobile
-   * consent renders inline in the thread, so `consent` is not passed in sheet
-   * mode — the sheet shows widgets + Addison's work only.
+   * the same content flows to fill the sheet and scroll within it. "inline"
+   * flows in the chat thread's own scroll on mobile. On mobile consent renders
+   * inline in the thread, so `consent` is not passed in sheet mode.
    */
   variant?: "rail" | "sheet" | "inline";
   /**
-   * OPEN/Developer mode is active — surface the small blocky "DEV" annotation on
+   * OPEN/Developer mode is active — surface the small "dev" annotation on
    * dev-created items (command widgets, and any widget/routine whose
-   * createdInMode is "open" — the core forwards it on both list responses). In
-   * Simple mode these items are already filtered out by the core, so this stays
-   * false.
+   * createdInMode is "open"). In Simple mode these items are already filtered
+   * out by the core, so this stays false.
    */
   developer?: boolean;
   /** Stored widgets from `widget.list` (routine/stat/command specs). */
   widgets: Widget[];
-  /** Core-computed stats for the token meter + connections cards. */
+  /** Core-computed stats for the token meter + connection rows. */
   stats: Stats | null;
   /** Saved routines (for a routine widget's variable prompts). */
   routines: RailRoutine[];
@@ -67,6 +69,15 @@ interface Props {
 export interface RunOutcome {
   ok: boolean;
   detail: string;
+}
+
+/** One hairline-separated rail row. Everything below is built out of this. */
+function Row({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={"shrink-0 border-t border-line px-0.5 py-[13px] text-[12px] " + className}>
+      {children}
+    </div>
+  );
 }
 
 export function WidgetRail({
@@ -90,9 +101,8 @@ export function WidgetRail({
   const unpinned = widgets.filter((w) => !w.pinned);
 
   const hasUsage = (stats?.tokensMonth.total ?? 0) > 0;
+  const connections = stats?.connections ?? [];
   const isSheet = variant === "sheet";
-  // Inline: flows in the chat thread's own scroll on mobile (no fixed width, no
-  // nested scroll container) so widgets are simply visible on the chat screen.
   const isInline = variant === "inline";
 
   function toggleTray() {
@@ -107,116 +117,128 @@ export function WidgetRail({
     <aside
       aria-label="Your widgets"
       className={
-        "flex flex-col gap-[22px] " +
+        "flex flex-col " +
         (isSheet
-          ? "thread-scroll min-h-0 flex-1 overflow-y-auto pb-4"
+          ? "no-scrollbar min-h-0 flex-1 overflow-y-auto pb-4"
           : isInline
-            ? "w-full pt-1"
-            : "thread-scroll w-[270px] shrink-0 overflow-y-auto py-[30px]")
+            ? "w-full pt-2"
+            : "no-scrollbar h-full w-[232px] shrink-0 overflow-y-auto pb-5 pt-9")
       }
     >
-      <div>
-        <div className="mb-2.5 flex items-baseline justify-between">
-          <p className="text-label font-semibold uppercase tracking-caps-wider text-faint">
-            Your widgets
-          </p>
-          <button
-            type="button"
-            onClick={() => setEditMode((v) => !v)}
-            className="text-fine font-medium text-muted hover:text-ink-soft"
-          >
-            {editMode ? "Done" : "Edit"}
-          </button>
-        </div>
+      {/* The live annotation and the consent card ride at the top of the rail,
+          above the ambient rows — a pending question is never below the fold of
+          a widget list. */}
+      {work}
+      {consent && <div className="shrink-0 pb-5">{consent}</div>}
 
-        <div className="flex flex-col gap-2">
-          {/* Pinned stored widgets. */}
-          {pinned.map((w) => (
-            <WidgetCard
-              key={w.id}
-              widget={w}
-              stats={stats}
-              routines={routines}
-              editMode={editMode}
-              developer={developer}
-              onSetPinned={onSetPinned}
-              onDelete={onDelete}
-              onRunRoutine={onRunRoutine}
-              onRunCommandWidget={onRunCommandWidget}
+      {/* Pinned stored widgets. */}
+      {pinned.map((w) => (
+        <WidgetRow
+          key={w.id}
+          widget={w}
+          stats={stats}
+          routines={routines}
+          editMode={editMode}
+          developer={developer}
+          onSetPinned={onSetPinned}
+          onDelete={onDelete}
+          onRunRoutine={onRunRoutine}
+          onRunCommandWidget={onRunCommandWidget}
+        />
+      ))}
+
+      {/* Core-provided, not stored widgets: the token meter (once any usage
+          exists) and the connection rows (when the core reports any). Neither
+          is ever shown with an invented number. */}
+      {hasUsage && <TokenMeterRow stats={stats} />}
+      {connections.map((c) => (
+        <Row key={c.id}>
+          <div className="flex items-baseline gap-2">
+            <span
+              aria-hidden="true"
+              className={
+                "h-[5px] w-[5px] shrink-0 translate-y-[-2px] rounded-full " + dotClass(c.status)
+              }
             />
-          ))}
+            <span className="min-w-0 truncate text-ink-soft">{c.label}</span>
+            <span className="flex-1" />
+            <span className="shrink-0 font-mono text-[10px] text-muted">{c.detail}</span>
+          </div>
+        </Row>
+      ))}
 
-          {/* Implicit, core-provided cards: the token meter (once any usage exists)
-              and the connections card (always). These are NOT stored widgets. */}
-          {hasUsage && <TokenMeter stats={stats} />}
-          <ConnectionsCard stats={stats} />
+      {/* Overflow: unpinned stored widgets behind one row. */}
+      {unpinned.length > 0 && (
+        <>
+          {trayOpen &&
+            unpinned.map((w) => (
+              <WidgetRow
+                key={w.id}
+                widget={w}
+                stats={stats}
+                routines={routines}
+                editMode={editMode}
+                developer={developer}
+                inTray
+                onSetPinned={onSetPinned}
+                onDelete={onDelete}
+                onRunRoutine={onRunRoutine}
+                onRunCommandWidget={onRunCommandWidget}
+              />
+            ))}
+          <Row>
+            <button
+              type="button"
+              onClick={toggleTray}
+              aria-expanded={trayOpen}
+              className="flex w-full items-baseline gap-2 text-left text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
+            >
+              <span className="min-w-0 truncate">
+                {trayOpen
+                  ? "Show fewer"
+                  : `${unpinned.length} more widget${unpinned.length === 1 ? "" : "s"}`}
+              </span>
+              <span className="flex-1" />
+              <span aria-hidden="true" className="font-mono text-[10px] text-disabled">
+                {trayOpen ? "▴" : "▾"}
+              </span>
+            </button>
+          </Row>
+        </>
+      )}
 
-          {/* Overflow tray: unpinned stored widgets behind a stacked-edge tab. */}
-          {unpinned.length > 0 && (
-            <>
-              {trayOpen &&
-                unpinned.map((w) => (
-                  <WidgetCard
-                    key={w.id}
-                    widget={w}
-                    stats={stats}
-                    routines={routines}
-                    editMode={editMode}
-                    developer={developer}
-                    inTray
-                    onSetPinned={onSetPinned}
-                    onDelete={onDelete}
-                    onRunRoutine={onRunRoutine}
-                    onRunCommandWidget={onRunCommandWidget}
-                  />
-                ))}
-              <div className="relative mt-0.5">
-                {!trayOpen && (
-                  <>
-                    {/* The two offset strips peeking above the tab (prototype §9a). */}
-                    <div className="absolute left-2.5 right-2.5 -top-1 h-2 rounded-t-[8px] border border-line bg-surface" />
-                    <div className="absolute left-1.5 right-1.5 -top-2 h-2 rounded-t-[8px] border border-line bg-hair" />
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={toggleTray}
-                  aria-expanded={trayOpen}
-                  className="relative flex w-full items-center justify-between rounded-card border border-line bg-surface px-[13px] py-[9px] hover:opacity-85 max-md:min-h-[44px]"
-                >
-                  <span className="text-meta font-semibold text-fern-deep">
-                    {trayOpen ? "Show fewer" : `${unpinned.length} more widget${unpinned.length === 1 ? "" : "s"}`}
-                  </span>
-                  <span className="text-tick text-faint">{trayOpen ? "▴" : "▾"}</span>
-                </button>
-              </div>
-            </>
-          )}
-
+      {/* Footer: the way to ask for a new widget, and — only when there is
+          something to edit — the way to unpin or remove one. */}
+      <Row>
+        <div className="flex items-baseline gap-2">
           <button
             type="button"
+            data-scramble="900"
             onClick={onAskBuildWidget}
-            className="rounded-card border border-dashed border-dash bg-transparent px-2.5 py-2 text-center text-fine font-medium text-muted hover:opacity-80 max-md:min-h-[44px] max-md:text-meta"
+            className="text-left text-[12px] text-disabled transition-colors hover:text-muted max-md:min-h-[44px]"
           >
             ＋ Ask Addison to build a widget
           </button>
+          <span className="flex-1" />
+          {widgets.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setEditMode((v) => !v)}
+              className="shrink-0 font-mono text-[10px] text-disabled transition-colors hover:text-muted max-md:min-h-[44px]"
+            >
+              {editMode ? "done" : "edit"}
+            </button>
+          )}
         </div>
-      </div>
-
-      {(work || consent) && (
-        <div>
-          {work}
-          {consent && <div className="mt-3.5">{consent}</div>}
-        </div>
-      )}
+      </Row>
     </aside>
   );
 }
 
 // ---------------------------------------------------------------------------
-// One stored widget card — a routine Run pill or a stat display.
+// One stored widget, as a row.
 // ---------------------------------------------------------------------------
-interface CardProps {
+interface WidgetRowProps {
   widget: Widget;
   stats: Stats | null;
   routines: RailRoutine[];
@@ -229,7 +251,7 @@ interface CardProps {
   onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
 }
 
-function WidgetCard({
+function WidgetRow({
   widget,
   stats,
   routines,
@@ -240,46 +262,44 @@ function WidgetCard({
   onDelete,
   onRunRoutine,
   onRunCommandWidget,
-}: CardProps) {
+}: WidgetRowProps) {
   const spec = widget.spec;
-  const routine = spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
+  const routine =
+    spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
   // A dev-created item: a command widget (inherently OPEN), or anything the core
   // marked created_in_mode="open" (the widget itself, or the routine it runs).
   const isDev =
-    spec.kind === "command" ||
-    widget.createdInMode === "open" ||
-    routine?.createdInMode === "open";
+    spec.kind === "command" || widget.createdInMode === "open" || routine?.createdInMode === "open";
+
   return (
-    <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          {developer && isDev && <DevTag />}
-          {spec.kind === "routine" ? (
-            <RoutineWidgetBody
-              title={spec.title}
-              routine={routine}
-              routineId={spec.routineId}
-              onRunRoutine={onRunRoutine}
-            />
-          ) : spec.kind === "command" ? (
-            <CommandWidgetBody
-              title={spec.title}
-              command={spec.command}
-              onRun={() => onRunCommandWidget(widget.id)}
-            />
-          ) : (
-            <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
-          )}
-        </div>
+    <Row>
+      {developer && isDev && <DevTag />}
+      <div className="flex items-baseline gap-2">
+        {spec.kind === "routine" ? (
+          <RoutineWidgetBody
+            title={spec.title}
+            routine={routine}
+            routineId={spec.routineId}
+            onRunRoutine={onRunRoutine}
+          />
+        ) : spec.kind === "command" ? (
+          <CommandWidgetBody
+            title={spec.title}
+            command={spec.command}
+            onRun={() => onRunCommandWidget(widget.id)}
+          />
+        ) : (
+          <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
+        )}
         {/* Edit affordances: pin toggle (⬤/◯) + remove ✕. In the tray, the pin
             toggle is always shown so an unpinned widget can be re-pinned. */}
         {(editMode || inTray) && (
-          <div className="flex shrink-0 items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-2 pl-1">
             <button
               type="button"
               title={widget.pinned ? "Unpin" : "Pin"}
               onClick={() => onSetPinned(widget.id, !widget.pinned)}
-              className="text-control leading-none text-muted hover:text-fern-deep"
+              className="text-[10px] leading-none text-disabled transition-colors hover:text-ink"
             >
               {widget.pinned ? "⬤" : "◯"}
             </button>
@@ -288,21 +308,21 @@ function WidgetCard({
                 type="button"
                 title="Remove widget"
                 onClick={() => onDelete(widget.id)}
-                className="text-control leading-none text-faint hover:text-danger"
+                className="text-[11px] leading-none text-disabled transition-colors hover:text-danger"
               >
                 ✕
               </button>
             )}
-          </div>
+          </span>
         )}
       </div>
-    </div>
+    </Row>
   );
 }
 
-// A routine widget: name + fern-tint Run pill. When the routine has variables
-// without defaults, a compact inline prompt collects them first (§6.5), exactly
-// like the Routines library.
+// A routine widget: name — accent Run. When the routine has variables without
+// defaults, a compact inline prompt collects them first (§6.5), exactly like the
+// Routines library.
 function RoutineWidgetBody({
   title,
   routine,
@@ -342,57 +362,58 @@ function RoutineWidgetBody({
   }
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-meta font-semibold text-ink">{title}</span>
+    <span className="min-w-0 flex-1">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-ink-soft">{title}</span>
+        <span className="flex-1" />
         <button
           type="button"
           disabled={running}
           onClick={() => void run()}
-          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-fact font-semibold text-fern-deep hover:opacity-85 disabled:opacity-60 max-md:min-h-[44px] max-md:px-5 max-md:text-hint"
+          className="shrink-0 text-[12px] text-accent transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           {running ? "Running…" : "Run"}
         </button>
-      </div>
+      </span>
 
       {filling && (
-        <div className="mt-2.5 rounded border border-line bg-paper p-2.5">
+        <span className="mt-2.5 block rounded-[6px] border border-line bg-panel p-2.5">
           {needsInput.map((v) => (
-            <label key={v.name} className="mb-2 block text-hint font-medium text-ink-soft">
+            <label key={v.name} className="mb-2 block text-[11px] text-ink-soft">
               {v.prompt}
               <input
                 type="text"
                 value={values[v.name] ?? ""}
                 onChange={(e) => setValues((prev) => ({ ...prev, [v.name]: e.target.value }))}
-                className="mt-1 w-full rounded border border-line bg-surface px-2 py-1.5 text-control text-ink"
+                className="mt-1 w-full rounded-[5px] border border-line bg-paper px-2 py-1.5 text-[12px] text-ink outline-none focus:border-track-hi"
               />
             </label>
           ))}
-          <div className="mt-1 flex gap-2">
+          <span className="mt-1 flex gap-4">
             <button
               type="button"
               onClick={() => void run()}
-              className="rounded-sm bg-fern px-3 py-1 text-hint font-semibold text-on-accent hover:bg-fern-deep"
+              className="text-[12px] text-accent transition-colors hover:text-ink"
             >
               Start
             </button>
             <button
               type="button"
               onClick={() => setFilling(false)}
-              className="rounded-sm border border-line bg-surface px-3 py-1 text-hint font-medium text-ink-soft"
+              className="text-[12px] text-muted transition-colors hover:text-ink"
             >
               Cancel
             </button>
-          </div>
-        </div>
+          </span>
+        </span>
       )}
 
       {outcome && (
-        <p className={"mt-2 text-fine " + (outcome.ok ? "text-fern-deep" : "text-ink-soft")}>
+        <span className={"mt-1.5 block text-[11px] " + (outcome.ok ? "text-muted" : "text-ink-soft")}>
           {outcome.detail}
-        </p>
+        </span>
       )}
-    </>
+    </span>
   );
 }
 
@@ -431,54 +452,48 @@ function CommandWidgetBody({
   }
 
   return (
-    <>
-      <div className="flex items-center justify-between gap-2">
-        <span className="min-w-0 truncate text-meta font-semibold text-ink">{title}</span>
+    <span className="min-w-0 flex-1">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-ink-soft">{title}</span>
+        <span className="flex-1" />
         <button
           type="button"
           disabled={running}
           onClick={handleRun}
-          className="shrink-0 rounded-pill bg-fern-tint px-3 py-1 text-fact font-semibold text-fern-deep hover:bg-rule disabled:opacity-45"
+          className="shrink-0 text-[12px] text-accent transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           {running ? "Running…" : "Run"}
         </button>
-      </div>
-      <p
-        title={command}
-        className="mt-1.5 truncate rounded-sm bg-paper px-2 py-1 font-mono text-fine text-ink-soft"
-      >
+      </span>
+      <span title={command} className="mt-1.5 block truncate font-mono text-[10px] text-muted">
         {command}
-      </p>
+      </span>
       {outcome && (
-        <p
+        <span
           title={outcome.detail}
           className={
-            "mt-1.5 truncate font-mono text-fact " +
-            (outcome.ok ? "text-fern-deep" : "text-danger")
+            "mt-1 block truncate font-mono text-[10px] " +
+            (outcome.ok ? "text-muted" : "text-danger")
           }
         >
           {outcome.detail}
-        </p>
+        </span>
       )}
-    </>
-  );
-}
-
-// The blocky "DEV" annotation (design-brief-fern shape rule: blocky = a live
-// annotation Addison is showing you). Square edges, 2px left fern rule, small-
-// caps — marks an item created with developer abilities. Shown in Developer
-// profile only; Simple never sees these items at all (core-filtered).
-function DevTag() {
-  return (
-    <span className="mb-1 inline-block border-l-2 border-fern pl-1.5 text-tag font-semibold uppercase tracking-caps-wide text-fern-deep">
-      Dev
     </span>
   );
 }
 
+// The "dev" annotation — marks an item created with developer abilities. Shown
+// in the Developer/Custom profile only; Simple never sees these items at all
+// (core-filtered). A machine fact about the item, so mono.
+function DevTag() {
+  return (
+    <span className="mb-1 block font-mono text-[10px] tracking-[.04em] text-disabled">dev</span>
+  );
+}
+
 // A stat widget renders one of the three core-computed sources with the widget's
-// own title. The bodies are shared with the implicit token-meter / connections
-// cards below.
+// own title.
 function StatWidgetBody({
   title,
   source,
@@ -494,92 +509,89 @@ function StatWidgetBody({
 }
 
 // ---------------------------------------------------------------------------
-// Stat bodies (shared by stored stat widgets + the implicit cards).
+// Stat bodies (shared by stored stat widgets + the implicit token meter).
 // ---------------------------------------------------------------------------
-function TokenMeter({ stats }: { stats: Stats | null }) {
+function TokenMeterRow({ stats }: { stats: Stats | null }) {
   return (
-    <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
-      <TokenMeterBody title={`Tokens · ${currentMonthLabel()}`} stats={stats} />
-    </div>
+    <Row>
+      <TokenMeterBody title="Tokens this month" stats={stats} scramble="780" />
+    </Row>
   );
 }
 
-function TokenMeterBody({ title, stats }: { title: string; stats: Stats | null }) {
+function TokenMeterBody({
+  title,
+  stats,
+  scramble,
+}: {
+  title: string;
+  stats: Stats | null;
+  scramble?: string;
+}) {
   const total = stats?.tokensMonth.total ?? 0;
   const limit = stats?.tokensMonth.limit ?? null;
-  const value = limit != null ? `${formatTokens(total)} / ${formatTokens(limit)}` : formatTokens(total);
+  const value =
+    limit != null ? `${formatTokens(total)} / ${formatTokens(limit)}` : formatTokens(total);
   const pct = limit ? Math.max(0, Math.min(100, Math.round((total / limit) * 100))) : null;
   return (
-    <>
-      <div className="flex items-baseline justify-between">
-        <SmallCaps>{title}</SmallCaps>
-        <span className="font-mono text-fine text-ink-soft">{value}</span>
-      </div>
-      {/* The 5px fern-on-hair progress bar renders ONLY when a limit exists. */}
+    <span className="flex min-w-0 flex-1 flex-col gap-[9px]">
+      <span className="flex items-baseline justify-between gap-2 text-muted">
+        <span data-scramble={scramble} className="min-w-0 truncate">
+          {title}
+        </span>
+        <span className="shrink-0 font-mono text-[11px]">{value}</span>
+      </span>
+      {/* The bar renders ONLY when the core reports a limit: a fill needs a real
+          denominator, and drawing one against a guessed ceiling would be a
+          fabricated number in a place people read as a budget. */}
       {pct != null && (
-        <div className="mt-2 h-[5px] overflow-hidden rounded-pill bg-hair">
-          <div className="h-full rounded-pill bg-fern" style={{ width: `${pct}%` }} />
-        </div>
+        <span className="block h-[2px] w-full bg-track">
+          <span
+            className="block h-[2px] bg-ink transition-[width] duration-[400ms]"
+            style={{ width: `${pct}%` }}
+          />
+        </span>
       )}
-    </>
-  );
-}
-
-// The implicit connections card carries no title of its own (final design
-// screenshots 2026-07): the dot rows are self-explanatory. A user-saved stat
-// widget still shows its own title via ConnectionsBody's `title`.
-function ConnectionsCard({ stats }: { stats: Stats | null }) {
-  return (
-    <div className="rounded-card border border-line bg-surface px-[13px] py-[11px]">
-      <ConnectionsBody stats={stats} />
-    </div>
+    </span>
   );
 }
 
 function ConnectionsBody({ title, stats }: { title?: string; stats: Stats | null }) {
   const rows = stats?.connections ?? [];
   return (
-    <div className="flex flex-col gap-[5px]">
-      {title && <SmallCaps className="mb-0.5">{title}</SmallCaps>}
-      {rows.length === 0 && <p className="text-fine text-faint">Nothing connected yet.</p>}
+    <span className="flex min-w-0 flex-1 flex-col gap-[7px]">
+      {title && <span className="text-muted">{title}</span>}
+      {rows.length === 0 && <span className="text-[11px] text-disabled">Nothing connected yet.</span>}
       {rows.map((c) => (
-        <div key={c.id} className="flex items-center gap-[7px]">
+        <span key={c.id} className="flex items-baseline gap-2">
           <span
-            className="h-1.5 w-1.5 shrink-0 rounded-pill"
-            style={{ backgroundColor: dotColor(c.status) }}
+            aria-hidden="true"
+            className={
+              "h-[5px] w-[5px] shrink-0 translate-y-[-2px] rounded-full " + dotClass(c.status)
+            }
           />
-          <span className="min-w-0 truncate text-hint text-ink">{c.label}</span>
-          <span className="ml-auto shrink-0 font-mono text-tick text-faint">{c.detail}</span>
-        </div>
+          <span className="min-w-0 truncate text-ink-soft">{c.label}</span>
+          <span className="flex-1" />
+          <span className="shrink-0 font-mono text-[10px] text-muted">{c.detail}</span>
+        </span>
       ))}
-    </div>
+    </span>
   );
 }
 
 function LatencyBody({ title, stats }: { title: string; stats: Stats | null }) {
   const rows = stats?.providerLatency ?? [];
   return (
-    <div className="flex flex-col gap-[5px]">
-      <SmallCaps className="mb-0.5">{title}</SmallCaps>
-      {rows.length === 0 && <p className="text-fine text-faint">No calls yet.</p>}
+    <span className="flex min-w-0 flex-1 flex-col gap-[7px]">
+      <span className="text-muted">{title}</span>
+      {rows.length === 0 && <span className="text-[11px] text-disabled">No calls yet.</span>}
       {rows.map((r) => (
-        <div key={r.provider} className="flex items-center gap-[7px]">
-          <span className="min-w-0 truncate text-hint text-ink">{r.provider}</span>
-          <span className="ml-auto shrink-0 font-mono text-tick text-faint">{r.ms} ms</span>
-        </div>
+        <span key={r.provider} className="flex items-baseline gap-2">
+          <span className="min-w-0 truncate text-ink-soft">{r.provider}</span>
+          <span className="flex-1" />
+          <span className="shrink-0 font-mono text-[10px] text-muted">{r.ms} ms</span>
+        </span>
       ))}
-    </div>
-  );
-}
-
-function SmallCaps({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return (
-    <span
-      className={
-        "text-fact font-semibold uppercase tracking-caps text-faint " + className
-      }
-    >
-      {children}
     </span>
   );
 }
@@ -587,12 +599,12 @@ function SmallCaps({ children, className = "" }: { children: ReactNode; classNam
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
-// fern (running/reachable) · dash-gray (idle) · danger (unreachable). Uses the
-// CSS custom-property channels so it flips with the theme like every token.
-function dotColor(status: string): string {
-  if (status === "running" || status === "reachable") return "rgb(var(--c-fern))";
-  if (status === "unreachable") return "rgb(var(--c-danger))";
-  return "rgb(var(--c-dash))"; // idle
+// Live = `ink` (the same weight the current work step carries), idle = dimmed,
+// unreachable = the rose danger token. Nothing here is a filled pill.
+function dotClass(status: string): string {
+  if (status === "running" || status === "reachable") return "bg-ink";
+  if (status === "unreachable") return "bg-danger";
+  return "bg-disabled"; // idle
 }
 
 // 412000 → "412k", 1_500_000 → "1.5M". Compact machine-fact formatting.
@@ -603,10 +615,6 @@ function formatTokens(n: number): string {
   }
   if (n >= 1_000) return Math.round(n / 1_000) + "k";
   return String(n);
-}
-
-function currentMonthLabel(): string {
-  return new Date().toLocaleDateString(undefined, { month: "long" });
 }
 
 function loadTrayOpen(): boolean {

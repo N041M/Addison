@@ -8,6 +8,7 @@ import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/prot
 import type { DisplayMessage } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
+import { createStreamScramble, isMotionEnabled, type StreamScramble } from "../lib/scramble";
 
 export const WELCOME: DisplayMessage = {
   id: "welcome",
@@ -57,6 +58,46 @@ export function useTurn({
   const [currentActivity, setCurrentActivity] = useState<ActivityUpdate | null>(null);
   const [activities, setActivities] = useState<ActivityUpdate[]>([]);
   const [lastUserText, setLastUserText] = useState<string | null>(null);
+
+  // --- Streamed text: the truth, and the decoration over it -----------------
+  // `messages` always holds the TRUE streamed text — that is what is committed
+  // to state, what a retry/rewind reads, and what lands in the store. The
+  // scramble is a DISPLAY overlay held here: ChatThread renders `streamDisplay`
+  // in place of the pending message's content while it is non-null, and the
+  // moment the turn settles the overlay is dropped and the real content shows.
+  // Scrambled glyphs must never be able to reach the message content — see
+  // `__tests__/streaming.test.tsx`, which pins exactly that.
+  const [streamDisplay, setStreamDisplay] = useState<string | null>(null);
+  const streamRef = useRef<StreamScramble | null>(null);
+  const streamTextRef = useRef("");
+
+  function endStream() {
+    streamRef.current?.stop();
+    streamRef.current = null;
+    streamTextRef.current = "";
+    setStreamDisplay(null);
+  }
+
+  /**
+   * A `conversation.streamChunk` delta arrived. Appends it to the pending
+   * message (the true text) and, when motion is on, feeds the scramble engine
+   * so the tail resolves out of the noise as it lands.
+   */
+  function appendStreamedText(text: string) {
+    if (!text) return;
+    setMessages((prev) => prev.map((m) => (m.pending ? { ...m, content: m.content + text } : m)));
+    if (!isMotionEnabled()) {
+      // Reduced motion / motion off: no overlay at all, so the text just
+      // appends. Cheaper than running an engine that emits the input unchanged.
+      setStreamDisplay(null);
+      return;
+    }
+    streamTextRef.current += text;
+    if (!streamRef.current) {
+      streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame));
+    }
+    streamRef.current.push(streamTextRef.current);
+  }
   // Identifies the turn whose IPC result may still touch shared turn state (the
   // assistant message, isWorking, the activity line). Stop and every new turn
   // reassign it, so a result arriving late from an abandoned turn — the core has
@@ -81,6 +122,7 @@ export function useTurn({
     setCurrentActivity(null);
     setPermission(null);
     setIsWorking(true);
+    endStream();
 
     try {
       // Deliver the *effective* model for the active role. For "local", fall
@@ -169,6 +211,9 @@ export function useTurn({
         currentTurnRef.current = null;
         setIsWorking(false);
         setCurrentActivity(null);
+        // The answer is settled: drop the display overlay so the message shows
+        // its real content (which the result may just have replaced wholesale).
+        endStream();
         // A turn just landed: refresh the sidebar so a new chat's auto-title
         // appears, and adopt the launch conversation as current if we didn't
         // know its id yet. Usage changed too, so refresh the token meter.
@@ -199,6 +244,8 @@ export function useTurn({
     currentTurnRef.current = null;
     setIsWorking(false);
     setCurrentActivity(null);
+    // Stop shows what actually arrived, not a half-scrambled tail of it.
+    endStream();
     setMessages((prev) =>
       prev.map((m) =>
         m.pending
@@ -217,6 +264,7 @@ export function useTurn({
     setCurrentActivity(null);
     setPermission(null);
     setLastUserText(null);
+    endStream();
   }
 
   return {
@@ -230,6 +278,8 @@ export function useTurn({
     currentActivity,
     setCurrentActivity,
     lastUserText,
+    streamDisplay,
+    appendStreamedText,
     handleSend,
     handleRetry,
     handleStop,

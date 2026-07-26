@@ -1,12 +1,17 @@
 // Consent card — the plain-language permission prompt (design-doc §7.4,
-// engineering-spec §4.3; Fern direction: design-brief-fern README §3).
+// engineering-spec §4.3; DARK direction card language — a flat `panel` block
+// with a 1px `rail` border and a 7px radius).
 //
 // Rendered when the Core emits `permission.requestGrant`; blocks the tool call
 // until the user answers. It sits in the widget rail (rail open) or inline in the
 // thread (rail hidden). For the primary personas (54–68, non-technical) the
-// answer must be ONE obvious tap: a big Allow, a plain "Not now", no risk codes
-// or jargon. The tool provides its own plain label (the question) + description
-// (the consequence); we never show a stack trace or a raw tool id.
+// answer must be ONE obvious choice: an accent Allow, a plain "Not now", no risk
+// codes or jargon. The tool provides its own plain label (the question) +
+// description (the consequence); we never show a stack trace or a raw tool id.
+//
+// EVERY SENTENCE HERE IS THE CORE'S, VERBATIM. The redesign changed the skin and
+// nothing else: the question, the consequence and the exact command text are
+// rendered as sent, and both answers stay one press away.
 
 import type { PermissionRequest } from "../types/protocol";
 
@@ -33,29 +38,29 @@ function splitCommand(description: string): { lead: string; command: string | nu
 export function PermissionCard({ request, onRespond }: Props) {
   const { lead, command } = splitCommand(request.description);
   return (
-    <div className="animate-[fade-rise_160ms_ease-out] rounded-card bg-fern-tint px-[15px] py-[13px]">
-      <p className="text-meta font-semibold leading-snug text-ink">{request.label}</p>
-      <p className="mt-1 text-fine leading-relaxed text-ink-soft">{lead}</p>
+    <div className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3">
+      <p className="m-0 text-[12px] font-medium leading-[1.45] text-ink">{request.label}</p>
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-ink-soft">{lead}</p>
       {command && (
         <p
           title={command}
-          className="mt-1.5 truncate rounded-sm bg-surface px-2 py-1 font-mono text-hint text-ink"
+          className="m-0 mt-2 truncate rounded-[4px] bg-paper px-2 py-1 font-mono text-[10.5px] text-ink"
         >
           {command}
         </p>
       )}
-      <div className="mt-2.5 flex flex-wrap items-center gap-3">
+      <div className="mt-3 flex flex-wrap items-baseline gap-5">
         <button
           type="button"
           onClick={() => onRespond(true)}
-          className="rounded-pill bg-fern px-[18px] py-[7px] text-xs font-semibold text-on-accent hover:bg-fern-deep"
+          className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
         >
           Allow
         </button>
         <button
           type="button"
           onClick={() => onRespond(false)}
-          className="text-xs font-medium text-ink-soft hover:text-muted"
+          className="text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
         >
           Not now
         </button>

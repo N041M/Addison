@@ -1,11 +1,19 @@
-// Composer — the message-entry card (Fern direction; design-brief-fern README §2).
+// Composer — the message row at the foot of the chat column (DARK direction;
+// docs/design-brief-dark, "Screens → Composer").
 //
-// A rounded `surface` card with a soft shadow, spanning the full width below the
-// chat column and widget rail. The textarea sits above a row that pairs the
-// model pill (ModelSelector, a muted text button) with the fern Send button;
-// Send flips to Stop while a turn runs. A 12px dim hint sits below the card.
-// Extracted from ChatThread so the message column and rail can scroll between the
-// header and this fixed composer.
+// No card, no border box: a borderless 15px textarea over a single 1px top rule
+// that brightens from `track` to `track-hi` while the row has focus. To its
+// right sit the two controls the person actually reaches for — the model label
+// (mono, opens the per-message menu) and a 30px circle that is Send, and becomes
+// the real Stop while a turn runs. One line of mono microcopy sits under it.
+//
+// It carries NO horizontal padding of its own: `main` supplies the 40px gutter
+// (16px below md), and doubling it was the misalignment phase 1 flagged — the
+// composer row and the thread above it must share one left edge.
+//
+// The Stop control is not in the prototype and is not decoration: the v1 IPC
+// contract has no core-side cancel, so Stop is what lets a person end a turn
+// that is taking too long (useTurn.handleStop). It keeps its aria-label.
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelSelection } from "../hooks/useModelSelection";
@@ -16,14 +24,18 @@ interface Props {
   connected: boolean;
   /** The turn-lifecycle bundle (useTurn): isWorking + Send/Stop handlers. */
   turn: TurnState;
-  /** The model-picker bundle (useModelSelection) for the model pill. */
+  /** The model-picker bundle (useModelSelection) for the model label + menu. */
   models: ModelSelection;
-  /** One-shot prefill from a rewind's edit-and-resend; nothing runs until Send. */
+  /** One-shot prefill (rewind's edit-and-resend, a suggestion chip, a widget
+   * idea); nothing runs until Send. */
   draftSeed?: string | null;
   onDraftSeedUsed?: () => void;
   /** Bump to focus the textarea without prefilling (first-run "say hello" nudge). */
   focusSignal?: number;
 }
+
+/** The textarea grows to this and then scrolls (prototype: max-height 180px). */
+const MAX_TEXTAREA_PX = 180;
 
 export function Composer({
   connected,
@@ -37,19 +49,33 @@ export function Composer({
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // Auto-grow the textarea from one line up to ~8 lines, then scroll. Runs on
-  // every draft change (including the rewind prefill and the post-send reset).
+  // Auto-grow from one line to the cap, then scroll. Runs on every draft change
+  // (including the prefill and the post-send reset).
   function autoGrow(el: HTMLTextAreaElement | null) {
     if (!el) return;
     el.style.height = "auto";
-    const max = 8 * 24; // ~8 lines at the 24px line box below
-    el.style.height = `${Math.min(el.scrollHeight, max)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`;
   }
   useEffect(() => {
     autoGrow(textareaRef.current);
   }, [draft]);
 
-  // Rewind's edit-and-resend: the rewound message's text lands here, once.
+  // The mount-time measurement can land before the stylesheet (or the window's
+  // real width) is settled, and because the effect above only runs when the
+  // draft changes, a wrong first answer would stick for the whole session — a
+  // one-line composer 180px tall. Re-measure once the frame has painted, and
+  // again whenever the window resizes.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => autoGrow(textareaRef.current));
+    const onResize = () => autoGrow(textareaRef.current);
+    window.addEventListener("resize", onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  // A seeded draft lands here, once, and takes focus with it.
   useEffect(() => {
     if (draftSeed != null && draftSeed !== "") {
       setDraft(draftSeed);
@@ -80,24 +106,30 @@ export function Composer({
     }
   }
 
+  const canSend = Boolean(draft.trim()) && !isWorking;
+  const placeholder = !connected
+    ? "Addison's engine isn't connected yet."
+    : isWorking
+      ? "Addison is working…"
+      : "Write to Addison…";
+
   return (
-    // Full-width with 16px side padding below md; the desktop 44px gutters
-    // restore at md. The bottom padding folds in the phone safe-area inset
-    // (0 on desktop, so it stays the plain 20px there).
-    <div className="px-4 pt-3.5 pb-[calc(env(safe-area-inset-bottom)+1.25rem)] md:px-[44px]">
-      <div className="mx-auto w-full max-w-[840px] rounded-card border border-line bg-surface px-3.5 pb-2 pt-2.5 shadow-soft focus-within:border-fern">
+    <div className="relative pb-[calc(env(safe-area-inset-bottom)+22px)]">
+      <div className="mx-auto flex w-full max-w-[840px] items-end gap-2.5 border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-track-hi">
         <textarea
           ref={textareaRef}
+          data-composer=""
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={isWorking}
           rows={1}
-          placeholder={connected ? "Write to Addison…" : "Addison's engine isn't connected yet."}
+          placeholder={placeholder}
           aria-label="Message to Addison"
-          className="block max-h-[192px] w-full resize-none overflow-y-auto bg-transparent px-1 py-0.5 text-body leading-6 text-ink placeholder:text-faint focus:outline-none disabled:opacity-60"
+          className="min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-[10px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
+          style={{ maxHeight: `${MAX_TEXTAREA_PX}px` }}
         />
-        <div className="mt-1.5 flex items-center justify-between gap-x-3 px-1">
+        <div className="flex items-center gap-3 pb-[5px]">
           <ModelSelector
             roles={models.roles}
             cloudModels={models.cloudModels}
@@ -109,32 +141,40 @@ export function Composer({
             onSelectEffort={models.handleSelectEffort}
             disabled={isWorking}
           />
-          <div className="ml-auto">
-            {isWorking ? (
-              <button
-                type="button"
-                onClick={handleStop}
-                className="rounded-sm border border-line bg-surface px-5 py-2 text-action font-semibold text-ink-soft hover:border-danger hover:text-danger max-md:min-h-[44px] max-md:px-6"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={submit}
-                disabled={!draft.trim()}
-                className="rounded-sm bg-fern px-[26px] py-[9px] text-action font-semibold text-on-accent hover:bg-fern-deep disabled:cursor-not-allowed disabled:opacity-50 max-md:min-h-[44px] max-md:px-7"
-              >
-                Send
-              </button>
-            )}
-          </div>
+          {isWorking ? (
+            <button
+              type="button"
+              onClick={handleStop}
+              title="Stop"
+              aria-label="Stop"
+              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border border-track bg-transparent text-[11px] text-disabled transition-colors hover:text-ink max-md:h-11 max-md:w-11"
+            >
+              <span aria-hidden="true">■</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!canSend}
+              title="Send"
+              aria-label="Send"
+              className={
+                "flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border text-[15px] transition-colors duration-200 max-md:h-11 max-md:w-11 " +
+                (canSend
+                  ? "border-accent bg-accent text-on-accent"
+                  : "cursor-not-allowed border-track bg-transparent text-disabled")
+              }
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          )}
         </div>
       </div>
-      {/* The hint line is hidden below md (the mobile shots show none). */}
-      <p className="mx-auto mt-2 hidden max-w-[840px] text-xs text-faint md:block">
-        Press Enter to send. Shift+Enter starts a new line. Addison asks first, and
-        anything it does can be undone.
+      <p
+        data-scramble="960"
+        className="m-0 mx-auto mt-2.5 w-fit text-center font-mono text-[10px] text-ghost"
+      >
+        enter to send · everything can be undone
       </p>
     </div>
   );

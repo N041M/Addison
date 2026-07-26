@@ -191,6 +191,93 @@ export function scrambleElement(el: Element | null | undefined, delayMs = 0): ()
   };
 }
 
+// --- The streaming variant --------------------------------------------------
+// The same language applied to text that is still ARRIVING (design-brief-dark,
+// "Motion → Streaming reply"; prototype.html `send` ~line 475). A ~14-character
+// scrambled window trails the received tail and resolves left→right at ~5
+// characters per 38ms tick, so an answer settles as it lands instead of
+// materialising a paragraph at a time.
+//
+// The property that matters here is the same one `scrambleElement` owes: the
+// display can lag the truth, but it may never INVENT it. So the window's leading
+// edge is clamped to the text actually received — the animation is never a
+// character ahead of the model — and `finish()` lands on the exact string.
+//
+// This engine does NOT touch the DOM. It hands frames to a callback, because the
+// message it decorates is React state: the true text stays in the store and only
+// the *display* is scrambled (useTurn keeps them apart, and a test pins it).
+
+/** Width of the scrambled window trailing the resolved text. */
+export const STREAM_WINDOW_CHARS = 14;
+/** How far the window's leading edge advances per tick. */
+export const STREAM_ADVANCE_CHARS = 5;
+
+export interface StreamScramble {
+  /**
+   * The true text received SO FAR — the whole prefix, not a delta. Passing the
+   * full string each time is what keeps the engine incapable of drifting from
+   * the message it is decorating.
+   */
+  push(received: string): void;
+  /** Tear down without emitting anything further. */
+  stop(): void;
+}
+
+/**
+ * Create a streaming scramble. `onFrame` receives the text to DISPLAY.
+ *
+ * With motion off (module flag or `prefers-reduced-motion`) this is a hard
+ * no-op: no timer is ever scheduled and every `push` emits the received text
+ * unchanged, so the reply simply appends — the same fallback the rest of the
+ * file makes.
+ */
+export function createStreamScramble(onFrame: (display: string) => void): StreamScramble {
+  const pool = POOLS[(Math.random() * POOLS.length) | 0];
+  let received = "";
+  // The window's leading edge, in characters. Everything before
+  // `front - STREAM_WINDOW_CHARS` is resolved; the span between is scrambled.
+  let front = 0;
+  let interval: ReturnType<typeof setInterval> | null = null;
+
+  function stop(): void {
+    if (interval !== null) clearInterval(interval);
+    interval = null;
+  }
+
+  function tick(): void {
+    const n = received.length;
+    // Clamp to `n + window`: at that point the resolved edge has reached the end
+    // of what has arrived, so the leading edge can never run ahead of the text
+    // and then "resolve" characters the model has not sent.
+    front = Math.min(front + STREAM_ADVANCE_CHARS, n + STREAM_WINDOW_CHARS);
+    const resolved = Math.max(0, Math.min(n, front - STREAM_WINDOW_CHARS));
+    let out = received.slice(0, resolved);
+    for (let i = resolved; i < Math.min(n, front); i++) {
+      const c = received[i];
+      // Whitespace passes through, exactly as in the one-shot engine: word and
+      // line shapes hold still while the letters settle.
+      out += /\s/.test(c) ? c : randomFrom(pool);
+    }
+    onFrame(out);
+    // Caught up with everything received: `out` IS the received string, exactly.
+    // Idle rather than spin — the next `push` restarts the loop where it left
+    // off, so a stream that pauses mid-answer resumes instead of jumping.
+    if (resolved >= n) stop();
+  }
+
+  return {
+    push(next: string): void {
+      received = next;
+      if (!isMotionEnabled()) {
+        onFrame(received);
+        return;
+      }
+      if (interval === null) interval = setInterval(tick, TICK_MS);
+    },
+    stop,
+  };
+}
+
 /**
  * The staggered initial-load pass. Each matched element's own
  * `data-scramble` / `data-scramble-live` value is its base delay, plus a 40ms

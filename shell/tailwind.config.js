@@ -138,6 +138,8 @@ export default {
         // Floating chrome only. Both flip with the theme (values in styles.css).
         popover: "var(--shadow-popover)",
         modal: "var(--shadow-modal)",
+        // The composer's model menu (design-brief-dark: 0 12px 32px rgba(0,0,0,.5)).
+        menu: "var(--shadow-menu)",
         // TODO(redesign phase 4): remove legacy aliases.
         soft: "var(--shadow-popover)",
         banner: "var(--shadow-popover)",

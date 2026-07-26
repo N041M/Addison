@@ -68,21 +68,23 @@ export function EndpointProposalCard({ proposal, onDismiss, onAdded }: Props) {
   return (
     <section
       aria-label="Add a model server?"
-      className="animate-[fade-rise_160ms_ease-out] border-t border-line bg-surface px-6 py-4"
+      className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3"
     >
-      <h3 className="text-base font-semibold text-ink">Add a model server?</h3>
+      <h3 className="m-0 text-[12px] font-medium text-ink">Add a model server?</h3>
 
-      <p className="mt-2 font-mono text-fact text-ink-soft break-all">{proposal.baseUrl}</p>
-      <p className="mt-1 text-sm text-muted">Your own server</p>
+      <p className="m-0 mt-2 break-all font-mono text-[10.5px] text-ink-soft">{proposal.baseUrl}</p>
+      <p className="m-0 mt-1.5 text-[12px] text-muted">Your own server</p>
 
-      <p className="mt-2 text-sm text-muted">You asked Addison to add this address.</p>
+      <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">
+        You asked Addison to add this address.
+      </p>
       {proposal.isLocalOrLan && (
-        <p className="mt-1 text-sm text-muted">
+        <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
           This points to your own computer or a device on your network.
         </p>
       )}
 
-      <label className="mt-4 block text-sm font-medium text-ink-soft">
+      <label className="mt-3 block text-[12px] text-muted">
         Paste the server's API key (it stays in your keychain)
         <input
           type="password"
@@ -94,18 +96,18 @@ export function EndpointProposalCard({ proposal, onDismiss, onAdded }: Props) {
             if (status === "error") setStatus("idle");
           }}
           disabled={working}
-          className="mt-1 w-full max-w-md rounded border border-line bg-paper px-3 py-2 text-base text-ink placeholder:text-faint disabled:opacity-60"
+          className="mt-1.5 w-full rounded-[5px] border border-line bg-paper px-2.5 py-2 font-mono text-[12px] text-ink outline-none focus:border-track-hi disabled:opacity-60"
         />
       </label>
 
-      {status === "error" && <p className="mt-2 text-fine text-danger">{error}</p>}
+      {status === "error" && <p className="m-0 mt-2 text-[12px] text-danger">{error}</p>}
 
-      <div className="mt-4 flex gap-3">
+      <div className="mt-3 flex items-baseline gap-5">
         <button
           type="button"
           onClick={() => void add()}
           disabled={working}
-          className="rounded-pill bg-fern px-5 py-2 text-sm font-semibold text-on-accent hover:bg-fern-deep disabled:opacity-50"
+          className="text-[12px] text-accent transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           {working ? "Adding…" : "Add server"}
         </button>
@@ -113,7 +115,7 @@ export function EndpointProposalCard({ proposal, onDismiss, onAdded }: Props) {
           type="button"
           onClick={decline}
           disabled={working}
-          className="rounded-sm px-2 py-2 text-sm font-medium text-muted hover:text-ink-soft disabled:opacity-50"
+          className="text-[12px] text-muted transition-colors hover:text-ink disabled:cursor-not-allowed disabled:text-disabled max-md:min-h-[44px]"
         >
           Not now
         </button>

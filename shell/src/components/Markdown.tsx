@@ -45,7 +45,7 @@ function buildComponents(pending: boolean): Components {
           title={href}
           role="link"
           onClick={(e) => e.preventDefault()}
-          className="text-fern-deep underline"
+          className="text-accent underline"
         >
           {children}
         </a>

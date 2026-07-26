@@ -466,6 +466,8 @@ describe("normalizeCloudModels", () => {
         default: true,
         provider: "anthropic",
         providerLabel: "Anthropic",
+        // Absent on the wire (to_wire omits it) → false, never "probably not".
+        free: false,
       },
     ]);
   });
@@ -476,7 +478,30 @@ describe("normalizeCloudModels", () => {
     expect(normalizeCloudModels({ cloudModels: "nope" })).toEqual([]);
     // No effortLevels -> empty; `name` fills id; label falls back to id; default false.
     expect(normalizeCloudModels({ cloudModels: [{ name: "m1" }, { label: "no id" }] })).toEqual([
-      { id: "m1", label: "m1", effortLevels: [], default: false, provider: undefined, providerLabel: undefined },
+      {
+        id: "m1",
+        label: "m1",
+        effortLevels: [],
+        default: false,
+        provider: undefined,
+        providerLabel: undefined,
+        free: false,
+      },
     ]);
+  });
+
+  // Only the CORE may call a model free — the composer menu's note reads "free"
+  // off this flag and nothing else (CLAUDE.md, Phase-2 step 4: no cloud model
+  // ever claims free; the chip stays Ollama-only). So the parser has to fail
+  // closed on everything that merely LOOKS affirmative: a truthy string is
+  // exactly the shape a sloppy payload would carry, and treating it as free
+  // would put a "costs you nothing" note under a paid model.
+  it("only an explicit boolean true makes a model free", () => {
+    const free = (value: unknown) =>
+      normalizeCloudModels({ cloudModels: [{ id: "m", free: value }] })[0].free;
+    expect(free(true)).toBe(true);
+    for (const junk of [undefined, null, false, "true", "free", 1, {}]) {
+      expect(free(junk)).toBe(false);
+    }
   });
 });

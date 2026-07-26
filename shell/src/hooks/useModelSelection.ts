@@ -381,6 +381,8 @@ export function normalizeCloudModels(result: unknown): CloudModel[] {
       default: obj.default === true,
       provider: typeof obj.provider === "string" ? obj.provider : undefined,
       providerLabel: typeof obj.providerLabel === "string" ? obj.providerLabel : undefined,
+      // Fails closed: only an explicit `true` from the core makes a model free.
+      free: obj.free === true,
     });
   }
   return out;

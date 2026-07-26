@@ -6,10 +6,11 @@
 // that behavior: a late result must never resurrect stopped text or clobber a
 // newer turn's answer, and must not re-enable the composer.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useTurn } from "../hooks/useTurn";
 import { ipc } from "../ipc/client";
+import { setMotionEnabled } from "../lib/scramble";
 
 // The hook only touches ipc.sendMessage on the tested paths; mock the whole
 // module so no Tauri context is needed (RawError is a type — erased at build).
@@ -169,5 +170,102 @@ describe("useTurn race guard", () => {
     expect(assistant.failed).toBeFalsy();
     expect(assistant.pending).toBe(false);
     expect(result.current.isWorking).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Streamed text: the scramble is a DECORATION, and the store never sees it.
+//
+// The streaming animation writes random glyphs into the tail of an arriving
+// answer. If those glyphs could reach the message content, they would reach
+// everything downstream of it: Retry re-sends the last user text but a rewind
+// re-seeds the composer from message content, and the thread's own copy is what
+// a person reads back later. A motion flourish that can put "#%&*" inside a
+// sentence Addison wrote is not a flourish. So the true text and the displayed
+// text are two different values, and this is the test that says so.
+// ---------------------------------------------------------------------------
+describe("streamed text vs. the streaming scramble", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setMotionEnabled(true);
+  });
+
+  const CHUNKS = ["Happy to help — ", "here is where I landed ", "after a first look."];
+  const TRUE_TEXT = CHUNKS.join("");
+
+  function sendAndStream() {
+    const args = makeArgs();
+    const rendered = renderHook(() => useTurn(args));
+    act(() => {
+      rendered.result.current.handleSend("have a look");
+    });
+    act(() => {
+      for (const chunk of CHUNKS) rendered.result.current.appendStreamedText(chunk);
+    });
+    return { args, ...rendered };
+  }
+
+  it("commits the true text to state while the display is still scrambled", () => {
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2); // mid-flight: the window is over the tail
+    });
+
+    // What is COMMITTED is the model's text, byte for byte...
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: true,
+      content: TRUE_TEXT,
+    });
+    // ...and what is DISPLAYED is two ticks' worth of window (5 chars each),
+    // whose contents are still noise rather than the answer's opening words.
+    const display = result.current.streamDisplay!;
+    expect(display).toHaveLength(10);
+    expect(display).not.toBe(TRUE_TEXT.slice(0, 10));
+  });
+
+  it("drops the overlay when the turn settles, so the real answer shows", async () => {
+    const { result } = sendAndStream();
+
+    await act(async () => {
+      deferreds[0].resolve({ text: TRUE_TEXT });
+      await flushMicrotasks();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  it("drops the overlay on Stop, and keeps what actually arrived", () => {
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38);
+      result.current.handleStop();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  it("adds no overlay at all with motion off — the text just appends", () => {
+    setMotionEnabled(false);
+    const { result } = sendAndStream();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
   });
 });
