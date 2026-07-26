@@ -31,9 +31,10 @@ flowchart LR
         direction TB
         SendCmd["send_to_core: validates and relays webview frames"]
         StoreKeyCmd["store_provider_key: write-only key path"]
-        Supervisor["Agent Core supervisor and stdout pump"]
+        Supervisor["agent_process.rs: Agent Core supervisor and stdout pump"]
         Keychain["keychain.rs: provider keys, device keypair"]
         Filesystem["filesystem.rs: pickers, scoped handles, save and delete"]
+        AppBuild["app_build.rs: the build reference a G4 anchor records"]
     end
 
     subgraph core["Agent Core in Python — no OS permissions of its own"]
@@ -54,8 +55,14 @@ flowchart LR
     Snapshots -.->|"Custom anchor: app build reference via shell.appBuildRef"| Supervisor
     Supervisor --> Keychain
     Supervisor --> Filesystem
+    Supervisor --> AppBuild
     StoreKeyCmd --> Keychain
 ```
+
+`shell/src-tauri/src/main.rs` registers exactly those three webview commands and
+spawns the core. There is a fifth module, `updater.rs`, but it is a **nine-line
+comment stub with no code**: `tauri-plugin-updater` is not wired up, and
+auto-update is a **Phase-3** item (see G4 below, where this matters).
 
 What each process may and may not do:
 
@@ -113,11 +120,14 @@ Two boundaries keep this consistent with the trust model:
   clobber a key. A restored provider config re-binds to whatever keys are in the
   keychain by provider id — and if that key is gone, the restore names the affected
   service in plain language rather than pretending it reconnected.
-- **Deletable, except the anchor.** Ordinary snapshots are housekeeping and the user
-  may clear them. The moment a safety guard is **turned off in Custom mode** and saved,
-  an **undeletable anchor** of the last verified-working state is minted — neither user
-  nor model can remove it, and the refusal is enforced by database triggers, not by a
-  `WHERE` clause. Unlike an ordinary snapshot, the anchor also **records the app build
+- **Deletable, except three kinds of row.** Ordinary snapshots are housekeeping and the
+  user may clear them. Three kinds are permanent: the bottom row of the restore walk —
+  `genesis` on an install this launch created, `pre_upgrade` on a database that predates
+  the subsystem — and the **G4 anchor** minted the moment a safety guard is **turned off
+  in Custom mode** and saved (`guards.set` mints it *first*, and refuses the change if
+  it cannot). Neither user nor model can remove any of them, and the refusal is enforced
+  by two `RAISE(ABORT)` database triggers, not by a `WHERE` clause anyone can forget.
+  Unlike an ordinary snapshot, the anchor also **records the app build
   it was minted on** — a short `{"version", "identifier"}` reference fetched from the
   shell via `shell.appBuildRef`, never bytes and never a path (keys still excluded).
   *(Owner decision 2026-07-20: this corrects the earlier "captures the app binary /
@@ -150,15 +160,21 @@ orchestrator (and the outer `JsonRpcServer` that wires everything) knows about a
 three. That boundary is what lets the routine engine replay tool calls through the
 exact same registry and gate as the live loop.
 
+`JsonRpcServer` lives in `main.py` but its handlers do not: it is composed from the
+mixins in `agent_core/rpc/` — one module per method namespace (`conversation`,
+`undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
+`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`), each of which is also
+the sole camelCase mapper at the wire boundary for its own namespace.
+
 ```mermaid
 flowchart TB
-    Server["JsonRpcServer (main.py): IPC, persistence, wiring"]
+    Server["JsonRpcServer (main.py + rpc/ mixins): IPC, persistence, wiring"]
     Orch["Orchestrator: the single fan-in over the three packages"]
 
     subgraph tools["tools/"]
         TR["ToolRegistry: undo check at registration"]
         Tool["Typed tools: calculator, read_file, save_file, ..."]
-        MCP["McpClient: external MCP tools, adapted into the registry"]
+        MCP["McpClient (Phase-2 step 7, not built): external MCP tools"]
     end
     subgraph providers["providers/"]
         MR["ModelRouter: resolve provider per turn + routing strategy"]
@@ -209,11 +225,18 @@ Component by component:
 - **ToolRegistry** — holds the typed tools and enforces the central invariant at
   registration: a tool whose risk tier is not LOW must implement a real `undo()`, or
   registration raises. This single check is the mechanical backbone of the safety
-  model. Mode-scoped safety (owner decision 2026-07-19, `policy.py`): a `dev_only`
-  tool (only `run_command` today) is exempt from that check and lives in the ONE
-  shared registry, but is filtered out of the SAFE view — `visible_tools(mode)`
-  returns it only in OPEN mode, so the Simple profile can neither see nor run it,
-  while routines still share the same registry instance (no second registry).
+  model. Mode-scoped safety (owner decision 2026-07-19, `policy.py`) splits that into
+  **two independent dimensions**, because step 5 needed them apart: `open_only` is
+  *visibility* — the tool is absent from `visible_tools(SAFE)` and refused at dispatch
+  outside OPEN — while `allow_missing_undo` is the *exemption* from the undo check.
+  `dev_only=True` is the alias that sets both, and `run_command` is the only tool that
+  gets it. The harness's `read_project_file` / `write_project_file` are `open_only`
+  **and still undo-enforced**, so a future edit dropping `write_project_file.undo()`
+  fails registration. All of them live in the ONE shared registry, so routines use the
+  same instance (no second registry). Hiding is not enforcing: the SAFE boundary is
+  closed at **dispatch** by `refuse_if_dev_only_outside_open`, called by both the
+  orchestrator turn path and the routine step path *before* the gate and before
+  `execute`, so a `tool_use` naming a hidden id cannot sail through to `get()`.
 - **PermissionGate** — consulted before every tool execution, not just the first, so
   a revoked grant takes effect immediately. It is mode-aware (`authorize`): in SAFE
   mode it prompts for every not-yet-granted tool exactly as before; in OPEN mode it
@@ -222,35 +245,68 @@ Component by component:
   recorded, so approving one destructive command never authorizes a later one, and
   the card names the exact command text each time (`detail`, truncated ~120 chars).
   The gate still runs on every call in both modes. Destructiveness is per-call
-  (`run_command` classifies its own command via a read-only allowlist; any other
-  tool is destructive iff its tier is HIGH). Non-dev tools keep the coarse
-  session-grant model the gate tracks; the consent prompt itself is an IPC round-trip to
-  the webview. The amendment extends the gate along two axes without changing its
-  "runs and logs on every call" guarantee. **Workspace-trust** (Phase-2): when the
-  user grants a project directory, OPEN mode stops *prompting* for destructive calls
-  *inside* that scope (the gate still runs and logs); calls outside the workspace
-  still raise the per-invocation card exactly as today. **Custom mode** (the third
-  profile) makes the gate's *prompting* guards — the destructive card, the auto-grant
-  scope, the workspace boundary, the keyword-gate strictness — user-tunable deep in
-  Settings; the four global floors (G1, G2, G3, and the undeletable-anchor rule —
-  **G4** in `CLAUDE.md` and in code; the two names are the same rule) are never in that
-  panel. A powerful or *armed* action additionally requires a **user-typed keyword
-  prefix** on the message; because it is user-typed, observed content can never supply
-  it, so the keyword gate doubles as a prompt-injection barrier.
+  (`tools/base.call_is_destructive`): a tool may classify its own call, and two do —
+  **`run_command` returns True unconditionally, so every command cards.** The
+  read-only allowlist that used to auto-allow `ls`/`grep`/`git status` was **removed**
+  (`run_command.py`): it was defeated three ways during hardening — a bare newline
+  (`shlex` reads `ls\nrm -rf /` as a lone `ls`), bundled and attached short flags
+  (`grep -rf /etc/passwd`, `grep -f/etc/passwd`), and allowlisted readers that write
+  when given a flag (`file -Cm`) — and a misclassification lands *outside* the G3
+  rollback floor, since an `rm -rf` is not undoable. `write_project_file` also returns
+  True (an overwrite is data loss). With no classifier, a call is destructive iff its
+  tier is HIGH. Non-dev tools keep the coarse session-grant model the gate tracks; the
+  consent prompt itself is an IPC round-trip to the webview.
+
+  Two extensions, neither of which changes the "runs and logs on every call"
+  guarantee. **Workspace-trust** (step 5, shipped) is two separate predicates, and
+  conflating them is the error to avoid. *Confinement* is permission-to-**touch**: a
+  path-bounded tool — one with a non-`None` `affected_path` — is **hard-refused before
+  the gate and before `execute`** when its resolved path is outside every trusted root,
+  LOW and MEDIUM alike. The gate's `trusted` flag is only permission-to-**skip the
+  card**, and by owner decision 2026-07-24 it is set solely for the typed,
+  path-bounded, undoable file tools; **`run_command` always cards**, its
+  `affected_path` being `None` so confinement never governs it either. Routine command
+  steps and command widgets pass `trusted=False` unconditionally, so a stored one-click
+  spec can never skip a card. The path is resolved **once** and handed to `execute` via
+  `ExecutionContext.resolved_path` rather than re-read from `args` — check one path,
+  act on another is the TOCTOU gap. **Custom mode** (the third profile, step 2 —
+  shipped) makes the gate's *prompting* guards user-tunable deep in Settings. Two are
+  built and settings-backed: `destructive_card` (`per_invocation` > `session`) and
+  `auto_grant_scope` (`none` > `non_destructive` > `everything`), a `GuardConfig` that
+  only ever modulates the OPEN path — the defaults are today's OPEN gate byte for byte,
+  which is what lets Simple and Developer keep passing `None`. The four global floors
+  (G1, G2, G3, and the undeletable-anchor rule — **G4** in `CLAUDE.md` and in code; the
+  two names are the same rule) are never in that panel. The **keyword gate** for
+  powerful or *armed* actions is Phase-2 **step 8 and not built**; when it lands, the
+  prefix will be user-typed, so observed content can never supply it and the gate
+  doubles as a prompt-injection barrier.
 - **UndoManager** — records an action snapshot per mutating tool call and reverses
   the most recent ones on request, and separately truncates message history for a
   conversational rewind. The two mechanisms are independent.
 - **ModelRouter** — resolves which provider handles a request from an explicit role
   (PRIMARY, LOCAL, SETUP_ASSISTANT) and an optional model name. Multiple roles and
-  several models per role can be configured and reachable at once. The amendment adds a
-  bounded **routing strategy** layer over this substrate (Phase-2): four named
-  strategies — **quality-first** (default; strongest capable model, degrade down on
-  unavailability/rate-limit/budget), **cost-first**, **local-only** (never leaves the
-  machine), and **balanced** — plus a Developer-only **custom** builder. The companion
-  surface exposes only a single "prefer quality / prefer free" toggle. Routing is
-  strong-first by default, degrades gracefully with a plain-language note and a light
-  per-provider cooldown instead of hammering a failing endpoint, and shows an
-  "answered with a free model" disclaimer whenever a free model responds.
+  several models per role can be configured and reachable at once. Phase-2 step 3
+  **shipped** a bounded **routing strategy** layer beside this substrate — deliberately
+  beside, not on it: `resolve_chain(strategy, candidates, head_model_id, custom_order)`
+  is a pure module function in `providers/router.py` that orders `RoutingCandidate`s,
+  and the attempt loop (cooldown, per-turn deadline, mid-turn advance) is orchestrator
+  machinery. Three named strategies plus a Developer/Custom ordered chain:
+  **quality_first** (the default; strongest capable model, degrade down),
+  **cost_first**, **local_only** (no model call leaves the machine — resolved before
+  the Setup-Assistant relay branch, and enforced upstream in `rpc/conversation.py` as
+  well as in the chain), and **custom**. **`balanced` was cut from v1** (owner decision
+  2026-07-24, amendment §10.1: at two-model pools it was provably identical to
+  cost-first). The head of every chain is the user's standing default, so a strategy
+  orders only the tail and never overrides a deliberate pick; the companion surface
+  exposes a single "prefer quality / prefer free" toggle over the same setting. The
+  turn falls forward **only** on `ProviderUnavailable` — the structured exception
+  hierarchy in `providers/base.py` (`ProviderUnavailable` /
+  `ProviderRequestRejected` / `ProviderAuthFailed`, all `RuntimeError` subclasses so
+  every existing handler still catches them) is what keeps a bad request or a bad key
+  from being amplified across the whole chain. Degrading emits a plain-language note,
+  cools the failed provider (in-memory, a module constant), and an "Answered with a
+  free model." chip appears when a free model answered *and* routing rather than the
+  user chose it.
 - **Providers** — one adapter per backend. `AnthropicProvider`, `OpenAIProvider`, and
   `GoogleProvider` are cloud providers (multi-provider, owner decision 2026-07-18);
   `OpenAIProvider` also backs an OpenAI-compatible **custom server** via a `base_url`
@@ -264,6 +320,21 @@ Component by component:
   one tiny request, then registers the provider's models. Non-secret connection
   metadata (connected, added date, custom base URL) lives in `provider_config`;
   `provider.list`/`connect`/`disconnect` responses never carry key material.
+  Anthropic and Google validate against their own fixed endpoints (`GET /v1/models`,
+  `GET /v1beta/models`). The **OpenAI-compatible** `GET {base}/v1/models` is different,
+  because a custom server's base URL points wherever the user — or, via the
+  add-by-prompt card, a model-influenced utterance — says, so it is issued through
+  **`agent_core/net_vetting.py`**: the pinned-request mechanism factored out of
+  `read_web_page` in step 4 so the two flows share one defence instead of growing a
+  weaker copy. Resolve the name, vet the **resolved IP**, connect to the vetted address
+  with the name in `Host` and TLS SNI, follow no redirects, and re-vet every hop. The
+  vetting *decision* is a parameter, so a LAN endpoint (private addresses and any port
+  allowed) and the public web share one mechanism and differ only in that argument;
+  rebinding and the redirect gap are closed either way, and the pin drops credential
+  headers the moment a redirect leaves the origin they were aimed at. Adding an
+  endpoint by prompting is a propose/confirm pair (`endpoint.proposeFromConversation`,
+  `endpoint.confirmAdd`) whose fields are core-derived or canned — never
+  model-authored — and it ends in the same `provider.connect`.
 - **RoutineBuilder / RoutineLibrary / RoutineEngine** — build a declarative plan from
   a recent conversation, store and list saved routines, and replay a plan's steps
   through the shared gate and registry. Mode-scoped safety (`policy.py`): a plan step
@@ -276,19 +347,24 @@ Component by component:
   each provider call the orchestrator's `on_usage` hook records a `usage_log` row
   (tokens + latency) at that single choke point; `stats.get` derives the token meter
   and per-provider latency from it. Widgets themselves are **declarative specs**
-  (`agent_core/widgets.py`), validated at save *and* at render, never eval'd. The
-  amendment makes widgets **buildable in every mode** and gates the *capability* a
-  widget may use rather than whether one can be built (Phase-2). SAFE draws from a
-  **non-destructive vocabulary** — the existing launchers (routine / stat / command)
-  plus interactive display kinds (to-do/checklist, note, counter, timer) rendered by
-  trusted Addison components over safe backing storage, with no arbitrary code, so
-  SAFE-1 and the webview CSP still hold. Higher tiers (Developer / Custom) add
-  code-backed / system-capable widgets governed by workspace-trust, per-tool `undo()`,
-  the snapshot floor, and the keyword gate. A widget can never exceed its mode's
-  capability tier; `created_in_mode` continues to hide higher-tier widgets under the
-  Simple profile. They are proposed like routines (draft held in the core, saved only
-  on an explicit confirm) and stored in the `widgets` table.
-- **McpClient** — Addison as an MCP **client**, not a server or gateway (Phase-2). It
+  (`agent_core/widgets.py`), validated at save *and* at render against the current
+  policy mode, never eval'd. Today's vocabulary is three kinds: the launchers
+  `{kind:"routine", routineId, title}` and `{kind:"stat", source, title}` (source from
+  the fixed whitelist `tokens_month` / `provider_latency` / `connections`) in both
+  modes, plus `{kind:"command", command, title}` in OPEN only — rejected at save and
+  hidden at render under SAFE, and stored `created_in_mode='open'` so it never surfaces
+  while Simple is active. There is no eval, no expression field and no template field,
+  and a routine id is matched against a plain-slug pattern so a spec cannot smuggle an
+  expression through it. Widgets are proposed like routines (draft held in the core,
+  saved only on an explicit confirm) and stored in the `widgets` table.
+  **Phase-2 step 6, not built yet:** the amendment makes widgets buildable in every
+  mode and gates the *capability* a widget may use rather than whether one can be
+  built, adding SAFE-tier interactive kinds (to-do/checklist, note, counter, timer)
+  rendered by trusted Addison components over safe backing storage, and code-backed /
+  system-capable kinds at the higher tiers governed by workspace-trust, per-tool
+  `undo()`, the snapshot floor, and the keyword gate.
+- **McpClient** *(Phase-2 step 7 — not built; nothing in `agent_core/` implements this
+  yet)* — Addison as an MCP **client**, not a server or gateway. It
   connects to external MCP servers and surfaces their tools through the **existing
   ToolRegistry and PermissionGate** — never a side channel, so MCP tools are gated,
   logged, and undo-aware like any native tool. It is mode-scoped: OPEN runs them under
@@ -307,5 +383,16 @@ Component by component:
   whole configuration. They are complementary and never call each other, which is why
   the verbs differ — capture / restore / mint_anchor / prune, never record / undo_last.
 - **Store** — the SQLite access layer. It reads and writes the transcript, action
-  snapshots, routines, usage, widgets, settings, and app-state snapshots; it holds no
-  secrets, since keys live only in the keychain.
+  snapshots, routines, usage, widgets, skills, settings, provider config, workspace
+  trust, and app-state snapshots; it holds no secrets, since keys live only in the
+  keychain. All SQLite access is confined to the server's single worker thread.
+- **Outward reach** — `read_web_page` (`agent_core/tools/read_web_page.py`) is LOW,
+  read-only and in the Simple tool set, and it is the first SAFE tool that sends a
+  request to an address the *model* picks. Every URL and every redirect hop is vetted
+  by resolved IP and the connection is pinned to the address that was vetted
+  (`net_vetting.py`), closing SSRF and DNS-rebinding. Outward reach is bounded by
+  **visibility, not per-site grants** (owner decision 2026-07-20): the tool's
+  `permission_detail` names the **host only** — never a path or query string, which
+  could carry data outward and would land in the Activity Panel and in any screenshot
+  of it — and the panel shows that host on every granted call, in both modes and on
+  the routine path too.

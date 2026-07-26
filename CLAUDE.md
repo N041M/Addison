@@ -56,11 +56,15 @@ truth, there is no separately-persisted mode (`agent_core/policy.py`,
   no gate* — the gate still runs (and logs) on every call.
 - **Custom profile → a user-tuned surface** (scope amendment 2026-07-20; deep in
   Settings, behind extra confirmation). The user may loosen/tighten the *prompting*
-  guards (per-invocation destructive card, auto-grant scope, the workspace-trust
-  boundary, keyword-gate strictness) — **never** the global floors. Turning any
-  guard OFF and saving mints an **undeletable snapshot anchor** (which records the
-  app build it was minted on — see G4), so weakening safety always leaves a
-  guaranteed way back.
+  guards — **never** the global floors. **TWO guards exist** (`GuardConfig`,
+  `policy.py`): the per-invocation destructive card, and the auto-grant scope. The
+  amendment also describes a workspace-trust dial and a keyword-gate dial; neither
+  is built, and the panel grows them **as those capabilities land, never before** —
+  a toggle that controls nothing, in a safety panel, is a lie in the worst possible
+  place. (Workspace trust today is granted and revoked per folder, not dialled; the
+  keyword gate is Phase-2 step 8 and does not exist.) Turning any guard OFF and
+  saving mints an **undeletable snapshot anchor** (which records the app build it
+  was minted on — see G4), so weakening safety always leaves a guaranteed way back.
 
 Organizing principle (amendment): **reversible data/config** (endpoints, models,
 guards, skills, widgets, routines — all snapshotted and one-action reversible) vs.
@@ -380,10 +384,17 @@ replay tool calls through the exact same registry + gate as the live loop.
 - **IPC types are hand-synced**: keep `agent_core/protocol.py` and
   `shell/src/types/protocol.ts` in lockstep (codegen is Phase 3, not v1).
 
-## Build order (spec §11 — build in sequence, each independently testable)
+## Build order
 
-Done: (1) schema + dataclasses, (2) `ToolRegistry` + undo check + calculator,
-(3) `PermissionGate`. Also shipped past the numbered sequence: the UI wave, and
+**The v1 sequence (spec §11, steps 1–11) is complete and merged**: schema +
+dataclasses, `ToolRegistry` + the undo check, the `PermissionGate`,
+`AnthropicProvider` + `ModelRouter` + the orchestration loop, the remaining tools
+and their `undo()`, the `UndoManager`, the Tauri shell + IPC, Routines, the Setup
+Assistant relay, Ollama + the full router, and Profiles. **No file is marked
+`TODO(step N)` any more** — that sequence now records the order the system was
+built in, not work outstanding. The live sequence is the **Phase-2 order** below.
+
+Also shipped past the numbered sequence: the UI wave, and
 the **widget rail** — declarative routine/stat widgets
 (`agent_core/widgets.py`, invariant 7) plus the `usage_log` token/latency
 substrate (§4.8) that feeds the token meter + connections rows. The wave is
@@ -398,23 +409,15 @@ retired. The features themselves were restyled, never de-wired.)* Also shipped:
 the **mode-scoped safety backend** (owner decision 2026-07-19, `agent_core/policy.py`)
 — the SAFE/OPEN split derived 1:1 from the profile, `run_command` (dev-only),
 mode-aware `ToolRegistry.visible_tools` + `PermissionGate.authorize`, routine/widget
-`command` kinds + `created_in_mode` hiding. The **frontend PR is next**: Settings
-copy for the two profiles/modes (honest about what OPEN relaxes and the two GLOBAL
-invariants that never do), the auto-grant/destructive-prompt UI, and rendering the
-`mode` field now carried on `profile.get`/`profile.set`.
+`command` kinds + `created_in_mode` hiding — together with the frontend that goes
+with it: Settings copy for the profiles and modes (honest about what OPEN relaxes
+and the global floors that never do), the auto-grant/destructive-prompt UI, and the
+`mode` field carried on `profile.get`/`profile.set`.
 
-Next: (4) `AnthropicProvider` + minimal `ModelRouter` + orchestration loop,
-**CLI-only** — get a working chat-with-tools loop before touching the shell.
-Then (5) remaining tools + their `undo()`, (6) `UndoManager`, (7) Tauri shell +
-IPC, (8) Routines, (9) Setup Assistant relay, (10) Ollama + full router, (11)
-Profiles — the Simple/Developer split, which now ALSO derives the policy mode
-(policy.py): Developer = OPEN mode reshapes the visible tool set and the gate's
-prompting, but NEVER the global floors. The permission gate is mode-aware
-(`authorize`), not profile-blind — the earlier "never the permission gate"
-framing is superseded by the mode-scoped model above.
-
-Most files past step 3 are stubs marked `TODO(step N)` pointing at the spec
-section — implement them in order, not opportunistically.
+Profiles (step 11) also derive the policy mode (`policy.py`): Developer = OPEN mode
+reshapes the visible tool set and the gate's prompting, but NEVER the global floors.
+The permission gate is mode-aware (`authorize`), not profile-blind — the earlier
+"never the permission gate" framing is superseded by the mode-scoped model above.
 
 Also shipped alongside step 1: **`read_web_page`** (`agent_core/tools/read_web_page.py`)
 — LOW, read-only, in the **Simple** tool set, because answering *from* a page rather
@@ -485,7 +488,9 @@ Routine steps and command widgets pass `trusted=False` unconditionally), (6)
 **widget capability tiers + expanded safe vocabulary** (to-do/checklist, note,
 timer), (7) **MCP client** tools via the registry + gate, (8) the **automation
 keyword gate** + author-OS-run automation.
-Steps 3–4 (companion) can run in parallel with 5–8 once 1–2 land.
+**Steps 1–5 are built; 6, 7 and 8 are what remains**, and they are independent
+enough to be taken in any order — 6 is companion-facing, 7 and 8 add capability
+through the existing registry + gate.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 

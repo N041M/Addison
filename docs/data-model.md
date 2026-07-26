@@ -5,9 +5,11 @@
 > Adds the guaranteed-rollback floor (G3) and its **snapshot** store (auto + on-command,
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server
-> config. Column names for the new tables are Phase-2 and marked as tentative below;
-> the shapes are authoritative, the exact names are not yet frozen — **except
-> `config_snapshots`, which shipped in Phase-2 step 1 and is final.**
+> config. **`config_snapshots` (step 1) and `workspace_trust` (step 5) have shipped and
+> their DDL is final.** `mcp_servers` and the widget capability columns have not been
+> built; they are sketches, called out as such where they appear, and are deliberately
+> absent from the ER diagrams, which show only what `agent_core/memory/schema.sql`
+> actually creates.
 
 Addison's local state is a single SQLite database on the user's device, created from
 `agent_core/memory/schema.sql` on first open. All timestamps are unix epoch seconds.
@@ -64,6 +66,7 @@ erDiagram
         INTEGER updated_at
         INTEGER run_count
         INTEGER last_run_at
+        TEXT created_in_mode "safe or open - hides OPEN routines under Simple"
     }
     routine_runs {
         TEXT id PK
@@ -87,11 +90,16 @@ erDiagram
   reopening a conversation keeps the assistant's prose but not its tool plumbing —
   replaying persisted tool rows would send unpaired tool results and the provider
   would reject the next turn.
-- **memory_facts** — the second tier of memory: durable facts written only on explicit
-  user confirmation (`confirmed_by_user`), never silently.
+- **memory_facts** — the second tier of memory: durable facts to be written only on
+  explicit user confirmation (`confirmed_by_user`), never silently. **Inert today** —
+  the table is created, but `Store` has no method that reads or writes it, so nothing
+  in the running app touches it yet.
 - **routines** — saved declarative plans. `plan_json` holds the ordered, DAG-shaped
   step plan; by construction it never contains code. `run_count` and `last_run_at`
-  track usage.
+  track usage. `created_in_mode` (`safe` | `open`) records the policy mode the routine
+  was saved under: a routine created in OPEN is hidden from `routine.list` and refused
+  by `routine.run` while the Simple profile is active, and returns untouched in
+  Developer.
 - **routine_runs** — the run log behind "show what you just did", one row per run with
   a `status` constrained to `running`, `completed`, `failed`, or `cancelled` and a
   JSON step log.
@@ -115,16 +123,30 @@ erDiagram
         INTEGER granted_at
         TEXT scope_details
     }
+    workspace_trust {
+        TEXT root PK "canonical absolute directory path"
+        INTEGER granted_at
+    }
     device_identity {
         INTEGER id PK "singleton, id = 1"
         TEXT device_id
         INTEGER created_at
     }
     provider_config {
-        TEXT role PK "primary, local, setup_assistant"
-        TEXT provider_id
-        TEXT config_json
+        TEXT provider_id PK "anthropic, openai, google or custom"
+        INTEGER connected
+        INTEGER added_at
+        TEXT base_url "custom OpenAI-compatible server only"
+        TEXT catalog_json "optional cached model catalog"
+        INTEGER last_check_ok
         INTEGER updated_at
+    }
+    skills {
+        TEXT id PK
+        TEXT name
+        TEXT instructions
+        INTEGER enabled
+        INTEGER created_at
     }
     app_settings {
         TEXT key PK
@@ -145,15 +167,11 @@ erDiagram
         TEXT binary_ref "app build reference, anchors only; NEVER bytes"
         TEXT created_in_mode "safe, open or custom - DISPLAY ONLY"
     }
-    mcp_servers {
-        TEXT id PK
-        TEXT label
-        TEXT transport "stdio or http; Phase-2"
-        TEXT config_json "command/base URL, non-secret; Phase-2"
-        INTEGER enabled
-        INTEGER added_at
-    }
 ```
+
+`config_snapshots` also carries two `RAISE(ABORT)` triggers
+(`trg_config_snapshots_permanent_no_delete`,
+`trg_config_snapshots_permanent_stays_permanent`) — see the permanence note below.
 
 - **action_snapshots** — the backing store for action undo. Each row records what a
   mutating tool did (`undo_payload`, tool-specific JSON) so `UndoManager` can reverse
@@ -168,27 +186,55 @@ erDiagram
   session. If grants ever persist, restore must **intersect** them, never replace.) A
   restore additionally clears the live in-session grants, so the session is never more
   permissive than the config it just rolled back to.
-- **device_identity** — a single-row table (`id = 1`) holding the public device id.
-  The matching ed25519 private key lives only in the OS keychain, never here.
-- **provider_config** — non-secret per-role provider configuration (selected model
-  name, Ollama base URL, and the like). `role` is constrained to `primary`, `local`,
-  or `setup_assistant`. Multiple roles can be populated at once. API keys are never
-  stored in this table. *(Phase-2, amendment §10):* this table also carries the
-  non-secret routing/availability metadata a strategy needs — the provider's cost/tier
-  hints, a `free`/legit-free flag (so the "answered with a free model" disclaimer can
-  fire), and light **cooldown** bookkeeping (a `cooldown_until`-style marker) so a
-  degrade-down strategy can skip a rate-limited endpoint instead of hammering it.
-  Endpoints added by prompting (§6.2) land here exactly like a normal provider; it is
-  reversible, snapshotted config.
-- **app_settings** — a generic non-secret key/value store. Notably it holds
-  `active_profile` — now one of `simple`, `developer`, or **`custom`** (default
-  `simple`; the amendment §7 adds Custom, a user-tuned surface reached deep in
-  Settings). It also holds the **routing** choice (*Phase-2, amendment §10*): a
-  `routing_strategy` key (`quality_first` | `cost_first` | `local_only` | `balanced` |
-  `custom`, default `quality_first`) plus the companion's simpler **prefer-quality /
-  prefer-free** toggle, and the Custom profile's per-guard **prompting** toggles (the
-  floors G1/G2/G3 and the anchor rule are never keys here — they cannot be switched
-  off). Never holds secrets.
+- **workspace_trust** *(step 5 — **built**)* — the directories the user has trusted for
+  the OPEN-mode coding harness, one row per root. `root` is canonicalized (`realpath`)
+  at grant time, so the confinement check (`rpc/workspace.is_trusted`) compares
+  realpath against realpath. Inside a trusted root a typed, path-bounded, undoable file
+  edit skips the per-change card; the edit is still logged and reversible, and
+  `run_command` still cards every time (its `affected_path` is `None`, so confinement
+  never governs it). Addison's own data directory can never be a trusted root — the
+  floor is `policy.workspace_trust_allows`, applied both at grant time and at
+  authorize time. **Excluded from every snapshot** on the `tool_grants` precedent:
+  trust is standing consent, and a restore that reinstated a revoked trust would be a
+  privilege grant delivered by the ungated one-action restore button.
+- **device_identity** — a single-row table (`id = 1`) intended to hold the public
+  device id, with the matching ed25519 private key only in the OS keychain, never here.
+  **Inert today**: `Store` has no method that reads or writes it — the relay's device
+  identity is served straight from the keychain via `keychain.getDeviceKey`.
+- **provider_config** — non-secret per-**provider** connection metadata. The primary
+  key is `provider_id`, constrained to `anthropic`, `openai`, `google`, or `custom`
+  (owner decision 2026-07-18 — several providers connected at once, one picker union);
+  `connected` and `last_check_ok` record how `provider.connect`'s validation request
+  went, `added_at` when the key was first connected, `base_url` is the custom
+  OpenAI-compatible server's address (the one permitted `http://` case), and
+  `catalog_json` an optional cached model catalog. API keys are never stored here.
+  Endpoints added by prompting (amendment §6.2) land here exactly like a normal
+  provider, through `endpoint.confirmAdd` → `provider.connect` — reversible,
+  snapshotted config. It carries **no** routing metadata: a model's `quality_rank` and
+  its `free` flag come from the code catalog (`agent_core/models_catalog.py`), and the
+  per-provider **cooldown** is in-memory in the orchestrator (a module constant, not a
+  column), so nothing persisted can shrink or extend it.
+- **app_settings** — a generic non-secret key/value store. The keys actually written
+  today are `active_profile` — one of `simple`, `developer`, or **`custom`** (default
+  `simple`; amendment §7 adds Custom, a user-tuned surface reached deep in Settings) —
+  the routing pair `routing_strategy` / `routing_custom_chain` (`rpc/routing.py`), the
+  Custom profile's two prompting guards `guard_destructive_card` /
+  `guard_auto_grant_scope` (`rpc/guards.py`), and the `widgets_seeded` latch. The
+  routing vocabulary is `quality_first` | `cost_first` | `local_only` | `custom`,
+  default `quality_first` — **`balanced` was cut from v1** (owner decision 2026-07-24,
+  amendment §10.1: at two-model pools it was indistinguishable from cost-first). The
+  companion's **prefer-quality / prefer-free** toggle is a *surface* over the same key,
+  not a key of its own — `routing.get` returns a `surface` field (`"toggle"` under
+  Simple, `"full"` under Developer/Custom). The floors G1–G4 are never keys here; they
+  cannot be switched off. Never holds secrets.
+- **skills** — guidance skills (owner-directed 2026-07-20): a named plain-text note the
+  person writes to steer *how* Addison approaches tasks. When `enabled`, the text is
+  appended to the **transient** per-turn system prompt, never persisted into the
+  transcript. A skill is not executable — no tool, no routine, no code field — so it
+  respects SAFE-mode invariant 1, and it can never widen what Addison may *do*: the
+  registry and gate stay the sole authority. It therefore applies in both modes and has
+  no `created_in_mode` column. `idx_skills_enabled` backs the hot read path, since every
+  non-setup turn composes the enabled skills into its prompt.
 - **config_snapshots** *(Phase-2 step 1 — **built**; amendment §3, spec §4.9)* — the
   backing store for the **G3 guaranteed-rollback floor**, distinct from `action_snapshots`
   (which reverses one tool call; this restores whole-app *configuration*). The column names
@@ -327,9 +373,13 @@ erDiagram
   - **Keys never enter a snapshot** (G1): the captured tables cannot hold key material, and
     the keychain is untouched by capture *and* restore, so a rollback can never move, expose,
     or clobber a key. A restored provider config re-binds to whatever key is in the keychain
-    by provider id; if that key is gone, the restore says so by name. Also never captured:
-    the transcript, `usage_log`, `action_snapshots`, `routine_runs`, `device_identity`,
-    `tool_grants`, and this table itself — a restore must never rewrite the way back.
+    by provider id; if that key is gone, the restore says so by name. Also never captured
+    (`scope.py`'s `_EXCLUDED_TABLES`, each with its stated reason): the transcript
+    (`conversations`, `messages`), `memory_facts`, `usage_log`, `action_snapshots`,
+    `routine_runs`, `device_identity`, `tool_grants`, **`workspace_trust`**, and this
+    table itself — a restore must never rewrite the way back. A handful of `app_settings`
+    keys are one-way latches rather than reversible config and survive the replace-all
+    restore (`_PRESERVED_SETTING_KEYS`, `widgets_seeded` today).
 
   **`created_in_mode` never hides a snapshot** *(a deliberate override, step 1)*. The
   engineering spec's provisional DDL commented that this column "mirrors existing artifact
@@ -339,8 +389,9 @@ erDiagram
   finds an empty list. Snapshots are recovery machinery, not artifacts. Two tests hold the
   line — a behavioural one and a **source-level** one that reads the SQL in `store.py` and
   `snapshot_manager.py` and fails if the column ever appears in a filter position.
-- **mcp_servers** *(Phase-2, amendment §8.5)* — non-secret configuration for external **MCP
-  servers Addison consumes as a client** (Addison is never an MCP server/gateway). Shaped
+- **mcp_servers** *(Phase-2 step 7 — **not in `schema.sql` yet**; amendment §8.5)* — the
+  planned home for non-secret configuration of external **MCP servers Addison consumes as
+  a client** (Addison is never an MCP server/gateway). Column names are a sketch. Shaped
   like a provider row: a label, the transport, and non-secret connection metadata
   (`config_json` — the launch command or base URL). Any credential an MCP server needs is
   stored in the **OS keychain per G1**, never in this table. Connecting a server is
@@ -369,11 +420,10 @@ erDiagram
     widgets {
         TEXT id PK
         TEXT spec_json
-        TEXT required_capabilities "declared caps -> tier gate; Phase-2"
-        TEXT created_in_mode "safe, open, or custom"
         INTEGER pinned
         INTEGER position
         INTEGER created_at
+        TEXT created_in_mode "safe or open"
     }
 ```
 
@@ -387,22 +437,26 @@ erDiagram
   (`agent_core/widgets.py`), validated at save *and* at render (an invalid stored spec
   is hidden, never run). The base shapes are the launchers `{kind:"routine", routineId,
   title}`, `{kind:"stat", source, title}`, and — in OPEN — `{kind:"command", command,
-  title}`. **Widgets are now buildable in every mode; the mode gates the *capability*,
-  not whether one can be built** (*amendment §8.4*). Phase-2 therefore adds:
+  title}`. `WIDGET_KINDS` and `STAT_SOURCES` (`tokens_month`, `provider_latency`,
+  `connections`) are the closed vocabularies; an unknown kind or source is rejected at
+  save and hidden at render. `created_in_mode` is `safe` | `open` — a command widget is
+  saved as `open` and never surfaces while Simple is active.
+
+  **Phase-2 step 6, not built yet** — the amendment (§8.4) makes widgets buildable in
+  every mode and gates the *capability* rather than whether one can be built. What that
+  step adds:
   - **New SAFE-tier interactive kinds** — a **safe, non-destructive vocabulary** on top
     of the launchers: to-do / checklist, note, counter / timer. These are rendered by
     *trusted Addison components* and backed by Addison's own safe storage — **no shell,
     no arbitrary code or eval**, so SAFE-1 and the webview CSP still hold. "Build me a
     to-do widget" produces a real checklist in Simple.
-  - **Capability declaration + tier gate** — `required_capabilities` (tentative name)
-    records the capabilities a widget's spec needs; a tier check maps capabilities → the
-    minimum mode. SAFE admits only the non-destructive set; higher tiers (Developer /
-    Custom) additionally admit **code-backed / system-capable** widgets (monitors,
-    scripts) governed by workspace-trust, per-tool `undo()`, the snapshot floor, and the
-    keyword gate to run/arm one.
-  - **`created_in_mode`** — the mode a widget was built in (`safe` | `open` | `custom`),
-    so an OPEN/Custom-only widget is hidden while Simple is active, matching the existing
-    routine hiding.
+  - **Capability declaration + tier gate** — a `required_capabilities` column (tentative
+    name; no such column exists today) recording the capabilities a widget's spec needs,
+    and a tier check mapping capabilities → the minimum mode. SAFE would admit only the
+    non-destructive set; higher tiers (Developer / Custom) additionally admit
+    **code-backed / system-capable** widgets (monitors, scripts) governed by
+    workspace-trust, per-tool `undo()`, the snapshot floor, and the keyword gate to
+    run/arm one.
 
   `pinned` decides whether the widget shows as a card or behind the overflow tray (at
   most six pinned); `position` is the user-visible order. The token meter and connections

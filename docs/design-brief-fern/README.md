@@ -1,11 +1,26 @@
-# Handoff: Addison UI Redesign ("Fern")
+# Handoff: Addison UI Redesign ("Fern") — HISTORY, NOT CURRENT GUIDANCE
 
-> **SUPERSEDED (2026-07-26).** The app's shipped look is now the dark
-> "correspondence-instrument" direction — see **`docs/design-brief-dark/`**
-> (authoritative: its `README.md` + `prototype.html` are the designer's
-> reference, `IMPLEMENTATION.md` the binding prototype→app mapping) and the UI
-> bullet in `CLAUDE.md`. This Fern bundle is kept as history only; do not
-> implement from it.
+> # ⛔ SUPERSEDED (2026-07-26) — do not implement from this file.
+>
+> The Fern direction (v3) shipped and was then **replaced in full** by the dark
+> "correspondence-instrument" direction (v4). **`docs/design-brief-dark/` is
+> authoritative** — its `README.md` + `prototype.html` are the designer's reference,
+> `IMPLEMENTATION.md` is the binding prototype→app mapping — together with the UI
+> bullet in `CLAUDE.md` and the tokens in `shell/tailwind.config.js`. This bundle is
+> kept in the tree **only** so the decision trail stays auditable.
+>
+> **Nothing in the rest of this file describes the app as it is.** Specifically,
+> every one of these was retired: the warm paper palette and the fern-green accent
+> (now near-black `#0C0C0D` paper with one violet `#B4A9F5` accent); the three
+> bundled OFL fonts and the Source Serif "correspondence" voice (now **system
+> stacks only** — there is no `@font-face` in the app and no serif token); the
+> blocky-vs-rounded shape rule with its cards and pills (now hairline rows, a 2px
+> accent left rail for selection, and bordered panels reserved for floating chrome);
+> the settings *drawer* framing (now in-window surfaces that replace the chat
+> column); the pine first-run banner; and the **service-bell logo** chosen as
+> "concept B" below — the mark is now the lowercase-`a` tile with the lavender dot.
+> The layout/IA and accessibility rules those directions all shared are unchanged
+> and live in design-doc §7.1, not here.
 
 ## Overview
 Complete redesign of the Addison desktop app (repo: `N041M/Addison`, Tauri + React + Tailwind in `shell/`). Replaces the current cool-slate single-window chat with a warm, calm three-column layout: conversation sidebar, correspondence-style chat, and a user-owned widget rail. Adds an in-window settings page, multi-provider API keys, dark mode, a first-run setup banner, and a service-bell logo.

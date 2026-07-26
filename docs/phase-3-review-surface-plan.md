@@ -50,8 +50,11 @@ nothing from it, which is what makes it shippable at this size.
 ## The one thing to understand before starting: the CSP
 
 `shell/src-tauri/tauri.conf.json:24` is today the single directive `default-src 'self'`.
-It is the reason fonts are bundled rather than hotlinked, and it is a load-bearing part
-of the webview's lowest-trust posture.
+It is a load-bearing part of the webview's lowest-trust posture: nothing the window
+renders may be fetched from anywhere but the app itself. (An earlier draft of this plan
+cited bundled fonts as the illustration. That is no longer true — the dark v4 direction
+retired the bundled faces, and `shell/src/styles.css:25` states there is no `@font-face`
+anywhere and the app uses system stacks only.)
 
 **Monaco cannot run under it.** `style-src 'unsafe-inline'` is unavoidable and a nonce
 cannot substitute — Monaco positions every view line, cursor, and selection overlay with

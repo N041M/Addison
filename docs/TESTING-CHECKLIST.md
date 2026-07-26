@@ -10,24 +10,34 @@ launch terminal. Findings get converted into automated coverage afterwards.
 Cheap-model tip: export `ADDISON_MODEL=claude-haiku-4-5` before launching if
 you want the whole pass to cost pennies; steps 9–10 exercise the picker anyway.
 
+**Which branch to run.** Sections 13, 13a, 13b and 14 describe the **dark v4**
+UI, which lives on **`redesign/dark-v2`** and is **not on `master`** (as of
+2026-07-26 that branch is pushed and unmerged; `master` still carries the Fern
+look). Check out `redesign/dark-v2` before running the visual sections, or every
+one of them will fail for the wrong reason.
+
 **Known gaps — not bugs, don't file them** (HANDOFF.md "Known gaps"):
-drafting a message reports "not available yet"; there is no file-attach/drop
-UI, so `read_file` is unreachable from chat; the Setup Assistant relay has no
-server in this repo.
+drafting a message reports "Opening email drafts isn't available yet."; there is
+no file-attach/drop UI, so `read_file` is unreachable from chat; the Setup
+Assistant relay has no server in this repo; nothing in the app can open an
+external link, so every address shown in Settings is copy-paste text.
 
 ---
 
 ## 1. Launch & connect
 
 **Do:** `cd shell && npm run tauri dev`. Wait for the window.
-**Expect:** brief "Getting ready…" state, then the message box becomes active
-with the placeholder "Write to Addison…" (it reads "Addison's engine isn't
-connected yet." until the core is up). No error banner. Window looks calm and
-near-black: the dark direction's `paper` background, hairline separators, one
-soft violet accent — and the lowercase-`a` mark alone at the far left of the
-header.
-**Fail signs:** stuck on "Getting ready", or "Addison's engine isn't connected
-yet." after ~10 s → copy the launch-terminal stderr.
+**Expect:** the window paints in the right theme immediately — no white flash,
+because `index.html` sets the background before the bundle loads. The message box
+is active with the placeholder "Write to Addison…"; the composer reads
+"Addison's engine isn't connected yet." and a banner says "Addison's engine isn't
+connected. You can look around, but I can't chat just yet." only while the core
+is down. No error banner otherwise. Window looks calm and near-black: the dark
+direction's `paper` background, hairline separators, one soft violet accent — and
+the lowercase-`a` mark alone at the far left of the header.
+**Fail signs:** either of those disconnected sentences still on screen after
+~10 s, or a first message that never gets a reply → copy the launch-terminal
+stderr.
 
 ## 2. Plain chat
 
@@ -383,9 +393,12 @@ deleting a note", "You saved this") with its timestamp as the **mono** value
 (machine facts only). On a fresh profile there is exactly one row, **"Addison as
 first installed"**, marked **Permanent**. The modal is a centred 440px `panel`
 over a scrim, header "Restore points" beside **save one now** and a ✕, and a
-mono footer note ("everything can be undone · restores never delete your
-files"). It closes on the scrim, the ✕, and Escape, and focus returns to the
-opener.
+mono footer note whose first half is **mode-scoped**: "everything can be undone ·
+restores never delete your files" under Simple (SAFE), but "some actions can't be
+undone · restores never delete your files" under Developer/Custom (OPEN), because
+`run_command` is SAFE-2's one exemption and the footer must not contradict the
+profile card. Check it in both. It closes on the scrim, the ✕, and Escape, and
+focus returns to the opener.
 
 **Automatic capture.** Do each of these and re-open the list — a new row appears
 for each, and its label names the change: switch profile (Simple ⇄ Developer),

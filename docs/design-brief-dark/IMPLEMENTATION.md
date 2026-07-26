@@ -35,21 +35,38 @@ dark), `darkMode: "class"` stays.
 | `panel`      | `#141518`        | `#FFFFFF`       | popovers, menus, modal |
 | `line`       | `#1E1F22`        | `#E4E4E1`       | 1px hairlines/separators |
 | `rail`       | `#2E2F33`        | `#D6D6D2`       | inactive 2px section rails; menu/modal borders |
-| `track`      | `#26272B`        | `#E8E8E5`       | composer idle top border, meter track |
-| `track-hi`   | `#3A3B40`        | `#C9C9C4`       | composer focused top border |
+| `track`      | `#26272B`        | `#8C8E94`       | composer idle top border, meter track, idle send ring |
+| `track-hi`   | `#3A3B40`        | `#6E7076`       | composer/input focused border |
 | `ink`        | `#E9E9E7`        | `#1B1B1D`       | primary text |
 | `ink-soft`   | `#B9BBBE`        | `#43454A`       | secondary text |
-| `muted`      | `#909398`        | `#6E7076`       | tertiary text |
-| `faint`      | `#6E7076`        | `#8F9196`       | section labels |
-| `disabled`   | `#55575C`        | `#A8AAB0`       | hints, idle glyphs, "You" label |
-| `ghost`      | `#3C3E42`        | `#C8CACF`       | faintest microcopy |
+| `muted`      | `#909398`        | `#5B5D63`       | tertiary text |
+| `faint`      | `#6E7076`        | `#63656B`       | section labels |
+| `disabled`   | `#55575C`        | `#696B71`       | hints, idle glyphs, "You" label |
+| `ghost`      | `#3C3E42`        | `#6E7076`       | faintest microcopy |
 | `accent`     | `#B4A9F5`        | `#6D5BD0`       | links/actions, selection rails, send fill |
 | `on-accent`  | `#100E22`        | `#FFFFFF`       | glyph on accent fill |
+| `scrollbar` / `scrollbar-hi` | `#2E2F33` / `#3A3B40` | `#888A90` / `#6E7076` | the composer's bespoke scrollbar thumb, idle / hover |
+
+> **The light column above was corrected on 2026-07-26 and the values it replaced
+> shipped nowhere.** Translating the dark ramp by eye produced text nobody could
+> read on paper — measured, `ghost` was 1.53:1, `disabled` 2.17, `faint` 2.94, all
+> against a 4.5 floor, at 10–11px, for readers who are 54 and 68; and `track`, which
+> draws the composer's only boundary *and* the idle send-button ring, was 1.14:1, so
+> that ring was effectively invisible. Dark keeps its designed values untouched.
+> Light's low end is now pinned to the floor and therefore **compressed**
+> (muted 6.14 → faint 5.43 → disabled 4.97 → ghost 4.61); the ramp still descends
+> and every rung is legible. `muted` moved with them, because leaving it at 4.61
+> would have made `ghost` its equal and inverted the ramp it heads. `track` /
+> `track-hi` are treated as UI components (3:1 floor), not decorative hairlines.
+> `styles.css` carries these ratios inline — it, not this table, is the source of
+> truth if they ever diverge again.
 
 Scrim: `rgba(0,0,0,.55)` both themes. Popover ring (dark):
 `0 0 0 .5px rgba(255,255,255,.07), 0 18px 48px rgba(0,0,0,.65)` — light uses
 `0 0 0 .5px rgba(0,0,0,.08), 0 18px 48px rgba(0,0,0,.18)`. Modal shadow:
-`0 24px 64px rgba(0,0,0,.6)` (light `.2`). Danger keeps a rose token for real
+`0 24px 64px rgba(0,0,0,.6)` (light `.2`). The composer's model menu gets its own
+shallower lift, `--shadow-menu` (`0 12px 32px rgba(0,0,0,.14)` light), rather than
+reusing the anchored popover's. Danger keeps a rose token for real
 destructive actions (delete widget/routine) — value `#E2A6A6` dark / `#B4544E`
 light; restores are NEVER danger-colored (they are recoveries, HANDOFF rule).
 
@@ -225,8 +242,9 @@ glyphs hover to `ink`.
   history, `Addison Brandbook.dc.html` the wider system). Implemented as
   `shell/src/components/AddisonMark.tsx` (construction ratios + the sheet's
   exact sampled sizes; the tile stays dark in BOTH themes — fixed hex, never
-  tokens), used in the header (22px + wordmark, brandbook §10) and the
-  first-run splash (44px above the greeting). The favicon is
+  tokens), used in the header (22px, **mark only** — see the owner decision below;
+  this clause read "22px + wordmark, brandbook §10" until the wordmark was dropped)
+  and the first-run splash (44px above the greeting). The favicon is
   **`shell/public/favicon.png`**, a raster deliberately: the SVG version drew the
   "a" with a `<text>` element, so its letterform and size depended on whichever
   font the rasterising platform resolved (measured: a 15–20% bbox difference off
@@ -247,3 +265,53 @@ glyphs hover to `ink`.
 - Tests are UPDATED to the new design honestly — never deleted to go green;
   behavior assertions (confirm flows, honesty copy, G-floor guards) keep
   their teeth.
+
+## What the build learned after this brief was written (2026-07-26)
+
+This file was written on 2026-07-25 as the mapping to build *from*. The sections
+above still describe the intended design; the items below are things the build
+settled that the brief did not anticipate, recorded here so the next reader is not
+mapping against a stale picture. None of them change the design language.
+
+- **The light ramp is contrast-bound, not a straight translation.** See the note
+  under the token table. This is the largest single correction to this document.
+- **The composer scrolls in a reserved lane.** The prototype hides every scrollbar,
+  and the app keeps that for reading columns (`.no-scrollbar`). The composer's
+  textarea is the one scroller a person drags, so it gets a **bespoke** thumb
+  (`.bespoke-scroll`, its own `scrollbar` / `scrollbar-hi` tokens) in a reserved
+  gutter clear of the text. Deliberately no `scrollbar-width` / `scrollbar-color`:
+  once the standard property is set, Chromium and Safari 18+ ignore the
+  `::-webkit-scrollbar` rules entirely. The composer's text also wraps full-width
+  over a controls strip, and its max-height lands on the line grid.
+- **A finished answer is revealed with the scramble, not shown whole.** The same
+  motion language covers the case the brief only described for streaming: the first
+  frame is emitted **synchronously**, in the same commit that sets the target, so
+  the finished text is never painted before being hidden. The reveal **rate adapts**
+  to the answer's length (`revealAdvanceFor`) — at a fixed rate a long answer is not
+  an animation, it is a wait — and it can never display text that has not been
+  committed. `onDone` fires exactly once and a finished engine is not reused.
+- **The view title is not the only thing that scrambles on a switch.** The sidebar
+  title scrambles on chat switch too; the stagger survives remounts and is capped at
+  the viewport, and adopting the launch conversation's id does not replay it.
+- **Motion has a cleanup and a scroll contract.** The animation path cleans up on
+  unmount, and a reveal never scroll-jails the thread — auto-scroll follows only a
+  reader already at the bottom.
+- **The restore modal's footer claim is mode-scoped.** "everything can be undone ·
+  restores never delete your files" is true under SAFE; under OPEN it reads "some
+  actions can't be undone · …", because `run_command` is the undo rule's one
+  explicit exemption and a footer that contradicts the profile card is exactly the
+  quiet over-promise this floor cannot afford. The restores half never changes. An
+  absent mode is treated as `safe`.
+- **The one-action restore names its target and timestamp *through* the confirm.**
+  This regressed against master during the redesign and was restored; the modal also
+  moves, traps and restores focus.
+- **Chrome fixes the brief did not foresee.** A pending consent card is hoisted
+  above the modal/drawer scrim that made it unanswerable, and the modal's focus trap
+  deliberately includes it. Collapsed columns are `inert` rather than holding
+  invisible focus stops. Effort is keyboard-reachable. The rail sheds before the
+  reading column is squeezed. Row names truncate; rows carrying sentences wrap.
+  Routines no longer claim "None yet" while the engine is unreachable. Consent
+  answers have real hit targets, with Allow dominant by **fill** rather than hue.
+- **The favicon is a raster on purpose** (already recorded above): the SVG drew the
+  "a" with `<text>`, so its letterform depended on whichever font the rasterising
+  platform resolved — measured at a 15–20% bbox difference off macOS.

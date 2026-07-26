@@ -1,5 +1,29 @@
 # Handoff: Addison — desktop app redesign
 
+> **How to read this file (added 2026-07-26).** This is the **designer's handoff,
+> reproduced as delivered** — it is the authoritative reference for colours, type,
+> spacing, copy and motion, and it is deliberately not edited to match the app. The
+> binding prototype→app mapping lives beside it in **`IMPLEMENTATION.md`**, and
+> where the two differ on anything other than visual intent, `IMPLEMENTATION.md`
+> wins. Three standing translations, so nothing below is read as a contract:
+>
+> - **"dark theme only" describes the designed reference, not the shipped app.**
+>   Dark is the reference; light is a derived translation with the same structure,
+>   and the theme stays class-driven three-way (light / dark / system, default
+>   **system**). The light values are contrast-bound rather than translated by eye —
+>   see the note under `IMPLEMENTATION.md`'s token table.
+> - **All content here is demo data.** The sample chats, connections and restore
+>   points are the prototype's; the app renders real state and never ships a control
+>   that displays fabricated state.
+> - **The app has features this prototype does not show** (Stop while working, the
+>   Custom profile and guard panel, workspace trust, offer/proposal cards, markdown
+>   and mermaid rendering, the restore confirm flow, mobile layout). They are
+>   restyled into this language, never deleted and never de-wired.
+>
+> The prototype file is checked in here as **`prototype.html`** (with `support.js`
+> beside it); the "Files" section at the bottom names it by its original delivery
+> filename, `Addison Prototype v2.dc.html`.
+
 ## Overview
 A redesign of Addison, a local-first AI assistant desktop app (macOS). Core ideas: calm, text-first dark UI; everything reversible ("everything can be undone"); a left sidebar of chats, a center chat column, a right rail of ambient widgets, and full-page surfaces (Settings, Tools, Snapshots, Build-a-widget) that replace the chat column. Signature motion: a character-scramble text animation and small fade/rise transitions.
 

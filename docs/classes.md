@@ -25,7 +25,7 @@ raises otherwise.
 ```mermaid
 classDiagram
     class Orchestrator {
-        +run_turn(conversation, requested_role, model_name, effort)
+        +run_turn(conversation, requested_role, model_name, effort, mode)
     }
     class Conversation {
         +id
@@ -60,15 +60,20 @@ classDiagram
         HIGH
     }
     class ToolRegistry {
-        +register(tool)
+        +register(tool, dev_only, open_only, allow_missing_undo)
         +get(tool_id) Tool
+        +is_dev_only(tool_id) bool
+        +refuse_if_dev_only_outside_open(tool_id, mode) str
+        +visible_tools(mode)
         +list_for_model()
     }
     class PermissionGate {
+        +authorize(tool_id, mode, destructive, detail, guards, trusted) PermissionStatus
         +check(tool_id) PermissionStatus
         +request(tool_id) PermissionStatus
         +grant(tool_id)
         +revoke(tool_id)
+        +revoke_all()
         +clear_denials()
     }
     class UndoManager {
@@ -92,6 +97,12 @@ classDiagram
         +content
         +snapshot
     }
+    class ExecutionContext {
+        +conversation_id
+        +shell_bridge
+        +policy_mode
+        +resolved_path
+    }
     class Store {
         +insert_message()
         +messages_for_conversation()
@@ -109,10 +120,29 @@ classDiagram
     Tool --> ToolDefinition
     ToolDefinition --> RiskTier
     Tool ..> ToolResult
+    Tool ..> ExecutionContext
     ToolResult --> ActionSnapshot
     UndoManager --> Store
     UndoManager ..> ActionSnapshot
 ```
+
+Three things about the dispatch order the diagram cannot show, all of them shared
+byte for byte by the orchestrator turn path and the routine step path:
+
+1. **The dev-only refusal happens at dispatch, before the gate and before
+   `execute`.** `visible_tools` hides an `open_only` tool from the *model*, but hiding
+   is not enforcing — a `tool_use` naming a hidden id still reaches `get()`, and the
+   gate does not check dev-ness. `refuse_if_dev_only_outside_open` is what closes it.
+2. **Confinement is a separate predicate from prompting.** `call_affected_path`
+   resolves a path-bounded tool's path **once**; if that path is outside every trusted
+   root the call is hard-refused there and then, LOW and MEDIUM alike. The resolved
+   value rides to `execute` on `ExecutionContext.resolved_path` and is never re-read
+   from `args` — resolving twice would let confinement approve one path while the write
+   lands on another.
+3. **Destructiveness and the card's text are per call**, from
+   `tools/base.call_is_destructive` and `call_permission_detail`. The latter is asked
+   once and used twice — for the permission card and for the Activity Panel — so the
+   two can never describe different calls.
 
 ## Modes, guards, and snapshots
 
@@ -125,8 +155,20 @@ active profile; Custom is a tuned overlay whose *floors* are fixed. The
 holds), marks a configuration verified-working after a turn completes, and restores to
 the last verified-working state. Turning a guard off in Custom mode mints an
 **undeletable anchor** that records the app build it was minted on (a reference, not
-the binary — owner decision 2026-07-20; see `data-model.md`). `WorkspaceTrust` scopes
-the gate's OPEN-mode auto-grant to a user-granted project directory.
+the binary — owner decision 2026-07-20; see `data-model.md`).
+
+**Workspace trust is not a class.** It is a two-column table (`workspace_trust`) plus
+two pure predicates and an RPC namespace, and it is drawn above only as the row shape
+it actually is. `policy.workspace_trust_allows(path, data_dir)` is the *floor* —
+Addison's own data directory and its sidecar can never be, contain, or be contained by
+a trusted root, checked realpath-and-casefold in **both** directions so neither a
+symlink nor an ancestor gets around it. `rpc/workspace.is_trusted(resolved_path,
+roots, data_dir)` is the *confinement* predicate: match a granted root **then** apply
+the floor, so a root somehow planted over the data dir still confines nothing. Both
+are store-free by construction — the caller supplies the roots — which is what keeps
+the gate store-free. `WorkspaceMixin` wires the same resolver into the orchestrator,
+the routine engine and the widget rail as `trust_check`, so grant time and authorize
+time can never drift.
 
 **`SnapshotManager` shipped in Phase-2 step 1**, so its members below are real and the
 signatures are the ones in `agent_core/snapshots/snapshot_manager.py`. Three names in
@@ -165,14 +207,10 @@ classDiagram
     class GuardConfig {
         +destructive_card
         +auto_grant_scope
-        +workspace_trust : Phase-2 step 5
-        +keyword_gate_strictness : Phase-2 step 8
     }
-    class WorkspaceTrust {
-        +root_dir
+    class WorkspaceTrustRow {
+        +root
         +granted_at
-        +contains(path) bool
-        +revoke()
     }
     class SnapshotManager {
         +capture(trigger, reason, verified_working, prune) ConfigSnapshot
@@ -203,26 +241,32 @@ classDiagram
     Profile --> PolicyMode
     GuardConfig ..> Profile
     GuardConfig ..> PolicyMode
-    GuardConfig --> WorkspaceTrust
     PermissionGate ..> GuardConfig
     PermissionGate ..> CapabilityTier
+    WorkspaceTrustRow --> Store
     SnapshotManager ..> ConfigSnapshot
     SnapshotManager --> Store
 ```
 
 `mode_for_profile` is a module function in `policy.py`, not a `GuardConfig` member:
 Simple→SAFE, Developer and Custom→OPEN, with `GuardConfig` as the Custom profile's
-overlay on the OPEN gate. `CapabilityTier` is what the
-gate and the widget validator consult to decide whether a tool/widget's requested
-capability is admissible in the active mode — SAFE admits only `NON_DESTRUCTIVE`.
-Neither `ConfigSnapshot.undeletable` anchors nor the four floors (G1, G2, G3, the
-anchor rule — **G4** in code and in `CLAUDE.md`; the two names are the same rule) are
-reachable from `GuardConfig`. `SnapshotManager`, `ConfigSnapshot`, the `CUSTOM`
-profile and `GuardConfig` (its two shipped fields, in `policy.py`) are **shipped**
-and their names are fixed — Phase-2 step 2 built the Custom profile and the guard
-overlay, and lowering a guard mints the G4 anchor through `guards.set`.
-`WorkspaceTrust` (step 5), `CapabilityTier` (step 6) and `GuardConfig`'s two
-remaining fields are still *(Phase-2)* sketches whose names are not.
+overlay on the OPEN gate. `GuardConfig` has **exactly two fields**, both
+settings-backed and both a closed vocabulary with a total strictness order:
+`destructive_card` (`per_invocation` > `session`) and `auto_grant_scope` (`none` >
+`non_destructive` > `everything`). The defaults are today's OPEN gate byte for byte, so
+`GuardConfig()` is indistinguishable from the unguarded gate — that equivalence is what
+lets Simple and Developer keep passing `None`. `weakenings_between(old, new)` is the
+module function that decides whether a save *lowered* a guard; only a lowering mints the
+G4 anchor, and `guards.set` mints it **first**, refusing the change if it cannot.
+Neither the anchor nor the four floors (G1, G2, G3, the anchor rule — **G4** in code and
+in `CLAUDE.md`; the two names are the same rule) are reachable from `GuardConfig`.
+`SnapshotManager`, `ConfigSnapshot`, the `CUSTOM` profile and `GuardConfig` are
+**shipped** and their names are fixed. `CapabilityTier` is the one *(Phase-2)* sketch
+left in this diagram — step 6, not built, and its member names are not fixed. When it
+lands it is what the gate and the widget validator will consult to decide whether a
+tool's or widget's requested capability is admissible in the active mode, with SAFE
+admitting only `NON_DESTRUCTIVE`; today the widget validator takes the `PolicyMode`
+itself.
 
 `SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the
@@ -299,7 +343,16 @@ classDiagram
     class ModelProvider {
         <<interface>>
         +capabilities() ProviderCapabilities
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
+    }
+    class ProviderUnavailable {
+        <<exception>>
+    }
+    class ProviderRequestRejected {
+        <<exception>>
+    }
+    class ProviderAuthFailed {
+        <<exception>>
     }
     class ProviderCapabilities {
         +native_tool_calling
@@ -310,19 +363,19 @@ classDiagram
         +audio
     }
     class AnthropicProvider {
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
     }
     class OpenAIProvider {
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
     }
     class GoogleProvider {
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
     }
     class OllamaProvider {
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
     }
     class SetupAssistantProvider {
-        +send(messages, tools, effort) ModelResponse
+        +send(messages, tools, effort, timeout) ModelResponse
     }
     class ModelRole {
         <<enumeration>>
@@ -350,15 +403,23 @@ classDiagram
         +register(role, provider)
         +register_local_model(name, provider)
         +register_primary_model(name, provider)
+        +unregister_primary_model(name)
         +available_roles()
         +available_local_models()
+        +available_primary_models()
         +selected_primary_model()
         +selected_local_model()
+        +select_local_model(name)
     }
     class ModelResponse {
         +text
         +tool_calls
         +finish_reason
+        +usage
+    }
+    class Usage {
+        +input_tokens
+        +output_tokens
     }
     class ToolCallRequest {
         +id
@@ -373,18 +434,36 @@ classDiagram
     ModelProvider <|.. SetupAssistantProvider
     ModelProvider ..> ProviderCapabilities
     ModelProvider ..> ModelResponse
+    ModelProvider ..> ProviderUnavailable
+    ModelProvider ..> ProviderRequestRejected
+    ModelProvider ..> ProviderAuthFailed
     ModelResponse --> ToolCallRequest
+    ModelResponse --> Usage
     ModelRouter o-- ModelProvider
     ModelRouter ..> ModelRole
     RoutingCandidate ..> RoutingStrategy
 ```
 
-All members are shipped code. The strategy layer lives beside the router, not on it:
-`resolve_chain(strategy, candidates, head, custom_order)` is a pure module function in
-`providers/router.py` that orders `RoutingCandidate`s, and the attempt loop — per-send
-continuation, cooldown, the per-turn deadline — is orchestrator machinery. The router
-itself still answers one question: which provider instance serves this role and model
-name.
+All members are shipped code. Two shape notes. `RoutingStrategy` is drawn as an
+enumeration for readability, but in code it is four module-level string constants in
+`providers/router.py` (`QUALITY_FIRST`, `COST_FIRST`, `LOCAL_ONLY`, `CUSTOM`) plus the
+`ROUTING_STRATEGIES` tuple and `DEFAULT_ROUTING_STRATEGY` — there is no `Enum`, and
+there is no `BALANCED` (cut from v1, amendment §10.1). The three provider exceptions
+all subclass `RuntimeError`, so every pre-existing `except RuntimeError` still catches
+them and each carries byte-identical user-facing wording to what the provider raised
+before the split; the type is the only new thing, and the attempt loop branches on it
+for one question — *may I try the next candidate?* Only `ProviderUnavailable` says yes.
+
+The strategy layer lives beside the router, not on it:
+`resolve_chain(strategy, candidates, head_model_id, *, custom_order)` is a pure
+function — store-free, holding no cooldown state — that orders `RoutingCandidate`s,
+while the attempt loop (per-send continuation, cooldown, the per-turn deadline) is
+orchestrator machinery. The router itself still answers one question: which provider
+instance serves this role and model name. `DirectAPIProvider`
+(`providers/direct_api_provider.py`) is not a fifth adapter but a BYOK wrapper
+parameterized by a provider name and a key-*getter*: it holds the callable, never key
+material, and delegates to a per-instance adapter that fetches the key per `send()`.
+It is what a completed Setup Assistant → BYOK handoff registers under `PRIMARY`.
 
 ## Routines
 
@@ -394,9 +473,11 @@ conversation, the library stores and lists them, and the engine replays a plan t
 the same permission gate, tool registry, and undo manager as the live loop. Saved
 routines are declarative artifacts, so they are part of the app state the
 `SnapshotManager` captures (§ Modes, guards, and snapshots) and are restored with a
-rollback. Under the amendment, an OPEN-mode `command` step still raises the gate's
-per-invocation destructive card unless it runs inside a trusted workspace, and any
-routine that arms OS-run automation is subject to the keyword gate.
+rollback. An OPEN-mode `command` step **always** raises the gate's per-invocation
+destructive card: it runs through `run_command`, whose `affected_path` is `None`, and
+the engine passes `trusted=False` unconditionally for stored, replayable steps — so a
+trusted workspace never makes a saved routine's command card-free. The keyword gate for
+OS-run automation is Phase-2 step 8 and not built.
 
 ```mermaid
 classDiagram
@@ -413,6 +494,7 @@ classDiagram
         +args_template
         +depends_on
         +on_failure
+        +command
         +model_role
         +model_id
     }
@@ -435,12 +517,13 @@ classDiagram
     class RoutineLibrary {
         +list()
         +get(routine_id) Routine
+        +created_in_mode(routine_id) str
         +update_metadata()
         +record_run(routine_id)
         +delete(routine_id)
     }
     class RoutineEngine {
-        +run(routine, variable_values) RoutineRunResult
+        +run(routine, variable_values, mode) RoutineRunResult
     }
 
     Routine "1" *-- "many" RoutineStep
