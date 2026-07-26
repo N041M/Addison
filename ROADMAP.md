@@ -42,8 +42,17 @@ quickly.
 
 ## Next
 
-Three steps are left in that sequence. They are independent enough to take in any
-order.
+Four things are left. The last three are independent enough to take in any order;
+the first is finishing work that is already merged.
+
+5.5. **Containment for the coding harness.** Step 5 gave Developer mode a real
+   shell. What did not come with it is a boundary underneath the permission card,
+   so today one approved command can delete Addison's own restore points. This adds
+   a macOS sandbox around commands, bounded by the same folders you have trusted; a
+   short list of things that cannot be approved at all; stripping of anything that
+   looks like a password or key out of command output before a model sees it; and a
+   record of what ran. Plan:
+   [docs/step-5.5-containment-plan.md](docs/step-5.5-containment-plan.md).
 
 6. **Widget capability tiers.** Widgets can already be built in every mode. This
    gives the safe vocabulary more to work with (checklists, notes, timers) and makes

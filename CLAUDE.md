@@ -124,6 +124,20 @@ than working around it silently):
   providers, models, skills, widgets, routines) and **exclude the OS keychain**
   (keys stay put — G1 holds). (New floor, 2026-07-20. **Built** in Phase-2 step 1
   — see "The snapshot / restore subsystem" below.)
+  **Scope correction, 2026-07-26 — this holds in SAFE and is currently
+  OVERCLAIMED in OPEN.** The unbreakability above is enforced *within* the
+  database: two `RAISE(ABORT)` triggers, a sidecar copy of every payload, and RPC
+  paths that bypass the gate. None of that protects the *files* from the OPEN-mode
+  shell. `run_command` has `affected_path = None`, so confinement never governs it
+  and `workspace_trust_allows`'s protection of the data dir does not apply; the
+  tool runs `shell=True` at `$HOME`. One approved command therefore deletes the
+  database, the sidecars and every `undeletable` anchor. The card is real (per
+  invocation, exact command text, no grant recorded) and it is the *only* layer.
+  Do not repeat the sentence "the restore path is itself unbreakable" without this
+  qualifier until **[Phase-2 step 5.5](docs/step-5.5-containment-plan.md)** lands.
+  This is the same correction G4 took when "captures the app binary" was narrowed
+  to a build reference: **the repo must not carry a floor its own tests do not
+  cover.**
 - **G4 — Undeletable anchor on weakening** (≡ what the other docs call *the
   undeletable-anchor rule*; use **G4** in code, comments, and test names).
   Turning a guard OFF in Custom mode (and saving) mints a **permanent,
@@ -494,9 +508,32 @@ Routine steps and command widgets pass `trusted=False` unconditionally), (6)
 **widget capability tiers + expanded safe vocabulary** (to-do/checklist, note,
 timer), (7) **MCP client** tools via the registry + gate, (8) the **automation
 keyword gate** + author-OS-run automation.
-**Steps 1–5 are built; 6, 7 and 8 are what remains**, and they are independent
-enough to be taken in any order — 6 is companion-facing, 7 and 8 add capability
-through the existing registry + gate.
+**Steps 1–5 are built. What remains is 5.5, 6, 7 and 8** — 6 is companion-facing,
+7 and 8 add capability through the existing registry + gate, and those three are
+independent enough to be taken in any order.
+
+**(5.5) — containment for the OPEN harness**
+([docs/step-5.5-containment-plan.md](docs/step-5.5-containment-plan.md), proposed
+2026-07-26). Not a new capability: it is step 5's unfinished half. Step 5 shipped
+`run_command` and did **not** re-establish the property design-doc §9's first
+mitigation ("capability allow-list, not a shell") was protecting — see the G3
+scope correction above. Contents: move `run_command` behind the **ShellBridge**
+(today it is the only tool that reaches the OS without crossing it, contra spec
+§1.3, which is *why* it has no second enforcement layer); a **Seatbelt** profile
+generated from the live `workspace_trust` roots, so trust finally bounds the shell
+and not just the typed file tools; a **pre-gate denylist** that cannot be approved
+away, checked at the same site as CONFINEMENT; **secret redaction** on tool output
+before it reaches a provider; and a `tool_audit` table (**excluded** from
+snapshots, on the `tool_grants` precedent). A sandbox is **not** a guard — it never
+appears in the Custom panel and has no toggle, and this changes blast radius, never
+prompting: `run_command` still always cards. **Step 7 is downstream of the audit
+log and of closing amendment §13's MCP SAFE-constraint question** — §8.5 promises
+MCP tools are "gated, logged, undo-aware" and there is no log, and a server's
+self-declared "read-only" cannot admit a tool to SAFE without breaking invariant 2
+through a path the registry check cannot see.
+
+For *status* — what is built versus planned — [ROADMAP.md](ROADMAP.md) is the
+single source; this section is the reasoning, and the two have drifted before.
 
 ## Multi-provider (owner decision 2026-07-18 — overrides spec §10 "Anthropic only")
 

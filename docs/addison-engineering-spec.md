@@ -1451,7 +1451,7 @@ working around it.
 |---|---|
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. **Reinforced:** excluded from every snapshot, including the Custom-mode undeletable anchor (§4.9, §5). |
 | **G2** | No autonomous self-triggering / scheduling *by Addison*. **Reinterpreted (§6):** Addison may *author* OS-run automation; the OS runs it; Addison never fires it. |
-| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** |
+| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** **Scope correction 2026-07-26:** enforced *within* the database (triggers, sidecars, gate-exempt RPC). The OPEN-mode shell can still delete the files — `run_command` has `affected_path = None`, so confinement never governs it. True in SAFE, overclaimed in OPEN until [step 5.5](step-5.5-containment-plan.md) lands. |
 | **Anchor** (**G4** in `CLAUDE.md` and in code — the two names are the same rule) | Turning a guard *off* in Custom mode mints an **undeletable** snapshot that **records the app build it was minted on** (a reference, not the binary; keys still excluded). Restoring a binary is a Phase-3 updater item — owner decision 2026-07-20, §4.9. **New.** |
 
 **Reinterpreting invariant 4 (widgets).** SAFE invariant 4 said "widgets are

@@ -5,9 +5,12 @@ For the next working session. Read **CLAUDE.md** first (repo law), then
 governs where it and the older specs disagree, *except* where an inline
 owner-decision note supersedes it), then this.
 
-**Next up: Phase-2 step 6 (widget capability tiers + expanded safe vocabulary;
-make `primary.txt` capability-aware), then 7 (MCP client) and 8 (the automation
-keyword gate).** Those three are the only unbuilt Phase-2 steps. **Phase-2 steps
+**Next up: Phase-2 step 5.5 (containment for the OPEN harness —
+[`docs/step-5.5-containment-plan.md`](step-5.5-containment-plan.md), proposed
+2026-07-26), then 6 (widget capability tiers), 7 (MCP client) and 8 (the automation
+keyword gate).** 5.5 is step 5's unfinished half rather than new scope, and it is
+listed first because **G3 is currently overclaimed in OPEN mode** — see its entry
+under "Next up". Step 7 is downstream of 5.5's audit log. **Phase-2 steps
 1–5 are all BUILT and merged** — step 1 (the snapshot/rollback floor, G3, PR #47,
 plus the ledger retirement in #51), step 2 (Custom profile + guards + the G4
 anchor caller, #52), step 3 (routing strategies, #54), and steps 4 + 5
@@ -29,10 +32,13 @@ everything** — work from it, not from `redesign/dark-v2`.
   adversarial-review fix wave, the docs passes, the brand/icon fixes **and thread
   windowing**, all at once. `redesign/dark-v2` is still pushed but is now fully
   contained in `master` and safe to delete.
-- **Four commits landed after that merge** and are the current tip: the brand
-  icon-pipeline fix (`cc70ea8`), the pointer-glow revert (`e98828c`), the widget
-  rail / model-menu fixes (`3ab1159`) and the starfield removal (`07cc9ee`). See
-  "What shipped 07-26 — after PR #58" below.
+- **Four commits landed after that merge** — the brand icon-pipeline fix
+  (`cc70ea8`), the pointer-glow revert (`e98828c`), the widget rail / model-menu
+  fixes (`3ab1159`) and the starfield removal (`07cc9ee`). See "What shipped
+  07-26 — after PR #58" below.
+- **Then per-token streaming** (`d2174c1`, `0d6eec6`) and the branch-state
+  correction (`f4ad86a`), pushed direct to `master` — see "What shipped 07-26 —
+  per-token streaming". This doc pass sits on top of those.
 - **`windowed-thread` no longer exists**, locally or on the remote. Its one
   commit was rewritten as `839bcff` and merged with #58. **Thread windowing IS
   shipped** — an earlier version of this file said the opposite in three places.
@@ -186,43 +192,6 @@ on anchors. QA steps: **TESTING-CHECKLIST §13a**.
   fails on a filter position — because a behavioural test only proves today's
   behaviour, and would not stop someone adding `AND created_in_mode = ?` next
   quarter.
-
-## What shipped since the last handoff (07-17 → 07-20)
-
-- **Fern UI wave + mode-scoped safety backend** (#30, #31).
-- **Maintainability pass** (#32): SQLite indexes, `usage_log` retention pruning,
-  shared IPC test fixtures (`tests/conftest.py`), the Vitest rig.
-- **Conventions hardening** (#33): the first CI workflow; repo-wide pyright
-  clean; ESLint flat config (react-hooks + a `lib/parse.ts` import guard); an AST
-  **module-boundary test**; **payload-shape drift fixtures** (Python generates
-  real core payloads, vitest parses the same files); one conservative provider
-  retry; WAL + busy_timeout; the `Tool`/`UndoableTool`/`RedoableTool` protocol
-  split; **`main.py` decomposed** — roughly halved, into `agent_core/rpc/` mixins
-  + a dispatch table. (It has grown a long way back since, as step 1's snapshot
-  RPC surface and the activity-detail path landed — the mixin structure is what
-  that pass was for, and it held.)
-- **Frontend UX**: system-following theme (light/dark/**system**) + no-jump
-  interactions + calm animations; Settings uses the ☰ drawer idiom (#35);
-  sidebar always present on desktop (#36); mobile bell removed and **widgets
-  moved inline into the chat screen** (#37, #39); drawer close-arrow + slide-out
-  animation on every close path (#38); the app icon became the bell (#40 — the
-  bell was **retired** by the dark v4 redesign; the mark is now the lowercase-`a`
-  tile); **rename chats by double-clicking the sidebar title** (#42).
-- **Skills** (#41): user-authored **declarative guidance notes** appended to the
-  transient per-turn system prompt. They can *steer* but never widen what Addison
-  may do — the registry + gate stay the sole authority. Plus two seeded in-house
-  stat widgets.
-- **`primary.txt` widget guidance fix** (#43), **hardened again in #45** after a
-  live failure: asked to "build me a widget that works as a to-do app", Addison
-  wrote `todo-widget.html` via `save_file` and reported "Done!" — nothing reached
-  the rail, because no widget-creating tool exists. #45 moved the prohibition out
-  of a buried bullet into two override rules (no file as a stand-in; no "Done"
-  for something that doesn't exist). ⚠️ Interim-correct only: it describes what
-  the code can do **today**. Phase-2 step 6 must make it **capability-aware** and
-  will undo this wording.
-- **Docs: scope amendment adopted across all authoritative docs** (#44).
-  `addison-design-doc.md` + `addison-engineering-spec.md` were **un-gitignored
-  and are now tracked** in the repo.
 
 ## What shipped 07-24: step 3 — routing strategies
 
@@ -630,101 +599,43 @@ paths, where swallowing is the point.
 
 ## What shipped 07-25 → 07-26 — the dark v4 redesign wave (PR #58)
 
-**Merged to `master`** as `a22badd` on 2026-07-26. Everything in this section
-is on `master`. (It described itself as unmerged until the merge made that false;
-see the note in the branch-state section above.)
+**Merged to `master`** as `a22badd` on 2026-07-26. The commit-by-commit account
+that used to live here is in git; what survives below is only what a later
+session still has to honour.
 
-**The redesign itself, in four commits** (`b86887a` → `cb35125`), against
-`docs/design-brief-dark/` — `README.md` + `prototype.html` are the designer's
-reference and **`IMPLEMENTATION.md` records the binding prototype→app mapping**.
-Read that file before restyling anything: it is where "demo content is never
-shipped, real features are restyled and never de-wired" is written down, and the
-whole wave was built to it.
+**Design authority: `docs/design-brief-dark/`.** `README.md` + `prototype.html`
+are the designer's reference and **`IMPLEMENTATION.md` records the binding
+prototype→app mapping**. Read that file before restyling anything — it is where
+"demo content is never shipped, real features are restyled and never de-wired" is
+written down.
 
-- **1/4 — tokens, motion, chrome.** The dark token table in
-  `shell/tailwind.config.js`, the character-scramble engine
-  (`shell/src/lib/scramble.ts`), and the header/sidebar/surface shell.
-- **2/4 — the chat column.** Empty state, thread, composer, the streaming
-  scramble, the widget rail.
-- **3/4 — the surfaces.** Settings, Tools, Snapshots, Build a widget, the model
-  popup, the restore modal.
-- **4/4 — cleanup, all of it verified unreferenced first.** The Fern alias blocks
-  in `tailwind.config.js` and the `--c-fern*`/`--c-pine*` indirection in
-  `styles.css` are gone, along with the `serif` family, the named fontSize scale,
-  the old radii/shadows, `BottomSheet.tsx`, `BellLogo.tsx` and `WidgetRail`'s
-  unreachable `variant="sheet"`. **The `WELCOME` seed is retired** — a new thread
-  now starts genuinely empty, which is what makes `ChatThread` render the
-  greeting stack; `App`'s `threadEmpty`/`threadMessages` filter existed only to
-  hide that seed and is gone. A mutation-proven test pins the empty start.
+**Rules the rigor pass (`1241026`) established — these are safety, not polish:**
 
-Then eleven follow-ups: the prototype's line-height model and the accent Addison
-sender label (`f600015`); the sidebar-title scramble on chat switch, with the
-stagger surviving remounts and capped at the viewport (`69b9d30`); Settings
-levelled with the composer and the **lowercase-`a` mark** adopted in header,
-splash and favicon (`c3d2aab` — the service bell is retired); the composer
-wrapping full-width over a controls strip with its max-height on the line grid
-(`a37e173`, `63429fa`); a bespoke composer scrollbar in its own reserved lane
-(`b0ae132`); revealing a *finished* answer with the scramble rather than showing
-it whole (`d8493e6`); and dropping the redundant header wordmark plus
-regenerating the OS icon set from the mark (`2c3a2e3`, via
-`docs/design-brief-dark/brand/build-app-icon.sh`).
+- **A pending consent card is hoisted above any modal/drawer scrim, and the
+  modal's focus trap deliberately includes it.** A consent surface stranded
+  behind a scrim is unanswerable, which makes it a safety failure, not a cosmetic
+  one.
+- **The restore footer's undo promise is mode-scoped** (`footerNote` in
+  `RestorePointsModal.tsx`). `run_command` is SAFE-2's one explicit exemption
+  under OPEN, so a blanket "everything can be undone" contradicted the profile
+  card two sections away.
+- **The one-action restore names its target and timestamp through the confirm.**
+  Losing that was a *regression against `master`*, on the G3 surface itself.
+- Light-mode text meets AA; a reveal never scroll-jails a reader who has scrolled
+  up; the favicon is a raster rendered from a checked-in master so the mark does
+  not depend on the rasterising platform's fonts.
 
-### `1241026` — the bugs the adversarial review found
+**What the tests were doing — the standing failure mode, found again.** The
+frontend suite went 238 → 302 because `Composer` **had no test file at all and
+all 11 mutations against it survived**, the reduced-motion guard could be deleted
+with the suite still green, and **two G3 tests passed while restoring the wrong
+snapshot.** Same shape as the step-1 finding. Assume it is still true somewhere.
 
-The redesign's own rigor pass, and the reason the wave is worth trusting. Every
-fix in it is mutation-proven. Grouped as the commit groups them:
-
-- **Motion.** The reveal no longer paints the finished answer before hiding it
-  (the first frame is emitted synchronously, in the same commit that sets the
-  target); a reveal no longer scroll-jails the thread (auto-scroll follows only a
-  reader already at the bottom); the animation path cleans up on unmount;
-  adopting the launch conversation's id no longer replays the switch stagger;
-  `onDone` fires once and a finished engine is not reused; the streaming path
-  adapts its rate and can never display text it has not committed.
-- **Surfaces.** The one-action restore names its target and timestamp **through**
-  the confirm again — that was a **regression against `master`**, on the G3
-  surface. The restore modal moves, traps and restores focus. The footer's undo
-  promise is now **mode-scoped** (`footerNote` in `RestorePointsModal.tsx`),
-  because `run_command` is SAFE-2's one explicit exemption under OPEN and a
-  footer promising "everything can be undone" contradicted the profile card two
-  sections away. Routines no longer claim "None yet" while the engine is
-  unreachable. Consent answers have real hit targets, with Allow dominant by fill
-  rather than hue.
-- **Chrome.** A pending consent card is hoisted above the modal/drawer scrim that
-  had made it unanswerable, and the modal's focus trap deliberately includes it —
-  a consent surface behind a scrim is a safety failure, not a cosmetic one.
-  Collapsed columns are inert instead of holding invisible focus stops; Effort is
-  reachable by keyboard; the drawer scrim darkens in both themes; light-mode text
-  meets AA (ghost 1.53 → 4.61, disabled 2.17 → 4.97, faint 2.94 → 5.43) and the
-  scrollbar thumb has its own token at 3.22; the rail sheds before the reading
-  column is squeezed; row names truncate and rows carrying sentences wrap.
-- **What the tests were doing.** The frontend suite went 238 → 302. `Composer`
-  **had no test file at all and all 11 mutations against it survived**; the
-  reduced-motion guard could be deleted with the suite still green; the switch
-  stagger had no coverage; and **two G3 tests passed while restoring the wrong
-  snapshot**. That is the standing failure mode of this repo, found again, in the
-  same shape.
-- Also: the favicon is now a raster rendered from a checked-in master
-  (`docs/design-brief-dark/brand/favicon-master.svg` → `shell/public/favicon.png`),
-  so the mark no longer depends on the rasterising platform's fonts.
-
-### `ee38dbe` — the docs wave
-
-Adds **`docs/phase-3-review-surface-plan.md`** — a bespoke review surface for the
-Developer/OPEN profile, approved 2026-07-25 and **blocked on Phase-2 steps 6, 7
-and 8**. It **redefines what Phase 3 means**: four documents scoped that phase as
-packaging, signing, notarisation, the updater, binary restore and Secure-Enclave
-identity, and the plan adds a Developer surface alongside them. The redefinition
-was written back into those four places rather than left to be discovered.
-
-The rest of the wave brings the tree's account of itself back in line with what
-is built: the dark direction in `CLAUDE.md` and the design doc, **TESTING-CHECKLIST
-rewritten around the surfaces as they now are**, and `data-model.md` /
-the scope amendment / `IMPLEMENTATION.md` updated where the code had moved past
-the prose. Code side is cleanup only — exports nothing outside their module
-imports are now module-private (`CLICK_DELAY_MS`, `CLICK_SCRAMBLE_SELECTOR`,
-`STREAM_WINDOW_CHARS`, `REVEAL_TARGET_MS`, `ConversationsState`, `OffersState`
-and the two offer banners). No behaviour changes.
+**`ee38dbe` also redefined Phase 3.** `docs/phase-3-review-surface-plan.md` (a
+Developer/OPEN review surface, approved 2026-07-25, blocked on steps 6–8) is now
+part of that phase alongside packaging, signing, notarisation, the updater,
+binary restore and Secure-Enclave identity. The redefinition was written back
+into the four documents that had scoped Phase 3 the old way.
 
 ### Shipped: thread windowing (`839bcff`)
 
@@ -859,46 +770,6 @@ nothing** — verified by grep. It was not repurposed as "honours `on_delta`",
 because Ollama's answer to that is conditional; the reasoning lives at each
 `send()` instead.
 
-## The scope amendment in one screen (read the full doc)
-
-- **Identity** — butler. Developer = coding harness + Addison's safety/QoL;
-  Simple = companion; Custom = tunable *prompting* guards (deep in Settings,
-  behind extra confirmation).
-- **Four global floors, never off in any mode:**
-  - **G1** — API keys keychain-only, never webview/SQLite/snapshots.
-  - **G2** — Addison **never triggers itself**. It *may author* automation the OS
-    runs (cron/launchd/watcher); running or arming a powerful action requires a
-    **user-typed keyword prefix** (e.g. `!run …`) — which, being user-typed, is
-    also a prompt-injection barrier.
-  - **G3** — **guaranteed rollback**: app-state snapshots (automatic before risky
-    changes **and** on command), keys excluded, restore to the last
-    *verified-working* state, restore path itself unbreakable. **Built.**
-  - **G4** — turning a guard OFF in Custom mode mints an **undeletable anchor**
-    that **records the app build it was minted on**. (G4 ≡ what the older docs call
-    "the undeletable-anchor rule"; use **G4** in code, comments and test names.
-    **Owner decision 2026-07-20:** this replaces the earlier "also captures the app
-    binary" wording. What ships is a build *reference*; **restoring a binary is not
-    implemented** and is a Phase-3 updater item. The repo must not carry a floor its
-    own tests do not cover — that is the anti-pattern the amendment was written
-    against, so the promise was narrowed to what the code does. The correction is
-    applied in `CLAUDE.md`, the amendment §3.1/§3.3/§12/§13 Q8/§14, the design doc,
-    the engineering spec, `architecture.md`, `data-model.md` and `classes.md`.)
-- **Reversible data/config vs. inviolable machinery** — the user *and* the model
-  may change endpoints, models, guards, skills, widgets, routines, because all of
-  it is snapshotted and one-action reversible. Addison's code and the floors are
-  never alterable.
-- **Widgets are buildable in ALL modes, capability-gated** — SAFE = a safe,
-  **non-destructive** vocabulary (launchers + interactive kinds: to-do/checklist,
-  note, timer) via trusted renderers and safe storage, no arbitrary code;
-  higher tiers add **code-backed / system-capable** widgets under
-  workspace-trust + undo + snapshot + keyword gate.
-- **MCP client** (consume external tools through the existing registry + gate),
-  never a server/gateway. **Routing:** 4 strategies (quality-first default,
-  cost-first, local-only, balanced) + Developer custom. **Free models:** Addison
-  must be useful without a paid frontier key; legit free/local only in-app,
-  gray-area routers documented on GitHub only. **"Make it cheaper"** = a
-  previewed skill + model change, auto-snapshotted, one-click undo.
-
 ## Next up — Phase 2 (code), in dependency order
 
 **The step-1 ledger is RETIRED (2026-07-24).** The two pre-step-2 items shipped
@@ -944,13 +815,27 @@ Then:
    the shipped shape is narrower than this line described: inside a trusted dir
    the gate stops prompting for the **typed path-bounded file tools only** —
    `run_command` always cards (owner decision).
+5.5. **Containment for the OPEN harness** — **PROPOSED 2026-07-26, not started.**
+   [`docs/step-5.5-containment-plan.md`](step-5.5-containment-plan.md). Step 5's
+   unfinished half, not new scope: it shipped a shell without re-establishing the
+   property design-doc §9's first mitigation protected, and that bullet — unlike
+   the picker-scoping bullet beside it — was never amended. **The concrete
+   consequence: `run_command` has `affected_path = None`, so confinement never
+   governs it, and one approved command deletes the database, the sidecars and
+   every `undeletable` anchor. G3's "the restore path is itself unbreakable" is
+   true in SAFE and overclaimed in OPEN**; CLAUDE.md now carries that qualifier.
+   Ship the pre-gate denylist first (hours, and it makes G3 true against the
+   obvious case) and the Seatbelt work after. **Step 7 is downstream of its audit
+   log**, because amendment §8.5 promises MCP tools are "gated, logged,
+   undo-aware" and no log exists.
 6. **Widget capability tiers + expanded safe vocabulary**; make `primary.txt`
    capability-aware.
 7. **MCP client** tools through the registry + gate (SAFE: read-only/undo-able
    only — invariant 2 enforces it).
 8. **Automation keyword gate** + author-OS-run automation.
 
-**6, 7 and 8 are the only unbuilt steps, and they are the real next work.**
+**5.5, 6, 7 and 8 are what is left.** 5.5 finishes work that is already merged;
+6, 7 and 8 are the new capability.
 Downstream of all three sits **`docs/phase-3-review-surface-plan.md`** (approved
 2026-07-25) — a bespoke review surface for the Developer/OPEN profile, explicitly
 blocked on 6, 7 and 8. It also redefines Phase 3: that phase is no longer only
@@ -965,59 +850,6 @@ below. **Q3 (Custom reachability) closed 2026-07-24 with step 2** — as the lea
 reachable from any profile, behind an Advanced disclosure + two-step confirm
 (recorded inline in §13). Still open: keyword syntax (Q1), auto-routing
 depth (Q5), MCP-in-SAFE constraint (Q6), widget capability declaration (Q7).
-
-### Resolved §13 questions (decided, with reasons — don't reopen)
-
-- **Q2, retention.** Keep **50 snapshots or 30 days, whichever keeps more** — the
-  same idiom as the undo window, so there is one retention concept in the
-  codebase — with two exemptions written **into the SQL**, not left to a caller:
-  permanent rows, and **the newest TWO verified-working rows**. Retention here is
-  not housekeeping; a rule that can prune the last verified rows leaves the
-  one-action restore with no target, i.e. G3 silently off with no error anywhere —
-  the friend's failure reintroduced by the recovery machinery itself. **Two, not
-  one, and the second is not slack:** the restore walk skips any verified row
-  whose fingerprint matches the current config, because restoring it would change
-  zero bytes. If only the newest verified row were exempt, that one surviving row
-  could be exactly the row the walk skips — leaving the floor with nothing to
-  land on. See the docstring on `Store.prune_config_snapshots`. **Anchors never
-  prune and never count against the budget.** The amendment's alternative ("the
-  single most-recent working anchor") was rejected because it needs to *replace*
-  an undeletable row, creating the codebase's only `DELETE … WHERE undeletable =
-  1` — the exact statement G4 says must not exist. Its worry was storage, and Q8
-  removes it: an anchor is a few KB.
-- **Q4, verified-working.** **Any turn whose response was sent** — execution
-  reached `_respond({"ok": True, …})` in `rpc/conversation.py`. A tool failure is
-  deliberately *not* a turn failure. The "no rolled-back action" variant was
-  rejected: it couples config health to file-level regret through an independent
-  mechanism with an unbounded window. The mark does **not** flag the pre-change
-  row (that config never ran) — it captures the **current** config as a new
-  verified row, deduped by fingerprint.
-  **Honest residual, and the next session should know it was a deliberate
-  trade:** "a turn completed" is satisfied by configs that are *degraded* rather
-  than dead — which is the whole "make it cheaper" class, i.e. the friend's own
-  case. The mitigation is that `restore_last_working()` never targets a config
-  identical to the present one, so **each click steps back one distinct proven
-  configuration**. But **two bad changes deep, the user clicks Restore twice**: one
-  click lands on the *first* bad config, not the last good one. That is bounded
-  (the next click goes further), visible (the card names the target before you
-  click), and was chosen over a stronger predicate that would have to observe the
-  future — `mark_verified_working()` fires on every successful turn and must stay
-  cheap, idempotent and non-raising. If this ever needs improving, the honest fix
-  is episode tracking, not a cleverer local rule. *(Related: the **genesis** row is
-  written `verified_working = 1` before any turn has run. Strictly nothing proved
-  it — but G3 requires a restore target to exist at all times, including during
-  onboarding, and refusing the mark leaves both G3 and G4 unsatisfiable in that
-  window.)*
-- **Q8, anchor binary capture.** **A version pin, and capture only.** `binary_ref`
-  holds `{"version", "identifier"}` from `shell.appBuildRef` — never bytes, never a
-  path (an earlier draft carried the executable path; dropped, because nothing read
-  it, it goes stale on any move, and it would write the user's account name into a
-  plaintext sidecar and into every permanent anchor). Copy-on-write was rejected as
-  platform-dependent — APFS `clonefile` degrades silently to a full copy across
-  volumes, making an anchor's size depend on the user's disk layout, which is not
-  something a floor should rest on. **Binary restore does not ship** and is a
-  Phase-3 updater item; see the G4 note above for why the docs were corrected
-  rather than the promise left standing.
 
 ### How step 1 was verified — the standard to hold for steps 2–8
 
@@ -1045,58 +877,6 @@ What closed it, and what steps 2–8 should repeat:
   taking an agent's report on trust.
 
 For a floor, budget for this explicitly. It cost roughly as much as the build.
-
-### Step-1 amendment ledger — every commit after the build commit
-
-Step 1 did not land in one commit, and each follow-up changed behaviour a doc
-somewhere still described. Keep adding rows here; a commit that changes a
-documented rule and does not amend the doc is the defect this project shipped
-twice in one day, once by re-adding the sentence its own changeset falsified.
-
-| Commit | What it changed | Docs it obliged |
-|---|---|---|
-| `5d11958` | The subsystem itself (schema, manager, RPC, frontend, hooks). | The step-1 section above. |
-| `1587f4e` | Step-1 residuals; `read_web_page`; visible tool egress; the measured fresh-vs-upgraded flag replacing `_looks_like_a_fresh_install`. | `data-model.md` install-classification bullets; the ledger below. |
-| `4c7ae78` | **`mark_verified_working()` now flips `verified_working` on a permanent row whose fingerprint matches the current config, instead of writing an identical clone.** A fingerprint-proven `pre_upgrade` / `genesis` / anchor is therefore a one-action restore target. | **CLAUDE.md and `data-model.md` said the exact opposite and were not amended by the commit.** Both are now rewritten — CLAUDE.md's "bottom of the restore walk" bullet is the authority on the current rule. |
-| `9642ce1` | User-facing wording: "restore point", never "snapshot", in the one place that still said snapshot. | Copy rule already stated in the step-1 section. |
-| *(this round, uncommitted at the time of writing — confirm against `git log`)* | **Recovery-path fixes**: the sidecar arm now writes its own `pre_restore` row on the `'none'` / `'identical'` outcomes; `select_payload_to_restore` refuses to hand a `pre_restore` payload back as the unverified fallback; `_mirror_verified_into_sidecar()` carries a retroactively-set flag into the sidecar `meta`; an already-verified permanent row falls through to a fresh `turn_verified` row, restoring walk **recency** and re-arming the `refs[0]` short-circuit. | The `pre_restore` table and the "when a permanent row becomes verified" bullet in `data-model.md`, both written this pass. |
-| *(same round)* | **The live-database guard moved out of pytest**: armed by `import agent_core`, wrapping `sqlite3.connect` rather than `Store.__init__`, default-deny with one explicit grant (`live_db_guard.allow_live_database()`, called only by `main.main()`). | "Known gaps" / environment notes; see the guard's own module docstring, which is the authority on why no ambient signal was used. |
-
-**Two live warnings for whoever works here next.**
-
-- **A build agent's probe script once wrote a real Addison database into the
-  owner's `~/.addison`** — an undeletable row in it, permanent by design. That is
-  what the guard above exists for, and the residual gap it deliberately does not
-  close (a process importing no Addison code at all) is documented in the module.
-  Never point a probe or a test at the default data directory.
-- **Two agents shared this checkout during the round above.** One ran `git stash`
-  to measure a baseline and stashed the other's in-flight work; `stash pop`
-  restored it, but do not repeat that while a tree is shared.
-
-**Recommended, and now BUILT (2026-07-24):
-`test_the_verified_flag_is_only_set_under_the_permanent_row_narrowing` in
-`tests/test_snapshots.py` — pins exactly one `set_config_snapshot_verified` call
-site, its `permanent`/`verified_working` guard, and `_permanent_row_matching`'s
-`undeletable` narrowing. Mutation-killed three ways (second call site; dropped
-narrowing; dropped already-verified guard), the widened-narrowing kill reproduced
-by the coordinator personally.** The original recommendation follows, kept for
-the reasoning. Exactly one invariant in
-this subsystem has now been silently inverted by a commit while every gate stayed
-green, and it is the narrowing in `_permanent_row_matching` — *only* an
-`undeletable` row may have `verified_working` set after the fact. That narrowing
-is what keeps "restore lands somewhere that actually ran" true, and a behavioural
-test only proves today's behaviour: someone widening the predicate next quarter
-gets a green run, because a wider rule still passes every test that asserts the
-narrow one *works*. `test_no_snapshot_query_filters_on_created_in_mode` exists for
-precisely this shape of risk and has held.
-
-The recommendation: a source-level test beside it, in `tests/test_snapshots.py`,
-that reads `snapshot_manager.py` and asserts **`set_config_snapshot_verified` is
-called from exactly one place, and that call site is guarded by an `undeletable`
-check**. Worth it — it is a handful of lines against the one rule whose violation
-is invisible to the suite, and the prose guarding it has now failed twice. Do
-**not** generalise it into a linter; the value is in pinning one named rule, and a
-broad source-shape test rots faster than the prose it replaces.
 
 ### Residual walk-position defects (N-1 / N-3 / N-4)
 
@@ -1183,24 +963,6 @@ routes. `api-` was in the prefix list and was **removed** for exactly that reaso
 entropy rule missed. Decide the trade when add-an-endpoint-by-prompting lands,
 because that is the flow where a *model* starts composing these URLs.
 
-### Deferred with reason — the step-1 ledger
-
-Nothing here is forgotten; each line names where it lands and why it waited.
-
-| Item | Why it waited | Where it lands |
-|---|---|---|
-| **Anchor minting caller** | The Custom profile doesn't exist — `ProfileId` has two members. `mint_anchor()` is built and tested. | **Step 2** |
-| **`snapshot_now` tool** | ~~Deferred to keep step 1's blast radius small.~~ **Done in the 2026-07-24 ledger retirement** — LOW, capture-only, late-bound callable, AST source test forbidding every manager verb but `capture`. | **Landed (ledger retirement)** |
-| **`tool_grants` capture** | Excluded, and correctly so. The table is inert today (nothing reads or writes it; `PermissionGate` keeps grants in memory). More important: once grants persist, restoring a snapshot taken *before* the user revoked a grant would **reinstate** it — a privilege grant delivered by a deliberately ungated one-action button with no permission card in the path. A floor must not be a privilege-escalation vector. | **Step 2**, if grants ever persist — and then as an **INTERSECT**, never a replace |
-| **Data-dir permanent distrust** | Workspace-trust doesn't exist until step 5, but the rule must be fixed *before* it does, or `run_command` inside a trusted parent directory can `rm -rf` the floor's own storage with no card. | **Step 5**. Write `test_the_addison_data_dir_can_never_be_workspace_trusted` **now, as an `xfail`**, so the rule exists before the capability does |
-| **`_valid_http_url` credential hardening** | **Pulled forward from step 4 and landed in step 1** — see the G1 note below. A `base_url` carrying a secret lands in a plaintext sidecar *forever* via any permanent row, so it could not wait. Userinfo, any query string or fragment, and key-shaped path segments are now refused by `_base_url_problem` at the moment the person types the address, not stripped on capture — stripping would make a restore write back a *different* address and silently break their server. | **Landed (step 1).** Residual: the path check's composition gate and entropy bar let some token shapes through (a UUID, an all-letter or all-digit segment) — see the G1 note above |
-| **Fresh-vs-upgraded install flag** | ~~Scheduled for step 2.~~ **Done in step 1** — pulled forward when a review measured the heuristic misclassifying the *target persona*: a companion with tuned settings, widgets and months of chats but no provider row was called a fresh install, minting a permanent undeletable row that handed their broken config back under copy promising it was cleared. `main.py` now measures whether it created the database and passes the fact to `SnapshotManager(created_the_database=...)`; `_looks_like_a_fresh_install` is deleted rather than kept as a fallback, since its only distinctive answer was the dangerous one. | **Landed (step 1)** |
-| **`LiveDatabaseBlocked` should probably be a `BaseException`** | It subclasses `AssertionError`, so a broad `except Exception` swallows it — `JsonRpcServer._rebuild_into` against a guarded path reports "rebuild failed" rather than naming the guard. The block still HOLDS (nothing is written); what is lost is the loud message, in the one place a loud message is the entire point. `BaseException` makes it true, but changes how every existing handler behaves, so it was not slipped into a docstring correction at merge time. | **Next session**, with its own verification pass |
-| **Binary restore** | Owner-descoped — collides with the unwired `updater.rs`, and would be the one piece of the recovery floor that could itself brick the app. | **Phase 3**, as an updater work item |
-| **`mcp_servers` / workspace-trust capture** | The tables don't exist. `test_capture_scope_covers_every_schema_table` forces the decision the moment they land. | **Steps 5 and 7** |
-| **Routing-strategy + "make it cheaper" + add-endpoint hooks** | Those flows don't exist yet; the `reason` slugs are already reserved in `REASONS` so the vocabulary won't churn. | **Steps 3 and 4** |
-| **"Reset Addison" reconciliation** | Design-doc §9 describes a pre-amendment "Reset Addison" control that "clears corrupted app state". Read literally that could delete anchors. **Whatever Reset ends up doing, it must never be able to delete an anchor** — and the database triggers currently make that a hard failure rather than a silent one, which is the right way round but will surface as an error someone has to design for. | **Flag to the owner in the next doc pass**; decide before Reset is implemented |
-
 ### `read_web_page` + destination visibility (shipped alongside step 1)
 
 A new SAFE-view tool, `agent_core/tools/read_web_page.py`. It was added on the owner's finding that a search whose snippet
@@ -1276,82 +1038,34 @@ everything else is request/response by JSON-RPC id. Cap turns, use
 `claude-haiku-4-5` via `ADDISON_MODEL`, per-request timeouts ~90s. This validated
 the whole stack for pennies — reuse it.
 
-## Where a bug could have entered on 07-24 — look here first
-
-Written deliberately, at the owner's request, because a session that changed the
-permission gate, the dispatch path, the registry and the G3 recovery paths in one
-day has earned some suspicion. **Nothing below is a known defect** — everything is
-green and mutation-covered. These are the places where verification was thinnest,
-or where the *process* created risk. If something is misbehaving, start here.
-
-**1. `routines/engine.py` — the dev-only guard duplicates `on_failure` handling.**
-The guard shapes its refusal as a failed step and then re-implements
-abort / ask_user / skip **inline**, instead of falling through to the canonical
-block (`if not result.success:`, ~L255). It matches that block today. It will not
-follow it if someone adds a fourth `on_failure` policy or changes the semantics —
-the two will silently disagree, and only the dev-only path will be wrong. **Fix
-properly by restructuring so both paths share one block**; it was written this way
-to keep the diff small, which was the wrong trade for a branch nobody exercises
-often.
-
-**2. Several agents edited ONE working tree concurrently.** Two near-misses were
-caught by luck rather than design: one agent ran `git stash`, which stashed a
-sibling agent's uncommitted work (restored intact, verified — but nothing
-guaranteed that), and a `git add -A` swept three in-flight test files into an
-unrelated commit (split afterwards). **A silent clobber is plausible and would not
-show up in tests if the lost edit was a comment or a docstring.** If a file reads
-oddly — a half-finished sentence, a comment describing code that is not there —
-suspect this rather than assuming intent. Future sessions should give parallel
-agents disjoint files *and* separate worktrees.
-
-**3. `run_command` now cards on EVERY command — the UX at scale is untested.** The
-behaviour change is correct and deliberate, but nobody ran a routine with several
-command steps end to end. A five-step dev routine is now five permission cards.
-That may be fine, or it may be unusable; it has not been observed. Same for a
-command widget clicked repeatedly.
-
-**4. `keychain.rs` and `filesystem.rs` had functions extracted.** Both extractions
-claim to be behaviour-preserving and the tests agree, but `keychain.rs` is the G1
-machinery `CLAUDE.md` says not to touch, and the change was made to serve a test.
-The response builders return the same `json!` the handler returned inline —
-verified by reading and by the new leak sweep — but if device identity or relay
-signing misbehaves, this is the change that touched it.
-
-**5. The snapshot recovery paths took four late, complex changes.** Retroactive
-verification of the permanent row, the `pre_restore` capture on the sidecar arm,
-`select_payload_to_restore` excluding `pre_restore` payloads, and mirroring the
-verified flag into the sidecar. Each is mutation-covered and was independently
-re-attacked, but they landed at the end of a long session and they are the most
-intricate code in the repo. They interact: the walk, the chooser and the sidecar
-arm all read each other's output.
-
-**6. The `ruff` pin hides 182 real findings**, including several `B023` (a closure not
-binding a loop variable — 5 at the time of writing, but count them yourself). That is a genuine bug class, not a style nit, and those
-four are currently invisible. Read them before or while raising the pin (task in
-Known gaps below).
-
-**7. `tests/test_policy_modes.py` has a `_fake_is_read_only` double** that still
-classifies commands, while the real `run_command` always cards. It exists to drive
-the gate's two OPEN-mode branches and says so — but a reader skimming it could
-conclude the real tool still classifies. If someone "fixes" the double to match
-production, the two gate branches stop being covered.
-
-**8. `agent_core/__init__.py` now arms a global guard on import.**
-`live_db_guard` wraps `sqlite3.connect` for **any** process that imports
-`agent_core`, and only `main.main()` declares itself allowed (`main.py:1560`).
-This fails safe — a new entry point that forgets to declare gets blocked loudly
-rather than writing to the live database — but it *will* surprise. Ad-hoc probe
-scripts must use a temp path or declare. Note `LiveDatabaseBlocked` subclasses
-`AssertionError`, so a broad `except Exception` swallows its message (ledgered
-below); the block still holds, only the explanation is lost.
-
-**9. Partial work was adopted from a workflow killed mid-run by a usage limit.**
-The Rust edits in `keychain.rs`/`filesystem.rs` were left uncommitted by an agent
-that died. They were checked — they compiled, tests passed, the diff read
-coherently — but **not line-by-line against what that agent intended**, because its
-report never arrived.
-
 ## Known gaps (deliberate or tracked, not bugs)
+
+**This is the single live-issue register.** Items that used to sit in the step-1
+ledgers, the deferred-with-reason table and the 07-24 "where a bug could have
+entered" list were folded in here when those sections were retired (2026-07-26);
+everything still open is below, and the closed rows went to git.
+
+**Still open from the retired step-1 ledgers:**
+
+- **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
+  the table is inert (nothing reads or writes it; `PermissionGate` keeps grants in
+  memory). If grants ever persist, restoring a snapshot taken *before* the user
+  revoked one would **reinstate** it: a privilege grant delivered by a deliberately
+  ungated one-action button. If it is ever captured it must be an **INTERSECT**,
+  never a replace.
+- **`LiveDatabaseBlocked` should probably be a `BaseException`.** It subclasses
+  `AssertionError`, so a broad `except Exception` swallows it and
+  `JsonRpcServer._rebuild_into` reports "rebuild failed" instead of naming the
+  guard. The block still HOLDS — nothing is written; what is lost is the loud
+  message, in the one place a loud message is the whole point. Changing it alters
+  every existing handler's behaviour, so it needs its own verification pass.
+- **`routines/engine.py` — the dev-only guard duplicates `on_failure` handling.**
+  It shapes its refusal as a failed step and re-implements abort / ask_user / skip
+  **inline** instead of falling through to the canonical `if not result.success:`
+  block (~L255). It matches that block today and will silently diverge the moment
+  someone adds a fourth `on_failure` policy. Fix by restructuring so both paths
+  share one block; it was written this way to keep a diff small, which was the
+  wrong trade for a branch nobody exercises often.
 
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 
@@ -1413,21 +1127,14 @@ report never arrived.
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
-- ~~`shell/src/components/BottomSheet.tsx` is orphaned (unused since widgets
-  moved inline on mobile) — delete or repurpose.~~ **CLOSED (2026-07-25, dark
-  redesign phase 4):** deleted, along with the now-unreachable `"sheet"` variant
-  in `WidgetRail` and the `sheet-in` keyframe. The narrow-window layout keeps the
-  drawer + inline widgets the dark brief asks for.
-- **~~Three loose ends left by step 1~~ — ALL THREE CLOSED (2026-07-24, step 2 +
-  its rigor pass):** `RestoreResult.providers_needing_a_key` was dropped (the
-  keychain probe in `rpc/snapshots.py` computes the names itself — a field would
-  be a second, never-written source of truth); `ipc.restoreSnapshot` got its
-  caller (per-row "Restore this one" on permanent rows); and
-  `test_genesis_label_matches_across_languages` in `tests/test_protocol_drift.py`
-  now pins `REASONS["genesis"]` ≡ `GENESIS_LABEL` byte-for-byte
-  (mutation-proven).
 
 ## Working conventions (established with the user)
+
+- **A commit that changes a documented rule amends the doc, in the same commit.**
+  This is the defect the project has now shipped three times — once by re-adding
+  the sentence its own changeset falsified, and once by leaving a branch-state
+  paragraph standing through the merge that made it false. It is the reason the
+  step-1 commit ledger existed; the ledger is retired and this rule replaces it.
 
 - **Opus agents build, coordinator verifies.** Spawn Opus agents with EXACT,
   disjoint file-ownership lists; do shared-contract groundwork first (the

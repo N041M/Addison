@@ -184,7 +184,7 @@ ability to restore. G3 joins the standing global floors:
 |---|---|---|
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. | Unchanged; reinforced (snapshots exclude keys). |
 | **G2** | No autonomous self-triggering / scheduling by Addison. | Reinterpreted, still a floor (§9). |
-| **G3** | Guaranteed one-action rollback to a last-working state; restore is unbreakable. | **New.** |
+| **G3** | Guaranteed one-action rollback to a last-working state; restore is unbreakable. | **New.** **Scope correction 2026-07-26:** enforced *within* the database (triggers, sidecars, gate-exempt RPC). The OPEN-mode shell can still delete the files — `run_command` has `affected_path = None`, so confinement never governs it. True in SAFE, overclaimed in OPEN until [step 5.5](step-5.5-containment-plan.md) lands. |
 
 ---
 
@@ -458,6 +458,18 @@ we still decline, §6.4).
   with no `undo()` cannot be LOW-risk, so **invariant 2 keeps it out of the SAFE
   view** automatically. The exact SAFE constraint (read-only only? curated
   allowlist? dev-only?) is an open question (§13).
+  **Sharpened 2026-07-26 — this question must be closed BEFORE step 7 is built,
+  not during it.** The sentence above assumes Addison can tell whether an MCP tool
+  is read-only. It cannot: **the server declares its own risk, and admitting a tool
+  to the SAFE view on that say-so breaks invariant 2 through a path the registry's
+  registration check cannot see** — the check enforces that a non-LOW tool has an
+  `undo()`, and a remote tool that lies about being LOW never presents one to
+  enforce. Whatever the answer (curated allowlist, dev-only, or a local
+  `undo()`-wrapper the client supplies), it has to be a property Addison verifies
+  rather than reads. Two of this bullet's three promises — "gated, **logged**,
+  undo-aware" — also depend on a tool-call audit log that does not exist yet; it is
+  item 4 of [step 5.5](step-5.5-containment-plan.md), which is therefore a
+  prerequisite for step 7.
 - Connecting an MCP server is **reversible config** (like adding an endpoint,
   §5) — snapshotted, addable by prompting, revocable. It shares the
   add-an-endpoint plumbing.

