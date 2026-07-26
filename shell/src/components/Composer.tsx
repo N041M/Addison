@@ -34,8 +34,11 @@ interface Props {
   focusSignal?: number;
 }
 
-/** The textarea grows to this and then scrolls (prototype: max-height 180px). */
-const MAX_TEXTAREA_PX = 180;
+/** The textarea grows to this and then scrolls. Not the prototype's 180: the
+ * cap sits ON the line grid (9px + 2px pads + 7 × 22.5px lines), so a
+ * max-height draft ends on a whole line instead of a mid-line slice (user
+ * report, 2026-07-26). */
+const MAX_TEXTAREA_PX = 168.5;
 
 export function Composer({
   connected,
@@ -115,7 +118,16 @@ export function Composer({
 
   return (
     <div className="relative pb-[calc(env(safe-area-inset-bottom)+22px)]">
-      <div className="mx-auto flex w-full max-w-[840px] items-end gap-2.5 border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-track-hi">
+      {/* One bordered box, two stacked rows: the FULL-WIDTH textarea over a
+          right-aligned controls strip (model label + send). The prototype put
+          the controls beside the text, but a tall draft then drags a
+          text-wide empty column down its whole right side — the owner asked
+          for the text to wrap around the controls instead (2026-07-26). The
+          strip beneath is how a textarea can honestly do that: every line
+          gets the full 840px, and the controls sit where the eye expects
+          them, under the last line. Resting height stays two-deep (one text
+          line + the strip), so the Settings-level alignment holds. */}
+      <div className="mx-auto w-full max-w-[840px] border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-track-hi">
         <textarea
           ref={textareaRef}
           data-composer=""
@@ -126,14 +138,10 @@ export function Composer({
           rows={1}
           placeholder={placeholder}
           aria-label="Message to Addison"
-          // min-h 64px = two 22.5px lines + the 9/10px pads: the composer is two
-          // lines deep AT REST, as the prototype renders it — which also lifts
-          // the "Write to Addison…" line level with the sidebar's "Settings"
-          // (owner request 2026-07-26; auto-grow still takes over past two lines).
-          className="min-h-[64px] min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent pb-[10px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
+          className="block w-full resize-none overflow-y-auto border-0 bg-transparent pb-[2px] pt-[9px] text-[15px] leading-[1.5] text-ink outline-none placeholder:text-disabled disabled:text-muted"
           style={{ maxHeight: `${MAX_TEXTAREA_PX}px` }}
         />
-        <div className="flex items-center gap-3 pb-[5px]">
+        <div className="flex items-center justify-end gap-3 pb-[5px] pt-1">
           <ModelSelector
             roles={models.roles}
             cloudModels={models.cloudModels}
