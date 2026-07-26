@@ -282,3 +282,112 @@ describe("streamed text vs. the streaming scramble", () => {
     expect(result.current.messages.at(-1)).toMatchObject({ content: TRUE_TEXT });
   });
 });
+
+// The core does not stream (`conversation.streamChunk` is declared in
+// protocol.py and never emitted), so an answer arrives whole and used to appear
+// in a single frame. It is now revealed with the same scramble language (owner
+// request 2026-07-26). The honesty property from the streaming block above
+// carries over unchanged and is the reason these tests exist: the overlay is
+// DECORATION over text that is already committed, so an interrupted reveal can
+// never cost the reader a character of the answer.
+describe("revealing an answer that arrived whole", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setMotionEnabled(true);
+  });
+
+  const ANSWER = "Done — I renamed the 24 photos so they sort by date.";
+
+  async function sendAndLand(text: unknown = { text: ANSWER }) {
+    const args = makeArgs();
+    const rendered = renderHook(() => useTurn(args));
+    act(() => {
+      rendered.result.current.handleSend("rename my photos");
+    });
+    await act(async () => {
+      deferreds[0].resolve(text);
+      await flushMicrotasks();
+    });
+    return rendered;
+  }
+
+  it("commits the true answer immediately, and shows it resolving", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2);
+    });
+
+    // Committed: the real answer, in full, from the moment it landed.
+    const last = result.current.messages.at(-1)!;
+    expect(last).toMatchObject({ pending: false, content: ANSWER });
+    // Displayed: two ticks of window — noise, not the answer's opening words.
+    expect(result.current.streamMessageId).toBe(last.id);
+    expect(result.current.streamDisplay).toHaveLength(10);
+    expect(result.current.streamDisplay).not.toBe(ANSWER.slice(0, 10));
+  });
+
+  it("lands on the exact answer and hands the message back", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    // Overlay gone (so ChatThread renders markdown again), text intact.
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+
+  it("does not reveal with motion off — the answer is simply there", async () => {
+    setMotionEnabled(false);
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 40);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+
+  it("never scrambles a failed turn's message — an error reads at once", async () => {
+    const args = makeArgs();
+    const { result } = renderHook(() => useTurn(args));
+    act(() => {
+      result.current.handleSend("do the thing");
+    });
+    await act(async () => {
+      deferreds[0].reject(new Error("I couldn't reach the model."));
+      await flushMicrotasks();
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 4);
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      failed: true,
+      content: "I couldn't reach the model.",
+    });
+  });
+
+  it("abandons the reveal on Stop, leaving the whole answer readable", async () => {
+    const { result } = await sendAndLand();
+
+    act(() => {
+      vi.advanceTimersByTime(38 * 2);
+      result.current.handleStop();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+});

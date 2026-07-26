@@ -212,6 +212,33 @@ export const STREAM_WINDOW_CHARS = 14;
 /** How far the window's leading edge advances per tick. */
 export const STREAM_ADVANCE_CHARS = 5;
 
+/**
+ * Roughly how long a whole-answer REVEAL should take, end to end.
+ *
+ * The core does not stream (`conversation.streamChunk` is declared in the
+ * protocol and never emitted), so an answer arrives complete and would
+ * otherwise appear in one frame. Revealing it with the same scramble language
+ * is the prototype's own behaviour — its canned reply is likewise whole, and it
+ * animates it — but the prototype's fixed 5-chars-per-tick only reads well at
+ * its demo length: a real 3,000-character answer would take ~23 seconds, which
+ * is not an animation, it is a wait. So the rate ADAPTS to keep the reveal
+ * bounded, and never drops below the prototype's tempo for short answers.
+ */
+export const REVEAL_TARGET_MS = 1100;
+
+/** Chars-per-tick for revealing a finished answer of `length` characters. */
+export function revealAdvanceFor(length: number): number {
+  const ticks = Math.max(1, Math.round(REVEAL_TARGET_MS / TICK_MS));
+  return Math.max(STREAM_ADVANCE_CHARS, Math.ceil(length / ticks));
+}
+
+export interface StreamScrambleOptions {
+  /** Chars per tick. Defaults to the streaming rate (`STREAM_ADVANCE_CHARS`). */
+  advanceChars?: number;
+  /** Called once, after the frame that lands on the exact received text. */
+  onDone?: () => void;
+}
+
 export interface StreamScramble {
   /**
    * The true text received SO FAR — the whole prefix, not a delta. Passing the
@@ -231,7 +258,11 @@ export interface StreamScramble {
  * unchanged, so the reply simply appends — the same fallback the rest of the
  * file makes.
  */
-export function createStreamScramble(onFrame: (display: string) => void): StreamScramble {
+export function createStreamScramble(
+  onFrame: (display: string) => void,
+  options: StreamScrambleOptions = {},
+): StreamScramble {
+  const advance = options.advanceChars ?? STREAM_ADVANCE_CHARS;
   const pool = POOLS[(Math.random() * POOLS.length) | 0];
   let received = "";
   // The window's leading edge, in characters. Everything before
@@ -249,7 +280,7 @@ export function createStreamScramble(onFrame: (display: string) => void): Stream
     // Clamp to `n + window`: at that point the resolved edge has reached the end
     // of what has arrived, so the leading edge can never run ahead of the text
     // and then "resolve" characters the model has not sent.
-    front = Math.min(front + STREAM_ADVANCE_CHARS, n + STREAM_WINDOW_CHARS);
+    front = Math.min(front + advance, n + STREAM_WINDOW_CHARS);
     const resolved = Math.max(0, Math.min(n, front - STREAM_WINDOW_CHARS));
     let out = received.slice(0, resolved);
     for (let i = resolved; i < Math.min(n, front); i++) {
@@ -262,7 +293,13 @@ export function createStreamScramble(onFrame: (display: string) => void): Stream
     // Caught up with everything received: `out` IS the received string, exactly.
     // Idle rather than spin — the next `push` restarts the loop where it left
     // off, so a stream that pauses mid-answer resumes instead of jumping.
-    if (resolved >= n) stop();
+    // `onDone` fires here, AFTER that exact frame, so a reveal can hand the
+    // message back to its normal (markdown) rendering without the caller having
+    // to guess when the animation ended by comparing strings.
+    if (resolved >= n) {
+      stop();
+      options.onDone?.();
+    }
   }
 
   return {

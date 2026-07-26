@@ -50,6 +50,11 @@ interface Props {
    * message's own `content` stays the true text — this only decorates it.
    */
   streamDisplay?: string | null;
+  /**
+   * WHICH message `streamDisplay` decorates. Keyed by id, not by the `pending`
+   * flag, because a finished answer is revealed AFTER it settles.
+   */
+  streamMessageId?: string | null;
   /** Which conversation is on screen; a change staggers + re-scrambles the rows. */
   conversationKey?: string | null;
   /** Fills the composer from an empty-state suggestion chip. */
@@ -98,6 +103,7 @@ export function ChatThread({
   onRewindTo,
   showTechnicalDetails = false,
   streamDisplay,
+  streamMessageId,
   conversationKey,
   onSuggestion,
   header,
@@ -117,7 +123,7 @@ export function ChatThread({
     if (isEmpty) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, streamDisplay, header, footer]);
+  }, [messages, streamDisplay, streamMessageId, header, footer]);
 
   // Opening another conversation: the rows rise in one after another and their
   // labels/bodies resolve out of the scramble behind them. The session's very
@@ -182,7 +188,8 @@ export function ChatThread({
         <MessageRow
           key={m.id}
           message={m}
-          display={m.pending && streamDisplay != null ? streamDisplay : m.content}
+          revealing={m.id === streamMessageId && streamDisplay != null}
+          display={m.id === streamMessageId && streamDisplay != null ? streamDisplay : m.content}
           canRewind={m.role === "user" && Boolean(m.storeId)}
           canRetry={m.id === lastAssistantId && retryAvailable}
           onRewindTo={onRewindTo}
@@ -295,6 +302,8 @@ interface RowProps {
   message: DisplayMessage;
   /** What to render — the true content, or the streaming overlay over it. */
   display: string;
+  /** This message's text is resolving out of the scramble right now. */
+  revealing: boolean;
   canRewind: boolean;
   canRetry: boolean;
   onRewindTo: (messageId: string) => void;
@@ -305,6 +314,7 @@ interface RowProps {
 function MessageRow({
   message,
   display,
+  revealing,
   canRewind,
   canRetry,
   onRewindTo,
@@ -319,8 +329,11 @@ function MessageRow({
   // booleans come from the core; the frontend never re-derives `routed`. Not an
   // error, so no danger tone: it's Addison telling you which model replied.
   const showFreeChip = Boolean(message.answeredWith?.free && message.answeredWith?.routed);
-  // Markdown once the turn has settled; plain text while it streams (header).
-  const asMarkdown = isAddison && !message.failed && !message.pending;
+  // Markdown once the turn has settled AND its text has finished resolving.
+  // Feeding scrambled glyphs to the markdown parser 26×/s makes a stray `#` a
+  // heading for one frame, so a revealing answer stays plain pre-wrap text and
+  // swaps to markdown on the last frame (see the file header).
+  const asMarkdown = isAddison && !message.failed && !message.pending && !revealing;
   // Nothing has arrived yet. The blinking block alone would be a shrug; the
   // honest sentence stays, and the block rides after it (pending copy is kept
   // word for word from the Fern build).
@@ -370,7 +383,7 @@ function MessageRow({
           }
         >
           <span data-msg-text="1">{showWriting ? "Addison is writing…" : display}</span>
-          {message.pending && (
+          {(message.pending || revealing) && (
             // The block cursor riding the streamed tail (7×14px, blinking).
             <span
               aria-hidden="true"

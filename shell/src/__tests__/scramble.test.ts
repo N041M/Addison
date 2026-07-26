@@ -29,6 +29,8 @@ import {
   prefersReducedMotion,
   STREAM_ADVANCE_CHARS,
   STREAM_WINDOW_CHARS,
+  REVEAL_TARGET_MS,
+  revealAdvanceFor,
 } from "../lib/scramble";
 
 const FAKE = [
@@ -274,5 +276,43 @@ describe("createStreamScramble", () => {
 
     vi.advanceTimersByTime(38 * 40);
     expect(frames).toHaveLength(after);
+  });
+});
+
+// The whole-answer reveal (owner request 2026-07-26). The core sends an answer
+// complete, so the rate has to adapt: the prototype's fixed 5 chars/tick reads
+// well at demo length and turns a real 3,000-character answer into a 23-second
+// wait. These pin the two ends of that rule, because getting either wrong is
+// invisible in a screenshot and obvious in use.
+describe("the whole-answer reveal rate", () => {
+  it("keeps the prototype's tempo for a short answer", () => {
+    expect(revealAdvanceFor(40)).toBe(STREAM_ADVANCE_CHARS);
+    expect(revealAdvanceFor(0)).toBe(STREAM_ADVANCE_CHARS);
+  });
+
+  it("never lets a long answer outrun the target duration", () => {
+    for (const length of [500, 3000, 20000]) {
+      const advance = revealAdvanceFor(length);
+      const ticks = Math.ceil((length + STREAM_WINDOW_CHARS) / advance);
+      // A little slack for the trailing window; the point is it stays ~1s, not
+      // that it hits the target to the millisecond.
+      expect(ticks * 38).toBeLessThanOrEqual(REVEAL_TARGET_MS * 1.5);
+    }
+  });
+
+  it("reveals at the requested rate and reports when it is done", () => {
+    const frames: string[] = [];
+    let done = 0;
+    const text = "Done — I renamed the photos.";
+    const engine = createStreamScramble((f) => frames.push(f), {
+      advanceChars: 40,
+      onDone: () => (done += 1),
+    });
+    engine.push(text);
+    vi.advanceTimersByTime(38 * 10);
+
+    expect(frames.at(-1)).toBe(text); // lands EXACTLY on the answer
+    expect(done).toBe(1); // and says so, exactly once
+    expect(frames.length).toBeLessThan(4); // 40 chars/tick: a few frames, not 9
   });
 });

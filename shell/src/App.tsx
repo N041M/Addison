@@ -1042,6 +1042,7 @@ export function App() {
                   onRewindTo={handleRewindTo}
                   showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
                   streamDisplay={turn.streamDisplay}
+                  streamMessageId={turn.streamMessageId}
                   conversationKey={conversationsState.currentConversationId}
                   onSuggestion={(text) => setComposerSeed(text)}
                   header={firstRunHeader}

@@ -8,7 +8,12 @@ import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/prot
 import type { DisplayMessage } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
-import { createStreamScramble, isMotionEnabled, type StreamScramble } from "../lib/scramble";
+import {
+  createStreamScramble,
+  isMotionEnabled,
+  revealAdvanceFor,
+  type StreamScramble,
+} from "../lib/scramble";
 
 interface UseTurnArgs {
   connected: boolean;
@@ -64,14 +69,55 @@ export function useTurn({
   // Scrambled glyphs must never be able to reach the message content — see
   // `__tests__/streaming.test.tsx`, which pins exactly that.
   const [streamDisplay, setStreamDisplay] = useState<string | null>(null);
+  // WHICH message the overlay decorates. The streaming path could key off the
+  // `pending` flag, but the reveal below outlives it — the answer has landed,
+  // so the message is settled while its text is still resolving — and an id is
+  // the only thing that stays true across that moment.
+  const [streamMessageId, setStreamMessageId] = useState<string | null>(null);
   const streamRef = useRef<StreamScramble | null>(null);
   const streamTextRef = useRef("");
+  // True only while a finished answer is resolving. The turn's `finally` clears
+  // the overlay as part of settling, which would kill a reveal on the frame it
+  // started; this is what tells it to leave the reveal alone.
+  const revealingRef = useRef(false);
 
   function endStream() {
     streamRef.current?.stop();
     streamRef.current = null;
     streamTextRef.current = "";
+    revealingRef.current = false;
     setStreamDisplay(null);
+    setStreamMessageId(null);
+  }
+
+  /**
+   * Reveal a FINISHED answer with the scramble, instead of having it appear in
+   * one frame. The core doesn't stream, so without this every reply plops in
+   * whole (owner request 2026-07-26); the prototype animates its canned reply
+   * the same way.
+   *
+   * The overlay is display only — `messages` already holds the true text before
+   * this runs, so a rewind, retry, copy or store read can never see a scrambled
+   * glyph, and an interrupted reveal costs the reader nothing but the animation.
+   */
+  function revealFinalText(messageId: string, text: string) {
+    if (!isMotionEnabled() || !text) return;
+    streamRef.current?.stop();
+    streamTextRef.current = text;
+    revealingRef.current = true;
+    setStreamMessageId(messageId);
+    streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame), {
+      advanceChars: revealAdvanceFor(text.length),
+      // Hand the message back to its normal rendering (markdown, links, code)
+      // the instant the text has fully resolved.
+      onDone: () => {
+        revealingRef.current = false;
+        streamTextRef.current = "";
+        setStreamDisplay(null);
+        setStreamMessageId(null);
+      },
+    });
+    streamRef.current.push(text);
   }
 
   /**
@@ -90,6 +136,7 @@ export function useTurn({
     }
     streamTextRef.current += text;
     if (!streamRef.current) {
+      setStreamMessageId(currentTurnRef.current);
       streamRef.current = createStreamScramble((frame) => setStreamDisplay(frame));
     }
     streamRef.current.push(streamTextRef.current);
@@ -160,6 +207,14 @@ export function useTurn({
           return m;
         }),
       );
+      // Nothing streamed (the core sends the answer whole), so the text would
+      // otherwise appear in a single frame. Reveal it with the scramble instead.
+      // Guarded on an empty `streamTextRef`: if the core ever does start
+      // emitting `streamChunk`, the answer has already been animated as it
+      // arrived and re-revealing it would replay text the person just read.
+      if (!streamTextRef.current && finalText) {
+        revealFinalText(assistantId, finalText);
+      }
       // Composer path: if the user's own words asked for a widget, a model server,
       // or a cheaper setup, draft the matching card from the just-finished turn.
       // Nothing is saved or applied until they press the card's button.
@@ -208,8 +263,10 @@ export function useTurn({
         setIsWorking(false);
         setCurrentActivity(null);
         // The answer is settled: drop the display overlay so the message shows
-        // its real content (which the result may just have replaced wholesale).
-        endStream();
+        // its real content (which the result may just have replaced wholesale)
+        // — UNLESS that content is currently being revealed, which is an
+        // animation over text that has already landed. It ends itself.
+        if (!revealingRef.current) endStream();
         // A turn just landed: refresh the sidebar so a new chat's auto-title
         // appears, and adopt the launch conversation as current if we didn't
         // know its id yet. Usage changed too, so refresh the token meter.
@@ -275,6 +332,7 @@ export function useTurn({
     setCurrentActivity,
     lastUserText,
     streamDisplay,
+    streamMessageId,
     appendStreamedText,
     handleSend,
     handleRetry,
