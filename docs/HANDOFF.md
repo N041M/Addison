@@ -1067,6 +1067,39 @@ everything still open is below, and the closed rows went to git.
   share one block; it was written this way to keep a diff small, which was the
   wrong trade for a branch nobody exercises often.
 
+**Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)** — that file had become a
+second live-issue register holding items this one did not have. All checked
+against the tree on 2026-07-26:
+
+- **`RoutineLibrary` shares one `values` map across routines**
+  (`shell/src/components/RoutineLibrary.tsx`). The engine is safe against
+  *unknown* names — `routines/engine.py` builds defaults from `routine.variables`
+  and `resolve_template` only reads names the template mentions — so a stray key
+  is inert. The live edge is a **name collision**: fill routine A's `path`, then
+  run routine B without input, and B's default `path` is overridden by A's value.
+  Scope `values` per routine id, or clear it when `filling` changes.
+- **Empty-text `sendMessage` has no guard.** `_run_send_message`
+  (`agent_core/rpc/conversation.py`) reads `params.get("text", "")` and never
+  checks it; the CLI does. An empty message persists a blank user turn the
+  rollback doesn't remove. Unreachable through the composer today — decide.
+- **Local-setup pre-flight HTTP runs on the read loop.**
+  `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch handler
+  and calls `is_running()`, which can block frame delivery up to 5s.
+  `availableRoles` was moved off the read loop for exactly this reason; same shape
+  as `shell.pickDirectory` blocking the worker on a modal.
+- **Four stale-docstring flags, carried forward UNVERIFIED** from an earlier
+  sweep: the `PermissionRequest` dataclass (`permissions/gate.py`),
+  `ModelRouter.register` (`providers/router.py`), a claim in
+  `openai_provider.py`, and `default_cloud_model([])`'s defensive gap
+  (`models_catalog.py`). All four symbols still exist; whether the observations
+  still hold has not been re-checked. Re-verify or delete the line.
+- **Polish, unstarted:** no conversation search in the sidebar; **scoped consent
+  ("always allow" per site)** — a SAFE grant is keyed by tool id, so after the
+  first card every later `read_web_page` is ungated and model-addressed, with
+  Activity-Panel visibility as the shipped mitigation; "Not now" sometimes
+  described by the model as a malfunction; routine-save affordance is a small
+  link in the activity strip.
+
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 
 - **The webview cannot open an external link, at all.** `main.rs` registers three

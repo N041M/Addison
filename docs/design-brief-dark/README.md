@@ -127,4 +127,4 @@ None — no images or icon fonts. Arrows/chevrons are text glyphs (←, «, », 
 
 ## Files
 - `Addison Prototype v2.dc.html` — complete prototype: markup + inline styles in `<x-dc>`, behavior in the `Component` class (scramble engine ~line 358, send/streaming ~line 404, view/collapse transitions ~line 280–335, all screen content in `renderVals()`).
-- `support.js` — prototype runtime only (renders the file in a browser); not part of the design.
+- `support.js` — prototype runtime only (renders the file in a browser); not part of the design. One copy, at the root of this directory. `brand/` used to carry a byte-identical second copy; that was deleted 2026-07-26 and the three `brand/*.dc.html` files now load `../support.js`.

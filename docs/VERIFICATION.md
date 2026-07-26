@@ -106,48 +106,12 @@ CLAUDE.md, not just a green run:
       each other (`tests/test_module_boundaries.py` also enforces).
 - [ ] No user-facing string reworded without reason; no jargon introduced.
 
-## 4. Open items (verify or decide)
+## 4. Open items and known gaps
 
-Everything here was checked against the tree on 2026-07-26.
-
-- [ ] **RoutineLibrary shares one `values` map across routines**
-      (`shell/src/components/RoutineLibrary.tsx`). The engine is safe against
-      *unknown* names — `routines/engine.py` builds defaults from
-      `routine.variables` and `resolve_template` only reads names the template
-      mentions — so a stray key is inert. The live edge is a **name collision**:
-      fill routine A's `path`, then run routine B without input, and B's default
-      `path` is overridden by A's value. Scope `values` per routine id, or clear
-      it when `filling` changes.
-- [ ] **Empty-text `sendMessage` has no guard.** `_run_send_message`
-      (`agent_core/rpc/conversation.py`) reads `params.get("text", "")` and never
-      checks it; the CLI does. An empty message would persist a blank user turn
-      that the rollback doesn't remove. Unreachable through the composer today —
-      decide whether to add the guard.
-- [ ] **Local-setup pre-flight HTTP runs on the read loop.**
-      `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch
-      handler and calls `is_running()`, which can block frame delivery up to 5s.
-      `availableRoles` was moved off the read loop for exactly this reason. Same
-      shape as `shell.pickDirectory` blocking the worker on a modal dialog.
-- [ ] **Stale docstrings / dead-looking-but-seam items** flagged by an earlier
-      cleanup sweep and carried forward **unverified**: the `PermissionRequest`
-      dataclass (`permissions/gate.py`), `ModelRouter.register`
-      (`providers/router.py`), a claim in `openai_provider.py`, and
-      `default_cloud_model([])`'s defensive gap (`models_catalog.py`). All four
-      symbols still exist; whether the original observations still hold has not
-      been re-checked. Human calls, none urgent — re-verify or delete the line.
-
-### Closed since this file was last written
-
-- **Routine engine crash-on-raise** — a tool that *raised* crashed the run,
-  bypassed the `on_failure` policy and stranded the `routine_runs` row at
-  `running`. Fixed; a raise is now a failed step, same as the live orchestrator.
-  (Note the residual in HANDOFF.md: the dev-only guard in `routines/engine.py`
-  re-implements `on_failure` inline instead of falling through to the canonical
-  block.)
-- **Double keychain probe per message** — one probe per turn.
-- **Stream-chunk turn correlation** — `useTurn` holds `currentTurnRef`; Stop and
-  every new turn reassign it, and a result arriving from an abandoned turn is
-  dropped rather than overwriting "(Stopped.)" or a later answer.
+Owned entirely by **`HANDOFF.md` → "Known gaps"** — the single live-issue
+register. This section used to keep its own list; it drifted into a second
+register holding four items the other one did not have, which is the same
+two-copies problem §5 already solved by delegating. Moved there 2026-07-26.
 
 ## 5. Manual desktop pass
 
@@ -158,21 +122,4 @@ and there is retired.
 
 ## 6. Known-open polish items
 
-- **Local conversation search.** The sidebar lists real conversations grouped
-  Today / Earlier and renames on double-click, but there is no search field.
-- **Scoped consent ("always allow" per site).** A SAFE grant is keyed by tool id,
-  so after the first card every later `read_web_page` is ungated and
-  model-addressed. Visibility is the mitigation that shipped (the Activity Panel
-  names the host); narrowing the grant to a site is a permission-gate change.
-- **"Not now" phrased by the model as a malfunction** ("didn't go through") in
-  some replies.
-- **Routine-save affordance discoverability** — a small link in the activity
-  strip.
-- **`primary.txt` widget guidance is interim-correct only.** It tells the model
-  Addison cannot build custom-app widgets. True of today's code; wrong as a
-  statement of the amendment's intent. Rewrite capability-aware in Phase-2 step 6.
-
-Raw-markdown rendering, the conversation list, the token/cost meter and the
-lingering empty-stack Undo button were all on this list and have all shipped
-(`Markdown.tsx`, `Sidebar.tsx`, the rail's "Tokens this month", and the header's
-`hasUndoableActions` guard).
+Also moved to `HANDOFF.md` → "Known gaps" (2026-07-26), for the same reason.
