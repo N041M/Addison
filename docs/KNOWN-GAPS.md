@@ -20,6 +20,32 @@ ledgers, the deferred-with-reason table and the 07-24 "where a bug could have
 entered" list were folded in here when those sections were retired (2026-07-26);
 everything still open is below, and the closed rows went to git.
 
+**The inline widget rail works but is not designed yet (UI/UX, owner call).**
+The *functional* bug is fixed (`d35f113`, 2026-07-27): below 1024px the rail starts
+closed and the header's «/» shows and hides it. What is still wrong is how it looks
+and where it goes.
+
+- **No transition.** The beside rail animates four properties on collapse —
+  `width .35s, opacity .25s, margin-left .35s, transform .35s` — and the brief asks
+  for exactly that (`design-brief-dark/README.md`: "Sidebar collapses via header «
+  chevron (width/opacity/translate animate .35s)"). The inline form is
+  conditionally *mounted*, so it pops in and out with no transition at all. Two
+  affordances driven by one button behave visibly differently.
+- **It lands in the wrong place.** It renders in `ChatThread`'s `footer`, so it sits
+  in the reading column between the last message and the composer — which is why it
+  read as "covering the chat window" even when short. It pushes the conversation up
+  and competes with the composer for the eye.
+- **The placement has no design authority behind it.** `IMPLEMENTATION.md` says
+  "**Mobile** (<md): keep the existing drawer + inline-widgets structure" — that
+  covers below 768px only. The 768–1024 band was invented by the 07-26 responsive
+  work by extrapolating the mobile rule; the brief never specifies it. Worth
+  deciding rather than inheriting.
+- **Prior art that was deleted:** `BottomSheet.tsx` was removed in the v4 cleanup as
+  orphaned "since widgets moved inline on mobile". A sheet or slide-over anchored to
+  the header button — sibling to the existing `MobileDrawer` — is the obvious
+  candidate, and it would fix the transition and the position together. Check git
+  history before rebuilding it from scratch.
+
 **Still open from the retired step-1 ledgers:**
 
 - **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
