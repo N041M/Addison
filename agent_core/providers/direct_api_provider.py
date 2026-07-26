@@ -66,8 +66,13 @@ class DirectAPIProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
-        # Thread ``effort`` + per-call ``timeout`` ([MF-A]) through to the underlying
-        # adapter (an AnthropicProvider today), which honors effort only for a model
-        # that supports it.
-        return self._require_adapter().send(messages, tools, effort=effort, timeout=timeout)
+        # Thread ``effort`` + per-call ``timeout`` ([MF-A]) + ``on_delta`` through to
+        # the underlying adapter (an AnthropicProvider today), which honors effort
+        # only for a model that supports it. Passing the sink on rather than
+        # swallowing it is what lets a wrapped provider stream — this class adds
+        # routing, not a transport of its own.
+        return self._require_adapter().send(
+            messages, tools, effort=effort, timeout=timeout, on_delta=on_delta
+        )

@@ -721,6 +721,91 @@ commit, pushed, unmerged, and **not present on either `master` or
 `redesign/dark-v2`**. If a doc or a comment implies the thread is windowed today,
 it is wrong.
 
+## What shipped 07-26 — per-token streaming (`streaming-replies`)
+
+Owner report: replies did not appear as they were written, they just appeared.
+Two commits, and the first is a bug fix, not a prerequisite chore.
+
+### `d2174c1` — the reveal never ran in production
+
+`d8493e6` (dark v4 wave, above) added a whole-answer scramble reveal for the
+stated reason that "the core does not stream". **It never executed on a real
+turn**, and the reason is worth keeping written down because three comments and a
+test all asserted the opposite premise:
+
+- The core DID emit `conversation.streamChunk` — once per turn, with the entire
+  finished answer, from `orchestrator.stream_to_frontend(response.text)`.
+- `conversation.sendMessage`'s **result carries no answer text** (only
+  `userMessageId` / `assistantMessageId` / `answeredWith`), so that one chunk was
+  the sole delivery path for the reply. `extractFinalText` returned null.
+- So `revealFinalText`'s guard (`!streamTextRef.current && finalText`) was false
+  on both halves, and the engine `appendStreamedText` had just started was torn
+  down by `runTurn`'s `finally` a frame later. One 15-character frame of noise,
+  then the whole answer.
+
+Fixed in `useTurn`: an engine still mid-resolve when the turn settles is animating
+text that has fully arrived, so it is promoted to a reveal and its `onDone`
+releases the overlay. Catching up **before** the turn settles stays a pause
+between deltas and keeps the engine — dropping it would hand the next chunk a
+fresh engine that re-animates the whole accumulated prefix from character zero.
+
+### The second commit on the branch — real streaming, all four providers
+
+`ModelProvider.send` gains `on_delta: DeltaSink | None`. A provider that streams
+calls it per piece of prose and **still returns the same complete
+`ModelResponse`**, so the tool loop, `usage_log` recording and the fallback chain
+cannot tell the two paths apart — streaming stays a transport detail, and the
+`effort` precedent (accept-and-ignore) covers every provider that can't do it.
+
+Two rules bind every implementation, and the tests are built around them rather
+than around "some deltas arrived":
+
+1. **What is streamed equals what is returned.** Every provider test asserts the
+   joined deltas against `response.text`.
+2. **Only prose reaches the sink.** Anthropic `input_json_delta` and
+   `thinking_delta`, OpenAI fragmented `function.arguments`, Google
+   `functionCall` parts — all accumulated silently, never shown.
+
+Shared primitives in `providers/base.py`: `open_stream` (uses
+`client.send(request, stream=True)`, which composes with `request_with_retry`
+unchanged — `idempotent=False` still retries only the connect-level failures that
+prove nothing was generated or billed) and `iter_sse_json`.
+
+Per-provider notes worth not rediscovering:
+
+- **Ollama streams NDJSON, not SSE**, and its streaming is **conditional**: a
+  model on the non-native **fallback** path returns tool calls as a fenced JSON
+  block inside ordinary reply text, so streaming it would put
+  `{"tool": "delete_file"}` on screen as though Addison had said it. Whether a
+  piece of that text is prose or machinery is only knowable once the block closes,
+  so `native or not tools` gates it. Not a limitation to remove later.
+- **OpenAI needs `stream_options.include_usage`** or a streamed turn reports no
+  tokens at all and §4.8's substrate silently loses it.
+- **Google's `usageMetadata` is cumulative, not additive** — last frame wins.
+  Summing frames would over-report every streamed turn into the token meter.
+- **Setup Assistant relay accepts and ignores the sink**: its requests are SIGNED
+  over the assembled body (§5), so a streaming variant is a change to the relay's
+  contract, which lives outside this repo. Its answers arrive whole and get the
+  frontend reveal.
+
+**New honesty rule on the routed path.** Once a delta has been shown, a
+`ProviderUnavailable` may **not** fall forward: the next candidate returns a
+COMPLETE answer, which appends to the partial one and yields a single message that
+reads as one answer and is two. Nothing can un-say what was shown, so the turn
+fails with that provider's own sentence. Same reasoning as the existing
+`committed` cross-provider forbid. A stream that dies **before** emitting anything
+falls forward exactly as before — that case is tested too, so the rule cannot
+quietly become "streaming disabled fallback".
+
+**Visible side effect, deliberate:** a tool round's preamble text ("Let me look
+at that…") now reaches the reader as it arrives, where previously only the final
+answer was pushed. It appends to the same message.
+
+`supports_streaming` on `ProviderCapabilities` is **declared and read by
+nothing** — verified by grep. It was not repurposed as "honours `on_delta`",
+because Ollama's answer to that is conditional; the reasoning lives at each
+`send()` instead.
+
 ## The scope amendment in one screen (read the full doc)
 
 - **Identity** — butler. Developer = coding harness + Addison's safety/QoL;

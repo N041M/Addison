@@ -37,6 +37,8 @@ from agent_core.providers.base import (
     Usage,
     effective_timeout,
     exception_for_http_status,
+    iter_sse_json,
+    open_stream,
     request_with_retry,
 )
 
@@ -128,9 +130,8 @@ class OpenAIProvider:
         return ProviderCapabilities(
             native_tool_calling=True,
             max_context_tokens=128_000,
-            # Matches AnthropicProvider: send() is a single non-streaming POST, but
-            # the models themselves support streaming — the flag reports the model
-            # capability, consistent across cloud providers.
+            # Honoured: send() streams when the caller passes ``on_delta``, and
+            # falls back to a single POST when it does not.
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # modern GPT-class models can analyze images
@@ -142,6 +143,7 @@ class OpenAIProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
         # ``effort`` is an Anthropic "answer style" (§4.1.1); OpenAI has no such
         # per-message control here, so it is accepted and ignored for a uniform call.
@@ -160,6 +162,9 @@ class OpenAIProvider:
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
 
+        if on_delta is not None:
+            return self._send_streaming(headers, body, timeout, on_delta)
+
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
             # Never echo the response body or the key — just a plain next step. Same
@@ -169,6 +174,43 @@ class OpenAIProvider:
                 response.status_code, self._http_error_message(response.status_code)
             )
         return _translate_response(response.json())
+
+    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+        """The same request with ``stream: true``, relaying text as it arrives.
+
+        ``stream_options.include_usage`` is what keeps the ``usage_log`` row honest:
+        without it a streamed completion reports no token counts at all, and §4.8's
+        substrate would quietly lose every streamed turn. A server that ignores the
+        option (an OpenAI-compatible custom endpoint may) simply yields no usage, and
+        ``ModelResponse.usage`` stays None — never a guess.
+        """
+        body = {**body, "stream": True, "stream_options": {"include_usage": True}}
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
+        injected = self._client
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
+        url = f"{self._base_url}/chat/completions"
+        try:
+            with open_stream(
+                client,
+                url,
+                headers=headers,
+                body=body,
+                deadline=deadline,
+                allow_retry=timeout is None,
+            ) as response:
+                if response.status_code >= 400:
+                    raise exception_for_http_status(
+                        response.status_code, self._http_error_message(response.status_code)
+                    )
+                return _translate_stream(iter_sse_json(response), on_delta)
+        except httpx.HTTPError:
+            raise ProviderUnavailable(
+                f"Couldn't reach {self._service_label}. "
+                "Check your internet connection and try again."
+            ) from None
+        finally:
+            if injected is None:
+                client.close()
 
     def _resolve_key(self) -> str:
         getter = self._api_key_getter
@@ -290,6 +332,73 @@ def _translate_response(data: dict) -> ModelResponse:
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
     return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_stream(frames, on_delta) -> ModelResponse:
+    """Fold a chat.completions SSE stream into one ``ModelResponse``.
+
+    Each frame carries ``choices[0].delta``. Text arrives as ``delta.content``;
+    tool calls arrive as ``delta.tool_calls`` entries keyed by ``index``, whose
+    ``function.arguments`` is a JSON string built up a fragment at a time (and
+    whose ``id``/``name`` appear only on the first fragment, so they are recorded
+    and not overwritten by the later ones). Only ``delta.content`` reaches the
+    sink; argument fragments are machinery.
+
+    Frames with an empty ``choices`` list are normal — that is how the usage-only
+    final frame arrives when ``include_usage`` is on.
+    """
+    text_parts: list[str] = []
+    pending: dict[int, dict] = {}
+    finish_reason: str | None = None
+    usage: Usage | None = None
+
+    for frame in frames:
+        frame_usage = _translate_usage(frame.get("usage"))
+        if frame_usage is not None:
+            usage = frame_usage
+        choices = frame.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0] or {}
+        reason = choice.get("finish_reason")
+        if isinstance(reason, str) and reason:
+            finish_reason = reason
+        delta = choice.get("delta") or {}
+        piece = delta.get("content")
+        if isinstance(piece, str) and piece:
+            text_parts.append(piece)
+            on_delta(piece)
+        for raw in delta.get("tool_calls") or []:
+            if not isinstance(raw, dict):
+                continue
+            slot = pending.setdefault(
+                raw.get("index") or 0, {"id": None, "name": None, "arguments": ""}
+            )
+            if isinstance(raw.get("id"), str) and raw["id"]:
+                slot["id"] = raw["id"]
+            fn = raw.get("function") or {}
+            if isinstance(fn.get("name"), str) and fn["name"]:
+                slot["name"] = fn["name"]
+            if isinstance(fn.get("arguments"), str):
+                slot["arguments"] += fn["arguments"]
+
+    tool_calls = [
+        ToolCallRequest(
+            id=slot["id"] or slot["name"],
+            tool_id=slot["name"],
+            args=_parse_arguments(slot["arguments"]),
+        )
+        for _index, slot in sorted(pending.items(), key=lambda kv: kv[0])
+        if slot["name"]
+    ]
+    text = "".join(text_parts) if text_parts else None
+    if tool_calls:
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(
+        text=text, tool_calls=[], finish_reason=finish_reason or "stop", usage=usage
+    )
 
 
 def _translate_usage(usage) -> Usage | None:

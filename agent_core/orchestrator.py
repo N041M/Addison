@@ -154,6 +154,42 @@ class Conversation:
         )
 
 
+class _DeltaRelay:
+    """Threads streamed prose to the frontend and remembers what has been shown.
+
+    Providers call this per delta (``ModelProvider.send``'s ``on_delta``). It
+    answers two questions the turn needs, and they are NOT the same question:
+
+    * ``shown_this_send`` — did THIS provider call stream anything? A provider that
+      ignored ``on_delta`` streamed nothing, so the finished ``response.text``
+      still has to be pushed. Without the distinction the answer either never
+      arrives or arrives twice.
+    * ``shown_this_turn`` — is part of an answer already on the reader's screen?
+      That is what forbids the routed path from falling forward: appending a
+      second, complete answer to a partial one produces a single message that
+      reads as one answer and is two.
+
+    Empty deltas are dropped rather than counted — a provider that emits a
+    zero-length chunk has shown the reader nothing, and treating it as "shown"
+    would suppress the finished text and lose the answer entirely.
+    """
+
+    def __init__(self, sink) -> None:
+        self._sink = sink
+        self.shown_this_send = False
+        self.shown_this_turn = False
+
+    def begin_send(self) -> None:
+        self.shown_this_send = False
+
+    def __call__(self, text: str) -> None:
+        if not text:
+            return
+        self.shown_this_send = True
+        self.shown_this_turn = True
+        self._sink(text)
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -272,14 +308,17 @@ class Orchestrator:
         # many at once" may be the page's decision.
         calls_made = 0
         budget_spent = False
+        relay = _DeltaRelay(self.stream_to_frontend)
         for _round in range(_MAX_TOOL_ROUNDS):
             started = time.monotonic()
+            relay.begin_send()
             response = provider.send(
                 messages=conversation.messages,
                 # The model only ever sees the tools visible in this mode — SAFE
                 # hides every dev-only tool, so it can't even request run_command.
                 tools=self.tool_registry.visible_tools(mode),
                 effort=effort,
+                on_delta=relay,
             )
             latency_ms = int((time.monotonic() - started) * 1000)
             # Record this call's usage + latency at the single choke point (§4.8).
@@ -292,7 +331,10 @@ class Orchestrator:
                     break
                 continue
             conversation.append_assistant_message(response.text)
-            self.stream_to_frontend(response.text)
+            # Already relayed as it arrived, unless this provider ignored on_delta —
+            # then the finished text is the reader's only copy of the answer.
+            if not relay.shown_this_send:
+                self.stream_to_frontend(response.text)
             # A single-path answer is the model the caller picked, so it is not routed.
             self.on_answered(model_id, self._model_label(model_id), False, False)
             break
@@ -324,6 +366,7 @@ class Orchestrator:
         answered: RoutingCandidate | None = None
         calls_made = 0
         budget_spent = False
+        relay = _DeltaRelay(self.stream_to_frontend)
 
         for _round in range(_MAX_TOOL_ROUNDS):
             response = None
@@ -350,6 +393,7 @@ class Orchestrator:
                     continue
                 provider = self.model_router.resolve(cand.role, cand.model_id)
                 started = time.monotonic()
+                relay.begin_send()
                 try:
                     response = provider.send(
                         messages=conversation.messages,
@@ -359,8 +403,20 @@ class Orchestrator:
                         # to its own default, so a healthy first send is byte-identical
                         # to today, and no single hanging candidate can blow the budget.
                         timeout=remaining,
+                        on_delta=relay,
                     )
                 except ProviderUnavailable as exc:
+                    # Text already on the reader's screen bars the walk, for the same
+                    # reason `committed` bars a cross-provider advance: the next
+                    # candidate would produce a COMPLETE answer, which appends to the
+                    # partial one and yields a single message that reads as one answer
+                    # and is two. There is no way to unsay what was already shown —
+                    # the frontend's overlay may lag the truth but never rewinds it —
+                    # so the honest move is to fail with this provider's own sentence.
+                    # A stream that died before emitting anything showed nothing, so
+                    # that case falls forward exactly as it always has.
+                    if relay.shown_this_turn:
+                        raise
                     last_unavailable = exc
                     self._cool(cand.provider_id)
                     idx += 1
@@ -393,7 +449,9 @@ class Orchestrator:
                     break
                 continue
             conversation.append_assistant_message(response.text)
-            self.stream_to_frontend(response.text)
+            # Already relayed as it arrived, unless this provider ignored on_delta.
+            if not relay.shown_this_send:
+                self.stream_to_frontend(response.text)
             answered = candidate
             break
         else:

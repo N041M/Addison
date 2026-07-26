@@ -7,7 +7,10 @@ branches on the concrete provider. Capability differences are handled via
 
 from __future__ import annotations
 
+import json
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Protocol, runtime_checkable
@@ -119,6 +122,74 @@ def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
     return ProviderRequestRejected(message)
 
 
+# --- streaming primitives (shared by every streaming provider) --------------
+# Per-token delivery. Each provider translates its OWN wire format, but opening
+# the stream and splitting SSE frames are identical everywhere, so they live here
+# rather than as four near-copies.
+
+#: What a provider calls with each piece of assistant TEXT as it arrives. Prose
+#: only — never a tool call's arguments, and never a reasoning/thinking block: the
+#: sink's text is appended verbatim to what the reader is watching, so anything
+#: that is not part of the answer must not reach it.
+DeltaSink = Callable[[str], None]
+
+
+@contextmanager
+def open_stream(
+    client: httpx.Client,
+    url: str,
+    *,
+    headers: dict,
+    body: dict,
+    deadline: float,
+    allow_retry: bool,
+) -> Iterator[httpx.Response]:
+    """POST ``body`` and yield the response with its body UNREAD, for streaming.
+
+    ``client.send(request, stream=True)`` returns once the status line is in, so
+    this composes with ``request_with_retry`` unchanged and keeps the no-double-
+    billing rule intact: ``idempotent=False`` retries only the connection-level
+    failures that prove the request never arrived, and those raise before any
+    token has been generated or billed. Nothing here reads the body, so the
+    ``>=500`` re-send inside the helper stays unreachable (it is idempotent-only).
+
+    The caller checks ``status_code`` and iterates; the stream is always closed.
+    """
+    request = client.build_request("POST", url, headers=headers, json=body, timeout=deadline)
+    response = request_with_retry(
+        lambda: client.send(request, stream=True),
+        idempotent=False,
+        allow_retry=allow_retry,
+    )
+    try:
+        yield response
+    finally:
+        response.close()
+
+
+def iter_sse_json(response: httpx.Response) -> Iterator[dict]:
+    """Yield each ``data:`` frame of an SSE response, JSON-decoded.
+
+    Comments, blank separators, the ``event:`` lines and the ``[DONE]`` sentinel
+    are skipped, as is any frame that will not parse — a stream is read as it
+    arrives, so a truncated or malformed final frame is an ordinary way for one to
+    end and must not raise in the middle of relaying an answer the reader is
+    already looking at. Only dict frames are yielded, so callers can index safely.
+    """
+    for line in response.iter_lines():
+        if not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if not payload or payload == "[DONE]":
+            continue
+        try:
+            frame = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(frame, dict):
+            yield frame
+
+
 def effective_timeout(override: float | None, default: float) -> float:
     """The per-call timeout a provider actually uses ([MF-A]). ``None`` -> the
     provider's own default (freeze). A value only ever TIGHTENS the default, never
@@ -204,10 +275,27 @@ class ModelProvider(Protocol):
     # never EXTENDS past its own default; the override only ever tightens it
     # (``effective_timeout``), so passing the whole remaining budget on the first,
     # healthy send resolves to today's constant exactly.
+    #
+    # ``on_delta`` is how an answer reaches the reader AS IT ARRIVES. A provider
+    # that streams calls it with each piece of assistant prose and STILL returns
+    # the same complete ``ModelResponse`` — so the tool loop, usage recording and
+    # the fallback chain are unaffected by whether streaming happened. Like
+    # ``effort``, a provider that cannot honour it ACCEPTS and IGNORES it; the
+    # orchestrator then pushes the finished text itself, so the only difference is
+    # whether the answer appears progressively. That is what keeps this
+    # capability-driven rather than an ``isinstance`` branch (§2).
+    #
+    # Two rules bind every implementation:
+    #   * Only assistant PROSE goes to the sink — never tool-call arguments and
+    #     never a reasoning block. The sink's text is appended verbatim to what
+    #     the reader is watching, so it may not contain machinery.
+    #   * What is streamed must equal what is returned. The display may lag the
+    #     ``ModelResponse``; it may never say something the response does not.
     def send(
         self,
         messages: list[Message],
         tools: list["ToolDefinition"],
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta: DeltaSink | None = None,
     ) -> ModelResponse: ...

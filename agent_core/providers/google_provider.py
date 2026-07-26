@@ -29,6 +29,8 @@ from agent_core.providers.base import (
     Usage,
     effective_timeout,
     exception_for_http_status,
+    iter_sse_json,
+    open_stream,
     request_with_retry,
 )
 
@@ -65,6 +67,7 @@ class GoogleProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
         # ``effort`` is an Anthropic "answer style" (§4.1.1); Gemini has no such
         # per-message control here, so it is accepted and ignored for a uniform call.
@@ -79,12 +82,50 @@ class GoogleProvider:
             body["tools"] = tool_blocks
 
         headers = {"x-goog-api-key": api_key, "content-type": "application/json"}
+        if on_delta is not None:
+            return self._send_streaming(headers, body, timeout, on_delta)
+
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
             raise exception_for_http_status(
                 response.status_code, _http_error_message(response.status_code)
             )
         return _translate_response(response.json())
+
+    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+        """``:streamGenerateContent?alt=sse``, relaying text as it arrives.
+
+        Gemini's streaming method takes the SAME request body and emits frames of
+        the SAME shape as ``generateContent`` — each a partial ``candidates`` list —
+        so ``alt=sse`` is the only change beyond the method name. Without it the
+        endpoint answers with a JSON array rather than an event stream, which does
+        not arrive progressively at all.
+        """
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
+        injected = self._client
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
+        url = f"{_BASE_URL}/models/{self._model}:streamGenerateContent?alt=sse"
+        try:
+            with open_stream(
+                client,
+                url,
+                headers=headers,
+                body=body,
+                deadline=deadline,
+                allow_retry=timeout is None,
+            ) as response:
+                if response.status_code >= 400:
+                    raise exception_for_http_status(
+                        response.status_code, _http_error_message(response.status_code)
+                    )
+                return _translate_stream(iter_sse_json(response), on_delta)
+        except httpx.HTTPError:
+            raise ProviderUnavailable(
+                "Couldn't reach Google. Check your internet connection and try again."
+            ) from None
+        finally:
+            if injected is None:
+                client.close()
 
     def _resolve_key(self) -> str:
         getter = self._api_key_getter
@@ -216,6 +257,52 @@ def _translate_response(data: dict) -> ModelResponse:
             text_parts.append(part["text"])
     text = "".join(text_parts) if text_parts else None
     usage = _translate_usage(data.get("usageMetadata"))
+    if tool_calls:
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_stream(frames, on_delta) -> ModelResponse:
+    """Fold a ``streamGenerateContent`` SSE stream into one ``ModelResponse``.
+
+    Every frame is a partial ``generateContent`` payload, so this is
+    ``_translate_response`` applied incrementally: text parts append and go to the
+    sink, ``functionCall`` parts accumulate. ``usageMetadata`` is CUMULATIVE across
+    frames rather than additive, so the last one that parses wins — summing them
+    would report several times the tokens actually spent, straight into
+    ``usage_log`` and the token meter (§4.8).
+    """
+    text_parts: list[str] = []
+    tool_calls: list[ToolCallRequest] = []
+    usage: Usage | None = None
+
+    for frame in frames:
+        frame_usage = _translate_usage(frame.get("usageMetadata"))
+        if frame_usage is not None:
+            usage = frame_usage
+        candidates = frame.get("candidates") or []
+        content = (candidates[0].get("content") if candidates else None) or {}
+        for part in content.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if "functionCall" in part:
+                fn = part.get("functionCall") or {}
+                name = fn.get("name")
+                if not name:
+                    continue
+                args = fn.get("args")
+                if not isinstance(args, dict):
+                    args = {}
+                tool_calls.append(
+                    ToolCallRequest(id=f"google-{uuid.uuid4().hex[:8]}", tool_id=name, args=args)
+                )
+            elif isinstance(part.get("text"), str) and part["text"]:
+                text_parts.append(part["text"])
+                on_delta(part["text"])
+
+    text = "".join(text_parts) if text_parts else None
     if tool_calls:
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage

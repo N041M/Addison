@@ -143,7 +143,7 @@ class _ScriptedProvider:
             supports_streaming=False, runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         return self._responses.pop(0)
 
 

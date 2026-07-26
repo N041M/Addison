@@ -17,6 +17,8 @@ reads ``.id``, ``.description`` and ``.parameters_schema`` off each tool.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 
 from agent_core.providers.base import (
@@ -29,6 +31,8 @@ from agent_core.providers.base import (
     Usage,
     effective_timeout,
     exception_for_http_status,
+    iter_sse_json,
+    open_stream,
     request_with_retry,
 )
 
@@ -86,6 +90,7 @@ class AnthropicProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
         # Fetch the key fresh for THIS request; keep it in a local only (§5, §8.3).
         api_key = self._resolve_key()
@@ -119,6 +124,9 @@ class AnthropicProvider:
             "content-type": "application/json",
         }
 
+        if on_delta is not None:
+            return self._send_streaming(headers, body, timeout, on_delta)
+
         response = self._post(headers, body, timeout)
 
         if response.status_code >= 400:
@@ -130,6 +138,44 @@ class AnthropicProvider:
             )
 
         return _translate_response(response.json())
+
+    def _send_streaming(self, headers: dict, body: dict, timeout, on_delta) -> ModelResponse:
+        """The same request with ``stream: true``, relaying text as it arrives.
+
+        Returns the SAME ``ModelResponse`` the non-streaming path would: the
+        orchestrator's tool loop, usage recording and fallback chain cannot tell
+        the two apart, which is what keeps streaming a transport detail.
+        """
+        body = {**body, "stream": True}
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
+        injected = self._client
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
+        try:
+            with open_stream(
+                client,
+                _API_URL,
+                headers=headers,
+                body=body,
+                deadline=deadline,
+                # [MF-A] as on the non-streaming path: a caller-supplied deadline
+                # means the attempt loop is driving, and its chain is the retry.
+                allow_retry=timeout is None,
+            ) as response:
+                if response.status_code >= 400:
+                    raise exception_for_http_status(
+                        response.status_code, _http_error_message(response.status_code)
+                    )
+                return _translate_stream(iter_sse_json(response), on_delta)
+        except httpx.HTTPError:
+            # Identical wording to _post: a stream that drops mid-answer is the
+            # same problem to the reader as one that never opened.
+            raise ProviderUnavailable(
+                "Couldn't reach the Anthropic service. "
+                "Check your internet connection and try again."
+            ) from None
+        finally:
+            if injected is None:
+                client.close()
 
     def _resolve_key(self) -> str:
         getter = self._api_key_getter
@@ -264,6 +310,108 @@ def _translate_response(data: dict) -> ModelResponse:
         finish_reason=data.get("stop_reason", "stop"),
         usage=_translate_usage(data.get("usage")),
     )
+
+
+def _translate_stream(frames, on_delta) -> ModelResponse:
+    """Fold the Messages API event stream into one ``ModelResponse``.
+
+    The events that matter, and nothing else (an unknown event type is skipped,
+    so a new one the API adds can never derail an answer in flight):
+
+    * ``message_start``     — carries ``usage.input_tokens``
+    * ``content_block_start``/``_delta``/``_stop`` — text and ``tool_use`` blocks,
+      identified by ``index`` because they interleave
+    * ``message_delta``     — the real ``stop_reason`` and final ``output_tokens``
+
+    ``text_delta`` is the ONLY thing handed to ``on_delta``. A ``tool_use``
+    block's ``input_json_delta`` is machinery — half-built JSON that means nothing
+    to a reader — so it is accumulated silently and parsed when its block closes.
+    """
+    text_parts: list[str] = []
+    # Keyed by block index: tool_use blocks arrive interleaved with text and are
+    # completed out of order relative to their own start event.
+    tool_blocks: dict[int, dict] = {}
+    stop_reason = "stop"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+    for frame in frames:
+        event = frame.get("type")
+        if event == "message_start":
+            usage = (frame.get("message") or {}).get("usage") or {}
+            if isinstance(usage.get("input_tokens"), int):
+                input_tokens = usage["input_tokens"]
+            if isinstance(usage.get("output_tokens"), int):
+                output_tokens = usage["output_tokens"]
+        elif event == "content_block_start":
+            block = frame.get("content_block") or {}
+            if block.get("type") == "tool_use":
+                tool_blocks[frame.get("index")] = {
+                    "id": block.get("id"),
+                    "name": block.get("name"),
+                    "json": "",
+                }
+        elif event == "content_block_delta":
+            delta = frame.get("delta") or {}
+            kind = delta.get("type")
+            if kind == "text_delta":
+                piece = delta.get("text")
+                if isinstance(piece, str) and piece:
+                    text_parts.append(piece)
+                    on_delta(piece)
+            elif kind == "input_json_delta":
+                block = tool_blocks.get(frame.get("index"))
+                if block is not None and isinstance(delta.get("partial_json"), str):
+                    block["json"] += delta["partial_json"]
+            # Any other delta type (a thinking block among them) is deliberately
+            # dropped: it is not part of the answer, so it must not be shown and
+            # must not join the text the response returns.
+        elif event == "message_delta":
+            reason = (frame.get("delta") or {}).get("stop_reason")
+            if isinstance(reason, str) and reason:
+                stop_reason = reason
+            usage = frame.get("usage") or {}
+            if isinstance(usage.get("output_tokens"), int):
+                output_tokens = usage["output_tokens"]
+        elif event == "error":
+            # The stream itself reported a failure partway through. Transient by
+            # nature (overloaded_error is the common one), and the plain sentence
+            # is the same one an HTTP 5xx gets.
+            raise ProviderUnavailable(_http_error_message(500))
+
+    tool_calls = [
+        ToolCallRequest(
+            id=block["id"],
+            tool_id=block["name"],
+            args=_parse_tool_input(block["json"]),
+        )
+        for _index, block in sorted(tool_blocks.items(), key=lambda kv: kv[0])
+        if block.get("id") and block.get("name")
+    ]
+    text = "".join(text_parts) if text_parts else None
+    usage = (
+        Usage(input_tokens=input_tokens, output_tokens=output_tokens)
+        if isinstance(input_tokens, int) and isinstance(output_tokens, int)
+        else None
+    )
+    return ModelResponse(
+        text=text, tool_calls=tool_calls, finish_reason=stop_reason, usage=usage
+    )
+
+
+def _parse_tool_input(raw: str) -> dict:
+    """A streamed ``tool_use`` input, reassembled from its json deltas. An empty
+    string is the wire's way of saying "no arguments"; anything unparseable is
+    treated the same way rather than raising, so one malformed call cannot lose an
+    answer that has already been shown — the tool then reports the missing
+    argument through the ordinary result path."""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _translate_usage(usage) -> Usage | None:

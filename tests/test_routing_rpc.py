@@ -144,7 +144,7 @@ def _spy_cloud():
     # A provider that raises if it is ever asked to send — the "zero outbound"
     # assertion made mechanical: a leak becomes a loud failure, not a silent send.
     class _NeverSend(_ScriptedProvider):
-        def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
+        def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
             raise AssertionError("cloud provider was reached under local_only")
     return _NeverSend([])
 

@@ -118,7 +118,7 @@ class _StubProvider:
             runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         raise AssertionError("fixture stub provider is never invoked")
 
 

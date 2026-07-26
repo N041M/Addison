@@ -40,6 +40,7 @@ from agent_core.providers.base import (
     Usage,
     effective_timeout,
     exception_for_http_status,
+    open_stream,
     request_with_retry,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
@@ -113,6 +114,7 @@ class OllamaProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
         # ``effort`` is a cloud-model "answer style" (§4.1.1); local models have no
         # such control, so it is accepted and ignored for a uniform provider call.
@@ -126,6 +128,18 @@ class OllamaProvider:
             # Fallback path: the model can't do native tool calls, so coax a fenced
             # JSON block by appending the instruction block to the system prompt.
             body["messages"] = _with_tool_instructions(history, tools)
+
+        # A model on the FALLBACK path must not stream, and this is not a limitation
+        # to work around later. Its tool calls come back as a fenced JSON block
+        # inside the ordinary reply text (``tool_call_parser``), so streaming that
+        # text would put ```json {"tool": "delete_file", ...}``` on screen as though
+        # Addison were saying it — machinery shown as prose, which
+        # ``ModelProvider.send``'s contract forbids. Whether a given piece of text
+        # is an answer or a call is only knowable once the block is complete, so
+        # this path answers whole and gets the frontend's reveal instead.
+        streaming = on_delta is not None and (native or not tools)
+        if streaming:
+            return self._send_streaming(body, timeout, on_delta, native)
 
         response = self._post("/api/chat", body, timeout)
         if response.status_code >= 400:
@@ -142,6 +156,40 @@ class OllamaProvider:
         if native:
             return _translate_native_response(message, usage)
         return _translate_fallback_response(message, usage)
+
+    def _send_streaming(
+        self, body: dict, timeout, on_delta, native: bool
+    ) -> ModelResponse:
+        """``/api/chat`` with ``stream: true``, relaying text as it arrives.
+
+        Ollama streams NDJSON, not SSE: one bare JSON object per line, no ``data:``
+        prefix and no ``[DONE]`` sentinel — the final object carries ``done: true``
+        and the token counts. So this iterates lines directly instead of reusing
+        ``iter_sse_json``.
+        """
+        body = {**body, "stream": True}
+        deadline = effective_timeout(timeout, _TIMEOUT_SECONDS)
+        injected = self._client
+        client = injected if injected is not None else httpx.Client(timeout=deadline)
+        try:
+            with open_stream(
+                client,
+                f"{self._base_url}/api/chat",
+                headers={"content-type": "application/json"},
+                body=body,
+                deadline=deadline,
+                allow_retry=timeout is None,
+            ) as response:
+                if response.status_code >= 400:
+                    raise exception_for_http_status(
+                        response.status_code, _chat_error_message(response.status_code)
+                    )
+                return _translate_stream(response.iter_lines(), on_delta, native)
+        except httpx.HTTPError:
+            raise ProviderUnavailable(_NOT_RUNNING_MESSAGE) from None
+        finally:
+            if injected is None:
+                client.close()
 
     # --- HTTP -------------------------------------------------------------
     def _post(self, path: str, body: dict, timeout: float | None = None) -> httpx.Response:
@@ -253,6 +301,66 @@ def _translate_fallback_response(message: dict, usage: Usage | None = None) -> M
             text=None, tool_calls=[tool_call], finish_reason="tool_use", usage=usage
         )
     return ModelResponse(text=text or None, tool_calls=[], finish_reason="stop", usage=usage)
+
+
+def _translate_stream(lines, on_delta, native: bool) -> ModelResponse:
+    """Fold an ``/api/chat`` NDJSON stream into one ``ModelResponse``.
+
+    Each line is a whole JSON object carrying an incremental ``message``; the last
+    one has ``done: true`` and the top-level token counts. Text accumulates and
+    goes to the sink; native ``tool_calls`` arrive complete on a single line (Ollama
+    does not fragment their arguments the way OpenAI does), so they are collected
+    as-is.
+
+    Reaches this function only on the native / no-tools path — see the guard in
+    ``send``, which keeps the fenced-JSON fallback out of the sink entirely. The
+    ``native`` flag is still honoured here rather than assumed, so a no-tools turn
+    on a non-native model cannot pick up tool-call handling it never asked for.
+
+    A line that will not parse is skipped: a stream is read as it arrives, so a
+    truncated final line must not raise over an answer already on screen.
+    """
+    text_parts: list[str] = []
+    tool_calls: list[ToolCallRequest] = []
+    usage: Usage | None = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            frame = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(frame, dict):
+            continue
+        frame_usage = _translate_usage(frame)
+        if frame_usage is not None:
+            usage = frame_usage
+        message = frame.get("message") or {}
+        piece = message.get("content")
+        if isinstance(piece, str) and piece:
+            text_parts.append(piece)
+            on_delta(piece)
+        if native:
+            for raw in message.get("tool_calls") or []:
+                if not isinstance(raw, dict):
+                    continue
+                fn = raw.get("function") or {}
+                name = fn.get("name")
+                if not name:
+                    continue
+                args = fn.get("arguments")
+                if not isinstance(args, dict):
+                    args = {}
+                tool_calls.append(ToolCallRequest(id=_call_id(), tool_id=name, args=args))
+
+    text = "".join(text_parts) if text_parts else None
+    if tool_calls:
+        return ModelResponse(
+            text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
+        )
+    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
 
 
 def _translate_usage(payload: dict) -> Usage | None:

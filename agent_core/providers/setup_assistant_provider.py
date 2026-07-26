@@ -81,9 +81,17 @@ class SetupAssistantProvider:
         tools: list,
         effort: str | None = None,
         timeout: float | None = None,
+        on_delta=None,
     ) -> ModelResponse:
         # ``effort`` is a PRIMARY cloud "answer style" (§4.1.1); the onboarding relay
         # has no such control, so it is accepted and ignored for a uniform call.
+        #
+        # ``on_delta`` is likewise accepted and ignored: every request to the relay is
+        # SIGNED over its assembled body (§5), and a streaming variant is a change to
+        # the relay's own contract — which lives outside this repo — not something
+        # this adapter can decide. The orchestrator pushes the finished text when a
+        # provider streams nothing, so onboarding answers still arrive; they arrive
+        # whole, and get the frontend's reveal instead.
         # Device id first (the body carries it), then sign the assembled body.
         device_id = self._device_id()
         body: dict = {

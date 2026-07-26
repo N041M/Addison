@@ -56,7 +56,7 @@ class _Provider:
             supports_streaming=False, runs_off_device=self._local,
         )
 
-    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         self.timeouts.append(timeout)
         self.sends += 1
         item = self._script.pop(0)
@@ -80,7 +80,7 @@ class _BlockingProvider:
             supports_streaming=False, runs_off_device=False,
         )
 
-    def send(self, messages, tools, effort=None, timeout=None) -> ModelResponse:
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         self.sends += 1
         self.timeouts.append(timeout)
         time.sleep(timeout if timeout is not None else 5.0)
