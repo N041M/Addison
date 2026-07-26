@@ -27,7 +27,14 @@
 //     anyway — this check makes that refusal explicit rather than incidental, so
 //     a rendered answer is never rewritten by an animation.
 
-import { useEffect, useRef, type ReactNode, type UIEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type UIEvent,
+} from "react";
 import type { DisplayMessage } from "../types/ui";
 import { Markdown } from "./Markdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
@@ -87,14 +94,35 @@ const TEXT_STAGGER_MS = 40;
 // renders at a time, so module scope cannot cross wires.
 let lastStaggeredConversation: string | null | undefined = undefined;
 
-/** Test-only: forget the session's stagger history between test cases. */
+// How far each conversation's window had been opened when the reader last left
+// it. Module scope for the same reason as the stagger key above: ChatThread
+// unmounts whenever a surface replaces the chat column, so an instance ref
+// forgets across a Settings detour — and coming back to a thread you had opened
+// out, to find only the last 30 messages again, is the window taking something
+// away that the old full-list render never did.
+const rememberedShown = new Map<string, number>();
+
+/** Test-only: forget the session's thread state (stagger history, windows). */
 export function resetThreadStaggerForTests() {
   lastStaggeredConversation = undefined;
+  rememberedShown.clear();
 }
 
 /** How many trailing rows animate on a switch — the ones the bottom-scrolled
  * viewport can actually show. Everything above the fold stays still. */
 const STAGGER_ROWS = 12;
+
+// How much of a thread is RENDERED when it opens. `loadConversation` still hands
+// over every message, but the thread opens scrolled to the bottom, so parsing
+// markdown (and drawing mermaid) for hundreds of rows above the fold buys the
+// reader nothing and costs the whole open. MUST stay >= STAGGER_ROWS: the switch
+// stagger animates the last STAGGER_ROWS children, and windowing is a cost cut
+// that may not quietly shrink the motion language on its way through.
+const INITIAL_WINDOW_ROWS = 30;
+/** How many further rows appear each time the reader reaches the top. */
+const EXTEND_BATCH_ROWS = 30;
+/** How close to the top counts as "reaching it", in pixels of scroll offset. */
+const EXTEND_THRESHOLD_PX = 300;
 
 /** How close to the foot of the thread still counts as "following along" —
  * enough slack for a fractional scroll position, not enough to swallow a
@@ -134,10 +162,162 @@ export function ChatThread({
   // new text is already in the DOM, where "was at the bottom" and "was one
   // answer above it" measure the same.
   const followingRef = useRef(true);
+
+  // --- The window ----------------------------------------------------------
+  // Held as a count of rows hidden at the TOP, keyed by the conversation it was
+  // measured against. A count from the top rather than a `slice(-n)`: a message
+  // appended while a reply streams must lengthen the window at the BOTTOM, and a
+  // trailing slice would answer that by dropping the topmost rendered row —
+  // pulling text out from under a reader who has scrolled up mid-stream.
+  const [thread, setThread] = useState<{ key: string | null | undefined; hiddenCount: number }>({
+    key: undefined,
+    hiddenCount: 0,
+  });
+  // Scroll geometry captured just before an extension, consumed by the layout
+  // effect below. `null` means "no extension in flight".
+  const pendingExtendRef = useRef<{ prevHeight: number; prevTop: number } | null>(null);
+  // Whether an ARRIVAL at the top may release a batch — see handleScroll.
+  const armedRef = useRef(true);
+  // How many rows the reader has ASKED to see: raised only when they extend or
+  // reveal, never from the size the DOM happens to have reached. Those two
+  // diverge as soon as a thread grows on its own, and treating the grown size as
+  // the floor would re-render all of it on the next rewind.
+  const shownFloorRef = useRef(INITIAL_WINDOW_ROWS);
+  // The newest message the PERSON sent, and the list's length, at the last
+  // commit — together they tell "they just sent something" from "the model is
+  // still writing" and from "the list just got shorter".
+  const lastUserIdRef = useRef<string | null>(null);
+  const lengthRef = useRef(0);
+
+  // Re-measure DURING render, not in an effect (React's documented "adjusting
+  // state when a prop changes" pattern — the component re-runs before its
+  // children render, so the pass that saw the old count never reaches the DOM).
+  // An effect would commit one render of the FULL list and only then correct
+  // itself, which is precisely the cost this windowing exists to remove.
+  //
+  // The second branch is load-bearing rather than defensive: App's
+  // `handleRewindTo` TRUNCATES `messages` (`prev.slice(0, idx)`) under the SAME
+  // key, so a rewind anchored on the topmost rendered row would leave
+  // `visible.length === hiddenCount` and render no messages at all — a blank
+  // column, since `isEmpty` reads the full list and the greeting never appears
+  // either. The narrowed count is written BACK rather than clamped for the one
+  // render that needs it: a stale count left in state is a ceiling the window
+  // climbs back to as the thread grows again, re-hiding rows already on screen.
+  // Its floor is how much the reader ASKED to see, so a rewind cannot collapse
+  // an opened-out window at the moment they are editing their own history.
+  const windowKey = conversationKey ?? null;
+  const switchingWindow = thread.key !== windowKey;
+  const maxHidden = Math.max(
+    0,
+    visible.length - Math.max(INITIAL_WINDOW_ROWS, shownFloorRef.current),
+  );
+  if (switchingWindow) {
+    // A stale adjustment must not fire against the new list: its geometry
+    // describes the thread that just left the screen.
+    pendingExtendRef.current = null;
+    armedRef.current = true; // the new thread opens at the bottom...
+    followingRef.current = true; // ...and following it is what that means
+    const remembered =
+      (windowKey != null ? rememberedShown.get(windowKey) : undefined) ?? INITIAL_WINDOW_ROWS;
+    shownFloorRef.current = remembered;
+    setThread({
+      key: windowKey,
+      hiddenCount: Math.max(0, visible.length - Math.max(INITIAL_WINDOW_ROWS, remembered)),
+    });
+  } else if (thread.hiddenCount > maxHidden) {
+    setThread({ key: windowKey, hiddenCount: maxHidden });
+  }
+
+  const hiddenCount = thread.hiddenCount;
+  const windowed = hiddenCount > 0 ? visible.slice(hiddenCount) : visible;
+
+  // Remembering the SHOWN count, not the hidden one: the two agree only while
+  // the thread's length does not change, and restoring a stale hidden count
+  // after a rewind hands back fewer rows than the reader had opened out.
+  // Written after commit, so a discarded render-phase pass cannot poison it.
+  useEffect(() => {
+    if (windowKey != null) {
+      rememberedShown.set(windowKey, Math.max(INITIAL_WINDOW_ROWS, shownFloorRef.current));
+    }
+  });
+
+  // Reaching the top reveals the next batch — on ARRIVAL, once. Being near the
+  // top is a state a gesture can sit in for many events (an elastic overscroll
+  // pinned at 0), and each of those events would otherwise release another
+  // batch: one flick would render most of a long thread, which is the cost this
+  // mechanism exists to avoid. Re-arming needs the reader to leave the zone,
+  // which the restore below normally does on its own by pushing them down past
+  // the rows it just added.
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
     const el = event.currentTarget;
     followingRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+    if (el.scrollTop > EXTEND_THRESHOLD_PX) {
+      armedRef.current = true;
+      return;
+    }
+    if (!armedRef.current || pendingExtendRef.current || hiddenCount === 0) return;
+    armedRef.current = false;
+    // Suppressed for THIS prepend only: the browser's own scroll anchoring would
+    // compensate for the added rows on top of the layout effect's adjustment,
+    // and two corrections for one prepend make the thread jump. Leaving it off
+    // permanently would be a different bug — anchoring is what keeps the reader
+    // still when content above them grows late, which this thread does every
+    // time a diagram or an image finishes rendering.
+    el.style.overflowAnchor = "none";
+    pendingExtendRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+    shownFloorRef.current = visible.length - Math.max(0, hiddenCount - EXTEND_BATCH_ROWS);
+    setThread((t) => ({ ...t, hiddenCount: Math.max(0, t.hiddenCount - EXTEND_BATCH_ROWS) }));
   };
+
+  // The control above the window. Scrolling pages a batch at a time, which is
+  // right for reading back — but someone who is SEARCHING wants the whole
+  // conversation present, because the browser's own find-in-page (and select
+  // all, and copy) only ever see what is rendered. So this reveals everything
+  // above in one action, at a cost the person asked for explicitly, and the
+  // count in the label is what tells them how big that ask is.
+  function handleShowEarlier() {
+    const el = listRef.current;
+    if (el) {
+      el.style.overflowAnchor = "none";
+      pendingExtendRef.current = { prevHeight: el.scrollHeight, prevTop: el.scrollTop };
+    }
+    shownFloorRef.current = visible.length;
+    setThread((t) => ({ ...t, hiddenCount: 0 }));
+  }
+
+  // Rows prepended above the viewport push everything down by exactly the height
+  // they add; without this the reader is thrown backwards through the thread by
+  // that much. Before paint, so the jump is never seen.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const pending = pendingExtendRef.current;
+    pendingExtendRef.current = null;
+    el.style.overflowAnchor = ""; // the prepend is over, whether it landed or was dropped
+    if (!pending) return;
+    el.scrollTop = pending.prevTop + (el.scrollHeight - pending.prevHeight);
+  }, [hiddenCount]);
+
+  // A window that does not overflow its container can never be extended: no
+  // overflow means no scroll event, and the rows above it would be unreachable.
+  // Rare at 30 rows, but it is the failure mode anyone lowering
+  // INITIAL_WINDOW_ROWS would walk into, and the check costs two reads. A
+  // container with no measurable height is not evidence of anything — jsdom, or
+  // a hidden column — so it is left alone.
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (!el || hiddenCount === 0 || !el.clientHeight) return;
+    if (el.scrollHeight > el.clientHeight) return;
+    setThread((t) => ({ ...t, hiddenCount: Math.max(0, t.hiddenCount - EXTEND_BATCH_ROWS) }));
+  }, [hiddenCount, messages]);
+
+  // Retry is a deliberate ask for a new answer, and `runTurn` replaces the
+  // trailing assistant row rather than appending a user one — so the send force
+  // in the follow effect cannot see it, and it needs saying here.
+  function handleRetry() {
+    followingRef.current = true;
+    onRetry();
+  }
 
   // Keep the newest content in view — but only for a reader who is already
   // there. Skipped while the thread is empty: the greeting stack is the content
@@ -152,8 +332,29 @@ export function ChatThread({
   //     a fresh inline fragment on EVERY render, so listing it meant an
   //     unrelated state change elsewhere in the app scrolled the thread.
   //     `streamMessageId` is an id, not content, and is out for the same reason.
+  //
+  // The exception is a message the PERSON just sent: they acted, and the reply
+  // belongs at the bottom of the thread they were looking at. It has to be the
+  // newest USER message, not the newest message — `runTurn` appends the user's
+  // row and the pending assistant row in ONE update (useTurn.ts), so the last
+  // element of the list is ALWAYS the assistant and a check on it never fires on
+  // the one path that produces it. The length guard is the other half: an id can
+  // also become "newest" because the rows after it were removed, and a rewind is
+  // not a send.
   useEffect(() => {
-    if (isEmpty || !followingRef.current) return;
+    if (isEmpty) return;
+    let newestUserId: string | null = null;
+    for (let i = visible.length - 1; i >= 0; i--) {
+      if (visible[i].role === "user") {
+        newestUserId = visible[i].id;
+        break;
+      }
+    }
+    const sent = newestUserId !== lastUserIdRef.current && visible.length > lengthRef.current;
+    lastUserIdRef.current = newestUserId;
+    lengthRef.current = visible.length;
+    if (sent) followingRef.current = true;
+    if (!followingRef.current) return;
     bottomRef.current?.scrollIntoView({ block: "end" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, streamDisplay]);
@@ -244,7 +445,21 @@ export function ChatThread({
     >
       {header}
 
-      {visible.map((m) => (
+      {hiddenCount > 0 && (
+        // Without this the thread simply starts 30 messages ago, and the fade
+        // mask at the top of the column makes that cut read as the beginning of
+        // the conversation. Same idiom as "Retry this answer" — a plain accent
+        // action inside the thread, not a new piece of furniture.
+        <button
+          type="button"
+          onClick={handleShowEarlier}
+          className="shrink-0 self-center text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+        >
+          {hiddenCount === 1 ? "Show 1 earlier message" : `Show ${hiddenCount} earlier messages`}
+        </button>
+      )}
+
+      {windowed.map((m) => (
         <MessageRow
           key={m.id}
           message={m}
@@ -253,7 +468,7 @@ export function ChatThread({
           canRewind={m.role === "user" && Boolean(m.storeId)}
           canRetry={m.id === lastAssistantId && retryAvailable}
           onRewindTo={onRewindTo}
-          onRetry={onRetry}
+          onRetry={handleRetry}
           showTechnicalDetails={showTechnicalDetails}
         />
       ))}
