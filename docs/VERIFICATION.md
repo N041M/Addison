@@ -35,13 +35,27 @@ checkout's interpreter — the venv lives in `/Users/karel/Desktop/Addison`.
 
 ## 2. Live-driver end-to-end proofs (real API, pennies on haiku)
 
-Pattern documented in `HANDOFF.md` ("The live-driver pattern"); the scripts are
-written per session and do not persist. The mechanics: spawn
-`agent_core/.venv/bin/python -m agent_core.main` with `ADDISON_DB_PATH` at a tmp
-dir, play the Rust shell from a reader thread, answer permission cards, cap
-turns, `modelId: claude-haiku-4-5`. **Never point a driver at `~/.addison`** —
-`live_db_guard` blocks it, and the guard exists because a probe script once wrote
-an undeletable row into the owner's real database.
+The scripts are written per session and do not persist. **This is the canonical
+description** — `HANDOFF.md` carried a second copy until 2026-07-26 and now points
+here.
+
+Spawn `agent_core/.venv/bin/python -m agent_core.main` from the repo root with
+`ADDISON_DB_PATH` pointed at a tmp dir. A reader thread consumes stdout lines, and
+frames whose method starts with `shell.` / `keychain.` are answered **by the
+driver**, playing the Rust shell:
+
+- `keychain.getProviderKey` → `{"key": ""}`, so the core falls back to its env key
+- `shell.saveNewFile` → write in tmp, return `{path}`
+- `shell.deleteFile` → delete **within tmp only**
+
+`permission.requestGrant` notifications are answered with
+`permission.respond {toolId, allow: true}`; everything else is request/response by
+JSON-RPC id. Cap turns, use `claude-haiku-4-5` via `ADDISON_MODEL`, per-request
+timeouts ~90s. This validated the whole stack for pennies — reuse it.
+
+**Never point a driver at `~/.addison`.** `live_db_guard` blocks it, and the guard
+exists because a probe script once wrote an undeletable row into the owner's real
+database.
 
 Scenarios that must pass (each was proven once; rerun after any core change):
 

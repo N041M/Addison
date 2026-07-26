@@ -1020,23 +1020,14 @@ read is not the one path where the destination goes unnamed.
 - Dev knobs: `ADDISON_MODEL`, `ADDISON_DB_PATH`, `ADDISON_OLLAMA_URL`, `ADDISON_RELAY_URL`.
 - Launch the app: `cd shell && npm run tauri dev` (first Rust build is slow).
   A backend change needs a **restart**, not just Cmd+R.
-- Commands: pytest as above · `ruff check agent_core tests` ·
-  `npx --yes pyright` (repo root; config `pyrightconfig.json`) ·
-  `cd shell && npm run lint && npx tsc --noEmit && npm test && npm run build` ·
-  `cd shell/src-tauri && cargo test`.
+- **The gate commands live in `VERIFICATION.md` §1**, not here.
 
 ## The live-driver pattern (cheap end-to-end tests)
 
-Spawn `agent_core/.venv/bin/python -m agent_core.main` from repo root with
-`ADDISON_DB_PATH` pointed at a tmp dir; a reader thread consumes stdout lines;
-frames whose method starts with `shell.`/`keychain.` are answered BY THE DRIVER
-(play the Rust shell: `keychain.getProviderKey` → `{"key": ""}` so the core falls
-back to its env key; `shell.saveNewFile` → write in tmp, return `{path}`;
-`shell.deleteFile` → delete within tmp only); `permission.requestGrant`
-notifications are answered with `permission.respond {toolId, allow: true}`;
-everything else is request/response by JSON-RPC id. Cap turns, use
-`claude-haiku-4-5` via `ADDISON_MODEL`, per-request timeouts ~90s. This validated
-the whole stack for pennies — reuse it.
+Owned by **`VERIFICATION.md` §2** — the driver mechanics, the eight scenarios that
+must pass, and the `~/.addison` warning. This section held a second copy until
+2026-07-26; VERIFICATION's copy already said it was deferring here, so the two
+deferred to each other and both drifted.
 
 ## Known gaps (deliberate or tracked, not bugs)
 
