@@ -92,6 +92,7 @@ import {
 
 const THEME_KEY = "addison.theme";
 const RAIL_OPEN_KEY = "addison.railOpen";
+const INLINE_RAIL_OPEN_KEY = "addison.inlineRailOpen";
 const SIDE_OPEN_KEY = "addison.sideOpen";
 
 /** How long the leaving surface's fadeDrop runs before the new view commits. */
@@ -136,6 +137,16 @@ export function App() {
   // now collapses too (the header's «/» on the chat view).
   const [railOpen, setRailOpen] = useState<boolean>(() => loadBool(RAIL_OPEN_KEY, true));
   const [sideOpen, setSideOpen] = useState<boolean>(() => loadBool(SIDE_OPEN_KEY, true));
+  // The narrow layout gets its OWN remembered state, defaulting to CLOSED.
+  //
+  // Not duplication of `railOpen`: beside-the-thread and inside-the-thread are
+  // different affordances, and wanting a 232px ambient column at 1600px says
+  // nothing about wanting six rows of it inside a 500px reading column. Below
+  // 1024 it opens only when asked (reported 2026-07-27: it covered the chat and
+  // there was no way to close it).
+  const [inlineRailOpen, setInlineRailOpen] = useState<boolean>(() =>
+    loadBool(INLINE_RAIL_OPEN_KEY, false),
+  );
 
   // Narrow-window (mobile) layout. Below the md breakpoint (768px) the sidebar
   // becomes a slide-over drawer and the widget rail moves inline to the foot of
@@ -510,6 +521,10 @@ export function App() {
   useEffect(() => {
     saveBool(RAIL_OPEN_KEY, railOpen);
   }, [railOpen]);
+
+  useEffect(() => {
+    saveBool(INLINE_RAIL_OPEN_KEY, inlineRailOpen);
+  }, [inlineRailOpen]);
   useEffect(() => {
     saveBool(SIDE_OPEN_KEY, sideOpen);
   }, [sideOpen]);
@@ -928,6 +943,9 @@ export function App() {
   };
 
   const railVisible = railOpen && view === "chat" && railBeside;
+  // Whether widgets are on screen at all, in whichever layout applies. The header
+  // button and the inline block both read this so they cannot disagree.
+  const widgetsShowing = railBeside ? railOpen : inlineRailOpen;
 
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-paper text-[13px] text-ink">
@@ -1015,17 +1033,24 @@ export function App() {
               Undo last action
             </button>
           )}
-          {/* Only offered while the rail has a column to appear in — below
-              1024px it would toggle something that is never on screen. */}
-          {!isSurface && railBeside && (
+          {/* Offered at EVERY width on the chat view. It used to be gated on
+              `railBeside`, on the reasoning that "below 1024px it would toggle
+              something that is never on screen" — but below 1024 the rail is very
+              much on screen, just inline at the foot of the thread, and it was
+              rendered unconditionally. So the one control that could put it away
+              was hidden exactly where it was needed (reported 2026-07-27). The
+              button drives whichever layout is showing. */}
+          {!isSurface && (
             <button
               type="button"
-              onClick={() => setRailOpen((v) => !v)}
-              title={railOpen ? "Hide widgets" : "Show widgets"}
-              aria-label={railOpen ? "Hide widgets" : "Show widgets"}
+              onClick={() =>
+                railBeside ? setRailOpen((v) => !v) : setInlineRailOpen((v) => !v)
+              }
+              title={widgetsShowing ? "Hide widgets" : "Show widgets"}
+              aria-label={widgetsShowing ? "Hide widgets" : "Show widgets"}
               className="text-[12px] text-disabled transition-colors hover:text-ink"
             >
-              {railOpen ? "»" : "«"}
+              {widgetsShowing ? "»" : "«"}
             </button>
           )}
         </span>
@@ -1096,7 +1121,7 @@ export function App() {
                           work + consent blocks with them. Wide: work/consent go
                           inline only when the rail is hidden (otherwise they're
                           in the rail). */}
-                      {!railBeside ? (
+                      {!railBeside && inlineRailOpen ? (
                         <WidgetRail
                           variant="inline"
                           work={workBlock}
@@ -1112,7 +1137,14 @@ export function App() {
                           onAskBuildWidget={handleAskBuildWidget}
                         />
                       ) : (
-                        !railOpen && (
+                        // `!widgetsShowing`, NOT `!railOpen`: with widgets closed on
+                        // the narrow layout, `railOpen` is still true (it belongs to
+                        // the wide layout), so keying on it left the work annotation
+                        // and — the part that matters — a PENDING CONSENT CARD with
+                        // nowhere to render. A consent surface that cannot be seen is
+                        // a safety failure, not a cosmetic one; the same rule put the
+                        // card above the modal scrim in `1241026`.
+                        !widgetsShowing && (
                           <>
                             {workBlock}
                             {consentBlock}

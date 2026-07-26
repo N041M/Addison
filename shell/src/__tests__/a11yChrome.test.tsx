@@ -161,10 +161,15 @@ describe("the collapsing side columns", () => {
     // measured 208px at 820px), too wide for the mobile drawer.
     stubMatchMedia((q) => q.includes("1023.98"));
     render(<App />);
-    expect(columns()).toHaveLength(2); // sidebar + centre, no rail column
-    // …and no control offering to toggle a column that cannot appear.
-    expect(screen.queryByRole("button", { name: "Hide widgets" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Show widgets" })).toBeNull();
+    expect(columns()).toHaveLength(2); // sidebar + centre, no rail COLUMN
+    // The control stays, and this is the correction of 2026-07-27. It used to be
+    // asserted ABSENT here, on the reasoning that it would "toggle a column that
+    // cannot appear" — but the widgets do not disappear below 1024, they move
+    // inline into the thread. So the button was hidden at exactly the widths where
+    // the rail sat in the reading column and putting it away mattered most, and
+    // this test called that correct. Below 1024 it drives the inline form, which
+    // now starts closed.
+    expect(screen.getByRole("button", { name: "Show widgets" })).toBeTruthy();
     // The sidebar survives — it is navigation; the rail is ambient.
     expect(screen.getByRole("button", { name: "Hide chats" })).toBeTruthy();
   });

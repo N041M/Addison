@@ -21,7 +21,7 @@
 // complements Tailwind's `md:` and the rail query are written against.
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { App } from "../App";
 
 afterEach(cleanup);
@@ -72,16 +72,25 @@ describe("the layout at every width that means something", () => {
       stubWidth(w);
       render(<App />);
 
-      // THE INVARIANT. One rail, wherever it lives. Two means the widgets, the
-      // token meter and the consent block are all on screen twice; zero means
-      // they are unreachable at this width.
-      const rails = screen.getAllByLabelText("Your widgets");
-      expect(rails, `expected exactly one widget rail at ${w}px`).toHaveLength(1);
+      // THE INVARIANT: never TWO. Two means the widgets, the token meter and the
+      // consent block are all on screen twice.
+      //
+      // Amended 2026-07-27: this used to demand exactly ONE at every width, which
+      // encoded the bug. Below 1024 the rail rendered inline unconditionally while
+      // the header's hide button was gated on `railBeside` — so it covered the
+      // reading column with no way to put it away, and the test called that
+      // correct. The narrow layout now starts CLOSED, so zero is right there;
+      // reachability is asserted by the toggle tests below instead of by forcing
+      // the rail on screen.
+      const rails = screen.queryAllByLabelText("Your widgets");
+      expect(rails.length, `two rails at ${w}px`).toBeLessThanOrEqual(1);
+      expect(rails.length, `rail count at ${w}px`).toBe(railColumn ? 1 : 0);
 
-      const rail = rails[0];
-      // The column form is fixed-width; the inline form fills the thread.
-      const isColumn = rail.className.includes("w-[232px]");
-      expect(isColumn, `rail form is wrong at ${w}px`).toBe(railColumn);
+      if (rails.length) {
+        // The column form is fixed-width; the inline form fills the thread.
+        const isColumn = rails[0].className.includes("w-[232px]");
+        expect(isColumn, `rail form is wrong at ${w}px`).toBe(railColumn);
+      }
     });
 
     it(`${w}px (${label}) reaches the chats exactly one way`, () => {
@@ -110,9 +119,61 @@ describe("the layout at every width that means something", () => {
     for (const { w } of WIDTHS) {
       stubWidth(w);
       const { unmount } = render(<App />);
-      expect(screen.queryAllByLabelText("Your widgets"), `${w}px`).toHaveLength(1);
+      expect(screen.queryAllByLabelText("Your widgets").length, `${w}px`).toBeLessThanOrEqual(1);
       unmount();
     }
+  });
+
+  // The reported bug, 2026-07-27: "there is no way to hide it with a button."
+  // The control was gated on `railBeside`, so it vanished at exactly the widths
+  // where the rail took over the reading column and hiding it mattered most.
+  it("offers a show/hide widgets button at every width", () => {
+    for (const { w } of WIDTHS) {
+      stubWidth(w);
+      const { unmount } = render(<App />);
+      const toggle = screen.queryByRole("button", { name: /show widgets|hide widgets/i });
+      expect(Boolean(toggle), `no widgets toggle at ${w}px`).toBe(true);
+      unmount();
+    }
+  });
+
+  it("the button puts the inline rail on screen and takes it away again", () => {
+    stubWidth(880); // the reporter's window: inline layout, closed by default
+    render(<App />);
+    expect(screen.queryAllByLabelText("Your widgets")).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: /show widgets/i }));
+    const rails = screen.getAllByLabelText("Your widgets");
+    expect(rails).toHaveLength(1);
+    expect(rails[0].className).not.toContain("w-[232px]"); // inline form, not a column
+
+    fireEvent.click(screen.getByRole("button", { name: /hide widgets/i }));
+    expect(screen.queryAllByLabelText("Your widgets")).toHaveLength(0);
+  });
+
+  it("remembers the two layouts separately", () => {
+    // Wanting a 232px ambient column on a big screen says nothing about wanting
+    // six rows of it inside a 500px reading column, so the two are distinct
+    // states rather than one shared flag.
+    stubWidth(880);
+    const narrow = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /show widgets/i }));
+    expect(screen.getAllByLabelText("Your widgets")).toHaveLength(1);
+    narrow.unmount();
+
+    stubWidth(1440);
+    const wide = render(<App />);
+    // Not asserting absence here: the BESIDE rail stays mounted and inert when
+    // closed (zero width, aria-hidden, inert) so the collapse can animate, unlike
+    // the inline one which is simply not rendered. What matters for this test is
+    // that closing it does not reach across to the narrow state.
+    fireEvent.click(screen.getByRole("button", { name: /hide widgets/i }));
+    wide.unmount();
+
+    // Back to narrow: still open, because closing the WIDE one did not touch it.
+    stubWidth(880);
+    render(<App />);
+    expect(screen.getAllByLabelText("Your widgets")).toHaveLength(1);
   });
 
   it("keeps the composer reachable at every width", () => {
