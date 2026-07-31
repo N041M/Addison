@@ -77,8 +77,9 @@ used to mean editing thirteen files.
   arming a powerful action needs a user-typed keyword prefix (designed, **not built**).
 - **G3** — Guaranteed rollback. Snapshots (auto before risky changes, plus
   on-command) always allow a one-action restore to the last verified-working config.
-  **Currently overclaimed in OPEN** — `run_command` can delete the floor's own
-  files; see SAFETY.md and [step 5.5](docs/step-5.5-containment-plan.md).
+  **True in both modes since Phase-2 step 5.5** (2026-07-31) put a seatbelt profile
+  and a pre-gate denylist under `run_command`; the two edges it does not reach are
+  named in [docs/SAFETY.md](docs/SAFETY.md), which owns this floor's scope.
 - **G4** — Turning a guard OFF in Custom mints a permanent, undeletable snapshot
   anchor recording the app build. A build *reference*, never bytes; restoring a
   previous binary is not implemented (Phase-3 updater).
@@ -163,24 +164,21 @@ deliberately not being built. This section held a second copy and the two drifte
 it now holds only what a *builder* needs that status does not convey.
 
 The v1 sequence (spec §11, steps 1–11) is complete and merged, as are Phase-2
-steps 1–5 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
-strategies, free-model endpoints, the coding harness + workspace-trust). **No file
-is marked `TODO(step N)` any more** — that sequence records the order the system
-was built in, not work outstanding.
+steps 1–5.5 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
+strategies, free-model endpoints, the coding harness + workspace-trust, and
+containment for that harness). **No file is marked `TODO(step N)` any more** — that
+sequence records the order the system was built in, not work outstanding.
 
-What remains, and the one dependency that is not obvious from the list:
+Three steps remain — 6, 7 and 8. They are independent of each other, and the one
+dependency that is not obvious from the list is inside 7:
 
-- **5.5 — containment for the OPEN harness**
-  ([plan](docs/step-5.5-containment-plan.md)). Not new capability: step 5 shipped
-  `run_command` without re-establishing the property design-doc §9's first
-  mitigation protected, which is why **G3 is currently overclaimed in OPEN**
-  ([docs/SAFETY.md](docs/SAFETY.md)). Ship its pre-gate denylist first.
 - **6 — widget capability tiers**, companion-facing and independent.
-- **7 — MCP client.** **Downstream of 5.5's audit log**, because the spec promises
-  MCP tools are "gated, logged, undo-aware" and no log exists — and downstream of
-  the SAFE-constraint question in "Known gaps", because a server declares its own
-  risk and admitting a tool to SAFE on that say-so breaks SAFE invariant 2 through
-  a path the registration check cannot see.
+- **7 — MCP client.** 5.5 shipped the `tool_audit` log, so the spec's promise that
+  MCP tools are "gated, logged, undo-aware" is now satisfiable and that half of the
+  dependency is discharged. It is **still blocked on the SAFE-constraint question**
+  in "Known gaps", because a server declares its own risk and admitting a tool to
+  SAFE on that say-so breaks SAFE invariant 2 through a path the registration check
+  cannot see.
 - **8 — the automation keyword gate** + author-OS-run automation. Until it exists,
   nothing in the tree can author or arm automation, so G2 holds trivially.
 

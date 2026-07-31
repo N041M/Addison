@@ -1,6 +1,6 @@
 # Roadmap
 
-Where Addison actually is, as of 2026-07-26.
+Where Addison actually is, as of 2026-08-01.
 
 This file holds status only, and it is the **only** place that does. The reasoning
 behind any of it lives in [CLAUDE.md](CLAUDE.md), [docs/SAFETY.md](docs/SAFETY.md)
@@ -41,8 +41,10 @@ quickly.
 
 ## Next
 
-Four things are left. The last three are independent enough to take in any order;
-the first is finishing work that is already merged.
+Three things are left — 6, 7 and 8 — and they are independent enough to take in
+any order. Step 5.5 headed this list until 2026-07-31 and is finished; its entry
+stays first, below, because it is recent enough that people still ask what it
+covered.
 
 5.5. **Containment for the coding harness — DONE 2026-07-31.** Step 5 gave
    Developer mode a real shell. What did not come with it was a boundary underneath

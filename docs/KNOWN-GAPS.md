@@ -98,11 +98,10 @@ and where it goes.
   independently checked. Nothing in the tree can widen it today (it is read
   straight from `workspace_trust`); noted so the next thing that touches that path
   knows what it is standing on.
-- **The floor still protects Addison's DATA, not Addison's CODE.** Unchanged by
-  this step and now the sharper edge of the two: the profile denies writes to the
-  data dir, not to a packaged `/Applications/Addison.app`. See the existing
-  owner-call item below — this is the natural moment to close it, since `exec.rs`
-  is where the extra deny would go.
+- The data-versus-code edge is **unchanged by this step and is now the sharper of
+  the two** — the seatbelt profile denies writes to the data dir, not to a packaged
+  `/Applications/Addison.app`. It is the same owner call opened by steps 4 + 5 and
+  is stated once, below; it is not restated here.
 
 **The keychain integration has a plan (2026-07-31):**
 [docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md). The
@@ -221,22 +220,25 @@ against the tree on 2026-07-26:
   panel grows the third guard or whether that precedence rule is the whole answer.
 - ~~`tsc --noEmit` does not cover the test files.~~ **CLOSED 2026-08-01.**
   `shell/tsconfig.test.json` + an `npm run typecheck` script that runs both
-  configs. It found **nine real errors on the first run**, including the exact
-  failure this entry predicted: a `ConversationSummary` fixture carrying a
-  `messageCount` field the type has never had. Also fixed: five unchecked
-  `normalizeProfile` nulls (now a narrowing helper that says why null would be a
-  parser bug), an `afterEach` returning `VitestUtils` instead of void, and a
-  `vi.fn(() => { throw })` inferring `Mock<[], never>`.
+  configs. Every error it found on the first run was real, in four classes,
+  including the exact failure this entry predicted: a `ConversationSummary` fixture
+  carrying a `messageCount` field the type has never had. The other three were
+  unchecked `normalizeProfile` nulls (now a narrowing helper that says why null
+  would be a parser bug), an `afterEach` returning `VitestUtils` instead of void,
+  and a `vi.fn(() => { throw })` inferring `Mock<[], never>`.
 - **`policy._canonical` case-folds unconditionally**, so `/tmp/PROJECT/x` is judged
   inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
   (case-insensitive), **wrong on a case-sensitive volume**, where it widens
   confinement. macOS-only assumption, currently undocumented in the function.
-- **The floor protects Addison's DATA, not Addison's CODE.** A trusted root may
-  contain the repo (fine — that IS the harness working for a developer) or, in a
-  packaged install, `/Applications/Addison.app`, where the model could rewrite
-  `policy.py` card-free. The amendment's "inviolable machinery: Addison's code and
-  the global floors" is therefore broader than what ships. Either narrow the wording
-  or add the running app's resource root to `_protected_dirs`. **Owner call.**
+- **The floor protects Addison's DATA, not Addison's CODE.** *(This is the single
+  statement of it; SAFETY.md, design-doc §9.x and HANDOFF all point here.)* A
+  trusted root may contain the repo (fine — that IS the harness working for a
+  developer) or, in a packaged install, `/Applications/Addison.app`, where the
+  model could rewrite `policy.py` card-free. The amendment's "inviolable machinery:
+  Addison's code and the global floors" is therefore broader than what ships.
+  Either narrow the wording or add the running app's resource root to
+  `_protected_dirs` — and since step 5.5, to the seatbelt denies in `exec.rs`,
+  which is now the cheaper of the two places to put it. **Owner call.**
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.

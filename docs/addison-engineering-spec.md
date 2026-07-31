@@ -30,8 +30,8 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
 **What the amendment adds/changes (all Phase-2):**
 
 - **G3 (new global floor) — guaranteed rollback.** Defined in
-  **[`SAFETY.md`](SAFETY.md)**, which owns the floor and its current scope
-  (it holds in SAFE and is overclaimed in OPEN). Realised here with **app-state
+  **[`SAFETY.md`](SAFETY.md)**, which owns the floor and its current scope — do not
+  restate that scope here, it has changed once already. Realised here with **app-state
   snapshots** — taken automatically before any risky/sweeping change *and* on
   command; see the §1.4 / §3 / §4.9 notes for the mechanism.
 - **Undeletable anchor (new fourth floor).** Turning a safety guard **off** in
@@ -905,9 +905,10 @@ The Developer profile deliberately reuses surfaces that already exist for other 
 setup to "make the models run as cheaply as possible" and bricked it
 *permanently* — the built-in rewind did not fire, and he had no way back. G3 is
 the floor written to make that structurally impossible. **[`SAFETY.md`](SAFETY.md)
-states G3 and its current scope** — do not restate it here; the guarantee holds in
-SAFE and is presently overclaimed in OPEN, and that qualification has already been
-lost once by being copied without it.
+states G3 and its current scope** — do not restate either here. That scope has been
+wrong in this file twice, in opposite directions: first a copy of the guarantee made
+without its OPEN-mode qualification, then that same qualification left asserted here
+after [step 5.5](step-5.5-containment-plan.md) removed the reason for it.
 
 Distinct from **§4.5 Rewind & Self-Repair**, which undoes *tool actions* and
 truncates *conversation history*. The snapshot subsystem restores *Addison's own
@@ -1456,7 +1457,7 @@ working around it.
 |---|---|
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. **Reinforced:** excluded from every snapshot, including the Custom-mode undeletable anchor (§4.9, §5). |
 | **G2** | No autonomous self-triggering / scheduling *by Addison*. **Reinterpreted (§6):** Addison may *author* OS-run automation; the OS runs it; Addison never fires it. |
-| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** **Scope correction 2026-07-26:** enforced *within* the database (triggers, sidecars, gate-exempt RPC). The OPEN-mode shell can still delete the files — `run_command` has `affected_path = None`, so confinement never governs it. True in SAFE, overclaimed in OPEN until [step 5.5](step-5.5-containment-plan.md) lands. |
+| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** Enforced *within* the database (triggers, sidecars, gate-exempt RPC) and, since [step 5.5](step-5.5-containment-plan.md) shipped 2026-07-31, at the process edge as well, so it holds in OPEN too. The 2026-07-26 scope correction that made this row read *"overclaimed in OPEN"* is spent; [`SAFETY.md`](SAFETY.md) owns the floor's scope and the two edges it still does not reach. |
 | **Anchor** (**G4** in `CLAUDE.md` and in code — the two names are the same rule) | Turning a guard *off* in Custom mode mints an **undeletable** snapshot that **records the app build it was minted on** (a reference, not the binary; keys still excluded). Restoring a binary is a Phase-3 updater item — owner decision 2026-07-20, §4.9. **New.** |
 
 **Reinterpreting invariant 4 (widgets).** SAFE invariant 4 said "widgets are
@@ -1585,6 +1586,11 @@ of that pass); code then follows in **dependency order, safety floor first**:
 5. **Harness + workspace-trust** (OPEN) — the trust boundary the powerful
    capabilities below depend on (§4.10). **Shipped 2026-07-24** — read §4.10's head
    note before building on it; two of that section's sentences were wrong.
+5.5. **Containment for the harness** (OPEN) — not new capability, but the boundary
+   step 5 shipped without: `run_command` moved behind the ShellBridge and under a
+   Seatbelt profile generated from the live trusted roots, a pre-gate denylist at
+   all three dispatch sites, output redaction, and the `tool_audit` trail step 7
+   depends on. **Shipped 2026-07-31** — [plan](step-5.5-containment-plan.md).
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers + safe storage (buildable
    in all modes); capability-tier gating; make `primary.txt` capability-aware
@@ -1593,9 +1599,10 @@ of that pass); code then follows in **dependency order, safety floor first**:
    mode-scoped (§4.12). **Not started.**
 8. **Automation keyword gate** + author-OS-run automation (§6). **Not started.**
 
-**Status as of 2026-07-26:** steps 1–5 are built and merged; 6–8 are not started,
-and they are the three prerequisites the Phase-3 review surface waits on (see the
-Phase-3 note below).
+**[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
+carried a second copy of the state until that copy went stale. Steps 6–8 are the
+three prerequisites the Phase-3 review surface waits on (see the Phase-3 note
+below).
 
 Each Phase-2 step stays independently testable and ships behind the same gate as
 today. Steps 3–4 are companion-facing and independent of the harness, so they can
@@ -1604,8 +1611,8 @@ proceed in parallel with 5–8 once 1–2 land. Of the amendment's §13 open que
 (Q4) and anchor binary capture (Q8) are resolved**, and **auto-routing depth (Q5) is
 half-resolved** — each with its reasoning recorded inline there; do not reopen them.
 Still genuinely open: **keyword-gate syntax (Q1), the MCP-in-SAFE constraint (Q6),
-and the widget kinds/capability grammar (Q7)** — all three belong to steps 6–8,
-which are not started.
+and the widget kinds/capability grammar (Q7)** — all three belong to steps 6–8.
+Q6 in particular **blocks** step 7 rather than merely accompanying it.
 
 ### Phase 3 — redefined 2026-07-25: packaging *and* the Developer review surface
 

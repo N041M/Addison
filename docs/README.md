@@ -47,12 +47,16 @@ them as maps, and check the tree when a detail matters.
 | [`data-model.md`](data-model.md) | The SQLite schema as ER diagrams. Coverage is test-enforced against `schema.sql`. |
 | [`flows.md`](flows.md) | Runtime sequence flows across the process boundaries. |
 
-## Plans — approved, not started
+## Plans
+
+`ROADMAP.md` owns whether a plan is scheduled; this table says only where each one
+stands relative to the tree.
 
 | File | Status |
 |---|---|
-| [`step-5.5-containment-plan.md`](step-5.5-containment-plan.md) | Proposed 2026-07-26. Step 5's unfinished half: containment for the OPEN harness. |
-| [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) | Approved 2026-07-25. Blocked on steps 6, 7 and 8. |
+| [`step-5.5-containment-plan.md`](step-5.5-containment-plan.md) | **COMPLETE.** Written 2026-07-26, all five items shipped 2026-07-31. Kept as the record of what was planned and why — its body is written in the present tense of 2026-07-26. |
+| [`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) | **PROPOSED, not scheduled** (2026-07-31). Repair-first plan for the keychain integration, with the encrypted vault kept as a destination behind named triggers. Owner decisions in its §14. |
+| [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) | Approved 2026-07-25, not started. Blocked on steps 6, 7 and 8. |
 
 ## Design
 
@@ -80,6 +84,13 @@ them as maps, and check the tree when a detail matters.
    its own changeset falsified.
 3. **Do not write a number you are not prepared to maintain.** Test counts and line
    counts went stale twice in a day here. A stale number reads as a claim.
-4. **State what is not true yet.** A floor the code does not enforce should say so —
-   G3 is currently overclaimed in OPEN mode and `SAFETY.md` says that plainly. The
-   repo must not carry a guarantee its own tests do not cover.
+4. **State what is not true yet.** A floor the code does not enforce should say so,
+   in the owner's file and nowhere else — `SAFETY.md` carried G3's OPEN-mode
+   overclaim in plain words for the five days it was true, and states the two edges
+   the floor still does not reach now that step 5.5 has closed it. The repo must not
+   carry a guarantee its own tests do not cover.
+5. **A caveat is as perishable as the claim it qualifies.** When the underlying fact
+   flips, every copy of the caveat becomes a lie in the other direction, and a gate
+   that only checks *"is the caveat present"* stays green through it. Give the fact
+   one owner, point the copies at it, and let
+   `test_docs_drift.py`'s `G3_RESOLVED_IN_OPEN` show what that looks like in a test.

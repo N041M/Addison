@@ -126,13 +126,11 @@ than working around it silently):
   `an_approved_command_cannot_delete_the_recovery_floor`, in
   `shell/src-tauri/src/exec.rs` — is **live and mutation-proven**, not an `xfail`.
 
-  Two things that are true and must not be rounded off. **A command still runs
-  unconfined on a platform with no profile** (Linux: Landlock/bubblewrap is not
-  built) — the response carries `sandboxed: false` and the tool prints a note
-  above the output, so it is never silent, but it is not protected either. And
-  **the floor protects Addison's data, not Addison's code** (see KNOWN-GAPS) —
-  the profile denies writes to the data dir, not to a packaged
-  `/Applications/Addison.app`.
+  Two edges this floor does not reach, and they must not be rounded off: a
+  platform with no profile, and Addison's own **code** as opposed to its **data**.
+  Both are live items in [`KNOWN-GAPS.md`](KNOWN-GAPS.md), which owns them and
+  states each in full; design-doc §9.x states them as threat-model boundaries.
+  Neither is written out a third time here.
 
   This correction followed the one G4 took when "captures the app binary" was
   narrowed to a build reference: **the repo must not carry a floor its own tests

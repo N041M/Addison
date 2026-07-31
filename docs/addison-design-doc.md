@@ -99,10 +99,11 @@ firms the recovery goals into hard guarantees and adds a keyless-usefulness goal
     of goal 7 — goal 7 undoes a *tool action*, goal 10 restores whole-app
     *configuration* via snapshots. "Safety" for Addison means this.
     **The floor's exact wording, and how far it currently reaches, are owned by
-    [`SAFETY.md`](SAFETY.md)** (global floor **G3**). Do not restate them here: the
-    guarantee holds in SAFE and is presently overclaimed in OPEN, and a copy made
-    without that qualification is how this document came to assert something its own
-    code does not do.
+    [`SAFETY.md`](SAFETY.md)** (global floor **G3**). Do not restate them here. A
+    copy made without its qualification is how this document once came to assert
+    something its own code did not do — and the copy then outlived the qualification
+    too, still calling the floor overclaimed in OPEN after §9's own bullet recorded
+    step 5.5 closing it. Both failures are the same one: a second copy.
 11. **Useful without a paid frontier key.** The companion persona (§5) will not
     set up frontier billing, so Addison must do real work on legitimate free/local
     models — and let a user add new OpenAI-compatible endpoints by simply asking
@@ -789,7 +790,7 @@ This flow is the actual deliverable of the "easier setup" requirement — it's a
 Threat model is different from OpenClaw's: the user isn't defending a server from a remote attacker, they're trusting an agent running with their own OS permissions to not do something destructive by mistake (bad tool call, prompt injection from a malicious webpage/document, model error).
 
 Mitigations:
-- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above — "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26, RESOLVED 2026-07-31 (Phase-2 step 5.5).** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN) — and for five days the property this bullet protected, *the model cannot issue an unbounded OS effect*, was not re-established, unlike the picker-scoping bullet below which named where its boundary had moved to. It is re-established now, in that same idiom: **the boundary moved to the process edge.** `run_command` no longer executes in the Agent Core at all; it crosses the ShellBridge (`shell.runCommand`) and the Rust shell runs it under a **Seatbelt profile generated from the live trusted roots** — reads stay broad, writes are denied wholesale and re-permitted only inside folders the person has explicitly trusted, and the data-dir denies are emitted *after* every allow so the recovery floor wins even against a trusted root that contains it. Above that sits a **pre-gate denylist** that cannot be approved away (Addison's own restore storage, `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`), checked at all three sites a command can start: chat, a routine step, and a widget's Run pill. The permission card is unchanged and still cards per invocation with the exact command text — it is simply no longer the only layer. **G3's "the restore path is itself unbreakable" is true again in OPEN** — [SAFETY.md](SAFETY.md) owns that wording and its five-day qualification came off when step 5.5 items 1–3 landed — pinned by `an_approved_command_cannot_delete_the_recovery_floor` in `shell/src-tauri/src/exec.rs`, which is live and mutation-proven rather than aspirational. Two limits are stated rather than rounded off: on a platform with no profile (Linux today) a command runs unconfined and the response says `sandboxed: false`, which the tool prints above its output; and the profile protects Addison's *data*, not Addison's *code* (see "What this does not defend against").
+- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above — "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26, RESOLVED 2026-07-31 (Phase-2 step 5.5).** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN) — and for five days the property this bullet protected, *the model cannot issue an unbounded OS effect*, was not re-established, unlike the picker-scoping bullet below which named where its boundary had moved to. It is re-established now, in that same idiom: **the boundary moved to the process edge.** `run_command` no longer executes in the Agent Core at all; it crosses the ShellBridge (`shell.runCommand`) and the Rust shell runs it under a **Seatbelt profile generated from the live trusted roots** — reads stay broad, writes are denied wholesale and re-permitted only inside folders the person has explicitly trusted, and the data-dir denies are emitted *after* every allow so the recovery floor wins even against a trusted root that contains it. Above that sits a **pre-gate denylist** that cannot be approved away (Addison's own restore storage, `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`), checked at all three sites a command can start: chat, a routine step, and a widget's Run pill. The permission card is unchanged and still cards per invocation with the exact command text — it is simply no longer the only layer. **G3's "the restore path is itself unbreakable" is true again in OPEN** — [SAFETY.md](SAFETY.md) owns that wording and its five-day qualification came off when step 5.5 items 1–3 landed — pinned by `an_approved_command_cannot_delete_the_recovery_floor` in `shell/src-tauri/src/exec.rs`, which is live and mutation-proven rather than aspirational. Two limits are stated rather than rounded off — a platform with no profile, and the data/code boundary — and both are written out once, in §9.x below.
 - **Filesystem scope by picker, not by path.** The agent never gets a raw path string to open; it gets a handle to whatever the OS-native file picker returned, so it structurally cannot wander outside what the user selected. **Amended 2026-07-24 (Phase-2 step 5, owner-scoped decision — this bullet is unchanged for the SAFE tools, and the OPEN harness departs from it deliberately).** A coding harness cannot work through a per-file picker: an editing loop touches dozens of files, and `save_new_file` refuses to overwrite at all (that refusal is precisely what keeps its undo trivial). So the two OPEN-only file tools (`read_project_file`, `write_project_file`) scope by **trusted root** instead: the user grants one project directory through the OS folder picker — still a native dialog, still a deliberate act — and every path the tools resolve must sit inside it. The property the picker was protecting is preserved rather than dropped, because the boundary is still enforced at the process edge: the core hard-refuses an out-of-root path before the tool runs, **and the Rust shell independently refuses Addison's own data directory**, so a bypass of the core's check still cannot reach the recovery floor's storage. What genuinely changed is the *granularity* of consent — per-file, to per-directory-per-grant — and only inside the profile that asked for a coding harness. The SAFE file tools keep picker scoping exactly as written above.
 - **Destructive actions require re-confirmation with a preview.** "Delete `invoice_march.pdf`?" always shows the actual filename, never a batched/summarized action.
 - **Prompt-injection awareness.** Content pulled from tool results (web pages, documents) is marked as untrusted data in the model context, and the system prompt instructs the model not to treat instructions found inside tool output as commands from the user — the same pattern used in Claude's own tool-result handling.
@@ -824,7 +825,7 @@ user clicks through and a prompt-injection could try to talk around, so it is
 
 **G3 — guaranteed rollback (new global floor).** *Neither the user nor the model
 can drive Addison into an unrecoverable configuration — see
-[`SAFETY.md`](SAFETY.md), which owns the exact wording and its OPEN-mode caveat. At
+[`SAFETY.md`](SAFETY.md), which owns the exact wording and how far it reaches. At
 all times there exists a
 one-action restore to a last-known-working state, and that restore path is itself
 unbreakable.* Realised with **app-state snapshots**:
@@ -930,7 +931,9 @@ Claude Code says outright that no system is immune. Addison's boundaries:
   Claude Code and Codex CLI both rely on. Acceptable; not permanent.
 - **Platforms with no profile.** Linux has no Landlock/bubblewrap path yet, so a
   command runs unconfined; the response carries `sandboxed: false` and the tool
-  prints it above the output. Never silent — but never protected either.
+  prints it above the output. Never silent — but never protected either. Tracked in
+  KNOWN-GAPS, which owns its status; v1 is macOS, so it bites the day a second
+  platform ships.
 - **Hardlinks inside a trusted root.** `realpath` cannot see them, so a hardlink
   to a file outside the root is treated as inside it. Inherent to any
   realpath-based confinement.
@@ -1088,6 +1091,12 @@ track (post-greenlight):
 5. **Harness + workspace-trust** (OPEN) — the trust boundary the powerful
    capabilities below depend on (§7.11). **Shipped 2026-07-24** — narrower than
    drafted; read §7.11's correction note first.
+5.5. **Containment for the harness** (OPEN) — the boundary underneath step 5's
+   permission card: commands execute in the desktop shell under a macOS sandbox
+   bounded by the folders the person has trusted, a short list of things that
+   cannot be approved at all, redaction of credentials out of command output, and a
+   record of every tool decision. **Shipped 2026-07-31**, and §9's first mitigation
+   was brought current with it — [plan](step-5.5-containment-plan.md).
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers and safe storage
    (buildable in all modes), capability-tier gating, capability-aware guidance.
@@ -1097,8 +1106,8 @@ track (post-greenlight):
    **Not started.**
 8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Not started.**
 
-**Status as of 2026-07-26:** steps 1–5 are built and merged; 6–8 are not started.
-Those three are also the prerequisites for the Phase-3 **review surface**
+**[`../ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*. Steps
+6–8 are also the prerequisites for the Phase-3 **review surface**
 (`docs/phase-3-review-surface-plan.md`) — see the Phase-3 note above.
 
 Steps 3–4 are companion-facing and independent of the harness, so they can run in

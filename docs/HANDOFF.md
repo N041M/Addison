@@ -40,8 +40,8 @@ or 8**, and they are independent of each other. `ROADMAP.md` has the description
 - **Two things only the owner can decide**, both queued in KNOWN-GAPS: whether a
   401 should mark a provider needs-attention (it currently changes nothing, so a
   revoked key fails every turn forever), and whether `/Applications/Addison.app`
-  joins the seatbelt denies (the floor protects Addison's data, not its code —
-  `exec.rs` is now where that deny would go, so it is cheap).
+  joins the seatbelt denies — the DATA-not-CODE item, which KNOWN-GAPS states in
+  full. `exec.rs` is now where that deny would go, so it is cheap.
 
 **If you are picking up the keychain thread:** read
 [`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) before touching
@@ -57,27 +57,25 @@ not-downloaded → one-click download plus a source link; downloaded → how to 
 it; and more open-source models), and skills file-upload (an uploaded text file's
 contents become the skill's guidance text — editable, previewed, size-limited).
 
-## Uncommitted work on `master` (2026-08-01)
+## Committed and pushed (2026-08-01)
 
-**Everything below is written, tested and green — and NOT committed.** If you are
-a new session and `git status` is dirty, this is why. Roughly 30 files: step 5.5
-in full, the keychain diagnosis and its signing fix, the secrets plan, and three
-small gap closures.
+**The tree is clean.** What this section warned about for most of 2026-08-01 — a
+`master` carrying roughly 30 uncommitted files — is over. It went out in the four
+pieces it was split into: step 5.5 (`22c8876`), the "Always Allow" signing fix
+(`6690fd2`), the secrets plan (`62d93a7`) and three gap closures (`b57917f`), all
+on `master` and all pushed. `ROADMAP.md` owns what they mean for status.
 
-**A warning paid for in this session:** an untracked file was renamed and
-rewritten, and ~700 lines of design work vanished with no git history to recover
-from — the doc that replaced it even claimed its history held the original. Commit
-early here; the tree is carrying a lot that exists nowhere else.
-
-Suggested split if you commit it in pieces: (1) step 5.5 — `exec.rs`, the denylist,
-redaction, `tool_audit`, their tests and docs; (2) the keychain diagnosis — the
-trace and `sign-and-run.sh`; (3) the secrets plan (pure docs); (4) the three gap
-closures.
+**The lesson stays, because it was paid for and the tree being clean does not
+repay it:** during that session an untracked file was renamed and rewritten, and
+~700 lines of design work vanished with no git history to recover from — the doc
+that replaced it even claimed its history held the original. **Commit early.** An
+untracked file is not work-in-progress, it is work with no backup, and this repo
+has now lost some that way.
 
 ## Branch and PR state (verified 2026-08-01)
 
-**No open pull requests. `master` carries everything** — work from it, and see the
-uncommitted-work section above before assuming a clean tree.
+**No open pull requests. `master` carries everything**, committed and pushed —
+work from it.
 
 - **PR #58 merged** (`a22badd`, 2026-07-26): the dark v4 redesign, the
   adversarial-review fix wave, the docs passes, the brand/icon fixes and thread
@@ -121,9 +119,9 @@ the test dies.** It has been wrong four times in this repo now.
 
 ## Where the project stands
 
-- The v1 build order (engineering-spec §11, steps 1–11) is implemented and merged.
-  Phase-2 steps 1–5 are built and merged; **5.5 is complete but uncommitted**
-  (above). **6, 7 and 8 remain.**
+- The v1 build order (engineering-spec §11, steps 1–11) is implemented and merged,
+  as are Phase-2 steps 1–5.5. **6, 7 and 8 remain** — `ROADMAP.md` owns this and is
+  the file to trust if it and this line ever disagree.
 - Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple =
   an all-in-one companion; Custom tunes prompting guards. Safety means **guaranteed
   rollback**, and that now has code and tests behind it in BOTH modes — the
@@ -134,7 +132,8 @@ the test dies.** It has been wrong four times in this repo now.
   diagnostics are pre-existing `reportMissingImports` for `pytest`/`httpx` — pyright
   has no venv), ruff, vitest, ESLint, `tsc --noEmit`, `vite build`, `cargo test`.
   `tsc` now covers the test files too (`npm run typecheck` runs both configs — the
-  second one found nine real errors the day it was added).
+  second config found real errors in four classes the day it was added, all fixed;
+  KNOWN-GAPS has them).
   **Counts are deliberately not written down** — they went stale twice in one day,
   and a stale number reads as a claim. Commands are in `CONVENTIONS.md`;
   `VERIFICATION.md` is the runbook.
