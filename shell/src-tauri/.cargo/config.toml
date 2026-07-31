@@ -1,0 +1,15 @@
+# Dev-build code signing — see sign-and-run.sh for the full reasoning.
+#
+# SHORT VERSION: an ad-hoc signature carries a per-build identifier, so every
+# rebuild looks like a different app to macOS and the keychain ACL ("Always Allow")
+# is discarded. Signing each dev build with one stable identity is what makes that
+# decision stick. The runner is the only hook available: `npm run tauri dev` builds
+# and launches in one step, and cargo hands the runner the freshly-built binary.
+#
+# macOS only — the ACL behaviour this works around is macOS's. Other platforms get
+# cargo's default runner (none) and are unaffected.
+#
+# It also applies to `cargo test`, which is harmless: the script signs and execs,
+# and it fails open on any machine without the identity.
+[target.'cfg(target_os = "macos")']
+runner = "./sign-and-run.sh"

@@ -19,7 +19,9 @@
 // emitted, and never crosses an IPC boundary.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::time::Instant;
 
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -108,6 +110,53 @@ static OS_KEYCHAIN: Mutex<()> = Mutex::new(());
 /// panic while holding it must not wedge every later keychain call.
 fn os_guard() -> MutexGuard<'static, ()> {
     OS_KEYCHAIN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+// ===========================================================================
+// KEYCHAIN TRACE — a diagnostic, opt-in, and it must never print a secret
+// ===========================================================================
+// WHY IT EXISTS. Launching raises TWO password dialogs for the SAME item, and
+// "Allow" answers only the first — because "Allow" is a single-access grant while
+// "Always Allow" writes an ACL onto the item. Two dialogs therefore means two
+// separate OS reads of one item, which `KEY_CACHE` and `OS_KEYCHAIN` were built to
+// prevent. Static reading of this file cannot say which caller makes the second
+// read: it depends on ordering and on which of the three outcomes the first read
+// returns (`NothingSaved` is deliberately never cached). So: measure.
+//
+// OFF BY DEFAULT, both processes. `ADDISON_KEYCHAIN_TRACE=1` turns it on here and
+// in the Agent Core (`shell_bridge.py`), which prints the CORE-side call site — so
+// one launch shows both "who asked" and "what the OS was actually touched for",
+// interleaved on the same stderr in real order.
+//
+// **NO KEY MATERIAL, EVER (G1).** A trace line carries the account name, the
+// outcome VARIANT, and timing. Never a key, never a length, never a prefix — a
+// length narrows a brute force and a prefix identifies the vendor. This is
+// enforced by `a_trace_line_never_carries_key_material`, which is the test that
+// matters in this block: a debug aid that leaks the thing it is debugging is worse
+// than no debug aid.
+static TRACE_START: OnceLock<Instant> = OnceLock::new();
+static TRACE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+fn trace_enabled() -> bool {
+    std::env::var("ADDISON_KEYCHAIN_TRACE").map(|v| v == "1").unwrap_or(false)
+}
+
+/// One trace line. `subject` is an account name or `provider=…`; `outcome` is a
+/// short variant word. Both are program-authored constants or account names — never
+/// a value read out of the keychain.
+fn trace(event: &str, subject: &str, outcome: &str) {
+    if !trace_enabled() {
+        return;
+    }
+    let started = TRACE_START.get_or_init(Instant::now);
+    let seq = TRACE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
+    // stderr, because the core's stdout is the JSON-RPC channel and the shell's
+    // stderr is what `npm run tauri dev` shows (agent_process.rs inherits it, so
+    // both processes' lines land in the one terminal, in order).
+    eprintln!(
+        "[keychain +{:>6}ms #{seq:<2}] shell  {event:<12} {subject:<28} -> {outcome}",
+        started.elapsed().as_millis()
+    );
 }
 
 /// Keychain service name — matches the app identifier (tauri.conf.json).
@@ -231,6 +280,20 @@ enum KeyRead {
     Unreadable,
 }
 
+impl KeyRead {
+    /// The variant, as one word, for a trace line. **Never the key** — `Found`
+    /// deliberately renders as a bare word and not as any function of the value:
+    /// not the key, not its length, not a prefix. A length narrows a brute force
+    /// and a prefix names the vendor, and neither is worth a debug line.
+    fn trace_word(&self) -> &'static str {
+        match self {
+            KeyRead::Found(_) => "found",
+            KeyRead::NothingSaved => "nothing-saved",
+            KeyRead::Unreadable => "unreadable",
+        }
+    }
+}
+
 /// Agent-Core-internal read. Never exposed as a Tauri command, so the webview has no
 /// route to it.
 ///
@@ -244,7 +307,9 @@ enum KeyRead {
 /// automatic pollers (stats, provider.list) stay non-fresh, so a denial still costs
 /// at most one dialog per user action, never one per minute.
 fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
+    trace("ask", &format!("provider={provider} fresh={fresh}"), "…");
     if let Some(answer) = cached_answer(provider, fresh) {
+        trace("answered", &format!("provider={provider}"), &format!("{} (no OS touch)", answer.trace_word()));
         return answer;
     }
     let _os = os_guard();
@@ -252,10 +317,12 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
     // same provider must read ITS result rather than raise a second dialog for an
     // item that has just been fetched.
     if let Some(answer) = cached_answer(provider, fresh) {
+        trace("answered", &format!("provider={provider}"), &format!("{} (no OS touch, post-lock)", answer.trace_word()));
         return answer;
     }
 
     let outcome = read_provider_key_from_os(provider);
+    trace("cached-as", &format!("provider={provider}"), outcome.trace_word());
     match &outcome {
         KeyRead::Found(key) => cache_put(provider, key),
         // Remembered so the next stats poll answers from memory instead of raising
@@ -284,7 +351,12 @@ fn cached_answer(provider: &str, fresh: bool) -> Option<KeyRead> {
 /// it into `provider-key:anthropic` so an existing key survives the upgrade to the
 /// per-provider scheme without the user re-pasting it.
 fn read_provider_key_from_os(provider: &str) -> KeyRead {
-    let Ok(entry) = Entry::new(SERVICE, &account_for_provider(provider)) else {
+    let account = account_for_provider(provider);
+    // THE LINE THAT COSTS A PASSWORD DIALOG. Every one of these is one prompt on a
+    // build whose ACL has been invalidated; counting them is the whole diagnostic.
+    trace("OS-TOUCH", &account, "reading…");
+    let Ok(entry) = Entry::new(SERVICE, &account) else {
+        trace("OS-TOUCH", &account, "unreadable (no entry handle)");
         return KeyRead::Unreadable;
     };
     match entry.get_password() {
@@ -299,11 +371,17 @@ fn read_provider_key_from_os(provider: &str) -> KeyRead {
 /// either way — a migration that couldn't complete must not cost the user their key
 /// for this launch.
 fn legacy_anthropic_key(destination: &Entry) -> KeyRead {
+    // A SECOND OS touch inside one logical read — and therefore a second dialog.
+    // Only reached when `provider-key:anthropic` reported NoEntry, but that is
+    // exactly the case worth seeing in a trace: `NothingSaved` is never cached, so
+    // if this path is live it runs again on the very next caller.
+    trace("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "reading (legacy migration)…");
     let Ok(legacy) = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT) else {
         return KeyRead::Unreadable;
     };
     match legacy.get_password() {
         Ok(key) => {
+            trace("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "found -> migrating + WRITING + deleting");
             migrate_legacy_key(|| destination.set_password(&key), || legacy.delete_credential());
             KeyRead::Found(key)
         }
@@ -441,16 +519,20 @@ fn identity_cache_store(slot: &Mutex<Option<DeviceIdentity>>, identity: &DeviceI
 /// private key is only ever materialized here as an in-memory `SigningKey`; it is
 /// never returned, logged, or emitted.
 fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
+    trace("ask", DEVICE_ACCOUNT, "…");
     if let Some(identity) = identity_cache_load(device_cache()) {
+        trace("answered", DEVICE_ACCOUNT, "cached (no OS touch)");
         return Ok(identity);
     }
     let _os = os_guard();
     // Re-check under the OS lock, for the same reason as the provider read: the two
     // calls one relay message makes must not both raise a dialog for the same item.
     if let Some(identity) = identity_cache_load(device_cache()) {
+        trace("answered", DEVICE_ACCOUNT, "cached (no OS touch, post-lock)");
         return Ok(identity);
     }
 
+    trace("OS-TOUCH", DEVICE_ACCOUNT, "reading…");
     let entry = Entry::new(SERVICE, DEVICE_ACCOUNT).map_err(|_| {
         RpcError::app("Couldn't reach the system keychain for your device identity.")
     })?;
@@ -459,6 +541,7 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
         // is ever remembered.
         Ok(blob) => DeviceIdentity::from_stored(&blob)?,
         Err(keyring::Error::NoEntry) => {
+            trace("OS-TOUCH", DEVICE_ACCOUNT, "no entry -> generating + WRITING");
             let identity = DeviceIdentity::generate();
             entry
                 .set_password(&identity.to_stored())
@@ -602,6 +685,41 @@ mod tests {
 
     // --- Session cache: exercised directly, no OS keychain involved. Tests own
     // distinct provider ids so parallel test threads can't collide.
+
+    #[test]
+    fn a_trace_line_never_carries_key_material() {
+        // The one assertion that makes the trace safe to hand a user. A debug aid
+        // that prints the secret it is debugging is worse than no debug aid — and
+        // a keychain trace is precisely where that mistake is easy to make, because
+        // the value is right there in the variant being reported.
+        //
+        // `trace_word` is asserted rather than the printed line because it is the
+        // only place a KeyRead's contents could reach a trace: everything else the
+        // tracer prints is a program-authored constant or an account name.
+        let secret = "sk-ant-do-not-print-this-0123456789";
+        let word = KeyRead::Found(secret.to_string()).trace_word();
+        assert_eq!(word, "found");
+        assert!(!word.contains(secret));
+        // Not the length either: a length narrows a brute force.
+        assert!(!word.contains(&secret.len().to_string()));
+        // ...and not a prefix, which names the vendor.
+        assert!(!word.contains("sk-"));
+        assert_eq!(KeyRead::NothingSaved.trace_word(), "nothing-saved");
+        assert_eq!(KeyRead::Unreadable.trace_word(), "unreadable");
+    }
+
+    #[test]
+    fn the_trace_is_off_unless_explicitly_asked_for() {
+        // Off by default in every build, release and debug: a keychain trace on by
+        // default is a keychain trace in someone's support-log paste.
+        std::env::remove_var("ADDISON_KEYCHAIN_TRACE");
+        assert!(!trace_enabled());
+        std::env::set_var("ADDISON_KEYCHAIN_TRACE", "0");
+        assert!(!trace_enabled(), "only an explicit 1 enables it");
+        std::env::set_var("ADDISON_KEYCHAIN_TRACE", "1");
+        assert!(trace_enabled());
+        std::env::remove_var("ADDISON_KEYCHAIN_TRACE");
+    }
 
     #[test]
     fn cache_round_trips_a_key() {
