@@ -11,5 +11,18 @@
 #
 # It also applies to `cargo test`, which is harmless: the script signs and execs,
 # and it fails open on any machine without the identity.
+#
+# A RUNNER ONLY RUNS WHEN CARGO RUNS THE BINARY. `cargo run` and `cargo test`
+# invoke it; **`cargo build` does not**, so a plain `cargo build` leaves the
+# ad-hoc signature the linker produced and launching that binary by hand brings
+# every keychain prompt back. This is not a gap — `npm run tauri dev` shells out
+# to `cargo run --no-default-features` (verified by reading tauri's own
+# DevCommand line in its output), so the workflow anybody actually uses is
+# covered. Written down because a `cargo build` followed by `codesign -d -r-`
+# shows a `cdhash` requirement and looks exactly like the bug this fixes.
+#
+# The path is relative to THIS FILE, not to the shell's cwd: cargo resolves a
+# runner against the config directory, so `cargo test --manifest-path …` from the
+# repo root (or anywhere else) works. Verified from /tmp before believing it.
 [target.'cfg(target_os = "macos")']
 runner = "./sign-and-run.sh"

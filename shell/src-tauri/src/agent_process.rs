@@ -348,6 +348,47 @@ mod tests {
     use super::*;
     use tokio::io::BufReader as AsyncBufReader;
 
+    #[test]
+    fn the_pump_asks_dispatch_off_loop_before_it_awaits_anything() {
+        // THE WIRING, not the function. `a_long_command_does_not_block_the_next_
+        // request` below calls `dispatch_off_loop` directly — correctly, because
+        // `handle_line` needs an `AppHandle` no unit test can build — so it proves
+        // the dispatcher works and proves NOTHING about whether the pump still
+        // calls it. Measured: commenting the call out of `handle_line` leaves the
+        // whole suite green while every command goes back to being awaited on the
+        // read loop, which is the exact 30-second stall this file exists to avoid.
+        //
+        // This is trap 3 from docs/HANDOFF.md ("purifying a function for
+        // testability moves the untested part to its caller") landing a second
+        // time in the same repo, so it gets a source-level pin rather than a
+        // comment. Coarse on purpose: it asserts ORDER, which is the property, and
+        // not the surrounding shape, which is free to change.
+        let source = include_str!("agent_process.rs");
+        let start = source
+            .find("async fn handle_line")
+            .expect("handle_line must exist for this test to mean anything");
+        let body = &source[start..];
+        let end = body.find("\n}\n").expect("handle_line must be a closed function");
+        let body = &body[..end];
+
+        // The CALL, not the word. The first version of this test searched for
+        // `dispatch_off_loop` and passed under its own mutation, because deleting
+        // the call left the comment above it saying "see `dispatch_off_loop`" —
+        // a source test that matches prose measures the prose.
+        let dispatch = body
+            .find("dispatch_off_loop(stdin_state")
+            .expect("handle_line must CALL dispatch_off_loop — otherwise a slow \
+                    request is awaited on the core's read loop and stalls every frame");
+        let awaited = body
+            .find("filesystem::handle")
+            .expect("handle_line must still route shell-bound methods somewhere");
+        assert!(
+            dispatch < awaited,
+            "dispatch_off_loop must be consulted BEFORE the inline await, or the \
+             claim off it is worthless:\n{body}"
+        );
+    }
+
     #[tokio::test]
     async fn a_long_command_does_not_block_the_next_request() {
         // THE ASSERTION THAT MATTERS IS THE CLOCK, and the frames are read back off a
