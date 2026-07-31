@@ -60,8 +60,20 @@ _SECRETS = {
         "Slack token": ("xoxb", "-123456789012-abcdefghijklmnop"),
         "Google API key": ("AIza", "SyA0123456789abcdefghijklmnopqrstuv"),
         "bearer token": ("Bearer ", "abcdefghijklmnopqrstuvwxyz0123456789"),
+        "Stripe key": ("sk_live_", "0123456789abcdefghijklmn"),
+        "GitLab token": ("glpat-", "0123456789abcdefghij"),
+        "JSON web token": (
+            "eyJ",
+            "hbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnopqrstuvwxyz012345",
+        ),
     }.items()
 }
+
+# The 40-character half that actually signs an AWS request. It is NOT in the dict
+# above because it cannot stand alone: with no vendor prefix it is
+# indistinguishable from a git SHA, so the rule anchors on the assignment and the
+# fixture has to carry one too. AWS's own published example value.
+_AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"
 
 _PEM = (
     "-----BEGIN OPENSSH PRIVATE KEY-----\n"
@@ -81,6 +93,39 @@ def test_every_known_secret_shape_is_removed_and_named():
         assert secret not in result.text, kind
         assert f"[redacted: {kind}]" in result.text, kind
         assert kind in result.kinds
+
+
+def test_the_aws_secret_half_is_removed_and_its_variable_name_survives():
+    """The rule that was missing for weeks while its neighbour matched `AKIA…`.
+
+    An access key ID is an identifier; THIS is the credential. Both spellings the
+    real world uses are covered, and the variable name is deliberately kept — a
+    redactor that deletes `AWS_SECRET_ACCESS_KEY=` along with the value produces
+    output that reads like corruption, and a model looking at corruption re-runs
+    the command."""
+    for line in (
+        f"AWS_SECRET_ACCESS_KEY={_AWS_SECRET}",
+        f"aws_secret_access_key: {_AWS_SECRET}",
+        f'aws_secret_access_key = "{_AWS_SECRET}"',
+    ):
+        result = redact(f"env dump\n{line}\ndone")
+        assert _AWS_SECRET not in result.text, line
+        assert "[redacted: AWS secret key]" in result.text, line
+        assert "AWS secret key" in result.kinds
+        # The name survives; only the value goes.
+        assert "secret_access_key" in result.text.lower(), line
+
+
+def test_a_bare_forty_character_secret_is_NOT_redacted_and_that_is_the_trade():
+    """Stated as a test so it is a decision rather than a surprise.
+
+    With no `aws_secret_access_key=` in front of it, the value is 40 characters of
+    base64 alphabet — the same shape as a git SHA. Matching it unanchored would
+    shred ordinary `git log` output, so the rule stays anchored and this case
+    passes. That is the backstop-not-a-boundary rule being honest, and anyone
+    tempted to "fix" it should read the git-SHA assertion in
+    `test_ordinary_output_is_left_alone` first."""
+    assert redact(f"loose value {_AWS_SECRET} here").kinds == ()
 
 
 def test_a_private_key_block_is_removed_body_and_all():
@@ -383,6 +428,44 @@ def test_a_routine_step_is_audited_too(tmp_path):
     # A routine is not a conversation; the run is identifiable from routine_runs.
     assert rows[0]["conversation_id"] is None
     assert rows[0]["tool_id"] == "calculator"
+
+
+def test_a_throwing_sink_never_breaks_a_ROUTINE_either(tmp_path):
+    """The same best-effort contract, proven at the second of the three sites.
+
+    `main._record_tool_audit` calls `insert_tool_audit(**row)` bare — nothing in
+    it is defensive. What makes a broken audit store survivable is entirely the
+    CALLER's blanket `except`, and until now only the live loop had a test saying
+    so. A routine that died because its history could not be written would be the
+    audit trail costing the person the work it exists to describe."""
+    from agent_core.memory.store import Store
+    from agent_core.routines.engine import RoutineEngine
+    from agent_core.routines.model import Routine, RoutineStep
+
+    def _explode(_row):
+        raise RuntimeError("audit backend is down")
+
+    registry = ToolRegistry()
+    registry.register(_LeakyTool())
+    store = Store(tmp_path / "r.sqlite3")
+    store.insert_routine(
+        id="r-1", name="T", description="", plan_json={},
+        created_from_conversation_id=None, created_at=1, created_in_mode="safe",
+    )
+    engine = RoutineEngine(
+        tool_registry=registry,
+        permission_gate=PermissionGate(on_request=lambda *a, **k: True),
+        undo_manager=UndoManager(store=store, tool_registry=registry),
+        store=store,
+        on_tool_audit=_explode,
+    )
+    result = engine.run(
+        Routine(id="r-1", name="T", description="", variables=[],
+                steps=[RoutineStep("s1", "calculator", {})]),
+        {}, mode=PolicyMode.SAFE,
+    )
+    # The step ran and the run completed — the sink's failure stayed local.
+    assert result is not None
 
 
 class _VeryLeakyTool:

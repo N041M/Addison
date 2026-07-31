@@ -52,6 +52,18 @@ export interface ConversationSummary {
   id: string;
   title: string;
   startedAt: number;
+  /**
+   * User + assistant turns, tool rows excluded (`store.py`'s
+   * `SUM(m.role != 'tool')`). Nothing renders it yet — it is here because the
+   * core SENDS it on every row and this interface said otherwise for months.
+   *
+   * That gap was not harmless: when `tsc` first covered the test files it
+   * flagged a fixture carrying this field, and the fix was to delete it from the
+   * FIXTURE, which made the type and the tests agree with each other and both
+   * disagree with the wire. Optional because the type is describing a payload it
+   * does not control — not because the core sometimes omits it.
+   */
+  messageCount?: number;
 }
 
 /**
@@ -76,6 +88,7 @@ export function parseConversationSummaries(result: unknown): ConversationSummary
       id: obj.id,
       title: typeof obj.title === "string" && obj.title ? obj.title : "Untitled conversation",
       startedAt: typeof obj.startedAt === "number" ? obj.startedAt : 0,
+      ...(typeof obj.messageCount === "number" ? { messageCount: obj.messageCount } : {}),
     });
   }
   return out;

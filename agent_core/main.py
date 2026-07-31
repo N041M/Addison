@@ -1472,10 +1472,18 @@ class JsonRpcServer(
         """Persist one tool-decision row (step 5.5, item 4).
 
         Server machinery, the ``_record_usage`` precedent — never a registry tool:
-        a tool able to write its own audit row is a tool able to skip one. The
-        orchestrator already swallows failures around this call, so a broken audit
-        trail can never take a turn down with it; a store that isn't up yet simply
-        drops the row."""
+        a tool able to write its own audit row is a tool able to skip one.
+
+        DELIBERATELY NOT DEFENSIVE, and that is a real dependency rather than an
+        oversight: this calls ``insert_tool_audit(**row)`` bare, so the only thing
+        making a broken audit store survivable is each CALLER's blanket
+        ``except``. A second layer of swallowing here would buy little and cost
+        something — the failure that matters is rows going missing silently, and
+        the fix for that was to make the write observable, not quieter.
+        The contract is pinned behaviourally at all three sites instead
+        (``test_a_throwing_sink_never_breaks_the_turn`` and its routine twin), so
+        a caller that stops swallowing fails a test rather than a person's work.
+        A store that isn't up yet simply drops the row."""
         if self.store is None:
             return
         self.store.insert_tool_audit(**row)

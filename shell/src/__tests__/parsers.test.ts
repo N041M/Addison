@@ -305,7 +305,7 @@ describe("normalizeProfile", () => {
       label: "Simple",
       description: "Approachable by default.",
     });
-    expect("advanced" in parsed!.profiles[1]).toBe(false);
+    expect("advanced" in parsed.profiles[1]).toBe(false);
     // Only Custom carries it, and only because the wire said `true`.
     expect(parsed?.profiles[2]).toEqual({
       id: "custom",
@@ -319,7 +319,7 @@ describe("normalizeProfile", () => {
     const parsed = parsedProfile({
       profiles: [{ id: "custom", label: "Custom", description: "", advanced: 1 }],
     });
-    expect("advanced" in parsed!.profiles[0]).toBe(false);
+    expect("advanced" in parsed.profiles[0]).toBe(false);
   });
 
   it("returns null for a non-object payload", () => {

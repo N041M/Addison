@@ -139,7 +139,13 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
       setOutcome((prev) => ({ ...prev, [routine.id]: { ok: false, detail } }));
     } finally {
       setRunning(null);
+      // Both halves, together. `values` and `valuesFor` are one fact spelled in
+      // two variables — which answers WHICH routine the answers belong to — and
+      // clearing only the answers leaves an id pointing at an empty map. Harmless
+      // today (the payload is `{}` either way), and exactly the shape of the bug
+      // this pair was introduced to fix.
       setValues({});
+      setValuesFor(null);
     }
   }
 
