@@ -37,6 +37,7 @@ PolicyMode for the ExecutionContext, so the dependency runs one way only).
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 from dataclasses import dataclass
@@ -228,15 +229,30 @@ def workspace_trust_allows(
 #
 # SCOPE THE GUARANTEE HONESTLY. Deciding what an arbitrary ``shell=True`` string
 # touches is the game #48 lost three times (``ls\nrm -rf`` defeated ``shlex``;
-# bundled and attached short flags defeated flag matching). Quoting defeats this
-# too: ``rm -rf ~/.addi"son"`` is not caught, and nothing here pretends otherwise.
-# This is a BACKSTOP AGAINST THE OBVIOUS, not a parser. The real boundary is the
-# seatbelt profile's ``deny file-write*`` (step 5.5 item 2), which no amount of
-# quoting evades; when that lands, this stays as the layer above it.
+# bundled and attached short flags defeated flag matching). This is a BACKSTOP
+# AGAINST THE OBVIOUS, not a parser. The real boundary is the seatbelt profile's
+# ``deny file-write*`` (step 5.5 item 2), which no amount of spelling evades; when
+# that lands, this stays as the layer above it.
+#
+# Two evasions this DID concede and no longer does, because each was one character
+# wide and both were live in the shipped build (2026-08-01):
+#   * quoting — ``rm -rf ~/.addi"son"`` and ``cat "$HOME"/.ssh/id_rsa``. Quote
+#     characters are now removed from a token before it is resolved, exactly as
+#     the shell removes them.
+#   * globbing — ``rm -rf ~/.addiso*``, ``rm -rf ~/.addi?on``, ``cat ~/.s*h/id_rsa``.
+#     A wildcard WIDENS what a token can name, so it must widen the refusal too: a
+#     pattern that COULD expand onto a protected path is refused. Anything else
+#     makes the denylist trivially bypassable by a person who can type ``*``.
+# What is still conceded, precisely: a separator this doesn't split on, command
+# substitution and variables other than ``$HOME`` (``cat $(echo ~)/.ssh/id_rsa``),
+# and anything the shell computes rather than spells.
 _CREDENTIAL_DIRS = ("~/.ssh", "~/.aws", "~/.gnupg")
 
-# Matched on the token's basename, wherever it lives. ``.env`` is the one file
-# every project keeps its secrets in, and it is not under a fixed root.
+# Matched on the token's basename, wherever it lives — as a PREFIX, not an exact
+# name. ``.env`` is the one file every project keeps its secrets in, it is not
+# under a fixed root, and the dominant real-world spellings are the per-stage
+# suffixes: ``.env.local``, ``.env.production``, ``.env.development``. An exact
+# tuple protected the least-used spelling of the four.
 _CREDENTIAL_BASENAMES = (".env",)
 
 # Shell separators. Splitting on these is NOT parsing — it only widens the set of
@@ -274,6 +290,14 @@ def denylisted_roots(data_dir: str | os.PathLike[str]) -> list[str]:
     return roots
 
 
+# Characters a shell removes before it resolves a path, so this must remove them
+# too: ``~/.addi"son"``, ``~/'.ssh'/id_rsa`` and ``~/.addi\son`` all name exactly
+# what their bare spellings name. Deleting characters can only WIDEN the set of
+# tokens tested, so the dequoted form is added ALONGSIDE the raw one, never
+# instead of it.
+_QUOTE_CHARS = re.compile(r"""['"`\\]""")
+
+
 def _command_tokens(command: str) -> list[str]:
     """Every substring of ``command`` that might name a path. Over-generates on
     purpose — an extra token costs one comparison, a missed one is a hole."""
@@ -287,21 +311,27 @@ def _command_tokens(command: str) -> list[str]:
             candidates.append(raw.split("=", 1)[1])
         if raw.startswith("-"):
             # ``-f/etc/passwd`` — an attached value after bundled short flags.
+            # ``if positions`` and not ``min(positions) > 0``: the de-dashed token
+            # can START with the path character (``-/etc/x`` -> ``/etc/x``), and
+            # requiring a non-zero index dropped exactly that candidate. Index 0
+            # simply means the whole de-dashed token is the path.
             stripped = raw.lstrip("-")
             positions = [stripped.find(c) for c in "/~$" if c in stripped]
-            if positions and min(positions) > 0:
+            if positions:
                 candidates.append(stripped[min(positions):])
         for candidate in candidates:
-            token = candidate.strip("'\"`,")
-            if token:
-                tokens.append(token)
+            for form in (candidate.strip("'\"`,"), _QUOTE_CHARS.sub("", candidate).strip(",")):
+                if form and form not in tokens:
+                    tokens.append(form)
     return tokens
 
 
-def _resolved_token(token: str) -> str | None:
-    """A token as an absolute canonical path. Relative tokens resolve against the
-    HOME directory because that is ``run_command``'s cwd — resolving them against
-    the Agent Core's own cwd would test a path the command never touches."""
+def _absolute_form(token: str) -> str:
+    """A token as an absolute path STRING — expansions only, no realpath, so a
+    token carrying wildcards survives as a pattern. Relative tokens resolve
+    against the HOME directory because that is ``run_command``'s cwd; resolving
+    them against the Agent Core's own cwd would test a path the command never
+    touches."""
     expanded = token
     for name in ("${HOME}", "$HOME"):
         if expanded.startswith(name):
@@ -310,7 +340,65 @@ def _resolved_token(token: str) -> str | None:
     expanded = os.path.expanduser(expanded)
     if not os.path.isabs(expanded):
         expanded = os.path.join(os.path.expanduser("~"), expanded)
-    return _canonical(expanded)
+    return expanded
+
+
+def _resolved_token(token: str) -> str | None:
+    """A token as an absolute canonical path (symlinks and ``..`` resolved)."""
+    return _canonical(_absolute_form(token))
+
+
+# --- globbing: a wildcard widens the refusal, it does not narrow it ----------
+#
+# ``rm -rf ~/.addiso*`` deletes the recovery floor exactly as ``rm -rf ~/.addison``
+# does, and until 2026-08-01 the first was allowed because it is not literally the
+# second. A pattern names a SET of paths; the honest question is therefore "could
+# this expand onto a protected path", and a candidate that could must be refused.
+_GLOB_CHARS = "*?["
+
+
+def _has_glob(token: str) -> bool:
+    return any(char in token for char in _GLOB_CHARS)
+
+
+def _glob_component_matches(pattern: str, name: str) -> bool:
+    """One path component against one pattern component, with the shell's own
+    leading-dot rule: a wildcard does NOT match a name starting with ``.`` unless
+    the pattern spells the dot. Without that rule ``ls *`` would be refused (``*``
+    would "match" ``.addison``) while the real shell never touches it — the kind
+    of false positive that gets a guard switched off rather than fixed."""
+    if name.startswith(".") and not pattern.startswith("."):
+        return False
+    return fnmatch.fnmatchcase(name.casefold(), pattern.casefold())
+
+
+def _glob_offends(token: str, root: str) -> str | None:
+    """How a WILDCARD token offends against one canonical root, or None.
+
+    Component-wise, because that is what a shell glob is: every component of the
+    pattern must be able to match the root's component in the same position.
+    Longer-or-equal pattern -> it could name the root itself or something under it
+    (INSIDE); shorter -> it could name a folder that HOLDS the root (CONTAINS)."""
+    pattern_parts = os.path.normpath(_absolute_form(token)).split(os.sep)
+    root_parts = root.split(os.sep)
+    for pattern_part, root_part in zip(pattern_parts, root_parts):
+        if not _glob_component_matches(pattern_part, root_part):
+            return None
+    return DENIED_INSIDE if len(pattern_parts) >= len(root_parts) else DENIED_CONTAINS
+
+
+def _is_credential_basename(basename: str) -> bool:
+    """True for ``.env`` and its per-stage spellings (``.env.local``,
+    ``.env.production``…), and for a wildcard that could expand onto one
+    (``.env*``, ``.en?``). Prefix + glob, never an exact-name tuple: exactly one
+    of the four common spellings is the bare ``.env``."""
+    name = basename.casefold()
+    for known in _CREDENTIAL_BASENAMES:
+        if name == known or name.startswith(known + "."):
+            return True
+        if _has_glob(basename) and _glob_component_matches(basename, known):
+            return True
+    return False
 
 
 def _names_a_directory(token: str) -> bool:
@@ -355,16 +443,32 @@ def command_denied_path(
     ``ls ~`` succeeds, and this direction should be DELETED rather than tuned —
     along with ``_names_a_directory``, which exists only to serve it.
 
+    THREE SPELLINGS OF ONE PATH, all refused: the literal one, the quoted one
+    (quote characters and backslashes are removed first, as the shell removes
+    them), and the WILDCARD one — a pattern that could expand onto a protected
+    path is refused, because ``rm -rf ~/.addiso*`` destroys the recovery floor as
+    surely as naming it does. What is still conceded is listed at the head of this
+    section; it is shorter than it was, and it is not empty.
+
     ``data_dir`` is required for the reason ``denylisted_roots`` gives."""
     roots = [_canonical(root) for root in denylisted_roots(data_dir)]
     roots = [root for root in roots if root is not None]
     for token in _command_tokens(command):
-        if os.path.basename(token.rstrip("/")).casefold() in _CREDENTIAL_BASENAMES:
+        if _is_credential_basename(os.path.basename(token.rstrip("/"))):
             return (token, DENIED_INSIDE)
+        pathish = _names_a_directory(token)
+        if _has_glob(token):
+            # A pattern cannot be realpath'd — resolving it would compare a
+            # literal ``*`` against real directory names and always miss — so it
+            # is matched component-wise against each root instead. The literal
+            # pass below still runs, for a token whose ``[`` is part of a name.
+            for root in roots:
+                direction = _glob_offends(token, root)
+                if direction == DENIED_INSIDE or (direction == DENIED_CONTAINS and pathish):
+                    return (token, direction)
         resolved = _resolved_token(token)
         if resolved is None:
             continue
-        pathish = _names_a_directory(token)
         for root in roots:
             if _within_or_equal(resolved, root):
                 return (token, DENIED_INSIDE)

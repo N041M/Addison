@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent_core.redaction import redact
 from agent_core.skills import Skill
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES, _PRESERVED_SETTING_KEYS
@@ -570,9 +571,22 @@ class Store:
         to.
 
         ``detail`` is the value the permission card already shows
-        (``tools/base.call_permission_detail``) — narrow by contract and never a
-        secret. ``redacted`` is a comma-separated list of KINDS the redactor
-        removed on the way to the model, never the values.
+        (``tools/base.call_permission_detail``). That contract says "narrow", and
+        for every path-bounded tool it is — but ``run_command``'s detail is the
+        COMMAND TEXT, so ``export ANTHROPIC_API_KEY=… && ./deploy.sh`` arrives here
+        verbatim. **It is redacted on the way in**, once, at the write rather than
+        at each of the three dispatch sites, so a fourth site added later cannot
+        forget: the row is durable, ``tool_audit`` is excluded from snapshots and is
+        never pruned, so a secret written here outlives everything (G1). The card
+        the person approves still shows the real command — it has to, that is what
+        they are approving; what must not persist is the copy. ``redacted`` is a
+        comma-separated list of KINDS the redactor removed on the way to the model,
+        never the values.
+
+        Redaction is a backstop, not a boundary (see ``agent_core.redaction``): a
+        credential in a shape nobody enumerated still lands. The claim this
+        supports is "no KNOWN secret shape is persisted", and no doc may state it
+        more strongly than that.
 
         Best-effort by design (the caller swallows failures): the audit trail must
         never be the reason a turn dies. A missing row is a gap in history; a
@@ -585,7 +599,7 @@ class Store:
                 id,
                 conversation_id,
                 tool_id,
-                detail,
+                redact(detail).text if detail else detail,
                 mode,
                 1 if destructive else 0,
                 outcome,

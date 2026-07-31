@@ -17,8 +17,10 @@ destroy the evidence that a leak happened, which is the opposite of the goal.
 
 from __future__ import annotations
 
+import pathlib
+
 from agent_core.orchestrator import Conversation, Orchestrator
-from agent_core.permissions.gate import PermissionGate
+from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import PolicyMode
 from agent_core.providers.base import (
     Message,
@@ -196,19 +198,50 @@ class _LeakyTool:
         )
 
 
+class _CommandShapedTool:
+    """``run_command``'s SHAPE, minus the shell: a tool whose ``permission_detail``
+    is the argument text itself.
+
+    This is the tool the audit trail actually has to survive. Every other tool's
+    detail is narrow by construction (``read_web_page`` gives a host), so a test
+    written against one of those asserts nothing about `detail` — the field is
+    None and the assertion passes over an empty string. A command's detail IS its
+    arguments, and arguments are where a secret enters."""
+
+    definition = ToolDefinition(
+        id="run_command_shape", label="Run a command", description="carries its args",
+        risk_tier=RiskTier.LOW,
+        parameters_schema={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    )
+
+    def permission_detail(self, args) -> str | None:
+        # Byte-for-byte what RunCommandTool.permission_detail does, cap included.
+        command = str(args.get("command", "")).strip()
+        return command or None
+
+    def execute(self, args, context) -> ToolResult:
+        return ToolResult(success=True, content="deployed")
+
+
 class _FakeStore:
     def insert_action_snapshot(self, snapshot: ActionSnapshot) -> None:
         pass
 
 
-def _run_turn(audit_sink=None):
-    tool = _LeakyTool()
+def _run_turn(audit_sink=None, tool=None, args=None):
+    tool = tool if tool is not None else _LeakyTool()
     registry = ToolRegistry()
     registry.register(tool)
     provider = _RecordingProvider([
         ModelResponse(
             text=None,
-            tool_calls=[ToolCallRequest(id="c1", tool_id="calculator", args={})],
+            tool_calls=[
+                ToolCallRequest(id="c1", tool_id=tool.definition.id, args=args or {})
+            ],
         ),
         ModelResponse(text="done", tool_calls=[]),
     ])
@@ -267,17 +300,43 @@ def test_a_granted_call_is_recorded_and_names_what_was_redacted():
     assert "AWS access key" in (row["redacted"] or "")
 
 
-def test_no_audit_row_ever_carries_a_secret():
-    """G1's rule applied to history: `detail` is the permission card's own value,
-    and `redacted` is kinds only. Neither may contain a value, and the audit trail
-    is durable — a leak here outlives the session."""
-    rows: list[dict] = []
-    _run_turn(audit_sink=rows.append)
+def test_no_audit_row_ever_carries_a_secret(tmp_path):
+    """G1's rule applied to history, and it is asserted WHERE THE ROW LANDS.
+
+    Two things this test got wrong until 2026-08-01, both of which made it pass
+    while the leak was live:
+
+      * it ran a tool with no ``permission_detail`` at all, so the `detail` field
+        under test was always None. Nothing it asserted could ever have failed.
+        It now runs a run_command-shaped call whose detail IS the command text —
+        `export TOKEN=… && ./deploy.sh`, the exact shape the harness produces.
+      * it asserted on the dict handed to the sink. The redaction that makes this
+        true happens inside ``Store.insert_tool_audit`` (one site, so a fourth
+        dispatch site cannot forget), and durability is the whole reason the field
+        matters: `tool_audit` is excluded from snapshots and never pruned. So the
+        assertion is on rows READ BACK OUT OF SQLITE.
+    """
+    from agent_core.memory.store import Store
+
+    store = Store(tmp_path / "audit.sqlite3")
+    secret = _SECRETS["GitHub token"]
+    _run_turn(
+        audit_sink=lambda row: store.insert_tool_audit(**row),
+        tool=_CommandShapedTool(),
+        args={"command": f"export TOKEN={secret} && ./deploy.sh"},
+    )
+
+    rows = store.list_tool_audit()
+    assert rows, "the call must have left a row — otherwise this proves nothing"
+    # Not vacuous in the other direction either: the row describes THIS call.
+    assert any("./deploy.sh" in (row["detail"] or "") for row in rows)
     for row in rows:
         blob = " ".join(str(v) for v in row.values())
-        for secret in _SECRETS.values():
-            assert secret not in blob
+        for known in _SECRETS.values():
+            assert known not in blob
         assert "AWS_SECRET" not in blob      # nor the surrounding tool output
+        # A partial key is still a key: assert no prefix of it survived either.
+        assert secret[:20] not in blob
 
 
 def test_an_audit_sink_that_throws_never_breaks_the_turn():
@@ -324,6 +383,418 @@ def test_a_routine_step_is_audited_too(tmp_path):
     # A routine is not a conversation; the run is identifiable from routine_runs.
     assert rows[0]["conversation_id"] is None
     assert rows[0]["tool_id"] == "calculator"
+
+
+class _VeryLeakyTool:
+    """Output carrying the SAME secret kind many times over — a build script that
+    prints a key table, or a `env`-shaped dump. This is what turned the `redacted`
+    column from cosmetic into a size problem: the redactor reports one entry per
+    MATCH, and the row is durable, excluded from snapshots and never pruned."""
+
+    definition = ToolDefinition(
+        id="dump_env", label="Dump", description="prints many keys",
+        risk_tier=RiskTier.LOW, parameters_schema={"type": "object", "properties": {}},
+    )
+
+    def execute(self, args, context) -> ToolResult:
+        lines = [f"KEY_{n}={_SECRETS['AWS access key']}" for n in range(200)]
+        lines.append(f"GH_TOKEN={_SECRETS['GitHub token']}")
+        return ToolResult(success=True, content="\n".join(lines))
+
+
+def test_the_redacted_column_names_each_kind_once(tmp_path):
+    """One entry per KIND, not per MATCH, and in a stable order.
+
+    201 hits of two kinds used to write "AWS access key, AWS access key, …" —
+    roughly 3KB here and ~40KB for a command that prints a real key table — into a
+    column whose entire content is two names. Sorted as well as deduplicated, so
+    the same set of kinds is always the same row and two runs are comparable."""
+    from agent_core.memory.store import Store
+
+    store = Store(tmp_path / "audit.sqlite3")
+    _run_turn(audit_sink=lambda row: store.insert_tool_audit(**row), tool=_VeryLeakyTool())
+
+    granted = [r for r in store.list_tool_audit() if r["outcome"] == "granted"]
+    assert granted, "the call must have left a row — otherwise this proves nothing"
+    # Both kinds are named, each exactly once, alphabetically.
+    assert granted[0]["redacted"] == "AWS access key, GitHub token"
+
+
+def test_nothing_is_scanned_for_secrets_when_no_audit_sink_is_wired(monkeypatch):
+    """The classification exists only to fill the ``redacted`` column, so with no
+    sink it is pure cost: a 9-regex pass over up to _MAX_OUTPUT_CHARS of output, on
+    every CLI turn and every test turn, thrown away. It was a plain ARGUMENT, and
+    an argument is evaluated before the callee's early-out can discard it."""
+    import agent_core.orchestrator as orchestrator_module
+
+    scanned: list[str] = []
+    real = orchestrator_module.redact
+
+    def _counting(text):
+        scanned.append(text)
+        return real(text)
+
+    monkeypatch.setattr(orchestrator_module, "redact", _counting)
+
+    _run_turn()                                   # no sink
+    assert scanned == [], "tool output was scanned with nothing to record it in"
+
+    # Not vacuous: with a sink wired the very same turn DOES scan. (This is the
+    # orchestrator's classification pass only — the scrubbing that protects the
+    # wire is `redacted_for_model`, a different function, and it always runs.)
+    _run_turn(audit_sink=[].append)
+    assert scanned, "a wired sink must still get its classification"
+
+
+# ===========================================================================
+# The refusal branches — the rows the log actually exists for
+# ===========================================================================
+
+
+class _ExplodingGate:
+    """A gate that must never be consulted. Every refusal below sits ABOVE the
+    gate by design, so reaching it is itself the failure."""
+
+    def authorize(self, *args, **kwargs):  # pragma: no cover - must not run
+        raise AssertionError("a refusal must never reach the permission gate")
+
+
+def test_a_routine_step_refused_as_dev_only_still_leaves_a_row(tmp_path):
+    """A routine step naming a dev tool outside OPEN was the one refusal in the
+    tree that recorded nothing at all — and a routine is the path that runs
+    one-click, model-authored, with nobody watching. ``detail`` is None to match
+    the live loop's dev_only row: nothing about the call was examined."""
+    from agent_core.memory.store import Store
+    from agent_core.routines.engine import RoutineEngine
+    from agent_core.routines.model import Routine, RoutineStep
+    from agent_core.tools.run_command import RunCommandTool
+
+    rows: list[dict] = []
+    registry = ToolRegistry()
+    registry.register(RunCommandTool(), dev_only=True)
+    store = Store(tmp_path / "r.sqlite3")
+    store.insert_routine(
+        id="r-dev", name="T", description="", plan_json={},
+        created_from_conversation_id=None, created_at=1, created_in_mode="open",
+    )
+    engine = RoutineEngine(
+        tool_registry=registry,
+        permission_gate=_ExplodingGate(),
+        undo_manager=UndoManager(store=store, tool_registry=registry),
+        store=store,
+        on_tool_audit=rows.append,
+    )
+    run = engine.run(
+        Routine(id="r-dev", name="T", description="", variables=[],
+                steps=[RoutineStep("s1", "run_command", {}, command="echo hi")]),
+        {}, mode=PolicyMode.SAFE,
+    )
+
+    assert run.status == "failed"
+    assert [r["outcome"] for r in rows] == ["dev_only"]
+    row = rows[0]
+    assert row["tool_id"] == "run_command"
+    assert row["conversation_id"] is None        # a routine is not a conversation
+    assert row["detail"] is None
+    assert row["mode"] == "safe"
+    # Computed from the call, not from the branch: run_command always cards.
+    assert row["destructive"] is True
+
+
+def test_the_rails_safe_refusal_leaves_a_row(tmp_path):
+    """The Run pill is the third site a command can start, and the only one a
+    CLICK starts rather than a model. Driven through the real JSON-RPC server so
+    the row is the one the live server writes, read back out of its own store."""
+    from agent_core.memory.store import Store
+    from agent_core.protocol import Method
+    from tests.test_policy_modes import _artifact_server, _rpc, _shutdown
+
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "simple")
+    try:
+        result = _rpc(reader, writer, 1, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        assert result["ok"] is False
+        assert "waiting in Developer profile" in result["error"]
+    finally:
+        _shutdown(reader, thread)
+
+    store = Store(db_path)
+    rows = store.list_tool_audit()
+    store.close()
+    assert [r["outcome"] for r in rows] == ["dev_only"]
+    assert rows[0]["tool_id"] == "run_command"
+    assert rows[0]["mode"] == "safe"
+    assert rows[0]["detail"] == "ls"           # the widget's own command
+    assert rows[0]["destructive"] == 1
+
+
+def test_the_rails_refusal_records_even_when_run_command_is_not_registered(tmp_path):
+    """THE LESSON FROM THE FIRST ATTEMPT AT THE ROW ABOVE, kept as a test.
+
+    Resolving the tool in the handler so the refusal could be audited turned a
+    clean SAFE refusal into a ``-32000`` error frame on every server whose registry
+    has no ``run_command`` — which is every server built by ``conftest.build_server``
+    and could be a real one mid-reconfiguration. Two properties, and the first
+    matters more: **the refusal does not depend on registry contents**, and the
+    audit still writes a row (id only, empty detail) rather than breaking the thing
+    it observes."""
+    import json as _json
+
+    from agent_core.memory.store import Store
+    from agent_core.protocol import Method
+    from tests.conftest import IPC_DB_NAME, _shutdown, build_server
+
+    db_path = tmp_path / IPC_DB_NAME
+    seed = Store(db_path)
+    seed.set_setting("widgets_seeded", "1")
+    seed.insert_widget(
+        id="cmd-w",
+        spec_json=_json.dumps({"kind": "command", "command": "ls", "title": "List"}),
+        pinned=True, position=0, created_at=1, created_in_mode="open",
+    )
+    seed.close()
+
+    harness = build_server(tmp_path)          # registry carries the spy tool ONLY
+    try:
+        registry = harness.server.tool_registry
+        assert "run_command" not in {d.id for d in registry.list_for_model()}
+        harness.reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_RUN,
+             "params": {"id": "cmd-w"}}
+        )
+        frame = harness.writer.wait_for(lambda f: f.get("id") == 1)
+        assert "error" not in frame, f"a refusal became an error frame: {frame}"
+        assert frame["result"]["ok"] is False
+        assert "waiting in Developer profile" in frame["result"]["error"]
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+    store = Store(db_path)
+    rows = store.list_tool_audit()
+    store.close()
+    assert [r["outcome"] for r in rows] == ["dev_only"]
+    assert rows[0]["tool_id"] == "run_command"   # the id IS the record
+    assert rows[0]["detail"] is None
+
+
+# ===========================================================================
+# THE ROUND TRIP — every outcome, through a real SQLite store
+# ===========================================================================
+
+
+class _DestructivePathTool:
+    """A write-shaped, path-bounded tool. Confinement refuses it before the gate,
+    which is the branch whose ``destructive`` column used to be a hard-coded
+    False regardless of what the call would have done."""
+
+    definition = ToolDefinition(
+        id="write_shaped", label="Save a file", description="path-bounded write",
+        risk_tier=RiskTier.LOW,
+        parameters_schema={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    )
+
+    def affected_path(self, args) -> str:
+        return str(pathlib.Path(str(args.get("path", ""))).resolve())
+
+    def is_destructive(self, args) -> bool:
+        return True                              # an overwrite is data loss
+
+    def permission_detail(self, args) -> str | None:
+        # The file's name, not the whole path: `call_permission_detail` caps what a
+        # detail may be, and a tmp_path is long enough to hit the cap.
+        return pathlib.Path(str(args.get("path", ""))).name or None
+
+    def execute(self, args, context) -> ToolResult:  # pragma: no cover - must not run
+        raise AssertionError("a confined-out call must never execute")
+
+
+def _audited_turn(store, *, tool, args, mode, allow=True, dev_only=False):
+    """One turn whose audit sink is a REAL store — no list, no fake."""
+    registry = ToolRegistry()
+    registry.register(tool, dev_only=dev_only)
+    provider = _RecordingProvider([
+        ModelResponse(
+            text=None,
+            tool_calls=[ToolCallRequest(id="c1", tool_id=tool.definition.id, args=args)],
+        ),
+        ModelResponse(text="done", tool_calls=[]),
+    ])
+    answer = PermissionStatus.GRANTED if allow else PermissionStatus.DENIED
+    Orchestrator(
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
+        tool_registry=registry,
+        permission_gate=PermissionGate(on_request=lambda *a, **k: answer),
+        undo_manager=UndoManager(store=_FakeStore(), tool_registry=registry),
+        # The default refuses every path, so a path-bounded tool is confined to
+        # nothing — which is what makes the confined_out branch reachable here.
+        on_tool_audit=lambda row: store.insert_tool_audit(**row),
+    ).run_turn(_conversation(), mode=mode)
+
+
+def _conversation():
+    conv = Conversation(id="conv-1")
+    conv.messages.append(Message(role="user", content="go"))
+    return conv
+
+
+def test_every_outcome_survives_the_round_trip_into_sqlite(tmp_path):
+    """THE TEST THE AUDIT TRAIL DID NOT HAVE.
+
+    Every other test here hands ``_audit`` a ``list.append`` sink, and BOTH
+    ``_audit`` implementations swallow every exception by contract. So a renamed
+    column, a widened outcome, a violated CHECK — anything that makes the INSERT
+    fail — would drop 100% of rows in the running app while this file stayed
+    entirely green. That is the repo's own "passes when the mechanism never ran"
+    trap, in the subsystem whose whole purpose is durability.
+
+    So: a real ``Store``, all five outcomes, read back out with
+    ``list_tool_audit``. It also pins ``destructive`` as a property of the CALL —
+    the refusal branches each used to hard-code a literal, so the column described
+    which branch was taken, in exactly the rows the log exists for."""
+    from agent_core.memory.store import Store
+    from agent_core.tools.run_command import RunCommandTool
+
+    store = Store(tmp_path / "audit.sqlite3")
+
+    # granted / denied — an ordinary LOW tool, gate says yes then no.
+    _audited_turn(store, tool=_LeakyTool(), args={}, mode=PolicyMode.SAFE, allow=True)
+    _audited_turn(store, tool=_LeakyTool(), args={}, mode=PolicyMode.SAFE, allow=False)
+    # forbidden — the hardline denylist, above the gate (step 5.5 item 3).
+    _audited_turn(
+        store, tool=RunCommandTool(), args={"command": "rm -rf ~/.addison"},
+        mode=PolicyMode.OPEN, dev_only=True,
+    )
+    # confined_out — a path-bounded write with no trusted root (step 5, D3).
+    _audited_turn(
+        store, tool=_DestructivePathTool(), args={"path": str(tmp_path / "x.txt")},
+        mode=PolicyMode.SAFE,
+    )
+    # dev_only — a dev tool named outside OPEN.
+    _audited_turn(
+        store, tool=RunCommandTool(), args={"command": "ls"},
+        mode=PolicyMode.SAFE, dev_only=True,
+    )
+
+    rows = store.list_tool_audit()
+    store.close()
+    by_outcome = {row["outcome"]: row for row in rows}
+    assert set(by_outcome) == {
+        "granted", "denied", "forbidden", "confined_out", "dev_only"
+    }, f"rows that never reached SQLite: {sorted(rows, key=str)}"
+
+    # DESTRUCTIVE IS THE CALL'S ANSWER, NOT THE BRANCH'S.
+    assert by_outcome["forbidden"]["destructive"] == 1      # every command cards
+    assert by_outcome["dev_only"]["destructive"] == 1       # ...even a refused one
+    assert by_outcome["confined_out"]["destructive"] == 1   # a write, refused early
+    # ...and it is not simply always 1: a LOW read-only tool is not destructive.
+    assert by_outcome["granted"]["destructive"] == 0
+    assert by_outcome["denied"]["destructive"] == 0
+
+    # The rows describe THESE calls, so none of the above passed over empty fields.
+    assert by_outcome["forbidden"]["detail"] == "rm -rf ~/.addison"
+    assert by_outcome["confined_out"]["detail"] == "x.txt"
+    assert by_outcome["dev_only"]["detail"] is None
+    for row in rows:
+        assert row["conversation_id"] == "conv-1"
+        assert row["mode"] in ("safe", "open")
+
+
+class _NonDestructiveCommandTool:
+    """Declares command text — the denylist's one input — but classifies itself
+    non-destructive.
+
+    ``run_command`` is the only tool that declares ``command_text`` today and it
+    cards unconditionally, so a forbidden row for it is True either way. This
+    shape is what tells a COMPUTED column apart from the ``True`` the forbidden
+    branch used to hard-code, and ``command_text`` is an open protocol any later
+    tool may implement."""
+
+    definition = ToolDefinition(
+        id="peek", label="Peek at a file", description="reads, never writes",
+        risk_tier=RiskTier.LOW,
+        parameters_schema={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    )
+
+    def command_text(self, args) -> str:
+        return str(args.get("command", ""))
+
+    def permission_detail(self, args) -> str | None:
+        return str(args.get("command", "")) or None
+
+    def is_destructive(self, args) -> bool:
+        return False
+
+    def execute(self, args, context) -> ToolResult:  # pragma: no cover - must not run
+        raise AssertionError("a forbidden call must never execute")
+
+
+def test_a_forbidden_row_describes_the_call_not_the_branch(tmp_path):
+    """The denylist refusal is the outcome with NO card behind it, so its row is
+    the only place the attempt is ever recorded. A hard-coded ``destructive=True``
+    there is a claim about the branch dressed as a fact about the call."""
+    from agent_core.memory.store import Store
+
+    store = Store(tmp_path / "audit.sqlite3")
+    _audited_turn(
+        store, tool=_NonDestructiveCommandTool(),
+        args={"command": "cat ~/.ssh/id_rsa"}, mode=PolicyMode.SAFE,
+    )
+    rows = store.list_tool_audit()
+    store.close()
+
+    assert [row["outcome"] for row in rows] == ["forbidden"]
+    assert rows[0]["detail"] == "cat ~/.ssh/id_rsa"
+    assert rows[0]["destructive"] == 0
+
+
+def test_a_routines_refusal_rows_describe_the_call_not_the_branch(tmp_path):
+    """The same defect lived twice — the engine's refusal branches carried their
+    own copies of the literal. The engine is the path that runs one-click and
+    unattended, so its rows are the ones nobody is watching being written."""
+    from agent_core.memory.store import Store
+    from agent_core.routines.engine import RoutineEngine
+    from agent_core.routines.model import Routine, RoutineStep
+
+    def _run(tool, args, rows):
+        registry = ToolRegistry()
+        registry.register(tool)
+        store = Store(tmp_path / f"{tool.definition.id}.sqlite3")
+        store.insert_routine(
+            id="r", name="T", description="", plan_json={},
+            created_from_conversation_id=None, created_at=1, created_in_mode="safe",
+        )
+        RoutineEngine(
+            tool_registry=registry,
+            permission_gate=_ExplodingGate(),
+            undo_manager=UndoManager(store=store, tool_registry=registry),
+            store=store,
+            on_tool_audit=rows.append,
+        ).run(
+            Routine(id="r", name="T", description="", variables=[],
+                    steps=[RoutineStep("s1", tool.definition.id, args)]),
+            {}, mode=PolicyMode.SAFE,
+        )
+        store.close()
+
+    # forbidden: a non-destructive read the denylist refuses anyway.
+    forbidden: list[dict] = []
+    _run(_NonDestructiveCommandTool(), {"command": "cat ~/.ssh/id_rsa"}, forbidden)
+    assert [r["outcome"] for r in forbidden] == ["forbidden"]
+    assert forbidden[0]["destructive"] is False
+
+    # confined_out: a destructive write with no trusted root (the engine's default
+    # trust check refuses every path).
+    confined: list[dict] = []
+    _run(_DestructivePathTool(), {"path": str(tmp_path / "x.txt")}, confined)
+    assert [r["outcome"] for r in confined] == ["confined_out"]
+    assert confined[0]["destructive"] is True
 
 
 def test_the_audit_row_survives_the_snapshot_scope_rule():

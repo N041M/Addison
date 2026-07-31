@@ -506,7 +506,10 @@ class Orchestrator:
     ) -> None:
         """Record one tool decision. BEST-EFFORT, ALWAYS: a failure to write history
         must never be the reason a person's turn dies, so every exception is
-        swallowed here rather than at each of the six call sites."""
+        swallowed here rather than at each of the six call sites.
+
+        ``auditing`` is public for the one caller that must not even BUILD its
+        argument when there is no sink — see the granted branch."""
         if self._on_tool_audit is None:
             return
         try:
@@ -519,12 +522,26 @@ class Orchestrator:
                     "mode": mode.value if hasattr(mode, "value") else str(mode),
                     "destructive": bool(destructive),
                     "outcome": outcome,
-                    "redacted": ", ".join(redacted) if redacted else None,
+                    # KINDS, deduplicated — one entry per kind, never one per
+                    # match. ``redact`` reports every hit, so a command that prints
+                    # 2000 keys produced a 40KB string of the same three words
+                    # repeated, in a table that is excluded from snapshots and
+                    # never pruned. Sorted so the same set is always the same row.
+                    "redacted": ", ".join(sorted(set(redacted))) if redacted else None,
                     "created_at": int(time.time()),
                 }
             )
         except Exception:
             pass
+
+    @property
+    def auditing(self) -> bool:
+        """Whether an audit sink is wired at all. Read by the granted branch so it
+        can skip BUILDING the ``redacted`` argument — that argument is a full
+        9-regex pass over up to _MAX_OUTPUT_CHARS of tool output, and as a plain
+        argument it was evaluated before ``_audit``'s early-out could discard it,
+        on every CLI and test turn."""
+        return self._on_tool_audit is not None
 
     def _finish_over_budget(self, conversation) -> None:
         # Same sentence for both ceilings: the person does not care which counter ran
@@ -560,8 +577,15 @@ class Orchestrator:
             dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(
                 call.tool_id, mode
             )
+            # Per-call destructiveness, resolved ONCE for every branch below.
+            # Each refusal branch used to hard-code a literal here — True for
+            # forbidden, False for confined_out and dev_only — which made the
+            # column a description of the BRANCH rather than of the call, in
+            # exactly the rows the log exists for. The tool already answers this
+            # question (tools/base.call_is_destructive); ask it.
+            destructive = call_is_destructive(tool, call.args)
             if dev_only_refusal is not None:
-                self._audit(conversation, call.tool_id, None, mode, False, "dev_only")
+                self._audit(conversation, call.tool_id, None, mode, destructive, "dev_only")
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=dev_only_refusal)
                 )
@@ -578,7 +602,8 @@ class Orchestrator:
                 # invisible outside the transcript today).
                 self._audit(
                     conversation, call.tool_id,
-                    call_permission_detail(tool, call.args), mode, True, "forbidden",
+                    call_permission_detail(tool, call.args), mode, destructive,
+                    "forbidden",
                 )
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=forbidden)
@@ -597,7 +622,8 @@ class Orchestrator:
             if affected is not None and not trusted:
                 self._audit(
                     conversation, call.tool_id,
-                    call_permission_detail(tool, call.args), mode, False, "confined_out",
+                    call_permission_detail(tool, call.args), mode, destructive,
+                    "confined_out",
                 )
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=_OUTSIDE_TRUST)
@@ -610,7 +636,8 @@ class Orchestrator:
             # `detail`). A confined, trusted file edit passes `trusted=True` so the
             # gate auto-grants it card-free (§8.3). Destructiveness is per-call
             # (run_command and write_project_file classify their own; else HIGH).
-            destructive = call_is_destructive(tool, call.args)
+            # ``destructive`` was resolved above the refusal branches, so the gate
+            # and every audit row agree on one answer per call.
             # Asked once and used twice, on purpose: the permission card and the
             # Activity Panel must describe the SAME call. Calling the tool's
             # permission_detail a second time could describe a different one if it ever
@@ -680,9 +707,19 @@ class Orchestrator:
                 # tool's. `redact` is re-run on the result purely to classify it —
                 # the actual scrubbing still happens once, at the send boundary, so
                 # every message is covered and not just tool results. Kinds only.
+                #
+                # Guarded by ``self.auditing`` because an ARGUMENT is evaluated
+                # before the callee's early-out can discard it: with no sink wired
+                # (every CLI turn, every test that does not pass one) this ran a
+                # 9-regex pass over up to _MAX_OUTPUT_CHARS of output and threw the
+                # answer away. The classification is only ever read by the row.
                 self._audit(
                     conversation, call.tool_id, detail, mode, destructive, "granted",
-                    redacted=redact(_result_as_text(result.content)).kinds,
+                    redacted=(
+                        redact(_result_as_text(result.content)).kinds
+                        if self.auditing
+                        else None
+                    ),
                 )
             conversation.append_tool_result(call.id, result)
         return calls_made, budget_spent

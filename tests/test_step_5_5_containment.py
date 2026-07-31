@@ -175,6 +175,29 @@ _MUST_BE_FORBIDDEN_INSIDE = [
     "gpg --export-secret-keys ~/.gnupg",
     "cat .env",                          # basename match, anywhere
     "cat /tmp/project/.env",
+    # The per-stage .env spellings — the dominant real-world ones. An exact
+    # basename tuple protected the least-used of the four (2026-08-01).
+    "cat .env.local",
+    "cat .env.production",
+    "cat .env.development",
+    "cat /tmp/project/.env.production",
+    # QUOTING. The shell strips these before it resolves the path, so anything
+    # that does not strip them is reading a different string than the shell will.
+    'rm -rf ~/.addi"son"',
+    "rm -rf ~/'.addison'",
+    'cat "$HOME"/.ssh/id_rsa',           # the idiomatic $HOME spelling, quoted
+    "cat ~/.ssh/'id_rsa'",
+    "rm -rf ~/.addi\\son",               # backslash escape, same principle
+    # GLOBBING. A wildcard WIDENS what a token can name, so it has to widen the
+    # refusal: each of these expands onto the floor or a credential store, and
+    # each was allowed by the shipped build until 2026-08-01.
+    "rm -rf ~/.addiso*",
+    "rm -rf ~/.addi?on",
+    "rm -rf ~/.addis[o]n",
+    "cat ~/.s*h/id_rsa",
+    "rm -rf ~/.*",                       # matches every dotfile, floor included
+    "cat .env*",
+    "cat .en?",
     # Attached short flag (#48's vector). Spelled against the REAL home: an
     # earlier draft used a fictional /Users/x/… and a trailing ".", so it passed
     # on the "." (a CONTAINS hit) while the flag path it was written to cover went
@@ -214,6 +237,19 @@ _MUST_STILL_BE_ALLOWED = [
     "python3 -m pytest tests/",
     "echo addison",                      # the word, not the path
     "cat environment.txt",               # NOT .env
+    "cat .environment_notes",            # .env is a prefix of NAMES, not of text
+    "cat .envoy.yaml",                   # ditto — the boundary is the dot
+    # Globs that must NOT be widened onto the floor. A wildcard does not match a
+    # leading dot in any shell, and a denylist that pretends otherwise refuses
+    # `ls *` in the home directory — the false positive that gets a guard
+    # switched off rather than fixed.
+    "ls *",
+    "ls *.py",
+    "rm -rf ~/*",
+    "grep -rn TODO src/*.ts",
+    "ls ~/projects/*/dist",
+    "echo \"hello world\"",              # quotes that reveal nothing when removed
+    "git commit -m 'fix: a thing'",
     "",
 ]
 
@@ -259,6 +295,46 @@ def test_the_offending_token_is_reported_not_just_a_bool():
     assert command_denied_path("rm -rf ~/.addison", DATA_DIR) == ("~/.addison", DENIED_INSIDE)
     assert command_denied_path("rm -rf ~", DATA_DIR) == ("~", DENIED_CONTAINS)
     assert command_denied_path("ls -la ~/projects", DATA_DIR) is None
+
+
+def test_a_glob_widens_the_refusal_rather_than_escaping_it():
+    """The one-character bypass, pinned as its own property.
+
+    `rm -rf ~/.addiso*` destroys the recovery floor exactly as naming it does, and
+    the shipped build allowed it because it is not literally the same string. A
+    pattern names a SET of paths, so the question a denylist has to answer is
+    "could this expand onto a protected path", not "is this spelled like one".
+
+    The direction matters as much as the refusal: a pattern that could only ever
+    expand to something ABOVE the floor is CONTAINS (recoverable, "name the
+    subfolder"), and one that could land on or inside it is INSIDE."""
+    assert command_denied_path("rm -rf ~/.addiso*", DATA_DIR) == (
+        "~/.addiso*", DENIED_INSIDE,
+    )
+    assert command_denied_path("cat ~/.s*h/id_rsa", DATA_DIR) == (
+        "~/.s*h/id_rsa", DENIED_INSIDE,
+    )
+    # ...and the leading-dot rule holds, so ordinary globbing is untouched.
+    assert command_denied_path("rm -rf ~/*", DATA_DIR) is None
+    assert command_denied_path("ls *", DATA_DIR) is None
+
+
+def test_a_quoted_path_names_what_the_shell_says_it_names():
+    """`rm -rf ~/.addi"son"` was conceded in the docstring and live in the code.
+    Conceding an evasion does not make it acceptable when the fix is to delete the
+    characters the shell itself deletes."""
+    assert command_denied_path('rm -rf ~/.addi"son"', DATA_DIR)[1] == DENIED_INSIDE
+    assert command_denied_path('cat "$HOME"/.ssh/id_rsa', DATA_DIR)[1] == DENIED_INSIDE
+    # Quotes around something harmless stay harmless once removed.
+    assert command_denied_path("git commit -m 'fix: a thing'", DATA_DIR) is None
+
+
+def test_a_dash_prefixed_token_that_is_entirely_a_path_is_still_examined():
+    """The attached-short-flag candidate used to require the path character at a
+    NON-ZERO index (`min(positions) > 0`), which silently dropped the candidate
+    whenever the de-dashed token WAS the path. Index 0 is not a sentinel."""
+    assert command_denied_path("rm -rf -~/.addison", DATA_DIR) is not None
+    assert command_denied_path("cat -/etc/../root/.ssh/id_rsa", DATA_DIR) is None
 
 
 def test_a_long_command_is_scanned_in_full():
@@ -521,21 +597,28 @@ def test_a_routine_variable_cannot_smuggle_a_forbidden_path(tmp_path):
 
 def test_only_the_owner_modules_may_derive_the_data_directory():
     root = pathlib.Path(__file__).resolve().parent.parent / "agent_core"
+    # MATCHED ON THE PATH FROM ``agent_core/``, NOT ON ``path.name``. A basename
+    # whitelist reads as if it names three modules; it actually exempts every file
+    # in the tree that happens to share a basename — and `base.py` alone is
+    # `tools/base.py`, `rpc/base.py` and `providers/base.py`. Two of those three
+    # were silently allowed to re-derive the data dir by a guard whose entire job
+    # is to stop exactly that.
     allowed = {
         # policy.py defines it.
         "policy.py",
         # rpc/workspace.py is the AUTHORITY: it answers from the running store's
         # path and falls back to the derivation only when no store is wired.
-        "workspace.py",
+        "rpc/workspace.py",
         # tools/base.py's named fallback, for a construction with no server at all.
-        "base.py",
+        "tools/base.py",
     }
     offenders = []
     for path in root.rglob("*.py"):
-        if path.name in allowed:
+        relative = path.relative_to(root).as_posix()
+        if relative in allowed:
             continue
         if "_derived_data_dir" in path.read_text(encoding="utf-8"):
-            offenders.append(str(path.relative_to(root)))
+            offenders.append(relative)
     assert not offenders, (
         "these modules re-derive the data directory instead of being handed the "
         f"live one: {offenders}. See policy.denylisted_roots for why that is a "

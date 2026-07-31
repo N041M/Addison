@@ -11,7 +11,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
-from agent_core.policy import DENIED_CONTAINS, PolicyMode, command_denied_path
+from agent_core.policy import (
+    DENIED_CONTAINS,
+    PolicyMode,
+    _derived_data_dir,
+    command_denied_path,
+)
 
 
 class RiskTier(str, Enum):
@@ -328,9 +333,15 @@ def default_forbidden_check(tool: Any, args: dict) -> str | None:
     always injects a check bound to the RUNNING store's directory, and this only
     covers the constructed-without-a-server case (tests). It is the one place in
     the tree allowed to re-derive the data dir for this predicate — a source test
-    (`test_step_5_5_containment`) pins that."""
-    from agent_core.policy import _derived_data_dir
+    (`test_step_5_5_containment`) pins that.
 
+    ``_derived_data_dir`` is imported at MODULE level with the rest of policy.
+    It sat inside this body with no reason given, which reads as "there is a
+    cycle here" — there is not: policy imports only ``profiles``, and this module
+    already imports three other names from it at the top. It is also not a
+    deferral of any work, because the function reads ``ADDISON_DB_PATH`` when
+    CALLED, so binding the name early changes nothing about when the answer is
+    computed."""
     return call_is_forbidden(tool, args, _derived_data_dir())
 
 

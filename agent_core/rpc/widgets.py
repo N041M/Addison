@@ -138,6 +138,16 @@ class WidgetsMixin(ServerContext):
             return
         mode = self._mode()
         if mode is PolicyMode.SAFE:
+            # The rail's SAFE refusal used to emit nothing at all, which made the
+            # plan's "written on every branch including refusals" false at the one
+            # site where a click, not a model, starts a command. Same outcome the
+            # live loop and the engine record for a dev tool named outside OPEN.
+            #
+            # Audited by ID, and the lookup happens INSIDE the audit helper on
+            # purpose: resolving the tool out here to build the row is what turned
+            # this clean refusal into an error frame the first time it was written.
+            # A refusal must not depend on what the registry happens to contain.
+            self._audit_tool_by_id("run_command", spec, mode, "dev_only")
             self._respond(
                 request_id,
                 {
@@ -204,6 +214,43 @@ class WidgetsMixin(ServerContext):
             if result.success
             else {"ok": False, "error": result.content},
         )
+
+    def _audit_tool_by_id(self, tool_id, spec, mode, outcome) -> None:
+        """Audit a refusal that happens BEFORE the tool is resolved.
+
+        The registry lookup lives in here, under the same blanket ``except`` the
+        row write does, because the callers are refusal paths: a Run pill that is
+        being turned away must be turned away with a plain sentence whatever the
+        registry holds. Resolving the tool in the handler to build the audit row
+        is exactly how a clean SAFE refusal first became an error frame — every
+        test server registers its own tools, and nothing promises ``run_command``
+        is among them.
+
+        A missing registration still leaves a row: the id is what the record is
+        for, and ``detail`` is allowed to be empty."""
+        try:
+            tool = self.tool_registry.get(tool_id)
+        except Exception:
+            tool = None
+        if tool is None:
+            try:
+                self._record_tool_audit(
+                    {
+                        "id": str(uuid4()),
+                        "conversation_id": None,
+                        "tool_id": tool_id,
+                        "detail": None,
+                        "mode": mode.value if hasattr(mode, "value") else str(mode),
+                        "destructive": False,
+                        "outcome": outcome,
+                        "redacted": None,
+                        "created_at": int(time.time()),
+                    }
+                )
+            except Exception:
+                pass
+            return
+        self._audit_tool(tool, {"command": spec.get("command", "")}, mode, outcome)
 
     def _audit_tool(self, tool, args, mode, outcome) -> None:
         """One tool-decision row for a Run pill (step 5.5, item 4). The rail is the

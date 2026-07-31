@@ -36,6 +36,7 @@ frictionless minority hiding a mutation inside it.
 from __future__ import annotations
 
 from agent_core.policy import PolicyMode
+from agent_core.redaction import redact
 from agent_core.tools.base import (
     MAX_PERMISSION_DETAIL_CHARS,
     ExecutionContext,
@@ -167,7 +168,27 @@ class RunCommandTool:
             output = f"{output}\n{stderr}" if output else stderr
         output = output.strip()
         if len(output) > _MAX_OUTPUT_CHARS:
-            output = output[:_MAX_OUTPUT_CHARS] + "\n… (output truncated)"
+            # REDACT BEFORE CUTTING. Every rule in agent_core.redaction is anchored
+            # on a vendor prefix followed by a minimum body ({16,}); the send
+            # boundary is what applies them. So a credential that straddles
+            # _MAX_OUTPUT_CHARS was being sliced BELOW that minimum here, and the
+            # surviving head — a vendor prefix plus a handful of body characters —
+            # then matched nothing at the boundary and travelled to the provider
+            # intact, still enough to name the vendor and the account. Truncation
+            # was defeating the one thing standing between command output and
+            # someone else's server, and doing it silently.
+            #
+            # This is NOT a second redaction boundary — agent_core.redaction still
+            # owns that, at the orchestrator's send, and this call cannot replace it
+            # (it sees one tool's output, not the history). It exists because THIS
+            # cut can defeat that boundary, so the cut has to be made on text the
+            # boundary has already been able to read whole.
+            #
+            # It is also why the untruncated path below is untouched: the store
+            # keeps the real bytes for every ordinary command (redaction.py's
+            # decision #1), and only the bytes this function was going to throw
+            # away regardless are affected.
+            output = redact(output).text[:_MAX_OUTPUT_CHARS] + "\n… (output truncated)"
 
         exit_code = int(result.get("exitCode") or 0)
         success = exit_code == 0

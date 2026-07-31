@@ -254,10 +254,17 @@ BEGIN SELECT RAISE(ABORT, 'this restore point is permanent'); END;
 -- fetched. A refusal left none either, so "Addison declined something" was
 -- unanswerable after the fact.
 --
--- NEVER SECRETS. `detail` is the SAME value the permission card and the Activity
--- Panel already show (tools/base.call_permission_detail), which is capped and
--- deliberately narrow — read_web_page contributes a HOST, never a full URL. No
--- tool output, no arguments, no key material lands here.
+-- `detail` is the SAME value the permission card and the Activity Panel already
+-- show (tools/base.call_permission_detail), capped and deliberately narrow —
+-- read_web_page contributes a HOST, never a full URL. No tool output lands here.
+--
+-- ARGUMENTS DO, THOUGH, for one tool: run_command's detail is the command text
+-- itself, so `export ANTHROPIC_API_KEY=… && ./deploy.sh` arrives here verbatim.
+-- This comment used to say "never a secret" and that was simply false. Every
+-- `detail` is now run through agent_core/redaction.py inside
+-- Store.insert_tool_audit, before the row exists. That is a backstop and not a
+-- boundary: a KNOWN secret shape never persists here; an unenumerated one still
+-- can. Do not restore the stronger sentence.
 --
 -- EXCLUDED from snapshots (snapshots/scope.py) on the `tool_grants` precedent:
 -- an audit log is history, and a restore that rewrote the record of what
@@ -266,7 +273,7 @@ CREATE TABLE IF NOT EXISTS tool_audit (
     id              TEXT PRIMARY KEY,
     conversation_id TEXT,                    -- NULL for a routine/widget run
     tool_id         TEXT NOT NULL,
-    detail          TEXT,                    -- call_permission_detail; never a secret
+    detail          TEXT,                    -- call_permission_detail, redacted on write
     mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),
     destructive     INTEGER NOT NULL DEFAULT 0,
     -- granted      = the gate said yes (auto-allow or the person approved)

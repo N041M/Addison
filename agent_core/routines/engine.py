@@ -259,7 +259,17 @@ class RoutineEngine:
             # STEP (not a failed run) so on_failure still decides what happens next
             # — byte-for-byte what run_command's own refusal already produced.
             dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(tool_id, mode)
+            # Per-call destructiveness, resolved ONCE for every branch below — the
+            # refusal branches used to hard-code a literal, which described the
+            # branch rather than the call (the live loop had the same defect).
+            destructive = call_is_destructive(tool, resolved_args)
             if dev_only_refusal is not None:
+                # The live loop audits this branch; this one did not, so a routine
+                # step naming a dev tool in SAFE was the one refusal in the tree
+                # that left no record at all — and a routine is the path that runs
+                # without anyone watching. `detail` is None to match the live
+                # loop's dev_only row exactly: nothing about the call was examined.
+                self._audit(routine, tool_id, None, mode, destructive, "dev_only")
                 result = ToolResult(success=False, content=dev_only_refusal)
                 step_results[step.step_id] = result
                 step_log.append(self._log_entry(index, step, dev_only_refusal))
@@ -282,7 +292,7 @@ class RoutineEngine:
             forbidden = self._forbidden_check(tool, resolved_args)
             if forbidden is not None:
                 self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
-                            mode, True, "forbidden")
+                            mode, destructive, "forbidden")
                 result = ToolResult(success=False, content=forbidden)
                 step_results[step.step_id] = result
                 step_log.append(self._log_entry(index, step, forbidden))
@@ -303,7 +313,7 @@ class RoutineEngine:
             affected = call_affected_path(tool, resolved_args)
             if affected is not None and not self._trust_check(affected):
                 self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
-                            mode, False, "confined_out")
+                            mode, destructive, "confined_out")
                 result = ToolResult(success=False, content=_OUTSIDE_TRUST)
                 step_results[step.step_id] = result
                 step_log.append(self._log_entry(index, step, _OUTSIDE_TRUST))
@@ -324,7 +334,8 @@ class RoutineEngine:
             # Routines NEVER auto-escalate — same gate as §4.3. trusted=False
             # UNCONDITIONALLY (D5): a persisted, one-click, model-authorable spec
             # must never skip a card the way a live confined edit does.
-            destructive = call_is_destructive(tool, resolved_args)
+            # ``destructive`` was resolved above the refusal branches, so the gate
+            # and every audit row agree on one answer per step.
             # Asked once and used twice, exactly as the live loop does it: the
             # permission card and the Activity Panel must describe the SAME step.
             detail = call_permission_detail(tool, resolved_args)

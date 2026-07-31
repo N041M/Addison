@@ -105,3 +105,60 @@ def test_execute_reports_nonzero_exit_without_crashing():
     tool = RunCommandTool()
     result = tool.execute({"command": "false"}, _open(_FakeExecBridge(exitCode=1)))
     assert result.success is False
+
+
+def test_a_credential_straddling_the_truncation_point_cannot_survive_as_a_fragment():
+    """Truncation must not be able to defeat the redactor.
+
+    Every rule in ``agent_core.redaction`` is anchored on a vendor prefix plus a
+    minimum body (``{16,}``), and the send boundary is what applies them. Cutting
+    the output at ``_MAX_OUTPUT_CHARS`` first sliced a straddling credential BELOW
+    that minimum, so the surviving head matched nothing at the boundary and
+    travelled to the provider intact — the truncation silently disarming the one
+    thing standing between command output and someone else's server.
+
+    Assembled from prefix + body, never a literal: a credential-shaped literal is
+    what a secret scanner is built to find, and it cannot tell a fixture from the
+    real thing (GitHub push protection has already blocked this repo once)."""
+    from agent_core.redaction import redact
+    from agent_core.tools.run_command import _MAX_OUTPUT_CHARS
+
+    secret = "sk-" + "proj-" + "0123456789abcdefghijklmnopqrstuv"
+    kept = 18                       # what a naive cut would have left of it
+    fragment = secret[:kept]
+    # The head must start on a word boundary or no rule could anchor on it at all.
+    head = "x" * (_MAX_OUTPUT_CHARS - kept - 1) + "\n"
+    stdout = head + secret + "\nBuild finished.\n" + "y" * 200
+
+    # NOT VACUOUS, in both directions: the WHOLE secret is catchable, and the
+    # fragment a naive cut leaves behind is not — so truncate-first really did put
+    # it on the wire, and this test is guarding a live hole rather than a
+    # hypothetical one.
+    assert redact(stdout).text != stdout
+    assert redact(fragment).text == fragment
+
+    tool = RunCommandTool()
+    result = tool.execute({"command": "./deploy.sh"}, _open(_FakeExecBridge(stdout=stdout)))
+    content = str(result.content)
+
+    assert "(output truncated)" in content      # the cap still holds
+    assert secret not in content
+    assert fragment not in content
+    # ...and it was NAMED, not merely lost: the model is told something was there,
+    # so it does not helpfully re-run the command to fetch it.
+    assert "[redacted:" in content
+
+
+def test_output_under_the_cap_keeps_its_real_bytes():
+    """The other half of the rule above, and the reason it is written as narrowly
+    as it is: redaction toward the model is owned by the orchestrator's send
+    boundary, and the transcript keeps the real bytes (agent_core.redaction,
+    decision #1). Truncation is the ONE thing that can defeat that boundary, so
+    only the truncated path scrubs — an ordinary command's output is untouched."""
+    secret = "sk-" + "proj-" + "0123456789abcdefghijklmnopqrstuv"
+    tool = RunCommandTool()
+    result = tool.execute(
+        {"command": "./deploy.sh"},
+        _open(_FakeExecBridge(stdout=f"TOKEN={secret}\ndone")),
+    )
+    assert secret in str(result.content)
