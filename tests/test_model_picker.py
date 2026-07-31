@@ -853,6 +853,42 @@ def test_available_roles_keeps_fallback_until_key_appears(tmp_path):
         _shutdown(reader, thread)
 
 
+def test_a_polled_availableRoles_never_touches_the_keychain_when_a_key_is_saved(tmp_path):
+    """The dialog storm, as a test.
+
+    `availableRoles` is POLLED by the UI, and its live-catalog gate used to ask
+    the real Anthropic getter whether a key existed — and the probe IS the
+    keychain read. On a machine whose keychain item carries an access list from a
+    build that no longer exists, that is one macOS password dialog per poll:
+    roughly ten stacked at once on 2026-08-01, none of them answerable, because
+    each was orphaned when the app restarted.
+
+    `provider_config.connected` answers the same question for free. The probe here
+    EXPLODES, so the only way this test can pass is if nothing consulted it."""
+    def _never_call_me():
+        raise AssertionError(
+            "availableRoles reached the OS keychain for a presence question — "
+            "that is the poll-driven password dialog this test exists to prevent"
+        )
+
+    store = Store(tmp_path / "live.sqlite3")
+    store.upsert_provider_config(provider_id="anthropic", connected=True)
+
+    _server, reader, writer, _router, made, thread = _live_server(
+        tmp_path, key_probe=_never_call_me, fetcher=lambda: _LIVE_CATALOG
+    )
+    try:
+        roles = _ask_roles(reader, writer, 1)
+        # POSITIVE CONTROL: the catalog actually swapped in. Without this the test
+        # would pass just as well if the gate refused everything and no fetch was
+        # ever attempted — "the probe was not called" is trivially true of work
+        # that did not happen.
+        assert [m["id"] for m in roles["cloudModels"]] == ["claude-live-a", "claude-live-b"]
+        assert set(made) == {"claude-live-a", "claude-live-b"}
+    finally:
+        _shutdown(reader, thread)
+
+
 def test_available_roles_retries_live_fetch_after_a_failure(tmp_path):
     state = {"calls": 0}
 
