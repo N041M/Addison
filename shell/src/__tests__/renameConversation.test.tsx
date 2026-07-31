@@ -22,7 +22,6 @@ const CONVO: ConversationSummary = {
   id: "c1",
   title: "First chat",
   startedAt: 0,
-  messageCount: 2,
 };
 
 function renderSidebar(onRename = vi.fn()) {
@@ -112,7 +111,9 @@ function renderMany(count: number) {
 }
 
 describe("sidebar group expand and collapse", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it("shows three rows and an honest count of the rest", () => {
     renderMany(5);

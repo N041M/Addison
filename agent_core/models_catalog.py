@@ -261,11 +261,21 @@ def load_cloud_catalog(model_override: str | None = None) -> list[CloudModel]:
 
 
 def default_cloud_model(catalog: list[CloudModel]) -> CloudModel:
-    """The default entry (exactly one is marked ``default``); the first is a safe
-    fallback if a caller hands over a catalog with none marked."""
+    """The default entry (exactly one is marked ``default``); the first entry is the
+    fallback when a caller hands over a catalog with none marked.
+
+    An EMPTY catalog raises ``ValueError``, not ``IndexError``. The old docstring
+    called the fallback "safe" while ``catalog[0]`` raised on empty — safe for the
+    none-marked case it was describing, and not for the one it wasn't. No caller
+    can reach it today (``rpc/models`` returns None on an empty catalog first,
+    ``main`` passes the built-in fallback, ``_maybe_load_live_catalog`` drops an
+    empty fetch), so this is about the NEXT caller: an empty live catalog should
+    say what went wrong, not surface as a list-index error three frames away."""
     for model in catalog:
         if model.default:
             return model
+    if not catalog:
+        raise ValueError("The model catalog is empty, so there is no default model.")
     return catalog[0]
 
 

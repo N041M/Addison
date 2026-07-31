@@ -877,3 +877,17 @@ def test_available_roles_retries_live_fetch_after_a_failure(tmp_path):
         assert state["calls"] == 2
     finally:
         _shutdown(reader, thread)
+
+
+def test_an_empty_catalog_says_so_instead_of_raising_indexerror():
+    """The docstring promised a "safe fallback" while `catalog[0]` raised on empty
+    — safe for the none-marked case it described, not for the one it didn't. No
+    caller can reach it today; this is for the next one (a live catalog fetch that
+    comes back empty), which should learn what went wrong rather than get a list-
+    index error three frames from the cause."""
+    import pytest
+
+    from agent_core.models_catalog import default_cloud_model
+
+    with pytest.raises(ValueError, match="catalog is empty"):
+        default_cloud_model([])

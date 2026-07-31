@@ -70,6 +70,15 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   // Per-routine transient UI state.
   const [filling, setFilling] = useState<string | null>(null); // routine collecting variables
   const [values, setValues] = useState<Record<string, string>>({});
+  // WHICH routine the values above were entered for. Without it the map is shared
+  // across the whole library: fill routine A's `path`, then run routine B (which
+  // needs no input, so it skips the fill step entirely and runs immediately) and
+  // B's own default `path` is overridden by A's value. The engine is safe against
+  // UNKNOWN names — it builds defaults from routine.variables and resolve_template
+  // only reads names the template mentions — so a stray key is inert; a name
+  // COLLISION is not, and `path`/`branch`/`message` are exactly the names two
+  // routines are most likely to share.
+  const [valuesFor, setValuesFor] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, RunOutcome>>({});
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
@@ -100,6 +109,7 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
       const prefill: Record<string, string> = {};
       for (const v of routine.variables) if (v.default) prefill[v.name] = v.default;
       setValues(prefill);
+      setValuesFor(routine.id);
       setFilling(routine.id);
       return;
     }
@@ -111,7 +121,10 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
     setRunning(routine.id);
     setOutcome((prev) => ({ ...prev, [routine.id]: undefined as unknown as RunOutcome }));
     try {
-      const res = (await ipc.runRoutine(routine.id, values)) as Record<string, unknown>;
+      // Only ever send values that were entered FOR this routine. Anything else is
+      // another routine's answers wearing the same variable name.
+      const payload = valuesFor === routine.id ? values : {};
+      const res = (await ipc.runRoutine(routine.id, payload)) as Record<string, unknown>;
       const ok = res?.ok === true;
       const detail =
         typeof res?.detail === "string" && res.detail

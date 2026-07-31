@@ -44,6 +44,7 @@ vi.mock("../ipc/client", async (importOriginal) => {
       listSnapshots: vi.fn(),
       restoreSnapshot: vi.fn(),
       listRoutines: vi.fn(async () => ({ routines: [] })),
+      runRoutine: vi.fn(),
     },
   };
 });
@@ -188,5 +189,62 @@ describe("the routine library with nothing in it", () => {
     // The count-shaped claim is the bug: a disconnected surface cannot know.
     expect(screen.queryByText("None yet")).toBeNull();
     expect(ipc.listRoutines).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (c) one routine's answers must never become another's
+// ---------------------------------------------------------------------------
+//
+// The `values` map is component-level, so it outlives the routine it was filled
+// for. Routine A asks for `path`; the person answers. Routine B declares `path`
+// WITH a default, so it needs no input and skips the fill step entirely — and ran
+// with A's answer. The engine cannot catch this: it builds defaults from
+// `routine.variables` and then applies whatever the caller sent, so a stray key
+// is inert but a name COLLISION silently wins. `path`, `branch` and `message` are
+// exactly the names two routines are most likely to share.
+
+describe("routine variable values", () => {
+  beforeEach(() => {
+    vi.mocked(ipc.listRoutines).mockClear();
+    vi.mocked(ipc.runRoutine).mockClear();
+  });
+
+  it("never sends one routine's answers to another", async () => {
+    // The reachable repro is ABANDONING a fill, not completing one: `executeRun`
+    // clears `values` in its finally block, so running A first cleans up after
+    // itself. Open A's fill panel, type an answer, then click B's Run instead —
+    // B needs no input (its `path` has a default), so it skips the fill step and
+    // runs immediately, carrying A's typed answer under the shared name.
+    engineConnected = true;
+    vi.mocked(ipc.listRoutines).mockResolvedValue({
+      routines: [
+        { id: "a", name: "Routine A", description: "", variables: [{ name: "path", prompt: "Where?" }] },
+        {
+          id: "b", name: "Routine B", description: "",
+          variables: [{ name: "path", prompt: "Where?", default: "/b/default" }],
+        },
+      ],
+    } as never);
+    vi.mocked(ipc.runRoutine).mockResolvedValue({ ok: true, detail: "Done." } as never);
+
+    render(<RoutineLibrary />);
+    await waitFor(() => expect(screen.getByText("Routine A")).toBeTruthy());
+
+    // Open A's fill panel and type — but never run A.
+    fireEvent.click(screen.getAllByRole("button", { name: /run/i })[0]);
+    const input = await screen.findByDisplayValue("");
+    fireEvent.change(input, { target: { value: "/a/answer" } });
+
+    // Now run B.
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: /run/i })[1]);
+    });
+
+    const calls = vi.mocked(ipc.runRoutine).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe("b");
+    // B must get nothing — its own default is the engine's job to apply.
+    expect(calls[0][1]).toEqual({});
   });
 });

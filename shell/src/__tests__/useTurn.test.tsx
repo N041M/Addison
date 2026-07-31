@@ -165,7 +165,9 @@ describe("useTurn race guard", () => {
   // goes red on `failed`.
   it("a throwing post-turn drafter does not mark a good turn as failed", async () => {
     const args = makeArgs();
-    args.maybeProposeOffers = vi.fn(() => {
+    // Typed to the field's own signature: a bare `vi.fn(() => { throw })` infers
+    // Mock<[], never>, which is not assignable to (userText: string) => void.
+    args.maybeProposeOffers = vi.fn((_userText: string): void => {
       throw new Error("drafting blew up");
     });
     const { result } = renderHook(() => useTurn(args));

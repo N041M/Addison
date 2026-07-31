@@ -13,6 +13,19 @@
 import { describe, it, expect } from "vitest";
 import { parseStats, parseWidgetList, parseConversationRename } from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
+
+/**
+ * `normalizeProfile` returns null only for a NON-record input (its own first
+ * line), and every input below is a record — so a null here would be a parser
+ * bug, not a fixture bug, and saying so loudly beats a `!` that hides it. Exists
+ * because these files are typechecked now (`tsconfig.test.json`): the null case
+ * was always reachable in the types and simply never looked at.
+ */
+function parsedProfile(input: unknown) {
+  const parsed = normalizeProfile(input);
+  if (!parsed) throw new Error("normalizeProfile returned null for a record input");
+  return parsed;
+}
 import { normalizeRoles, normalizeCloudModels } from "../hooks/useModelSelection";
 
 // ---------------------------------------------------------------------------
@@ -277,7 +290,7 @@ describe("normalizeProfile", () => {
   });
 
   it("carries `advanced` on the Custom profile only, and never invents it (step 2)", () => {
-    const parsed = normalizeProfile({
+    const parsed = parsedProfile({
       activeProfile: "custom",
       mode: "open",
       profiles: [
@@ -303,7 +316,7 @@ describe("normalizeProfile", () => {
   });
 
   it("only strict true marks a profile advanced (a truthy value doesn't)", () => {
-    const parsed = normalizeProfile({
+    const parsed = parsedProfile({
       profiles: [{ id: "custom", label: "Custom", description: "", advanced: 1 }],
     });
     expect("advanced" in parsed!.profiles[0]).toBe(false);
@@ -331,13 +344,13 @@ describe("normalizeProfile", () => {
   });
 
   it("falls back to SAFE for an unknown/missing mode and never over-permits", () => {
-    expect(normalizeProfile({ mode: "wide-open" }).mode).toBe("safe");
-    expect(normalizeProfile({ mode: 1 }).mode).toBe("safe");
-    expect(normalizeProfile({ activeProfile: "developer" }).mode).toBe("safe");
+    expect(parsedProfile({ mode: "wide-open" }).mode).toBe("safe");
+    expect(parsedProfile({ mode: 1 }).mode).toBe("safe");
+    expect(parsedProfile({ activeProfile: "developer" }).mode).toBe("safe");
   });
 
   it("ignores truthy-but-non-true flag values (only strict true enables)", () => {
-    const parsed = normalizeProfile({
+    const parsed = parsedProfile({
       flags: { exposeRoutinePlan: 1, rawDiagnostics: "yes", headlessCli: {}, byokFirstOnboarding: "true" },
     });
     expect(parsed.flags).toEqual({
@@ -349,7 +362,7 @@ describe("normalizeProfile", () => {
   });
 
   it("drops profile options without a string id and fills label/description", () => {
-    const parsed = normalizeProfile({
+    const parsed = parsedProfile({
       profiles: [
         { id: "simple" }, // label/description fall back
         { label: "no id" }, // dropped

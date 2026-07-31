@@ -1,0 +1,15 @@
+{
+  // Typechecks the TEST files too — `tsconfig.json` excludes them, which left a
+  // real hole in a gate people trust: a fixture that drifts from the type or hook
+  // signature it drives is invisible to `npm run typecheck`. That is exactly how
+  // `useTurn.test.tsx` came to be missing a required callback, and when this file
+  // was first added it immediately surfaced a `ConversationSummary` fixture
+  // carrying a `messageCount` field the type has never had.
+  //
+  // A SEPARATE config rather than widening `tsconfig.json`, because the two have
+  // different jobs: the build config describes what ships, and shipping must not
+  // depend on test files existing. CI runs both.
+  "extends": "./tsconfig.json",
+  "include": ["src"],
+  "exclude": []
+}
