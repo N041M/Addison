@@ -95,6 +95,27 @@ minutes on 2026-07-26 because `7444c8e` described the branch state accurately wh
 the redesign was unmerged, and PR #58 then falsified six passages without touching
 the file that contained them. No gate catches that.
 
+## Two commits on `master` are red, and it is not what you think
+
+**`22c8876` and `6690fd2` fail `test_every_markdown_link_resolves`.** Both link
+to `docs/secrets-and-keychain-plan.md`, which is not committed until `62d93a7`,
+two commits later. `62d93a7` and everything after it are green (measured, in a
+worktree, at every commit in the range).
+
+Nothing is wrong with the code at either commit — it is purely an ordering
+mistake in a four-way split of one large uncommitted tree: the docs went with the
+change they described instead of with the file they referenced. **If you
+`git bisect` across that range, expect those two to fail for an unrelated
+reason** — `--skip` them, or bisect with a test selection that excludes
+`test_docs_drift.py`.
+
+Not rewritten, deliberately. The history is pushed, and rewriting shared history
+to fix a docs-link test is a worse trade than a paragraph saying so. The lesson
+for the next split: **a commit that references a file must not precede the commit
+that adds it**, and the cheap way to catch it is to run the suite at each
+intermediate commit rather than only at the end — which is exactly what was not
+done here.
+
 ## Three traps this session hit, all the same shape
 
 Worth thirty seconds before you write a test here, because each one cost real time
