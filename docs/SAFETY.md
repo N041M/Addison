@@ -103,20 +103,41 @@ than working around it silently):
   providers, models, skills, widgets, routines) and **exclude the OS keychain**
   (keys stay put — G1 holds). (New floor, 2026-07-20. **Built** in Phase-2 step 1
   — see "The snapshot / restore subsystem" below.)
-  **Scope correction, 2026-07-26 — this holds in SAFE and is currently
-  OVERCLAIMED in OPEN.** The unbreakability above is enforced *within* the
-  database: two `RAISE(ABORT)` triggers, a sidecar copy of every payload, and RPC
-  paths that bypass the gate. None of that protects the *files* from the OPEN-mode
-  shell. `run_command` has `affected_path = None`, so confinement never governs it
-  and `workspace_trust_allows`'s protection of the data dir does not apply; the
-  tool runs `shell=True` at `$HOME`. One approved command therefore deletes the
-  database, the sidecars and every `undeletable` anchor. The card is real (per
-  invocation, exact command text, no grant recorded) and it is the *only* layer.
-  Do not repeat the sentence "the restore path is itself unbreakable" without this
-  qualifier until **[Phase-2 step 5.5](step-5.5-containment-plan.md)** lands.
-  This is the same correction G4 took when "captures the app binary" was narrowed
-  to a build reference: **the repo must not carry a floor its own tests do not
-  cover.**
+  **Scope correction, 2026-07-26 — RESOLVED 2026-07-31.** For five days this
+  floor was **overclaimed in OPEN**, and the record of why is worth keeping.
+  The unbreakability above is enforced *within* the database: two `RAISE(ABORT)`
+  triggers, a sidecar copy of every payload, and RPC paths that bypass the gate.
+  None of that protected the *files* from the OPEN-mode shell. `run_command` has
+  `affected_path = None`, so confinement never governs it and
+  `workspace_trust_allows`'s protection of the data dir did not apply; the tool
+  ran `shell=True` at `$HOME`. One approved command deleted the database, the
+  sidecars and every `undeletable` anchor. The card was real (per invocation,
+  exact command text, no grant recorded) and it was the **only** layer — and a
+  single layer guarded by human attention is not a floor.
+
+  **Closed by [Phase-2 step 5.5](step-5.5-containment-plan.md) items 1–3.**
+  `run_command` no longer executes in the Agent Core at all: it crosses the
+  ShellBridge like every other OS effect (§1.3), and the shell runs it under a
+  **seatbelt profile generated from the live workspace-trust roots**, with the
+  data-dir denies emitted *after* every allow so the floor beats even a trusted
+  root that contains it. Above that sits the hardline denylist
+  (`policy.command_denied_path`), refusing the direct ask before the gate is
+  consulted at all three dispatch sites. The headline test —
+  `an_approved_command_cannot_delete_the_recovery_floor`, in
+  `shell/src-tauri/src/exec.rs` — is **live and mutation-proven**, not an `xfail`.
+
+  Two things that are true and must not be rounded off. **A command still runs
+  unconfined on a platform with no profile** (Linux: Landlock/bubblewrap is not
+  built) — the response carries `sandboxed: false` and the tool prints a note
+  above the output, so it is never silent, but it is not protected either. And
+  **the floor protects Addison's data, not Addison's code** (see KNOWN-GAPS) —
+  the profile denies writes to the data dir, not to a packaged
+  `/Applications/Addison.app`.
+
+  This correction followed the one G4 took when "captures the app binary" was
+  narrowed to a build reference: **the repo must not carry a floor its own tests
+  do not cover.** The difference is which way it was settled — G4 narrowed the
+  sentence, G3 got the code.
 - **G4 — Undeletable anchor on weakening** (≡ what the other docs call *the
   undeletable-anchor rule*; use **G4** in code, comments, and test names).
   Turning a guard OFF in Custom mode (and saving) mints a **permanent,

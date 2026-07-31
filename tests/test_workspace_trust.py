@@ -155,6 +155,20 @@ class _FakeStore:
         self.inserted.append(snapshot)
 
 
+class _FakeExecBridge:
+    """The shell's half of ``shell.runCommand`` (step 5.5, item 1), plus the two
+    methods the server binds on every bridge."""
+
+    def bind_sender(self, send) -> None:
+        pass
+
+    def get_app_build_ref(self) -> dict:
+        return {"version": "test", "identifier": "test"}
+
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        return {"stdout": "ok", "stderr": "", "exitCode": 0, "sandboxed": True}
+
+
 class _FakeRunCommand:
     """run_command's shape: HIGH, dev_only, always-destructive, no affected_path —
     records instead of touching a shell."""
@@ -573,6 +587,11 @@ def test_command_widget_still_cards_when_a_workspace_is_trusted(tmp_path):
         store_factory=lambda: Store(db_path),
         db_path=db_path,
         model_router=ModelRouter(configured={ModelRole.PRIMARY: _ScriptedProvider([])}),
+        # run_command no longer executes in the core (step 5.5, item 1): it crosses
+        # the bridge so the command lands where a sandbox can be applied. This test
+        # is about the CARD — a command widget must still ask even under trust — so
+        # the bridge only has to answer.
+        shell_bridge=_FakeExecBridge(),
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

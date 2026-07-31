@@ -23,6 +23,11 @@ open = "5"                          # open http(s) links in the default browser 
 base64 = "0.22"                     # encode picked images for shell.readScopedFile
 uuid = { version = "1", features = ["v4"] }   # opaque file handles + device_id (§5)
 
+# SIGKILL for a command that overruns its budget (exec.rs, step 5.5). std::process
+# offers no timed wait and no signal, and a catchable signal is one a runaway shell
+# can ignore — so the one libc call is `kill(pid, SIGKILL)` and nothing more.
+libc = "0.2"
+
 # Device identity keypair (§5): ed25519 signing key generated in the shell on first
 # launch, private half stored ONLY in the OS keychain. `rand_core`'s OsRng is the
 # CSPRNG that seeds it; the `rand_core` feature exposes `SigningKey::generate`.

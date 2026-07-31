@@ -418,6 +418,28 @@ def _seed_artifacts(db_path: Path) -> None:
     store.close()
 
 
+class _FakeExecBridge:
+    """The shell's half of ``shell.runCommand`` (step 5.5, item 1).
+
+    ``run_command`` no longer executes anything in the Agent Core — it crosses the
+    ShellBridge so the command lands in the process that can put a seatbelt profile
+    around it. These policy tests are about the GATE (does it card, every time?),
+    not about execution, so the bridge answers immediately and records nothing the
+    assertions depend on. The real boundary is tested where it lives:
+    ``shell/src-tauri/src/exec.rs``."""
+
+    def bind_sender(self, send) -> None:
+        # The server binds its writer into every bridge; nothing here sends frames.
+        pass
+
+    def get_app_build_ref(self) -> dict:
+        # Read by the snapshot machinery when a restore point is minted (G4).
+        return {"version": "test", "identifier": "test"}
+
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        return {"stdout": "ok", "stderr": "", "exitCode": 0, "sandboxed": True}
+
+
 def _artifact_server(tmp_path, profile_id: str):
     db_path = tmp_path / "policy.sqlite3"
     if not db_path.exists():
@@ -436,6 +458,7 @@ def _artifact_server(tmp_path, profile_id: str):
         tool_registry=build_registry(DEVELOPER),   # includes run_command dev_only
         store_factory=lambda: Store(db_path),
         model_router=ModelRouter(configured={ModelRole.PRIMARY: _ScriptedProvider()}),
+        shell_bridge=_FakeExecBridge(),
     )
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

@@ -44,14 +44,31 @@ quickly.
 Four things are left. The last three are independent enough to take in any order;
 the first is finishing work that is already merged.
 
-5.5. **Containment for the coding harness.** Step 5 gave Developer mode a real
-   shell. What did not come with it is a boundary underneath the permission card,
-   so today one approved command can delete Addison's own restore points. This adds
-   a macOS sandbox around commands, bounded by the same folders you have trusted; a
-   short list of things that cannot be approved at all; stripping of anything that
-   looks like a password or key out of command output before a model sees it; and a
-   record of what ran. Plan:
+5.5. **Containment for the coding harness — DONE 2026-07-31.** Step 5 gave
+   Developer mode a real shell. What did not come with it was a boundary underneath
+   the permission card — for five days one approved command could delete Addison's
+   own restore points. This added a macOS sandbox around commands, bounded by the
+   same folders you have trusted; a short list of things that cannot be approved at
+   all; stripping of anything that looks like a password or key out of command
+   output before a model sees it; and a record of what ran. Plan:
    [docs/step-5.5-containment-plan.md](docs/step-5.5-containment-plan.md).
+
+   **The sandbox and the short list are built; the restore guarantee holds again
+   in Developer mode.** Commands no longer run inside Addison's own engine — they
+   run in the desktop shell, inside a macOS sandbox that can only write to folders
+   you have trusted, and never to Addison's restore points however the path is
+   spelled. On top of that, a command naming those restore points, or `~/.ssh` /
+   `~/.aws` / `~/.gnupg` / a `.env`, is refused outright rather than offered as
+   something to approve — everywhere a command can start: chat, a routine step,
+   and a widget's Run button.
+
+   **Also done: passwords and keys are stripped from command output before a model
+   sees them, and every tool decision is recorded — including the ones Addison
+   refused.** That record is what the MCP client (7) was waiting on, since the
+   promise there is that outside tools are "gated, logged, undo-aware". On a
+   machine that is not a Mac a command still runs unprotected; Addison says so in
+   its answer rather than pretending otherwise, and the threat model now lists
+   every boundary it does not defend (design-doc §9.x).
 
 6. **Widget capability tiers.** Widgets can already be built in every mode. This
    gives the safe vocabulary more to work with (checklists, notes, timers) and makes

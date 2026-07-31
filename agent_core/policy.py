@@ -38,6 +38,7 @@ PolicyMode for the ExecutionContext, so the dependency runs one way only).
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -211,3 +212,162 @@ def workspace_trust_allows(
         if _within_or_equal(candidate, prot) or _within_or_equal(prot, candidate):
             return False
     return True
+
+
+# ===========================================================================
+# The hardline denylist (step 5.5, item 3) — paths a CALL may never name.
+# ===========================================================================
+# Distinct from ``workspace_trust_allows`` above, which answers "may this folder
+# be a trusted workspace". This one answers "may this call happen at all", and it
+# is checked BEFORE the permission gate: it is not a card the person can approve.
+#
+# It exists because ``run_command`` has no ``affected_path``, so confinement never
+# governs it (tools/base.call_affected_path) and the card is the only layer under
+# it. The card is per-invocation and shows the exact command, which is strong —
+# but a single layer guarded by human attention is not a floor.
+#
+# SCOPE THE GUARANTEE HONESTLY. Deciding what an arbitrary ``shell=True`` string
+# touches is the game #48 lost three times (``ls\nrm -rf`` defeated ``shlex``;
+# bundled and attached short flags defeated flag matching). Quoting defeats this
+# too: ``rm -rf ~/.addi"son"`` is not caught, and nothing here pretends otherwise.
+# This is a BACKSTOP AGAINST THE OBVIOUS, not a parser. The real boundary is the
+# seatbelt profile's ``deny file-write*`` (step 5.5 item 2), which no amount of
+# quoting evades; when that lands, this stays as the layer above it.
+_CREDENTIAL_DIRS = ("~/.ssh", "~/.aws", "~/.gnupg")
+
+# Matched on the token's basename, wherever it lives. ``.env`` is the one file
+# every project keeps its secrets in, and it is not under a fixed root.
+_CREDENTIAL_BASENAMES = (".env",)
+
+# Shell separators. Splitting on these is NOT parsing — it only widens the set of
+# tokens examined, so a missed separator can only fail open (which the docstring
+# above already concedes), never wrongly refuse.
+#
+# ``{`` and ``}`` are deliberately NOT separators: splitting on them tears
+# ``${HOME}/.addison`` into three pieces and the middle one resolves nowhere, which
+# is a hole rather than the extra coverage the other separators buy.
+_TOKEN_SPLIT = re.compile(r"[\s;|&()<>]+")
+
+# Characters that make a token an explicit reference to a directory rather than a
+# bare word. Only these (plus the literal ``.``/``..``) are tested for CONTAINING a
+# protected directory, so an ordinary argument is never resolved against the
+# command's cwd and then refused for being somewhere under home.
+_PATHISH_PREFIXES = ("~", "$HOME", "${HOME}")
+
+
+def denylisted_roots(data_dir: str | os.PathLike[str]) -> list[str]:
+    """Every directory a call may never reach into: the protected dirs (the data
+    dir, its snapshot sidecar, ``~/.addison``) plus the user's credential stores.
+    The G3 floor's own files live in the first group; the second is there because
+    ``cat ~/.ssh/id_rsa`` sends a private key to a cloud provider (step 5.5 item 4
+    redacts what still gets through; this stops the direct ask).
+
+    ``data_dir`` IS REQUIRED — no ``None`` default, deliberately. The live data dir
+    is the one the running store is open on, and only the server knows it
+    (``WorkspaceMixin._data_dir``: *"derived from the running store's path, never a
+    re-derivation"*). A convenience default here would silently re-derive it from
+    the environment, so a store opened on any other path would be protected in
+    name only. That mistake has already been made once inside this same step (see
+    BUILD-LOG 07-31, finding 1) — the signature is what stops it recurring."""
+    roots = list(_protected_dirs(data_dir))
+    roots.extend(os.path.expanduser(d) for d in _CREDENTIAL_DIRS)
+    return roots
+
+
+def _command_tokens(command: str) -> list[str]:
+    """Every substring of ``command`` that might name a path. Over-generates on
+    purpose — an extra token costs one comparison, a missed one is a hole."""
+    tokens: list[str] = []
+    for raw in _TOKEN_SPLIT.split(command):
+        if not raw:
+            continue
+        candidates = [raw]
+        if "=" in raw:
+            # ``--files0-from=/etc/shadow`` — the path is the right-hand side.
+            candidates.append(raw.split("=", 1)[1])
+        if raw.startswith("-"):
+            # ``-f/etc/passwd`` — an attached value after bundled short flags.
+            stripped = raw.lstrip("-")
+            positions = [stripped.find(c) for c in "/~$" if c in stripped]
+            if positions and min(positions) > 0:
+                candidates.append(stripped[min(positions):])
+        for candidate in candidates:
+            token = candidate.strip("'\"`,")
+            if token:
+                tokens.append(token)
+    return tokens
+
+
+def _resolved_token(token: str) -> str | None:
+    """A token as an absolute canonical path. Relative tokens resolve against the
+    HOME directory because that is ``run_command``'s cwd — resolving them against
+    the Agent Core's own cwd would test a path the command never touches."""
+    expanded = token
+    for name in ("${HOME}", "$HOME"):
+        if expanded.startswith(name):
+            expanded = os.path.expanduser("~") + expanded[len(name):]
+            break
+    expanded = os.path.expanduser(expanded)
+    if not os.path.isabs(expanded):
+        expanded = os.path.join(os.path.expanduser("~"), expanded)
+    return _canonical(expanded)
+
+
+def _names_a_directory(token: str) -> bool:
+    """True when the token explicitly designates a directory, so testing whether it
+    CONTAINS a protected dir is meaningful. ``~``, ``/``, ``.`` and ``..`` qualify
+    (cwd is home, so ``rm -rf .`` is ``rm -rf ~``); a bare word like ``notes`` does
+    not, and must not be — otherwise every ordinary argument resolves to somewhere
+    under home and home contains ``~/.addison``."""
+    return token in (".", "..") or "/" in token or token.startswith(_PATHISH_PREFIXES)
+
+
+# The two directions a token can offend in. They are reported separately because
+# they are not equally recoverable, and one message for both told the model the
+# wrong thing half the time:
+#
+#   INSIDE   — the token names something in a denylisted place. There is no
+#              rephrasing; the answer is that Addison will not go there.
+#   CONTAINS — the token names a folder that HOLDS a denylisted place (``~``,
+#              ``/``, ``.``). Naming a subfolder works, and saying so turns a
+#              dead end into a one-turn correction.
+DENIED_INSIDE = "inside"
+DENIED_CONTAINS = "contains"
+
+
+def command_denied_path(
+    command: str, data_dir: str | os.PathLike[str]
+) -> tuple[str, str] | None:
+    """The first denylisted path ``command`` appears to name and HOW it offends —
+    ``(token, DENIED_INSIDE | DENIED_CONTAINS)`` — or None.
+
+    Refuses BOTH directions, the same way ``workspace_trust_allows`` does: a token
+    INSIDE a denylisted root (``rm ~/.addison/addison.sqlite3``) and a token that
+    CONTAINS one (``rm -rf ~``, which takes the floor with it). The second
+    direction is why ``ls ~`` is refused as well as ``rm -rf ~`` — read and write
+    are not distinguishable in this string, and the plan's own reasoning is that
+    the safe choice is to refuse rather than to keep patching a classifier. The
+    cost is real and narrow: naming a subfolder works, and step 5.5 item 2's
+    sandbox is what will eventually make the read/write distinction properly.
+
+    **The CONTAINS direction is scaffolding.** Once the seatbelt profile denies
+    writes outside the trusted roots, ``rm -rf ~`` fails at the kernel while
+    ``ls ~`` succeeds, and this direction should be DELETED rather than tuned —
+    along with ``_names_a_directory``, which exists only to serve it.
+
+    ``data_dir`` is required for the reason ``denylisted_roots`` gives."""
+    roots = [_canonical(root) for root in denylisted_roots(data_dir)]
+    roots = [root for root in roots if root is not None]
+    for token in _command_tokens(command):
+        if os.path.basename(token.rstrip("/")).casefold() in _CREDENTIAL_BASENAMES:
+            return (token, DENIED_INSIDE)
+        resolved = _resolved_token(token)
+        if resolved is None:
+            continue
+        pathish = _names_a_directory(token)
+        for root in roots:
+            if _within_or_equal(resolved, root):
+                return (token, DENIED_INSIDE)
+            if pathish and _within_or_equal(root, resolved):
+                return (token, DENIED_CONTAINS)
+    return None

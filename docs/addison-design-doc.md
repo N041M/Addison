@@ -789,7 +789,7 @@ This flow is the actual deliverable of the "easier setup" requirement — it's a
 Threat model is different from OpenClaw's: the user isn't defending a server from a remote attacker, they're trusting an agent running with their own OS permissions to not do something destructive by mistake (bad tool call, prompt injection from a malicious webpage/document, model error).
 
 Mitigations:
-- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above — "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26 — this bullet holds for SAFE/Simple, and OPEN/Developer departs from it, but the compensating boundary is NOT yet built.** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN). The property this bullet protected — *the model cannot issue an unbounded OS effect* — was **not** re-established when the shell arrived, unlike the picker-scoping bullet below, which was rewritten to name where its boundary moved to. Today the only thing standing between an OPEN-mode command and the machine is the permission card: `run_command` reports destructive unconditionally and cards **per invocation** with the exact command text, and no grant is ever recorded — genuinely stricter prompting than most harnesses, and also the *only* layer. Because `affected_path` is `None`, confinement never governs it, so an approved command can reach Addison's own data directory and delete the G3 recovery floor; **G3's "the restore path is itself unbreakable" is therefore true in SAFE and overclaimed in OPEN.** Closing this is [Phase-2 step 5.5](step-5.5-containment-plan.md) — a Seatbelt profile generated from the trusted roots, a pre-gate denylist that cannot be approved away, and moving execution behind the ShellBridge so the Rust shell can refuse the data dir independently, exactly as it already does for the typed file tools. Until that lands, treat this bullet as describing SAFE only.
+- **Capability allow-list, not a shell.** Tools are individual typed functions (`read_file(path)`, `web_search(query)`), not "run arbitrary command." This eliminates most of the attack surface OpenClaw explicitly warns about (per the Register/Zylon coverage in the search results above — "endless supply of security flaws" tracks directly back to broad shell/computer-control access). **Amended 2026-07-26, RESOLVED 2026-07-31 (Phase-2 step 5.5).** Phase-2 step 5 shipped `run_command`, a real shell, in OPEN mode only (absent from `registry.visible_tools(SAFE)`, refused at dispatch outside OPEN) — and for five days the property this bullet protected, *the model cannot issue an unbounded OS effect*, was not re-established, unlike the picker-scoping bullet below which named where its boundary had moved to. It is re-established now, in that same idiom: **the boundary moved to the process edge.** `run_command` no longer executes in the Agent Core at all; it crosses the ShellBridge (`shell.runCommand`) and the Rust shell runs it under a **Seatbelt profile generated from the live trusted roots** — reads stay broad, writes are denied wholesale and re-permitted only inside folders the person has explicitly trusted, and the data-dir denies are emitted *after* every allow so the recovery floor wins even against a trusted root that contains it. Above that sits a **pre-gate denylist** that cannot be approved away (Addison's own restore storage, `~/.ssh`, `~/.aws`, `~/.gnupg`, `.env`), checked at all three sites a command can start: chat, a routine step, and a widget's Run pill. The permission card is unchanged and still cards per invocation with the exact command text — it is simply no longer the only layer. **G3's "the restore path is itself unbreakable" is true again in OPEN** — [SAFETY.md](SAFETY.md) owns that wording and its five-day qualification came off when step 5.5 items 1–3 landed — pinned by `an_approved_command_cannot_delete_the_recovery_floor` in `shell/src-tauri/src/exec.rs`, which is live and mutation-proven rather than aspirational. Two limits are stated rather than rounded off: on a platform with no profile (Linux today) a command runs unconfined and the response says `sandboxed: false`, which the tool prints above its output; and the profile protects Addison's *data*, not Addison's *code* (see "What this does not defend against").
 - **Filesystem scope by picker, not by path.** The agent never gets a raw path string to open; it gets a handle to whatever the OS-native file picker returned, so it structurally cannot wander outside what the user selected. **Amended 2026-07-24 (Phase-2 step 5, owner-scoped decision — this bullet is unchanged for the SAFE tools, and the OPEN harness departs from it deliberately).** A coding harness cannot work through a per-file picker: an editing loop touches dozens of files, and `save_new_file` refuses to overwrite at all (that refusal is precisely what keeps its undo trivial). So the two OPEN-only file tools (`read_project_file`, `write_project_file`) scope by **trusted root** instead: the user grants one project directory through the OS folder picker — still a native dialog, still a deliberate act — and every path the tools resolve must sit inside it. The property the picker was protecting is preserved rather than dropped, because the boundary is still enforced at the process edge: the core hard-refuses an out-of-root path before the tool runs, **and the Rust shell independently refuses Addison's own data directory**, so a bypass of the core's check still cannot reach the recovery floor's storage. What genuinely changed is the *granularity* of consent — per-file, to per-directory-per-grant — and only inside the profile that asked for a coding harness. The SAFE file tools keep picker scoping exactly as written above.
 - **Destructive actions require re-confirmation with a preview.** "Delete `invoice_march.pdf`?" always shows the actual filename, never a batched/summarized action.
 - **Prompt-injection awareness.** Content pulled from tool results (web pages, documents) is marked as untrusted data in the model context, and the system prompt instructs the model not to treat instructions found inside tool output as commands from the user — the same pattern used in Claude's own tool-result handling.
@@ -888,6 +888,58 @@ deleting the undeletable anchor, or reaching a state with no restore. This is ho
 "let advanced users tune guards" coexists with "no one can brick Addison." (See
 §7.9 for the fine-grained per-action undo that complements whole-config restore,
 and §7.11 for the mode/profile model these floors sit under.)
+
+### 9.x What this does NOT defend against
+
+Added 2026-07-31 with step 5.5. Every mitigation above has an edge, and a
+security section that lists only its strengths teaches readers to over-trust it.
+OpenClaw states its boundaries plainly ("one operator per gateway"; "if someone
+can modify Gateway host state/config, treat them as a trusted operator") and
+Claude Code says outright that no system is immune. Addison's boundaries:
+
+- **An attacker who can already write to `~/.addison`.** They own the SQLite
+  config, the snapshot sidecars, and the provider-connection metadata. Nothing
+  below assumes otherwise, and no floor claims to survive it. This is the
+  standing boundary every other item here is stated relative to.
+- **A person who approves a malicious command.** The card shows the exact text
+  every time and no grant is recorded — but a person who reads `rm -rf ~/project`
+  and clicks Allow has authorised it. The Seatbelt profile still bounds the blast
+  radius to trusted roots, and the recovery floor still survives; the project's
+  own files do not.
+- **Prompt injection in OPEN mode.** Page text and command output are model-
+  readable, and a model that can request `run_command` can be steered into
+  requesting one. The card is the human checkpoint; the denylist and the sandbox
+  bound what an approved command can reach. What none of them do is make the
+  *request* not happen. Untrusted-content screening is a v2 item, and step 5.5's
+  network grant (below) makes that deferral load-bearing rather than theoretical.
+- **Exfiltration through a legitimately-approved command.** The Seatbelt profile
+  grants `network-outbound` deliberately: denying it broke `git fetch`,
+  `npm install` and `pip install` while buying nothing, because a command's
+  output *already* travels to a cloud provider. Output redaction
+  (`agent_core/redaction.py`) strips the credential shapes it knows on the way to
+  the model, and the `tool_audit` trail records that it happened — but a secret
+  in an unrecognised format, or deliberately encoded, passes. Redaction reduces
+  exposure; it does not eliminate it.
+- **The floor protects Addison's DATA, not Addison's CODE.** A trusted root may
+  contain the repo (which *is* the harness working for a developer) or, in a
+  packaged install, `/Applications/Addison.app`, where the model could rewrite
+  `policy.py` card-free. The amendment's "inviolable machinery: Addison's code
+  and the global floors" is therefore broader than what ships. Tracked in
+  KNOWN-GAPS as an owner call; `exec.rs` is where the extra deny would go.
+- **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
+  Claude Code and Codex CLI both rely on. Acceptable; not permanent.
+- **Platforms with no profile.** Linux has no Landlock/bubblewrap path yet, so a
+  command runs unconfined; the response carries `sandboxed: false` and the tool
+  prints it above the output. Never silent — but never protected either.
+- **Hardlinks inside a trusted root.** `realpath` cannot see them, so a hardlink
+  to a file outside the root is treated as inside it. Inherent to any
+  realpath-based confinement.
+- **Multi-user machines and physical access.** Addison is a single-user desktop
+  app. Another admin on the same Mac, or someone with the disk, is out of scope.
+- **A secret already in the Agent Core's memory.** Keys are fetched per call and
+  never retained — but Python cannot zeroize a `str`, so a key lingers in that
+  process's heap until garbage collection. The shell zeroizes; the core cannot.
+  Mitigation is lifetime, not erasure.
 
 ---
 

@@ -20,6 +20,7 @@ and NEVER stored on this bridge.
 
 from __future__ import annotations
 
+import os
 import threading
 
 from agent_core.protocol import Method
@@ -36,6 +37,90 @@ _DEFAULT_TIMEOUT = 60.0
 # password they eventually type lands on a request nobody is waiting on, so the turn
 # fails anyway AND the shell's answer is thrown away. Human-paced, therefore.
 _KEYCHAIN_TIMEOUT = 600.0
+
+# ...and a ``shell.runCommand`` waits on the COMMAND's budget, not the shell's own
+# responsiveness. The shell kills the child at the timeout it was given and answers,
+# so this waiter only needs enough headroom on top to cover spawning sandbox-exec
+# and draining the pipes. Too little and a slow-but-legal command is reported as a
+# stalled shell while it keeps running unattended.
+_EXEC_SLACK_MS = 15_000
+
+# --- keychain trace (diagnostic, opt-in) -----------------------------------
+#
+# THE HALF THE SHELL CANNOT SEE. `keychain.rs` records what the OS was touched for
+# — which is what costs a password dialog — but it cannot say WHO asked, and that
+# is the open question: two dialogs for one item at launch means two callers, and
+# the candidates (`_maybe_load_live_catalog` via availableRoles, `_provider_key_present`
+# via provider.list and stats.get, the per-turn probe) are indistinguishable at the
+# wire. So this side prints the core call site and the shell side prints the OS
+# touch, both to stderr — which `agent_process.rs` inherits, so one launch produces
+# a single interleaved, ordered trace in the terminal.
+#
+# Same switch as the shell (`ADDISON_KEYCHAIN_TRACE=1`), read per call rather than
+# at import so it can be flipped without a rebuild of anything.
+#
+# **NEVER A KEY.** This prints the CALLER and the provider id, and returns before
+# the result is in hand — there is deliberately no "-> found" line on this side,
+# because the value is in scope here and a trace that reports on it is one edit away
+# from printing it. The shell already reports the outcome, from the one place where
+# the variant can be named without the value.
+_TRACE_ENV = "ADDISON_KEYCHAIN_TRACE"
+
+# Frames belonging to the plumbing rather than to a caller — walking past these is
+# what turns a stack into the answer ("_maybe_load_live_catalog") instead of the
+# question ("get_provider_key").
+#
+# Matched on the BASENAME, not with ``endswith`` on the path: ``endswith`` also
+# swallows ``test_shell_bridge.py`` (and any other ``*shell_bridge.py``), so the
+# walk skipped straight past the real caller and reported pytest's internals. A
+# suffix test on a filename is a substring test wearing a hat.
+_TRACE_SKIP = {"shell_bridge.py"}
+
+
+# How many core frames to print. ONE IS NOT ENOUGH, and the first live trace proved
+# it: every line came back `main.py:1817 getter()` — the key-fetch CLOSURE, which is
+# the nearest non-plumbing frame for every caller alike, so the trace answered
+# "something asked" for all of them. The interesting name is one or two frames
+# further out (`_provider_key_present`, `_maybe_load_live_catalog`), and a chain
+# beats a longer skip list: skipping is a guess about which frames are boring, and a
+# guess that is wrong hides the answer instead of adding noise.
+_TRACE_FRAMES = 3
+
+
+def _trace_caller() -> str:
+    """The nearest few agent_core frames outside this module — i.e. who wanted a key,
+    innermost first, e.g. ``getter() <- _provider_key_present() <- _provider_list()``.
+
+    Best-effort by construction: a diagnostic must never be able to break the call
+    it is diagnosing, so any failure to read the stack answers "unknown" rather
+    than raising into a keychain fetch."""
+    try:
+        import traceback
+
+        chain: list[str] = []
+        for frame in reversed(traceback.extract_stack()[:-2]):
+            name = frame.filename.rsplit("/", 1)[-1]
+            if name in _TRACE_SKIP:
+                continue
+            chain.append(f"{name}:{frame.lineno} {frame.name}()")
+            if len(chain) == _TRACE_FRAMES:
+                break
+        if chain:
+            return " <- ".join(chain)
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _trace(what: str) -> None:
+    if os.environ.get(_TRACE_ENV) != "1":
+        return
+    import sys
+
+    # stderr: stdout is the JSON-RPC channel to the shell and a stray line on it
+    # would corrupt a frame.
+    print(f"[keychain            ] core   {what:<16} {_trace_caller()}", file=sys.stderr, flush=True)
+
 
 # Plain-language, never-leaks-internals fallbacks (CLAUDE.md).
 _TIMEOUT_MESSAGE = "Addison couldn't finish that just now. Please try again."
@@ -164,6 +249,22 @@ class IpcShellBridge:
         )
         self._call(Method.SHELL_RESTORE_WORKSPACE_FILE, params)
 
+    # --- OPEN-mode command execution (step 5.5, item 1) --------------------
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        """Run a command in the SHELL, under its seatbelt profile.
+
+        The per-call timeout is the command's own budget plus ``_EXEC_SLACK_MS``,
+        never the bridge default: the shell kills the child at ``timeoutMs`` and
+        answers, so if this waiter gave up first the command would keep running
+        with nobody to receive its output — and the turn would report a bridge
+        stall for what is really a slow command. The slack covers spawning
+        ``sandbox-exec`` and draining the pipes after the kill."""
+        return self._call(
+            Method.SHELL_RUN_COMMAND,
+            {"command": command, "timeoutMs": timeout_ms, "writeRoots": list(write_roots)},
+            timeout=(timeout_ms + _EXEC_SLACK_MS) / 1000.0,
+        )
+
     # --- key fetch (§5) ---------------------------------------------------
     def get_provider_key(self, provider: str = "anthropic", fresh: bool = False) -> str:
         """Per-call API-key fetch from the OS keychain via the shell, keyed by
@@ -184,6 +285,7 @@ class IpcShellBridge:
         session. Sent ONLY by the per-turn probe: the person's own message may
         re-raise the dialog they dismissed, while the automatic pollers keep
         answering from the shell's memory."""
+        _trace(f"want {provider}{' fresh' if fresh else ''}")
         params: dict = {"provider": provider}
         if fresh:
             params["fresh"] = True
@@ -209,6 +311,7 @@ class IpcShellBridge:
 
         Returns ``{"deviceId", "publicKey"}`` — the PUBLIC half ONLY. The private
         key never leaves the OS keychain and the core never sees it (§5)."""
+        _trace("want device")
         return self._call(Method.KEYCHAIN_GET_DEVICE_KEY, {}, timeout=_KEYCHAIN_TIMEOUT)
 
     def sign_relay_request(self, payload: dict) -> dict:
@@ -217,6 +320,7 @@ class IpcShellBridge:
 
         The core hands over bytes to sign and gets back a signature; the key
         material stays in the OS keychain and is never exposed here (§5, §8.4)."""
+        _trace("want sign")
         return self._call(
             Method.KEYCHAIN_SIGN_RELAY_REQUEST, {"payload": payload}, timeout=_KEYCHAIN_TIMEOUT
         )

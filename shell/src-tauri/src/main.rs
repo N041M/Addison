@@ -18,6 +18,7 @@
 
 mod agent_process;
 mod app_build;
+mod exec;
 mod filesystem;
 mod ipc;
 mod keychain;

@@ -1,6 +1,34 @@
 # Phase-2 step 5.5 — containment for the OPEN harness
 
-**Status: PROPOSED, not started. Written 2026-07-26.**
+**Status: COMPLETE. Written 2026-07-26; all five items shipped 2026-07-31.**
+
+| Item | State |
+|---|---|
+| 1 — `run_command` behind the ShellBridge | **SHIPPED 2026-07-31** — `shell.runCommand`, `shell/src-tauri/src/exec.rs`; no `subprocess` remains in the core, pinned by a source test |
+| 2 — seatbelt profile from `workspace_trust` | **SHIPPED 2026-07-31** — generated per call from the live trusted roots; data-dir denies emitted last; `sandboxed` surfaced honestly |
+| 3 — the hardline denylist | **SHIPPED 2026-07-31** — `policy.command_denied_path`, `tools/base.call_is_forbidden`, all three dispatch sites |
+| 4 — output redaction + `tool_audit` | **SHIPPED 2026-07-31** — `agent_core/redaction.py` at the orchestrator's send boundary (one seam, every provider); `tool_audit` table written on all five outcomes at all three dispatch sites; **step 7's log dependency is satisfied** |
+| 5 — bring design-doc §9 current | **SHIPPED 2026-07-31** — bullet 1 amended in bullet 2's idiom; new §9.x *"What this does NOT defend against"* (10 named boundaries) |
+
+**G3's qualification is lifted** ([`SAFETY.md`](SAFETY.md)): the headline test
+`an_approved_command_cannot_delete_the_recovery_floor` is live and
+mutation-proven, in `exec.rs` where the boundary actually is. It moved to Rust
+because only that side can prove the property — the Python side can prove the core
+refuses to *ask*, not that an approved command cannot escape.
+
+**Still open, and deliberately not rounded off:** a command runs unconfined on a
+platform with no profile (Linux; `sandboxed: false` is surfaced, never silent),
+and the floor still protects Addison's data rather than Addison's code. Both are
+in [`KNOWN-GAPS.md`](KNOWN-GAPS.md).
+
+Build notes for all three items — including two design errors that had to be
+reverted and one test that was passing for the wrong reason — are in
+[`BUILD-LOG.md`](BUILD-LOG.md).
+
+**The plan as written follows, unchanged, as the record of what was planned and
+why** (the BUILD-LOG idiom). Its present tense describes 2026-07-26, not today:
+every "is today protected by nothing but a permission card" below was true when
+written and is false now. The table above is the current state.
 
 Step 5 shipped a shell. The compensating boundary that the design doc's security
 model assumes did not ship with it. This plan pays that debt, and it belongs

@@ -128,6 +128,7 @@ export const Method = {
   ShellReadWorkspaceFile: "shell.readWorkspaceFile",
   ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
   ShellPickDirectory: "shell.pickDirectory",
+  ShellRunCommand: "shell.runCommand",
   ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",

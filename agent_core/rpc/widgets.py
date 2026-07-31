@@ -149,6 +149,16 @@ class WidgetsMixin(ServerContext):
             return
         tool = self.tool_registry.get("run_command")
         args = {"command": spec.get("command", "")}
+        # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate — the same check
+        # the live loop and the routine engine run, at the third and last site a
+        # command reaches a shell. A widget spec is persisted and model-authorable,
+        # so a Run pill must never be the one door where a forbidden command is
+        # merely a card away.
+        forbidden = self._is_forbidden_call(tool, args)
+        if forbidden is not None:
+            self._audit_tool(tool, args, mode, "forbidden")
+            self._respond(request_id, {"ok": False, "error": forbidden})
+            return
         status = self.permission_gate.authorize(
             "run_command",
             mode=mode,
@@ -164,15 +174,20 @@ class WidgetsMixin(ServerContext):
             trusted=False,
         )
         if status != PermissionStatus.GRANTED:
+            self._audit_tool(tool, args, mode, "denied")
             self._respond(
                 request_id,
                 {"ok": False, "error": "You declined a permission it needs."},
             )
             return
+        self._audit_tool(tool, args, mode, "granted")
         context = ExecutionContext(
             conversation_id=f"widget:{widget_id}",
             shell_bridge=self._shell_bridge,
             policy_mode=mode,
+            # Same allowlist the chat and a routine get (step 5.5, item 2) — a Run
+            # pill must never be sandboxed more loosely than the conversation.
+            trusted_roots=self._trusted_roots,
         )
         try:
             result = tool.execute(args, context)
@@ -189,6 +204,28 @@ class WidgetsMixin(ServerContext):
             if result.success
             else {"ok": False, "error": result.content},
         )
+
+    def _audit_tool(self, tool, args, mode, outcome) -> None:
+        """One tool-decision row for a Run pill (step 5.5, item 4). The rail is the
+        third site a command can start, so it is the third site that must leave a
+        record — a widget is persisted and model-authorable, and a Run pill that
+        left no trace would be the quietest way to run something."""
+        try:
+            self._record_tool_audit(
+                {
+                    "id": str(uuid4()),
+                    "conversation_id": None,
+                    "tool_id": tool.definition.id,
+                    "detail": call_permission_detail(tool, args),
+                    "mode": mode.value if hasattr(mode, "value") else str(mode),
+                    "destructive": bool(call_is_destructive(tool, args)),
+                    "outcome": outcome,
+                    "redacted": None,
+                    "created_at": int(time.time()),
+                }
+            )
+        except Exception:
+            pass
 
     def _handle_widget_propose(self, request_id) -> None:
         """Draft a widget spec from the recent conversation (mirrors routine.propose:

@@ -63,6 +63,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.readWorkspaceFile" => read_workspace_file(params),
         "shell.restoreWorkspaceFile" => restore_workspace_file(app, params),
         "shell.pickDirectory" => pick_directory(app).await,
+        // OPEN-mode command execution (step 5.5, items 1+2). It lands here, in the
+        // shell, for the same reason the workspace file methods do: this is the
+        // process with OS permissions, and therefore the only one that can put a
+        // sandbox around what the model asked for. exec.rs builds the seatbelt
+        // profile from the trusted roots the core sends and re-denies Addison's own
+        // data dir on top of them, independently (defence in depth, §1.3).
+        "shell.runCommand" => crate::exec::run_command(params),
         "shell.openExternal" => open_external(params),
         "shell.readClipboard" => read_clipboard(),
         // Which build of Addison this is — recorded on a permanent restore point
@@ -312,7 +319,7 @@ fn restore_workspace_path(
 /// allows); this is the shell's independent floor (§6.6, defence in depth), so the
 /// coding harness can never write or read Addison's memory even if the core's check
 /// were bypassed.
-fn addison_data_dirs() -> Vec<PathBuf> {
+pub fn addison_data_dirs() -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
     if let Ok(env) = std::env::var("ADDISON_DB_PATH") {
         if let Some(parent) = PathBuf::from(&env).parent() {

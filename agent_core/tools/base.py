@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
-from agent_core.policy import PolicyMode
+from agent_core.policy import DENIED_CONTAINS, PolicyMode, command_denied_path
 
 
 class RiskTier(str, Enum):
@@ -138,6 +138,31 @@ class ShellBridge(Protocol):
         the frontend's "Trust a folder" flow reaches a real OS dialog (§1.3)."""
         ...
 
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        """Run ``command`` and return
+        ``{"stdout": str, "stderr": str, "exitCode": int, "sandboxed": bool}``.
+
+        Step 5.5 item 1 — the LAST OS effect that did not cross this boundary.
+        ``run_command`` used to call ``subprocess.run(shell=True)`` from the Agent
+        Core, which contradicted engineering-spec §1.3 (*"the Agent Core has no OS
+        permissions of its own"*) and, more practically, put execution in the one
+        process where no sandbox could be applied. Moving it fixes both with one
+        change.
+
+        ``write_roots`` is the live workspace-trust list. The shell turns it into
+        the seatbelt profile's write allowlist and **independently re-denies
+        Addison's own data directory on top of it**, exactly as the workspace file
+        methods do — the core's list is an input to the boundary, never the
+        boundary itself.
+
+        ``sandboxed`` says whether a profile was actually applied. It is in the
+        return value rather than assumed because **a silent unsandboxed fallback
+        is the failure mode this whole step exists to design against**: a guard
+        that reports success while doing nothing is this project's own
+        anti-pattern. On macOS the shell REFUSES rather than running unconfined;
+        elsewhere it runs and answers False, and the tool says so in its output."""
+        ...
+
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         """Undo-time restore for ``write_project_file``: put ``prior_content`` back at
         ``path`` (the bytes it overwrote), or DELETE the file when ``prior_content``
@@ -171,6 +196,17 @@ class ExecutionContext:
     # ``affected_path`` (run_command, the SAFE tools), and reset per call so a path
     # tool can never inherit a stale value from an earlier call in the same turn.
     resolved_path: str | None = None
+    # The live workspace-trust roots, as a CALLABLE (step 5.5, item 2). Only
+    # ``run_command`` reads it, to hand the shell the write-allowlist its seatbelt
+    # profile is built from.
+    #
+    # A callable rather than a list, deliberately: a list captured when the context
+    # was built is a snapshot of trust taken at the START of the turn, and the one
+    # direction a stale trust list can be wrong in is the dangerous one — a root
+    # revoked mid-turn would stay writable for the rest of it. Resolving at execute
+    # time makes revocation take effect on the very next command. None (CLI/tests)
+    # means no roots, which the shell reads as "nothing outside temp is writable".
+    trusted_roots: Any = None
 
 
 @runtime_checkable
@@ -264,6 +300,83 @@ def call_is_destructive(tool: Any, args: dict) -> bool:
 # was left recorded as ``running`` forever, which is the exact failure the engine's
 # own error handling exists to prevent.
 UNRESOLVABLE_PATH = "\x00unresolvable"
+
+
+# What the person (and the model) is told when the denylist refuses a call. Plain
+# language, and both say the thing that matters first: nothing ran. Neither is
+# phrased as a permission problem — there is no card behind it to approve.
+#
+# TWO messages, because the two directions are not equally recoverable. A CONTAINS
+# refusal has an obvious next move and the sentence hands it over, so the model
+# corrects in one turn instead of reporting the whole task as blocked. One shared
+# message made every ``ls ~`` look like a dead end.
+FORBIDDEN_CALL_INSIDE = (
+    "That reaches into a folder Addison never lets a command touch — its own "
+    "restore points, or where your keys and passwords are kept. Nothing was run."
+)
+FORBIDDEN_CALL_CONTAINS = (
+    "That names a folder that holds Addison's own restore points, so Addison "
+    "won't run a command across the whole of it. Nothing was run. Name the "
+    "folder inside it that you actually mean."
+)
+
+
+def default_forbidden_check(tool: Any, args: dict) -> str | None:
+    """The store-free fallback used when no ``forbidden_check`` was wired.
+
+    Mirrors ``WorkspaceMixin._data_dir``'s own fallback exactly: the live server
+    always injects a check bound to the RUNNING store's directory, and this only
+    covers the constructed-without-a-server case (tests). It is the one place in
+    the tree allowed to re-derive the data dir for this predicate — a source test
+    (`test_step_5_5_containment`) pins that."""
+    from agent_core.policy import _derived_data_dir
+
+    return call_is_forbidden(tool, args, _derived_data_dir())
+
+
+def call_is_forbidden(tool: Any, args: dict, data_dir: str) -> str | None:
+    """A refusal sentence, or None. Checked BEFORE the gate: this is not a card the
+    person can approve, it is a call that does not happen.
+
+    The hardline denylist (step 5.5 item 3). It sits at the same three dispatch
+    sites as the confinement check — the live loop, the routine engine, and the
+    command widget's Run pill — because a boundary that only one of them enforces
+    is not a boundary (SAFE invariant 3's reasoning, applied to containment).
+
+    ONE source, and it is not a parser: a tool that declares the raw text it would
+    hand to a shell, via an optional ``command_text(args) -> str | None``.
+    ``run_command`` is the only one today, and it is the reason this function
+    exists — it has no ``affected_path``, so confinement never governs it and the
+    card is the only layer underneath.
+
+    A PATH-BOUNDED TOOL IS DELIBERATELY NOT CHECKED HERE. Confinement already
+    refuses those at these same three sites, and it does so against the LIVE data
+    directory, which the caller holds and this function does not. Re-deriving the
+    data dir here to run a second copy of the floor produced a check that was both
+    redundant and less informed than the one beside it — two spellings of one
+    boundary, which is precisely what CLAUDE.md's one-owner rule exists to stop.
+
+    **Scope the guarantee honestly** — ``policy.command_denied_path`` explains why
+    at length. Pattern-matching a ``shell=True`` string is a backstop against the
+    obvious, defeated by quoting, and it must never be described as the boundary.
+    The boundary is the seatbelt profile (item 2).
+
+    ``data_dir`` is the LIVE data directory, passed in by the caller — never
+    re-derived here. See ``policy.denylisted_roots`` for why that is a signature
+    and not a convention."""
+    provider = getattr(tool, "command_text", None)
+    if callable(provider):
+        command = provider(args)
+        if command:
+            denial = command_denied_path(str(command), data_dir)
+            if denial is not None:
+                _, direction = denial
+                return (
+                    FORBIDDEN_CALL_CONTAINS
+                    if direction == DENIED_CONTAINS
+                    else FORBIDDEN_CALL_INSIDE
+                )
+    return None
 
 
 def call_affected_path(tool: Any, args: dict) -> str | None:

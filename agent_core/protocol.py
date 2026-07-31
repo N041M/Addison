@@ -186,6 +186,15 @@ class Method:
     SHELL_READ_WORKSPACE_FILE = "shell.readWorkspaceFile"       # {path} -> {content}
     SHELL_RESTORE_WORKSPACE_FILE = "shell.restoreWorkspaceFile" # {path, content?|delete} -> {}
     SHELL_PICK_DIRECTORY = "shell.pickDirectory"                # {} -> {path} (native folder picker)
+    # OPEN-mode command execution (step 5.5, item 1). The core does NOT run this
+    # itself: run_command crosses the bridge like every other OS effect (§1.3), so
+    # execution happens in the process that can apply a sandbox. `writeRoots` is the
+    # live workspace-trust list, which the shell turns into the seatbelt profile's
+    # write allowlist; the shell independently re-denies Addison's own data dir on
+    # top of whatever roots it is sent. `sandboxed` reports whether a profile was
+    # actually applied — NEVER silently false (design-doc §9).
+    # {command, timeoutMs, writeRoots} -> {stdout, stderr, exitCode, sandboxed}
+    SHELL_RUN_COMMAND = "shell.runCommand"
     # {} -> {deviceId, publicKey}; the public half ONLY
     KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
     # {provider} -> {key}; read per-call at the moment of use, never cached (G1)

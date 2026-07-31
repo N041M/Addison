@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,7 @@ from agent_core.providers.base import (
     ToolCallRequest,
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
+from agent_core.redaction import redact, redacted_for_model
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
@@ -30,6 +32,7 @@ from agent_core.tools.base import (
     call_affected_path,
     call_is_destructive,
     call_permission_detail,
+    default_forbidden_check,
 )
 from agent_core.tools.registry import ToolRegistry
 
@@ -206,6 +209,9 @@ class Orchestrator:
         on_answered=lambda model_id, label, free, routed: None,
         model_label=lambda model_id: model_id,
         trust_check=lambda path: False,
+        forbidden_check=None,
+        trusted_roots=None,
+        on_tool_audit=None,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
@@ -251,6 +257,23 @@ class Orchestrator:
         # None from a caller used to raise TypeError mid-turn rather than confine
         # to nothing, and the two call sites must not disagree about that.
         self._trust_check = trust_check or (lambda path: False)
+        # The hardline denylist (step 5.5, item 3), wired the same way trust_check
+        # is and for the same reason: it needs the LIVE data directory, which only
+        # the server knows (rpc/workspace._is_forbidden_call). The default re-derives
+        # it — correct only for a store-free construction, which is why it is a
+        # named fallback rather than an inline expression.
+        self._forbidden_check = forbidden_check or default_forbidden_check
+        # The live trusted roots, as a zero-arg callable (step 5.5, item 2) — the
+        # sandbox's write allowlist. Wired by the server (rpc/workspace._trusted_roots);
+        # None here means no roots, which is the safe reading, not an open one.
+        self._trusted_roots = trusted_roots
+        # The tool-call audit sink (step 5.5, item 4): called with one row per tool
+        # DECISION, on every branch including the refusals that never ran. Wired by
+        # the server to the store; None (CLI/tests) simply records nothing. It is a
+        # callback rather than a store handle for the same reason on_usage is: the
+        # orchestrator must not learn about SQLite, and machinery — never a registry
+        # tool — is the only thing allowed to write history.
+        self._on_tool_audit = on_tool_audit
         # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
         # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
         self._cooldowns: dict[str, float] = {}
@@ -281,6 +304,7 @@ class Orchestrator:
             conversation_id=conversation.id,
             shell_bridge=self.shell_bridge,
             policy_mode=mode,
+            trusted_roots=self._trusted_roots,
         )
         chain = self._routing_chain(requested_role, model_name)
         if chain is None:
@@ -312,8 +336,14 @@ class Orchestrator:
         for _round in range(_MAX_TOOL_ROUNDS):
             started = time.monotonic()
             relay.begin_send()
+            # REDACTION (step 5.5, item 4) at the one place every provider is fed.
+            # A throwaway view goes on the wire; conversation.messages — the
+            # person's own record, and the SQLite rows behind it — keeps the real
+            # bytes. Doing this here rather than in each provider's
+            # _translate_history means a provider added later cannot miss it.
+            outbound, _ = redacted_for_model(conversation.messages)
             response = provider.send(
-                messages=conversation.messages,
+                messages=outbound,
                 # The model only ever sees the tools visible in this mode — SAFE
                 # hides every dev-only tool, so it can't even request run_command.
                 tools=self.tool_registry.visible_tools(mode),
@@ -395,8 +425,9 @@ class Orchestrator:
                 started = time.monotonic()
                 relay.begin_send()
                 try:
+                    outbound, _ = redacted_for_model(conversation.messages)
                     response = provider.send(
-                        messages=conversation.messages,
+                        messages=outbound,
                         tools=self.tool_registry.visible_tools(mode),
                         effort=effort,
                         # [MF-A] a real per-attempt deadline: the provider clamps this
@@ -470,6 +501,31 @@ class Orchestrator:
                 answered.model_id, self._model_label(answered.model_id), answered.free, routed
             )
 
+    def _audit(
+        self, conversation, tool_id, detail, mode, destructive, outcome, redacted=None
+    ) -> None:
+        """Record one tool decision. BEST-EFFORT, ALWAYS: a failure to write history
+        must never be the reason a person's turn dies, so every exception is
+        swallowed here rather than at each of the six call sites."""
+        if self._on_tool_audit is None:
+            return
+        try:
+            self._on_tool_audit(
+                {
+                    "id": str(uuid.uuid4()),
+                    "conversation_id": getattr(conversation, "id", None),
+                    "tool_id": tool_id,
+                    "detail": detail,
+                    "mode": mode.value if hasattr(mode, "value") else str(mode),
+                    "destructive": bool(destructive),
+                    "outcome": outcome,
+                    "redacted": ", ".join(redacted) if redacted else None,
+                    "created_at": int(time.time()),
+                }
+            )
+        except Exception:
+            pass
+
     def _finish_over_budget(self, conversation) -> None:
         # Same sentence for both ceilings: the person does not care which counter ran
         # out, only that Addison stopped and is saying so.
@@ -505,8 +561,27 @@ class Orchestrator:
                 call.tool_id, mode
             )
             if dev_only_refusal is not None:
+                self._audit(conversation, call.tool_id, None, mode, False, "dev_only")
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=dev_only_refusal)
+                )
+                continue
+            # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate and above
+            # confinement: a call naming Addison's own restore storage or the user's
+            # credential stores does not happen, and is not offered as a card. It is
+            # first because a forbidden call must never be shown to the person as
+            # something they could approve — the gate is not consulted at all.
+            forbidden = self._forbidden_check(tool, call.args)
+            if forbidden is not None:
+                # The one outcome with no card behind it — so the audit row is the
+                # ONLY place a forbidden call is ever recorded (KNOWN-GAPS: it is
+                # invisible outside the transcript today).
+                self._audit(
+                    conversation, call.tool_id,
+                    call_permission_detail(tool, call.args), mode, True, "forbidden",
+                )
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=forbidden)
                 )
                 continue
             # CONFINEMENT (step 5, D3): a path-bounded tool (non-None affected_path)
@@ -520,6 +595,10 @@ class Orchestrator:
             affected = call_affected_path(tool, call.args)
             trusted = bool(affected) and self._trust_check(affected)
             if affected is not None and not trusted:
+                self._audit(
+                    conversation, call.tool_id,
+                    call_permission_detail(tool, call.args), mode, False, "confined_out",
+                )
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=_OUTSIDE_TRUST)
                 )
@@ -546,6 +625,9 @@ class Orchestrator:
                 trusted=trusted,
             )  # may block for UI
             if status == PermissionStatus.DENIED:
+                self._audit(
+                    conversation, call.tool_id, detail, mode, destructive, "denied"
+                )
                 # Steer the model past the refusal: "not now" declines the STEP, not
                 # the request — anything already gathered (search results, a
                 # calculation) should be delivered in chat.
@@ -591,6 +673,17 @@ class Orchestrator:
                         result.snapshot.tool_call_id = call.id
                         self.undo_manager.record(result.snapshot)
                     result = self._gate_image_result(result, provider)
+                # The granted branch, audited AFTER execution so the row can name
+                # what THIS call's output contained. Attributing it to the previous
+                # outbound send was wrong by one round: a tool's output is scrubbed
+                # on the NEXT send, so the send before it carried nothing of this
+                # tool's. `redact` is re-run on the result purely to classify it —
+                # the actual scrubbing still happens once, at the send boundary, so
+                # every message is covered and not just tool results. Kinds only.
+                self._audit(
+                    conversation, call.tool_id, detail, mode, destructive, "granted",
+                    redacted=redact(_result_as_text(result.content)).kinds,
+                )
             conversation.append_tool_result(call.id, result)
         return calls_made, budget_spent
 

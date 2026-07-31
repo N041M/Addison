@@ -53,6 +53,11 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # button. So a restore never resurrects trust, and the round-1 D6 disclosure is
     # unnecessary: there is nothing to disclose.
     "workspace_trust":  "standing consent (like tool_grants); restoring it could re-trust a revoked folder",
+    # Step 5.5, item 4. History, on the tool_grants precedent: a restore that
+    # rewrote the record of what Addison did — or was refused — would be worse
+    # than having no record. The audit trail must survive every rollback intact,
+    # including a rollback performed to undo whatever the log recorded.
+    "tool_audit":       "audit history; a restore must never rewrite what happened",
 }
 
 # Columns of a CAPTURED table that are deliberately not captured. Empty today.

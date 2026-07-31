@@ -35,9 +35,6 @@ frictionless minority hiding a mutation inside it.
 
 from __future__ import annotations
 
-import os
-import subprocess
-
 from agent_core.policy import PolicyMode
 from agent_core.tools.base import (
     MAX_PERMISSION_DETAIL_CHARS,
@@ -53,6 +50,17 @@ _TIMEOUT_SECONDS = 30
 _SAFE_MODE_REFUSAL = (
     "Running commands is only available in the Developer profile."
 )
+
+# No shell wired — the desktop app is the only place a command can run safely,
+# because the sandbox lives there (step 5.5, item 1).
+_NO_SHELL_REFUSAL = (
+    "Addison can only run commands from the desktop app, so it didn't run that one."
+)
+
+# Prepended to the output when the shell could not apply a sandbox profile. Said
+# plainly, and said EVERY time — the whole point of returning `sandboxed` is that
+# its absence is never invisible.
+_UNSANDBOXED_NOTE = "Note: this ran without Addison's usual sandbox around it."
 
 
 class RunCommandTool:
@@ -95,6 +103,15 @@ class RunCommandTool:
         carding every time regardless of any trusted workspace."""
         return None
 
+    def command_text(self, args: dict) -> str | None:
+        """The UNTRUNCATED command, for the hardline denylist (step 5.5, item 3;
+        ``tools/base.call_is_forbidden``). Deliberately not ``permission_detail``,
+        which is capped at MAX_PERMISSION_DETAIL_CHARS for the card and the
+        Activity Panel — a denylist reading a truncated string would stop seeing
+        the dangerous path of any command long enough to push it past the cap."""
+        command = str(args.get("command", "")).strip()
+        return command or None
+
     def permission_detail(self, args: dict) -> str | None:
         """The exact command text, for the permission card and the Activity Panel.
 
@@ -120,33 +137,47 @@ class RunCommandTool:
         if not command:
             return ToolResult(success=False, content="No command was given to run.")
 
-        try:
-            completed = subprocess.run(
-                command,
-                shell=True,
-                cwd=os.path.expanduser("~"),
-                capture_output=True,
-                text=True,
-                timeout=_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired:
-            return ToolResult(
-                success=False,
-                content=f"That command didn't finish within {_TIMEOUT_SECONDS} seconds.",
-            )
-        except OSError as exc:
-            return ToolResult(success=False, content=f"Couldn't run that command: {exc}")
+        # THE CORE DOES NOT RUN COMMANDS (step 5.5, item 1). No subprocess here, by
+        # design and by test: execution crosses the ShellBridge like every other OS
+        # effect (§1.3), which is what puts it in the process that can apply a
+        # sandbox. With no shell wired there is no sandbox to run under, so this
+        # refuses rather than falling back to running unconfined — the fallback
+        # would be exactly the silent-unsandboxed failure this step exists to
+        # prevent, and it would reintroduce the deleted subprocess call.
+        if context.shell_bridge is None:
+            return ToolResult(success=False, content=_NO_SHELL_REFUSAL)
 
-        output = completed.stdout or ""
-        if completed.stderr:
-            output = f"{output}\n{completed.stderr}" if output else completed.stderr
+        # The live trusted roots become the sandbox's write allowlist. Resolved HERE,
+        # at execute time, not captured on the turn: revoking a folder's trust takes
+        # effect on the very next command. An empty list is meaningful and safe —
+        # nothing is writable outside the shell's own temp allowance.
+        write_roots = list(context.trusted_roots() if context.trusted_roots else [])
+
+        try:
+            result = context.shell_bridge.run_command(
+                command, _TIMEOUT_SECONDS * 1000, write_roots
+            )
+        except RuntimeError as exc:
+            # The bridge turns a shell error or a stall into one plain sentence.
+            return ToolResult(success=False, content=str(exc))
+
+        output = str(result.get("stdout") or "")
+        stderr = str(result.get("stderr") or "")
+        if stderr:
+            output = f"{output}\n{stderr}" if output else stderr
         output = output.strip()
         if len(output) > _MAX_OUTPUT_CHARS:
             output = output[:_MAX_OUTPUT_CHARS] + "\n… (output truncated)"
 
-        success = completed.returncode == 0
+        exit_code = int(result.get("exitCode") or 0)
+        success = exit_code == 0
         if not output:
             output = "(the command produced no output)" if success else (
-                f"The command exited with status {completed.returncode}."
+                f"The command exited with status {exit_code}."
             )
+        # Honest degradation, never silent: on a platform where no profile could be
+        # applied the person and the model are both told, in the output itself,
+        # rather than the sandbox's absence being invisible.
+        if not result.get("sandboxed", False):
+            output = f"{_UNSANDBOXED_NOTE}\n\n{output}"
         return ToolResult(success=success, content=output)

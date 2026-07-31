@@ -28,6 +28,7 @@ import time
 
 from agent_core.policy import path_is_within, workspace_trust_allows
 from agent_core.rpc.base import ServerContext
+from agent_core.tools.base import call_is_forbidden
 
 # Frozen plain-language copy (D6, F2). The frontend asserts these bytes.
 _GRANT_DATA_DIR_REFUSAL = (
@@ -70,6 +71,24 @@ class WorkspaceMixin(ServerContext):
         (D3) and the gate's ``trusted`` bool read the exact same answer."""
         roots = [row["root"] for row in self.store.list_workspace_trust()]
         return is_trusted(resolved_path, roots, self._data_dir())
+
+    def _trusted_roots(self) -> list[str]:
+        """Every currently-trusted root, canonical. Read at the moment of use, never
+        cached on a turn: revoking trust must take effect on the next command, not
+        the next conversation. Feeds the seatbelt profile's write-allowlist (step
+        5.5, item 2) — which is what finally makes workspace trust govern the
+        shell, rather than only the careful path-bounded tools."""
+        return [row["root"] for row in self.store.list_workspace_trust()]
+
+    def _is_forbidden_call(self, tool, args) -> str | None:
+        """The hardline denylist (step 5.5, item 3), bound to the LIVE data dir.
+
+        Wired into the orchestrator / routine engine as ``forbidden_check`` and
+        called directly by the widget rail, so all three sites read one answer —
+        the same discipline ``_is_trusted_path`` exists for. Without this binding
+        the predicate re-derived the data dir from the environment and would have
+        protected the default store while the running one went unguarded."""
+        return call_is_forbidden(tool, args, self._data_dir())
 
     # --- RPC ----------------------------------------------------------------
     def _workspace_list(self) -> dict:

@@ -12,6 +12,293 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## Measured 07-31 — two keychain spikes for the vault redesign
+
+Nothing shipped; two claims of
+[docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md) were
+**measured** before the design could rest on them (the scrutiny pass flagged
+both as load-bearing and unverified). A ~60-line spike binary
+(`security-framework` 3.x, modern `SecItem*` API) was signed with the
+`Addison Dev` identity and driven with 4–5 s timeout guards, so a dialog
+classifies as "prompted" without anyone answering it.
+
+**Spike 1 — does creator trust survive a rebuild under a self-signed cert? NO.**
+
+```
+add   (build A, signed)   -> OK  25ms   added
+read  (build A, signed)   -> OK  29ms   read 28 bytes        # same binary: silent
+# append a no-op fn, rebuild, re-sign with the SAME "Addison Dev" identity
+read  (build B, signed)   -> TIMED OUT (5s)                  # dialog appeared
+```
+
+An item created via `SecItemAdd` by one build **prompts when read by the next
+build signed with the same certificate**. Without a team ID there is no stable
+partition for trust to attach to, so the Chrome/VS Code zero-prompt steady
+state requires an Apple-issued identity (Phase 3). The dev floor is one
+explained sequence per **rebuild** (relaunches of the same binary stay silent —
+consistent with the owner's original "asked only after a rebuild" report). This
+**falsified** the draft's claim that app-created items give zero-dialog steady
+state under the dev cert — which is exactly what the spike was for. One open
+variable only the owner can measure: whether a single *Always Allow* (a
+partition-list edit) is durable across rebuilds — plan §13.6.
+
+**Spike 2 — does the data-protection keychain work under the current signing? NO, with a number.**
+
+```
+dp-add  -> ERR  11ms  Error { code: -34018, "A required entitlement isn't present." }
+```
+
+`kSecUseDataProtectionKeychain` needs provisioned entitlements; the Phase-3
+deferral is now measured rather than assumed. (Also re-verified in passing:
+attributes-only queries against a real item raise no dialog, and cleanup via
+the `security` CLI deleted the spike item without a prompt.)
+
+---
+
+## What shipped 07-31 (later) — step 5.5 items 4 and 5: step 5.5 is COMPLETE
+
+**Item 4 — output redaction + the tool-call audit trail.**
+
+- **`agent_core/redaction.py`** — stdlib `re` only. Every rule is anchored to a
+  vendor prefix or a structural marker (`sk-ant-`, `ghp_`, `AKIA`, `xox[baprs]-`,
+  `AIza`, `Bearer `, PEM blocks). An unanchored "long alphanumeric" rule would eat
+  git SHAs, base64 and UUIDs out of ordinary output, and **a redactor that mangles
+  innocent text is one people switch off**.
+- **The seam is the ORCHESTRATOR, not each provider.** There are five
+  `_translate_history` functions — five places for a sixth provider to miss.
+  `conversation.messages` is handed to a provider at exactly two sites, so
+  redaction happens there, provider-agnostically, and a provider added later is
+  covered for free.
+- **Redact toward the model, never into the store** (the plan's owner decision 2,
+  resolved). The wire gets a throwaway view; `conversation.messages` and the
+  SQLite rows keep the real bytes, because scrubbing the person's own record would
+  destroy the evidence that a leak happened. Both halves are asserted.
+- **`tool_audit`** — one row per tool DECISION on every branch, at all three
+  dispatch sites. Five outcomes: `granted | denied | forbidden | confined_out |
+  dev_only`. It closes a real hole: `read_web_page` is LOW so it writes no
+  `action_snapshots` row — **the tool most exposed to prompt injection left no
+  record of which hosts it fetched** — and a refusal left none at all. EXCLUDED
+  from snapshots on the `tool_grants` precedent (a restore that rewrote the record
+  of what happened would be worse than no record). **This satisfies step 7's log
+  dependency.**
+
+**Two findings worth keeping:**
+
+1. **The audit attribution was wrong by one round, and a test caught it.** The
+   granted row was written *before* `execute`, naming redactions from the previous
+   outbound send — but a tool's output is scrubbed on the *next* send, so that row
+   described a round carrying none of this tool's output. Moved after execution and
+   attributed to the result itself. The bug was invisible in the code and obvious
+   in the assertion, which is the argument for asserting on values rather than on
+   "did it run".
+2. **The docs-drift test fired twice, correctly, on work that was otherwise
+   green.** Once for the new `tool_audit` table missing from `data-model.md`'s ER
+   diagram, and once because §9's restored G3 sentence had drifted more than 500
+   characters from its scope marker. Both are exactly the drift those tests were
+   written for, and neither would have been caught by review.
+
+**Item 5 — design-doc §9 brought current.** Bullet 1 ("capability allow-list, not
+a shell") is amended in bullet 2's own idiom — name the property, say where the
+boundary moved to — rather than left standing as an aspiration. New **§9.x, "What
+this does NOT defend against"**, with ten named boundaries: an attacker who can
+already write to `~/.addison`, a person who approves a malicious command, prompt
+injection in OPEN, exfiltration through an approved command (and why
+`network-outbound` is granted anyway), the data-not-code gap, `sandbox-exec`'s
+deprecation, platforms with no profile, hardlinks, multi-user machines, and the
+Python-side zeroization limit. OpenClaw and Claude Code both state their
+boundaries plainly; Addison's docs previously read as though the floors were
+absolute.
+
+Four mutations proven on the new guards: send-boundary redaction removed, the PEM
+rule disabled, the audit's redaction naming dropped, and the view returning
+originals — each kills its own test and nothing else.
+
+---
+
+## What shipped 07-31 — step 5.5 items 1, 2 and 3: the OPEN harness gets a floor
+
+**G3's overclaim is closed.** `run_command` no longer executes in the Agent Core;
+it crosses the ShellBridge and the shell runs it under a seatbelt profile built
+from the live workspace-trust roots. The headline test is live and
+mutation-proven in `shell/src-tauri/src/exec.rs`. Items 4 (redaction + audit log)
+and 5 (design-doc §9) remain, and **step 7 is still downstream of item 4**.
+
+### Items 1 + 2 — execution moved, and confined
+
+- **`shell.runCommand`** (`protocol.py` / `protocol.ts`, hand-synced) carrying
+  `{command, timeoutMs, writeRoots}` → `{stdout, stderr, exitCode, sandboxed}`.
+- **`shell/src-tauri/src/exec.rs`** — the seatbelt profile, generated per call.
+  Order is the security argument: `(deny default)`, broad reads, `(deny
+  file-write*)`, then per-root allows, then **the data-dir denies LAST** so the
+  floor beats a trusted root that contains it. The shell re-derives the data dirs
+  itself; the core's `writeRoots` is an input to the boundary, never the boundary.
+- **`sandboxed` is answered honestly.** On macOS a missing `sandbox-exec` REFUSES
+  the command rather than running it bare; elsewhere the command runs and the tool
+  prints a note above the output. A silent unsandboxed fallback would have been
+  this project's own anti-pattern — a guard reporting success while doing nothing.
+- **`ExecutionContext.trusted_roots` is a CALLABLE, not a list.** A list captured
+  when the turn began is a trust snapshot, and the one direction it can be stale
+  in is the dangerous one: a root revoked mid-turn would stay writable for the
+  rest of it.
+
+**Nine findings worth keeping:**
+
+1. **The timeout did not exist, and a green test said it did.** `run_with_timeout`
+   signalled the direct child. But `/bin/sh -c "echo x; sleep 30"` FORKS — `sleep`
+   is a grandchild, so the shell died and the real work ran on, still holding the
+   write end of the stdout pipe, so `drain` blocked until it finished by itself. A
+   600ms budget took the full 30 seconds; `run_command`'s advertised 30s ceiling
+   was unenforced for every compound command; and the shell's IPC worker was held
+   for as long as the longest orphan lived. **The test passed the whole time**,
+   because it asserted on the OUTPUT — and the stderr note is appended on the
+   timeout path whether or not the kill landed. It was found only by noticing that
+   every `cargo test` run in the session reported ~30s. Fixed with
+   `process_group(0)` + `kill(-pgid)`; the test now asserts ELAPSED TIME, which is
+   the property, and is the one thing an output-shaped assertion cannot see.
+   Suite went from 30s to 0.6s. **If a test's subject is a deadline, assert the
+   clock.**
+2. **A negative sandbox test can pass because the sandbox never ran.** Mutating
+   the allowlist to `/` broke the profile outright — and *both* negative tests
+   went green, because a rejected profile also means the forbidden file is absent.
+   The strongest possible false green, on the one boundary the step exists to
+   build, and only the positive test noticed. Every negative test now writes a
+   marker into a permitted path in the same command and asserts the marker landed:
+   marker present + target absent means the sandbox ran and refused; marker absent
+   means the test proved nothing and says so.
+3. **The headline test belongs in Rust.** Python can prove the core refuses to
+   *ask*; only the shell side can prove that a command which *is* approved cannot
+   escape. Keeping it in Python as an `xfail` would have left the definition of
+   done in the process that no longer enforces anything.
+4. **No `subprocess` in the core is a property of the FILE, not of a call** — so
+   it is pinned by a source test. It checks call shapes (`subprocess.run`,
+   `os.system`, …) rather than the words, because the module has to be able to
+   explain what was removed and why; a guard that forbids the prose is paid for by
+   deleting the explanation.
+5. **A test made deterministic can stop testing the wiring.** The headline
+   originally read the data dir from `ADDISON_DB_PATH`, which other Rust tests
+   mutate — it passed alone and failed in the full run, the worst shape of flake on
+   the one test the step is judged against. The fix made `seatbelt_profile` a pure
+   function of (write roots, protected dirs)… which meant every test passed the
+   floor in explicitly, and **dropping `addison_data_dirs()` at the call site
+   killed the floor with all six tests still green**. `the_handler_feeds_the_real_protected_dirs_into_the_profile`
+   closes it by asserting on the argv the handler actually builds. Purifying a
+   function for testability moves the untested part to its caller; the caller needs
+   its own test the same day.
+6. **Two granted capabilities that nothing needed.** The profile's non-file
+   grants were written defensively — copied from the shape such profiles usually
+   have — and included unfiltered `mach-lookup` and `ipc-posix-shm`. Measured
+   afterwards: git, node, python, pytest and npm all work without either, and
+   unfiltered `mach-lookup` is a known way OUT of a seatbelt profile (ask a system
+   daemon to act on your behalf). Both removed. `sysctl-read` stays because it is
+   genuinely load-bearing — without it `node` aborts in `os.GetOSInformation`
+   (a `uname` call) and every `npm` invocation dies with a native stack trace.
+   Under `(deny default)` each grant is a decision; the set is now pinned by
+   `the_profile_grants_no_capability_beyond_the_measured_set`. **Measure, don't
+   copy.**
+7. **The network was denied by accident, and that was the wrong default.** No
+   `(allow network*)` under `(deny default)` broke `git fetch`, `npm install`,
+   `pip install` and `curl` — with a DNS error that reads as a broken machine
+   rather than a policy. It also bought nothing: **the command's output already
+   travels to a cloud provider**, so a profile that blocks `curl` and then hands
+   the same bytes to a model over HTTPS has closed only the useful half of the
+   harness. `network-outbound` is now granted deliberately, with the reasoning in
+   the profile; `network-bind` is not (a model-issued command has no business
+   opening a listening socket, and the 30s ceiling makes a dev server pointless).
+   Exfiltration remains item 4's problem, exactly as broad reads are.
+8. **A hand-synced protocol asserted on one side is asserted on neither.** Nothing
+   covered the actual frame: the Rust tests called the inner functions, the Python
+   tests stopped at the bridge, and `test_protocol_drift` covers the method NAME
+   only. A renamed field would have passed both suites and failed the first time
+   the app ran. Worse, the first version of the Rust contract test *still* missed
+   it — both inbound fields are read with `unwrap_or`, so a rename silently
+   becomes a default. Each field is now asserted **through its effect**: the write
+   lands (so `writeRoots` arrived) and the command dies in 600ms (so `timeoutMs`
+   arrived). Renaming either key on either side now fails a test.
+9. **The bridge needed a third timeout budget.** A command waits on the
+   *command's* deadline plus slack, not the shell's default 60s — otherwise a
+   legal 45-second build is reported as a wedged shell while it keeps running with
+   nobody to receive its output. `test_only_the_keychain_calls_wait_at_a_persons_pace`
+   now pins three budgets instead of two.
+
+### Item 3 — the hardline denylist
+
+**What shipped:**
+
+- **`policy.command_denied_path(command, data_dir)`** — the predicate. Returns
+  `(token, direction)` or None, where direction is INSIDE a denylisted root or
+  CONTAINS one. `denylisted_roots(data_dir)` = the existing `_protected_dirs()`
+  (data dir, its snapshot sidecar, `~/.addison`) **plus** `~/.ssh`, `~/.aws`,
+  `~/.gnupg`; `.env` is matched on basename, wherever it lives.
+- **`tools/base.call_is_forbidden(tool, args, data_dir)`** — the generic
+  dispatcher, reading a new optional `command_text(args)` on the tool.
+  `run_command` is the only implementer.
+- **Checked at all three dispatch sites**, above the gate: `orchestrator.py`,
+  `routines/engine.py`, `rpc/widgets.py` (the Run pill), each bound to the live
+  data dir by the server. A boundary one of the three does not enforce is not a
+  boundary — SAFE invariant 3's reasoning applied to containment.
+- **Two refusal messages, not one** — INSIDE is a dead end, CONTAINS names the
+  next move ("name the folder inside it that you actually mean").
+
+**Five findings from the build itself:**
+
+0. **"Which data directory?" needs exactly one owner.** The mistake below was
+   then made a second time, in the opposite direction: the fix left
+   `command_denied_path` re-deriving the data dir from the environment, so a store
+   opened anywhere but the default would have been protected in name only. Nothing
+   in the tree does that today, which is precisely why it would have shipped.
+   `denylisted_roots` and `call_is_forbidden` now **require** a data dir — no
+   convenience default — the live server binds them via
+   `WorkspaceMixin._is_forbidden_call` (the same shape as `_is_trusted_path`), and
+   a source test pins the three modules allowed to derive one at all. A signature,
+   not a convention, because the convention lost twice.
+1. **A second copy of the floor is worse than none.** The first cut also ran
+   `workspace_trust_allows` on a path-bounded tool's resolved path — a "cheap
+   second layer". It re-derived the data dir instead of using the live one the
+   caller holds, so under the test harness (`conftest` points `ADDISON_DB_PATH` at
+   `tmp_path`) **every ordinary file in a test was judged to be inside the data
+   dir**: 11 step-5 tests failed. Confinement already applies the floor at these
+   same three sites, with the right data dir. The branch was deleted, not fixed.
+   The failure was loud only because the step-5 suite is thorough; the same
+   mistake in a less-covered predicate would have shipped.
+2. **`command_text` is deliberately not `permission_detail`.** The detail is
+   capped at `MAX_PERMISSION_DETAIL_CHARS` (120) for the card and the Activity
+   Panel. A denylist reading the capped string stops seeing the dangerous path of
+   any command long enough to push it past the cap — a hole you get for free by
+   reusing the obvious accessor. Pinned by
+   `test_a_long_command_is_scanned_in_full`.
+3. **`{` and `}` must not be token separators.** Splitting on them tears
+   `${HOME}/.addison` into three pieces, none of which resolves to the data dir.
+   Caught by the `${HOME}` case in the forbidden list, which was written before
+   the code.
+
+**The known cost, and it is deliberate:** the ancestor direction means `ls ~`,
+`ls .` and `ls /` are refused outright, not carded. Read and write are not
+distinguishable in a `shell=True` string — that is #48's lesson, three times over
+— and `rm -rf ~` takes the recovery floor with it. Naming a subfolder works, and
+the **two refusal messages** exist for this: a CONTAINS refusal says which move to
+make next, so the model corrects in one turn instead of reporting the task as
+blocked. One shared message made every `ls ~` read as a dead end.
+
+**Now that item 2 has landed, this direction is scaffolding.** The kernel refuses
+`rm -rf ~` while allowing `ls ~`, which is the distinction the string could never
+make. `command_denied_path` says so in its own docstring: delete the CONTAINS
+direction and `_names_a_directory` with it, rather than tuning either. Left in for
+now only because nothing measures how often it fires — that is item 4's audit log.
+
+**One test was passing for the wrong reason** and is worth naming: the
+attached-short-flag vector `grep -f/Users/x/.ssh/id_rsa .` matched on its trailing
+`.` (a CONTAINS hit against home), so the flag path it was written to cover went
+entirely untested. It is now spelled against the real home with no trailing token.
+A vector that passes for the wrong reason is worse than no vector — it occupies
+the slot where the real check should be.
+
+Every guard line was mutation-proven in a scratch copy outside the repo (seven
+Python mutations: each of the three sites, both directions of the predicate, the
+`.env` rule, and `command_text` reading the truncated detail; plus three Rust
+mutations against `exec.rs`).
+
+---
+
 ## What shipped 07-20 — Phase-2 step 1, the G3 rollback floor
 
 The floor everything else leans on. The motivating story is worth re-reading in
@@ -822,11 +1109,67 @@ one OS read per provider per launch. `ensure_device_keypair` calls
 does **one OS keychain read per message**. On a build whose ACL keeps being
 invalidated, that is one prompt per message.
 
+**A trace exists now (2026-07-31).** `ADDISON_KEYCHAIN_TRACE=1` prints every
+keychain touch from BOTH processes to the one stderr the dev terminal shows:
+`keychain.rs` prints the OS touches (the thing that costs a dialog) and
+`shell_bridge.py` prints the core call site (which the shell cannot see). Off by
+default in every build — a keychain trace on by default is a keychain trace in
+someone's support-log paste — and it never carries key material: `KeyRead::Found`
+renders as the bare word `found`, never the value, its length, or a prefix
+(`a_trace_line_never_carries_key_material`).
+
+**What the owner reported on 07-31, and why it narrows things:** two dialogs on
+launch, **naming the same item**, where pressing *Allow* still raised the second
+and *Always Allow* stopped it. That is diagnostic: **"Allow" is a single-ACCESS
+grant** — it records nothing — while "Always Allow" writes an ACL onto the item.
+So two dialogs for one item means **two separate OS reads**, which `KEY_CACHE` and
+`OS_KEYCHAIN` were built to prevent. A read that returns `Found` is cached and
+cannot prompt twice, so the first read is not returning a key; the two candidates
+are a remembered `Unreadable` that a `fresh` per-turn probe deliberately retries
+past, and `NothingSaved`, **which is never cached at all** on the reasoning that
+"nothing saved costs no dialog". The trace distinguishes them in one launch.
+
+**RESOLVED 2026-07-31 — the trace settled it, and step 1 shipped.** A live trace
+of two launches showed exactly ONE `OS-TOUCH` on `provider-key:anthropic`, and the
+read did not return until BOTH dialogs were answered (Esc on the second aborted it
+to `unreadable`). So the two prompts were never two reads: they are two ACL
+authorizations for a single `SecKeychainFindGenericPassword`, against an app
+identity macOS cannot match. Everything on Addison's side was ruled out first —
+`keyring` 3.6.3 makes one `find_generic_password` call per read, there are no
+duplicate keychain items (an earlier check used `sort -u`, which would have hidden
+them), and the login keychain is `no-timeout` so the first dialog was not an
+unlock. Cause 1 below was the whole story.
+
+**Two things the same trace established, worth keeping:**
+
+- **A dismissed dialog costs the whole session.** Esc on launch left every later
+  read answering `unreadable (no OS touch)` from `FAILED_READS` for 74 seconds —
+  the app ran keyless, and the UI said "not connected" with no explanation.
+  Recovery works exactly as designed: the first user MESSAGE probes with
+  `fresh=true`, re-reads, and finds the key. Worth surfacing in the UI rather than
+  leaving the person to guess.
+- **`nothing-saved` is never cached, so it re-reads forever.** OpenAI and Google
+  are read from the OS on every 60-second `stats.get` poll, permanently. Free in
+  dialogs today (no item exists, so there is nothing to authorize) — but it is the
+  one read path with no memory in front of it, and it is the shape the original
+  three-prompt cascade had.
+
 **Agreed plan, in order — do not skip to the end:**
 
-1. **A stable self-signed development certificate.** Fixes the actual cause: a
-   stable signing identity means the ACL survives rebuilds and Always Allow
-   works. Free. *The $99 Apple Developer Program is for distribution — signing,
+1. **A stable self-signed development certificate. — SHIPPED 2026-07-31.**
+   `sign-and-run.sh` + `.cargo/config.toml`: a cargo **runner** signs each dev
+   build with the `Addison Dev` identity and then execs it. The runner is the only
+   available seam — `npm run tauri dev` builds and launches in one step,
+   `beforeDevCommand` runs before the Rust build, and `bundle.macOS.signingIdentity`
+   applies to `tauri build` only. Identifier goes from `addison-<per-build-hash>`
+   (adhoc) to a stable `addison`, so one "Always Allow" survives every later
+   rebuild. Fails OPEN on a machine without the identity (warns, runs unsigned):
+   it is a convenience wrapper, not a security control, and a fresh clone must
+   still build. Scoped to the app binary so `cargo test` is untouched, and
+   `ADDISON_SIGN_ONLY=1` signs without launching, because a script whose normal
+   path ends in `exec` into a GUI window is otherwise untestable.
+   Fixes the actual cause: a stable signing identity means the ACL survives
+   rebuilds and Always Allow works. Free. *The $99 Apple Developer Program is for distribution — signing,
    notarisation, shipping to other people's machines. It is a Phase-3 packaging
    concern and buying it now would not fix this.*
 2. **Cache the parsed `SigningKey`** in the same shape as `KEY_CACHE`, only if

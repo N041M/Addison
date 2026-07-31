@@ -29,6 +29,7 @@ from agent_core.tools.base import (
     call_affected_path,
     call_is_destructive,
     call_permission_detail,
+    default_forbidden_check,
 )
 from agent_core.tools.registry import ToolRegistry
 
@@ -127,6 +128,9 @@ class RoutineEngine:
         on_activity=None,
         guards_provider=None,
         trust_check=None,
+        forbidden_check=None,
+        on_tool_audit=None,
+        trusted_roots=None,
     ) -> None:
         # SAME instances as the live orchestrator — never private copies (§6.4).
         self.tool_registry = tool_registry
@@ -140,6 +144,21 @@ class RoutineEngine:
         # step still passes trusted=False to the gate unconditionally (D5) — a
         # persisted one-click spec never skips a card.
         self._trust_check = trust_check or (lambda path: False)
+        # The hardline denylist (step 5.5, item 3), wired exactly as trust_check is:
+        # it needs the LIVE data directory, which only the server knows. Same
+        # instance-shared discipline as everything else here — a routine must get
+        # the same answer the live loop gets, never a second derivation of it.
+        self._forbidden_check = forbidden_check or default_forbidden_check
+        # The audit sink (step 5.5, item 4) — the SAME one the live loop writes to,
+        # for the same reason the gate and registry are shared: a routine's tool
+        # calls must be as visible after the fact as a conversation's. A routine is
+        # persisted, one-click and model-authorable, so "what did that routine
+        # actually do?" is a question the log has to be able to answer.
+        self._on_tool_audit = on_tool_audit
+        # The live trusted roots, as a zero-arg callable (step 5.5, item 2). Same
+        # resolver the live loop uses: a routine's command must be sandboxed by the
+        # same allowlist the chat's would be, never a wider one.
+        self._trusted_roots = trusted_roots
         # The effective GuardConfig provider (Custom profile, D3) — the SAME
         # resolution function the live loop uses, so a routine can never out- or
         # under-permission the conversation. None/absent -> the unguarded gate.
@@ -156,6 +175,30 @@ class RoutineEngine:
         # pattern as a permission request (§6.2). Default: stop.
         self._on_ask_user = on_ask_user or (lambda step, run_id, message: False)
         self._store = store   # optional: writes the routine_runs log (§6.4)
+
+    def _audit(self, routine, tool_id, detail, mode, destructive, outcome) -> None:
+        """One tool-decision row for a routine step. Best-effort, like the live
+        loop's: history must never be the reason a run dies. ``conversation_id`` is
+        None — a routine is not a conversation — and the routine is identifiable
+        from ``routine_runs`` by timestamp."""
+        if self._on_tool_audit is None:
+            return
+        try:
+            self._on_tool_audit(
+                {
+                    "id": str(uuid.uuid4()),
+                    "conversation_id": None,
+                    "tool_id": tool_id,
+                    "detail": detail,
+                    "mode": mode.value if hasattr(mode, "value") else str(mode),
+                    "destructive": bool(destructive),
+                    "outcome": outcome,
+                    "redacted": None,
+                    "created_at": int(time.time()),
+                }
+            )
+        except Exception:
+            pass
 
     def run(
         self,
@@ -179,6 +222,7 @@ class RoutineEngine:
             conversation_id=f"routine:{routine.id}",
             shell_bridge=self.shell_bridge,
             policy_mode=mode,
+            trusted_roots=self._trusted_roots,
         )
 
         # Variable defaults fill anything the caller didn't supply.
@@ -230,6 +274,27 @@ class RoutineEngine:
                             step_log,
                         )
                 continue
+            # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
+            # naming Addison's own restore storage or the user's credential stores
+            # does not run, and is never offered as a card. A routine is persisted,
+            # one-click and model-authorable, so this is the site where a forbidden
+            # command would otherwise be easiest to smuggle past a person.
+            forbidden = self._forbidden_check(tool, resolved_args)
+            if forbidden is not None:
+                self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
+                            mode, True, "forbidden")
+                result = ToolResult(success=False, content=forbidden)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, forbidden))
+                if step.on_failure == "abort":
+                    return self._finish(run_id, "failed", step_results, forbidden, step_log)
+                if step.on_failure == "ask_user" and not self._on_ask_user(
+                    step, run_id, forbidden
+                ):
+                    return self._finish(
+                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                    )
+                continue
             # CONFINEMENT (step 5, D3): a path-bounded step may only run inside a
             # trusted root. Resolve once, refuse before the gate if outside trust,
             # and hand the resolved path to execute via the context (R6). The file
@@ -237,6 +302,8 @@ class RoutineEngine:
             # affected_path is None for a command step, which resets resolved_path.
             affected = call_affected_path(tool, resolved_args)
             if affected is not None and not self._trust_check(affected):
+                self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
+                            mode, False, "confined_out")
                 result = ToolResult(success=False, content=_OUTSIDE_TRUST)
                 step_results[step.step_id] = result
                 step_log.append(self._log_entry(index, step, _OUTSIDE_TRUST))
@@ -270,6 +337,7 @@ class RoutineEngine:
                 trusted=False,
             )
             if status == PermissionStatus.DENIED:
+                self._audit(routine, tool_id, detail, mode, destructive, "denied")
                 step_log.append(self._log_entry(index, step, "permission denied"))
                 return self._finish(
                     run_id, "failed", step_results, "You declined a permission it needs.",
@@ -286,6 +354,7 @@ class RoutineEngine:
             # Announced only once the step is actually granted, so a declined step
             # is never reported as something Addison did.
             self.on_activity(tool_id, tool.definition.label, detail)
+            self._audit(routine, tool_id, detail, mode, destructive, "granted")
             try:
                 result = tool.execute(resolved_args, context)
             except RuntimeError as exc:

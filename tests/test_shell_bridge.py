@@ -22,7 +22,7 @@ from __future__ import annotations
 import pytest
 
 from agent_core.protocol import Method
-from agent_core.shell_bridge import _KEYCHAIN_TIMEOUT, IpcShellBridge
+from agent_core.shell_bridge import _EXEC_SLACK_MS, _KEYCHAIN_TIMEOUT, IpcShellBridge
 
 # A stand-in secret. Long and distinctive so a "did this leak?" scan cannot pass
 # by accident on a substring of something else.
@@ -208,7 +208,16 @@ _BRIDGE_CALLS = (
     ("get_provider_key", ("anthropic",)),
     ("get_device_key", ()),
     ("sign_relay_request", ({"messages": []},)),
+    ("run_command", ("ls", 30_000, [])),
 )
+
+# The one call whose budget is neither the default nor the person-paced one: a
+# command waits on the COMMAND's own deadline (step 5.5, item 1). The shell kills
+# the child at ``timeoutMs`` and answers, so this waiter only needs that plus
+# enough slack to spawn sandbox-exec and drain the pipes. Left on the default
+# budget, a legal 45-second build would be reported as a wedged shell while it
+# kept running with nobody to receive its output.
+_COMMAND_BUDGET_SECONDS = (30_000 + _EXEC_SLACK_MS) / 1000.0
 
 # Not requests: one binds the sender, the other is the read loop handing an answer
 # back. Neither has a timeout to choose.
@@ -265,6 +274,8 @@ def test_only_the_keychain_calls_wait_at_a_persons_pace():
     for method, timeout in bridge.calls:
         if method.startswith("keychain."):
             assert timeout == _KEYCHAIN_TIMEOUT, method
+        elif method == Method.SHELL_RUN_COMMAND:
+            assert timeout == _COMMAND_BUDGET_SECONDS, method
         else:
             assert timeout is None, method   # None = the instance/default budget
 
@@ -290,3 +301,63 @@ def test_a_fetched_key_is_not_retained_anywhere_on_the_bridge():
     assert _KEY not in repr(vars(shell.bridge)), "key retained on the instance"
     assert _KEY not in repr(vars(type(shell.bridge))), "key retained on the class"
     assert _KEY not in repr(vars(bridge_module)), "key retained in module state"
+
+
+# --- keychain trace (diagnostic, opt-in) -----------------------------------
+
+
+def _drive_a_key_fetch(monkeypatch, enabled: bool, capsys):
+    monkeypatch.setenv("ADDISON_KEYCHAIN_TRACE", "1" if enabled else "0")
+    bridge = _RecordingBridge()
+    bridge.get_provider_key("anthropic")
+    return capsys.readouterr().err
+
+
+def test_the_keychain_trace_names_the_caller(monkeypatch, capsys):
+    """The whole point of the core-side half: the shell can say WHAT the OS was
+    touched for, but only this side can say WHO asked. Two password dialogs for one
+    keychain item means two callers, and at the wire they are indistinguishable."""
+    err = _drive_a_key_fetch(monkeypatch, True, capsys)
+    assert "want anthropic" in err
+    # The CALLER, not the plumbing: a trace naming get_provider_key answers the
+    # question with the question.
+    assert "get_provider_key()" not in err
+    assert "_drive_a_key_fetch()" in err
+    # A CHAIN, not one frame. The first live trace reported `main.py:1817 getter()`
+    # for every caller — the key-fetch closure is the nearest non-plumbing frame for
+    # all of them, so a single frame answered "something asked" and named nobody.
+    assert " <- " in err
+    # The NEAREST frame is the caller — asserted on position, not on absence.
+    # Outer frames in the chain are legitimately pytest's here; what must never
+    # happen is the chain STARTING there, which is what the old skip-list bug did
+    # ("test_shell_bridge.py".endswith("shell_bridge.py") is True, so it walked
+    # straight past the real caller). A test written the same way agreed with it.
+    chain = err.split("want anthropic")[1].strip()
+    assert chain.split(" <- ")[0].endswith("_drive_a_key_fetch()")
+
+
+def test_the_keychain_trace_is_silent_unless_asked_for(monkeypatch, capsys):
+    # A keychain trace on by default is a keychain trace in someone's support-log
+    # paste. Only an explicit "1" turns it on (the shell side agrees).
+    assert _drive_a_key_fetch(monkeypatch, False, capsys) == ""
+    monkeypatch.delenv("ADDISON_KEYCHAIN_TRACE", raising=False)
+    bridge = _RecordingBridge()
+    bridge.get_provider_key("anthropic")
+    assert capsys.readouterr().err == ""
+
+
+def test_the_core_side_trace_never_reports_the_key(monkeypatch, capsys):
+    """G1. This side has the value in scope, so it prints the REQUEST and stops —
+    there is deliberately no outcome line here. The shell reports the outcome from
+    the one place the variant can be named without the value."""
+    monkeypatch.setenv("ADDISON_KEYCHAIN_TRACE", "1")
+
+    class _KeyBridge(_RecordingBridge):
+        def _call(self, method, params, timeout=None):
+            super()._call(method, params, timeout)
+            return {"key": _KEY}
+
+    assert _KeyBridge().get_provider_key("anthropic") == _KEY
+    err = capsys.readouterr().err
+    assert _KEY not in err
+    assert "found" not in err   # no outcome word on this side at all

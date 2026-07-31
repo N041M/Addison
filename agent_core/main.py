@@ -810,6 +810,7 @@ class JsonRpcServer(
             stream_to_frontend=self._emit_stream_chunk,
             on_activity=self._emit_activity,
             on_usage=self._record_usage,
+            on_tool_audit=self._record_tool_audit,
             shell_bridge=self._shell_bridge,
             # Custom-profile guards (D3): the one resolution function, so the live
             # turn honours the same posture as the widget rail and routine engine.
@@ -823,6 +824,8 @@ class JsonRpcServer(
             # Workspace-trust confinement (step 5, D3): resolves whether a path is
             # inside a trusted root AND past the data-dir floor, reading the store.
             trust_check=self._is_trusted_path,
+            forbidden_check=self._is_forbidden_call,
+            trusted_roots=self._trusted_roots,
         )
         self.routine_builder = RoutineBuilder(store=self.store)
         self.routine_library = RoutineLibrary(store=self.store)
@@ -844,6 +847,9 @@ class JsonRpcServer(
             guards_provider=self._effective_guards,
             # Same confinement resolver as the live loop (step 5, D3).
             trust_check=self._is_trusted_path,
+            forbidden_check=self._is_forbidden_call,
+            trusted_roots=self._trusted_roots,
+            on_tool_audit=self._record_tool_audit,
         )
         # The build worked, so a remembered failure is stale — clear it rather than
         # answering "couldn't open its settings file" for the rest of the session.
@@ -1462,6 +1468,18 @@ class JsonRpcServer(
         self._respond(request_id, {"ok": True})
 
     # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
+    def _record_tool_audit(self, row: dict) -> None:
+        """Persist one tool-decision row (step 5.5, item 4).
+
+        Server machinery, the ``_record_usage`` precedent — never a registry tool:
+        a tool able to write its own audit row is a tool able to skip one. The
+        orchestrator already swallows failures around this call, so a broken audit
+        trail can never take a turn down with it; a store that isn't up yet simply
+        drops the row."""
+        if self.store is None:
+            return
+        self.store.insert_tool_audit(**row)
+
     def _record_usage(self, usage, latency_ms, provider_id, model_id) -> None:
         """Record one provider call's token usage + latency into ``usage_log``.
 

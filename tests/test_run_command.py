@@ -65,17 +65,43 @@ def test_execute_refuses_under_safe_mode():
         raise AssertionError("run_command must refuse under SAFE mode")
 
 
-def test_execute_runs_a_real_command_in_open_mode():
+class _FakeExecBridge:
+    """The shell's half of ``shell.runCommand``.
+
+    Execution left the Agent Core in step 5.5 item 1 — it crosses the ShellBridge
+    so the command lands in the process that can put a seatbelt profile around it.
+    So these tests can no longer run a real ``echo``: what they check is the tool's
+    half of the contract (what it sends, how it reads the answer). The sandbox
+    itself is tested where it lives, in ``shell/src-tauri/src/exec.rs``."""
+
+    def __init__(self, **response) -> None:
+        self.calls: list[tuple] = []
+        self._response = {
+            "stdout": "", "stderr": "", "exitCode": 0, "sandboxed": True, **response
+        }
+
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        self.calls.append((command, timeout_ms, list(write_roots)))
+        return self._response
+
+
+def _open(bridge) -> ExecutionContext:
+    return ExecutionContext(
+        conversation_id="c", policy_mode=PolicyMode.OPEN, shell_bridge=bridge
+    )
+
+
+def test_execute_sends_the_command_to_the_shell_and_returns_its_output():
     tool = RunCommandTool()
-    ctx = ExecutionContext(conversation_id="c", policy_mode=PolicyMode.OPEN)
-    result = tool.execute({"command": "echo hello-from-addison"}, ctx)
+    bridge = _FakeExecBridge(stdout="hello-from-addison")
+    result = tool.execute({"command": "echo hello-from-addison"}, _open(bridge))
     assert result.success is True
     assert "hello-from-addison" in str(result.content)
     assert result.snapshot is None   # not undoable
+    assert bridge.calls[0][0] == "echo hello-from-addison"
 
 
 def test_execute_reports_nonzero_exit_without_crashing():
     tool = RunCommandTool()
-    ctx = ExecutionContext(conversation_id="c", policy_mode=PolicyMode.OPEN)
-    result = tool.execute({"command": "false"}, ctx)
+    result = tool.execute({"command": "false"}, _open(_FakeExecBridge(exitCode=1)))
     assert result.success is False

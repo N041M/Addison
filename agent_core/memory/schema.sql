@@ -246,6 +246,44 @@ BEGIN SELECT RAISE(ABORT, 'this restore point is permanent'); END;
 -- above and test_reopening_never_drops_config_snapshots remain load-bearing —
 -- the triggers close the DELETE/UPDATE hole, not the DROP one.
 
+-- The tool-call audit trail (step 5.5, item 4) -------------------------------
+-- Every tool DECISION, on every branch, including the ones that never ran. It
+-- exists because the shipped record had a hole exactly where it mattered most:
+-- `read_web_page` is LOW risk, so it writes no `action_snapshots` row — the tool
+-- most exposed to prompt injection left no persistent trace of which URLs it
+-- fetched. A refusal left none either, so "Addison declined something" was
+-- unanswerable after the fact.
+--
+-- NEVER SECRETS. `detail` is the SAME value the permission card and the Activity
+-- Panel already show (tools/base.call_permission_detail), which is capped and
+-- deliberately narrow — read_web_page contributes a HOST, never a full URL. No
+-- tool output, no arguments, no key material lands here.
+--
+-- EXCLUDED from snapshots (snapshots/scope.py) on the `tool_grants` precedent:
+-- an audit log is history, and a restore that rewrote the record of what
+-- happened would be worse than having no record at all.
+CREATE TABLE IF NOT EXISTS tool_audit (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT,                    -- NULL for a routine/widget run
+    tool_id         TEXT NOT NULL,
+    detail          TEXT,                    -- call_permission_detail; never a secret
+    mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),
+    destructive     INTEGER NOT NULL DEFAULT 0,
+    -- granted      = the gate said yes (auto-allow or the person approved)
+    -- denied       = the person said "not now"
+    -- forbidden    = the hardline denylist refused it before the gate (item 3)
+    -- confined_out = outside every trusted root (step 5 confinement)
+    -- dev_only     = a dev tool named outside OPEN mode
+    outcome         TEXT NOT NULL
+                        CHECK(outcome IN ('granted','denied','forbidden',
+                                          'confined_out','dev_only')),
+    -- What the redactor removed from THIS call's output on its way to the model
+    -- (kinds only, comma-separated, e.g. "AWS access key"). Empty = nothing
+    -- matched. This is the only durable evidence that a leak was caught.
+    redacted        TEXT,
+    created_at      INTEGER NOT NULL
+);
+
 -- Indexes -------------------------------------------------------------------
 -- All IF NOT EXISTS so this script stays idempotent on every open (store.py
 -- runs it via executescript on both fresh and existing databases). These back
@@ -266,3 +304,5 @@ CREATE INDEX IF NOT EXISTS idx_config_snapshots_created
     ON config_snapshots(created_at);
 CREATE INDEX IF NOT EXISTS idx_config_snapshots_verified_created
     ON config_snapshots(verified_working, created_at);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_created
+    ON tool_audit(created_at);

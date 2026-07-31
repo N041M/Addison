@@ -432,6 +432,17 @@ erDiagram
         INTEGER created_at
         TEXT created_in_mode "safe or open"
     }
+    tool_audit {
+        TEXT id PK
+        TEXT conversation_id "NULL for a routine or widget run"
+        TEXT tool_id
+        TEXT detail "the permission card's own value; never a secret"
+        TEXT mode "safe or open"
+        INTEGER destructive
+        TEXT outcome "granted denied forbidden confined_out dev_only"
+        TEXT redacted "kinds the redactor removed, never values"
+        INTEGER created_at
+    }
 ```
 
 - **usage_log** — the §4.8 usage substrate. One row per provider call that reported
@@ -440,6 +451,19 @@ erDiagram
   duration of that call. Backs two derived stats: `tokens_month` (sum of tokens since
   the first of the month) and `provider_latency` (the newest latency per provider).
   Carries no key material.
+- **tool_audit** — the tool-call audit trail (step 5.5, item 4). One row per tool
+  DECISION, on every branch, **including the ones that never ran** — written by
+  orchestrator/engine/rail machinery only, never by a registry tool. It exists
+  because the shipped record had a hole exactly where it mattered: `read_web_page`
+  is LOW risk so it writes no `action_snapshots` row, leaving the tool most exposed
+  to prompt injection with no persistent trace of which hosts it fetched; and a
+  refusal left none at all, so "what did Addison decline?" was unanswerable after
+  the fact. `detail` is the same narrow value the permission card and Activity Panel
+  already show (`tools/base.call_permission_detail`) — a HOST for `read_web_page`,
+  never a full URL, never tool output, never arguments. `redacted` lists the KINDS
+  the redactor (`agent_core/redaction.py`) stripped on the way to the model, never
+  the values. **Excluded from snapshots** on the `tool_grants` precedent: a restore
+  that rewrote the record of what happened would be worse than no record.
 - **widgets** — user-owned rail widgets. `spec_json` is a **declarative** widget spec
   (`agent_core/widgets.py`), validated at save *and* at render (an invalid stored spec
   is hidden, never run). The base shapes are the launchers `{kind:"routine", routineId,

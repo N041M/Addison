@@ -551,6 +551,62 @@ class Store:
         )
         self._conn.commit()
 
+    def insert_tool_audit(
+        self,
+        *,
+        id: str,
+        conversation_id: str | None,
+        tool_id: str,
+        detail: str | None,
+        mode: str,
+        destructive: bool,
+        outcome: str,
+        redacted: str | None,
+        created_at: int,
+    ) -> None:
+        """Record one tool DECISION (step 5.5, item 4) — including the ones that
+        never ran. Written by orchestrator/engine/rail machinery only, never by a
+        registry tool: a tool that could write its own audit row could also decline
+        to.
+
+        ``detail`` is the value the permission card already shows
+        (``tools/base.call_permission_detail``) — narrow by contract and never a
+        secret. ``redacted`` is a comma-separated list of KINDS the redactor
+        removed on the way to the model, never the values.
+
+        Best-effort by design (the caller swallows failures): the audit trail must
+        never be the reason a turn dies. A missing row is a gap in history; a
+        raised exception here would be a gap in the person's work."""
+        self._conn.execute(
+            "INSERT INTO tool_audit "
+            "(id, conversation_id, tool_id, detail, mode, destructive, outcome, "
+            " redacted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                id,
+                conversation_id,
+                tool_id,
+                detail,
+                mode,
+                1 if destructive else 0,
+                outcome,
+                redacted or None,
+                created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def list_tool_audit(self, limit: int = 100) -> list[dict[str, Any]]:
+        """The newest audit rows, newest first — for a future Developer review
+        surface (docs/phase-3-review-surface-plan.md) and for support questions
+        of the form "what did it actually do?"."""
+        rows = self._conn.execute(
+            "SELECT id, conversation_id, tool_id, detail, mode, destructive, "
+            "       outcome, redacted, created_at "
+            "FROM tool_audit ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def prune_usage_log(self, cutoff: int) -> None:
         """Retention for the §4.8 usage substrate: delete every usage row strictly
         older than ``cutoff`` (its ``created_at`` epoch seconds is less than it).

@@ -46,6 +46,77 @@ and where it goes.
   candidate, and it would fix the transition and the position together. Check git
   history before rebuilding it from scratch.
 
+**Opened by step 5.5 items 1–3 (2026-07-31):**
+
+- **The denylist's CONTAINS direction is now scaffolding, and should be deleted.**
+  `ls ~`, `ls .` and `ls /` are refused outright, not carded, because `rm -rf ~`
+  takes the G3 floor with it and read/write are not distinguishable in a
+  `shell=True` string (#48, three times). **The seatbelt profile now makes exactly
+  that distinction at the kernel** — `rm -rf ~` fails, `ls ~` would succeed — so
+  the direction has outlived its reason. Deleting it means dropping the
+  `_names_a_directory` branch in `policy.command_denied_path` and the
+  `_MUST_BE_FORBIDDEN_CONTAINS` list. Not done in the same change as the sandbox
+  on purpose: removing a refusal on the same day the thing that replaces it lands
+  is how a gap opens. **Item 4's audit log now exists (2026-07-31), so the
+  mechanism is in place — what is missing is DATA.** A `forbidden` row now records
+  every time this fires; revisit once real use has produced some, rather than
+  guessing at the frequency.
+- ~~A forbidden call is invisible outside the transcript.~~ **CLOSED 2026-07-31**
+  by item 4's `tool_audit`: every refusal writes a row with `outcome='forbidden'`,
+  at all three dispatch sites. The same change closed the older hole it was
+  grouped with — `read_web_page` is LOW so it writes no `action_snapshots` row, and
+  the tool most exposed to prompt injection now leaves a durable record of which
+  hosts it reached (`detail` is the host, never the full URL).
+- **A command runs UNCONFINED on any platform without a profile.** macOS refuses
+  rather than running bare; Linux has no Landlock/bubblewrap path yet, so the
+  command runs and the answer carries `sandboxed: false`, which the tool prints
+  above the output. Never silent — but never protected either, and v1 is macOS, so
+  this is a real gap the day a second platform ships.
+- **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
+  Claude Code and Codex CLI both rely on. Acceptable; not permanent. **Recorded in
+  design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered —
+  the gap is now the dependency itself, not the silence about it.
+- **A sandboxed command can reach the network, deliberately.** `network-outbound`
+  is granted; `network-bind` is not. Denying outbound was the first draft's
+  accidental default and it broke `git fetch` / `npm install` / `pip install`
+  while buying nothing — the command's output already travels to a cloud provider,
+  so blocking `curl` closes only the useful half. **This makes item 4 (output
+  redaction) and the v2 untrusted-content screening deferral load-bearing rather
+  than theoretical**: they are now the only things standing between a prompt-
+  injected command and a deliberate exfiltration. The CLAUDE.md deferral for
+  screening was written with a trigger ("becomes load-bearing once free/gray-area
+  endpoints and MCP tools are in play") — this is a second trigger arriving early,
+  and it needs an explicit owner decision rather than silent expiry. **Partly
+  mitigated 2026-07-31**: output redaction (`agent_core/redaction.py`) strips the
+  credential shapes it knows on the way to the model and the audit trail records
+  that it happened — but an unrecognised or deliberately-encoded secret still
+  passes, so this stays open and is stated as such in design-doc §9.x.
+- **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
+  the core, so the profile is only as narrow as that list. The shell re-derives
+  and re-denies its own data dirs on top, independently, which is what keeps the
+  floor from depending on the core's honesty — but a *widened* allowlist is not
+  independently checked. Nothing in the tree can widen it today (it is read
+  straight from `workspace_trust`); noted so the next thing that touches that path
+  knows what it is standing on.
+- **The floor still protects Addison's DATA, not Addison's CODE.** Unchanged by
+  this step and now the sharper edge of the two: the profile denies writes to the
+  data dir, not to a packaged `/Applications/Addison.app`. See the existing
+  owner-call item below — this is the natural moment to close it, since `exec.rs`
+  is where the extra deny would go.
+
+**The keychain integration has a plan (2026-07-31):**
+[docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md). The
+double-password diagnosis first produced a ground-up encrypted-vault rewrite;
+scrutiny (60 findings) and two spikes then **turned it into a repair-first
+plan** — presence moves out of the keychain into the existing `provider_config`
+table, foreign items self-heal by delete-and-recreate, and `Intent` replaces the
+probe zoo. The vault survives as a documented destination with named triggers
+(step 7's MCP tokens, Android, or the Phase-3 identity rotation). Also new and
+independent of either path: a 401 currently changes nothing (a revoked key fails
+every turn forever), keys are trimmed only in the frontend, and G1's
+zeroization stops at the Python boundary — all three are written up in §5.
+**PROPOSED, not scheduled**; §14 lists the owner decisions.
+
 **Still open from the retired step-1 ledgers:**
 
 - **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
@@ -60,13 +131,16 @@ and where it goes.
   guard. The block still HOLDS — nothing is written; what is lost is the loud
   message, in the one place a loud message is the whole point. Changing it alters
   every existing handler's behaviour, so it needs its own verification pass.
-- **`routines/engine.py` — the dev-only guard duplicates `on_failure` handling.**
-  It shapes its refusal as a failed step and re-implements abort / ask_user / skip
-  **inline** instead of falling through to the canonical `if not result.success:`
-  block (~L255). It matches that block today and will silently diverge the moment
-  someone adds a fourth `on_failure` policy. Fix by restructuring so both paths
-  share one block; it was written this way to keep a diff small, which was the
-  wrong trade for a branch nobody exercises often.
+- **`routines/engine.py` — THREE pre-gate guards each duplicate `on_failure`
+  handling.** The dev-only guard, the confinement guard and (since 2026-07-31)
+  the step-5.5 denylist each shape their refusal as a failed step and
+  re-implement abort / ask_user / skip **inline** instead of falling through to
+  the canonical `if not result.success:` block (~L255). All three match that
+  block today and will silently diverge the moment someone adds a fourth
+  `on_failure` policy. The denylist copy was written to match its neighbours
+  rather than introduce a fourth shape — which is the right call for one diff and
+  the wrong equilibrium overall. **Fix by restructuring so all four paths share
+  one block**; it is now cheaper to do than to keep deferring.
 
 **Open design questions, each blocking a specific step** (moved here from the scope
 amendment's §13 when that document was retired, 2026-07-27 — the other four §13
@@ -93,13 +167,15 @@ questions were resolved during steps 1–3 and went with it):
 second live-issue register holding items this one did not have. All checked
 against the tree on 2026-07-26:
 
-- **`RoutineLibrary` shares one `values` map across routines**
-  (`shell/src/components/RoutineLibrary.tsx`). The engine is safe against
-  *unknown* names — `routines/engine.py` builds defaults from `routine.variables`
-  and `resolve_template` only reads names the template mentions — so a stray key
-  is inert. The live edge is a **name collision**: fill routine A's `path`, then
-  run routine B without input, and B's default `path` is overridden by A's value.
-  Scope `values` per routine id, or clear it when `filling` changes.
+- ~~`RoutineLibrary` shares one `values` map across routines.~~ **CLOSED
+  2026-08-01.** `values` is now scoped by a `valuesFor` routine id and only sent
+  to the routine it was entered for. **The repro in this entry was wrong and the
+  fix is narrower than it looked:** `executeRun` clears `values` in its `finally`,
+  so *completing* routine A cleans up after itself. The reachable path is
+  **abandoning** a fill — open A's fill panel, type an answer, then run B (which
+  needs no input, so it skips the fill step and runs immediately) and B carries
+  A's answer under the shared name. Mutation-proven; a first version of the test
+  passed under mutation because it ran A to completion first.
 - **Empty-text `sendMessage` has no guard.** `_run_send_message`
   (`agent_core/rpc/conversation.py`) reads `params.get("text", "")` and never
   checks it; the CLI does. An empty message persists a blank user turn the
@@ -109,12 +185,16 @@ against the tree on 2026-07-26:
   and calls `is_running()`, which can block frame delivery up to 5s.
   `availableRoles` was moved off the read loop for exactly this reason; same shape
   as `shell.pickDirectory` blocking the worker on a modal.
-- **Four stale-docstring flags, carried forward UNVERIFIED** from an earlier
-  sweep: the `PermissionRequest` dataclass (`permissions/gate.py`),
-  `ModelRouter.register` (`providers/router.py`), a claim in
-  `openai_provider.py`, and `default_cloud_model([])`'s defensive gap
-  (`models_catalog.py`). All four symbols still exist; whether the observations
-  still hold has not been re-checked. Re-verify or delete the line.
+- **Three stale-docstring flags, still UNVERIFIED**: `ModelRouter.register`
+  (`providers/router.py`), a claim in `openai_provider.py`, and the
+  `PermissionRequest` dataclass (`permissions/gate.py` — checked 2026-07-31: it
+  has no docstring at all, so there is nothing there to be stale; the flag itself
+  looks like the stale thing). Re-verify or delete the line. The fourth,
+  **`default_cloud_model([])`, was real and is CLOSED 2026-08-01**: its docstring
+  called `catalog[0]` "a safe fallback" while an empty catalog raised
+  `IndexError`. It now raises `ValueError` naming the cause. No caller can reach
+  it today (all three guard first), so this is for the next one — an empty live
+  catalog fetch should say what went wrong, not surface three frames away.
 - **Polish, unstarted:** no conversation search in the sidebar; **scoped consent
   ("always allow" per site)** — a SAFE grant is keyed by tool id, so after the
   first card every later `read_web_page` is ungated and model-addressed, with
@@ -139,11 +219,14 @@ against the tree on 2026-07-26:
   meantime the precedence question is answered defensively: `auto_grant_scope='none'`
   now beats trust (see rigor-pass item 6). **Decide at step 6 or 8** whether the
   panel grows the third guard or whether that precedence rule is the whole answer.
-- **`tsc --noEmit` does not cover the test files** — `tsconfig.json` excludes
-  `src/__tests__` and `*.test.ts(x)`. A fixture that drifts from the hook signature
-  it drives is invisible to the typechecker; that is exactly how `useTurn.test.tsx`
-  came to be missing a required callback. Consider a second `tsconfig.test.json` in
-  CI; it is a real hole in a gate people trust.
+- ~~`tsc --noEmit` does not cover the test files.~~ **CLOSED 2026-08-01.**
+  `shell/tsconfig.test.json` + an `npm run typecheck` script that runs both
+  configs. It found **nine real errors on the first run**, including the exact
+  failure this entry predicted: a `ConversationSummary` fixture carrying a
+  `messageCount` field the type has never had. Also fixed: five unchecked
+  `normalizeProfile` nulls (now a narrowing helper that says why null would be a
+  parser bug), an `afterEach` returning `VitestUtils` instead of void, and a
+  `vi.fn(() => { throw })` inferring `Mock<[], never>`.
 - **`policy._canonical` case-folds unconditionally**, so `/tmp/PROJECT/x` is judged
   inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
   (case-insensitive), **wrong on a case-sensitive volume**, where it widens
