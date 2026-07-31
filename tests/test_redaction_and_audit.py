@@ -114,6 +114,12 @@ def test_the_aws_secret_half_is_removed_and_its_variable_name_survives():
         assert "AWS secret key" in result.kinds
         # The name survives; only the value goes.
         assert "secret_access_key" in result.text.lower(), line
+        # ...and the surviving name must not re-trigger the rule on the next pass.
+        # The send boundary re-walks the whole history every round, so a `keep`
+        # group is the one construct here that could plausibly build a string
+        # matching its own pattern. It does not — pinned rather than assumed.
+        assert redact(result.text).text == result.text, line
+        assert redact(result.text).kinds == (), line
 
 
 def test_a_bare_forty_character_secret_is_NOT_redacted_and_that_is_the_trade():
