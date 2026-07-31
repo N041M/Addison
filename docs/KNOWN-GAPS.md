@@ -116,6 +116,35 @@ every turn forever), keys are trimmed only in the frontend, and G1's
 zeroization stops at the Python boundary — all three are written up in §5.
 **PROPOSED, not scheduled**; §14 lists the owner decisions.
 
+**The presence probe is no longer a theoretical cost — it was observed
+(2026-08-01).** The plan's first repair (move presence into `provider_config`)
+was argued from reading. It has now been watched happening: with
+`ADDISON_KEYCHAIN_TRACE=1`, `_primary_key_available()` (`main.py`) shows up as a
+real OS keychain read, because — as `main.py` says in its own words — **the probe
+IS the keychain read**, and it runs on polls with no user action behind it. On a
+machine whose items carry access lists written by builds that no longer exist,
+that is one password dialog PER POLL: roughly ten stacked at once in a single
+session, none of them dismissible, because each was orphaned when the app
+restarted. This does not change the plan; it changes how well-evidenced its
+first item is, and it is the concrete answer to "what does the probe zoo
+actually cost". **Still an owner call to schedule.**
+
+**A stable signing identity was NOT enough to make "Always Allow" stick, and the
+reason is worth keeping.** `sign-and-run.sh` was written on the premise that
+signing every dev build with one identity gives the keychain ACL something
+durable to match. That premise is necessary and was not sufficient: asked to
+invent a designated requirement for a **self-signed** leaf, `codesign` falls
+back to `cdhash H"…"` — a hash of the binary's CONTENTS — and macOS stores THAT
+as the ACL entry. Measured on this repo: a correctly-signed build still carried
+`designated => cdhash H"1380cf87…"`, so every rebuild presented a new
+requirement and the granted permission could never match. That is the original
+ad-hoc bug wearing a certificate. Fixed by naming the requirement explicitly
+(`identifier "addison" and certificate leaf H"<cert>"`), read from the keychain
+rather than hard-coded so it does not silently regress on another clone. Kept
+here rather than only in the script because the failure looks exactly like a
+user error — pressing the button and having nothing happen — and cost real time
+twice.
+
 **Still open from the retired step-1 ledgers:**
 
 - **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
