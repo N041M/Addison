@@ -33,14 +33,17 @@
 // the threat model rather than left as a surprise.
 
 use std::io::Read;
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use crate::filesystem::canonical_lossy;
 use crate::ipc::{required_str, RpcError};
 
 /// Where a command starts. HOME, not a trusted root: a command's cwd is a
@@ -59,10 +62,38 @@ const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 /// before the core ever sees it.
 const MAX_CAPTURE_BYTES: usize = 512 * 1024;
 
+/// What the core sends today, and what an absent `timeoutMs` means.
+const DEFAULT_TIMEOUT_MS: u64 = 30_000;
+
+/// The SHELL's own ceiling on a command's deadline, regardless of what the frame
+/// asked for.
+///
+/// `timeoutMs` used to be taken verbatim, so `u64::MAX` off the wire meant a
+/// command that is never stopped. The core always sends 30000 — but the shell is
+/// the trusted process, and `a_missing_timeout_or_roots_does_not_crash_the_shell`
+/// already states the rule this violated: it must not trust the frame. Deliberately
+/// well above anything a real command needs and well below "forever", so a slow
+/// build can still be given a longer budget by a future caller without handing the
+/// core a way to park a worker indefinitely.
+const MAX_TIMEOUT_MS: u64 = 120_000;
+
+/// Scratch space every command gets. Outside the floor and outside every project,
+/// so it costs nothing to allow — unless a dev config has put Addison's data dir
+/// underneath it, which `write_root_collides_with_protected` catches.
+const SCRATCH_DIR: &str = "/private/tmp";
+
 // shell.runCommand {command, timeoutMs, writeRoots} -> {stdout, stderr, exitCode, sandboxed}
 pub fn run_command(params: &Value) -> Result<Value, RpcError> {
+    run_command_with_ceiling(params, MAX_TIMEOUT_MS)
+}
+
+/// The handler proper, with the timeout ceiling injected so a test can prove the
+/// clamp on the CLOCK through the real path rather than only against the pure
+/// helper — a clamp asserted only on a pure function is a clamp nobody has shown
+/// the handler applies.
+fn run_command_with_ceiling(params: &Value, ceiling_ms: u64) -> Result<Value, RpcError> {
     let command = required_str(params, "command", "A command is required.")?.to_string();
-    let timeout_ms = params.get("timeoutMs").and_then(Value::as_u64).unwrap_or(30_000);
+    let timeout = timeout_from(params, ceiling_ms);
     let write_roots: Vec<PathBuf> = params
         .get("writeRoots")
         .and_then(Value::as_array)
@@ -72,7 +103,7 @@ pub fn run_command(params: &Value) -> Result<Value, RpcError> {
         .unwrap_or_default();
 
     let (program, args, sandboxed) = sandbox_invocation(&command, &write_roots)?;
-    let output = run_with_timeout(&program, &args, Duration::from_millis(timeout_ms))?;
+    let output = run_with_timeout(&program, &args, timeout)?;
 
     Ok(json!({
         "stdout": output.stdout,
@@ -80,6 +111,13 @@ pub fn run_command(params: &Value) -> Result<Value, RpcError> {
         "exitCode": output.exit_code,
         "sandboxed": sandboxed,
     }))
+}
+
+/// The command's deadline, read off the wire and CLAMPED. A missing or non-numeric
+/// field is the core's default; anything above the ceiling becomes the ceiling.
+fn timeout_from(params: &Value, ceiling_ms: u64) -> Duration {
+    let asked = params.get("timeoutMs").and_then(Value::as_u64).unwrap_or(DEFAULT_TIMEOUT_MS);
+    Duration::from_millis(asked.min(ceiling_ms))
 }
 
 /// Build the actual argv, and say whether it is confined.
@@ -141,23 +179,39 @@ fn sandbox_invocation(
 /// Order is the whole security argument, so read it in order:
 ///
 ///   1. `(deny default)` — nothing is permitted that is not named below.
-///   2. reads stay broad. Confinement here would break ordinary developer work
-///      (`git status` reads far outside a project), and exfiltration is item 4's
-///      problem — output redaction — not this profile's.
+///   2. reads stay broad, EXCEPT Addison's own data directories (item 4 below).
+///      Confining reads generally would break ordinary developer work (`git
+///      status` reads far outside a project), and exfiltration of a project's own
+///      bytes is item 4's problem — output redaction — not this profile's. The
+///      conversation store is a different matter: it is not the user's project,
+///      nothing legitimate reads it, and `network-outbound` is granted.
 ///   3. `(deny file-write*)` then per-root allows: writes are denied wholesale and
 ///      re-permitted only inside folders the person has explicitly trusted. **This
 ///      is what finally makes workspace trust govern the shell.** Until now trust
 ///      bounded the careful typed file tools while `run_command` roamed all of
 ///      HOME — the boundary applied to the safe tools and not the dangerous one.
-///   4. the data-dir denies come LAST, so the floor beats every allow above it,
-///      including a trusted root that somehow contains the data dir. This is the
-///      shell deciding INDEPENDENTLY, exactly as `refuse_addison_data_dir` does:
-///      the core's `writeRoots` is an input to the boundary, never the boundary.
+///      A root that collides with a protected dir is DROPPED rather than allowed —
+///      see `write_root_collides_with_protected`, which is what makes item 4's
+///      independence claim true.
+///   4. the data-dir denies come LAST, so the floor beats every allow above it.
+///      This is the shell deciding INDEPENDENTLY, exactly as
+///      `refuse_addison_data_dir` does: the core's `writeRoots` is an input to the
+///      boundary, never the boundary.
 ///
 /// Seatbelt evaluates the last matching rule, so a later `deny` overrides an
 /// earlier `allow`. If that ever stops being true, item 4's audit log is what
-/// would show it — and `test_the_data_dir_deny_comes_after_every_allow` fails
-/// first.
+/// would show it — and `the_data_dir_deny_comes_after_every_allow` fails first.
+///
+/// **ORDERING ALONE IS NOT CONTAINMENT, which is why step 3 drops instead.**
+/// Seatbelt matches a rename by its source and destination PATHS and does not
+/// walk the subtree, so a write root that is a proper ANCESTOR of the data dir
+/// let a command rename an intermediate directory out from under the deny —
+/// `mv $ROOT/sub $ROOT/sub2 && rm -rf $ROOT/sub2` — and the recovery floor was
+/// gone. Measured end-to-end against a byte-identical profile. The core's
+/// `_workspace_grant` already refuses such a root at the door; until now that
+/// meant the CORE held a property this file claimed to hold independently, and it
+/// was live in dev/test where `ADDISON_DB_PATH` can put the floor under a
+/// renameable ancestor.
 ///
 /// EVERY NON-FILE CAPABILITY, and why it is here. `(deny default)` means each one
 /// is a deliberate grant, so each needs a reason that survives review. These were
@@ -165,8 +219,16 @@ fn sandbox_invocation(
 /// by copying a profile from elsewhere, which is how the first draft acquired two
 /// grants nothing needed:
 ///
-///   * `process-exec process-fork signal` — a shell that cannot fork is not a
-///     shell. Descendants inherit the profile, so this does not widen anything.
+///   * `process-exec process-fork` — a shell that cannot fork is not a shell.
+///     Descendants inherit the profile, so this does not widen anything.
+///   * `signal`, **filtered to `(target children)`**. It was granted unfiltered,
+///     which meant an approved command could SIGKILL any process the user owns:
+///     `pkill -9 addison` mid-write, or the Agent Core. Measured both ways — under
+///     the wide grant a sandboxed `kill -9 <unrelated pid>` SUCCEEDS; under
+///     `(target children)` the same kill is refused with "Operation not
+///     permitted", while forking, `wait` and killing the shell's own jobs all keep
+///     working, as do git, node, npm and pytest. This is the same reasoning that
+///     removed `mach-lookup`; `signal` had simply been left in its widest form.
 ///   * `sysctl-read` — REQUIRED, and narrowly: without it `node` aborts inside
 ///     `os.GetOSInformation` (a `uname` call), so `npm` of any kind crashes with a
 ///     native stack trace. Read-only system information; grants no effect.
@@ -186,40 +248,72 @@ fn sandbox_invocation(
 /// machine rather than a policy — while buying nothing, because **the command's
 /// output already travels to a cloud provider**. A profile that blocks `curl` and
 /// then hands the same bytes to a model over HTTPS has not closed the
-/// exfiltration path, only the useful half of the harness. Exfiltration is item
-/// 4's problem (output redaction) and v2's (untrusted-content screening), exactly
-/// as broad reads above are. `network-bind` is NOT granted: a model-issued command
-/// has no business opening a listening socket, and the 30-second ceiling makes a
-/// dev server pointless anyway.
+/// exfiltration path, only the useful half of the harness. Exfiltration of the
+/// PROJECT's bytes is item 4's problem (output redaction) and v2's
+/// (untrusted-content screening). Exfiltration of ADDISON's own store is not left
+/// to them, because the read deny in step 4 removes it outright.
 #[cfg(target_os = "macos")]
 fn seatbelt_profile(write_roots: &[PathBuf], protected: &[PathBuf]) -> String {
     let mut profile = String::from(
         "(version 1)\n\
          (deny default)\n\
-         (allow process-exec process-fork signal)\n\
+         (allow process-exec process-fork)\n\
+         (allow signal (target children))\n\
          (allow sysctl-read)\n\
          (allow network-outbound)\n\
          (allow file-read*)\n\
          (deny file-write*)\n",
     );
     // A command with nowhere to write is still useful (it can read and report), so
-    // an empty root list is a legitimate state, not an error.
-    for root in write_roots {
+    // an empty root list is a legitimate state, not an error. The scratch dir rides
+    // through the SAME filter as the trusted roots: a dev config that puts the data
+    // dir under /private/tmp would otherwise hand back the rename hole by the back
+    // door.
+    let scratch = PathBuf::from(SCRATCH_DIR);
+    for root in write_roots.iter().chain(std::iter::once(&scratch)) {
+        if write_root_collides_with_protected(root, protected) {
+            continue;
+        }
         if let Some(rule) = subpath_rule("allow file-write*", root) {
             profile.push_str(&rule);
         }
     }
-    // Every command needs somewhere scratch; /private/tmp is outside the floor and
-    // outside every project, so it costs nothing to allow.
-    profile.push_str("(allow file-write* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))\n");
     // LAST. The floor always wins.
     for dir in protected {
         if let Some(rule) = subpath_rule("deny file-write*", dir) {
             profile.push_str(&rule);
         }
+        // Addison's own memory is not the user's project. `filesystem.rs`'s
+        // `refuse_addison_data_dir` has always refused READS here too, and its
+        // doc-comment says the harness "can never write or read Addison's memory" —
+        // but the profile emitted `(allow file-read*)` with no counterpart, so
+        // `cat ~/.addison/addison.db` worked under the sandbox and the whole
+        // conversation store was one `curl` away. Two adjacent files stated
+        // opposite policies; this is the one that was wrong.
+        if let Some(rule) = subpath_rule("deny file-read*", dir) {
+            profile.push_str(&rule);
+        }
     }
     profile
+}
+
+/// True when a write root must be DROPPED rather than allowed, because granting it
+/// would put a protected directory inside a writable subtree (or hand out the
+/// protected directory itself).
+///
+/// The predicate deliberately mirrors `refuse_addison_data_dir` exactly — refuse a
+/// path that IS, sits inside, or CONTAINS a protected directory — so the shell's
+/// independent floor and the core's grant-time rule cannot drift apart. The
+/// contains case is the one with teeth: see `seatbelt_profile`'s doc-comment for
+/// the rename that defeated ordering.
+#[cfg(target_os = "macos")]
+fn write_root_collides_with_protected(root: &Path, protected: &[PathBuf]) -> bool {
+    let root = canonical_lossy(root);
+    protected.iter().any(|dir| {
+        let dir = canonical_lossy(dir);
+        dir.starts_with(&root) || root.starts_with(&dir)
+    })
 }
 
 /// One `(<verb> (subpath "<path>"))` line, or None for a path that cannot be
@@ -243,8 +337,11 @@ fn subpath_rule(verb: &str, path: &Path) -> Option<String> {
     }
     // Canonicalize so a symlinked root is expressed as the real path the kernel
     // will match against — the same realpath-vs-realpath discipline the core's
-    // trust rows already use.
-    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    // trust rows already use. `canonical_lossy` (the filesystem floor's own
+    // resolver) rather than a bare `canonicalize`, so a not-yet-created data dir
+    // still resolves through /tmp and /var — and so this and
+    // `write_root_collides_with_protected` can never disagree about what a path is.
+    let resolved = canonical_lossy(path);
     let resolved = resolved.to_str()?;
     if resolved.contains('"') || resolved.contains('\\') || resolved.contains('\n') {
         return None;
@@ -281,6 +378,26 @@ struct CapturedOutput {
 /// lets the drains return. `an_overrunning_command_is_killed_promptly` now asserts
 /// elapsed time, because that is the property, and it is the one an
 /// output-shaped assertion cannot see.
+///
+/// **AND THE PROCESS GROUP IS NOT ENOUGH EITHER.** A descendant that calls
+/// `setsid()` LEAVES the group, so `kill(-pgid)` never reaches it — and it still
+/// holds the inherited write end of the pipe, so an unconditional
+/// `out_handle.join()` blocked for the orphan's entire lifetime, unbounded. Nor is
+/// that only a timeout-path problem: `sh -c 'something & exit 0'` returns
+/// instantly and leaves a background job holding the same pipe, so a command that
+/// SUCCEEDED wedged the handler just as thoroughly. Measured: a setsid'ing
+/// grandchild sleeping 5s took 5.04s to reach EOF though the direct child exited
+/// immediately, and `sleep 86400` in its place would have wedged the shell's IPC
+/// loop for a day. `an_overrunning_command_is_killed_promptly` cannot see this —
+/// it only ever forked in-group.
+///
+/// So the drains do not block forever: their pipes are switched to non-blocking,
+/// and once the child has been reaped they stop at the first moment the pipe is
+/// empty (plus `DRAIN_GRACE` for a straggler write). The threads therefore always
+/// terminate on their own — a bounded join with abandoned threads would leak a
+/// thread and a file descriptor per hung command, which is the same unbounded
+/// resource by a quieter name. Output an orphan writes AFTER its parent was reaped
+/// is dropped, deliberately: nobody is waiting on it and no one can be.
 fn run_with_timeout(
     program: &str,
     args: &[String],
@@ -298,8 +415,17 @@ fn run_with_timeout(
 
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let out_handle = std::thread::spawn(move || drain(stdout));
-    let err_handle = std::thread::spawn(move || drain(stderr));
+    // Flipped once the child has been reaped; the drains read it to know that an
+    // empty pipe means "nothing more is coming that anyone is waiting for".
+    let reaped = Arc::new(AtomicBool::new(false));
+    let out_handle = {
+        let reaped = Arc::clone(&reaped);
+        std::thread::spawn(move || drain(stdout, &reaped))
+    };
+    let err_handle = {
+        let reaped = Arc::clone(&reaped);
+        std::thread::spawn(move || drain(stderr, &reaped))
+    };
 
     let (tx, rx) = mpsc::channel();
     let mut waiter = child;
@@ -330,6 +456,10 @@ fn run_with_timeout(
 
     let mut child = wait_thread.join().map_err(|_| RpcError::app("Addison couldn't run that command."))?;
     let exit_code = child.wait().map(|s| s.code().unwrap_or(-1)).unwrap_or(-1);
+    // Only now: everything the command itself wrote is already in the pipe buffers,
+    // so from here an empty pipe that is still OPEN means an escaped descendant is
+    // holding it, and waiting on that is waiting on nothing.
+    reaped.store(true, Ordering::Relaxed);
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
 
@@ -348,18 +478,42 @@ fn run_with_timeout(
     Ok(CapturedOutput { stdout, stderr, exit_code })
 }
 
-/// Read a pipe to EOF, capped. Lossy UTF-8: command output is bytes, and a tool
-/// that emits one invalid sequence should not lose its whole output.
-fn drain(pipe: Option<impl Read>) -> String {
+/// How long a drain keeps reading an already-empty pipe after the child has been
+/// reaped, before deciding the only writer left is an escaped descendant. Long
+/// enough that a straggler write racing the reap is not lost; short enough that it
+/// is invisible next to a command's own runtime.
+const DRAIN_GRACE: Duration = Duration::from_millis(200);
+
+/// How long a drain sleeps between polls of an empty pipe. Only ever reached when
+/// there is nothing to read, so it costs a command that produces output nothing.
+const DRAIN_POLL: Duration = Duration::from_millis(2);
+
+/// Read a pipe to EOF, capped, and WITHOUT the possibility of blocking forever.
+/// Lossy UTF-8: command output is bytes, and a tool that emits one invalid
+/// sequence should not lose its whole output.
+///
+/// `reaped` is the caller's signal that the direct child is gone. Until then this
+/// behaves exactly like a blocking read-to-EOF. After it, an empty-but-open pipe
+/// means a descendant escaped the process group (see `run_with_timeout`), and this
+/// gives up rather than holding the shell's IPC pump for that orphan's lifetime.
+fn drain(pipe: Option<impl Read + AsRawFd>, reaped: &AtomicBool) -> String {
     let mut pipe = match pipe {
         Some(p) => p,
         None => return String::new(),
     };
+    // Without this the read below blocks and no deadline in this function can fire.
+    // A failing fcntl is not fatal — the drain simply degrades to the old blocking
+    // behaviour rather than losing output — but it does not happen on a pipe this
+    // process just created.
+    set_nonblocking(pipe.as_raw_fd());
+
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 8192];
+    let mut give_up_at: Option<Instant> = None;
     loop {
         match pipe.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
+            // EOF: every writer, escaped or not, has closed its end.
+            Ok(0) => break,
             Ok(n) => {
                 let room = MAX_CAPTURE_BYTES.saturating_sub(buffer.len());
                 if room == 0 {
@@ -367,9 +521,32 @@ fn drain(pipe: Option<impl Read>) -> String {
                 }
                 buffer.extend_from_slice(&chunk[..n.min(room)]);
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                if reaped.load(Ordering::Relaxed) {
+                    // NOT reset on a later successful read: an orphan that keeps
+                    // writing must not be able to hold this thread open forever by
+                    // printing. It is bounded by MAX_CAPTURE_BYTES either way.
+                    let deadline = *give_up_at.get_or_insert_with(|| Instant::now() + DRAIN_GRACE);
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                }
+                std::thread::sleep(DRAIN_POLL);
+            }
+            Err(_) => break,
         }
     }
     String::from_utf8_lossy(&buffer).into_owned()
+}
+
+/// Put a descriptor into non-blocking mode, best effort.
+fn set_nonblocking(fd: RawFd) {
+    unsafe {
+        let flags = libc::fcntl(fd, libc::F_GETFL);
+        if flags >= 0 {
+            libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        }
+    }
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -430,8 +607,14 @@ mod tests {
         let sidecar = snapshots.join("genesis.json");
         fs::write(&sidecar, b"{\"undeletable\": true}").unwrap();
 
-        // A trusted root that CONTAINS the data dir — the worst case, and the one
-        // the ordering of the profile exists for.
+        // The data dir handed in as a trusted root ITSELF — the core asking for the
+        // one folder it may never have. This is the case ordering was written for,
+        // and the comment here used to claim it was the CONTAINMENT case ("a trusted
+        // root that CONTAINS the data dir — the worst case"), which it is not: root
+        // == protected is not root ⊃ protected, and the containment case is strictly
+        // worse because ordering does not survive a rename. That case now has its own
+        // test — `a_trusted_root_that_contains_the_data_dir_is_dropped` — and the
+        // claim is no longer made twice by one assertion.
         let root = tmp_dir("floor-root");
         let marker = root.join("ran.txt");
         let _ = fs::remove_file(&marker);
@@ -491,10 +674,19 @@ mod tests {
     fn the_data_dir_deny_comes_after_every_allow() {
         // The ordering IS the floor-beats-a-root property. Seatbelt takes the last
         // matching rule, so a deny emitted before the allows would be overridden by
-        // a trusted root that contains the data dir.
+        // an allow that overlaps the data dir.
+        //
+        // The root here is a SIBLING of the protected dir, not its parent, and that
+        // is the whole difference from the version this replaced. That one passed
+        // `/tmp` as the root with the data dir underneath, which now produces a
+        // profile with no `(allow file-write*` line at all — the ancestor is DROPPED
+        // (`write_root_collides_with_protected`), because ordering alone never
+        // contained a rename. So the old fixture stopped measuring ordering the
+        // moment the drop landed, and unwrapped on None. Ordering still has to hold
+        // for every root that IS allowed, which is what this now measures.
         let profile = seatbelt_profile(
-            &[PathBuf::from("/tmp")],
-            &[PathBuf::from("/tmp/addison-order")],
+            &[PathBuf::from("/tmp/addison-order-root")],
+            &[PathBuf::from("/tmp/addison-order-data")],
         );
         let last_allow = profile.rfind("(allow file-write*").unwrap();
         let first_deny_of_data_dir = profile.find("(deny file-write* (subpath").unwrap();
@@ -604,6 +796,15 @@ mod tests {
         // the real toolchain, and watched something fail — the note in
         // `seatbelt_profile`'s docstring records what that measurement was for
         // each one.
+        //
+        // UPDATED DELIBERATELY, 2026-08-01, and NARROWED: `signal` was granted in
+        // its widest form, which let an approved command SIGKILL any process the
+        // user owns — the Addison shell mid-write, or the Agent Core. It is now
+        // `(target children)`, on its own line so the filter is visible at a
+        // glance. A human decided this; the pin was not bent to fit the code. The
+        // measurement behind it is
+        // `a_sandboxed_command_cannot_kill_an_unrelated_process` plus its positive
+        // twin, which shows job control still works.
         let profile = seatbelt_profile(&[PathBuf::from("/tmp")], &[]);
         let granted: Vec<&str> = profile
             .lines()
@@ -612,11 +813,23 @@ mod tests {
         assert_eq!(
             granted,
             vec![
-                "(allow process-exec process-fork signal)",
+                "(allow process-exec process-fork)",
+                "(allow signal (target children))",
                 "(allow sysctl-read)",
                 "(allow network-outbound)",
             ],
             "the non-file capability set changed; measure before granting"
+        );
+        // Said again, in the shape a widening would actually take: `signal` folded
+        // back into the process line, or re-emitted bare. The equality above catches
+        // both, but a reviewer reading only the profile should see the rule named.
+        assert!(
+            !profile.contains("(allow process-exec process-fork signal)"),
+            "signal must not ride the process line unfiltered"
+        );
+        assert!(
+            !profile.contains("(allow signal)"),
+            "an unfiltered signal grant lets a command kill any process the user owns"
         );
         // Named explicitly, because "absent from a list" is easy to miss in review.
         assert!(!profile.contains("mach-lookup"), "mach-lookup is not needed by anything");
@@ -663,5 +876,327 @@ mod tests {
         assert!(out.stdout.contains("first"), "output before the timeout must survive");
         assert!(out.stderr.contains("didn't finish in time"));
         assert_ne!(out.exit_code, 0);
+    }
+
+    #[test]
+    fn a_grandchild_that_escapes_the_process_group_does_not_wedge_the_handler() {
+        // `an_overrunning_command_is_killed_promptly` cannot see this: it only ever
+        // forks IN-group, where `kill(-pgid)` closes the pipes for it. A descendant
+        // that calls `setsid()` leaves the group, survives the kill, and keeps the
+        // inherited stdout write end open — so an unconditional `join()` on the
+        // drains blocked for that orphan's whole lifetime. Measured before the fix:
+        // the direct `sh` exited in 5ms while the reader sat on the pipe for the
+        // orphan's full sleep. With `sleep 86400` in its place that is the shell's
+        // IPC pump held for a day.
+        //
+        // THE ASSERTION IS THE CLOCK, and the budget here is deliberately 10s while
+        // the orphan lives 5s: a handler that returns quickly did so because the
+        // child was reaped, not because the deadline fired. `exit_code == 0` says
+        // the same thing from the other side — this is the SUCCESS path, which is
+        // why the timeout path's kill never enters into it.
+        let started = std::time::Instant::now();
+        let out = run_with_timeout(
+            "/bin/sh",
+            &[
+                "-c".into(),
+                // perl, not `setsid(1)`: macOS does not ship that binary. Its stdout
+                // is deliberately NOT redirected — holding the inherited pipe open is
+                // the entire point.
+                "perl -e 'use POSIX; POSIX::setsid(); sleep 5' & echo first; exit 0".into(),
+            ],
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "an escaped grandchild held the handler for {elapsed:?}: the drains are \
+             waiting on a pipe nobody is going to close"
+        );
+        // POSITIVE CONTROL. Returning fast is trivially true of a command that never
+        // ran, and of one whose output was dropped on the floor — so the direct
+        // child's own output has to be here, and its own exit status has to be the
+        // one reported.
+        assert!(
+            out.stdout.contains("first"),
+            "the command's own output must still be captured (stderr: {})",
+            out.stderr
+        );
+        assert_eq!(out.exit_code, 0, "this is the success path, not the timeout path");
+        assert!(
+            !out.stderr.contains("didn't finish in time"),
+            "the command finished; nothing should have been stopped"
+        );
+    }
+
+    #[test]
+    fn a_sandboxed_command_cannot_kill_an_unrelated_process() {
+        // `signal` was granted in its widest form, which meant an approved command
+        // could SIGKILL anything the user owns — `pkill -9 addison` mid-write, or the
+        // Agent Core, from inside a sandbox whose whole purpose is that a command
+        // cannot reach past its own work.
+        //
+        // POSITIVE CONTROL, THREE WAYS, because "the victim is still alive" is the
+        // classic false green — it is true when the profile was rejected and nothing
+        // ran at all. So: the marker proves the sandbox applied and the command ran;
+        // the recorded status proves the kill was ATTEMPTED; and the kernel's own
+        // refusal text proves it was REFUSED rather than aimed at nothing.
+        let root = tmp_dir("signal");
+        let marker = root.join("ran.txt");
+        let _ = fs::remove_file(&marker);
+
+        // A child of the TEST process — a sibling of the sandboxed command, never its
+        // descendant, which is exactly what `(target children)` distinguishes.
+        let mut victim = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the unrelated process");
+        let victim_pid = victim.id();
+
+        let out = sandboxed_run(
+            seatbelt_profile(std::slice::from_ref(&root), &[]),
+            format!(
+                "echo ran > '{}'; kill -9 {victim_pid} 2>&1; echo \"status=$?\"",
+                marker.display()
+            ),
+        );
+
+        assert_the_sandbox_actually_ran(&marker, &out);
+        assert!(
+            out.stdout.contains("status=1"),
+            "the kill must have been attempted and refused; the shell reported \
+             success instead (stdout: {}, stderr: {})",
+            out.stdout,
+            out.stderr
+        );
+        assert!(
+            out.stdout.to_lowercase().contains("not permitted"),
+            "the refusal must come from the KERNEL (EPERM), not from a bad pid or a \
+             mangled command (stdout: {}, stderr: {})",
+            out.stdout,
+            out.stderr
+        );
+        let alive = victim.try_wait().expect("check the unrelated process").is_none();
+        let _ = victim.kill();
+        let _ = victim.wait();
+        assert!(alive, "a sandboxed command killed a process it has no business touching");
+    }
+
+    #[test]
+    fn a_sandboxed_command_can_still_kill_its_own_children() {
+        // The other half of the narrowing, and the reason it is `(target children)`
+        // rather than no `signal` grant at all: an ordinary shell has to be able to
+        // stop the work it started. `timeout`, `xargs`, test runners and plain job
+        // control all rest on it, so removing the capability outright would have
+        // broken the harness while looking tidy in the profile.
+        let root = tmp_dir("signal-own");
+        let marker = root.join("ran.txt");
+        let _ = fs::remove_file(&marker);
+
+        let out = sandboxed_run(
+            seatbelt_profile(std::slice::from_ref(&root), &[]),
+            format!(
+                "echo ran > '{}'; sleep 30 & pid=$!; kill -9 $pid 2>&1; echo \"own=$?\"",
+                marker.display()
+            ),
+        );
+
+        assert_the_sandbox_actually_ran(&marker, &out);
+        assert!(
+            out.stdout.contains("own=0"),
+            "a command must still be able to kill its own child (stdout: {}, stderr: {})",
+            out.stdout,
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn a_trusted_root_that_contains_the_data_dir_is_dropped() {
+        // THE CASE ORDERING DOES NOT COVER, and the reason `seatbelt_profile` drops a
+        // colliding root instead of relying on rule order. Seatbelt matches a rename
+        // by source and destination PATHS and does not walk the subtree, so under an
+        // ancestor allow this exact command moved the data dir out from under its own
+        // deny and then deleted it — measured end-to-end against a byte-identical
+        // profile. The core refuses such a grant at the door, but that made the CORE
+        // the holder of a property this file claims to hold independently.
+        //
+        // WHAT IS RENAMED IS AN INTERMEDIATE DIRECTORY, not the data dir. Renaming
+        // the data dir itself is refused even by ordering alone — the source path
+        // matches the deny — so a test that did that passed with the drop removed
+        // and measured nothing. `$ROOT/sub` matches no deny, and once it is
+        // `$ROOT/sub2` neither does anything under it.
+        let root = tmp_dir("ancestor");
+        let sub = root.join("sub");
+        let data_dir = sub.join("addison-data");
+        let snapshots = data_dir.join("snapshots");
+        fs::create_dir_all(&snapshots).unwrap();
+        let sidecar = snapshots.join("genesis.json");
+        fs::write(&sidecar, b"{\"undeletable\": true}").unwrap();
+        let moved = root.join("sub2");
+        let _ = fs::remove_dir_all(&moved);
+
+        // The marker cannot live under `root` — the whole point is that `root` is not
+        // writable — so it gets a permitted root of its own, which also proves the
+        // drop is surgical rather than "the profile fell over".
+        let allowed = tmp_dir("ancestor-allowed");
+        let marker = allowed.join("ran.txt");
+        let _ = fs::remove_file(&marker);
+
+        let profile = seatbelt_profile(
+            &[root.clone(), allowed.clone()],
+            std::slice::from_ref(&data_dir),
+        );
+        let out = sandboxed_run(
+            profile.clone(),
+            format!(
+                "echo ran > '{}'; mv '{}' '{}'; rm -rf '{}'",
+                marker.display(),
+                sub.display(),
+                moved.display(),
+                moved.display()
+            ),
+        );
+
+        assert_the_sandbox_actually_ran(&marker, &out);
+        assert!(
+            sidecar.exists(),
+            "a rename out from under the deny deleted the recovery floor \
+             (stdout: {}, stderr: {})\nprofile:\n{profile}",
+            out.stdout,
+            out.stderr
+        );
+        assert!(!moved.exists(), "the intermediate directory must not have moved at all");
+        assert!(
+            !profile.contains(&format!("(allow file-write* (subpath \"{}\"))", root.display())),
+            "an ancestor of a protected dir must never appear as an allow:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn a_trusted_root_inside_the_data_dir_is_dropped_too() {
+        // The mirror of the case above, and it was the one clause of
+        // `write_root_collides_with_protected` that no test could see: deleting
+        // `root.starts_with(&dir)` left the whole suite green, while deleting the
+        // other half failed the ancestor test immediately.
+        //
+        // Ordering alone WOULD refuse this one — the deny is emitted after every
+        // allow, so a write inside the data dir loses on last-match-wins — which is
+        // exactly why it needs a test of its own rather than a shrug. Belt and
+        // braces are worth having on the recovery floor, but an untested brace is
+        // indistinguishable from a missing one the day somebody rewrites the
+        // ordering, and this file's whole argument is that the shell decides
+        // INDEPENDENTLY of anything the core sends.
+        let data_dir = tmp_dir("inside-protected");
+        let inside = data_dir.join("workspace");
+        fs::create_dir_all(&inside).unwrap();
+
+        let allowed = tmp_dir("inside-allowed");
+        let marker = allowed.join("ran.txt");
+        let _ = fs::remove_file(&marker);
+        let target = inside.join("written.txt");
+        let _ = fs::remove_file(&target);
+
+        let profile = seatbelt_profile(
+            &[inside.clone(), allowed.clone()],
+            std::slice::from_ref(&data_dir),
+        );
+        let out = sandboxed_run(
+            profile.clone(),
+            format!(
+                "echo ran > '{}'; echo leaked > '{}'",
+                marker.display(),
+                target.display()
+            ),
+        );
+
+        assert_the_sandbox_actually_ran(&marker, &out);
+        assert!(
+            !target.exists(),
+            "a write root inside the data dir let the harness write into the floor \
+             (stdout: {}, stderr: {})\nprofile:\n{profile}",
+            out.stdout,
+            out.stderr
+        );
+        assert!(
+            !profile.contains(&format!("(allow file-write* (subpath \"{}\"))", inside.display())),
+            "a root inside a protected dir must never appear as an allow:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn the_profile_refuses_to_read_addisons_own_store() {
+        // `filesystem.rs`'s `addison_data_dirs` has always said the harness can never
+        // "write or read" Addison's memory, and `refuse_addison_data_dir` refuses both
+        // — but the profile emitted `(allow file-read*)` with no counterpart, so
+        // `cat ~/.addison/addison.db` worked under the sandbox while `network-outbound`
+        // is deliberately granted. Two adjacent files stated opposite policies. The
+        // profile was the one that was wrong, so it now denies the read as well.
+        let data_dir = tmp_dir("read-floor");
+        let secret = data_dir.join("addison.db");
+        fs::write(&secret, b"CONVERSATION-STORE-SECRET").unwrap();
+
+        let allowed = tmp_dir("read-floor-allowed");
+        let marker = allowed.join("ran.txt");
+        let _ = fs::remove_file(&marker);
+
+        let out = sandboxed_run(
+            seatbelt_profile(std::slice::from_ref(&allowed), std::slice::from_ref(&data_dir)),
+            format!(
+                "echo ran > '{}'; cat '{}' 2>&1",
+                marker.display(),
+                secret.display()
+            ),
+        );
+
+        assert_the_sandbox_actually_ran(&marker, &out);
+        assert!(
+            !out.stdout.contains("CONVERSATION-STORE-SECRET"),
+            "the conversation store was readable under the sandbox, one curl from gone"
+        );
+        assert!(
+            out.stdout.to_lowercase().contains("operation not permitted"),
+            "the read must be REFUSED by the kernel, not merely missing (stdout: {}, \
+             stderr: {})",
+            out.stdout,
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn a_timeout_from_the_wire_cannot_exceed_the_shells_own_ceiling() {
+        // The core always sends 30000, and that is exactly why this is the shell's
+        // business: `a_missing_timeout_or_roots_does_not_crash_the_shell` states the
+        // rule — the trusted process does not trust the frame. Unclamped, a single
+        // `timeoutMs: u64::MAX` frame parked a blocking task until the command chose
+        // to end.
+        //
+        // ON THE CLOCK, THROUGH THE REAL HANDLER. The pure `timeout_from` is asserted
+        // below as well, but only the handler path proves the clamped value is the
+        // one the deadline actually gets.
+        let started = std::time::Instant::now();
+        let result = run_command_with_ceiling(
+            &json!({ "command": "sleep 30", "timeoutMs": u64::MAX, "writeRoots": [] }),
+            600,
+        )
+        .expect("the handler must accept an absurd timeout, not fail on it");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "an unclamped timeoutMs held the handler for {elapsed:?}"
+        );
+        assert!(
+            result["stderr"].as_str().unwrap().contains("didn't finish in time"),
+            "the command must have been stopped by the ceiling, not have finished"
+        );
+        assert_eq!(timeout_from(&json!({ "timeoutMs": u64::MAX }), 600), Duration::from_millis(600));
+        assert_eq!(timeout_from(&json!({ "timeoutMs": 500 }), 600), Duration::from_millis(500));
+        assert_eq!(timeout_from(&json!({}), 600), Duration::from_millis(600));
+        // The shipped ceiling, named: a change to it is a decision, not a typo.
+        assert_eq!(MAX_TIMEOUT_MS, 120_000);
     }
 }

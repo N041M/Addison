@@ -136,15 +136,55 @@ fn os_guard() -> MutexGuard<'static, ()> {
 // than no debug aid.
 static TRACE_START: OnceLock<Instant> = OnceLock::new();
 static TRACE_SEQ: AtomicU32 = AtomicU32::new(0);
+static TRACE_ON: OnceLock<bool> = OnceLock::new();
 
+/// Whether the trace is on, decided from the environment ONCE per process.
+///
+/// The decision used to be `std::env::var(…)` on every call, which made the switch
+/// process-global mutable state — and its test set and cleared the variable to
+/// exercise it, racing every other test thread that reached a `trace()`. That is
+/// exactly the flake shape `exec.rs` spends six lines condemning for
+/// `ADDISON_DB_PATH`: it passes alone and fails in a full run, and it is a data
+/// race besides (`set_var` is unsound while another thread reads the environment).
+///
+/// So the VALUE is read once here and the RULE lives in `trace_flag_from`, which is
+/// pure and is what the test drives. Reading once is also the honest model of the
+/// switch: it is a launch-time diagnostic, not something meant to change under a
+/// running process.
 fn trace_enabled() -> bool {
-    std::env::var("ADDISON_KEYCHAIN_TRACE").map(|v| v == "1").unwrap_or(false)
+    *TRACE_ON
+        .get_or_init(|| trace_flag_from(std::env::var("ADDISON_KEYCHAIN_TRACE").ok().as_deref()))
+}
+
+/// The rule itself: only an explicit `1`. Injected rather than read, so the test
+/// asserts on values instead of on this process's environment.
+fn trace_flag_from(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// Emit a trace line, formatting its arguments ONLY when the trace is on.
+///
+/// The guard belongs in the macro, not in the callee: the call sites build their
+/// subject with `format!`, and an argument is evaluated before the call, so every
+/// provider-key read allocated a `String` it then threw away — on the hot path, in
+/// every build, with the trace off. Wrapping the whole call in the check is what
+/// makes a disabled trace genuinely free.
+macro_rules! trace {
+    ($event:expr, $subject:expr, $outcome:expr $(,)?) => {
+        if trace_enabled() {
+            trace_line($event, $subject, $outcome);
+        }
+    };
 }
 
 /// One trace line. `subject` is an account name or `provider=…`; `outcome` is a
 /// short variant word. Both are program-authored constants or account names — never
 /// a value read out of the keychain.
-fn trace(event: &str, subject: &str, outcome: &str) {
+///
+/// The `trace!` macro is the only caller. The check is repeated here anyway so a
+/// future direct call cannot quietly print in a build where the trace is off — the
+/// cost is one atomic read of an already-initialised `OnceLock`.
+fn trace_line(event: &str, subject: &str, outcome: &str) {
     if !trace_enabled() {
         return;
     }
@@ -307,9 +347,9 @@ impl KeyRead {
 /// automatic pollers (stats, provider.list) stay non-fresh, so a denial still costs
 /// at most one dialog per user action, never one per minute.
 fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
-    trace("ask", &format!("provider={provider} fresh={fresh}"), "…");
+    trace!("ask", &format!("provider={provider} fresh={fresh}"), "…");
     if let Some(answer) = cached_answer(provider, fresh) {
-        trace("answered", &format!("provider={provider}"), &format!("{} (no OS touch)", answer.trace_word()));
+        trace!("answered", &format!("provider={provider}"), &format!("{} (no OS touch)", answer.trace_word()));
         return answer;
     }
     let _os = os_guard();
@@ -317,12 +357,12 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
     // same provider must read ITS result rather than raise a second dialog for an
     // item that has just been fetched.
     if let Some(answer) = cached_answer(provider, fresh) {
-        trace("answered", &format!("provider={provider}"), &format!("{} (no OS touch, post-lock)", answer.trace_word()));
+        trace!("answered", &format!("provider={provider}"), &format!("{} (no OS touch, post-lock)", answer.trace_word()));
         return answer;
     }
 
     let outcome = read_provider_key_from_os(provider);
-    trace("cached-as", &format!("provider={provider}"), outcome.trace_word());
+    trace!("cached-as", &format!("provider={provider}"), outcome.trace_word());
     match &outcome {
         KeyRead::Found(key) => cache_put(provider, key),
         // Remembered so the next stats poll answers from memory instead of raising
@@ -354,9 +394,9 @@ fn read_provider_key_from_os(provider: &str) -> KeyRead {
     let account = account_for_provider(provider);
     // THE LINE THAT COSTS A PASSWORD DIALOG. Every one of these is one prompt on a
     // build whose ACL has been invalidated; counting them is the whole diagnostic.
-    trace("OS-TOUCH", &account, "reading…");
+    trace!("OS-TOUCH", &account, "reading…");
     let Ok(entry) = Entry::new(SERVICE, &account) else {
-        trace("OS-TOUCH", &account, "unreadable (no entry handle)");
+        trace!("OS-TOUCH", &account, "unreadable (no entry handle)");
         return KeyRead::Unreadable;
     };
     match entry.get_password() {
@@ -375,13 +415,13 @@ fn legacy_anthropic_key(destination: &Entry) -> KeyRead {
     // Only reached when `provider-key:anthropic` reported NoEntry, but that is
     // exactly the case worth seeing in a trace: `NothingSaved` is never cached, so
     // if this path is live it runs again on the very next caller.
-    trace("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "reading (legacy migration)…");
+    trace!("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "reading (legacy migration)…");
     let Ok(legacy) = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT) else {
         return KeyRead::Unreadable;
     };
     match legacy.get_password() {
         Ok(key) => {
-            trace("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "found -> migrating + WRITING + deleting");
+            trace!("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "found -> migrating + WRITING + deleting");
             migrate_legacy_key(|| destination.set_password(&key), || legacy.delete_credential());
             KeyRead::Found(key)
         }
@@ -519,20 +559,20 @@ fn identity_cache_store(slot: &Mutex<Option<DeviceIdentity>>, identity: &DeviceI
 /// private key is only ever materialized here as an in-memory `SigningKey`; it is
 /// never returned, logged, or emitted.
 fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
-    trace("ask", DEVICE_ACCOUNT, "…");
+    trace!("ask", DEVICE_ACCOUNT, "…");
     if let Some(identity) = identity_cache_load(device_cache()) {
-        trace("answered", DEVICE_ACCOUNT, "cached (no OS touch)");
+        trace!("answered", DEVICE_ACCOUNT, "cached (no OS touch)");
         return Ok(identity);
     }
     let _os = os_guard();
     // Re-check under the OS lock, for the same reason as the provider read: the two
     // calls one relay message makes must not both raise a dialog for the same item.
     if let Some(identity) = identity_cache_load(device_cache()) {
-        trace("answered", DEVICE_ACCOUNT, "cached (no OS touch, post-lock)");
+        trace!("answered", DEVICE_ACCOUNT, "cached (no OS touch, post-lock)");
         return Ok(identity);
     }
 
-    trace("OS-TOUCH", DEVICE_ACCOUNT, "reading…");
+    trace!("OS-TOUCH", DEVICE_ACCOUNT, "reading…");
     let entry = Entry::new(SERVICE, DEVICE_ACCOUNT).map_err(|_| {
         RpcError::app("Couldn't reach the system keychain for your device identity.")
     })?;
@@ -541,7 +581,7 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
         // is ever remembered.
         Ok(blob) => DeviceIdentity::from_stored(&blob)?,
         Err(keyring::Error::NoEntry) => {
-            trace("OS-TOUCH", DEVICE_ACCOUNT, "no entry -> generating + WRITING");
+            trace!("OS-TOUCH", DEVICE_ACCOUNT, "no entry -> generating + WRITING");
             let identity = DeviceIdentity::generate();
             entry
                 .set_password(&identity.to_stored())
@@ -712,13 +752,42 @@ mod tests {
     fn the_trace_is_off_unless_explicitly_asked_for() {
         // Off by default in every build, release and debug: a keychain trace on by
         // default is a keychain trace in someone's support-log paste.
-        std::env::remove_var("ADDISON_KEYCHAIN_TRACE");
-        assert!(!trace_enabled());
-        std::env::set_var("ADDISON_KEYCHAIN_TRACE", "0");
-        assert!(!trace_enabled(), "only an explicit 1 enables it");
-        std::env::set_var("ADDISON_KEYCHAIN_TRACE", "1");
-        assert!(trace_enabled());
-        std::env::remove_var("ADDISON_KEYCHAIN_TRACE");
+        //
+        // ON THE VALUE, NOT ON THIS PROCESS'S ENVIRONMENT. The previous version set
+        // and cleared ADDISON_KEYCHAIN_TRACE with `set_var`, which is process-global:
+        // every other test thread that reached a `trace!` read the variable this one
+        // was mutating, and `set_var` racing a reader is unsound, not merely untidy.
+        // The rule is now a pure function and this is the whole of it.
+        assert!(!trace_flag_from(None), "absent means off");
+        assert!(!trace_flag_from(Some("")), "empty means off");
+        assert!(!trace_flag_from(Some("0")));
+        assert!(!trace_flag_from(Some("true")), "only an explicit 1 enables it");
+        assert!(!trace_flag_from(Some("yes")), "only an explicit 1 enables it");
+        assert!(!trace_flag_from(Some("1 ")), "not even a stray space");
+        assert!(trace_flag_from(Some("1")));
+    }
+
+    #[test]
+    fn a_disabled_trace_never_builds_the_line_it_will_not_print() {
+        // The call sites hand `trace!` a `format!`, and an argument is evaluated
+        // before the call it is an argument to — so with the check inside the callee
+        // every provider-key read allocated and threw away a String, in every build,
+        // with the trace off. The guard therefore lives in the MACRO, and this is the
+        // difference stated as a test rather than as a claim in a comment.
+        //
+        // Two-sided on purpose: it asserts the line IS built when the trace is on, so
+        // a run with ADDISON_KEYCHAIN_TRACE=1 measures something rather than skipping.
+        let built = std::cell::Cell::new(0u32);
+        fn subject(built: &std::cell::Cell<u32>) -> String {
+            built.set(built.get() + 1);
+            "provider=probe".to_string()
+        }
+        trace!("probe", &subject(&built), "…");
+        assert_eq!(
+            built.get(),
+            u32::from(trace_enabled()),
+            "the disabled trace still built its line (or the enabled one did not)"
+        );
     }
 
     #[test]

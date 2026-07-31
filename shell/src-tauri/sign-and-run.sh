@@ -45,9 +45,20 @@ launch() {
     exec "$BINARY" "$@"
 }
 
+# NOT a fail-open case, and it used to be treated as one. The old branch warned
+# "running it unchanged" and then called `launch`, which `exec`s the very file it
+# had just established cannot be executed — so the run died anyway, one line later,
+# with the shell's own message ("Permission denied", or "exec format error")
+# replacing the explanation that had just been printed. Failing open means running
+# UNSIGNED, which is exactly what the identity-missing branch below does; there is
+# no honest way to run a file that is not executable. So say so and stop. 126 is the
+# conventional status for "found, but not executable", which is what cargo reports.
 if [ ! -x "$BINARY" ]; then
-    echo "sign-and-run: '$BINARY' is not an executable; running it unchanged." >&2
-    launch "$@"
+    echo "sign-and-run: '$BINARY' is not an executable file, so there is nothing to" >&2
+    echo "              sign or run. (cargo passes the freshly-built binary as the" >&2
+    echo "              runner's first argument — an empty or missing path here means" >&2
+    echo "              the build did not produce one.)" >&2
+    exit 126
 fi
 
 # ONLY THE APP BINARY. Cargo uses this runner for `cargo test` too, and signing
@@ -58,9 +69,31 @@ case "$(basename "$BINARY")" in
     *) exec "$BINARY" "$@" ;;
 esac
 
-if security find-identity -v -p codesigning 2>/dev/null | grep -q "\"$IDENTITY\""; then
+CERT_SHA1=$(security find-identity -v -p codesigning 2>/dev/null \
+    | grep "\"$IDENTITY\"" | head -1 | awk '{print $2}')
+
+if [ -n "$CERT_SHA1" ]; then
     # --force replaces the ad-hoc signature cargo's linker left behind.
-    if ! codesign --force --sign "$IDENTITY" "$BINARY"; then
+    #
+    # -r IS THE WHOLE FIX, and signing without it does NOT work. Signing with a
+    # stable identity is necessary and not sufficient: asked to invent a
+    # designated requirement for a SELF-SIGNED leaf, codesign falls back to
+    # `cdhash H"..."` — a hash of the binary's CONTENTS. macOS stores that
+    # requirement as the "Always Allow" ACL entry, so the permission is keyed to
+    # those exact bytes and the next rebuild does not match it. That is the
+    # original bug wearing a certificate: measured on this repo, a signed build
+    # still carried `designated => cdhash H"1380cf87..."`.
+    #
+    # Naming the requirement explicitly keys the ACL to IDENTITY instead —
+    # `identifier addison and certificate leaf = H"<cert>"` — which is stable
+    # across every rebuild, because neither the identifier nor the certificate
+    # changes when the code does. One "Always Allow" then holds.
+    #
+    # The certificate hash is read from the keychain rather than written down:
+    # it differs per machine, and a hard-coded one would silently reintroduce
+    # the cdhash fallback on everybody else's clone.
+    REQUIREMENT="designated => identifier \"addison\" and certificate leaf H\"$CERT_SHA1\""
+    if ! codesign --force --sign "$IDENTITY" -r="$REQUIREMENT" "$BINARY"; then
         echo "sign-and-run: codesign failed; running unsigned (keychain prompts will" >&2
         echo "              come back on every rebuild)." >&2
     fi

@@ -63,13 +63,16 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.readWorkspaceFile" => read_workspace_file(params),
         "shell.restoreWorkspaceFile" => restore_workspace_file(app, params),
         "shell.pickDirectory" => pick_directory(app).await,
-        // OPEN-mode command execution (step 5.5, items 1+2). It lands here, in the
-        // shell, for the same reason the workspace file methods do: this is the
-        // process with OS permissions, and therefore the only one that can put a
-        // sandbox around what the model asked for. exec.rs builds the seatbelt
-        // profile from the trusted roots the core sends and re-denies Addison's own
-        // data dir on top of them, independently (defence in depth, §1.3).
-        "shell.runCommand" => crate::exec::run_command(params),
+        // NOTE: `shell.runCommand` is deliberately NOT routed here. It is OPEN-mode
+        // command execution (step 5.5, items 1+2) and it lands in the shell for the
+        // same reason the workspace file methods do — this is the process with OS
+        // permissions, and therefore the only one that can put a sandbox around what
+        // the model asked for. But every handler in this table is awaited INLINE in
+        // the core's stdout pump, and a command can hold its task for the whole of
+        // its budget; run_command therefore dispatches off the loop
+        // (agent_process.rs, `dispatch_off_loop`). Reaching this table would answer
+        // "unknown method" — loudly, which is the point: the alternative failure is
+        // a silent minutes-long stall of every frame in the app.
         "shell.openExternal" => open_external(params),
         "shell.readClipboard" => read_clipboard(),
         // Which build of Addison this is — recorded on a permanent restore point
@@ -386,7 +389,12 @@ fn refuse_addison_data_dir(path: &Path) -> Result<(), RpcError> {
 ///
 /// On macOS this also folds the case of existing components onto their real on-disk
 /// spelling.
-fn canonical_lossy(path: &Path) -> PathBuf {
+///
+/// `pub(crate)` for exec.rs: the seatbelt profile decides containment against the
+/// SAME protected dirs this floor does, and two resolvers would eventually disagree
+/// about what a path is — which is precisely the class of bug the walk-up above was
+/// written to fix.
+pub(crate) fn canonical_lossy(path: &Path) -> PathBuf {
     if let Ok(c) = std::fs::canonicalize(path) {
         return c;
     }

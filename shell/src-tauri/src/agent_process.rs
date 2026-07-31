@@ -7,10 +7,12 @@
 // This module owns the process lifecycle and the stdout pump:
 //   - resolve + spawn the core (piped stdin/stdout, inherited stderr);
 //   - read stdout line-by-line; `shell.*`/`keychain.*` frames are handled in-process
-//     (filesystem.rs / keychain.rs) and their response written back to the core's
-//     stdin; everything else is relayed to the webview as a `core-message` event;
-//     `keychain.*` is handled OFF the loop (see `handle_line`) because the OS can put
-//     a modal password dialog in front of it;
+//     (filesystem.rs / keychain.rs / exec.rs) and their response written back to the
+//     core's stdin; everything else is relayed to the webview as a `core-message`
+//     event; `keychain.*` and `shell.runCommand` are handled OFF the loop (see
+//     `dispatch_off_loop`) because both can hold their handler for a long time — the
+//     OS can put a modal password dialog in front of one, and the other is a whole
+//     command's runtime;
 //   - on unexpected exit, tell the user in plain language and respawn ONCE.
 
 use std::path::PathBuf;
@@ -149,16 +151,15 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
         Err(_) => return,
     };
 
+    // Anything slow is claimed here FIRST and never awaited (see `dispatch_off_loop`).
+    if dispatch_off_loop(stdin_state, &frame) {
+        return;
+    }
+
     match frame.get("method").and_then(Value::as_str) {
         Some(method) if ipc::is_shell_bound(method) => {
             let id = frame.get("id").cloned().unwrap_or(Value::Null);
             let params = frame.get("params").cloned().unwrap_or(Value::Null);
-
-            if method.starts_with(ipc::KEYCHAIN_PREFIX) {
-                spawn_keychain_request(stdin_state, method.to_string(), id, params);
-                return;
-            }
-
             let outcome = filesystem::handle(app, method, &params).await;
             write_to_core(stdin_state, &response_frame(id, outcome)).await;
         }
@@ -169,37 +170,88 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
     }
 }
 
-/// Answer a `keychain.*` request OFF this loop.
+/// OPEN-mode command execution. Named here rather than matched inside
+/// `filesystem::handle` because THIS is where the decision that matters is made:
+/// whether the frame is awaited on the pump or taken off it.
+const RUN_COMMAND: &str = "shell.runCommand";
+
+/// Claim the frames that must NOT be awaited on the core's stdout pump, and answer
+/// them on their own tasks. Returns true when the frame was claimed.
 ///
-/// The OS keychain can put a MODAL password dialog in front of the user, and that
-/// dialog blocks until it is answered. Handled inline, it stalled the whole pump: no
-/// core frame of any kind could be read while the dialog was up, so the core's own
-/// bridge timeout abandoned the request and the password, once typed, landed on a
-/// request nobody was waiting on. So the work goes to a blocking task and the loop
-/// moves straight to the next line.
+/// **THE FAILURE THIS EXISTS TO PREVENT, twice now.** The OS keychain can put a
+/// MODAL password dialog in front of the user, and that dialog blocks until it is
+/// answered. Handled inline, it stalled the whole pump: no core frame of any kind
+/// could be read while the dialog was up, so the core's own bridge timeout abandoned
+/// the request and the password, once typed, landed on a request nobody was waiting
+/// on.
 ///
-/// Responses may now complete out of order. That is fine — JSON-RPC ids correlate
-/// them core-side. Overlapping OS access is serialized inside keychain.rs, so two
-/// requests can never raise two dialogs at once.
-fn spawn_keychain_request(stdin_state: &CoreStdin, method: String, id: Value, params: Value) {
+/// `shell.runCommand` then reintroduced exactly that, with a longer and GUARANTEED
+/// block: `exec::run_command` is fully synchronous (a `recv_timeout` plus three
+/// thread joins) and holds its task for the command's entire runtime — up to the
+/// shell's timeout ceiling. While any command ran, no core->webview frame was
+/// relayed at all: streaming assistant tokens, status events and every other
+/// `shell.*` request stalled behind it. It also parked a Tokio worker thread in
+/// blocking syscalls with no `spawn_blocking`.
+///
+/// Sync on purpose, and takes no `AppHandle`: that is what lets
+/// `a_long_command_does_not_block_the_next_request` drive the real dispatcher and
+/// assert on the CLOCK. A deadline test that asserts on message text proves nothing
+/// about the deadline (docs/HANDOFF.md).
+///
+/// Responses may complete out of order. That is fine — JSON-RPC ids correlate them
+/// core-side. Overlapping OS keychain access is serialized inside keychain.rs, so
+/// two requests can never raise two dialogs at once.
+fn dispatch_off_loop(stdin_state: &CoreStdin, frame: &Value) -> bool {
+    let Some(method) = frame.get("method").and_then(Value::as_str) else {
+        return false;
+    };
+    let id = frame.get("id").cloned().unwrap_or(Value::Null);
+    let params = frame.get("params").cloned().unwrap_or(Value::Null);
+
+    if method.starts_with(ipc::KEYCHAIN_PREFIX) {
+        let method = method.to_string();
+        spawn_request(
+            stdin_state,
+            id,
+            move || keychain::handle(&method, &params),
+            "The keychain didn't answer just now.",
+        );
+        return true;
+    }
+    if method == RUN_COMMAND {
+        spawn_request(
+            stdin_state,
+            id,
+            move || crate::exec::run_command(&params),
+            "Addison couldn't run that command.",
+        );
+        return true;
+    }
+    false
+}
+
+/// Run one Core->Shell request on a blocking task and write its response back when
+/// it finishes, whenever that is. `failure` is the plain-language answer if the task
+/// itself dies — the core is waiting on this id, so it gets an answer rather than a
+/// timeout.
+fn spawn_request<F>(stdin_state: &CoreStdin, id: Value, work: F, failure: &'static str)
+where
+    F: FnOnce() -> Result<Value, ipc::RpcError> + Send + 'static,
+{
     let stdin_state = stdin_state.clone();
     tauri::async_runtime::spawn(async move {
         // Capture which core asked BEFORE doing the work. The request just came off
         // this core's stdout, and a respawn takes seconds, so the generation read
         // here is the asking core's.
         let generation = stdin_state.0.lock().await.generation;
-        let handled =
-            tauri::async_runtime::spawn_blocking(move || keychain::handle(&method, &params)).await;
-        // The task itself failed (panicked or was cancelled). The core is waiting on
-        // this id, so answer it in plain language rather than let it time out.
-        let outcome = handled
-            .unwrap_or_else(|_| Err(ipc::RpcError::app("The keychain didn't answer just now.")));
+        let handled = tauri::async_runtime::spawn_blocking(work).await;
+        let outcome = handled.unwrap_or_else(|_| Err(ipc::RpcError::app(failure)));
 
         let mut channel = stdin_state.0.lock().await;
         if channel.generation != generation {
             // The asking core is gone and its ids mean something else now. Dropping
             // the frame is the only correct delivery.
-            eprintln!("[addison] dropped a keychain response for a core that has exited");
+            eprintln!("[addison] dropped a response for a core that has exited");
             return;
         }
         write_to_channel(&mut channel, &response_frame(id, outcome)).await;
@@ -289,4 +341,93 @@ fn repo_root() -> PathBuf {
 /// stack traces reach the user — a plain message the frontend can render calmly).
 fn emit_status(app: &AppHandle, state: &str, message: &str) {
     let _ = app.emit("core-status", json!({ "state": state, "message": message }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::BufReader as AsyncBufReader;
+
+    #[tokio::test]
+    async fn a_long_command_does_not_block_the_next_request() {
+        // THE ASSERTION THAT MATTERS IS THE CLOCK, and the frames are read back off a
+        // real pipe so the ORDER is the order they were actually written. A deadline
+        // test that asserts on message text proves nothing about the deadline
+        // (docs/HANDOFF.md) — and "both answers arrived" is true of the broken
+        // version too, just two seconds later than it should be.
+        //
+        // `cat` stands in for the core: it gives us a genuine `ChildStdin` to answer
+        // into and hands every answered frame straight back on its stdout.
+        let mut sink = Command::new("/bin/cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn the stand-in core");
+        let channel = CoreStdin(Arc::new(Mutex::new(CoreChannel {
+            stdin: Some(sink.stdin.take().expect("piped stdin")),
+            generation: 0,
+        })));
+        let mut answers = AsyncBufReader::new(sink.stdout.take().expect("piped stdout")).lines();
+
+        let started = std::time::Instant::now();
+        assert!(
+            dispatch_off_loop(
+                &channel,
+                &json!({
+                    "jsonrpc": "2.0", "id": "slow", "method": "shell.runCommand",
+                    "params": { "command": "sleep 2", "timeoutMs": 10_000, "writeRoots": [] }
+                })
+            ),
+            "shell.runCommand must be taken off the pump"
+        );
+        // Whatever comes next off the core's stdout must be answerable NOW. A
+        // keychain frame with no provider is refused by required_str before any OS
+        // access, so this test never touches the real keychain.
+        assert!(dispatch_off_loop(
+            &channel,
+            &json!({ "jsonrpc": "2.0", "id": "quick", "method": "keychain.getProviderKey", "params": {} })
+        ));
+
+        let first = answers.next_line().await.unwrap().expect("a first answer");
+        let first_at = started.elapsed();
+        assert!(first.contains("\"quick\""), "the quick request must be answered first: {first}");
+        assert!(
+            first_at < Duration::from_millis(1000),
+            "the pump was held by the running command: the next request waited {first_at:?}"
+        );
+
+        // POSITIVE CONTROL. Without this the test passes when the command never ran
+        // at all — "answered fast" is trivially true of work that did not happen.
+        let second = answers.next_line().await.unwrap().expect("a second answer");
+        let second_at = started.elapsed();
+        assert!(second.contains("\"slow\""), "the command's own answer must still arrive: {second}");
+        assert!(
+            second_at >= Duration::from_millis(1500),
+            "the command did not actually occupy its 2 seconds ({second_at:?}), so \
+             answering the other request early proved nothing"
+        );
+
+        let _ = sink.kill().await;
+    }
+
+    #[tokio::test]
+    async fn only_the_requests_that_can_block_are_taken_off_the_loop() {
+        // The other half of the routing decision. Everything here answers from
+        // in-memory state or is refused outright, so nothing slow or OS-touching runs.
+        let channel = CoreStdin(Arc::new(Mutex::new(CoreChannel { stdin: None, generation: 0 })));
+        let frame = |method: &str| json!({ "jsonrpc": "2.0", "id": 1, "method": method });
+
+        assert!(dispatch_off_loop(&channel, &frame("shell.runCommand")));
+        // Params-less on purpose: both keychain methods are refused by `required_str`
+        // before any OS access, so a `cargo test` run still raises no password dialog.
+        assert!(dispatch_off_loop(&channel, &frame("keychain.getProviderKey")));
+        assert!(dispatch_off_loop(&channel, &frame("keychain.signRelayRequest")));
+        // A picker or a file write is fast and needs the AppHandle, so it stays on
+        // the pump where its ordering is trivially the core's own.
+        assert!(!dispatch_off_loop(&channel, &frame("shell.writeWorkspaceFile")));
+        assert!(!dispatch_off_loop(&channel, &frame("shell.readClipboard")));
+        // Core -> Frontend traffic is relayed, never handled.
+        assert!(!dispatch_off_loop(&channel, &frame("conversation.messageDelta")));
+        assert!(!dispatch_off_loop(&channel, &json!({ "jsonrpc": "2.0", "id": 1 })));
+    }
 }
