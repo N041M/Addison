@@ -105,8 +105,30 @@ class ProviderUnavailable(RuntimeError):
 
 
 class ProviderRequestRejected(RuntimeError):
-    """A 4xx other than 401/403/429 — the request itself is bad, so the next
+    """A 4xx other than 401/403/404/429 — the request itself is bad, so the next
     provider would reject it identically. The turn fails immediately (D4)."""
+
+
+class ProviderModelGone(ProviderUnavailable):
+    """HTTP 404 — the MODEL is not there, though the request was fine.
+
+    Split out of ``ProviderRequestRejected`` on 2026-08-07, from a real failure
+    this codebase could not previously express. Google's listing endpoint returned
+    ``gemini-2.5-flash``, advertising ``generateContent``; the generate endpoint
+    answered 404 with *"This model models/gemini-2.5-flash is no longer available
+    to new users."* — a model retired for accounts created after some cutoff, and
+    still in the catalogue.
+
+    D4's rule for a rejected request is "do not walk, the next provider gets the
+    same bad request". That is TRUE of a malformed body and FALSE here: nothing is
+    wrong with the request, one model is gone, and every other candidate would
+    answer it. Under the old class the chain gave up on the whole provider and
+    jumped to a different vendor's model.
+
+    A ``ProviderUnavailable`` subclass, so the existing walk applies with no new
+    branch — but the orchestrator cools the MODEL rather than the provider, because
+    "this one model is retired" says nothing about its siblings, and cooling all of
+    Google for a dead Gemini 2.5 would take out Gemini 3 with it."""
 
 
 class ProviderAuthFailed(RuntimeError):
@@ -151,6 +173,11 @@ def exception_for_http_status(
     exc: RuntimeError
     if status_code in (401, 403):
         exc = ProviderKeyRejected(message)
+    elif status_code == 404:
+        # Checked BEFORE the 429/5xx band and after auth, on the same reasoning as
+        # the rest of this ladder: 404 is about the MODEL, not the request and not
+        # the provider's health.
+        exc = ProviderModelGone(message)
     elif status_code == 429 or status_code >= 500:
         exc = ProviderUnavailable(message)
     else:

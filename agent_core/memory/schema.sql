@@ -437,11 +437,12 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
     provider        TEXT NOT NULL,           -- 'anthropic' | 'openai' | 'google' | 'ollama' | 'custom'
     model           TEXT NOT NULL,           -- the raw model id that was called
     -- unavailable  = transient; the chain walked on (429, 5xx, timeout)
+    -- model_gone   = 404; THIS model is not there, so the chain walked to another
     -- key_rejected = the server answered 401/403 about the key Addison holds
     -- auth_failed  = no key to send, or unusable bytes — never reached a server
     -- rejected     = a 4xx the next provider would repeat; the turn failed
     outcome         TEXT NOT NULL
-                        CHECK(outcome IN ('unavailable','key_rejected',
+                        CHECK(outcome IN ('unavailable','model_gone','key_rejected',
                                           'auth_failed','rejected')),
     -- The HTTP status, or NULL when the request never reached a server. NULL is
     -- the honest answer for a timeout; inventing a 0 would claim a reply.

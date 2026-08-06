@@ -353,7 +353,7 @@ def test_every_failure_class_leaves_a_row_with_the_status_the_server_sent():
     ends the turn and therefore never reaches the fallback note. That one is the
     reason this exists: it used to raise straight past every recording site."""
     rows: list[dict] = []
-    a = _Provider([exception_for_http_status(404, "The request to Google failed (status 404).")])
+    a = _Provider([exception_for_http_status(400, "The request to Google failed (status 400).")])
     b = _Provider([_answer("should not run")])
     orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
                         on_provider_attempt=rows.append)
@@ -366,8 +366,8 @@ def test_every_failure_class_leaves_a_row_with_the_status_the_server_sent():
     assert rows[0]["outcome"] == "rejected"
     # THE POINT OF THE ROW. Without this the log says a provider failed and leaves
     # you exactly where the activity line did.
-    assert rows[0]["status_code"] == 404
-    assert "404" in rows[0]["detail"]
+    assert rows[0]["status_code"] == 400
+    assert "400" in rows[0]["detail"]
 
 
 def test_a_transient_failure_is_recorded_even_though_the_turn_succeeds():
@@ -425,17 +425,15 @@ def test_the_log_keeps_what_the_SERVER_said_not_only_what_addison_said():
     exc = exception_for_http_status(
         404,
         "The request to Google failed (status 404). Please try again.",
-        "models/gemini-2.5-flash is not found for API version v1beta, "
-        "or is not supported for generateContent.",
+        "This model models/gemini-2.5-flash is no longer available to new users.",
     )
     orch, conv = _build({"a": _Provider([exc]), "b": _Provider([_answer("x")])},
                         [_cand("a", "pa"), _cand("b", "pb")],
                         on_provider_attempt=rows.append)
-    with pytest.raises(ProviderRequestRejected):
-        orch.run_turn(conv)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
 
     assert rows[0]["detail"].startswith("The request to Google failed")
-    assert "not found for API version v1beta" in rows[0]["server_detail"]
+    assert "no longer available to new users" in rows[0]["server_detail"]
 
 
 def test_an_unreadable_error_body_records_no_server_detail():
@@ -448,3 +446,33 @@ def test_an_unreadable_error_body_records_no_server_detail():
                         on_provider_attempt=rows.append)
     orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
     assert rows[0]["server_detail"] is None
+
+
+def test_a_retired_model_falls_forward_to_its_SIBLING_not_to_another_vendor():
+    """The failure this class was split out for, reported from a running app.
+
+    Google's listing returned `gemini-2.5-flash` advertising `generateContent`;
+    the generate endpoint answered 404 — "no longer available to new users". As a
+    `ProviderRequestRejected` that ended the turn without walking, so a dead Gemini
+    2.5 handed the conversation to Claude while a perfectly good Gemini 3 sat next
+    in the chain. D4's "the next provider gets the same bad request" is true of a
+    malformed body and false of a retired model.
+
+    Both Google candidates share `provider_id`, so this ALSO pins the cooldown
+    split: cooling the provider would have taken the sibling out with it and the
+    turn would have reached Claude anyway — passing the assertion above for the
+    wrong reason."""
+    dead = _Provider([exception_for_http_status(404, "gone", "no longer available")])
+    sibling = _Provider([_answer("gemini 3 answered")])
+    claude = _Provider([_answer("should not be needed")])
+    orch, conv = _build(
+        {"dead": dead, "sibling": sibling, "claude": claude},
+        [_cand("dead", "google"), _cand("sibling", "google"), _cand("claude", "anthropic")],
+    )
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert [m.content for m in conv.messages if m.role == "assistant"][-1] == "gemini 3 answered"
+    assert claude.sends == 0, "a retired model must not hand the turn to another vendor"
+    # The MODEL is stood down; its provider is untouched.
+    assert orch._is_model_cooled("dead")
+    assert not orch._is_cooled("google")

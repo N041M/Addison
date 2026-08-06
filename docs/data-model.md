@@ -519,7 +519,7 @@ erDiagram
         TEXT conversation_id "NULL for a routine or widget turn"
         TEXT provider "anthropic openai google ollama custom"
         TEXT model "the raw model id that was called"
-        TEXT outcome "unavailable key_rejected auth_failed rejected"
+        TEXT outcome "unavailable model_gone key_rejected auth_failed rejected"
         INTEGER status_code "NULL when it never reached a server"
         TEXT detail "the plain sentence the person saw; redacted on write"
         TEXT server_detail "what the SERVER said; the diagnostic one"

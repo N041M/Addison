@@ -22,6 +22,7 @@ from agent_core.providers.base import (
     ModelRole,
     ProviderAuthFailed,
     ProviderKeyRejected,
+    ProviderModelGone,
     ProviderRequestRejected,
     ProviderUnavailable,
     ToolCallRequest,
@@ -306,6 +307,11 @@ class Orchestrator:
         # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
         # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
         self._cooldowns: dict[str, float] = {}
+        # Per-MODEL cooldown, for a candidate the provider says is not there
+        # (ProviderModelGone / 404). Distinct from the provider map above because
+        # "this model is retired" says nothing about its siblings: cooling all of
+        # Google for a dead Gemini 2.5 would take Gemini 3 out with it.
+        self._model_cooldowns: dict[str, float] = {}
 
     def run_turn(
         self,
@@ -411,7 +417,10 @@ class Orchestrator:
         turn_started = time.monotonic()
         # Cooldown-filter the chain, but never lock: if EVERYTHING is cooled, try the
         # whole chain anyway, in normal (preferred-first) order ([S-a]).
-        active = [c for c in chain if not self._is_cooled(c.provider_id)] or list(chain)
+        active = [
+            c for c in chain
+            if not self._is_cooled(c.provider_id) and not self._is_model_cooled(c.model_id)
+        ] or list(chain)
         # ``preferred`` is the PRE-filter head: what the user's settings say should
         # answer. A head cooled by a previous turn still counts as "what you
         # expected" — without this, a cooled head silently hands the turn to a
@@ -512,11 +521,19 @@ class Orchestrator:
                     # so the honest move is to fail with this provider's own sentence.
                     # A stream that died before emitting anything showed nothing, so
                     # that case falls forward exactly as it always has.
-                    self._record_attempt(conversation, cand, "unavailable", exc)
+                    # A model the provider says is NOT THERE cools that MODEL and
+                    # leaves its siblings alone; anything else is about the provider.
+                    gone = isinstance(exc, ProviderModelGone)
+                    self._record_attempt(
+                        conversation, cand, "model_gone" if gone else "unavailable", exc
+                    )
                     if relay.shown_this_turn:
                         raise
                     last_unavailable = exc
-                    self._cool(cand.provider_id)
+                    if gone:
+                        self._cool_model(cand.model_id)
+                    else:
+                        self._cool(cand.provider_id)
                     idx += 1
                     continue
                 except (ProviderRequestRejected, ProviderAuthFailed) as exc:
@@ -814,6 +831,17 @@ class Orchestrator:
                 )
             conversation.append_tool_result(call.id, result)
         return calls_made, budget_spent
+
+    def _is_model_cooled(self, model_id: str) -> bool:
+        expiry = self._model_cooldowns.get(model_id)
+        return expiry is not None and time.monotonic() < expiry
+
+    def _cool_model(self, model_id: str) -> None:
+        """Stand this MODEL down for a while. A retired model is not coming back in
+        sixty seconds, but the map is in-memory and advisory ([S-a]) — the same
+        stance as the provider cooldown, and an all-cooled chain is still tried in
+        normal order rather than left with nothing."""
+        self._model_cooldowns[model_id] = time.monotonic() + _COOLDOWN_SECONDS
 
     def _record_attempt(self, conversation, candidate, outcome: str, exc: BaseException) -> None:
         """One row for a provider call that failed. Best-effort, always.

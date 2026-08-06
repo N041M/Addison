@@ -21,6 +21,7 @@ from agent_core.providers import anthropic_provider
 from agent_core.providers.base import (
     Message,
     ProviderAuthFailed,
+    ProviderModelGone,
     ProviderRequestRejected,
     ProviderUnavailable,
     effective_timeout,
@@ -42,14 +43,18 @@ def test_all_three_subclass_runtimeerror():
 
 
 def test_exception_for_http_status_classification():
-    # 401/403 -> auth; 429 or any 5xx -> unavailable; every other 4xx -> rejected.
+    # 401/403 -> auth; 404 -> the model is gone; 429 or any 5xx -> unavailable;
+    # every other 4xx -> rejected.
     assert isinstance(exception_for_http_status(401, "m"), ProviderAuthFailed)
     assert isinstance(exception_for_http_status(403, "m"), ProviderAuthFailed)
     assert isinstance(exception_for_http_status(429, "m"), ProviderUnavailable)
     assert isinstance(exception_for_http_status(500, "m"), ProviderUnavailable)
     assert isinstance(exception_for_http_status(503, "m"), ProviderUnavailable)
     assert isinstance(exception_for_http_status(400, "m"), ProviderRequestRejected)
-    assert isinstance(exception_for_http_status(404, "m"), ProviderRequestRejected)
+    # 404 is about the MODEL, not the request: it walks the chain (2026-08-07).
+    assert isinstance(exception_for_http_status(404, "m"), ProviderModelGone)
+    assert isinstance(exception_for_http_status(404, "m"), ProviderUnavailable)
+    assert not isinstance(exception_for_http_status(404, "m"), ProviderRequestRejected)
     assert isinstance(exception_for_http_status(422, "m"), ProviderRequestRejected)
     # The carried message is passed through untouched (message freeze).
     assert str(exception_for_http_status(429, "the exact words")) == "the exact words"
@@ -142,11 +147,15 @@ def test_anthropic_malformed_key_is_auth():
 
 
 # --- Ollama -----------------------------------------------------------------
-def test_ollama_404_is_rejected():
-    # /api/chat 404 == the model isn't pulled: a request problem, not "busy".
+def test_ollama_404_is_a_missing_model_and_falls_forward():
+    """/api/chat 404 == the model isn't pulled — which is the SAME situation the
+    Gemini 404 turned out to be (2026-08-07): the request is fine, this model is
+    not there, and every other candidate would answer it. It used to fail the turn;
+    now the chain walks, which is what the fallback design is for. A local model
+    nobody has pulled should reach for the cloud, not stop."""
     client, _ = _client_returning(404)
     provider = OllamaProvider(model="llama3", client=client)
-    with pytest.raises(ProviderRequestRejected):
+    with pytest.raises(ProviderModelGone):
         provider.send([Message(role="user", content="hi")], [])
 
 
