@@ -233,3 +233,42 @@ def test_a_database_that_predates_server_detail_gains_it_and_keeps_recording(tmp
         assert rows[0]["server_detail"].startswith("models/")
     finally:
         store.close()
+
+
+# --- one model, two names ----------------------------------------------------
+
+
+def test_a_pinned_snapshot_and_a_preview_are_dropped_when_their_base_is_listed():
+    """Google lists `gemini-2.0-flash` AND `gemini-2.0-flash-001`, and
+    `gemini-3.1-flash-lite` AND `-lite-preview`. Those are one model under two
+    names, and a picker that offers both asks somebody to choose between identical
+    things.
+
+    STRUCTURAL, not curated: the rule reads the list against itself, so it needs no
+    table anyone maintains and survives a wholesale renaming. That is the
+    difference between this and the non-chat denylist beside it, which is a
+    maintained list only because no field in the API says what a model is for."""
+    ids = [
+        "gemini-2.0-flash", "gemini-2.0-flash-001",
+        "gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview",
+    ]
+    assert [m.id for m in catalog_from_live_ids("google", ids)] == [
+        "gemini-2.0-flash", "gemini-3.1-flash-lite",
+    ]
+
+
+def test_a_suffix_alone_never_drops_a_model():
+    """`gemini-3-pro-preview` is the only Gemini 3 Pro there is. Dropping it for
+    looking provisional would remove the model rather than a duplicate of it, so
+    the base has to be PRESENT before anything goes."""
+    ids = ["gemini-3-pro-preview", "gemini-3-flash-preview", "gemini-2.0-flash-001"]
+    assert [m.id for m in catalog_from_live_ids("google", ids)] == ids
+
+
+def test_an_alias_survives_a_base_that_was_filtered_out_for_another_reason():
+    """Dedup runs against the CHAT set, not the raw listing. `gemini-3-pro-image`
+    is denied as a non-chat model; its `-preview` sibling is denied by the same
+    rule — but if a base is ever removed for a reason of its own, it must not take
+    an otherwise-usable alias with it."""
+    kept = [m.id for m in catalog_from_live_ids("google", ["gemini-9-flash-001"])]
+    assert kept == ["gemini-9-flash-001"], "no base present, so nothing to be a duplicate of"

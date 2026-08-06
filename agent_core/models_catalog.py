@@ -24,6 +24,7 @@ The wire shape (``to_wire``) is the contract the frontend renders against — se
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
@@ -247,6 +248,34 @@ def is_chat_model_id(model_id: str) -> bool:
     return not any(part in lowered for part in _NON_CHAT_SUBSTRINGS)
 
 
+# A pinned snapshot (`-001`) or a preview, when the thing it is a snapshot OR
+# preview OF is also on the list. Both suffixes mean "another name for a model you
+# can already see", and a picker that shows a model twice is asking somebody to
+# choose between two identical things.
+_PINNED_SNAPSHOT = re.compile(r"^(?P<base>.+)-\d{3}$")
+_PREVIEW_OF = re.compile(r"^(?P<base>.+)-preview$")
+
+
+def _is_redundant_alias(model_id: str, available: set[str]) -> bool:
+    """Is this id just another name for one already in ``available``?
+
+    STRUCTURAL, not curated — the rule reads the list against itself, so it needs
+    no table anybody has to maintain and it keeps working the day Google renames
+    everything. That distinction is why this exists at all: the non-chat filter
+    beside it IS a maintained denylist, and it is one only because no field in the
+    API says what a model is for.
+
+    A suffix ALONE is never enough. `gemini-3-pro-preview` is the only Gemini 3
+    Pro there is, so dropping it for looking provisional would remove the model
+    rather than a duplicate of it — which is why the base has to be present before
+    anything is dropped."""
+    for pattern in (_PINNED_SNAPSHOT, _PREVIEW_OF):
+        match = pattern.match(model_id)
+        if match and match.group("base") in available:
+            return True
+    return False
+
+
 def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
     """The picker's entries for a provider, built from THE IDS IT ACTUALLY SERVES.
 
@@ -270,7 +299,11 @@ def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
     end rather than shuffling it. An id the provider does not list is simply
     absent — including a curated one, which is exactly the case that used to 404.
     """
-    live = [i for i in ids if isinstance(i, str) and i and is_chat_model_id(i)]
+    chat = [i for i in ids if isinstance(i, str) and i and is_chat_model_id(i)]
+    # Deduped against the CHAT set, not the raw one: a base that was itself
+    # filtered out (an image model, say) must not silently take its alias with it.
+    chat_ids = set(chat)
+    live = [i for i in chat if not _is_redundant_alias(i, chat_ids)]
     live_ids = set(live)
     out: list[CloudModel] = []
     seen: set[str] = set()
