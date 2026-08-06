@@ -59,9 +59,13 @@ interface Props {
   variant?: "rail" | "inline";
   /**
    * OPEN/Developer mode is active — surface the small "dev" annotation on
-   * dev-created items (command widgets, and any widget/routine whose
-   * createdInMode is "open"). In Simple mode those items are listed as WAITING
-   * rows instead (see UnavailableWidgetBody), so this stays false there.
+   * dev-made items (command widgets, and any widget/routine whose createdInMode
+   * is "open"). That tag is PROVENANCE — where a row came from — and is a
+   * separate question from whether Simple can use it, which only the core
+   * answers, via the `unavailable` marker (see UnavailableWidgetBody). A
+   * checklist made while Developer was active carries this tag here and is a
+   * perfectly ordinary row in Simple; the two used to be the same flag, and a
+   * usable widget inherited a refusal from the profile it was born under.
    */
   developer?: boolean;
   /** Stored widgets from `widget.list` (routine/stat/command specs). */
@@ -334,8 +338,10 @@ function WidgetRow({
   const spec = widget.spec;
   const routine =
     spec.kind === "routine" ? routines.find((r) => r.id === spec.routineId) : undefined;
-  // A dev-created item: a command widget (inherently OPEN), or anything the core
-  // marked created_in_mode="open" (the widget itself, or the routine it runs).
+  // PROVENANCE, for the Developer-only tag: a command widget (inherently OPEN),
+  // or anything the core stamped created_in_mode="open" (the widget itself, or
+  // the routine it runs). Deliberately NOT the same question as `unavailable`
+  // below — where a row came from is not what decides whether Simple can use it.
   const isDev =
     spec.kind === "command" || widget.createdInMode === "open" || routine?.createdInMode === "open";
   // The core says this row can't be used under the active profile — either the

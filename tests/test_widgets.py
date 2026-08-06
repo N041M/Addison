@@ -1,8 +1,9 @@
 """Widget spec validation — the SAVE-time / RENDER-time gate (agent_core/widgets.py).
 
-A widget is a DECLARATIVE spec, one of exactly two shapes, NEVER code. These
-tests pin that: both valid kinds accept; unknown kinds/sources reject; code-
-looking ids reject; over-long titles and extra fields reject.
+A widget is a DECLARATIVE spec from a CLOSED set of six kinds, NEVER code — five
+usable in SAFE (routine, stat, checklist, note, timer) plus `command` in OPEN.
+These tests pin that: every valid kind accepts; unknown kinds/sources reject;
+code-looking ids reject; over-long titles and extra fields reject.
 
 The later sections leave the validator and drive the server's CALL SITES
 (rpc/widgets.py). Validating in isolation proved the rule; it did not prove either
@@ -36,6 +37,7 @@ from agent_core.widgets import (
     validate_widget_spec,
     validate_widget_state,
     widget_summary,
+    widget_uses_dev_abilities,
 )
 from tests.conftest import IPC_DB_NAME, _shutdown, build_server
 
@@ -228,21 +230,23 @@ def test_a_command_widget_drafted_in_developer_is_refused_when_saved_under_simpl
         _shutdown(reader, h.thread)
 
 
-def test_a_command_widget_row_is_hidden_from_the_simple_rail_whatever_it_claims_it_was_made_in(
-    tmp_path,
-):
-    """What a row IS decides whether Simple may see it — not what its stamp says.
+def test_a_command_widget_stamped_safe_is_disabled_and_unrunnable_in_simple(tmp_path):
+    """What a row IS decides what Simple may do with it — not what its stamp says.
 
     ``created_in_mode`` is a stamp on the row, so it is only as good as whoever
     wrote it: a restored config, an older build, or a hand-edited database can all
     put a command spec behind a 'safe' stamp. This row is stamped 'safe' on
-    purpose, which takes the created_in_mode filter out of the picture entirely and
-    leaves the render-time validation as the only thing standing between a shell
-    command and the Simple rail.
+    purpose, so the stamp is pulling in the widget's favour throughout — and it
+    buys the row nothing. It is marked unavailable because its SPEC needs
+    Developer, and `widget.run` refuses it whatever the list said.
 
-    Switching to Developer lists the very same row, which is what makes the empty
-    list above mean 'hidden' rather than 'the test inserted something unreadable'.
-    """
+    It is LISTED-DISABLED rather than hidden, which is the same treatment an
+    honestly-stamped dev widget gets (owner decision 2026-08-06) — the stamp
+    cannot buy a row a different display any more than it can buy it a shell.
+
+    Switching to Developer clears the marker on that same row, which is what makes
+    the marker above mean 'this profile can't use it' rather than 'the test
+    inserted something unreadable'."""
     store = Store(tmp_path / IPC_DB_NAME)
     store.insert_widget(
         id="w-command",
@@ -257,16 +261,27 @@ def test_a_command_widget_row_is_hidden_from_the_simple_rail_whatever_it_claims_
     h = build_server(tmp_path, responses=[], register_tool=False)
     reader, writer = h.reader, h.writer
     try:
-        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_LIST})
-        listed = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
-        assert listed["result"]["widgets"] == []
+        assert _listed(reader, writer, 1)["w-command"]["unavailable"] == {
+            "reason": "developer_abilities",
+            "message": "That widget uses developer abilities, so it's waiting in "
+            "Developer profile.",
+        }
 
-        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.PROFILE_SET,
+        # THE PROPERTY THAT MATTERS. The marker is display; this is enforcement,
+        # and a 'safe' stamp does not reach it either.
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_RUN,
+                     "params": {"id": "w-command"}})
+        refused = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert refused == {
+            "ok": False,
+            "error": "That widget uses developer abilities, so it's waiting in "
+            "Developer profile.",
+        }
+
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.PROFILE_SET,
                      "params": {"profileId": "developer"}})
-        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
-        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_LIST})
-        in_open = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
-        assert [w["id"] for w in in_open["result"]["widgets"]] == ["w-command"]
+        writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+        assert "unavailable" not in _listed(reader, writer, 4)["w-command"]
     finally:
         _shutdown(reader, h.thread)
 
@@ -556,6 +571,47 @@ def test_the_three_interactive_kinds_are_valid_in_the_simple_profile():
         assert kind in WIDGET_KINDS
 
 
+def test_widget_uses_dev_abilities_classifies_every_kind_in_the_vocabulary():
+    """The dev-ability test is DERIVED from the validator rather than written as a
+    second list of kinds, and this walks WIDGET_KINDS to hold it to that.
+
+    A hand-written pair of asserts would stay green forever while a seventh kind
+    went unclassified — which is the failure mode that matters, because an
+    unclassified OPEN-only kind is one that Simple would treat as ordinary. The
+    coverage assertion is therefore the load-bearing line here, not the loop.
+
+    ``command`` is the only OPEN-only kind today. Nothing about this test says so
+    twice: it reads the answer out of the validator, exactly as the function
+    does."""
+    samples = {
+        "routine": {"kind": "routine", "routineId": "r-1", "title": "Run it"},
+        "stat": _STAT_WIDGET,
+        "checklist": _CHECKLIST,
+        "note": _NOTE,
+        "timer": _TIMER,
+        "command": _COMMAND_WIDGET,
+    }
+    assert set(samples) == set(WIDGET_KINDS), "a kind was added without a sample here"
+    for kind, spec in samples.items():
+        needs_dev = validate_widget_spec(spec, PolicyMode.SAFE) is not None
+        assert widget_uses_dev_abilities(spec) is needs_dev, kind
+
+
+def test_a_spec_no_mode_can_read_is_not_waiting_for_developer():
+    """"Needs Developer" means OPEN accepts it and SAFE does not — not "SAFE said
+    no", which is also true of every piece of nonsense in the table.
+
+    The distinction is what keeps a disabled card meaning 'your work is waiting'.
+    A row nothing can read is dropped by the render-time validation instead, and
+    it would be listed as merely waiting if this returned True for it."""
+    for junk in ({"kind": "agent", "title": "Do things", "prompt": "go"},
+                 {"kind": "command", "title": "No command here"},
+                 {"kind": "checklist", "items": [], "title": "Empty"},
+                 "not even a dict",
+                 None):
+        assert widget_uses_dev_abilities(junk) is False, junk
+
+
 def test_a_checklist_needs_real_lines_and_stays_within_its_caps():
     assert validate_widget_spec({**_CHECKLIST, "items": []}) is not None
     assert validate_widget_spec({**_CHECKLIST, "items": "milk"}) is not None
@@ -750,12 +806,62 @@ def test_a_state_the_frontend_invented_is_refused_and_the_stored_one_is_untouche
         _shutdown(reader, h.thread)
 
 
-def test_setting_the_state_of_a_dev_created_widget_is_refused_in_simple(tmp_path):
+def test_a_checklist_made_in_developer_is_fully_usable_in_simple(tmp_path):
+    """The regression test for the provenance bug, and it is about a real rail.
+
+    A checklist needs nothing developer about it — it invokes no tool and has no
+    execution surface, which is the whole reason it is one of the SAFE kinds. But
+    availability used to be read off ``created_in_mode``, so making one while the
+    Developer profile happened to be active stamped it 'open', and switching to
+    Simple produced a shopping list that announced it "uses developer abilities"
+    and refused to let its boxes be ticked. Both halves were false.
+
+    Asked of the spec, the stamp is irrelevant here: no marker, and the state
+    round-trips. The stamp itself still ships (the rail's DEV tag reads it), which
+    is why the last line pins it — 'fixed' must not mean 'stopped recording where
+    it came from'."""
+    _insert(tmp_path, "w-list", _CHECKLIST, mode="open")
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        assert "unavailable" not in _listed(reader, writer, 1)["w-list"]
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-list", "state": {"checked": [True, False]}}})
+        ticked = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert ticked == {"ok": True, "state": {"checked": [True, False]}}
+
+        row = _listed(reader, writer, 3)["w-list"]
+        assert row["state"] == {"checked": [True, False]}
+        assert row["createdInMode"] == "open"
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_setting_the_state_of_a_widget_that_needs_developer_abilities_is_refused(tmp_path):
     """Dispatch is the enforcement, never the display marker (owner decision
-    2026-08-06). A dev-created checklist is LISTED in Simple as a disabled row, so
-    a stale frontend — or a mode switch mid-click — arrives here, and here is where
-    it is turned away. The refusal is the same sentence the row carries."""
-    _insert(tmp_path, "w-dev", _CHECKLIST, mode="open")
+    2026-08-06). A widget that needs Developer is LISTED in Simple as a disabled
+    row, so a stale frontend — or a mode switch mid-click — arrives here, and here
+    is where it is turned away. The refusal is the same sentence the row carries.
+
+    The vehicle is a ROUTINE widget pointing at a dev routine, and it has to be:
+    the three kinds that keep state are all SAFE by construction, so no stateful
+    widget can need Developer on its own. This spec is SAFE-legal by SHAPE and
+    needs Developer anyway, because of what it points AT — which is the case the
+    look-through exists for, and the one a spec-only check would miss."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.insert_routine(
+        id="r-dev",
+        name="Tidy up",
+        description="",
+        plan_json={"id": "r-dev", "name": "Tidy up", "description": "",
+                   "variables": [], "steps": []},
+        created_from_conversation_id=None,
+        created_at=int(time.time()),
+        created_in_mode="open",
+    )
+    store.close()
+    _insert(tmp_path, "w-dev", {"kind": "routine", "routineId": "r-dev", "title": "Tidy up"})
     h = build_server(tmp_path, responses=[], register_tool=False)
     reader, writer = h.reader, h.writer
     try:
@@ -769,15 +875,17 @@ def test_setting_the_state_of_a_dev_created_widget_is_refused_in_simple(tmp_path
         }
         assert "state" not in _listed(reader, writer, 2)["w-dev"]
 
-        # ...and the same widget takes the change once Developer is on, so the
-        # refusal above is about the PROFILE and not about the widget being broken.
+        # ...and once Developer is on, the SAME call stops being turned away for
+        # that reason and is turned away for the honest one instead. Both are
+        # refusals, so an assertion on `ok` alone would have proved nothing: it is
+        # the sentence CHANGING that shows the profile is what drove the first one.
         reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.PROFILE_SET,
                      "params": {"profileId": "developer"}})
         writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
         reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_SET_STATE,
                      "params": {"id": "w-dev", "state": {"checked": [True, True]}}})
-        allowed = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
-        assert allowed["ok"] is True
+        in_open = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        assert in_open == {"ok": False, "error": "That widget doesn't keep anything to change."}
     finally:
         _shutdown(reader, h.thread)
 

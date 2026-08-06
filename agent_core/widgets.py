@@ -192,6 +192,32 @@ def validate_widget_spec(spec, mode: PolicyMode = PolicyMode.SAFE) -> str | None
     return "That isn't a kind of widget Addison can make."
 
 
+def widget_uses_dev_abilities(spec) -> bool:
+    """True iff this spec NEEDS the Developer profile — OPEN accepts it and SAFE
+    refuses it. The widget-side mirror of ``routine_uses_dev_abilities``
+    (``routines/model.py``), and deliberately the same *question*: what does this
+    artifact ASK FOR, never where was it born.
+
+    Availability used to be read off the ``created_in_mode`` stamp instead, which
+    is a different question wearing the same answer. A checklist made while the
+    Developer profile happened to be active is stamped 'open' and needs nothing
+    developer about it; under the stamp it arrived in Simple disabled, saying it
+    "uses developer abilities" — a sentence that was simply false, about a widget
+    whose boxes then could not be ticked. The stamp survives as display-only
+    provenance (the rail's DEV tag) and is never again consulted for what Simple
+    may use.
+
+    Derived from the validator rather than by naming ``command`` here, so a
+    seventh OPEN-only kind is covered the day it is added and cannot be added
+    without being covered. A spec that BOTH modes refuse is not "waiting for
+    Developer" — it is not a widget at all — and returns False, leaving it to the
+    render-time validation to drop."""
+    return (
+        validate_widget_spec(spec, PolicyMode.OPEN) is None
+        and validate_widget_spec(spec, PolicyMode.SAFE) is not None
+    )
+
+
 def validate_widget_state(spec: dict, state) -> str | None:
     """Return None if ``state`` is a valid state for ``spec``, else a plain reason.
 
