@@ -24,6 +24,7 @@ supporting parts honest.
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from agent_core import main
@@ -190,3 +191,45 @@ def test_googles_own_method_list_is_not_enough_on_its_own():
         "gemini-3.1-pro-preview-customtools", "gemma-4-31b-it", "gemini-3.6-flash",
     ):
         assert is_chat_model_id(chat) is True, chat
+
+
+# --- the migration that a "log" needs in order to keep logging ---------------
+
+
+def test_a_database_that_predates_server_detail_gains_it_and_keeps_recording(tmp_path):
+    """`CREATE TABLE IF NOT EXISTS` does NOTHING to a table that already exists.
+
+    `provider_attempts` shipped, recorded one real 404, and gained `server_detail`
+    hours later. On every database that saw the first version the column never
+    appeared — and `insert_provider_attempt` then raised "no such column" straight
+    into the orchestrator's best-effort `except`, which drops the row without a
+    word. The table stayed frozen at one row while failures kept happening, and an
+    empty log reads as "nothing went wrong".
+
+    So this asserts the INSERT, not the column: `PRAGMA table_info` passing proves
+    the migration ran, and only a successful write proves it ran far enough."""
+    from agent_core.memory.store import Store
+
+    db = tmp_path / "old.sqlite3"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE provider_attempts ("
+        " id TEXT PRIMARY KEY, conversation_id TEXT, provider TEXT NOT NULL,"
+        " model TEXT NOT NULL, outcome TEXT NOT NULL, status_code INTEGER,"
+        " detail TEXT, created_at INTEGER NOT NULL)"
+    )
+    conn.commit()
+    conn.close()
+
+    store = Store(db)
+    try:
+        store.insert_provider_attempt(
+            id="a1", conversation_id=None, provider="google", model="gemini-2.5-flash",
+            outcome="rejected", status_code=404, detail="plain sentence",
+            server_detail="models/... is not found for API version v1beta",
+            created_at=1,
+        )
+        rows = store.list_provider_attempts()
+        assert rows[0]["server_detail"].startswith("models/")
+    finally:
+        store.close()

@@ -72,6 +72,14 @@ class Store:
         # with the ONLY safe default. 'unknown' — never 'absent' — because a row
         # written before this column says nothing about whether a key is saved, and
         # a stored "no key" is what routes a turn to the external relay.
+        # `provider_attempts` shipped without `server_detail` and gained it hours
+        # later. `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+        # exists, so without this line the column simply never appears on any
+        # database that saw the first version — and `insert_provider_attempt`
+        # raises "no such column" into the orchestrator's best-effort `except`,
+        # which drops the row in silence. A log that quietly stops logging is worse
+        # than no log: the empty table reads as "nothing went wrong".
+        self._add_column_if_missing("provider_attempts", "server_detail", "TEXT")
         self._add_column_if_missing(
             "provider_config",
             "secret_presence",
