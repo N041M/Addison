@@ -28,7 +28,37 @@ JOB=${1:-all}
 
 say() { printf '\n=== %s ===\n' "$1"; }
 
+# A missing TOOL is not a failing gate, and must not read like one. Run cold, this
+# script used to stop at a bare `ruff: command not found` — which tells a reader
+# nothing about what to do, and invites the worst repair (installing the tool
+# globally, so the next run checks a different ruff than CI does).
+#
+# Exit 2 for "cannot run", distinct from a gate's own non-zero: the difference
+# between "your code is wrong" and "your shell is not set up" is the whole message.
+need() {
+    missing=''
+    for tool in "$@"; do
+        command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
+    done
+    [ -z "$missing" ] && return 0
+    printf '\nCannot run this job — not on PATH:%s\n' "$missing" >&2
+    case "$1" in
+        ruff|pyright|pytest)
+            printf 'The Python gates need the agent-core venv:\n\n    source %s/agent_core/.venv/bin/activate\n\n' "$ROOT" >&2
+            printf 'If it does not exist yet: python3 -m venv agent_core/.venv && source agent_core/.venv/bin/activate && pip install -e "agent_core[dev]" pyright\n' >&2
+            ;;
+        npm|node)
+            printf 'The frontend gates need node + an install:\n\n    cd %s/shell && npm ci\n\n' "$ROOT" >&2
+            ;;
+        cargo)
+            printf 'The Rust gates need a toolchain: https://rustup.rs\n' >&2
+            ;;
+    esac
+    exit 2
+}
+
 gates_python() {
+    need ruff pyright pytest
     say "python (ruff · pyright · pytest)"
     cd "$ROOT"
     # PYTHONPATH mirrors CI: the editable install covers agent_core.*, the repo
@@ -39,6 +69,7 @@ gates_python() {
 }
 
 gates_frontend() {
+    need npm node
     say "frontend (eslint · tsc · vitest · build)"
     cd "$ROOT/shell"
     # --max-warnings=0: a warning nobody fails on is a warning nobody fixes.
@@ -51,6 +82,7 @@ gates_frontend() {
 }
 
 gates_rust() {
+    need cargo
     say "rust (cargo test, Tauri shell)"
     # A Tauri build needs the frontend bundle to exist; CI stubs it and so do we,
     # so this job never depends on having run the frontend one first.
