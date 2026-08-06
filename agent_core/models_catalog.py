@@ -202,6 +202,100 @@ def static_catalog_for(provider_id: str) -> list[CloudModel]:
     return []
 
 
+# Quality rank for a live model the curated table has never heard of. LOWER is
+# better everywhere in this file, so this sits below every hand-ranked entry
+# (Anthropic 10-60, OpenAI 15-70, Google 20-50): a model nobody has assessed is
+# reachable by name and by an explicit custom chain, and is the last thing
+# quality-first routing reaches for on its own.
+_UNRANKED_QUALITY_RANK = 80
+
+# Model families a provider lists that cannot hold a conversation. Google's
+# listing says which methods a model supports and is filtered on that; OpenAI's
+# has no capability field at all, so without this a picker of chat models fills
+# up with transcription, embedding and image endpoints.
+#
+# A DENYLIST, deliberately not an allowlist. An unrecognised id shows up and can
+# be tried; an allowlist would hide the model that shipped this morning. Failing
+# open costs one confusing row, failing closed costs the model somebody connected
+# the key for — and being wrong in that direction is what this whole function
+# exists to stop.
+_NON_CHAT_PREFIXES: tuple[str, ...] = (
+    "text-embedding", "text-moderation", "omni-moderation", "text-similarity",
+    "whisper", "tts", "dall-e", "gpt-image", "sora", "babbage", "davinci", "ada",
+    "curie", "embedding", "aqa", "imagen", "veo", "learnlm-embedding",
+    # Google families that DECLARE generateContent and cannot hold a conversation.
+    # Checked against a real key's listing on 2026-08-06, where 18 of 42 models
+    # advertising the method were image, music, robotics or research endpoints:
+    # ``supportedGenerationMethods`` says which METHOD a model answers, never what
+    # the method is FOR, so it cannot be the only filter.
+    "lyria", "nano-banana", "deep-research", "antigravity",
+)
+_NON_CHAT_SUBSTRINGS: tuple[str, ...] = (
+    "-audio", "-realtime", "-transcribe", "-tts",
+    # Same listing: `gemini-3-pro-image`, `gemini-2.5-computer-use-…`,
+    # `gemini-robotics-er-…`. Substrings because the family sits mid-id.
+    "-image", "computer-use", "robotics",
+)
+
+
+def is_chat_model_id(model_id: str) -> bool:
+    """Could this listed model id hold a conversation? See ``_NON_CHAT_PREFIXES``
+    for why this is a denylist and why that direction is the safe one."""
+    lowered = model_id.lower()
+    if lowered.startswith(_NON_CHAT_PREFIXES):
+        return False
+    return not any(part in lowered for part in _NON_CHAT_SUBSTRINGS)
+
+
+def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
+    """The picker's entries for a provider, built from THE IDS IT ACTUALLY SERVES.
+
+    This is the fix for a bug that made a whole provider unusable while reporting
+    itself connected (2026-08-06). Registration used to call the provider's list
+    endpoint purely to validate the key, DISCARD the reply, and register the
+    hardcoded ids in the curated table above. `provider.connect` therefore proved
+    only that listing works — never that the ids it was about to register exist —
+    so when Google's real ids drifted from ``gemini-2.5-pro``/``gemini-2.5-flash``,
+    the picker offered two models, the Connections panel said "connected", and
+    every single message came back ``404``. The authoritative list was fetched and
+    thrown away one line earlier.
+
+    So the live list decides WHICH models exist, and the curated table is demoted
+    to what it is genuinely good for: a display name and a hand-assigned
+    ``quality_rank`` for the ids it recognises. Curation can no longer outvote the
+    provider about what is real.
+
+    Order is curated-first (hand-ranked, best first) and then everything else the
+    provider serves, so a familiar list stays familiar and new models land at the
+    end rather than shuffling it. An id the provider does not list is simply
+    absent — including a curated one, which is exactly the case that used to 404.
+    """
+    live = [i for i in ids if isinstance(i, str) and i and is_chat_model_id(i)]
+    live_ids = set(live)
+    out: list[CloudModel] = []
+    seen: set[str] = set()
+    for entry in static_catalog_for(provider_id):
+        if entry.id in live_ids:
+            out.append(entry)
+            seen.add(entry.id)
+    for model_id in live:
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        # Raw id as the label: this file's rule is real names, never invented
+        # copy, and a prettifier would be inventing one.
+        out.append(
+            CloudModel(
+                id=model_id,
+                label=model_id,
+                description="",
+                provider=provider_id,
+                quality_rank=_UNRANKED_QUALITY_RANK,
+            )
+        )
+    return out
+
+
 def merge_catalogs(catalogs: list[list[CloudModel]]) -> list[CloudModel]:
     """Union several providers' catalogs into the single picker menu, keeping at
     most ONE default across the whole list (the first default seen wins; later

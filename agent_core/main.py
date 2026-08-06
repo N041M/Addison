@@ -40,10 +40,10 @@ from agent_core.memory.store import Store
 from agent_core.models_catalog import (
     CatalogFetchError,
     CloudModel,
+    catalog_from_live_ids,
     default_cloud_model,
     fetch_cloud_catalog,
     load_cloud_catalog,
-    static_catalog_for,
 )
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -794,8 +794,14 @@ class JsonRpcServer(
             # Display-only provenance for a snapshot row (C6 — never filtered). It
             # reports 'custom' when the active profile is Custom, so a restore points
             # list can SHOW where a row was made, even though Custom derives OPEN for
-            # every behavioural purpose. The three artifact-hiding filters still
-            # compare against 'open' and stay untouched (D6).
+            # every behavioural purpose. This is the ONLY place 'custom' is written as
+            # a mode: routines and widgets stamp ``mode.value``, which is 'safe' or
+            # 'open' and never 'custom' (D6).
+            #
+            # The routine-side availability checks still compare against 'open' and
+            # stay untouched. The WIDGET side no longer compares at all — it asks what
+            # a widget needs (2026-08-06, rpc/widgets.py::_widget_needs_dev) — so a
+            # value added here could not reach it even in principle.
             mode_ref=lambda: (
                 "custom"
                 if self._active_profile is not None
@@ -813,6 +819,11 @@ class JsonRpcServer(
             on_activity=self._emit_activity,
             on_usage=self._record_usage,
             on_tool_audit=self._record_tool_audit,
+            # The two halves of "what did the model layer do": on_usage records the
+            # calls that worked, this one the calls that did not. Only the first
+            # existed until 2026-08-07, so a provider that never once succeeded was
+            # invisible to every query anyone could run.
+            on_provider_attempt=self._record_provider_attempt,
             shell_bridge=self._shell_bridge,
             # Custom-profile guards (D3): the one resolution function, so the live
             # turn honours the same posture as the widget rail and routine engine.
@@ -1517,6 +1528,17 @@ class JsonRpcServer(
             return
         self.store.insert_tool_audit(**row)
 
+    def _record_provider_attempt(self, row: dict) -> None:
+        """Persist one FAILED provider call (2026-08-07).
+
+        The `_record_tool_audit` twin, bare for the same reason: the orchestrator's
+        `_record_attempt` already swallows, and a second layer here would only make
+        a broken store quieter. `usage_log` records the successes; this records the
+        other half, which until now was recorded nowhere at all."""
+        if self.store is None:
+            return
+        self.store.insert_provider_attempt(**row)
+
     def _record_usage(self, usage, latency_ms, provider_id, model_id) -> None:
         """Record one provider call's token usage + latency into ``usage_log``.
 
@@ -1970,17 +1992,23 @@ def main() -> None:
             for entry in models:
                 model_router.register_primary_model(entry.id, _build_cloud_provider(entry))
             return models
+        # The list call VALIDATES the key and SUPPLIES the models — one request,
+        # both jobs. Its reply used to be discarded and the curated static catalog
+        # registered instead, which is how a connected Google key could offer two
+        # models in the picker and 404 on every message: connect proved the listing
+        # worked, never that the ids about to be registered existed. Registering
+        # anything the provider did not just list is the bug, not a fallback.
         if provider_id == "openai":
-            openai_list_models("https://api.openai.com/v1", getter)  # validates the key
-            models = static_catalog_for("openai")
+            models = catalog_from_live_ids(
+                "openai", openai_list_models("https://api.openai.com/v1", getter)
+            )
             for entry in models:
                 model_router.register_primary_model(
                     entry.id, OpenAIProvider(model=entry.id, api_key_getter=getter)
                 )
             return models
         if provider_id == "google":
-            google_list_models(getter)  # validates the key
-            models = static_catalog_for("google")
+            models = catalog_from_live_ids("google", google_list_models(getter))
             for entry in models:
                 model_router.register_primary_model(
                     entry.id, GoogleProvider(model=entry.id, api_key_getter=getter)

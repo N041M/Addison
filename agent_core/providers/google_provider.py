@@ -368,9 +368,27 @@ def list_models(api_key_getter, client=None) -> list[str]:
         data = response.json()
     except ValueError:
         raise RuntimeError("Google's reply couldn't be read.") from None
+    return _ids_from_models_payload(data)
+
+
+def _ids_from_models_payload(data) -> list[str]:
+    """The chat-capable model ids in a ``GET /v1beta/models`` body.
+
+    Split out of ``list_models`` so the filter can be tested against a payload
+    rather than only through an HTTP round trip — this list is what registration
+    now registers, so what it drops is load-bearing rather than cosmetic."""
     ids: list[str] = []
     for entry in (data.get("models") if isinstance(data, dict) else None) or []:
         name = entry.get("name") if isinstance(entry, dict) else None
-        if isinstance(name, str) and name:
-            ids.append(name.split("/", 1)[-1])
+        if not isinstance(name, str) or not name:
+            continue
+        # Google SAYS what each model can do, so ask rather than guess: this
+        # listing carries embedding models, ``aqa`` and image models alongside the
+        # chat ones, and every one of them errors at ``:generateContent``. A
+        # missing or non-list field KEEPS the model — the field is the filter, and
+        # its absence must never quietly empty somebody's picker.
+        methods = entry.get("supportedGenerationMethods")
+        if isinstance(methods, list) and "generateContent" not in methods:
+            continue
+        ids.append(name.split("/", 1)[-1])
     return ids
