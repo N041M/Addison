@@ -89,6 +89,16 @@ gates_rust() {
     mkdir -p "$ROOT/shell/dist"
     cd "$ROOT/shell/src-tauri"
     cargo test
+    # PLATFORM-GATED CODE IS THE ONE THING THIS CANNOT CHECK. Everything behind
+    # `#[cfg(target_os = "macos")]` compiles here and vanishes on CI's Linux
+    # runner, taking its imports and constants with it — so `-D warnings` finds
+    # dead code there that does not exist here. Cross-checking locally is not
+    # practical (a Linux build of the Tauri deps needs a webkit sysroot), so when
+    # you gate a symbol, check every import and constant it was the sole user of.
+    #
+    # And read the COUNT in a CI failure, not the errors you recognise: "due to 4
+    # previous errors" got two of them fixed on 2026-08-06 because the other two
+    # were a different error kind and the grep that found them did not match.
     cargo clippy --all-targets -- -D warnings
 }
 

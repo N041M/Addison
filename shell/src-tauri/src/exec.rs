@@ -35,7 +35,11 @@
 use std::io::Read;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+// macOS-only, like every use of it here: `Path::new(SANDBOX_EXEC)` and the
+// profile tests are all behind `#[cfg(target_os = "macos")]`.
+#[cfg(target_os = "macos")]
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -43,6 +47,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+// Same: only the seatbelt profile builders canonicalise, and they are macOS-only.
+#[cfg(target_os = "macos")]
 use crate::filesystem::canonical_lossy;
 use crate::ipc::{required_str, RpcError};
 
