@@ -186,12 +186,16 @@ capability-declaration lattice was cut in favour of the closed kind list — see
 invariant 4 above and [ROADMAP.md](ROADMAP.md) for status). The one dependency that
 is not obvious from the list is inside 7:
 
-- **7 — MCP client.** 5.5 shipped the `tool_audit` log, so the spec's promise that
-  MCP tools are "gated, logged, undo-aware" is now satisfiable and that half of the
-  dependency is discharged. It is **still blocked on the SAFE-constraint question**
-  in "Known gaps", because a server declares its own risk and admitting a tool to
-  SAFE on that say-so breaks SAFE invariant 2 through a path the registration check
-  cannot see.
+- **7 — MCP client. STARTED; phase 1 of five landed 2026-08-06** (config only,
+  nothing callable). 5.5 shipped the `tool_audit` log, so the spec's promise that
+  MCP tools are "gated, logged, undo-aware" is satisfiable and that half of the
+  dependency is discharged. The **SAFE-constraint question** in "Known gaps" is
+  **deferred, not blocking**: MCP is dev-only for v1, so a server's self-declared
+  risk never reaches the SAFE view at all. **Transport is HTTP only for v1** —
+  stdio would mean the core launching an executable outside the seatbelt, so a
+  server row holds a URL and never a command.
+  [`docs/step-7-mcp-plan.md`](docs/step-7-mcp-plan.md) owns the phases and both
+  decisions.
 - **8 — the automation keyword gate** + author-OS-run automation. Until it exists,
   nothing in the tree can author or arm automation, so G2 holds trivially.
 

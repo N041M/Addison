@@ -49,6 +49,49 @@ CREATE TABLE IF NOT EXISTS workspace_trust (
     granted_at  INTEGER NOT NULL
 );
 
+-- External MCP servers Addison consumes as a CLIENT (step 7, phase 1). Addison is
+-- never an MCP server or gateway. A row here is INERT CONFIGURATION: phase 1 ships
+-- no protocol client, no tool discovery and no dispatch, so nothing in the tree
+-- reads this table to reach anything. Discovery is phase 2 (docs/step-7-mcp-plan.md,
+-- which owns the phase order).
+--
+-- TRANSPORT IS HTTP ONLY for v1 (owner decision 2026-08-06), which is why the row
+-- holds a `url` and NEVER a command. stdio would mean launching an arbitrary
+-- executable from the Agent Core — a process with no OS permissions of its own and
+-- no seatbelt around it — so the column that would carry a launch command does not
+-- exist, and `transport` is CHECK-constrained to the one value that needs none.
+-- Widening that vocabulary is a deliberate migration, not an insert.
+--
+-- The URL is validated where it is STORED (agent_core/rpc/mcp.py, `_mcp_url_problem`),
+-- on the `provider_config.base_url` precedent and for the same G1 reason: this table
+-- is snapshot-CAPTURED (snapshots/scope.py), so whatever lands here is copied into
+-- `config_snapshots.state_blob` and the plaintext sidecars, forever. https:// in
+-- general; http:// only for a server on this computer (loopback), which is the
+-- narrowed form of the ONE plain-http case rpc/providers.py already permits.
+--
+-- No token, no header, no credential column — and that is not an oversight: any
+-- secret an MCP server needs belongs in the OS keychain (G1), never here. Phase 1
+-- connects to nothing, so it needs no token at all; see the plan's §4.
+--
+-- `name` is the person's own plain label and is UNIQUE (case-insensitively, via the
+-- index below). Phase 2 namespaces every discovered tool as `mcp:<server>:<tool>`
+-- and must refuse a collision rather than replace, so two servers sharing a name
+-- would put two strangers' tools behind one id.
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id          TEXT PRIMARY KEY,        -- uuid4
+    name        TEXT NOT NULL,           -- plain user-given label, e.g. "Design docs"
+    url         TEXT NOT NULL,           -- streamable-HTTP endpoint. NEVER a command.
+    transport   TEXT NOT NULL DEFAULT 'http'
+                    CHECK(transport IN ('http')),
+    -- Rows are created enabled. There is no toggle RPC in phase 1 because there is
+    -- nothing yet to disable; the column exists so phase 2 can stop consuming a
+    -- server without the person losing its configuration.
+    enabled     INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
+    ON mcp_servers(name COLLATE NOCASE);
+
 CREATE TABLE IF NOT EXISTS action_snapshots (
     id                  TEXT PRIMARY KEY,
     tool_call_id        TEXT NOT NULL,

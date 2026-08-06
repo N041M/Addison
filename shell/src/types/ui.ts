@@ -552,6 +552,29 @@ export interface WorkspaceRoot {
   grantedAt?: number;
 }
 
+// ---------------------------------------------------------------------------
+// MCP servers — the external tool servers Addison consumes as a CLIENT
+// (mcp.list; Phase-2 step 7, phase 1 of five). A row is CONFIGURATION AND
+// NOTHING ELSE: this phase ships no connection, no tools and nothing Addison can
+// call, so what the panel renders is a saved address, not a capability. Nothing
+// secret rides the payload — the address is refused core-side if it carries a
+// sign-in name, password or key, and a token (when a later phase needs one) lives
+// in the OS keychain, never here. The parser fails CLOSED: a row without a usable
+// id and name is DROPPED rather than rendered with a Remove button it can't act on.
+// ---------------------------------------------------------------------------
+export interface McpServer {
+  /** The core's row id — what `mcp.remove` takes. */
+  id: string;
+  /** The plain name the person gave this server. */
+  name: string;
+  /** Its http(s) address. Never a command; nothing here starts a program. */
+  url: string;
+  /** Whether Addison would consume it once there is something to consume. */
+  enabled: boolean;
+  /** Unix seconds when it was added, when the core reports it. */
+  addedAt?: number;
+}
+
 /** The full profile picture from `profile.get`. */
 export interface ProfileState {
   activeProfile: string;

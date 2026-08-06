@@ -629,9 +629,12 @@ class RoutingStrategy(str, Enum):
 
 **MCP-server config (§4.12).** An MCP server connection is **reversible config,
 like a provider** — non-secret metadata persisted, secrets (if any) in the
-keychain per G1, snapshotted, addable by prompting, revocable. It reuses the
-add-an-endpoint plumbing; the concrete table shape lands with that work (open —
-amendment §13 Q6, including how MCP tool metadata declares undo-ability).
+keychain per G1, snapshotted, addable by prompting, revocable. **The concrete
+table shape landed with step 7 phase 1 on 2026-08-06** — `mcp_servers`, DDL in
+`agent_core/memory/schema.sql` and described in
+[data-model.md](data-model.md), which owns it. The SAFE constraint (and how MCP
+tool metadata declares undo-ability) is still open and is deferred rather than
+blocking; [KNOWN-GAPS.md](KNOWN-GAPS.md) owns that question.
 
 ---
 
@@ -1156,12 +1159,18 @@ quota-sharing, MCP/A2A-as-a-*gateway*, and 11-engine token compression.
 
 ### 4.12 Amendment 2026-07-20: MCP client (Addison consumes external tools)
 
-> **NOT BUILT as of 2026-07-26.** This is Phase-2 step 7 and nothing in it exists in
-> the tree — no MCP client, no server config table, no RPC namespace. Amendment §13
-> Q6 (the exact SAFE constraint, and how MCP tool metadata declares undo-ability) is
-> genuinely still open; do not treat the shape below as settled. The one part that
-> already holds mechanically is invariant 2, which will keep a mutating, no-undo MCP
-> tool out of the SAFE view whatever else is decided.
+> **PARTLY BUILT (2026-08-06): phase 1 of five.** What exists in the tree is
+> CONFIGURATION ONLY — the `mcp_servers` table, the `mcp.*` RPC namespace and a
+> Developer-only Settings section. There is still **no MCP client, no discovery, no
+> registration and no dispatch**, so nothing here is callable by a model yet.
+> [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and the step's two
+> decisions — **transport is HTTP only for v1** (answered 2026-08-06; a server row
+> stores a URL, never a command), and MCP is **dev-only for v1**, which defers
+> amendment §13 Q6 (the exact SAFE constraint, and how MCP tool metadata declares
+> undo-ability) rather than answering it. Do not treat the rest of the shape below
+> as settled. The one part that already holds mechanically is invariant 2, which
+> will keep a mutating, no-undo MCP tool out of the SAFE view whatever else is
+> decided.
 
 Addison works with MCP as a **client** — it *consumes* external MCP servers/tools
 — **not** as an MCP server or gateway (the OmniRoute-style thing still declined).

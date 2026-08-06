@@ -7,10 +7,9 @@
 > Adds the guaranteed-rollback floor (G3) and its **snapshot** store (auto + on-command,
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server
-> config. **`config_snapshots` (step 1), `workspace_trust` (step 5) and `widget_state`
-> (step 6) have shipped and their DDL is final.** `mcp_servers` has not been built; it is
-> a sketch, called out as such where it appears, and is deliberately absent from the ER
-> diagrams, which show only what `agent_core/memory/schema.sql` actually creates. The
+> config. **`config_snapshots` (step 1), `workspace_trust` (step 5), `widget_state`
+> (step 6) and `mcp_servers` (step 7 phase 1) have shipped and their DDL is final.** The
+> ER diagrams show only what `agent_core/memory/schema.sql` actually creates. The
 > amendment's **`required_capabilities` widget column was CUT** (owner decision
 > 2026-08-06): the widget vocabulary is a closed set of kinds instead — see the `widgets`
 > notes below.
@@ -152,6 +151,14 @@ erDiagram
         TEXT id PK
         TEXT name
         TEXT instructions
+        INTEGER enabled
+        INTEGER created_at
+    }
+    mcp_servers {
+        TEXT id PK
+        TEXT name "unique, case-insensitive"
+        TEXT url "http(s) endpoint, NEVER a command"
+        TEXT transport "http only in v1"
         INTEGER enabled
         INTEGER created_at
     }
@@ -438,16 +445,30 @@ erDiagram
   finds an empty list. Snapshots are recovery machinery, not artifacts. Two tests hold the
   line — a behavioural one and a **source-level** one that reads the SQL in `store.py` and
   `snapshot_manager.py` and fails if the column ever appears in a filter position.
-- **mcp_servers** *(Phase-2 step 7 — **not in `schema.sql` yet**; amendment §8.5)* — the
-  planned home for non-secret configuration of external **MCP servers Addison consumes as
-  a client** (Addison is never an MCP server/gateway). Column names are a sketch. Shaped
-  like a provider row: a label, the transport, and non-secret connection metadata
-  (`config_json` — the launch command or base URL). Any credential an MCP server needs is
-  stored in the **OS keychain per G1**, never in this table. Connecting a server is
-  **reversible config** — addable by prompting, revocable, and **snapshotted** — so it
-  shares the add-an-endpoint plumbing. Whether an MCP tool is usable in SAFE is decided at
-  the registry/gate (read-only or genuinely undo-able only, per invariant 2), not by a
-  column here.
+- **mcp_servers** *(Phase-2 step 7, phase 1 — **built 2026-08-06**; DDL is final)* —
+  non-secret configuration of the external **MCP servers Addison consumes as a client**
+  (Addison is never an MCP server/gateway). A row is a plain `name` the person chose, the
+  server's `url`, `transport`, `enabled` and `created_at` — and it is **inert**: phase 1
+  ships no protocol client, no tool discovery and no dispatch, so nothing reads this table
+  to reach anything. [`step-7-mcp-plan.md`](step-7-mcp-plan.md) owns the phase order.
+  - **`url`, never a command.** Transport is **HTTP only for v1** (owner decision
+    2026-08-06) — `transport` is CHECK-constrained to `http`, and there is no column that
+    could carry an executable to launch. The plan's §5 owns that decision and keeps stdio
+    as the documented later option.
+  - **No credential column, per G1.** Any secret a server needs goes to the **OS
+    keychain**, never here; phase 1 connects to nothing, so it needs none at all. The URL
+    itself is validated where it is stored (`agent_core/rpc/mcp.py`) on the
+    `provider_config.base_url` precedent — no userinfo, no query or fragment, no key-shaped
+    path segment — and `https://` is required unless the host is this computer.
+  - **Snapshot-CAPTURED** (`snapshots/scope.py`): a server connection is reversible config
+    (spec §4.12) — revocable, snapshotted, and addable by prompting. Unlike
+    `workspace_trust` it is *not* standing consent: a configured server grants Addison
+    nothing on this machine, so a restore that brings one back re-instates a setting rather
+    than a permission.
+  - `name` is UNIQUE case-insensitively, because phase 2 namespaces every discovered tool
+    as `mcp:<server>:<tool>` and must refuse a collision rather than replace. Whether an
+    MCP tool is usable in SAFE is decided at the registry/gate (read-only or genuinely
+    undo-able only, per invariant 2), never by a column here.
 
 ## Widgets and usage tables
 

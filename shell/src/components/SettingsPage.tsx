@@ -15,7 +15,8 @@
 // Sections, in the brief's order: Where Addison thinks · Which model answers ·
 // API keys · Run a model on this computer · Routines · Skills · Profile · How
 // careful Addison is (Custom only) · Folders Addison may work in
-// (Developer/Custom only) · Restore points · Diagnostics.
+// (Developer/Custom only) · Tool servers (Developer/Custom only) · Restore points ·
+// Diagnostics.
 //
 // TWO THINGS THAT ARE NOT STYLING, and must survive any future edit here:
 //   * G1 — a key typed into a row goes to the OS keychain through the Rust
@@ -35,6 +36,7 @@ import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
 import type { WorkspaceCardState } from "../hooks/useWorkspace";
+import type { McpServersCardState } from "../hooks/useMcpServers";
 import type { ThemeChoice } from "../lib/theme";
 import type { PopupAnchor } from "./ModelPopup";
 import {
@@ -50,6 +52,7 @@ import { SkillsSection } from "./SkillsSection";
 import { RestorePointsSection } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
 import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
+import { McpServersPanel } from "./McpServersPanel";
 import { RoutingCard, type RoutingCardModel } from "./RoutingCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -82,6 +85,12 @@ interface Props {
    * then. It shows ONLY on the Developer/Custom surfaces (keyed off the active
    * profile, never the mode); Simple never sees it. */
   workspace?: WorkspaceCardState;
+  /** The MCP tool-server bundle (useMcpServers; Phase-2 step 7 phase 1). Optional
+   * so a partial caller (older tests) still renders — the section is simply
+   * omitted then. It shows ONLY on the Developer/Custom surfaces (keyed off the
+   * active profile, never the mode); Simple never sees it, and the core refuses
+   * `mcp.add` outside Developer independently of this gate. */
+  mcp?: McpServersCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -209,6 +218,7 @@ export function SettingsPage({
   guards,
   routing,
   workspace,
+  mcp,
   profile,
   onSetProfile,
   diagnostics,
@@ -235,9 +245,12 @@ export function SettingsPage({
     return () => clearTimeout(t);
   }, [scrollTarget, onScrolled]);
 
-  const showWorkspace =
-    Boolean(workspace) &&
-    (profile?.activeProfile === "developer" || profile?.activeProfile === "custom");
+  // Developer/Custom only, keyed off the ACTIVE PROFILE and never the policy mode
+  // — the same gate the workspace-trust section uses, for the same reason.
+  const developerSurface =
+    profile?.activeProfile === "developer" || profile?.activeProfile === "custom";
+  const showWorkspace = Boolean(workspace) && developerSurface;
+  const showMcp = Boolean(mcp) && developerSurface;
 
   return (
     <Surface title="Settings" description={SETTINGS_DESCRIPTION} pinned={pinned}>
@@ -316,6 +329,16 @@ export function SettingsPage({
       {showWorkspace && workspace && (
         <SurfaceSection label="Folders Addison may work in">
           <WorkspaceTrustPanel connected={connected} workspace={workspace} />
+        </SurfaceSection>
+      )}
+
+      {/* Tool servers — the MCP client's configuration (Phase-2 step 7, phase 1).
+          Same Developer/Custom gate as workspace trust, and it sits beside it
+          because both answer "what may Addison reach". Nothing here connects to
+          anything yet; the panel says so in its own first line. */}
+      {showMcp && mcp && (
+        <SurfaceSection label="Tool servers">
+          <McpServersPanel connected={connected} mcp={mcp} />
         </SurfaceSection>
       )}
 

@@ -226,10 +226,17 @@ questions were resolved during steps 1–3 and went with it):
 - **Keyword-gate syntax (blocks step 8).** The exact prefix (`!run`, `arm:`,
   `sudo:` …) and the precise set of actions it gates. Owner's reading: running or
   arming powerful / OS-automation actions in the harness, never ordinary chat.
-- **MCP tools in SAFE (blocks step 7).** Read-only only, a curated allowlist, or
-  dev-only? And how MCP tool metadata declares undo-ability. **A server declares
-  its own risk, so this cannot be taken on trust** — see the sharpened note in the
-  spec's MCP section and item 4 of the step-5.5 plan.
+- **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
+  only, a curated allowlist, or dev-only? And how MCP tool metadata declares
+  undo-ability. **A server declares its own risk, so this cannot be taken on
+  trust** — see the sharpened note in the spec's MCP section and item 4 of the
+  step-5.5 plan. What unblocked the step was the owner's 2026-08-06 decision that
+  MCP is **dev-only for v1**: SAFE admission is deferred rather than answered, and
+  no code depends on it (phase 1 landed the same day and registers nothing at
+  all). Promoting a tool into SAFE is a later, separate decision.
+  [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the step's phases and its other
+  decisions — **transport was the second open question and is now answered: HTTP
+  only for v1**, which is why nothing in the step launches a program.
 - ~~**Widget capability tiers and vocabulary (blocks step 6).**~~ **CLOSED
   2026-08-06.** The safe interactive kinds are `checklist`, `note` and `timer`, and
   the vocabulary is a **closed, hard-coded set** — a widget spec does NOT declare

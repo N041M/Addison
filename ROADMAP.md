@@ -42,9 +42,11 @@ quickly.
 ## Next
 
 Two things are left — 7 and 8 — and they are independent enough to take in
-any order. Step 5.5 headed this list until 2026-07-31 and step 6 until 2026-08-06;
-both are finished. Their entries stay below, in place, because they are recent
-enough that people still ask what they covered.
+any order. **Step 7 is under way**: the first of its five phases landed on
+2026-08-06 and saves configuration only. Step 5.5 headed this list until
+2026-07-31 and step 6 until 2026-08-06; both are finished. Their entries stay
+below, in place, because they are recent enough that people still ask what they
+covered.
 
 5.5. **Containment for the coding harness — DONE 2026-07-31.** Step 5 gave
    Developer mode a real shell. What did not come with it was a boundary underneath
@@ -84,8 +86,24 @@ enough that people still ask what they covered.
    describe its own powers, because the list of kinds is closed and hard-coded,
    which is the same gate with nothing to get out of step. Code-backed widgets
    (monitors, scripts) are still Developer-only and still future work.
-7. **MCP client.** Consume external tools through the registry and the permission
-   gate that already exist. Addison is a client here, never a server.
+7. **MCP client — STARTED. Phase 1 of five is built (2026-08-06); nothing is
+   callable yet.** Consume external tools through the registry and the permission
+   gate that already exist. Addison is a client here, never a server. The five
+   phases and what each one covers are in
+   [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
+
+   **Transport is HTTP only for v1** (owner decision 2026-08-06): a saved server
+   is a web address, never a program to launch, which is why the client can live
+   in the agent core and needs nothing new in the desktop shell. Servers that talk
+   over stdio need containment that has not been built, so they wait — the plan
+   keeps both routes to them written down.
+
+   **What phase 1 shipped:** a Developer-only Settings section where you can save,
+   list and remove a tool server, and a restore point saved before each change so
+   the list can be rolled back. **Addison does not connect to any of them yet** —
+   it stores an address and nothing happens, which is exactly what this phase is
+   for, and the panel says so in its own first line. Nothing new is callable, and
+   nothing about the Simple profile changed.
 8. **The automation keyword gate.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
    never triggers itself.
@@ -125,8 +143,9 @@ Not because they are hard. They were looked at and put down on purpose.
   [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md): showing what a delete would remove
   before you approve it, which needs no sandbox and no execution at all; and a
   copy-on-write clone for the file-only subset. Isolating *foreign code* is also
-  a separate and live question — see the MCP transport decision in
-  [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
+  a separate and live question — it is what a stdio MCP server would need, and it
+  is why v1 talks to tool servers over the web instead
+  ([docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md) owns that decision).
 
 Addison also does not schedule itself, and that is not a gap. It is one of the four
 guarantees in the [README](README.md).

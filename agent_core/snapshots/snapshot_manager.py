@@ -63,7 +63,8 @@ REASONS: dict[str, str] = {
     "add_endpoint": "Before adding a service",  # step 4
     "routing_change": "Before changing how models are picked",  # step 3
     "workspace_trust": "Before trusting a project folder",  # step 5
-    "mcp_connect": "Before connecting an external tool",  # step 7
+    "mcp_connect": "Before adding a tool server",       # step 7 phase 1 (rpc/mcp.py)
+    "mcp_disconnect": "Before removing a tool server",  # step 7 phase 1 (rpc/mcp.py)
     "other": "Before a change",
 }
 

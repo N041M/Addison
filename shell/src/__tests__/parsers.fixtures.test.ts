@@ -18,6 +18,7 @@ import {
   parseStats,
   parseWidgetList,
   parseWorkspaceRoots,
+  parseMcpServers,
 } from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
 import { normalizeCloudModels, normalizeRoles } from "../hooks/useModelSelection";
@@ -28,6 +29,7 @@ import profileFixture from "./fixtures/profile.get.json";
 import rolesFixture from "./fixtures/model.availableRoles.json";
 import snapshotListFixture from "./fixtures/snapshot.list.json";
 import workspaceListFixture from "./fixtures/workspace.list.json";
+import mcpListFixture from "./fixtures/mcp.list.json";
 import costPlanFixture from "./fixtures/costPlan.propose.json";
 import endpointProposeFixture from "./fixtures/endpoint.proposeFromConversation.json";
 
@@ -229,6 +231,23 @@ describe("parseWorkspaceRoots over the real workspace.list payload", () => {
   it("reads the folders the core actually sends", () => {
     expect(parseWorkspaceRoots(workspaceListFixture)).toEqual([
       { directory: "/fixture/project", grantedAt: 4102444800 },
+    ]);
+  });
+});
+
+describe("parseMcpServers over the real mcp.list payload", () => {
+  it("reads the servers the core actually sends, camelCase timestamp included", () => {
+    // `addedAt` is the core's `created_at` renamed at the wire boundary — the same
+    // class of mapping the roots/folders mismatch hid in. Pinning it against the
+    // generated fixture is what makes a rename on either side a red build.
+    expect(parseMcpServers(mcpListFixture)).toEqual([
+      {
+        id: "mcp-fixture-0",
+        name: "Fixture tool server",
+        url: "https://tools.example/mcp",
+        enabled: true,
+        addedAt: 4102444800,
+      },
     ]);
   });
 });

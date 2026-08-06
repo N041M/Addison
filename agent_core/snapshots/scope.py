@@ -27,6 +27,14 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     "routines":        ("id", "name", "description", "plan_json",
                         "created_from_conversation_id", "created_at", "updated_at",
                         "run_count", "last_run_at", "created_in_mode"),
+    # Step 7 phase 1. CAPTURED, because spec §4.12 calls an MCP server connection
+    # reversible config — snapshotted, revocable, addable by prompting — and it is
+    # exactly the `provider_config` shape: a name, an address, and a flag, none of
+    # which can hold key material (a credential in the URL is refused at the store
+    # boundary, rpc/mcp.py). It is NOT standing consent like `workspace_trust`: a
+    # configured server grants Addison nothing on this machine, so a restore that
+    # brings one back re-instates a setting, not a permission.
+    "mcp_servers":     ("id", "name", "url", "transport", "enabled", "created_at"),
 }
 
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of

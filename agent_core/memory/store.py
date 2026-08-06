@@ -1103,6 +1103,66 @@ class Store:
         self._conn.commit()
         return cur.rowcount > 0
 
+    # --- MCP servers (step 7 phase 1; external tool servers Addison CONSUMES) --
+    # Non-secret configuration only, and inert: nothing in the tree connects to one
+    # yet. CAPTURED by snapshots (snapshots/scope.py) — reversible config, spec
+    # §4.12. The URL is validated by the caller (rpc/mcp.py) before it gets here,
+    # because whatever lands in this table is copied into every later snapshot
+    # payload in plain text.
+
+    def insert_mcp_server(self, *, id: str, name: str, url: str, created_at: int) -> None:
+        """Save a server row. Raises ``sqlite3.IntegrityError`` when the name is
+        already taken (the UNIQUE NOCASE index) — the caller checks first and turns
+        that into a plain sentence, and the index is the backstop under the race.
+
+        ``transport`` and ``enabled`` are left to their schema defaults ('http', 1):
+        HTTP is the only transport v1 has, and phase 1 has nothing to disable."""
+        self._conn.execute(
+            "INSERT INTO mcp_servers (id, name, url, created_at) VALUES (?, ?, ?, ?)",
+            (id, name, url, created_at),
+        )
+        self._conn.commit()
+
+    def list_mcp_servers(self) -> list[dict[str, Any]]:
+        """Every configured server, oldest first (the order they were added)."""
+        rows = self._conn.execute(
+            "SELECT id, name, url, transport, enabled, created_at FROM mcp_servers "
+            "ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "url": row["url"],
+                "transport": row["transport"],
+                "enabled": bool(row["enabled"]),
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_mcp_server(self, server_id: str) -> dict[str, Any] | None:
+        """One server row, or None."""
+        for row in self.list_mcp_servers():
+            if row["id"] == server_id:
+                return row
+        return None
+
+    def mcp_server_name_taken(self, name: str) -> bool:
+        """Is this name already in use? Case-insensitive, matching the UNIQUE index —
+        "Design docs" and "design docs" are the same server to a person, and phase 2
+        namespaces tool ids by this name."""
+        row = self._conn.execute(
+            "SELECT 1 FROM mcp_servers WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)
+        ).fetchone()
+        return row is not None
+
+    def delete_mcp_server(self, server_id: str) -> bool:
+        """Forget a server. Returns True if a row was removed."""
+        cur = self._conn.execute("DELETE FROM mcp_servers WHERE id = ?", (server_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     # --- config snapshots (GLOBAL FLOOR G3 — see agent_core/snapshots/) -------
     # App-state rollback, NOT the per-tool-call undo above. These rows hold a JSON
     # row-image of Addison's mutable config tables; the SnapshotManager owns the

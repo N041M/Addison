@@ -331,6 +331,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # shape. A fixture generated from the real handler is the only artifact
         # both sides share, so add one for every new payload a parser consumes.
         "workspace.list": _workspace_list_fixture(server),
+        "mcp.list": _mcp_list_fixture(server),
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
@@ -347,6 +348,27 @@ def _workspace_list_fixture(server: JsonRpcServer) -> dict:
         return server._workspace_list()
     finally:
         server.store.delete_workspace_trust("/fixture/project")
+
+
+def _mcp_list_fixture(server: JsonRpcServer) -> dict:
+    """An mcp.list payload with a row in it (step 7 phase 1) — an empty list would
+    parse the same whichever key the frontend read, which is exactly how the
+    `roots`/`folders` mismatch above survived both suites. Written through the store
+    and read back through the real handler, so the camelCase mapping (`created_at`
+    -> `addedAt`) is pinned rather than assumed. The address is a fixed literal.
+
+    Removed again afterwards so the rest of the fixtures (snapshot payloads capture
+    this table) stay byte-stable."""
+    server.store.insert_mcp_server(
+        id="mcp-fixture-0",
+        name="Fixture tool server",
+        url="https://tools.example/mcp",
+        created_at=_T0,
+    )
+    try:
+        return server._mcp_list()
+    finally:
+        server.store.delete_mcp_server("mcp-fixture-0")
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:

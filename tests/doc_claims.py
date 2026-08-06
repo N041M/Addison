@@ -96,6 +96,16 @@ G3_RESOLVED_IN_OPEN = True
 # restated in six documents when the brief said two. `docs/SAFETY.md` owns why.
 ARTIFACTS_LISTED_NOT_HIDDEN = True
 
+# MCP transport (owner decision 2026-08-06, step 7 phase 1). HTTP only for v1: an
+# `mcp_servers` row stores a URL and there is no column that could hold a launch
+# command, because stdio would mean the Agent Core starting an arbitrary executable
+# outside the seatbelt step 5.5 built. This is registered rather than merely written
+# down because the docs already carried the pre-decision sketch — data-model.md
+# described the row as holding "the launch command or base URL" — and a document
+# that says a server row can carry a command is a document that invites someone to
+# add the column. Flip this the day stdio genuinely ships.
+MCP_TRANSPORT_HTTP_ONLY = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -324,6 +334,49 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "Artifacts are hidden under SAFE again — this line says they are listed. "
                 "Amend it, or link to docs/SAFETY.md."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- MCP transport: HTTP only, so a server row is never a command ------
+    Claim(
+        id="mcp-transport-http-only",
+        owner="docs/step-7-mcp-plan.md",
+        holds=MCP_TRANSPORT_HTTP_ONLY,
+        true_state=(
+            "MCP transport is HTTP ONLY for v1 (owner decision 2026-08-06). An mcp_servers "
+            "row holds a URL and never a command; nothing in step 7 launches a program. "
+            "stdio is scheduled behind containment, not supported."
+        ),
+        false_state=(
+            "stdio transport has shipped, so a configured MCP server can name a program "
+            "to launch and the containment question is answered rather than deferred."
+        ),
+        # Two shapes, both taken from what the tree ACTUALLY said before the decision:
+        # the data-model sketch ("`config_json` — the launch command or base URL") and
+        # the plan's own "this is the one genuinely open question". A doc asserting
+        # either again is a doc pointing the next agent at a column that must not exist.
+        while_true=Wrong(
+            pattern=(
+                r"launch command"
+                r"|\bMCP\b[^.\n]{0,80}\bcommand to (?:run|launch)\b"
+                r"|(?:transport|stdio)[^.\n]{0,60}\b(?:is|remains|stays)\s+"
+                r"(?:still\s+)?(?:an?\s+)?open question"
+                r"|genuinely open question"
+            ),
+            fix=(
+                "Transport was answered on 2026-08-06: HTTP only, so an mcp_servers row "
+                "stores a URL and there is no launch-command field. Amend the sentence, or "
+                "delete it and link to docs/step-7-mcp-plan.md §5, which owns the decision. "
+                "If stdio has genuinely shipped, flip MCP_TRANSPORT_HTTP_ONLY in "
+                "tests/doc_claims.py in the SAME commit."
+            ),
+        ),
+        while_false=Wrong(
+            pattern=r"HTTP only for v1|no stdio|url, never a command|URL and never a command",
+            fix=(
+                "stdio has shipped — this line still says the transport is HTTP only. Amend "
+                "it, or link to docs/step-7-mcp-plan.md §5, which owns the transport decision."
             ),
         ),
         exempt=FROZEN,

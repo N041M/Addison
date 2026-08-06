@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "id": "mcp-fixture-0",
+      "name": "Fixture tool server",
+      "url": "https://tools.example/mcp",
+      "enabled": true,
+      "addedAt": 4102444800
+    }
+  ]
+}

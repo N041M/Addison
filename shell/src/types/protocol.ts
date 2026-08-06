@@ -115,6 +115,18 @@ export const Method = {
   WorkspaceList: "workspace.list",
   WorkspacePickDirectory: "workspace.pickDirectory",
 
+  // MCP servers — the external tool servers Addison consumes as a client (Phase-2
+  // step 7, phase 1 of five). CONFIGURATION ONLY: adding one saves an address and
+  // nothing else happens — no connection, no tools, nothing Addison can call. The
+  // address is HTTP(S) (`https://`, or `http://` only for a server on this
+  // computer); there is never a command to run, so nothing here starts a program.
+  // No key or token rides these payloads. `add` is refused outside the Developer
+  // profile; `list` and `remove` answer in every profile, so saved configuration
+  // never disappears and can always be removed. Mirrored in protocol.py.
+  McpList: "mcp.list",
+  McpAdd: "mcp.add",
+  McpRemove: "mcp.remove",
+
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
   // from, the Developer custom order, and whether the person sees the Simple

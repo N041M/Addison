@@ -86,6 +86,7 @@ from agent_core.rpc.constants import (
 from agent_core.rpc.conversation import ConversationMixin
 from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
+from agent_core.rpc.mcp import McpMixin
 from agent_core.rpc.models import ModelsMixin
 from agent_core.rpc.profile import ProfileMixin
 from agent_core.rpc.providers import ProvidersMixin
@@ -432,6 +433,7 @@ class JsonRpcServer(
     RoutingMixin,
     CostPlanMixin,
     WorkspaceMixin,
+    McpMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -1046,6 +1048,7 @@ class JsonRpcServer(
             _ROUTING_JOBS,
             _COSTPLAN_JOBS,
             _WORKSPACE_JOBS,
+            _MCP_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1193,6 +1196,12 @@ class JsonRpcServer(
                     self._respond(request_id, self._workspace_revoke(params))
                 elif kind == "workspace_pick_directory":
                     self._respond(request_id, self._workspace_pick_directory())
+                elif kind == "mcp_list":
+                    self._respond(request_id, self._mcp_list())
+                elif kind == "mcp_add":
+                    self._respond(request_id, self._mcp_add(params))
+                elif kind == "mcp_remove":
+                    self._respond(request_id, self._mcp_remove(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1779,6 +1788,16 @@ _WORKSPACE_JOBS = {
     Method.WORKSPACE_REVOKE_TRUST: "workspace_revoke",
     Method.WORKSPACE_LIST: "workspace_list",
     Method.WORKSPACE_PICK_DIRECTORY: "workspace_pick_directory",
+}
+
+# mcp.* read/write the `mcp_servers` table and mint an auto-snapshot through the
+# SnapshotManager, so they run on the worker like every other store op. Method ->
+# worker job kind. (Step 7 phase 1: configuration only — none of these connects to
+# a server or makes anything callable.)
+_MCP_JOBS = {
+    Method.MCP_LIST: "mcp_list",
+    Method.MCP_ADD: "mcp_add",
+    Method.MCP_REMOVE: "mcp_remove",
 }
 
 

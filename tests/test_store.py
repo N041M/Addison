@@ -738,13 +738,16 @@ def _seed_config(store: Store) -> None:
         created_from_conversation_id=None,
         created_at=9,
     )
+    # Step 7 phase 1: an MCP server row is reversible config, so it is captured
+    # like the rest. Seeded here so the round-trip tests below carry one.
+    store.insert_mcp_server(id="m1", name="Design docs", url="https://mcp.example/sse", created_at=10)
 
 
 def test_read_config_state_captures_exactly_the_declared_tables(store: Store):
     _seed_config(store)
     state = store.read_config_state()
     assert set(state) == {
-        "app_settings", "provider_config", "skills", "widgets", "routines"
+        "app_settings", "provider_config", "skills", "widgets", "routines", "mcp_servers"
     }
     assert state["skills"][0]["name"] == "Be brief"
     assert set(state["skills"][0]) == {

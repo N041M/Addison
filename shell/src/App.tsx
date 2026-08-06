@@ -16,7 +16,7 @@
 // progress) into React state, and Frontend → Core actions back out through the
 // typed `ipc`. The big state clusters live in dedicated hooks: useModelSelection,
 // useWidgets, useTurn, useConversations, useSnapshots, useGuards, useRouting,
-// useWorkspace, useOffers.
+// useWorkspace, useMcpServers, useOffers.
 //
 // Theme is class-driven and persisted in localStorage ("addison.theme") as one of
 // "light" | "dark" | "system"; the default is now "system" (Match this computer).
@@ -76,6 +76,7 @@ import { useSnapshots } from "./hooks/useSnapshots";
 import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useMcpServers } from "./hooks/useMcpServers";
 import { useOffers } from "./hooks/useOffers";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
@@ -249,6 +250,10 @@ export function App() {
   // only on the Developer/Custom surfaces (SettingsPage keys that off the active
   // profile); the hook itself just owns the trusted roots + grant/revoke.
   const workspaceState = useWorkspace({ connected });
+  // The MCP tool-server configuration (Phase-2 step 7, phase 1 of five). Same
+  // Developer/Custom gate as workspace trust, applied in SettingsPage. Adding one
+  // saves an address and nothing else — there is no MCP client yet.
+  const mcpState = useMcpServers({ connected });
   // The two step-4 conversational offers — "add my own model server" and "make it
   // cheaper" (useOffers). Same propose -> card -> explicit confirm mechanism as the
   // widget flow above; nothing is applied until the person presses the card's
@@ -1166,6 +1171,7 @@ export function App() {
                 guards={guardsState}
                 routing={routingState}
                 workspace={workspaceState}
+                mcp={mcpState}
                 profile={profile}
                 onSetProfile={handleSetProfile}
                 diagnostics={diagnostics}

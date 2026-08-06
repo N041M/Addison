@@ -38,6 +38,7 @@ import {
   type EndpointProposal,
   type CostPlan,
   type WorkspaceRoot,
+  type McpServer,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -536,6 +537,19 @@ export const ipc = {
     call(Method.WorkspaceList).then(parseWorkspaceRoots),
   pickWorkspaceDirectory: (): Promise<string | null> =>
     call(Method.WorkspacePickDirectory).then(parseWorkspaceDirectory),
+
+  // MCP servers — external tool servers Addison consumes as a client (Phase-2
+  // step 7, phase 1). CONFIGURATION ONLY: `addMcpServer` saves a name and an
+  // address and nothing connects, because this phase ships no client — the panel
+  // says so rather than implying a live connection. A refusal (a bad address, a
+  // name already used, or the Developer-only refusal) is a resolved {ok:false}
+  // carrying the core's own plain sentence, never a reject. No key or token ever
+  // rides these payloads.
+  listMcpServers: (): Promise<McpServer[]> => call(Method.McpList).then(parseMcpServers),
+  addMcpServer: (name: string, url: string): Promise<McpMutationResult> =>
+    call(Method.McpAdd, { name, url }).then(parseMcpMutation),
+  removeMcpServer: (id: string): Promise<McpMutationResult> =>
+    call(Method.McpRemove, { id }).then(parseMcpMutation),
 };
 
 // ---------------------------------------------------------------------------
@@ -1281,6 +1295,52 @@ export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
         typeof row.grantedAt === "number" && Number.isFinite(row.grantedAt)
           ? row.grantedAt
           : undefined,
+    });
+  }
+  return out;
+}
+
+/** mcp.add/mcp.remove → {ok, error?}. A refusal — a bad address, a name already
+ * in use, or "tool servers are part of the Developer profile" — is a resolved
+ * {ok:false} carrying the core's plain sentence, never a reject. */
+export interface McpMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+function parseMcpMutation(result: unknown): McpMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/**
+ * Parse `mcp.list` → the configured tool servers. Fails CLOSED, on the
+ * `parseWorkspaceRoots` reasoning: a row without a usable id AND name is dropped,
+ * because a row the panel can't name is one it would render a "Remove" button for
+ * and then fail to act on. `url` is shown to the person as the address they are
+ * about to trust later, so a non-http(s) string is dropped too — the core already
+ * refuses one at the store boundary, and this is the belt on those braces.
+ * `enabled` is trusted only on a strict boolean.
+ */
+export function parseMcpServers(result: unknown): McpServer[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.servers) ? (obj.servers as unknown[]) : [];
+  const out: McpServer[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    if (!row || typeof row.id !== "string" || !row.id) continue;
+    if (typeof row.name !== "string" || !row.name) continue;
+    if (typeof row.url !== "string" || !/^https?:\/\//i.test(row.url)) continue;
+    out.push({
+      id: row.id,
+      name: row.name,
+      url: row.url,
+      enabled: row.enabled !== false,
+      addedAt:
+        typeof row.addedAt === "number" && Number.isFinite(row.addedAt) ? row.addedAt : undefined,
     });
   }
   return out;

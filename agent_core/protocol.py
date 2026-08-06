@@ -106,6 +106,19 @@ class Method:
     WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
     WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
     WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
+    # External MCP servers Addison consumes as a CLIENT (step 7 phase 1; spec §4.12).
+    # CONFIGURATION ONLY — nothing here connects to a server, discovers a tool, or
+    # makes anything callable by the model; a row is inert until phase 2.
+    # Transport is HTTP ONLY for v1 (owner decision 2026-08-06), so `url` is the
+    # whole of a server's address and there is NEVER a command: stdio would mean the
+    # Agent Core launching an executable outside the seatbelt. No credential rides
+    # these payloads — phase 1 needs none, and a token will live in the OS keychain
+    # (G1) when phase 2 does. `add` is Developer-only (refused in SAFE); `list` and
+    # `remove` answer in every mode, because inert rows are not a capability and a
+    # tightening must not be trapped by a profile switch. See docs/step-7-mcp-plan.md.
+    MCP_LIST = "mcp.list"      # {} -> {servers: [{id, name, url, enabled, addedAt}]}
+    MCP_ADD = "mcp.add"        # {name, url} -> {ok, server} | {ok:false, error}
+    MCP_REMOVE = "mcp.remove"  # {id} -> {ok} | {ok:false, error}
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

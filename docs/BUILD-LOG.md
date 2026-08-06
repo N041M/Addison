@@ -12,6 +12,51 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-06 — step 7 phase 1: MCP configuration that does nothing
+
+[step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and now records what
+landed: the `mcp_servers` table, `mcp.list`/`add`/`remove`, and a Developer-only
+Settings section. **No client, no discovery, no registration, no dispatch** — a
+saved server is inert, which is the entire point of splitting the phase off.
+
+What building it taught:
+
+- **The transport decision is a schema decision.** "HTTP only for v1" reads like a
+  networking choice and is actually the reason nothing here can start a process:
+  the row has a `url` column and no column that could hold a command, plus a
+  `transport` CHECK the database enforces. Writing the decision only into prose
+  would have left the next phase free to add the field; writing it into the DDL
+  means widening it is a migration somebody has to justify. Both are
+  mutation-proven (`test_the_database_refuses_any_transport_but_http`,
+  `test_a_server_row_has_no_column_that_could_hold_a_command`), and so is the
+  import graph of `rpc/mcp.py` — a module that configures a server has no business
+  importing `subprocess`, the shell bridge, or the tool registry.
+- **The half-mechanism you do NOT build is a decision too.** The plan's own sketch
+  said "secrets to the keychain per the provider-key pattern". Phase 1 connects to
+  nothing, so a token would have had no reader, no validation and no way to be
+  wrong out loud — a keychain item nothing consumes is a claim, not a mechanism. So
+  none was built, and the door was left where the provider-key pattern already
+  points. What *did* have to ship is the half that cannot wait: the URL check, at
+  the STORE boundary, because `mcp_servers` is snapshot-captured and a credential
+  smuggled into an address would be copied into every later payload and sidecar in
+  plain text. That check calls `rpc/providers._base_url_problem` rather than
+  restating it — a second copy of a G1 rule is a second thing to keep true — with
+  exactly one rule added: plain `http://` narrowed from the custom-provider case at
+  large to loopback only. `net_vetting.classify_local_or_lan` was the tempting
+  reuse and is wrong here: it answers True for the whole LAN because it exists to
+  *disclose*, where this one *decides*.
+- **"Dev-only" is not one gate, and picking which one enforces it matters.** The
+  Settings section is hidden in Simple, and `mcp.add` is refused there
+  independently — hiding is never enforcement. But `list` and `remove` deliberately
+  answer in every profile: the rows are inert so listing grants nothing, and making
+  somebody's saved configuration vanish on a profile switch is precisely the
+  failure the 2026-08-06 artifact decision reversed. A tightening (removal) must
+  not be trapped either.
+- **The `enabled` column ships with no toggle**, on purpose and stated in the DDL:
+  there is nothing to disable until phase 2 consumes a server. That is the one
+  place this phase carries a field ahead of its mechanism, and it is written down
+  rather than left to be discovered.
+
 ## What shipped 08-06 — a rejected key changes something, and a key is normalised where it is stored
 
 Plan §5.2 and §5.3 (half of step 4 in

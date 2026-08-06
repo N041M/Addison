@@ -1,9 +1,13 @@
 # Step 7 — MCP client
 
-**Status: PROPOSED, not started (2026-08-06).** `ROADMAP.md` owns scheduling.
-The spec's shape is §4.12; this plan turns it into a build order and names the
-two decisions still open. Where this plan and §4.12 differ, §4.12's *banner* is
-right that its details were never settled — that is what this document settles.
+**Status: STARTED — phase 1 of five is BUILT (2026-08-06).** `ROADMAP.md` owns
+scheduling. The spec's shape is §4.12; this plan turns it into a build order and
+settles the decisions §4.12's banner admits were never made. Where this plan and
+§4.12 differ, §4.12's *banner* is right that its details were never settled — that
+is what this document settles.
+
+**Decision 1 (transport) is ANSWERED: HTTP only for v1** — see §5. Decision 2
+(where a server's tools appear) is untouched and belongs to phase 2.
 
 Addison is a **client**: it consumes external MCP servers/tools. Never a server,
 never a gateway (the OmniRoute-style thing, declined and still declined).
@@ -39,8 +43,8 @@ decides the architecture, not the other way round:
   forbids outright, and in OPEN it would run **outside the seatbelt** that step
   5.5 built, unless it is routed through the shell the way `run_command` was.
 
-This is the one genuinely open question (§5). Everything else below is
-transport-agnostic.
+This was the decision everything else waited on, and it is **answered: HTTP only
+for v1** (§5). Everything else below is transport-agnostic.
 
 ## 3. Tool admission — how an MCP tool becomes callable
 
@@ -69,10 +73,33 @@ and registration must refuse a collision rather than replace.
 
 ## 4. Build order — each phase lands green and is independently useful
 
-1. **Config only, no tools.** `mcp_servers` table (snapshot-CAPTURED — it is
-   reversible config), add/remove/list RPC, secrets to the keychain per the
-   provider-key pattern. `test_capture_scope_covers_every_schema_table` forces
-   the capture decision to be explicit. Ships doing nothing, which is the point.
+1. **Config only, no tools — BUILT 2026-08-06.** The `mcp_servers` table
+   (snapshot-CAPTURED — it is reversible config), `mcp.list`/`add`/`remove`, and
+   the URL check at the store boundary. Ships doing nothing, which is the point.
+   What landed, and the two places it differs from the sketch above:
+   - **No secret, and no half of one.** The keychain sentence in the original
+     sketch was dropped rather than partly built: phase 1 connects to nothing, so
+     a token has no consumer, no reader and no way to be validated. The door is
+     left open exactly where the provider-key pattern already points — a token
+     goes to the OS keychain through the shell when phase 2 needs one, never into
+     SQLite and never back to the webview (G1). What phase 1 *does* enforce is the
+     half that could not wait: a URL carrying a sign-in name, password, key-shaped
+     path segment, query or fragment is refused at the door, because this table is
+     captured and anything stored in it is copied into every later payload and
+     sidecar in plain text. That check is `rpc/providers._base_url_problem`,
+     called rather than re-derived, with ONE rule added on top — plain `http://`
+     is narrowed from "the custom-server case at large" to "a server on this
+     computer".
+   - **The surface is Developer-only, and `add` is what enforces it.** `mcp.list`
+     and `mcp.remove` answer in every profile: the rows are inert, so listing them
+     grants nothing, and hiding somebody's saved configuration on a profile switch
+     is the failure the 2026-08-06 artifact decision reversed
+     ([SAFETY.md](SAFETY.md) owns that rule). A tightening must never be trapped
+     either, so removal always works.
+   `test_capture_scope_covers_every_schema_table` forced the capture decision to
+   be explicit, as designed. Tests: `tests/test_mcp_servers.py`,
+   `shell/src/__tests__/mcp.test.tsx`, plus the generated `mcp.list` payload
+   fixture both sides share.
 2. **Connect + discovery.** Speak MCP, list tools, register them namespaced and
    dev-only. Nothing is callable yet; the picker and the tools surface show what
    was found.
@@ -82,19 +109,30 @@ and registration must refuse a collision rather than replace.
    when it held the IPC pump for thirty seconds.
 4. **Output handling.** MCP results are untrusted text heading for a model, so
    they cross the same redaction seam as command output.
-5. *(Later, separately)* stdio transport under the seatbelt; SAFE admission via a
-   user-promoted allowlist.
+5. *(Later, separately)* stdio transport under containment (§5 keeps both paths);
+   SAFE admission via a user-promoted allowlist.
 
-## 5. Decisions needed before phase 1
+## 5. Decisions
 
-1. **Transport for v1 — HTTP only, stdio under the seatbelt, or stdio under a
-   real containment environment?** *Recommendation: HTTP first.* It lets step 7
-   land without opening an unsandboxed execution path, needs no new highest-trust
-   surface, and keeps the client in the core where the module boundary already
-   fits. The cost is real: many popular MCP servers are stdio, so HTTP-only is a
-   smaller step 7 in practice.
+1. **Transport for v1 — ANSWERED 2026-08-06 (owner): HTTP ONLY.** Streamable
+   HTTP, no stdio.
 
-   The two stdio paths, in order of weight:
+   The reasoning, because it is what keeps the rest of the design where it is:
+   the core already speaks HTTPS to providers through `httpx`, so an HTTP MCP
+   client lives in the Agent Core and needs **no new shell surface at all** —
+   nothing has to be added to the highest-trust process. stdio would mean the
+   core launching an arbitrary executable, and the core has no OS permissions of
+   its own (spec §1.3): the process would run **outside** the seatbelt step 5.5
+   built, which is precisely the boundary that step exists to hold. So a server
+   row stores a **URL and never a command**, and nothing in phase 1 can spawn a
+   process — enforced in the schema (`transport CHECK`, no command column) and in
+   the import graph of `agent_core/rpc/mcp.py`, both mutation-proven.
+
+   The cost is real and was accepted: many popular MCP servers are stdio, so
+   HTTP-only is a smaller step 7 in practice.
+
+   **stdio is not rejected, it is scheduled** — the two paths below stay the
+   documented later option (phase 5), in order of weight:
 
    - **Reuse `exec.rs`'s seatbelt profile.** Cheapest, and it inherits a boundary
      that is already mutation-proven. The mismatch is lifecycle: that profile was
@@ -113,7 +151,8 @@ and registration must refuse a collision rather than replace.
    That is a different proposal, it is rejected, and `ROADMAP.md` records why
    (a side-effecting command would run twice, and outbound network is granted).
    Containment here isolates code; it never predicts what code will do.
-2. **Where a server's tools appear in Developer.** The tools surface lists native
+2. **Where a server's tools appear in Developer — STILL OPEN, phase 2's to
+   answer.** The tools surface lists native
    tools today; MCP tools are the first that arrive from outside and can vanish
    when a server goes away. Same disabled-card treatment as step 6's artifacts,
    or a separate section?
