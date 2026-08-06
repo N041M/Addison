@@ -42,14 +42,20 @@ a run prints a work order per offender — file, line, what is wrong, what to wr
 ## Reference views of the code
 
 These are hand-maintained and mirror real code, so they drift by construction. Treat
-them as maps, and check the tree when a detail matters.
+them as maps, and check the tree when a detail matters. Since 2026-08-06 all four carry
+mechanical guards in `tests/test_docs_drift.py` — the audit that day found stale content
+in every one of them. The guards anchor only on **structured** forms (a path in
+backticks, a name inside a mermaid block, a `namespace.method` token), never on prose,
+and each docstring names the anchors that were dropped for being noisy. A box a diagram
+draws that the code deliberately does not have is legal in `classes.md` and must say so
+in the block: `%% not-in-code: Name — why`.
 
 | File | Owns |
 |---|---|
-| [`architecture.md`](architecture.md) | The three processes and their trust boundaries. |
-| [`classes.md`](classes.md) | Class diagrams for orchestration, providers, routines. |
+| [`architecture.md`](architecture.md) | The three processes and their trust boundaries. Must name every `agent_core/rpc/` namespace mixin and every Rust module in the shell — both closed sets, both test-enforced. |
+| [`classes.md`](classes.md) | Class diagrams for orchestration, providers, routines. Class and member names are test-enforced against `agent_core/`. |
 | [`data-model.md`](data-model.md) | The SQLite schema as ER diagrams. Coverage is test-enforced against `schema.sql`. |
-| [`flows.md`](flows.md) | Runtime sequence flows across the process boundaries. |
+| [`flows.md`](flows.md) | Runtime sequence flows across the process boundaries. The RPC methods it names are test-enforced against `agent_core/protocol.py`. |
 
 ## Plans
 

@@ -83,6 +83,438 @@ def test_data_model_er_diagrams_cover_every_schema_table():
 
 
 # ---------------------------------------------------------------------------
+# The reference views — architecture.md, classes.md, flows.md, data-model.md
+#
+# `docs/README.md` groups these four as *"hand-maintained and mirror real code, so
+# they drift by construction"*, and until 2026-08-06 only data-model.md had a
+# mechanical defence. A docs audit that day found stale content in ALL FOUR, and the
+# three unguarded ones generated more drift work in a single day than every plan
+# document combined. A reference view naming a module that no longer exists, or a
+# class that was renamed, is not untidy — for a reader with no instinct that a
+# sentence might be void, it is a latent wrong action.
+#
+# Everything below anchors on a STRUCTURED form: a path in backticks, a name inside a
+# mermaid block, a `namespace.method` token. Never free prose — a sentence mentioning
+# "the orchestrator" must not be read as a symbol. That is not fastidiousness: a noisy
+# gate is worse than no gate here, because the next agent deletes it and takes its
+# real coverage with it. Where an anchor could not be made silent on the current tree
+# it was DROPPED rather than loosened; the drops are named in each docstring.
+#
+# These are set comparisons, not claims, so they are named tests rather than rows in
+# `doc_claims.py` — see that module's "What is NOT a claim row".
+# ---------------------------------------------------------------------------
+
+REFERENCE_VIEWS = (
+    "docs/architecture.md",
+    "docs/classes.md",
+    "docs/flows.md",
+    "docs/data-model.md",
+)
+
+_SOURCE_SUFFIXES = (
+    ".py", ".ts", ".tsx", ".rs", ".sql", ".sh", ".md",
+    ".html", ".css", ".js", ".json", ".yml", ".yaml", ".toml",
+)
+# A repo-path shape: segments of word characters, dots and dashes. Deliberately
+# refuses anything with a space, a glob, a colon or a bracket in it.
+_PATH_SHAPE = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/?$")
+_SKIP_TREE = {
+    "node_modules", ".git", ".venv", ".claude", ".pytest_cache", ".ruff_cache",
+    "__pycache__", "target", "dist",
+}
+
+
+def _repo_paths() -> set[str]:
+    """Every file and directory in the repo, repo-relative posix, minus vendored and
+    generated trees."""
+    out: set[str] = set()
+    for path in REPO.rglob("*"):
+        rel = path.relative_to(REPO)
+        if _SKIP_TREE & set(rel.parts):
+            continue
+        out.add(rel.as_posix())
+    return out
+
+
+def _inline_code_spans(text: str):
+    """`(token, line_number)` for every single-backtick span. Fenced blocks are not
+    scanned: a fence is a transcript or an example, and a path inside one is often
+    deliberately hypothetical."""
+    for match in re.finditer(r"(?<!`)`([^`\n]+)`(?!`)", text):
+        yield match.group(1), text.count("\n", 0, match.start()) + 1
+
+
+def test_reference_views_name_no_path_that_does_not_exist():
+    """A backticked repo path is the strongest anchor these documents offer: it is
+    unambiguous, it is what an agent greps for, and a stale one sends the next reader
+    to a file that is not there.
+
+    **Only the `stale` direction is enforced**, and deliberately. The `missing`
+    direction — "every file in the tree is named in the reference views" — is right
+    for data-model's tables, which are a closed set, and absurd here: these documents
+    are curated maps, and demanding a mention of every file would be exactly the noise
+    that gets a gate deleted. (Two genuinely closed sets DO get the `missing`
+    treatment; see the two tests below.)
+
+    Resolution is deliberately generous, because the documents write paths three ways
+    and all three are legitimate: fully qualified (`agent_core/policy.py`), relative to
+    the document (`../ROADMAP.md`), and package-relative or bare shorthand
+    (`providers/router.py`, `keychain.rs`). A token resolves if it is a segment-aligned
+    suffix of any real path. Generosity costs coverage of *misplacement* and buys
+    silence, which is the trade this gate has to win.
+
+    Dropped anchors, both because they could not be made silent without guesswork:
+    dotted symbol references (`tools/base.call_is_destructive`), which are not paths,
+    and bare extension tokens (`.json`), which name a format.
+    """
+    paths = _repo_paths()
+    by_last: dict[str, list[str]] = {}
+    for path in paths:
+        by_last.setdefault(path.rsplit("/", 1)[-1], []).append(path)
+
+    def resolves(token: str) -> bool:
+        token = token.rstrip("/")
+        last = token.rsplit("/", 1)[-1]
+        return any(c == token or c.endswith("/" + token) for c in by_last.get(last, []))
+
+    broken: list[str] = []
+    for view in REFERENCE_VIEWS:
+        md = REPO / view
+        text = md.read_text()
+        for raw, line_no in _inline_code_spans(text):
+            token = raw.split("::")[0].strip()          # `mod.py::symbol` -> `mod.py`
+            if not _PATH_SHAPE.match(token):
+                continue
+            if not (token.endswith("/") or token.endswith(_SOURCE_SUFFIXES)):
+                continue
+            if token.rstrip("/").rsplit("/", 1)[-1].startswith("."):
+                continue                                 # `.json` names a format
+            if (md.parent / token).exists() or resolves(token):
+                continue
+            broken.append(f"{view}:{line_no}: `{raw}`")
+
+    assert not broken, (
+        "these reference views name a path that is not in the tree. Point the sentence "
+        "at the file that replaced it, or delete the reference — a path that resolves "
+        "to nothing sends the next reader looking for code that does not exist:\n  "
+        + "\n  ".join(broken)
+    )
+
+
+# --- classes.md ------------------------------------------------------------
+
+# A box a diagram draws on purpose that the code does not have. Written inside the
+# mermaid block, beside the box it excuses, in the form
+#
+#     %% not-in-code: CapabilityTier — retired by owner decision 2026-08-06
+#
+# This is the `docs/README.md` rule "state what is not true yet" made checkable. It is
+# the only escape hatch from the class-name check, and it is not a mute button: the
+# reason is mandatory, an orphaned marker fails, and a marker whose class LATER shows
+# up in the code fails too.
+_NOT_IN_CODE = re.compile(r"^\s*%%\s*not-in-code:\s*(\w+)\s*—\s*(\S.*?)\s*$", re.M)
+
+
+def _python_classes() -> dict[str, set[str]]:
+    """`{class name: every member name reachable on it}` across `agent_core/`.
+
+    The member set is deliberately a generous superset — class-body `def`s and
+    assignments, `self.x = ...` anywhere in the body, and members inherited from a
+    base class scanned here. A superset only ever *forgives*, so the member check
+    stays silent on shape it cannot see while still catching a name that was deleted
+    or renamed.
+    """
+    import ast
+
+    bodies: dict[str, ast.ClassDef] = {}
+    for path in (REPO / "agent_core").rglob("*.py"):
+        if _SKIP_TREE & set(path.relative_to(REPO).parts):
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:                              # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                bodies.setdefault(node.name, node)
+
+    def own(node: ast.ClassDef) -> set[str]:
+        members: set[str] = set()
+        for stmt in node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                members.add(stmt.name)
+            elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                members.add(stmt.target.id)
+            elif isinstance(stmt, ast.Assign):
+                members |= {t.id for t in stmt.targets if isinstance(t, ast.Name)}
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and isinstance(sub.value, ast.Name):
+                if sub.value.id == "self" and isinstance(sub.ctx, ast.Store):
+                    members.add(sub.attr)
+        return members
+
+    resolved: dict[str, set[str]] = {}
+
+    def members_of(name: str, seen: frozenset[str] = frozenset()) -> set[str]:
+        if name in resolved:
+            return resolved[name]
+        node = bodies[name]
+        out = own(node)
+        for base in node.bases:
+            base_name = base.id if isinstance(base, ast.Name) else None
+            if base_name and base_name in bodies and base_name not in seen:
+                out |= members_of(base_name, seen | {name})
+        resolved[name] = out
+        return out
+
+    return {name: members_of(name) for name in bodies}
+
+
+def _class_diagram_blocks() -> list[str]:
+    doc = (REPO / "docs/classes.md").read_text()
+    blocks = re.findall(r"```mermaid\s*\nclassDiagram(.*?)```", doc, re.S)
+    assert blocks, "no classDiagram blocks found in docs/classes.md — did they move?"
+    return blocks
+
+
+def test_class_diagrams_name_no_class_the_code_does_not_have():
+    """`docs/classes.md` promises *"the real ones from the code"*. A renamed class is
+    the drift that costs most: an agent reads the diagram, greps for the old name,
+    finds nothing, and either re-invents it or edits the wrong module.
+
+    `stale` only — the `missing` direction ("every class in `agent_core/` appears in a
+    diagram") is exactly the noisy demand this file's docstring warns against; the
+    three views are curated and say so.
+
+    A box the code deliberately does not have is legal, but must SAY so, in the
+    mermaid block beside it: `%% not-in-code: Name — why`. Six boxes need one today
+    and all six are already explained in the surrounding prose — the marker just moves
+    the fact somewhere a machine can read it.
+    """
+    known = set(_python_classes())
+    problems: list[str] = []
+    for block in _class_diagram_blocks():
+        excused = {m.group(1) for m in _NOT_IN_CODE.finditer(block)}
+        for name in re.findall(r"^\s*class\s+(\w+)", block, re.M):
+            if name not in known and name not in excused:
+                problems.append(name)
+
+    assert not problems, (
+        f"docs/classes.md draws these classes and agent_core/ has no such class: "
+        f"{sorted(problems)}. Rename the box to the class that replaced it, or — if "
+        "the box is deliberately ahead of the code — add `%% not-in-code: Name — why` "
+        "inside the same mermaid block."
+    )
+
+
+def test_a_not_in_code_marker_is_neither_orphaned_nor_overtaken():
+    """The escape hatch needs its own guard, or it becomes the hole.
+
+    Two failure modes, both real: a marker left behind after its box was deleted
+    (which quietly excuses a future box of the same name), and a marker still standing
+    after the code CAUGHT UP — the class now exists, the diagram is describing it as
+    hypothetical, and every reader is told the thing is unbuilt when it shipped. That
+    second one is the sentence shape this repo has shipped three times.
+    """
+    known = set(_python_classes())
+    problems: list[str] = []
+    for block in _class_diagram_blocks():
+        drawn = set(re.findall(r"^\s*class\s+(\w+)", block, re.M))
+        for match in _NOT_IN_CODE.finditer(block):
+            name = match.group(1)
+            if name not in drawn:
+                problems.append(
+                    f"{name}: marked not-in-code but no box of that name is drawn in "
+                    "the same block — delete the marker."
+                )
+            if name in known:
+                problems.append(
+                    f"{name}: marked not-in-code, but agent_core/ now defines it. The "
+                    "code caught up: delete the marker and amend the prose that calls "
+                    "it unbuilt."
+                )
+    assert not problems, "not-in-code markers in docs/classes.md:\n  " + "\n  ".join(problems)
+
+
+def test_class_diagram_members_exist_on_the_real_class():
+    """The members are the half a reader actually copies — a signature in a diagram is
+    what an agent writes a call against.
+
+    Scoped to boxes that map to a real class, so the `not-in-code` boxes never reach
+    here. `stale` only, and emphatically so: the file states its members are *"trimmed
+    to the load-bearing members"*, so demanding completeness would fight the document's
+    own design. Members are matched by NAME, not by signature — argument lists in a
+    diagram are illustrative, and parsing them would be the noise that kills the gate.
+
+    This caught a real one on the day it was written: `Tool` was drawn with
+    `+undo(snapshot)`, which `tools/base.py` deliberately does not have — the Protocol
+    excludes `undo` so that LOW read-only tools are not misdescribed, and the mandatory
+    -undo invariant is enforced at registration instead. The diagram was asserting the
+    exact misreading that docstring exists to prevent.
+    """
+    classes = _python_classes()
+    problems: list[str] = []
+    for block in _class_diagram_blocks():
+        for match in re.finditer(r"^\s*class\s+(\w+)\s*\{(.*?)^\s*\}", block, re.S | re.M):
+            name, body = match.group(1), match.group(2)
+            if name not in classes:
+                continue
+            for member in re.finditer(r"^\s*[+\-#~](\w+)", body, re.M):
+                if member.group(1) not in classes[name]:
+                    problems.append(f"{name}.{member.group(1)}")
+
+    assert not problems, (
+        "docs/classes.md draws these members and the real class has no such attribute "
+        f"or method: {sorted(problems)}. Correct the name, or drop the row — a "
+        "signature in a diagram is what the next agent writes a call against."
+    )
+
+
+# --- flows.md and the rest: the wire methods --------------------------------
+
+
+def _rpc_methods() -> set[str]:
+    """Every `namespace.method` string in `agent_core/protocol.py`, the hand-synced
+    owner of the wire contract."""
+    proto = (REPO / "agent_core/protocol.py").read_text()
+    methods = set(re.findall(r'"([a-zA-Z]+\.[a-zA-Z]+)"', proto))
+    assert methods, "no method strings found in agent_core/protocol.py — did it move?"
+    return methods
+
+
+def test_reference_views_name_no_rpc_method_that_does_not_exist():
+    """`docs/flows.md` opens with *"Method and function names match the code"*, and the
+    sequence diagrams are read as a call list. A renamed RPC method leaves a diagram
+    describing a frame the server would reject.
+
+    Two collection sites, with different precision rules, because the surrounding
+    structure differs:
+
+    * **Inline code spans** anywhere in the four views. The backticks are the
+      structure, so any `namespace.method` whose namespace is a real RPC namespace is
+      checked.
+    * **Unquoted text inside `sequenceDiagram` blocks**, where camelCase is required.
+      That is not a stylistic preference, it is the discriminator: the wire boundary is
+      camelCase and Python is snake_case, so a camelCase dotted token cannot be an
+      attribute access. Without it, flow 1's `provider.send with the tool_result
+      appended` — a Python call on a provider object — is indistinguishable from a
+      wire method, and one false positive is all it takes.
+
+    Cost of that rule: single-word wire methods (`snapshot.list`, `guards.set`) are
+    only covered where they appear in backticks, which is most places. Accepted —
+    partial coverage that people trust beats full coverage that gets disabled.
+
+    `stale` only. The `missing` direction would demand that all 77 protocol methods be
+    drawn in a flow, which is not what a curated set of fifteen flows is for.
+    """
+    methods = _rpc_methods()
+    namespaces = {m.split(".")[0] for m in methods}
+    # A dotted token, not preceded or followed by path/identifier characters — so
+    # `data-model.md` and `rpc/workspace.is_trusted` are never mistaken for one.
+    token = re.compile(r"(?<![\w./-])([a-z][a-zA-Z]*)\.([a-z][a-zA-Z]*)(?![\w./-])")
+
+    problems: list[str] = []
+
+    def check(name: str, text: str, line_no: int, require_camel: bool) -> None:
+        for match in token.finditer(text):
+            ns, method = match.group(1), match.group(2)
+            if ns not in namespaces:
+                continue
+            if match.group(0).endswith(_SOURCE_SUFFIXES):    # `keychain.rs` is a path
+                continue
+            if require_camel and method.islower():
+                continue
+            if match.group(0) not in methods:
+                problems.append(f"{name}:{line_no}: {match.group(0)}")
+
+    for view in REFERENCE_VIEWS:
+        text = (REPO / view).read_text()
+        for raw, line_no in _inline_code_spans(text):
+            check(view, raw, line_no, require_camel=False)
+
+    flows = (REPO / "docs/flows.md").read_text()
+    for match in re.finditer(r"```mermaid\s*\nsequenceDiagram(.*?)```", flows, re.S):
+        base = flows.count("\n", 0, match.start(1)) + 1
+        for offset, line in enumerate(match.group(1).splitlines()):
+            check("docs/flows.md", line, base + offset, require_camel=True)
+
+    assert not problems, (
+        "these passages name an RPC method that agent_core/protocol.py does not "
+        "define. Use the method that replaced it, or drop the arrow — a diagram naming "
+        "a frame the server would reject is worse than no diagram. (If the token is a "
+        "Python call rather than a wire method, do not write it in the "
+        "`namespace.method` shape.):\n  " + "\n  ".join(sorted(set(problems)))
+    )
+
+
+# --- the two closed sets architecture.md claims to enumerate -----------------
+
+
+def test_architecture_names_every_rpc_namespace_module():
+    """`docs/architecture.md` states that `JsonRpcServer` *"is composed from the mixins
+    in `agent_core/rpc/` — one module per method namespace"* and then lists them. That
+    is a promise about a CLOSED set, which is what makes the `missing` direction fair
+    here and unfair for paths or classes.
+
+    It was already broken when this was written: `agent_core/rpc/mcp.py` shipped with
+    step 7's phase 1 on 2026-08-06 and the list still had thirteen names.
+
+    The set is derived from the code the same way the server composes it — a module
+    defining a `*Mixin(ServerContext)` class — so `base.py` and `constants.py` are
+    excluded by construction rather than by a hand-kept ignore list.
+
+    What counts is the BARE namespace name in backticks, not the file path: the doc
+    already carried `agent_core/rpc/mcp.py` elsewhere on the day the enumeration was
+    missing `mcp`, and accepting that would have kept this green through the exact
+    defect it was written for. One word per new namespace is the whole cost.
+    """
+    modules = sorted(
+        path.stem
+        for path in (REPO / "agent_core/rpc").glob("*.py")
+        if re.search(r"^class \w+Mixin\(ServerContext\)", path.read_text(), re.M)
+    )
+    assert modules, "no *Mixin(ServerContext) classes found under agent_core/rpc/"
+
+    doc = (REPO / "docs/architecture.md").read_text()
+    named = {raw for raw, _ in _inline_code_spans(doc)}
+    missing = [m for m in modules if m not in named]
+    assert not missing, (
+        f"docs/architecture.md enumerates the agent_core/rpc/ namespace mixins and "
+        f"omits {missing}. Add each to that list in backticks — an RPC namespace the "
+        "architecture never mentions is invisible to anyone reading the map."
+    )
+
+
+def test_architecture_names_every_shell_rust_module():
+    """The same closed-set argument, for the highest-trust process. `architecture.md`
+    enumerates the Rust modules beside `main.rs`, and its whole subject is what that
+    process may do — so a shell module it never mentions is the most expensive kind of
+    omission in the doc set.
+
+    It was already broken when this was written: `shell/src-tauri/src/exec.rs` shipped
+    with step 5.5's containment work and appeared in no enumeration here.
+    """
+    modules = sorted(
+        path.stem
+        for path in (REPO / "shell/src-tauri/src").glob("*.rs")
+        if path.stem != "main"
+    )
+    assert modules, "no Rust modules found under shell/src-tauri/src/"
+
+    doc = (REPO / "docs/architecture.md").read_text()
+    named = {raw for raw, _ in _inline_code_spans(doc)}
+    missing = [
+        m for m in modules
+        if not any(t in named for t in (m, f"{m}.rs", f"shell/src-tauri/src/{m}.rs"))
+    ]
+    assert not missing, (
+        f"docs/architecture.md enumerates the Tauri shell's Rust modules and omits "
+        f"{missing}. Say in backticks what each one does — this document is the only "
+        "map of what the highest-trust process contains."
+    )
+
+
+# ---------------------------------------------------------------------------
 # The claims registry — one test, many rows
 # ---------------------------------------------------------------------------
 

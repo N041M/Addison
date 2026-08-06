@@ -24,7 +24,11 @@ Back to the [README](../README.md); see also [architecture.md](architecture.md),
 
 The turn loop and the safety machinery. `Tool` is a structural protocol; a tool whose
 `risk_tier` is not LOW must implement a real `undo()`, and `ToolRegistry.register`
-raises otherwise.
+raises otherwise. Note where `undo()` sits: **not on `Tool`**. `tools/base.py` keeps it
+off that Protocol deliberately, because LOW read-only tools legitimately have none and
+requiring it structurally would misdescribe them; `UndoableTool` is the narrowed
+Protocol for code that actually calls it, and the mandatory-undo invariant is enforced
+at registration rather than by the type.
 
 ```mermaid
 classDiagram
@@ -48,6 +52,9 @@ classDiagram
         <<interface>>
         +definition
         +execute(args, context) ToolResult
+    }
+    class UndoableTool {
+        <<interface>>
         +undo(snapshot)
     }
     class ToolDefinition {
@@ -121,6 +128,7 @@ classDiagram
     Orchestrator ..> Conversation
     Conversation "1" *-- "many" Message
     ToolRegistry o-- Tool
+    Tool <|-- UndoableTool
     Tool --> ToolDefinition
     ToolDefinition --> RiskTier
     Tool ..> ToolResult
@@ -195,6 +203,8 @@ fingerprint so repeated toggling cannot grow an unbounded permanent list.
 
 ```mermaid
 classDiagram
+    %% not-in-code: CapabilityTier — retired rather than built (owner decision 2026-08-06, step 6); the closed list of widget kinds is the gate, so there is nothing to declare
+    %% not-in-code: WorkspaceTrustRow — not a class: a two-column `workspace_trust` table plus two pure predicates, drawn here as the row shape it is
     class Profile {
         <<enumeration>>
         SIMPLE
@@ -301,6 +311,9 @@ server is reversible, snapshotted config, sharing the add-an-endpoint plumbing.
 
 ```mermaid
 classDiagram
+    %% not-in-code: McpClient — Phase-2 step 7, not built; phase 1 (2026-08-06) shipped configuration only
+    %% not-in-code: McpConnection — Phase-2 step 7, not built; target shape, no protocol client exists
+    %% not-in-code: McpToolAdapter — Phase-2 step 7, not built; target shape, nothing registers an MCP tool yet
     class McpClient {
         +connect(server_config) McpConnection
         +disconnect(server_id)
@@ -351,6 +364,7 @@ model." chip whenever routing — not an explicit pick — chose a free model.
 
 ```mermaid
 classDiagram
+    %% not-in-code: RoutingStrategy — drawn as an enumeration for readability; in code it is four module-level string constants in providers/router.py, with no Enum
     class ModelProvider {
         <<interface>>
         +capabilities() ProviderCapabilities

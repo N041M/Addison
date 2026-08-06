@@ -63,10 +63,11 @@ flowchart LR
 ```
 
 `shell/src-tauri/src/main.rs` registers exactly those three webview commands and
-spawns the core. There is a sixth module, `updater.rs` (beside `agent_process`,
-`app_build`, `filesystem`, `ipc` and `keychain`), but it is a **nine-line
-comment stub with no code**: `tauri-plugin-updater` is not wired up, and
-auto-update is a **Phase-3** item (see G4 below, where this matters).
+spawns the core. Beside it sit six working modules — `agent_process`, `app_build`,
+`exec` (the step-5.5 seatbelt: the sandboxed executor every approved `run_command`
+runs through), `filesystem`, `ipc` and `keychain`. There is a seventh, `updater.rs`,
+but it is a **nine-line comment stub with no code**: `tauri-plugin-updater` is not
+wired up, and auto-update is a **Phase-3** item (see G4 below, where this matters).
 
 What each process may and may not do:
 
@@ -168,8 +169,9 @@ exact same registry and gate as the live loop.
 `JsonRpcServer` lives in `main.py` but its handlers do not: it is composed from the
 mixins in `agent_core/rpc/` — one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
-`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`), each of which is also
-the sole camelCase mapper at the wire boundary for its own namespace.
+`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, and `mcp` — step 7's
+configuration-only phase 1), each of which is also the sole camelCase mapper at the
+wire boundary for its own namespace.
 
 ```mermaid
 flowchart LR
