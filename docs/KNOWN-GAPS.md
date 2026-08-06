@@ -83,6 +83,23 @@ and where it goes.
   Claude Code and Codex CLI both rely on. Acceptable; not permanent. **Recorded in
   design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered —
   the gap is now the dependency itself, not the silence about it.
+- **The permission card shows the command, not its consequences (open, 2026-08-06).**
+  A card for `rm -rf build` says `rm -rf build`, which is the least informative
+  true thing that could be shown. Two narrower forms of "preview before you
+  approve" are open — both are cheaper than they sound and neither is the
+  VM-dry-run idea [`ROADMAP.md`](../ROADMAP.md) rejects (that one runs a
+  side-effecting command twice; these run nothing):
+  - **Compute the affected set, execute nothing.** For a delete, walk the path
+    and put the count on the card — "1,240 files, 3 modified today". No sandbox,
+    no clone, no execution; it is a directory read. This is the one worth
+    building, and it is a day rather than a subsystem.
+  - **A copy-on-write clone for the file-only subset.** APFS `clonefile` is
+    instant and free, so the command could run against a clone under the existing
+    seatbelt with `network-outbound` denied, and the diff shown. Honest limits:
+    it covers only commands that need no network, and it must SAY it skipped the
+    preview rather than silently showing none.
+  If ever scheduled this is **5.6**, not a new step — it is card and containment
+  work on the step-5 harness, the same shape 5.5 was.
 - **A sandboxed command can reach the network, deliberately.** `network-outbound`
   is granted; `network-bind` is not. Denying outbound was the first draft's
   accidental default and it broke `git fetch` / `npm install` / `pip install`

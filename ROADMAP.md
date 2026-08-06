@@ -108,6 +108,25 @@ Not because they are hard. They were looked at and put down on purpose.
 - Rewriting the agent core in Rust.
 - Sharing routines by export and import, and screening untrusted content. Both
   become more interesting once MCP and free endpoints are in wide use.
+- **Running a command in a virtual machine first to see what it would do.** The
+  appeal is obvious and the reasoning against it is not, so it is written down
+  here rather than rediscovered. To find out what a command does you have to run
+  it — so a command with side effects runs **twice**, and Addison deliberately
+  allows a sandboxed command to reach the network, which means a "test" of
+  `curl -X POST .../delete-account` deletes the account and then you approve it
+  and it happens again. The commands most worth previewing are exactly the ones
+  that cannot be previewed. Take the network away and ordinary work (`git fetch`,
+  `npm install`) fails in the test but not for real, so the test says nothing.
+  What Addison does instead is stronger for the same threat: the sandbox stops
+  the change reaching the recovery floor, and a snapshot reverses whatever did
+  happen. Confining and reversing beat predicting, because neither has to be
+  right about the future.
+  **Two narrower forms are NOT rejected** and are open questions in
+  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md): showing what a delete would remove
+  before you approve it, which needs no sandbox and no execution at all; and a
+  copy-on-write clone for the file-only subset. Isolating *foreign code* is also
+  a separate and live question — see the MCP transport decision in
+  [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
 
 Addison also does not schedule itself, and that is not a gap. It is one of the four
 guarantees in the [README](README.md).
