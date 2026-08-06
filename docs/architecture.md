@@ -385,12 +385,17 @@ Component by component:
   and a routine id is matched against a plain-slug pattern so a spec cannot smuggle an
   expression through it. Widgets are proposed like routines (draft held in the core,
   saved only on an explicit confirm) and stored in the `widgets` table.
-  **Phase-2 step 6, not built yet:** the amendment makes widgets buildable in every
-  mode and gates the *capability* a widget may use rather than whether one can be
-  built, adding SAFE-tier interactive kinds (to-do/checklist, note, counter, timer)
-  rendered by trusted Addison components over safe backing storage, and code-backed /
-  system-capable kinds at the higher tiers governed by workspace-trust, per-tool
-  `undo()`, the snapshot floor, and the keyword gate.
+  **Phase-2 step 6, half A (2026-08-06):** three interactive SAFE kinds —
+  `{kind:"checklist", items, title}`, `{kind:"note", text, title}` and
+  `{kind:"timer", seconds, title}` — rendered by trusted Addison components over
+  Addison's own storage, invoking no tool at all. Their mutable half lives in the
+  separate `widget_state` table, written by `widget.setState` (validated per kind,
+  no permission card, excluded from snapshots) — the spec stays what was declared.
+  The amendment's capability *declaration* was **cut**: the list of kinds is closed
+  and hard-coded, which is the tier gate ([SAFETY.md](SAFETY.md) owns invariant 4).
+  Code-backed / system-capable kinds at the higher tiers remain future work,
+  governed by workspace-trust, per-tool `undo()`, the snapshot floor, and the
+  keyword gate.
 - **McpClient** *(Phase-2 step 7 — not built; nothing in `agent_core/` implements this
   yet)* — Addison as an MCP **client**, not a server or gateway. It
   connects to external MCP servers and surfaces their tools through the **existing

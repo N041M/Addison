@@ -269,11 +269,12 @@ Neither the anchor nor the four floors (G1, G2, G3, the anchor rule — **G4** i
 in `CLAUDE.md`; the two names are the same rule) are reachable from `GuardConfig`.
 `SnapshotManager`, `ConfigSnapshot`, the `CUSTOM` profile and `GuardConfig` are
 **shipped** and their names are fixed. `CapabilityTier` is the one *(Phase-2)* sketch
-left in this diagram — step 6, not built, and its member names are not fixed. When it
-lands it is what the gate and the widget validator will consult to decide whether a
-tool's or widget's requested capability is admissible in the active mode, with SAFE
-admitting only `NON_DESTRUCTIVE`; today the widget validator takes the `PolicyMode`
-itself.
+left in this diagram, and step 6 **retired it rather than building it** (owner
+decision 2026-08-06): the widget vocabulary is a closed, hard-coded set of kinds, so
+there is nothing for a widget to declare and nothing to map. The widget validator
+takes the `PolicyMode` itself, and where a widget invokes a tool the tier check is
+`registry.visible_tools(mode)` — never a second risk model. Keep the box only as a
+record of the design that was considered.
 
 `SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the

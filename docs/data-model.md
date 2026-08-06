@@ -7,11 +7,13 @@
 > Adds the guaranteed-rollback floor (G3) and its **snapshot** store (auto + on-command,
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server
-> config. **`config_snapshots` (step 1) and `workspace_trust` (step 5) have shipped and
-> their DDL is final.** `mcp_servers` and the widget capability columns have not been
-> built; they are sketches, called out as such where they appear, and are deliberately
-> absent from the ER diagrams, which show only what `agent_core/memory/schema.sql`
-> actually creates.
+> config. **`config_snapshots` (step 1), `workspace_trust` (step 5) and `widget_state`
+> (step 6) have shipped and their DDL is final.** `mcp_servers` has not been built; it is
+> a sketch, called out as such where it appears, and is deliberately absent from the ER
+> diagrams, which show only what `agent_core/memory/schema.sql` actually creates. The
+> amendment's **`required_capabilities` widget column was CUT** (owner decision
+> 2026-08-06): the widget vocabulary is a closed set of kinds instead — see the `widgets`
+> notes below.
 
 Addison's local state is a single SQLite database on the user's device, created from
 `agent_core/memory/schema.sql` on first open. All timestamps are unix epoch seconds.
@@ -435,6 +437,12 @@ erDiagram
         INTEGER created_at
         TEXT created_in_mode "safe or open"
     }
+    widget_state {
+        TEXT widget_id PK
+        TEXT state_json "per kind; what the person did"
+        INTEGER updated_at
+    }
+    widgets ||--o| widget_state : keeps
     tool_audit {
         TEXT id PK
         TEXT conversation_id "NULL for a routine or widget run"
@@ -469,29 +477,39 @@ erDiagram
   that rewrote the record of what happened would be worse than no record.
 - **widgets** — user-owned rail widgets. `spec_json` is a **declarative** widget spec
   (`agent_core/widgets.py`), validated at save *and* at render (an invalid stored spec
-  is hidden, never run). The base shapes are the launchers `{kind:"routine", routineId,
-  title}`, `{kind:"stat", source, title}`, and — in OPEN — `{kind:"command", command,
-  title}`. `WIDGET_KINDS` and `STAT_SOURCES` (`tokens_month`, `provider_latency`,
+  is hidden, never run). The launchers are `{kind:"routine", routineId, title}` and
+  `{kind:"stat", source, title}`; the three interactive SAFE kinds (Phase-2 step 6, half
+  A) are `{kind:"checklist", items, title}`, `{kind:"note", text, title}` and
+  `{kind:"timer", seconds, title}`; and OPEN adds `{kind:"command", command, title}`.
+  `WIDGET_KINDS` and `STAT_SOURCES` (`tokens_month`, `provider_latency`,
   `connections`) are the closed vocabularies; an unknown kind or source is rejected at
   save and hidden at render. `created_in_mode` is `safe` | `open` — a command widget is
   saved as `open` and never surfaces while Simple is active.
 
-  **Phase-2 step 6, not built yet** — the amendment (§8.4) makes widgets buildable in
-  every mode and gates the *capability* rather than whether one can be built. What that
-  step adds:
-  - **New SAFE-tier interactive kinds** — a **safe, non-destructive vocabulary** on top
-    of the launchers: to-do / checklist, note, counter / timer. These are rendered by
-    *trusted Addison components* and backed by Addison's own safe storage — **no shell,
-    no arbitrary code or eval**, so SAFE-1 and the webview CSP still hold. "Build me a
-    to-do widget" produces a real checklist in Simple.
-  - **Capability declaration + tier gate** — a `required_capabilities` column (tentative
-    name; no such column exists today) recording the capabilities a widget's spec needs,
-    and a tier check mapping capabilities → the minimum mode. SAFE would admit only the
-    non-destructive set; higher tiers (Developer / Custom) additionally admit
-    **code-backed / system-capable** widgets (monitors, scripts) governed by
-    workspace-trust, per-tool `undo()`, the snapshot floor, and the keyword gate to
-    run/arm one.
+  **There is no capability column, and there will not be one** (owner decision
+  2026-08-06). The amendment (§8.4) sketched a `required_capabilities` field plus a
+  capability→minimum-mode lattice; the closed set of kinds above **is** that gate, and it
+  is a better one, because every kind's whole behaviour is written in `widgets.py` where
+  it can be read and tested rather than declared by the saved row about itself. The three
+  interactive kinds are rendered by *trusted Addison components* and backed by Addison's
+  own storage — no shell, no arbitrary code or eval — so SAFE-1 and the webview CSP hold.
+  Higher tiers still add **code-backed / system-capable** widgets (today's OPEN
+  `{kind:"command",…}`; monitors and scripts remain future work governed by
+  workspace-trust, per-tool `undo()`, the snapshot floor, and the keyword gate).
 
   `pinned` decides whether the widget shows as a card or behind the overflow tray (at
   most six pinned); `position` is the user-visible order. The token meter and connections
   cards are core-provided and implicit — they are *not* stored here.
+- **widget_state** — what the PERSON has since done with an interactive widget: which
+  boxes are ticked, what the note says now, whether the timer is running and how much is
+  left. One row per widget at most, and a **separate table on purpose**. The spec is the
+  DECLARATION (re-validated at every render, against the mode the widget would run in);
+  the state is the doing, so folding it into `spec_json` would make every tick a
+  re-declaration. `state_json` is validated per kind by `widgets.validate_widget_state`
+  on the way in *and* on the way out — a checklist state whose length no longer matches
+  its spec is dropped rather than applied to the wrong line. **Excluded from snapshots**
+  on the `memory_facts` precedent: restoring a *configuration* must never un-tick
+  somebody's list. Rows whose widget does not survive a restore are deleted explicitly in
+  `Store.apply_config_state` (the `routine_runs` shape) — the FK would otherwise abort the
+  restore at COMMIT, and `ON DELETE CASCADE` would have wiped the state of every widget
+  that *did* survive.

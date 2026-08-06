@@ -4,8 +4,8 @@
 // handlers are unchanged.
 
 import { useEffect, useState } from "react";
-import type { Stats, Widget, WidgetProposal } from "../types/ui";
-import { ipc, isEngineConnected } from "../ipc/client";
+import type { Stats, Widget, WidgetProposal, WidgetState } from "../types/ui";
+import { ipc, isEngineConnected, parseWidgetState } from "../ipc/client";
 import type { RailRoutine, RunOutcome } from "../components/WidgetRail";
 import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
 
@@ -107,6 +107,38 @@ export function useWidgets({ connected, railOpen, setStatusBanner }: UseWidgetsA
       .catch(() => setStatusBanner("Couldn't change that widget just now."));
   }
 
+  // Tick a box, edit a note, start or pause a timer. OPTIMISTIC, then RECONCILED:
+  // the row updates on the spot (a checkbox that waits for a round trip feels
+  // broken, and these changes are trivially reversible by the person), and then
+  // the core's answer replaces it with what was actually stored. A refusal is not
+  // patched over locally — the rail is refreshed from the core, because the
+  // truthful state after a failed write is whatever the core holds, not whatever
+  // this component remembers.
+  function handleSetWidgetState(id: string, state: WidgetState) {
+    setWidgets((current) => current.map((w) => (w.id === id ? { ...w, state } : w)));
+    ipc
+      .setWidgetState(id, state)
+      .then((res) => {
+        if (!res.ok) {
+          if (res.error) setStatusBanner(res.error);
+          refreshWidgets();
+          return;
+        }
+        setWidgets((current) =>
+          current.map((w) => {
+            if (w.id !== id) return w;
+            // Judged against THIS widget's spec, exactly like a listed row.
+            const stored = parseWidgetState(w.spec, res.state);
+            return stored ? { ...w, state: stored } : w;
+          }),
+        );
+      })
+      .catch(() => {
+        setStatusBanner("Couldn't save that change just now.");
+        refreshWidgets();
+      });
+  }
+
   function handleDeleteWidget(id: string) {
     ipc
       .deleteWidget(id)
@@ -148,6 +180,7 @@ export function useWidgets({ connected, railOpen, setStatusBanner }: UseWidgetsA
     handleAddWidget,
     handleDismissWidgetProposal,
     handleSetWidgetPinned,
+    handleSetWidgetState,
     handleDeleteWidget,
     handleRunWidgetRoutine,
   };

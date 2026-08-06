@@ -48,7 +48,7 @@ describe("parseStats over the real stats.get payload", () => {
 });
 
 describe("parseWidgetList over the real widget.list payload", () => {
-  it("keeps all three OPEN-mode widget kinds, drops nothing", () => {
+  it("keeps every widget kind the core sends, with the checklist's ticks, drops nothing", () => {
     expect(parseWidgetList(widgetListFixture)).toEqual([
       {
         id: "widget-fixture-0",
@@ -67,6 +67,15 @@ describe("parseWidgetList over the real widget.list payload", () => {
         spec: { kind: "command", command: "git status", title: "Repo status" },
         pinned: false,
         createdInMode: "open",
+      },
+      {
+        id: "widget-fixture-3",
+        spec: { kind: "checklist", items: ["Buy milk", "Call Ana"], title: "Saturday" },
+        pinned: false,
+        createdInMode: "safe",
+        // The stored ticks ride on the row, half-set — an all-false array here
+        // would mean the parser had dropped the state and defaulted it.
+        state: { checked: [true, false] },
       },
     ]);
   });

@@ -208,8 +208,10 @@ export interface ArtifactUnavailable {
 
 // ---------------------------------------------------------------------------
 // Widgets — DECLARATIVE specs mirrored from the core (agent_core/widgets.py).
-// Exactly two shapes: a saved-routine Run pill, or a whitelisted stat display.
-// NEVER code. The frontend renders these; it never constructs or evaluates one.
+// A CLOSED set of kinds: two launchers (a saved-routine Run pill, a whitelisted
+// stat display), three interactive SAFE kinds (checklist, note, timer), and the
+// Developer-only command widget. NEVER code. The frontend renders these; it
+// never constructs or evaluates one, and a kind it does not know is DROPPED.
 // ---------------------------------------------------------------------------
 export type WidgetStatSource = "tokens_month" | "provider_latency" | "connections";
 
@@ -238,7 +240,63 @@ export interface CommandWidgetSpec {
   title: string;
 }
 
-export type WidgetSpec = RoutineWidgetSpec | StatWidgetSpec | CommandWidgetSpec;
+/**
+ * The three INTERACTIVE SAFE kinds (Phase-2 step 6, half A —
+ * agent_core/widgets.py). They invoke no tool and reach nothing outside
+ * Addison, which is why they are available in the Simple profile.
+ *
+ * A spec is what was DECLARED and never changes: a checklist's items are FIXED
+ * at creation (v1 has no item editing, exactly as it has no routine step
+ * editing — you delete and recreate by asking), and a note's `text` is only its
+ * INITIAL text. What the person has since done lives in `WidgetState` below.
+ */
+export interface ChecklistWidgetSpec {
+  kind: "checklist";
+  items: string[];
+  title: string;
+}
+
+export interface NoteWidgetSpec {
+  kind: "note";
+  /** The note's initial text. The CURRENT text is in the widget's state. */
+  text: string;
+  title: string;
+}
+
+export interface TimerWidgetSpec {
+  kind: "timer";
+  /** How long the timer runs for, in seconds. */
+  seconds: number;
+  title: string;
+}
+
+export type WidgetSpec =
+  | RoutineWidgetSpec
+  | StatWidgetSpec
+  | ChecklistWidgetSpec
+  | NoteWidgetSpec
+  | TimerWidgetSpec
+  | CommandWidgetSpec;
+
+/**
+ * What the person has done with an interactive widget, from `widget.list` and
+ * written back with `widget.setState`. Kept apart from the spec on both sides of
+ * the wire (the core stores it in its own table): the spec is the declaration,
+ * this is the doing.
+ *
+ * `checked` maps to the spec's items BY POSITION and is exactly as long — the
+ * core drops a state whose length disagrees rather than guess which row moved,
+ * so a mismatch renders as an untouched list, never as the wrong box ticked.
+ *
+ * The timer holds start/duration/paused only. NOTHING counts it down but this
+ * frontend, and nothing anywhere fires at zero — Addison never triggers itself.
+ * `remaining` is the seconds left AT `startedAt` when running, or simply the
+ * seconds left when paused.
+ */
+export type WidgetState =
+  | { checked: boolean[] }
+  | { text: string }
+  | { running: boolean; remaining: number; startedAt: number | null };
 
 /**
  * One stored widget from `widget.list`: id + declarative spec + pin state. The
@@ -249,6 +307,12 @@ export interface Widget {
   id: string;
   spec: WidgetSpec;
   pinned: boolean;
+  /**
+   * Present only on an interactive kind that has stored state the core still
+   * considers valid for its spec. Absent means "draw the declaration" — an
+   * un-ticked list, the note's initial text, a full paused timer.
+   */
+  state?: WidgetState;
   /**
    * The policy mode the widget was saved under ("safe" | "open"), when the core
    * forwards it. Drives the Developer-profile "DEV" annotation tag. A command

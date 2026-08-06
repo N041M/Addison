@@ -230,11 +230,12 @@ land across the component design; each is detailed where it belongs, but collect
 here for orientation. All ship in **Phase 2** (post-greenlight, §11); details the
 amendment leaves open are marked **Phase-2** at §14.
 
-*(Status 2026-07-26 — the five below did not land together. **Built:** the snapshot
-subsystem, free-model endpoints + add-by-prompt, and the "make it cheaper" flow.
-**Not started:** capability-tiered widgets (Phase-2 step 6) and the MCP client
-(step 7) — the shipped widget vocabulary is still `routine` / `stat` plus the
-OPEN-only `command`, and there is no MCP client in the tree. See §11.)*
+*(Status 2026-08-06 — the five below did not land together. **Built:** the snapshot
+subsystem, free-model endpoints + add-by-prompt, the "make it cheaper" flow, and the
+SAFE half of the widget work (step 6): the vocabulary is now `routine` / `stat` /
+`checklist` / `note` / `timer`, plus the OPEN-only `command`. The capability
+*declaration* below was cut — the closed list of kinds is the gate. **Not started:**
+the MCP client (step 7); there is no MCP client in the tree. See §11.)*
 
 - **Snapshot / restore subsystem (the safety floor).** A point-in-time copy of
   Addison's *mutable state* (settings, provider config, routing choice, skills,
@@ -1233,12 +1234,14 @@ belong to Phase-2 steps 6–8, which are not started.)*
 14. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
     curated allowlist? dev-only?) and how MCP tool metadata declares undo-ability
     (§7.4). **Still open** — Phase-2 step 7, not started.
-15. **Widget capability tiers & vocabulary** — the exact safe interactive kinds,
-    how a widget spec *declares* the capabilities it needs, how the tier check maps
-    capabilities → mode, and how code-backed widgets are managed alongside
-    declarative ones (§7 note, §7.9). **Still open** — Phase-2 step 6, not started;
-    the shipped widget vocabulary is still `routine` / `stat` plus the OPEN-only
-    `command`.
+15. ~~**Widget capability tiers & vocabulary**~~ — **RESOLVED 2026-08-06 (Phase-2
+    step 6, half A).** The safe interactive kinds are `checklist`, `note` and
+    `timer`; a widget spec declares **no** capabilities and there is **no**
+    capability→mode map, because `WIDGET_KINDS` is a closed hard-coded set and that
+    is the gate. Where a widget invokes a tool the check is
+    `registry.visible_tools(mode)`, never a second risk model. Code-backed widgets
+    alongside declarative ones is the one part still open, and it stays with the
+    higher tiers (§7 note, §7.9).
 16. ~~**Anchor binary capture**~~ — **RESOLVED 2026-07-20: a version pin, capture
     only.** The anchor records `{"version", "identifier"}`; a copy-on-write bundle was
     rejected as platform-dependent and too large to keep an anchor undeletable.

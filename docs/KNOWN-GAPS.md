@@ -188,10 +188,15 @@ questions were resolved during steps 1–3 and went with it):
   dev-only? And how MCP tool metadata declares undo-ability. **A server declares
   its own risk, so this cannot be taken on trust** — see the sharpened note in the
   spec's MCP section and item 4 of the step-5.5 plan.
-- **Widget capability tiers and vocabulary (blocks step 6).** The exact safe
-  interactive kinds (to-do/checklist, note, timer …), how a widget spec *declares*
-  the capabilities it needs, how the tier check maps capabilities → mode, and how
-  code-backed widgets are listed alongside declarative ones.
+- ~~**Widget capability tiers and vocabulary (blocks step 6).**~~ **CLOSED
+  2026-08-06.** The safe interactive kinds are `checklist`, `note` and `timer`, and
+  the vocabulary is a **closed, hard-coded set** — a widget spec does NOT declare
+  the capabilities it needs, and there is no capability→mode map, because the list
+  of kinds is the gate (`agent_core/widgets.py`; [SAFETY.md](SAFETY.md) owns
+  invariant 4). Where a widget invokes a tool, the tier check is
+  `registry.visible_tools(mode)` and never a second risk model. Code-backed widgets
+  are still Developer-only and still unbuilt; when they land they are listed by the
+  same `widget.list`, disabled in Simple like every other dev-made artifact.
 - **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
   shipped in step 3: escalate/degrade on unavailable, rate-limit or network
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain
@@ -300,14 +305,16 @@ against the tree on 2026-07-26:
 - No file-attach/drop UI → `read_file` unreachable from chat.
 - Setup Assistant relay is client-complete; the server side is external by design.
 - Packaging/signing/updater = Phase 3.
-- **`primary.txt` widget guidance says Addison can't build custom-app widgets.**
-  True of the code today, and #45 deliberately strengthened it after a live
-  false-success failure — but wrong as a statement of the amendment's intent.
-  Rewrite capability-aware in Phase-2 step 6, when to-do/note/timer widgets
-  actually exist. A prompt-only guard is mitigation, not a fix: it has now
-  failed once (#43) and been re-hardened once (#45). If it regresses a third
-  time, go structural — a registry-level guard on `save_file` calls that look
-  like widget substitutes.
+- ~~**`primary.txt` widget guidance says Addison can't build custom-app widgets.**~~
+  **Rewritten 2026-08-06 with step 6 half A**, which is what it was waiting for: the
+  guidance now names the checklist, note and timer as things Addison really makes,
+  states the two limits worth hearing early (a checklist's lines are fixed at
+  creation; a timer never rings, because nothing runs by itself), and keeps the
+  refusal for what is still not a widget — a calculator, a game, a watcher. The
+  never-save-a-file-instead rule is unchanged and still load-bearing. It remains
+  MITIGATION, not a mechanism: it failed once (#43) and was re-hardened once (#45),
+  and a third regression should go structural — a registry-level guard on
+  `save_file` calls that look like widget substitutes.
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.

@@ -11,16 +11,29 @@
 //
 // SAFETY: widgets are DECLARATIVE specs only (agent_core/widgets.py). A routine
 // widget runs a saved routine through the EXISTING run path (its own gates apply
-// at run time); a stat widget DISPLAYS a core-computed value; a command widget's
-// Run goes to the core's widget.run, which re-checks the mode and raises the
-// per-invocation card before anything executes. There is no code, expression, or
-// template anywhere here — the rail only renders specs and calls the typed ipc.
+// at run time); a stat widget DISPLAYS a core-computed value; a checklist, note
+// or timer edits only its OWN stored state through widget.setState, which the
+// core validates per kind; a command widget's Run goes to the core's widget.run,
+// which re-checks the mode and raises the per-invocation card before anything
+// executes. There is no code, expression, or template anywhere here — the rail
+// only renders specs and calls the typed ipc.
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { WidgetRunResult } from "../ipc/client";
-import type { ArtifactUnavailable, Widget, Stats, WidgetStatSource } from "../types/ui";
+import type {
+  ArtifactUnavailable,
+  Widget,
+  Stats,
+  WidgetState,
+  WidgetStatSource,
+} from "../types/ui";
 
 const TRAY_OPEN_KEY = "addison.trayOpen";
+
+// Mirrors MAX_NOTE_LEN in agent_core/widgets.py. A courtesy stop on the textarea,
+// NOT the rule: the core rejects an over-long note whatever this says, and this
+// only keeps someone from typing a page they were never going to be able to save.
+const MAX_NOTE_LEN = 2000;
 
 /** Minimal routine info the rail needs to run a routine widget (variable prompts). */
 export interface RailRoutine {
@@ -63,6 +76,13 @@ interface Props {
   /** widget.run for a command widget (Developer profile) — the core re-checks
    * the mode and gates the command per invocation; never executed client-side. */
   onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
+  /**
+   * widget.setState for the three interactive kinds. Optional so the many places
+   * that render a read-only rail (and the tests that predate this) need no
+   * change: without it a checklist still SHOWS its ticks, it just can't take new
+   * ones — the same posture as every other missing control here.
+   */
+  onSetWidgetState?: (id: string, state: WidgetState) => void;
   onAskBuildWidget: () => void;
 }
 
@@ -92,6 +112,7 @@ export function WidgetRail({
   onDelete,
   onRunRoutine,
   onRunCommandWidget,
+  onSetWidgetState,
   onAskBuildWidget,
 }: Props) {
   const [editMode, setEditMode] = useState(false);
@@ -187,6 +208,7 @@ export function WidgetRail({
           onDelete={onDelete}
           onRunRoutine={onRunRoutine}
           onRunCommandWidget={onRunCommandWidget}
+          onSetWidgetState={onSetWidgetState}
         />
       ))}
 
@@ -227,6 +249,7 @@ export function WidgetRail({
                 onDelete={onDelete}
                 onRunRoutine={onRunRoutine}
                 onRunCommandWidget={onRunCommandWidget}
+                onSetWidgetState={onSetWidgetState}
               />
             ))}
           <Row>
@@ -292,6 +315,7 @@ interface WidgetRowProps {
   onDelete: (id: string) => void;
   onRunRoutine: (routineId: string, variables: Record<string, string>) => Promise<RunOutcome>;
   onRunCommandWidget: (id: string) => Promise<WidgetRunResult>;
+  onSetWidgetState?: (id: string, state: WidgetState) => void;
 }
 
 function WidgetRow({
@@ -305,6 +329,7 @@ function WidgetRow({
   onDelete,
   onRunRoutine,
   onRunCommandWidget,
+  onSetWidgetState,
 }: WidgetRowProps) {
   const spec = widget.spec;
   const routine =
@@ -336,6 +361,33 @@ function WidgetRow({
             title={spec.title}
             command={spec.command}
             onRun={() => onRunCommandWidget(widget.id)}
+          />
+        ) : spec.kind === "checklist" ? (
+          <ChecklistWidgetBody
+            title={spec.title}
+            items={spec.items}
+            state={widget.state}
+            onChange={
+              onSetWidgetState ? (state) => onSetWidgetState(widget.id, state) : undefined
+            }
+          />
+        ) : spec.kind === "note" ? (
+          <NoteWidgetBody
+            title={spec.title}
+            initialText={spec.text}
+            state={widget.state}
+            onChange={
+              onSetWidgetState ? (state) => onSetWidgetState(widget.id, state) : undefined
+            }
+          />
+        ) : spec.kind === "timer" ? (
+          <TimerWidgetBody
+            title={spec.title}
+            seconds={spec.seconds}
+            state={widget.state}
+            onChange={
+              onSetWidgetState ? (state) => onSetWidgetState(widget.id, state) : undefined
+            }
           />
         ) : (
           <StatWidgetBody title={spec.title} source={spec.source} stats={stats} />
@@ -532,6 +584,243 @@ function CommandWidgetBody({
   );
 }
 
+// ---------------------------------------------------------------------------
+// The three interactive SAFE kinds (Phase-2 step 6, half A). None of them calls a
+// tool, reads a file, or reaches the network: each one edits only its own stored
+// state through `widget.setState`, which the core validates against the widget's
+// spec before storing. That is why they are available in the Simple profile.
+//
+// Shared UI rules, from docs/design-brief-dark + personas 54/68:
+//   * the accent is for ACTIONS and LIVE STATE only — a ticked box, a Save, a
+//     running clock — never for decoration;
+//   * state is never signalled by colour alone: a done item is struck through
+//     AND dimmed AND checked, a running timer says "running" in words;
+//   * every control is a real, focusable element (a native checkbox takes Space,
+//     a textarea takes Tab) and grows to a 44px target on touch widths.
+// ---------------------------------------------------------------------------
+
+// A checklist: title — done/total, then one line per item. ITEMS ARE FIXED at
+// creation (agent_core/widgets.py — v1 has no item editing, the same way it has
+// no routine step editing); only the ticks change, and they map to the items BY
+// POSITION. A state whose length disagrees with the spec is not trusted here
+// either: the row draws an untouched list rather than tick a line it can't be
+// sure of, which mirrors what the core does on the way out.
+function ChecklistWidgetBody({
+  title,
+  items,
+  state,
+  onChange,
+}: {
+  title: string;
+  items: string[];
+  state?: WidgetState;
+  onChange?: (state: WidgetState) => void;
+}) {
+  const stored = state && "checked" in state ? state.checked : null;
+  const checked = stored && stored.length === items.length ? stored : items.map(() => false);
+  const done = checked.filter(Boolean).length;
+
+  function toggle(index: number) {
+    if (!onChange) return;
+    onChange({ checked: checked.map((value, i) => (i === index ? !value : value)) });
+  }
+
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-[7px]">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-muted">{title}</span>
+        <span className="flex-1" />
+        {/* A count, not a bar: two numbers are unambiguous at a glance and need
+            no colour to be read. */}
+        <span className="shrink-0 font-mono text-[10px] text-muted">
+          {done}/{items.length}
+        </span>
+      </span>
+      {items.map((item, index) => (
+        <label
+          key={index}
+          className="flex cursor-pointer items-baseline gap-2 max-md:min-h-[44px]"
+        >
+          <input
+            type="checkbox"
+            checked={checked[index]}
+            disabled={!onChange}
+            onChange={() => toggle(index)}
+            className="h-[13px] w-[13px] shrink-0 translate-y-[2px] accent-accent"
+          />
+          <span
+            className={
+              "min-w-0 flex-1 leading-[1.45] " +
+              (checked[index] ? "text-muted line-through" : "text-ink-soft")
+            }
+          >
+            {item}
+          </span>
+        </label>
+      ))}
+    </span>
+  );
+}
+
+// A note: the spec's `text` is the note as first written; the state holds what it
+// says NOW. Edits commit on blur, and while there are uncommitted ones the Save
+// action appears — a rail that saved silently would leave the person guessing
+// whether their words survived, and one that only saved on a button would lose
+// them when they clicked away.
+function NoteWidgetBody({
+  title,
+  initialText,
+  state,
+  onChange,
+}: {
+  title: string;
+  initialText: string;
+  state?: WidgetState;
+  onChange?: (state: WidgetState) => void;
+}) {
+  const stored = state && "text" in state ? state.text : initialText;
+  const [draft, setDraft] = useState(stored);
+  // What the CORE last told us it holds. Kept in a ref so the effect below can
+  // tell "the core's value changed underneath us" (a reconcile after a save, a
+  // refreshed list) apart from "the person is typing". `dirty` is separate state
+  // rather than `draft !== saved.current`, because a ref does not re-render: the
+  // Save control has to disappear the moment the words are safe, not whenever the
+  // parent next happens to redraw.
+  const saved = useRef(stored);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (stored !== saved.current) {
+      saved.current = stored;
+      setDraft(stored);
+      setDirty(false);
+    }
+  }, [stored]);
+
+  function edit(text: string) {
+    setDraft(text);
+    setDirty(text !== saved.current);
+  }
+
+  function commit() {
+    setDirty(false);
+    if (!onChange || draft === saved.current) return;
+    saved.current = draft;
+    onChange({ text: draft });
+  }
+
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-[7px]">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-muted">{title}</span>
+        <span className="flex-1" />
+        {dirty && onChange && (
+          <button
+            type="button"
+            onClick={commit}
+            className="shrink-0 text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+          >
+            Save
+          </button>
+        )}
+      </span>
+      <textarea
+        aria-label={title}
+        value={draft}
+        rows={3}
+        maxLength={MAX_NOTE_LEN}
+        readOnly={!onChange}
+        onChange={(e) => edit(e.target.value)}
+        onBlur={commit}
+        className="w-full resize-y rounded-[5px] border border-line bg-paper px-2 py-1.5 text-[12px] leading-[1.5] text-ink outline-none focus:border-track-hi"
+      />
+    </span>
+  );
+}
+
+// A timer: a length, a clock, and three plain controls. THE COUNTING HAPPENS
+// HERE — the core stores start/duration/paused and nothing else. Nothing is
+// scheduled anywhere and nothing fires when it reaches zero: the row simply says
+// so, and waits to be read. Addison never triggers itself (G2), and a timer that
+// rang would be exactly that.
+function TimerWidgetBody({
+  title,
+  seconds,
+  state,
+  onChange,
+}: {
+  title: string;
+  seconds: number;
+  state?: WidgetState;
+  onChange?: (state: WidgetState) => void;
+}) {
+  const timer = state && "running" in state ? state : null;
+  const running = timer?.running ?? false;
+  const remaining = timer?.remaining ?? seconds;
+  const startedAt = timer?.startedAt ?? null;
+
+  const [now, setNow] = useState(nowSeconds);
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setNow(nowSeconds()), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+
+  // Derived, never stored: what is left is the paused remainder minus however
+  // long it has been running. A clock the core had to keep would be a clock the
+  // core had to tick.
+  const left =
+    running && startedAt !== null ? Math.max(0, remaining - (now - startedAt)) : remaining;
+  const finished = left <= 0;
+
+  return (
+    <span className="flex min-w-0 flex-1 flex-col gap-[7px]">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-muted">{title}</span>
+        <span className="flex-1" />
+        <span
+          className={
+            "shrink-0 font-mono text-[11px] " + (running && !finished ? "text-accent" : "text-ink")
+          }
+        >
+          {formatClock(left)}
+        </span>
+      </span>
+      <span className="flex items-baseline gap-4">
+        {/* The state in WORDS as well as in colour — the clock going violet is
+            the second signal, never the only one. */}
+        <span className="min-w-0 truncate font-mono text-[10px] tracking-[.04em] text-muted">
+          {finished ? "time's up" : running ? "running" : "paused"}
+        </span>
+        <span className="flex-1" />
+        {onChange && !finished && (
+          <button
+            type="button"
+            onClick={() =>
+              onChange(
+                running
+                  ? { running: false, remaining: left, startedAt: null }
+                  : { running: true, remaining: left, startedAt: nowSeconds() },
+              )
+            }
+            className="shrink-0 text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+          >
+            {running ? "Pause" : "Start"}
+          </button>
+        )}
+        {onChange && (running || left !== seconds) && (
+          <button
+            type="button"
+            onClick={() => onChange({ running: false, remaining: seconds, startedAt: null })}
+            className="shrink-0 text-[12px] text-muted transition-colors hover:text-ink max-md:min-h-[44px]"
+          >
+            Reset
+          </button>
+        )}
+      </span>
+    </span>
+  );
+}
+
 // A widget the active profile can't use — a routine/widget made with developer
 // abilities, while Simple is on. It is SHOWN, not dropped: switching profiles used
 // to make the person's own work vanish out of the rail (owner decision
@@ -680,6 +969,22 @@ function dotClass(status: string): string {
   if (status === "running" || status === "reachable") return "bg-ink";
   if (status === "unreachable") return "bg-danger";
   return "bg-disabled"; // idle
+}
+
+// Whole seconds since the epoch — the same unit the core stores `startedAt` in,
+// so the two never disagree by a factor of a thousand.
+function nowSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+// 90 → "1:30", 3661 → "1:01:01". A clock, read the way a clock is read.
+function formatClock(total: number): string {
+  const seconds = Math.max(0, Math.floor(total));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(rest)}` : `${minutes}:${pad(rest)}`;
 }
 
 // 412000 → "412k", 1_500_000 → "1.5M". Compact machine-fact formatting.

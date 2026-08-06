@@ -567,12 +567,20 @@ now **declares the capability/tier it needs**, checked at save/render against th
 active mode. SAFE admits only the non-destructive set; higher tiers admit
 code-backed / system-capable kinds.
 
-> **Still provisional as of 2026-07-26 — Phase-2 step 6 is NOT built.** The shipped
-> widget vocabulary is still the step-0 one in `agent_core/widgets.py`
-> (`routine` / `stat` launchers, plus the OPEN-only `command`). `WidgetCapability`,
-> the interactive display kinds, and the tier check below do not exist yet; amendment
-> §13 Q7 is still open. Nothing here has been contradicted by code — it has simply
-> not been implemented.
+> **SHIPPED 2026-08-06 (Phase-2 step 6, half A) — but NOT as sketched below, and the
+> difference is the decision.** The interactive kinds are real and live in
+> `agent_core/widgets.py`: `{kind:"checklist", items, title}`,
+> `{kind:"note", text, title}` and `{kind:"timer", seconds, title}` — note the names
+> and fields differ from the `todo`/`body` sketch below; the code is the authority.
+> **`WidgetCapability` and the tier check below were CUT.** No spec declares the
+> capability it needs, because `WIDGET_KINDS` is a closed, hard-coded set and that IS
+> the tier gate — a shorter path to the same guarantee, with nothing that can drift
+> from what the validator does. Amendment §13 Q7 is closed on those terms.
+> Per-widget STATE (a tick, an edited note, a paused timer) is not in the spec at all:
+> it lives in the `widget_state` table, is written by `widget.setState` (validated per
+> kind, no permission card — these kinds invoke no tool), and is excluded from
+> snapshots so a restore never un-ticks a list. Higher-tier code-backed widgets remain
+> unbuilt; `command` is still the only one.
 
 ```python
 # Phase-2, provisional — exact kind list & capability grammar are OPEN (amendment §13 Q7).
@@ -993,8 +1001,9 @@ fine-grained per-tool `undo()` (§4.5) *and* a whole-config restore (this sectio
 > **SHIPPED in two pieces — Phase-2 step 2 (Custom + guards, 2026-07-24) and step 5
 > (harness + workspace-trust, 2026-07-24).** Read this section through the two
 > corrections below; where they and the body disagree, they are the authority.
-> **Capability tiers for widgets (step 6) are NOT built** — the tier grammar
-> described here still applies only to tools and to the mode-scoped registry view.
+> **Capability tiers for widgets were CUT at step 6 (2026-08-06)** — a widget's kind
+> is its tier, from a closed hard-coded list, so the tier grammar described here
+> applies only to tools and to the mode-scoped registry view (see §8.1).
 >
 > **1. Two prompting guards ship, not four.** The body lists four tunable guards
 > (destructive card, auto-grant scope, workspace-trust boundary, keyword-gate

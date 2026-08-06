@@ -136,14 +136,26 @@ class Method:
     COSTPLAN_APPLY = "costPlan.apply"          # {accept} -> {ok, snapshotId?, error?}
 
     # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
-    # pill or a whitelisted stat display. NEVER code. Widgets are proposed like
-    # routines (draft-held-in-memory + explicit confirm) and saved LOW-risk.
-    # {} -> {widgets: [{id, spec, pinned, position, createdInMode, unavailable?}]};
+    # pill, a whitelisted stat display, or one of the three interactive SAFE kinds
+    # (checklist / note / timer). NEVER code. Widgets are proposed like routines
+    # (draft-held-in-memory + explicit confirm) and saved LOW-risk.
+    # {} -> {widgets: [{id, spec, pinned, position, createdInMode, state?,
+    # unavailable?}]}; `state` rides only on a stateful kind that has one stored
+    # AND still valid for its spec (see WIDGET_SET_STATE below);
     # `unavailable` is the same {reason, message} marker routine.list carries, on the
     # same terms (absent when usable, display only). See ROUTINE_LIST above.
     WIDGET_LIST = "widget.list"
     WIDGET_SET_PINNED = "widget.setPinned"     # {id, pinned} -> {ok, error?}
     WIDGET_DELETE = "widget.delete"            # {id} -> {ok}
+    # {id, state} -> {ok, state?} | {ok:false, error}. The mutable half of the
+    # three interactive SAFE kinds (checklist / note / timer — step 6, half A):
+    # a tick, an edited note, a paused timer. The SPEC never changes; this writes
+    # the separate widget_state row. The state is validated PER KIND server-side
+    # against the same closed vocabulary — the frontend's shape is never trusted —
+    # and a valid write echoes the stored state back so an optimistic UI can
+    # reconcile. NO permission card: these kinds invoke no tool and have no
+    # execution surface at all, which is precisely SAFE invariant 4.
+    WIDGET_SET_STATE = "widget.setState"
     WIDGET_PROPOSE_FROM_CONVERSATION = "widget.proposeFromConversation"  # {} -> {title, kind, summary, spec}
     WIDGET_CONFIRM_SAVE = "widget.confirmSave"  # {accept} -> {ok, widgetId?}
     WIDGET_RUN = "widget.run"                   # {id} -> {ok, output?, error?}

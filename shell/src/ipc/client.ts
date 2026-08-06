@@ -23,6 +23,7 @@ import {
   type Widget,
   type WidgetProposal,
   type WidgetSpec,
+  type WidgetState,
   type WidgetStatSource,
   type Stats,
   type ConnectionStat,
@@ -411,6 +412,12 @@ export const ipc = {
     call(Method.WidgetSetPinned, { id, pinned }).then(parseWidgetMutation),
   deleteWidget: (id: string): Promise<WidgetMutationResult> =>
     call(Method.WidgetDelete, { id }).then(parseWidgetMutation),
+  // A tick, an edited note, a paused timer (the three interactive kinds). The
+  // core validates the state against the widget's own spec before storing it and
+  // answers with what it stored, so an optimistic update has something real to
+  // reconcile against. No permission card: these kinds run nothing.
+  setWidgetState: (id: string, state: WidgetState): Promise<WidgetStateResult> =>
+    call(Method.WidgetSetState, { id, state }).then(parseWidgetStateResult),
   proposeWidget: (): Promise<WidgetProposal> =>
     call(Method.WidgetProposeFromConversation).then(parseWidgetProposal),
   confirmWidget: (accept: boolean): Promise<WidgetMutationResult> =>
@@ -670,6 +677,27 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
     }
     return { kind: "stat", source: source as WidgetStatSource, title: obj.title };
   }
+  // The three interactive SAFE kinds. Each is DISPLAY + LOCAL EDIT only: ticking
+  // a box or typing in a note calls widget.setState, which the core validates
+  // per kind before storing. Nothing here runs anything.
+  if (obj.kind === "checklist") {
+    const items = Array.isArray(obj.items) ? obj.items : null;
+    // Fail CLOSED, like every other parser here: a checklist we can't render
+    // fully is dropped rather than rendered short, because `checked` maps to
+    // these items by POSITION and a silently shortened list would tick wrongly.
+    if (!items || items.length === 0 || items.some((i) => typeof i !== "string")) return null;
+    return { kind: "checklist", items: items as string[], title: obj.title };
+  }
+  if (obj.kind === "note") {
+    if (typeof obj.text !== "string") return null;
+    return { kind: "note", text: obj.text, title: obj.title };
+  }
+  if (obj.kind === "timer") {
+    if (typeof obj.seconds !== "number" || !Number.isFinite(obj.seconds) || obj.seconds <= 0) {
+      return null;
+    }
+    return { kind: "timer", seconds: obj.seconds, title: obj.title };
+  }
   // A command widget (OPEN/Developer mode) is DISPLAY DATA ONLY — never executed
   // client-side. We keep the command text so the rail can show it; running it is
   // the core's job (run_command tool + gate), and this build exposes no such path.
@@ -678,6 +706,39 @@ function parseWidgetSpec(value: unknown): WidgetSpec | null {
     return { kind: "command", command: obj.command, title: obj.title };
   }
   return null;
+}
+
+/**
+ * One widget's stored state, judged AGAINST ITS SPEC. Fails closed to
+ * `undefined` — a state that doesn't fit is not half-applied, the widget simply
+ * draws its declaration (the same call the core makes on the way out).
+ */
+export function parseWidgetState(spec: WidgetSpec, value: unknown): WidgetState | undefined {
+  const obj = asRecord(value);
+  if (!obj) return undefined;
+  if (spec.kind === "checklist") {
+    const checked = Array.isArray(obj.checked) ? obj.checked : null;
+    // Length is the whole safety property: `checked[i]` belongs to `items[i]`.
+    if (!checked || checked.length !== spec.items.length) return undefined;
+    if (checked.some((c) => typeof c !== "boolean")) return undefined;
+    return { checked: checked as boolean[] };
+  }
+  if (spec.kind === "note") {
+    return typeof obj.text === "string" ? { text: obj.text } : undefined;
+  }
+  if (spec.kind === "timer") {
+    const { running, remaining, startedAt } = obj;
+    if (typeof running !== "boolean") return undefined;
+    if (typeof remaining !== "number" || !Number.isFinite(remaining) || remaining < 0) {
+      return undefined;
+    }
+    if (running) {
+      if (typeof startedAt !== "number" || !Number.isFinite(startedAt)) return undefined;
+      return { running, remaining, startedAt };
+    }
+    return { running, remaining, startedAt: null };
+  }
+  return undefined;
 }
 
 export function parseWidgetList(result: unknown): Widget[] {
@@ -695,15 +756,34 @@ export function parseWidgetList(result: unknown): Widget[] {
     // Why this widget can't be used under the active profile, when the core says
     // so — the rail renders those rows disabled instead of dropping them.
     const unavailable = normalizeUnavailable(row.unavailable);
+    // Interactive kinds only, and only when it fits the spec — see parseWidgetState.
+    const state = parseWidgetState(spec, row.state);
     out.push({
       id: row.id,
       spec,
       pinned: row.pinned !== false,
       createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
+      ...(state ? { state } : {}),
       ...(unavailable ? { unavailable } : {}),
     });
   }
   return out;
+}
+
+/** widget.setState — `state` is what the CORE stored, echoed back. */
+export interface WidgetStateResult {
+  ok: boolean;
+  state?: unknown;
+  error?: string;
+}
+
+function parseWidgetStateResult(result: unknown): WidgetStateResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    state: obj?.state,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
 }
 
 function parseWidgetMutation(result: unknown): WidgetMutationResult {

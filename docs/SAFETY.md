@@ -379,17 +379,36 @@ relaxes exactly these four, and only as spelled out above.
 4. **Widgets are capability-gated, not code — buildable in every mode (scope
    amendment 2026-07-20).** Widgets can be *built* in all modes; the mode gates
    the *capability*, not the ability to build. SAFE-tier widgets come from a
-   **safe, non-destructive vocabulary** (`agent_core/widgets.py`): the launchers
-   (`{kind:"routine",routineId,title}` runs a saved routine through the *existing*
-   routine.run path — same registry + gate, zero new execution surface;
-   `{kind:"stat",source,title}` from the fixed whitelist `tokens_month` /
-   `provider_latency` / `connections`) **plus new interactive display kinds**
-   (to-do/checklist, note, timer, …) rendered by *trusted Addison components* and
-   backed by safe storage. Still **no eval, no arbitrary code, no raw-code/template
-   field** — SAFE-1 and the webview CSP hold; a SAFE widget can never reach
-   anything that harms the machine or Addison. Unknown kinds/sources are rejected
-   at save and hidden at render. Higher tiers (Developer/Custom) add **code-backed
-   / system-capable** widgets (today's OPEN `{kind:"command",…}`; monitors/scripts
-   under workspace-trust + undo + snapshot + keyword gate). Surviving guarantee: a
+   **safe, non-destructive vocabulary** (`agent_core/widgets.py`), and since
+   2026-08-06 that vocabulary is a **CLOSED SET OF KINDS, hard-coded in that
+   file** — five in SAFE:
+
+   - the two launchers — `{kind:"routine",routineId,title}` runs a saved routine
+     through the *existing* routine.run path (same registry + gate, zero new
+     execution surface), and `{kind:"stat",source,title}` reads the fixed
+     whitelist `tokens_month` / `provider_latency` / `connections`;
+   - the three interactive kinds — `{kind:"checklist",items,title}`,
+     `{kind:"note",text,title}`, `{kind:"timer",seconds,title}` — rendered by
+     *trusted Addison components*, backed by Addison's own storage, invoking **no
+     tool at all**. Their mutable half (a tick, an edited note, a paused timer)
+     lives in the separate `widget_state` table, validated per kind server-side at
+     write *and* at read, and carries **no permission card** because there is
+     nothing there to gate: they are non-destructive by construction, which is
+     what this invariant asks for. Nothing counts a timer down but the frontend
+     and nothing fires at zero — G2 is untouched.
+
+   **There is no capability-declaration lattice, and that is the decision, not a
+   gap** (owner decision 2026-08-06). The amendment sketched a
+   `required_capabilities` field plus a capability→minimum-mode map; the closed
+   list of kinds *is* that gate, and it cannot drift from what the code does,
+   because it is what the code does. A spec declaring its own powers would be the
+   saved data telling the app what it is allowed to do.
+
+   Still **no eval, no arbitrary code, no raw-code/template field** — SAFE-1 and
+   the webview CSP hold; a SAFE widget can never reach anything that harms the
+   machine or Addison. Unknown kinds/sources are rejected at save and hidden at
+   render. Higher tiers (Developer/Custom) add **code-backed / system-capable**
+   widgets (today's OPEN `{kind:"command",…}`; monitors/scripts under
+   workspace-trust + undo + snapshot + keyword gate). Surviving guarantee: a
    widget never exceeds its mode's tier, and SAFE widgets are non-destructive by
    construction.

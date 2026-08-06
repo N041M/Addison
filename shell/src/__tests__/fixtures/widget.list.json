@@ -32,6 +32,26 @@
       "pinned": false,
       "position": 2,
       "createdInMode": "open"
+    },
+    {
+      "id": "widget-fixture-3",
+      "spec": {
+        "kind": "checklist",
+        "items": [
+          "Buy milk",
+          "Call Ana"
+        ],
+        "title": "Saturday"
+      },
+      "pinned": false,
+      "position": 3,
+      "createdInMode": "safe",
+      "state": {
+        "checked": [
+          true,
+          false
+        ]
+      }
     }
   ]
 }

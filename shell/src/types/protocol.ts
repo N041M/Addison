@@ -52,13 +52,22 @@ export const Method = {
   CostPlanApply: "costPlan.apply",
 
   // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
-  // pill or a whitelisted stat display, NEVER code. Proposed like routines
-  // (draft-in-memory + explicit confirm) and saved LOW-risk (display-only).
+  // pill, a whitelisted stat display, or one of the three interactive SAFE kinds
+  // (checklist / note / timer), NEVER code. Proposed like routines (draft-in-memory
+  // + explicit confirm) and saved LOW-risk (display-only).
   // Rows carry the same `unavailable` {reason, message} marker on the same terms
   // as `routine.list` above (absent when usable, display only).
   WidgetList: "widget.list",
   WidgetSetPinned: "widget.setPinned",
   WidgetDelete: "widget.delete",
+  // {id, state} -> {ok, state?} | {ok:false, error}. A tick, an edited note, a
+  // paused timer — the mutable half of the three interactive kinds. The widget's
+  // SPEC never changes; this writes the separate state the core keeps beside it,
+  // and the core VALIDATES that state per kind before storing it, so nothing this
+  // frontend sends is taken on trust. It answers with the state it actually
+  // stored, which is what an optimistic update reconciles against. No permission
+  // card, because these kinds invoke no tool and touch nothing outside Addison.
+  WidgetSetState: "widget.setState",
   WidgetProposeFromConversation: "widget.proposeFromConversation",
   WidgetConfirmSave: "widget.confirmSave",
   WidgetRun: "widget.run",

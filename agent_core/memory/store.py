@@ -759,7 +759,35 @@ class Store:
         return int(row["m"]) + 1
 
     def delete_widget(self, widget_id: str) -> None:
+        # The state row goes FIRST: widget_state.widget_id REFERENCES widgets(id)
+        # and PRAGMA foreign_keys is ON, so deleting the widget out from under a
+        # ticked checklist would raise instead of deleting anything.
+        self._conn.execute("DELETE FROM widget_state WHERE widget_id = ?", (widget_id,))
         self._conn.execute("DELETE FROM widgets WHERE id = ?", (widget_id,))
+        self._conn.commit()
+
+    # --- per-widget state (what the PERSON has done; see schema.sql) ----------
+    # NOT snapshot-captured (snapshots/scope.py): a restore of the CONFIGURATION
+    # must never un-tick somebody's list.
+    def get_widget_state(self, widget_id: str) -> str | None:
+        """The stored ``state_json`` for one widget, or None if it has none."""
+        row = self._conn.execute(
+            "SELECT state_json FROM widget_state WHERE widget_id = ?", (widget_id,)
+        ).fetchone()
+        return None if row is None else row["state_json"]
+
+    def widget_states(self) -> dict[str, str]:
+        """Every stored state, keyed by widget id — one read for the whole rail."""
+        rows = self._conn.execute("SELECT widget_id, state_json FROM widget_state").fetchall()
+        return {row["widget_id"]: row["state_json"] for row in rows}
+
+    def set_widget_state(self, widget_id: str, state_json: str, updated_at: int) -> None:
+        self._conn.execute(
+            "INSERT INTO widget_state (widget_id, state_json, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(widget_id) DO UPDATE SET state_json = excluded.state_json, "
+            "updated_at = excluded.updated_at",
+            (widget_id, state_json, updated_at),
+        )
         self._conn.commit()
 
     # --- guidance skills (declarative steering text — see agent_core/skills.py) ---
@@ -1229,6 +1257,24 @@ class Store:
                 "DELETE FROM routine_runs"
                 + (f" WHERE routine_id NOT IN ({placeholders})" if surviving else ""),
                 tuple(surviving),
+            )
+
+            # Same shape for widget state, and the same reason: `widget_state` is
+            # NOT captured, so its rows outlive the wipe — but a row whose widget
+            # does not survive the restore would dangle, and the FK check at
+            # COMMIT would abort the whole restore. The state of a widget that
+            # DOES survive is kept untouched, which is the point of excluding this
+            # table at all: restoring a configuration never un-ticks a list.
+            surviving_widgets = [row["id"] for row in state.get("widgets", []) if "id" in row]
+            widget_placeholders = ", ".join("?" for _ in surviving_widgets)
+            self._conn.execute(
+                "DELETE FROM widget_state"
+                + (
+                    f" WHERE widget_id NOT IN ({widget_placeholders})"
+                    if surviving_widgets
+                    else ""
+                ),
+                tuple(surviving_widgets),
             )
 
             known_conversations = {

@@ -9,6 +9,24 @@
 
 import type { WidgetProposal } from "../types/ui";
 
+// The one-line machine fact under the summary: what KIND of thing is about to be
+// added. This was a two-way ternary ("runs a saved routine" / "shows a value from
+// Addison") for as long as there were two SAFE kinds, so every other kind fell
+// into the else — a command widget already described itself as a readout, and
+// with checklists, notes and timers that else branch would be wrong three more
+// ways, on the one card whose whole job is saying what you are agreeing to.
+function kindLine(kind: string): string {
+  const lines: Record<string, string> = {
+    routine: "runs a saved routine",
+    stat: "shows a value from Addison",
+    checklist: "a list you tick off",
+    note: "a note you can edit",
+    timer: "a timer you start yourself",
+    command: "runs a command on this computer",
+  };
+  return lines[kind] ?? "";
+}
+
 interface Props {
   proposal: WidgetProposal;
   onAdd: () => void;
@@ -27,9 +45,7 @@ export function WidgetProposalCard({ proposal, onAdd, onCancel }: Props) {
       {proposal.summary && (
         <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{proposal.summary}</p>
       )}
-      <p className="m-0 mt-2 font-mono text-[10px] text-disabled">
-        {proposal.kind === "routine" ? "runs a saved routine" : "shows a value from Addison"}
-      </p>
+      <p className="m-0 mt-2 font-mono text-[10px] text-disabled">{kindLine(proposal.kind)}</p>
 
       <div className="mt-3 flex items-baseline gap-5">
         <button

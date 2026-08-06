@@ -24,10 +24,17 @@ from agent_core.protocol import Method
 from agent_core.providers.base import ModelResponse, ToolCallRequest
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.widgets import (
+    MAX_CHECKLIST_ITEMS,
+    MAX_ITEM_LEN,
+    MAX_NOTE_LEN,
     MAX_PINNED,
+    MAX_TIMER_SECONDS,
     MAX_TITLE_LEN,
     STAT_SOURCES,
+    WIDGET_KINDS,
+    initial_widget_state,
     validate_widget_spec,
+    validate_widget_state,
     widget_summary,
 )
 from tests.conftest import IPC_DB_NAME, _shutdown, build_server
@@ -516,3 +523,369 @@ def test_a_new_widget_arrives_pinned_until_the_rail_is_full_then_unpinned(tmp_pa
         assert len(listed_ids) == MAX_PINNED
     finally:
         _shutdown(reader, h.thread)
+
+
+# ===========================================================================
+# The three interactive SAFE kinds (Phase-2 step 6, half A) — checklist, note,
+# timer. They are SAFE-legal because they invoke NO tool and add ZERO execution
+# surface, so what has to be pinned is not "can they run something" (nothing can)
+# but the shape rules: the closed vocabulary, the caps, and the SPEC/STATE split.
+#
+# The state rules carry the weight. A widget spec was immutable until now, and
+# every safety argument in widgets.py rests on a stored spec being re-judgeable at
+# render. Keeping the doing OUT of the declaration is what preserves that, so the
+# tests below check both halves of every rule: what is accepted, and that the
+# thing it would have corrupted is untouched afterwards.
+# ===========================================================================
+
+_CHECKLIST = {"kind": "checklist", "items": ["Buy milk", "Call Ana"], "title": "Saturday"}
+_NOTE = {"kind": "note", "text": "Ana's address", "title": "Note"}
+_TIMER = {"kind": "timer", "seconds": 300, "title": "5 minutes timer"}
+
+
+def test_the_three_interactive_kinds_are_valid_in_the_simple_profile():
+    """The feature itself: SAFE accepts them, with no mode argument at all — the
+    default is SAFE, and these are the kinds the companion is for."""
+    for spec in (_CHECKLIST, _NOTE, _TIMER):
+        assert validate_widget_spec(spec) is None, spec["kind"]
+        assert validate_widget_spec(spec, PolicyMode.SAFE) is None, spec["kind"]
+        assert validate_widget_spec(spec, PolicyMode.OPEN) is None, spec["kind"]
+    # ...and they are in the declared vocabulary, which is what widget.list and
+    # the frontend both read the closed set from.
+    for kind in ("checklist", "note", "timer"):
+        assert kind in WIDGET_KINDS
+
+
+def test_a_checklist_needs_real_lines_and_stays_within_its_caps():
+    assert validate_widget_spec({**_CHECKLIST, "items": []}) is not None
+    assert validate_widget_spec({**_CHECKLIST, "items": "milk"}) is not None
+    assert validate_widget_spec({**_CHECKLIST, "items": ["ok", "   "]}) is not None
+    assert validate_widget_spec({**_CHECKLIST, "items": ["ok", 7]}) is not None
+    assert validate_widget_spec({**_CHECKLIST, "items": ["x" * (MAX_ITEM_LEN + 1)]}) is not None
+    assert validate_widget_spec({**_CHECKLIST, "items": ["x"] * (MAX_CHECKLIST_ITEMS + 1)}) is not None
+    # The boundary is inclusive on the allowed side, or the cap is off by one.
+    assert validate_widget_spec({**_CHECKLIST, "items": ["x"] * MAX_CHECKLIST_ITEMS}) is None
+    assert validate_widget_spec({**_CHECKLIST, "items": ["x" * MAX_ITEM_LEN]}) is None
+
+
+def test_a_note_is_text_and_a_timer_is_a_positive_length():
+    assert validate_widget_spec({**_NOTE, "text": ""}) is None      # a blank page is fine
+    assert validate_widget_spec({**_NOTE, "text": 12}) is not None
+    assert validate_widget_spec({**_NOTE, "text": "x" * (MAX_NOTE_LEN + 1)}) is not None
+    assert validate_widget_spec({**_TIMER, "seconds": 0}) is not None
+    assert validate_widget_spec({**_TIMER, "seconds": -5}) is not None
+    assert validate_widget_spec({**_TIMER, "seconds": 5.5}) is not None
+    assert validate_widget_spec({**_TIMER, "seconds": MAX_TIMER_SECONDS + 1}) is not None
+    # bool is an int in Python, and `True` seconds would sail through a naive
+    # isinstance check and become a one-second timer nobody asked for.
+    assert validate_widget_spec({**_TIMER, "seconds": True}) is not None
+
+
+def test_the_new_kinds_reject_extra_fields_like_every_other_kind():
+    assert validate_widget_spec({**_CHECKLIST, "onDone": "run_command"}) is not None
+    assert validate_widget_spec({**_NOTE, "script": "eval"}) is not None
+    assert validate_widget_spec({**_TIMER, "onZero": "notify"}) is not None
+
+
+def test_widget_summary_describes_the_new_kinds_in_plain_language():
+    assert "tick" in widget_summary(_CHECKLIST).lower()
+    assert widget_summary(_NOTE)
+    # A duration a person reads, not "300s".
+    assert "5 minutes" in widget_summary(_TIMER)
+
+
+# --- state validation: the SPEC is the authority for the shape ---------------
+
+
+def test_only_the_interactive_kinds_keep_state():
+    """A routine/stat/command widget has nothing to change, and asking to change
+    one is refused rather than quietly stored — otherwise widget_state becomes a
+    place to park arbitrary JSON against any widget id.
+
+    The second state below is the one that matters, and it is why this test is
+    not a formality: `{"running": False, "remaining": 0, "startedAt": None}` is a
+    VALID timer state, so without the kind check up front it walks straight
+    through the timer arm (`0 > spec.get("seconds", 0)` is false for a spec that
+    has no `seconds`) and a routine widget acquires a stored timer. An empty dict
+    alone would have let that mutation live — it is rejected by the timer arm's
+    own type checks either way."""
+    timer_shaped = {"running": False, "remaining": 0, "startedAt": None}
+    for spec in (
+        {"kind": "routine", "routineId": "a", "title": "x"},
+        {"kind": "stat", "source": "connections", "title": "x"},
+        _COMMAND_WIDGET,
+    ):
+        assert validate_widget_state(spec, {}) is not None, spec["kind"]
+        assert validate_widget_state(spec, timer_shaped) is not None, spec["kind"]
+
+
+def test_a_checklist_state_must_be_exactly_as_long_as_its_spec():
+    """The positional rule, which is the reason a mismatch is DISCARDED rather
+    than padded: `checked[i]` means `items[i]`, so a state of the wrong length
+    cannot be applied without ticking a line nobody ticked."""
+    assert validate_widget_state(_CHECKLIST, {"checked": [True, False]}) is None
+    assert validate_widget_state(_CHECKLIST, {"checked": [True]}) is not None
+    assert validate_widget_state(_CHECKLIST, {"checked": [True, False, True]}) is not None
+    assert validate_widget_state(_CHECKLIST, {"checked": ["yes", "no"]}) is not None
+    assert validate_widget_state(_CHECKLIST, {"checked": [True, False], "note": "x"}) is not None
+    assert validate_widget_state(_CHECKLIST, "ticked") is not None
+
+
+def test_a_timer_state_holds_start_duration_and_paused_only():
+    running = {"running": True, "remaining": 300, "startedAt": 1_700_000_000}
+    paused = {"running": False, "remaining": 120, "startedAt": None}
+    assert validate_widget_state(_TIMER, running) is None
+    assert validate_widget_state(_TIMER, paused) is None
+    # A start time is required exactly when it is running: a paused timer holding
+    # one would count down twice, and a running one without it cannot count at all.
+    assert validate_widget_state(_TIMER, {**running, "startedAt": None}) is not None
+    assert validate_widget_state(_TIMER, {**paused, "startedAt": 1_700_000_000}) is not None
+    # Never more than the timer was set for, and never negative.
+    assert validate_widget_state(_TIMER, {**paused, "remaining": 301}) is not None
+    assert validate_widget_state(_TIMER, {**paused, "remaining": -1}) is not None
+    # Nothing else may ride along — no callback, no label, no "onZero".
+    assert validate_widget_state(_TIMER, {**paused, "onZero": "run"}) is not None
+
+
+def test_a_note_state_is_text_within_the_same_cap_as_its_spec():
+    assert validate_widget_state(_NOTE, {"text": "moved to Brno"}) is None
+    assert validate_widget_state(_NOTE, {"text": "x" * (MAX_NOTE_LEN + 1)}) is not None
+    assert validate_widget_state(_NOTE, {"text": None}) is not None
+
+
+def test_the_initial_state_comes_from_the_spec_not_from_a_caller():
+    """What a freshly-saved widget starts as. The core derives it; nothing on the
+    wire proposes it, which is why an un-ticked list is not something a draft can
+    arrive pre-ticked."""
+    assert initial_widget_state(_CHECKLIST) == {"checked": [False, False]}
+    assert initial_widget_state(_NOTE) == {"text": "Ana's address"}
+    assert initial_widget_state(_TIMER) == {"running": False, "remaining": 300, "startedAt": None}
+    assert initial_widget_state({"kind": "stat", "source": "connections", "title": "x"}) is None
+    # And whatever it produces is valid by its own validator — the two agree, or a
+    # brand-new widget would render with its state dropped.
+    for spec in (_CHECKLIST, _NOTE, _TIMER):
+        assert validate_widget_state(spec, initial_widget_state(spec)) is None
+
+
+# ===========================================================================
+# widget.setState at the SERVER — the call sites, not the validator.
+#
+# Same lesson as the two call-site sections above: validating in isolation proves
+# the rule and proves nothing about whether either caller still asks. setState has
+# two checks that only exist in the handler (the widget must be usable under the
+# ACTIVE profile, and the spec must still validate in it), and one that is shared
+# with the render path. Each test below enters through the real JSON-RPC server and
+# then reads the result back through widget.list or the table — because "was it
+# refused" and "was nothing written" are different questions, and only the second
+# one catches a handler that answers no and stores anyway.
+# ===========================================================================
+
+
+def _insert(tmp_path, widget_id: str, spec: dict, mode: str = "safe") -> None:
+    store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        store.insert_widget(
+            id=widget_id,
+            spec_json=json.dumps(spec),
+            pinned=True,
+            position=0,
+            created_at=int(time.time()),
+            created_in_mode=mode,
+        )
+    finally:
+        store.close()
+
+
+def _listed(reader, writer, request_id: int) -> dict:
+    reader.feed({"jsonrpc": "2.0", "id": request_id, "method": Method.WIDGET_LIST})
+    listed = writer.wait_for(lambda f: f.get("id") == request_id and "result" in f)
+    return {w["id"]: w for w in listed["result"]["widgets"]}
+
+
+def test_ticking_a_box_is_stored_and_comes_back_on_the_next_list(tmp_path):
+    """The feature, end to end and in the Simple profile: no permission card is
+    raised anywhere in this exchange, because there is nothing here to gate."""
+    _insert(tmp_path, "w-list", _CHECKLIST)
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        # Before: no state at all — the key is ABSENT, not an empty object, so an
+        # older frontend sees exactly the payload it always saw.
+        assert "state" not in _listed(reader, writer, 1)["w-list"]
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-list", "state": {"checked": [False, True]}}})
+        saved = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        # The stored state is echoed back — that is what an optimistic rail
+        # reconciles against, so it has to be the stored value and not an ack.
+        assert saved == {"ok": True, "state": {"checked": [False, True]}}
+
+        assert _listed(reader, writer, 3)["w-list"]["state"] == {"checked": [False, True]}
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_state_the_frontend_invented_is_refused_and_the_stored_one_is_untouched(tmp_path):
+    """The wire is not trusted. A checklist of two lines can only ever have a
+    two-long state, and the refusal must leave the real one in place — a handler
+    that wrote first and validated after would pass a test that only read the
+    reply."""
+    _insert(tmp_path, "w-list", _CHECKLIST)
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-list", "state": {"checked": [True, False]}}})
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        for bad in ({"checked": [True, True, True]}, {"checked": "all"}, {"text": "sneaky"}):
+            reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_SET_STATE,
+                         "params": {"id": "w-list", "state": bad}})
+            refusal = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+            assert refusal["ok"] is False, bad
+            assert refusal["error"], bad
+
+        assert _listed(reader, writer, 3)["w-list"]["state"] == {"checked": [True, False]}
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_setting_the_state_of_a_dev_created_widget_is_refused_in_simple(tmp_path):
+    """Dispatch is the enforcement, never the display marker (owner decision
+    2026-08-06). A dev-created checklist is LISTED in Simple as a disabled row, so
+    a stale frontend — or a mode switch mid-click — arrives here, and here is where
+    it is turned away. The refusal is the same sentence the row carries."""
+    _insert(tmp_path, "w-dev", _CHECKLIST, mode="open")
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-dev", "state": {"checked": [True, True]}}})
+        refusal = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert refusal == {
+            "ok": False,
+            "error": "That widget uses developer abilities, so it's waiting in "
+            "Developer profile.",
+        }
+        assert "state" not in _listed(reader, writer, 2)["w-dev"]
+
+        # ...and the same widget takes the change once Developer is on, so the
+        # refusal above is about the PROFILE and not about the widget being broken.
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.PROFILE_SET,
+                     "params": {"profileId": "developer"}})
+        writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-dev", "state": {"checked": [True, True]}}})
+        allowed = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        assert allowed["ok"] is True
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_setting_the_state_of_a_widget_that_is_gone_is_refused(tmp_path):
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "no-such-widget", "state": {"text": "hi"}}})
+        refusal = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert refusal == {"ok": False, "error": "That widget isn't here any more."}
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_stored_state_that_no_longer_fits_its_spec_is_dropped_at_render(tmp_path):
+    """The read-time half. Specs are immutable, so a mismatch cannot come from the
+    app — it comes from a hand-edited database or a payload written by another
+    build. The row still lists (the widget is fine), it simply arrives with no
+    state, and the rail draws an untouched list rather than a wrongly ticked one."""
+    _insert(tmp_path, "w-list", _CHECKLIST)
+    store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        store.set_widget_state("w-list", json.dumps({"checked": [True]}), int(time.time()))
+    finally:
+        store.close()
+
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        row = _listed(reader, writer, 1)["w-list"]
+        assert row["spec"]["kind"] == "checklist"
+        assert "state" not in row
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_checklist_proposed_from_the_conversation_arrives_saved_and_unticked(tmp_path):
+    """The companion path all the way through: the person says what they want, the
+    core drafts it from THEIR words (never the assistant's), and the saved widget
+    starts in a state the core derived rather than one anybody sent."""
+    h = build_server(
+        tmp_path,
+        responses=[ModelResponse(text="Here's a checklist.", tool_calls=[])],
+        register_tool=False,
+    )
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+                     "params": {"text": "make me a widget with a checklist: milk, bread"}})
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        reader.feed({"jsonrpc": "2.0", "id": 2,
+                     "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        preview = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert preview["kind"] == "checklist"
+        assert preview["spec"]["items"] == ["milk", "bread"]
+
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": True}})
+        saved = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        assert saved["ok"] is True
+
+        row = _listed(reader, writer, 4)[saved["widgetId"]]
+        assert row["state"] == {"checked": [False, False]}
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_timer_is_proposed_with_the_length_the_person_asked_for(tmp_path):
+    h = build_server(
+        tmp_path,
+        responses=[ModelResponse(text="Done.", tool_calls=[])],
+        register_tool=False,
+    )
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+                     "params": {"text": "put a 25 minute timer widget in the panel"}})
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 2,
+                     "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        preview = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert preview["spec"] == {
+            "kind": "timer", "seconds": 1500, "title": "25 minutes timer",
+        }
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_removing_a_widget_takes_its_state_with_it(tmp_path):
+    """`widget_state.widget_id` REFERENCES `widgets(id)` with foreign keys ON, so a
+    delete that forgot the state row would RAISE rather than delete — and the
+    person's Remove button would simply stop working on any widget they had used."""
+    _insert(tmp_path, "w-list", _CHECKLIST)
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_STATE,
+                     "params": {"id": "w-list", "state": {"checked": [True, True]}}})
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.WIDGET_DELETE,
+                     "params": {"id": "w-list"}})
+        assert writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"] == {"ok": True}
+        assert _listed(reader, writer, 3) == {}
+    finally:
+        _shutdown(reader, h.thread)
+        with sqlite3.connect(tmp_path / IPC_DB_NAME) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM widget_state").fetchone()[0] == 0

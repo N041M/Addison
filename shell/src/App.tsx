@@ -1134,6 +1134,7 @@ export function App() {
                           onDelete={widgetsState.handleDeleteWidget}
                           onRunRoutine={widgetsState.handleRunWidgetRoutine}
                           onRunCommandWidget={(id) => ipc.runWidget(id)}
+                          onSetWidgetState={widgetsState.handleSetWidgetState}
                           onAskBuildWidget={handleAskBuildWidget}
                         />
                       ) : (
@@ -1264,6 +1265,7 @@ export function App() {
               onDelete={widgetsState.handleDeleteWidget}
               onRunRoutine={widgetsState.handleRunWidgetRoutine}
               onRunCommandWidget={(id) => ipc.runWidget(id)}
+              onSetWidgetState={widgetsState.handleSetWidgetState}
               onAskBuildWidget={handleAskBuildWidget}
             />
           </div>

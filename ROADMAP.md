@@ -1,6 +1,6 @@
 # Roadmap
 
-Where Addison actually is, as of 2026-08-01.
+Where Addison actually is, as of 2026-08-06.
 
 This file holds status only, and it is the **only** place that does. The reasoning
 behind any of it lives in [CLAUDE.md](CLAUDE.md), [docs/SAFETY.md](docs/SAFETY.md)
@@ -41,10 +41,10 @@ quickly.
 
 ## Next
 
-Three things are left — 6, 7 and 8 — and they are independent enough to take in
-any order. Step 5.5 headed this list until 2026-07-31 and is finished; its entry
-stays first, below, because it is recent enough that people still ask what it
-covered.
+Two things are left — 7 and 8 — and they are independent enough to take in
+any order. Step 5.5 headed this list until 2026-07-31 and step 6 until 2026-08-06;
+both are finished. Their entries stay below, in place, because they are recent
+enough that people still ask what they covered.
 
 5.5. **Containment for the coding harness — DONE 2026-07-31.** Step 5 gave
    Developer mode a real shell. What did not come with it was a boundary underneath
@@ -72,9 +72,18 @@ covered.
    its answer rather than pretending otherwise, and the threat model now lists
    every boundary it does not defend (design-doc §9.x).
 
-6. **Widget capability tiers.** Widgets can already be built in every mode. This
-   gives the safe vocabulary more to work with (checklists, notes, timers) and makes
-   the guidance the model reads aware of what each mode can actually do.
+6. **Widget capability tiers — DONE 2026-08-06.** *Both halves are built; the
+   tier lattice was cut.* **Half B** shipped 2026-08-06: a routine or widget made
+   with developer abilities is listed in Simple as a disabled row that says why,
+   instead of vanishing. **Half A** shipped the same day: three interactive kinds
+   the Simple profile can use — a checklist you tick off, a note you edit, and a
+   timer you start and pause yourself — with what you have done with one kept apart
+   from what the widget IS, and left alone by a restore. What Addison tells the
+   model it can build was rewritten to match. What was **deliberately not built**
+   is the capability declaration the scope amendment sketched: a widget does not
+   describe its own powers, because the list of kinds is closed and hard-coded,
+   which is the same gate with nothing to get out of step. Code-backed widgets
+   (monitors, scripts) are still Developer-only and still future work.
 7. **MCP client.** Consume external tools through the registry and the permission
    gate that already exist. Addison is a client here, never a server.
 8. **The automation keyword gate.** Let Addison write automation that the operating

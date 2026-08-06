@@ -1,10 +1,12 @@
 """widget.* + stats.get handlers — the declarative widget rail (routine / stat /
-command specs) and the core-computed stat sources it renders (engineering-spec §7,
-§4.8; widgets.py invariants)."""
+checklist / note / timer / command specs), the per-widget state the three
+interactive kinds keep, and the core-computed stat sources it renders
+(engineering-spec §7, §4.8; widgets.py invariants)."""
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -22,7 +24,35 @@ from agent_core.tools.base import (
     call_is_destructive,
     call_permission_detail,
 )
-from agent_core.widgets import MAX_PINNED, validate_widget_spec, widget_summary
+from agent_core.widgets import (
+    MAX_CHECKLIST_ITEMS,
+    MAX_ITEM_LEN,
+    MAX_NOTE_LEN,
+    MAX_PINNED,
+    MAX_TIMER_SECONDS,
+    MAX_TITLE_LEN,
+    initial_widget_state,
+    plain_duration,
+    validate_widget_spec,
+    validate_widget_state,
+    widget_summary,
+)
+
+# What the person has to have typed for the core to draft one of the three
+# interactive kinds. Deliberately small and literal: these fire on the USER's own
+# words (never assistant content), and a loose pattern here means proposing the
+# wrong widget, which the person then has to read and decline.
+_CHECKLIST_WORDS = (
+    "checklist", "check list", "to-do", "todo", "to do list",
+    "shopping list", "packing list", "grocery list", "tick off",
+)
+# Word-boundaried so "footnote"/"noted" don't count as asking for a note widget.
+_NOTE_RE = re.compile(r"\bnotes?\b|\bjot\b|\bscratchpad\b")
+_TIMER_RE = re.compile(r"\btimer\b|\bcountdown\b|\bcount down\b")
+# "- milk", "* milk", "1. milk", "2) milk" — one thing to do per line.
+_BULLET_RE = re.compile(r"^(?:[-*•]|\d+[.)])\s+(.*\S)")
+# "25 minutes", "2 hr", "90 sec" — one plainly-written unit at a time.
+_DURATION_RE = re.compile(r"(\d+)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b")
 
 
 def _month_start_epoch() -> int:
@@ -56,6 +86,8 @@ class WidgetsMixin(ServerContext):
         a spec that fails validate_widget_spec is never surfaced or run)."""
         self._ensure_built()
         mode = self._mode()
+        # One read for the whole rail; a widget without a row simply has no state.
+        states = self.store.widget_states()
         widgets: list[dict] = []
         for row in self.store.list_widgets():
             # Dev-created widgets are LISTED while the Simple profile is active,
@@ -99,8 +131,85 @@ class WidgetsMixin(ServerContext):
             # exactly the shape older frontends already parse.
             if unavailable is not None:
                 widget["unavailable"] = unavailable
+            # Per-widget state (checklist / note / timer), RE-VALIDATED here on
+            # the way out. A stored state that no longer fits its spec — a
+            # checklist whose length disagrees, a hand-edited row — is DROPPED,
+            # so the widget renders from its declaration rather than from
+            # something nobody can vouch for. Absent for every other kind.
+            state = self._valid_widget_state(spec, states.get(row["id"]))
+            if state is not None:
+                widget["state"] = state
             widgets.append(widget)
         return {"widgets": widgets}
+
+    @staticmethod
+    def _valid_widget_state(spec: dict, state_json: str | None) -> dict | None:
+        """Decode + validate one stored state against its spec, or None.
+
+        None covers all three ways a widget has no state to show: no row, a row
+        that will not decode, and a row that no longer matches the spec. The
+        caller cannot tell them apart on purpose — every one of them means "draw
+        the declaration"."""
+        if state_json is None:
+            return None
+        try:
+            state = json.loads(state_json)
+        except ValueError:
+            return None
+        if validate_widget_state(spec, state) is not None:
+            return None
+        return state
+
+    def _widget_set_state(self, params: dict) -> dict:
+        """widget.setState {id, state} -> {ok, state?} | {ok:false, error}.
+
+        The mutable half of the three interactive SAFE kinds. NO PERMISSION CARD,
+        and that is not an omission: a checklist, a note and a timer invoke no
+        tool, reach no file, and have no execution surface whatsoever — they are
+        non-destructive BY CONSTRUCTION, which is exactly what SAFE invariant 4
+        asks a SAFE widget to be. Adding a gate here would be asking the person
+        for permission to tick their own box.
+
+        What IS checked, in this order:
+          * the widget exists;
+          * the ACTIVE profile can use it — a dev-created widget is listed in
+            Simple but disabled, and dispatch is the enforcement, never the
+            display marker (the widget.run rule, owner decision 2026-08-06);
+          * its spec is still valid in this mode (the render-time check, so a
+            spec the rail would refuse to draw cannot be written to either);
+          * the state fits the SPEC — per kind, server-side, against the same
+            closed vocabulary. The frontend's shape is never trusted.
+        """
+        self._ensure_built()
+        widget_id = params.get("id")
+        # Narrowed to `str` here rather than at the write: a non-string id can
+        # never name a row, so it takes the same "isn't here any more" exit as an
+        # id that simply doesn't exist.
+        if not isinstance(widget_id, str) or not widget_id:
+            return {"ok": False, "error": "That widget isn't here any more."}
+        row = self.store.get_widget(widget_id)
+        if row is None:
+            return {"ok": False, "error": "That widget isn't here any more."}
+        mode = self._mode()
+        unavailable = _unavailable_marker(
+            mode, row.get("created_in_mode"), _WIDGET_DEV_ABILITIES_MESSAGE
+        )
+        if unavailable is not None:
+            return {"ok": False, "error": unavailable["message"]}
+        try:
+            spec = json.loads(row["spec_json"])
+        except ValueError:
+            return {"ok": False, "error": "That widget can't be changed."}
+        if validate_widget_spec(spec, mode) is not None:
+            return {"ok": False, "error": "That widget can't be changed."}
+        state = params.get("state")
+        error = validate_widget_state(spec, state)
+        if error is not None:
+            return {"ok": False, "error": error}
+        self.store.set_widget_state(widget_id, json.dumps(state), int(time.time()))
+        # Echo the STORED state back, so an optimistic frontend reconciles against
+        # what the core actually holds rather than against what it hoped it sent.
+        return {"ok": True, "state": state}
 
     def _widget_set_pinned(self, params: dict) -> dict:
         self._ensure_built()
@@ -344,32 +453,55 @@ class WidgetsMixin(ServerContext):
             created_at=int(time.time()),
             created_in_mode=mode.value,
         )
+        # A stateful kind starts in the state the CORE derives from its spec (an
+        # un-ticked list, the note's declared text, a paused full-length timer) —
+        # never in one the model or the frontend supplied. Written after the
+        # widget row so the foreign key holds.
+        initial = initial_widget_state(draft)
+        if initial is not None:
+            self.store.set_widget_state(widget_id, json.dumps(initial), int(time.time()))
         self._draft_widget = None
         self._respond(request_id, {"ok": True, "widgetId": widget_id, "pinned": pinned})
 
     def _draft_widget_from_conversation(self, mode: PolicyMode) -> dict | None:
         """The widget heuristic. Returns a valid spec dict or None (a refusal).
 
-        Priority: an explicit ask for token/latency/connection info -> that stat
-        widget; else (OPEN mode only) the last run_command in the recent chat -> a
-        command widget; else the routine just run, or a routine named in the recent
-        chat -> that routine widget; else None."""
+        Priority, and why this order (step 6 half A kept the existing one and slotted
+        the three interactive kinds into the middle of it):
+
+          1. (OPEN only) the last run_command in the recent chat -> a command widget;
+          2. an explicit ask for token/latency/connection info -> that stat widget.
+             These keywords stay ahead of the new kinds because they were already
+             ahead of everything, and moving them would silently change what an
+             existing phrase produces;
+          3. an explicit ask for a checklist / note / timer -> that widget. Above
+             the routine fallback DELIBERATELY: that fallback fires on the mere
+             existence of a routine run this session, whatever the person just
+             said, so a checklist asked for after any routine run would never be
+             reached below it;
+          4. the routine just run, or a routine named in the recent chat;
+          5. otherwise None (a refusal — the card is simply not shown).
+
+        Everything is read from the USER's messages only, never from assistant
+        content: the model does not get to author a spec, it only gets asked."""
         recent = self.conversation.messages[-10:]
         if mode is PolicyMode.OPEN:
             command = self._recent_command(recent)
             if command is not None:
                 return {"kind": "command", "command": command, "title": command[:60]}
-        joined = " ".join(
-            m.content.lower()
-            for m in recent
-            if m.role == "user" and isinstance(m.content, str)
-        )
+        user_texts = [
+            m.content for m in recent if m.role == "user" and isinstance(m.content, str)
+        ]
+        joined = " ".join(text.lower() for text in user_texts)
         if any(k in joined for k in ("token", "usage", "how much have i used", "cost")):
             return {"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}
         if any(k in joined for k in ("latency", "how fast", "response time", "how quick")):
             return {"kind": "stat", "source": "provider_latency", "title": "Model latency"}
         if any(k in joined for k in ("connection", "connected", "online", "reachable")):
             return {"kind": "stat", "source": "connections", "title": "Connections"}
+        interactive = self._draft_interactive_widget(user_texts, joined)
+        if interactive is not None:
+            return interactive
         if self._last_run_routine_id is not None:
             try:
                 routine = self.routine_library.get(self._last_run_routine_id)
@@ -381,6 +513,83 @@ class WidgetsMixin(ServerContext):
             if routine.name and routine.name.lower() in joined:
                 return {"kind": "routine", "routineId": routine.id, "title": routine.name[:60]}
         return None
+
+    @classmethod
+    def _draft_interactive_widget(cls, user_texts: list[str], joined: str) -> dict | None:
+        """A checklist / note / timer drafted from what the PERSON typed, or None.
+
+        Titles are FIXED plain phrases rather than a slice of the utterance: a
+        title cut out of "can you make me a widget with a shopping list on it"
+        reads like a transcription error, and the person is looking straight at
+        the proposal card either way.
+
+        A checklist with no items is not proposed at all — items are fixed at
+        creation (see widgets.py), so an empty one could never become useful, and
+        falling through to the next rule is better than saving a dead widget."""
+        if any(word in joined for word in _CHECKLIST_WORDS):
+            items = cls._checklist_items(user_texts)
+            if items:
+                return {"kind": "checklist", "items": items, "title": "Checklist"}
+        if _TIMER_RE.search(joined):
+            seconds = cls._timer_seconds(joined)
+            return {
+                "kind": "timer",
+                "seconds": seconds,
+                "title": f"{plain_duration(seconds)} timer"[:MAX_TITLE_LEN],
+            }
+        if _NOTE_RE.search(joined):
+            return {"kind": "note", "text": cls._note_text(user_texts), "title": "Note"}
+        return None
+
+    @staticmethod
+    def _checklist_items(user_texts: list[str]) -> list[str]:
+        """The things to tick, out of the most recent user message that names a
+        list. Two shapes only, both of them ways people actually write one: a
+        bulleted/numbered line each, or a comma-separated run after a colon.
+        Capped at MAX_CHECKLIST_ITEMS and MAX_ITEM_LEN — a spec that would fail
+        validation must never be proposed."""
+        for text in reversed(user_texts):
+            if not any(word in text.lower() for word in _CHECKLIST_WORDS):
+                continue
+            candidates: list[str] = []
+            for line in text.splitlines():
+                bullet = _BULLET_RE.match(line.strip())
+                if bullet:
+                    candidates.append(bullet.group(1))
+            if not candidates and ":" in text:
+                tail = text.split(":", 1)[1]
+                candidates = re.split(r",|\band\b|;", tail)
+            items = [
+                item.strip()[:MAX_ITEM_LEN]
+                for item in candidates
+                if item.strip()
+            ]
+            if items:
+                return items[:MAX_CHECKLIST_ITEMS]
+        return []
+
+    @staticmethod
+    def _timer_seconds(joined: str) -> int:
+        """The length asked for ("25 minute timer", "an hour and a half" is NOT
+        parsed — one unit, plainly written), else five minutes. Clamped to the
+        validator's ceiling so a "1000 hour timer" becomes a saveable one."""
+        total = 0
+        for value, unit in _DURATION_RE.findall(joined):
+            multiplier = 3600 if unit.startswith("h") else 60 if unit.startswith("m") else 1
+            total += int(value) * multiplier
+        if total <= 0:
+            return 300
+        return min(total, MAX_TIMER_SECONDS)
+
+    @staticmethod
+    def _note_text(user_texts: list[str]) -> str:
+        """The note's INITIAL text: whatever followed the colon in the message
+        that asked for it, else blank. The person edits it in the rail from
+        there — the state holds the current text, the spec holds this one."""
+        for text in reversed(user_texts):
+            if _NOTE_RE.search(text.lower()) and ":" in text:
+                return text.split(":", 1)[1].strip()[:MAX_NOTE_LEN]
+        return ""
 
     @staticmethod
     def _recent_command(messages: list) -> str | None:

@@ -2478,3 +2478,69 @@ def test_a_row_verified_after_the_fact_survives_a_rebuild_from_its_sidecar(
         assert result.detail == sm._RESTORED_PRE_UPGRADE
     finally:
         rebuilt.close()
+
+
+# --- widget_state is user content, and a restore leaves it alone -------------
+#
+# `widgets` IS captured (a widget spec is configuration), and `widget_state` is
+# NOT (a ticked box is not). The classification itself is forced by
+# test_capture_scope_covers_every_schema_table above — a new table with no entry
+# in either dict fails the build — so what is left to prove is the BEHAVIOUR the
+# classification was chosen for, and the FK edge it created underneath the
+# restore path. Both of these fail if `widget_state` is moved into
+# _CAPTURED_TABLES; the first is the reason, the second is the accident.
+
+
+def _widget_row(store: Store, widget_id: str, items: int = 2) -> None:
+    store.insert_widget(
+        id=widget_id,
+        spec_json=json.dumps(
+            {"kind": "checklist", "items": ["a"] * items, "title": "Saturday"}
+        ),
+        pinned=True,
+        position=0,
+        created_at=1_700_000_000,
+        created_in_mode="safe",
+    )
+
+
+def test_restoring_a_configuration_does_not_untick_a_checklist(store: Store) -> None:
+    """The whole reason `widget_state` is excluded. The restore point is taken
+    BEFORE anything is ticked, exactly as an automatic one would be, and then the
+    person ticks their list. Rolling the configuration back must return the
+    settings and leave the list alone — a rollback that quietly emptied somebody's
+    shopping list would be the recovery floor doing damage of its own."""
+    _widget_row(store, "w-1")
+    store.set_setting("selected_model", "before")
+    captured = store.read_config_state()
+
+    store.set_widget_state("w-1", json.dumps({"checked": [True, True]}), 1_700_000_100)
+    store.set_setting("selected_model", "after")
+
+    store.apply_config_state(captured)
+
+    assert store.get_setting("selected_model") == "before"          # config DID roll back
+    assert store.get_widget_state("w-1") == json.dumps({"checked": [True, True]})
+
+
+def test_a_restore_that_removes_a_widget_still_completes_and_leaves_no_orphan(
+    store: Store,
+) -> None:
+    """The FK edge the exclusion created. `widget_state.widget_id` REFERENCES a
+    CAPTURED table, so a restore that drops the widget leaves its state pointing
+    at nothing — and SQLite checks that at COMMIT, which would abort the whole
+    restore. The recovery floor cannot be allowed to fail for anyone who has ever
+    ticked a box, so the orphaned rows are deleted first (the routine_runs shape).
+    The surviving widget's state is the control: cleanup must not become a wipe."""
+    _widget_row(store, "w-old")
+    captured = store.read_config_state()          # a config where w-new does not exist
+
+    _widget_row(store, "w-new")
+    store.set_widget_state("w-new", json.dumps({"checked": [True, True]}), 1_700_000_100)
+    store.set_widget_state("w-old", json.dumps({"checked": [False, True]}), 1_700_000_100)
+
+    store.apply_config_state(captured)               # must not raise
+
+    assert store.get_widget(  "w-new") is None
+    assert store.get_widget_state("w-new") is None   # no dangling row left behind
+    assert store.get_widget_state("w-old") == json.dumps({"checked": [False, True]})

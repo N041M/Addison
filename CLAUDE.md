@@ -99,7 +99,10 @@ used to mean editing thirteen files.
    `visible_tools(mode)` is a filtered view, never a second registry.
 4. **Widgets are capability-gated, not code.** Buildable in every mode; the mode
    gates the capability. SAFE widgets come from a safe, non-destructive vocabulary
-   and are non-destructive by construction.
+   and are non-destructive by construction. That vocabulary is a **CLOSED SET OF
+   KINDS**, hard-coded in `agent_core/widgets.py` — a spec never declares its own
+   capabilities, and where a widget invokes a tool the tier check is
+   `registry.visible_tools(mode)`, never a second risk model.
 
 **Two rules that are easy to get wrong:**
 
@@ -169,15 +172,16 @@ deliberately not being built. This section held a second copy and the two drifte
 it now holds only what a *builder* needs that status does not convey.
 
 The v1 sequence (spec §11, steps 1–11) is complete and merged, as are Phase-2
-steps 1–5.5 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
-strategies, free-model endpoints, the coding harness + workspace-trust, and
-containment for that harness). **No file is marked `TODO(step N)` any more** — that
+steps 1–6 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
+strategies, free-model endpoints, the coding harness + workspace-trust,
+containment for that harness, and the widget vocabulary + tiers). **No file is marked `TODO(step N)` any more** — that
 sequence records the order the system was built in, not work outstanding.
 
-Three steps remain — 6, 7 and 8. They are independent of each other, and the one
-dependency that is not obvious from the list is inside 7:
+Two steps remain — 7 and 8. Step 6 landed on 2026-08-06 (both halves; the
+capability-declaration lattice was cut in favour of the closed kind list — see
+invariant 4 above and [ROADMAP.md](ROADMAP.md) for status). The one dependency that
+is not obvious from the list is inside 7:
 
-- **6 — widget capability tiers**, companion-facing and independent.
 - **7 — MCP client.** 5.5 shipped the `tool_audit` log, so the spec's promise that
   MCP tools are "gated, logged, undo-aware" is now satisfiable and that half of the
   dependency is discharged. It is **still blocked on the SAFE-constraint question**

@@ -141,9 +141,37 @@ CREATE TABLE IF NOT EXISTS widgets (
     -- command widget, or a widget wrapping a dev routine) are hidden in SAFE mode.
     created_in_mode TEXT NOT NULL DEFAULT 'safe'
 );
--- Widgets are DECLARATIVE specs only — a saved-routine Run pill or a whitelisted
--- stat display. NEVER code, expressions, or templates; validated at save AND at
+-- Widgets are DECLARATIVE specs only — a saved-routine Run pill, a whitelisted
+-- stat display, or one of the three interactive SAFE kinds (checklist, note,
+-- timer). NEVER code, expressions, or templates; validated at save AND at
 -- render (agent_core/widgets.py). See CLAUDE.md invariants.
+
+-- Per-widget STATE (Phase-2 step 6, half A) --------------------------------
+-- What the PERSON has since done with a widget: a ticked box, an edited note, a
+-- paused timer. Deliberately a SEPARATE TABLE rather than a mutation of
+-- widgets.spec_json, for two reasons:
+--
+--   * The spec is what was DECLARED — it is validated at save and again at every
+--     render, and the whole safety argument for widgets is that a stored spec
+--     can be re-judged against the current mode. State is what has HAPPENED
+--     since. Writing state into spec_json would conflate the two and make every
+--     tick a re-validation of the declaration.
+--   * `widgets` is snapshot-captured (snapshots/scope.py) and this table is NOT.
+--     Ticks are user content, like memory_facts: restoring a CONFIGURATION must
+--     never un-tick somebody's shopping list. Keeping them in spec_json would
+--     have put user content inside a captured table with no way to separate it.
+--
+-- state_json is validated per KIND, server-side, by widgets.validate_widget_state
+-- on the way in AND on the way out; a state that no longer matches its spec (a
+-- checklist whose length disagrees) is dropped at render, never guessed at.
+-- No FK cascade on purpose: apply_config_state deletes and reinserts `widgets`
+-- wholesale during a restore, and ON DELETE CASCADE would wipe the state of
+-- every widget that survives it. Orphans are cleaned explicitly instead (store.py).
+CREATE TABLE IF NOT EXISTS widget_state (
+    widget_id   TEXT PRIMARY KEY REFERENCES widgets(id),
+    state_json  TEXT NOT NULL,           -- per-kind, see agent_core/widgets.py
+    updated_at  INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS skills (
     id              TEXT PRIMARY KEY,        -- uuid4

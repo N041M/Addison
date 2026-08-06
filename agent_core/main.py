@@ -1134,6 +1134,8 @@ class JsonRpcServer(
                     self._respond(request_id, self._widget_set_pinned(params))
                 elif kind == "widget_delete":
                     self._respond(request_id, self._widget_delete(params))
+                elif kind == "widget_set_state":
+                    self._respond(request_id, self._widget_set_state(params))
                 elif kind == "widget_propose":
                     self._handle_widget_propose(request_id)
                 elif kind == "widget_confirm":
@@ -1707,6 +1709,7 @@ _WIDGET_JOBS = {
     Method.WIDGET_LIST: "widget_list",
     Method.WIDGET_SET_PINNED: "widget_set_pinned",
     Method.WIDGET_DELETE: "widget_delete",
+    Method.WIDGET_SET_STATE: "widget_set_state",
     Method.WIDGET_PROPOSE_FROM_CONVERSATION: "widget_propose",
     Method.WIDGET_CONFIRM_SAVE: "widget_confirm",
     Method.WIDGET_RUN: "widget_run",

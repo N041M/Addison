@@ -13,9 +13,9 @@
 > modules: **flow 9** (snapshots, step 1), **flow 10** ("make it cheaper", step 4),
 > **flow 11** (add an endpoint, step 4), **flow 14** (routing, step 3), and the
 > workspace-trust half of **flow 12** (step 5). Two are still unbuilt and are marked
-> where they appear: the **keyword gate** in flow 12 (step 8), and **flow 13**'s
-> capability tiers and interactive widget kinds (step 6). **Flow 15** (MCP, step 7) is
-> unbuilt in its entirety. The `reason` slugs quoted throughout are entries of the
+> where they appear: the **keyword gate** in flow 12 (step 8), and — inside the now
+> mostly-shipped **flow 13** — the code-backed widget branch. **Flow 15** (MCP, step 7)
+> is unbuilt in its entirety. The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
 > around them is not.
 
@@ -523,17 +523,20 @@ injection barrier. Nothing in `agent_core/` implements it today.
 
 ## 13. Build a widget — SAFE safe-vocabulary vs. higher-tier code-backed
 
-**Phase-2 step 6 — not built.** Today's shipped flow is flow 8, and today's vocabulary is
-three kinds (`routine`, `stat`, and `command` in OPEN only); there is no
-`required_capabilities`, no capability tier, and no interactive kind. What follows is the
-target shape.
+**Phase-2 step 6 — the SAFE half is built (2026-08-06); the code-backed branch is not.**
+Today's vocabulary is six kinds: `routine`, `stat`, `checklist`, `note` and `timer` in
+SAFE, plus `command` in OPEN only. There is **no `required_capabilities` and no capability
+tier, by decision rather than by omission** — the closed list of kinds is the gate
+([SAFETY.md](SAFETY.md), invariant 4). The `else` branch below is therefore still the
+target shape, not the tree: a code-backed widget is `command` and nothing else today.
 
 Widgets are buildable in **every** mode; the mode gates the **capability**, not whether one
 can be built (amendment §8.4). A SAFE request for a to-do widget produces a real checklist
-from the **safe interactive vocabulary** (trusted renderers + safe storage, no code). A
-Developer/Custom request may build a **code-backed / system-capable** widget (a monitor,
-the friend's connection watcher), which is capability-tier-gated and, to *run or arm*, goes
-through workspace-trust + the keyword gate + snapshot floor.
+from the **safe interactive vocabulary** (trusted renderers + safe storage, no code) whose
+ticks are stored apart from the spec, in `widget_state`. A Developer/Custom request may
+build a **code-backed / system-capable** widget (a monitor, the friend's connection
+watcher), which is tier-gated and, to *run or arm*, goes through workspace-trust + the
+keyword gate + snapshot floor.
 
 ```mermaid
 sequenceDiagram
@@ -543,20 +546,22 @@ sequenceDiagram
     participant DB as Store (widgets)
 
     WV->>SRV: widget.proposeFromConversation ("build me a to-do widget")
-    Note over SRV: draft a spec — stamp required_capabilities + created_in_mode
+    Note over SRV: draft a spec from the PERSON's own words — stamp created_in_mode
     SRV-->>WV: {title, kind, summary, spec}  (held in memory)
     WV->>SRV: widget.confirmSave {accept: true}
     SRV->>W: validate_widget_spec(draft, mode)
-    alt SAFE-tier capabilities only (to-do/checklist, note, timer, launchers)
-        Note over W: non-destructive vocabulary — no code/eval, SAFE-1 + CSP hold
+    alt a SAFE kind (checklist, note, timer, or a launcher)
+        Note over W: closed vocabulary — no code/eval, SAFE-1 + CSP hold
         W-->>SRV: None (valid)
         SRV->>DB: insert_widget (created_in_mode="safe")
+        SRV->>DB: set_widget_state (core-derived: un-ticked / initial text / paused)
     else code-backed / system-capable (Developer / Custom)
-        Note over W: capability tier > SAFE -> requires OPEN/Custom<br/>refused if built under Simple
+        Note over W: kind absent from SAFE's list -> requires OPEN/Custom<br/>refused if built under Simple
         W-->>SRV: None (valid in-tier) — else reject + plain reason
         SRV->>DB: insert_widget (created_in_mode="open"/"custom", disabled in Simple)
     end
     SRV-->>WV: {ok: true, widgetId}
+    Note over SRV: later, a tick or an edit or a pause -> widget.setState<br/>validated per kind against the spec, and NOT snapshot-captured
     Note over WV: running/arming a system-capable widget -> workspace-trust + keyword gate (flow 12)
 ```
 

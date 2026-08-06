@@ -151,6 +151,12 @@ def _seeded_store(db_path: Path) -> Store:
              "safe"),
             ({"kind": "stat", "source": "tokens_month", "title": "Tokens this month"}, "safe"),
             ({"kind": "command", "command": "git status", "title": "Repo status"}, "open"),
+            # An interactive kind WITH state (step 6 half A). The fixture carries
+            # one on purpose: `state` is a new optional key on the widget.list row,
+            # and a fixture without a single stateful widget would pin the exact
+            # payload the parsers must not be judged on.
+            ({"kind": "checklist", "items": ["Buy milk", "Call Ana"], "title": "Saturday"},
+             "safe"),
         ]
     ):
         store.insert_widget(
@@ -161,6 +167,11 @@ def _seeded_store(db_path: Path) -> Store:
             created_at=_T0 + i,
             created_in_mode=mode,
         )
+    # Half-ticked, so the fixture distinguishes a state that was read from one that
+    # was defaulted — an all-False array is what a parser produces when it gives up.
+    store.set_widget_state(
+        "widget-fixture-3", json.dumps({"checked": [True, False]}), _T0
+    )
     # G3 snapshots. Seeded HERE, before the server builds, because the genesis
     # snapshot is only written when the table is empty — so seeding first is what
     # keeps this fixture at exactly these three rows. One ordinary auto row, one
