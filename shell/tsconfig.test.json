@@ -11,5 +11,26 @@
   // depend on test files existing. CI runs both.
   "extends": "./tsconfig.json",
   "include": ["src"],
-  "exclude": []
+  "exclude": [],
+  "compilerOptions": {
+    // BOTH of these exist because this config passed locally and failed in CI on
+    // 2026-08-06 — the first time CI ever ran it, since the workflow had always
+    // run `npx tsc --noEmit` (src only). TypeScript walks PARENT directories
+    // looking for `node_modules/@types`, and on the owner's machine it found one
+    // in `/Users/karel/`, outside the repository entirely. The gate was green for
+    // a reason that was not in the repo, which is the worst way to be green.
+    //
+    // `types` pins the ambient set to what is declared here rather than to
+    // whatever happens to be in scope on the machine. Test files import `vitest`
+    // and `@testing-library/*` explicitly, so those need no entry — this list is
+    // only for GLOBAL types, and `node` earns its place because tests read
+    // fixtures off disk (`node:fs`, `node:path`, `process`). `@types/node` is a
+    // declared devDependency for the same reason: an ambient type is a dependency
+    // whether or not anybody wrote it down.
+    "types": ["node"],
+    // ES2022 for `Array.prototype.at`, used throughout the test files. The
+    // shipped config stays at ES2020 deliberately: what the app compiles to is a
+    // decision about browsers, and these tests run in node and jsdom.
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  }
 }

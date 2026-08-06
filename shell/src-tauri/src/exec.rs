@@ -55,6 +55,11 @@ fn home_dir() -> PathBuf {
 
 /// Absolute path, because a sandbox invoked through `PATH` is a sandbox an
 /// attacker's `PATH` can replace.
+// macOS-only: every use sits behind `#[cfg(target_os = "macos")]`, so on any
+// other target this is dead code — and `clippy -D warnings` (a CI gate since
+// 2026-08-06) is right to say so. Gated rather than `#[allow(dead_code)]`d,
+// because "this does not exist off macOS" is the true statement.
+#[cfg(target_os = "macos")]
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// Ceiling on captured output, mirroring the core's own transcript truncation.
@@ -80,6 +85,7 @@ const MAX_TIMEOUT_MS: u64 = 120_000;
 /// Scratch space every command gets. Outside the floor and outside every project,
 /// so it costs nothing to allow — unless a dev config has put Addison's data dir
 /// underneath it, which `write_root_collides_with_protected` catches.
+#[cfg(target_os = "macos")]
 const SCRATCH_DIR: &str = "/private/tmp";
 
 // shell.runCommand {command, timeoutMs, writeRoots} -> {stdout, stderr, exitCode, sandboxed}

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Addison desktop shell \u2014 Tauri + React frontend (engineering-spec \u00a71.2)",
+  "description": "Addison desktop shell — Tauri + React frontend (engineering-spec §1.2)",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -28,6 +28,7 @@
     "@eslint/js": "^9.17.0",
     "@tauri-apps/cli": "^2",
     "@testing-library/react": "^14.3.1",
+    "@types/node": "^26.1.2",
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@vitejs/plugin-react": "^4",
