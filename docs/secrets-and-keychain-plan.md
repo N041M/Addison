@@ -206,7 +206,9 @@ what a future pass would have to add are written up in
 **Detection, as built.** Nothing in the API says "this item is foreign", so the
 signal is elapsed time: a foreign item ALWAYS prompts, and a prompt always waits on
 a human, so a *successful read that waited* is a read of a foreign item. Spike 1
-measured an app-owned read at 29 ms; the threshold is 400 ms
+measured an app-owned read at 29 ms *(measured 2026-07-31 · a warm read of an
+app-owned item from the signing binary itself, on the owner's machine; a cold
+first read or a slower machine moves it)*; the threshold is 400 ms
 (`FOREIGN_READ_THRESHOLD`). One-sided and cheap in both directions — a slow but
 app-owned read costs one unnecessary, verified re-creation, and a foreign read
 cannot slip under the bar without a dialog nobody saw.

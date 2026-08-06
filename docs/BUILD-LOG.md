@@ -219,6 +219,11 @@ both as load-bearing and unverified). A ~60-line spike binary
 classifies as "prompted" without anyone answering it.
 
 **Spike 1 — does creator trust survive a rebuild under a self-signed cert? NO.**
+*(measured 2026-07-31 · a ~60-line spike binary signed with the self-signed
+`Addison Dev` identity and NO explicit designated requirement, so `codesign` fell
+back to a per-build `cdhash` — that condition is what later changed, and the
+conclusion below is superseded; see "§14 decision 6" at the top of this file. The
+29 ms figure survives it.)*
 
 ```
 add   (build A, signed)   -> OK  25ms   added
@@ -239,6 +244,9 @@ variable only the owner can measure: whether a single *Always Allow* (a
 partition-list edit) is durable across rebuilds — plan §13.6.
 
 **Spike 2 — does the data-protection keychain work under the current signing? NO, with a number.**
+*(measured 2026-07-31 · the same self-signed spike binary with no provisioning
+profile and no entitlements — `-34018` is a property of that signing, so this
+result is void the day the app ships with provisioned entitlements, not before.)*
 
 ```
 dp-add  -> ERR  11ms  Error { code: -34018, "A required entitlement isn't present." }
@@ -1246,7 +1254,11 @@ the wall-clock upper-bound assert in `test_shell_bridge.py` may flake under load
 signing-script automation is still un-agreed (ask before imposing the split dev
 loop).
 
-**STATUS 2026-07-24: step 1 of the plan is DONE and working.**
+**STATUS 2026-07-24: step 1 of the plan is DONE and working.** *(Superseded
+2026-07-31 by `sign-and-run.sh`, which does this as a cargo runner and adds the
+explicit designated requirement — read the rest of this block as the record of
+07-24, not as instructions. [CONVENTIONS.md](CONVENTIONS.md) owns the live
+mechanism.)*
 `scripts/sign-dev-binary.sh` signs the dev binary with a stable self-signed
 certificate. Verified on the owner's machine — the designated requirement the
 keychain ACL matches on went from a per-build hash to:
@@ -1265,11 +1277,13 @@ Two things the next session needs to know:
   instructions and is where the owner got stuck; the script now detects that exact
   state and says so. (That fix merged as PR #50.)
 - **`cargo` strips the signature on every rebuild**, so `./scripts/sign-dev-binary.sh`
-  must be re-run after each build. This is a step someone will forget. Wiring it
+  must be re-run after each build *(no longer: `sign-and-run.sh` does it, 07-31)*.
+  This is a step someone will forget. Wiring it
   into the dev loop was offered and **not** done, because `tauri dev` builds and
   runs in one step with no hook between, so automating it means running Vite and
   the binary separately — a workflow change the owner has not agreed to. Ask before
-  imposing it.
+  imposing it. *(Answered 07-31: the cargo **runner** seam was the missing hook, and
+  `sign-and-run.sh` uses it — no split dev loop, no manual re-run.)*
 
 **The multi-prompt symptom was the unexplained one, and the 07-25 audit above
 explained it.** The owner reported **three prompts in a single launch** (one

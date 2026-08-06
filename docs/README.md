@@ -11,7 +11,11 @@ documents and three precedence rules applied in order; and a single week's passe
 found ten statements that were false — every one of them correct when written and
 falsified by a change that never touched its file.
 
-`tests/test_docs_drift.py` now enforces the mechanical part.
+`tests/test_docs_drift.py` now enforces the mechanical part, and the facts it
+enforces live one row each in **[`tests/doc_claims.py`](../tests/doc_claims.py)** —
+the claims registry. **Adding a rule is adding a row, not writing a test.** Its
+module docstring says when a fact is worth a row and how to prove the row can fail;
+a run prints a work order per offender — file, line, what is wrong, what to write.
 
 ---
 
@@ -65,6 +69,7 @@ stands relative to the tree.
 |---|---|
 | [`design-brief-dark/`](design-brief-dark/) | **Authoritative.** The v4 dark direction — the designer's reference plus `IMPLEMENTATION.md`, which records the binding prototype→app mapping. |
 | [`design-brief-fern/`](design-brief-fern/) | Superseded v3. Kept as history; do not build from it. |
+| [`screenshots/`](screenshots/) | Generated app screenshots embedded by the root README, plus `MANIFEST.md` describing how to regenerate them. Owns no prose. |
 
 ## History — do not cite to settle a question
 
@@ -93,5 +98,16 @@ stands relative to the tree.
 5. **A caveat is as perishable as the claim it qualifies.** When the underlying fact
    flips, every copy of the caveat becomes a lie in the other direction, and a gate
    that only checks *"is the caveat present"* stays green through it. Give the fact
-   one owner, point the copies at it, and let
-   `test_docs_drift.py`'s `G3_RESOLVED_IN_OPEN` show what that looks like in a test.
+   one owner, point the copies at it, and register it in
+   [`tests/doc_claims.py`](../tests/doc_claims.py) — `G3_RESOLVED_IN_OPEN` is what
+   that looks like as a row.
+6. **A measurement is not a property.** An empirical number carries the date it was
+   taken and the conditions it was taken under, in the form
+   [`CONVENTIONS.md`](CONVENTIONS.md) owns. A spike result written as a permanent
+   fact is a trap for a reader with no instinct that it might be void — and this
+   repo has already sprung it.
+7. **Prefer the docstring next to the code.** Over the passes that produced these
+   rules, long docstrings adjacent to the code they govern drifted markedly less
+   than standalone narrative documents did, because the change that falsifies one is
+   in the same diff. A rule tied to a specific module belongs in that module's
+   docstring; this doc set then links to it.

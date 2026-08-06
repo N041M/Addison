@@ -193,6 +193,9 @@ pytest ../tests/ -q          # safety-invariant tests must pass
 # Shell (from shell/)
 npm install
 npm run tauri dev
+
+# Every gate, exactly as CI runs them (from the repo root)
+./scripts/gates.sh
 ```
 
 You can also drive the core without the desktop shell, which is useful while

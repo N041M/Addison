@@ -11,24 +11,23 @@ Run this before any wave is committed and PR'd. **Green gates are not the bar**
 ## 1. Automated gates (all must be green, from repo root)
 
 ```bash
-# Python: full suite. Agents may only ever raise the count.
-agent_core/.venv/bin/python -m pytest tests/ -q
-
-# Python lint + types
-agent_core/.venv/bin/ruff check agent_core tests
-npx --yes pyright                      # config: pyrightconfig.json
-
-# Frontend: lint, strict tsc, vitest, vite build
-cd shell && npm run lint && npx tsc --noEmit && npm test && npm run build
-
-# Rust shell
-cd shell/src-tauri && cargo test && cargo clippy --all-targets
+./scripts/gates.sh              # or: python | frontend | rust
 ```
+
+**`scripts/gates.sh` is the gate list**, and it is a program rather than a
+paragraph on purpose. This section used to hold its own copy of the commands, and
+that copy is exactly how the disagreement happened: it named `npx tsc --noEmit`
+(which checks `src` only), so the `tsconfig.test.json` gate that
+[`KNOWN-GAPS.md`](KNOWN-GAPS.md) recorded as CLOSED had never actually run in CI;
+it named `npm run lint` without `--max-warnings=0`; and it omitted `-D warnings`
+from clippy. `.github/workflows/ci.yml` calls the same script, so there is no
+second copy left to drift —
+`tests/test_docs_drift.py::test_ci_runs_the_gate_script_for_every_job_it_defines`
+keeps it that way. Agents may only ever raise the test count.
 
 No test-count thresholds are written here on purpose. They went stale twice in a
 day, and a stale number reads as a claim — run the suite and read the number off
-the run. `.github/workflows/ci.yml` runs the same three job groups on every PR
-and on every push to `master`.
+the run.
 
 From a **git worktree**, prefix pytest with `PYTHONPATH=$PWD` and use the main
 checkout's interpreter — the venv lives in `/Users/karel/Desktop/Addison`.

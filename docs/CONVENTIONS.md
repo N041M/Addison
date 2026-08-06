@@ -33,6 +33,42 @@ Before trusting a sentence in any doc — including this one — check it agains
 tree. Exact line counts and gate numbers are deliberately absent here for the same
 reason; they went stale twice in a day, and a stale number reads as a claim.
 
+This matters more here than in a repo people write, and the reason is worth stating
+plainly: **a person senses a stale doc and an agent does not.** The tone being off,
+the date being old, the sentence not quite matching what the code looks like — none
+of that reaches a reader that has only the text. It reads the sentence as true and
+acts on it. So a load-bearing fact gets registered in
+[`tests/doc_claims.py`](../tests/doc_claims.py) rather than merely written down, and
+a run names the file and line that disagree.
+
+## Writing a claim that will not go stale quietly
+
+- **A measurement is not a property. Mark it perishable.** An empirical number is
+  written with the date it was taken **and the conditions it was taken under**:
+
+  ```
+  29 ms *(measured 2026-07-31 · a warm read of an app-owned keychain item from the
+  signing binary itself, on the owner's machine)*
+  ```
+
+  The exact form is `*(measured YYYY-MM-DD · what it was measured under)*`, with no
+  parentheses inside it;
+  `tests/test_docs_drift.py::test_every_measurement_marker_is_well_formed` checks the
+  shape, and `test_a_spike_result_is_marked_perishable` refuses a spike figure that
+  carries neither a marker nor a plain statement that it has been superseded. The
+  **condition is the perishable half** — a number goes void because the thing it was
+  measured under changed, and naming that thing is what lets the next reader tell.
+  This repo quoted spike 1's keychain conclusion as a permanent property for six days
+  after `sign-and-run.sh` had voided it.
+- **A rule about one module belongs in that module's docstring.** Across these
+  passes, the long docstrings sitting beside the code they govern drifted markedly
+  less than the standalone narrative documents did — a docstring is in the diff that
+  falsifies it, and a document three directories away is not. Write the rule where
+  the code is and let the doc set link to it.
+- **Write for grep, not for browsing.** A reader arrives by searching for a symbol,
+  a filename or an error string, not by reading a file top to bottom. Put the literal
+  name it will search for in the sentence that answers the question.
+
 ## Working conventions (established with the user)
 
 - **Every change goes PR → `master` directly.** The stacked-PR era is over: no
@@ -119,4 +155,6 @@ reason; they went stale twice in a day, and a stale number reads as a claim.
 - Dev knobs: `ADDISON_MODEL`, `ADDISON_DB_PATH`, `ADDISON_OLLAMA_URL`, `ADDISON_RELAY_URL`.
 - Launch the app: `cd shell && npm run tauri dev` (first Rust build is slow).
   A backend change needs a **restart**, not just Cmd+R.
-- **The gate commands live in `VERIFICATION.md` §1**, not here.
+- **The gate list is `scripts/gates.sh`**, not a paragraph here or in
+  [`VERIFICATION.md`](VERIFICATION.md) — run `./scripts/gates.sh` and CI runs the
+  same script. Reporting green against a remembered subset is what made it a program.

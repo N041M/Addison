@@ -16,7 +16,11 @@ exactly one owner** — a second mention anywhere is a link, never a copy.
 | Gates and verification | `docs/VERIFICATION.md` |
 
 **[`docs/README.md`](docs/README.md) is the full map** — every file, what it owns,
-and the rule that keeps it that way.
+and the rule that keeps it that way. Load-bearing facts are registered in
+[`tests/doc_claims.py`](tests/doc_claims.py) one row each, so a document that
+contradicts one fails the suite with a work order naming the file and line. If a
+run points at something you wrote, fix the document — or, when the *fact* changed,
+flip that row's owner constant and amend every line it names in the same commit.
 
 There is **no precedence chain any more.** The 2026-07-20 scope amendment was
 retired on 2026-07-27: its content had already been folded into the documents
