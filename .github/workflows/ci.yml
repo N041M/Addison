@@ -36,19 +36,11 @@ jobs:
         run: |
           pip install -e "agent_core[dev]"
           pip install pyright
-      - name: Ruff (lint, line length 100)
-        run: ruff check agent_core/ tests/
-      # Config lives in pyrightconfig.json at the repo root. The strict
-      # annotations in this codebase are only worth anything if something
-      # checks them — this is that something.
-      - name: Pyright (type check)
-        run: pyright
-      # PYTHONPATH mirrors how the suite runs locally (repo root on sys.path);
-      # the editable install covers `agent_core.*`, the root covers `tests.*`.
-      - name: Pytest (includes the safety-invariant tests)
-        run: pytest tests/ -q
-        env:
-          PYTHONPATH: ${{ github.workspace }}
+      # ruff + pyright + pytest. The commands live in scripts/gates.sh, not here,
+      # so what CI runs and what a person runs are the same list by construction —
+      # see that script's header for the three-way disagreement that caused.
+      - name: Gates (ruff · pyright · pytest)
+        run: ./scripts/gates.sh python
 
   frontend:
     name: frontend (eslint · tsc · vitest · build)
@@ -65,14 +57,13 @@ jobs:
           cache-dependency-path: shell/package-lock.json
       - name: Install
         run: npm ci
-      - name: ESLint (react-hooks rules + the lib/parse.ts import guard)
-        run: npm run lint
-      - name: Typecheck (tsc --noEmit is the type authority; eslint stays syntactic)
-        run: npx tsc --noEmit
-      - name: Vitest (defensive parsers + useTurn race guard)
-        run: npm test
-      - name: Build (tsc && vite build)
-        run: npm run build
+      # eslint + tsc (BOTH configs) + vitest + build, from scripts/gates.sh.
+      # This step previously ran `npx tsc --noEmit`, which checks src only — so
+      # the tsconfig.test.json gate had never actually run here — and `npm run
+      # lint` without --max-warnings=0, so warnings passed.
+      - name: Gates (eslint · tsc · vitest · build)
+        working-directory: .
+        run: ./scripts/gates.sh frontend
 
   rust:
     name: rust (cargo test, Tauri shell)
@@ -89,10 +80,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: shell/src-tauri
-      # `tauri::generate_context!` embeds frontendDist (../dist) at compile
-      # time, so the directory must exist; its contents don't matter for tests.
-      - name: Stub frontend dist
-        run: mkdir -p shell/dist
-      - name: Cargo test (keychain asymmetry, IPC frame rejection, path allowlists)
-        run: cargo test
-        working-directory: shell/src-tauri
+      # cargo test + clippy, from scripts/gates.sh (which also stubs shell/dist —
+      # `tauri::generate_context!` embeds frontendDist at compile time, so the
+      # directory must exist; its contents don't matter for tests). clippy was
+      # never a CI gate before, though it has been clean and locally expected.
+      - name: Gates (cargo test · clippy)
+        run: ./scripts/gates.sh rust

@@ -271,4 +271,13 @@ pytest ../tests/ -q          # safety-invariant tests must pass
 # Shell (from shell/)
 npm install
 npm run tauri dev
+
+# EVERY gate, exactly as CI runs them (ci.yml calls this same script)
+./scripts/gates.sh            # or: python | frontend | rust
 ```
+
+**`scripts/gates.sh` is the gate list**, and it is a program rather than a
+paragraph on purpose. "Green" was reported three times on 2026-08-06 by someone
+running a remembered subset, and `ci.yml` itself had drifted from what the repo
+believed it ran. Do not restate the gates here or anywhere else — running them is
+the only claim worth making about them.
