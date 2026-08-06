@@ -9,7 +9,7 @@
 // re-bucketed rows would move the selection out from under the arrow keys.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { render, screen, cleanup, within } from "@testing-library/react";
+import { render, screen, cleanup, within, fireEvent } from "@testing-library/react";
 import { ModelPopup, type ModelPopupOption } from "../components/ModelPopup";
 
 afterEach(cleanup);
@@ -60,5 +60,53 @@ describe("model picker grouping", () => {
 
     expect(screen.queryByText("Anthropic")).toBeNull();
     expect(screen.getAllByRole("option")).toHaveLength(OPTIONS.length);
+  });
+});
+
+describe("model picker folding", () => {
+  const many: ModelPopupOption[] = [
+    option("Claude Opus 4.8", "Anthropic", true),
+    ...Array.from({ length: 8 }, (_, i) => option(`gemini-${i}`, "Google")),
+  ];
+
+  it("shows three of eight and offers the rest, then expands on click", () => {
+    render(<ModelPopup anchor={{ x: 400, y: 300 }} options={many} onClose={vi.fn()} />);
+
+    // Anthropic (1 row, unfolded) + Google's first three.
+    expect(screen.getAllByRole("option")).toHaveLength(4);
+    const more = screen.getByRole("button", { name: /5 more/ });
+
+    fireEvent.click(more);
+    expect(screen.getAllByRole("option")).toHaveLength(9);
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+  });
+
+  it("opens the group holding the model in effect, whatever its position", () => {
+    // A menu that folds the ACTIVE model out of sight answers nothing. Selected
+    // row is 7th in its company, so the fold must not apply to that group.
+    const deep = [
+      option("Claude Opus 4.8", "Anthropic"),
+      ...Array.from({ length: 8 }, (_, i) => option(`gemini-${i}`, "Google", i === 6)),
+    ];
+    render(<ModelPopup anchor={{ x: 400, y: 300 }} options={deep} onClose={vi.fn()} />);
+
+    expect(screen.getByText("gemini-6")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
+  });
+
+  it("says a listed model is not a promise", () => {
+    // Google lists gemini-2.5-flash advertising the right method and then refuses
+    // it — "no longer available to new users". Nothing on the row could have
+    // shown that, and which models a key may use is not knowable until one is
+    // called, so the honest place for it is one line under the list.
+    render(<ModelPopup anchor={{ x: 400, y: 300 }} options={many} onClose={vi.fn()} />);
+    expect(screen.getByText(/not every model here works with every key/)).toBeTruthy();
+  });
+
+  it("keeps the fold controls out of the option roles", () => {
+    render(<ModelPopup anchor={{ x: 400, y: 300 }} options={many} onClose={vi.fn()} />);
+    for (const opt of screen.getAllByRole("option")) {
+      expect(opt.textContent).not.toMatch(/more…|collapse/);
+    }
   });
 });

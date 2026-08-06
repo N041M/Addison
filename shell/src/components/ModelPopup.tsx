@@ -15,8 +15,9 @@
 // itself flagged the model, because no cloud model may claim to cost nothing on
 // the frontend's authority (CLAUDE.md, Phase-2 step 4).
 
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { isMotionEnabled } from "../lib/scramble";
+import { initialCollapsedGroups, modelListRows } from "../lib/modelGroups";
 
 /** Panel geometry — the prototype's numbers, kept as named constants because the
  * positioning maths reads as nonsense without them. */
@@ -81,6 +82,19 @@ export function ModelPopup({
   onClose: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  // Which companies are folded shut. Seeded ONCE per mount from the options, so
+  // reopening the menu forgets what was expanded last time — the panel is a
+  // glance surface, and a stale expansion is a stale answer to "what is on?".
+  const [collapsed, setCollapsed] = useState(() =>
+    initialCollapsedGroups(options, (o) => o.selected),
+  );
+  const toggle = (group: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(group)) next.add(group);
+      return next;
+    });
+  const rows = useMemo(() => modelListRows(options, collapsed), [options, collapsed]);
   // Kept up for the length of the exit, then gone.
   const [exiting, setExiting] = useState(false);
   const wasOpen = useRef(false);
@@ -160,58 +174,99 @@ export function ModelPopup({
           : "pointer-events-none animate-[fade-out_.12s_ease_both]")
       }
     >
-      {options.map((o, i) => {
-        // A heading wherever the company changes — which makes the FIRST row of
-        // each group the top of a list, so it takes the group's own top border
-        // rather than the hairline that separates siblings.
-        const heading = o.group && o.group !== options[i - 1]?.group ? o.group : null;
-        return (
-          <Fragment key={o.key}>
-            {heading && (
-              <div
-                // Presentational: the listbox's children are its options, and a
-                // heading announced as one would be an unpickable row to anyone
-                // reading with a screen reader. The grouping is visual.
-                role="presentation"
-                className={
-                  "px-3 pb-1.5 font-mono text-[10.5px] uppercase tracking-wide text-muted " +
-                  (i === 0 ? "pt-2" : "border-t border-t-line pt-3")
-                }
-              >
-                {heading}
-              </div>
-            )}
-            <div
-              role="option"
-              aria-selected={o.selected}
-              tabIndex={0}
-              onClick={o.onPick}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  o.onPick();
-                }
-              }}
+      {rows.map((row, i) => {
+        if (row.kind === "heading") {
+          return (
+            <button
+              key={`h:${row.group}`}
+              type="button"
+              // Presentational to the LISTBOX — a heading announced as an option
+              // would be an unpickable row — but a real button, because it does
+              // something. `aria-expanded` is the part that carries the state.
+              aria-expanded={!row.collapsed}
+              onClick={() => toggle(row.group)}
               className={
-                "flex cursor-pointer items-baseline gap-2.5 border-l-2 border-t py-3 pl-3 pr-0.5 " +
-                "text-[12px] transition-colors hover:text-ink " +
-                (i === 0 || heading ? "border-t-transparent " : "border-t-line ") +
-                (o.selected ? "border-l-accent text-ink" : "border-l-transparent text-ink-soft")
+                "flex w-full items-baseline gap-2 px-3 pb-1.5 text-left font-mono " +
+                "text-[10.5px] uppercase tracking-wide text-muted transition-colors " +
+                "hover:text-ink-soft " +
+                (i === 0 ? "pt-2" : "border-t border-t-line pt-3")
               }
             >
-              <span className="min-w-0 truncate">{o.label}</span>
+              <span className="min-w-0 truncate">{row.group}</span>
               <span className="flex-1" />
-              <span
-                className={
-                  "shrink-0 font-mono text-[10.5px] " + (o.selected ? "text-accent" : "text-muted")
-                }
-              >
-                {o.note}
+              <span className="shrink-0 normal-case tracking-normal">
+                {row.collapsed ? row.total : "collapse"}
               </span>
-            </div>
-          </Fragment>
+            </button>
+          );
+        }
+        if (row.kind === "more") {
+          return (
+            <button
+              key={`m:${row.group}`}
+              type="button"
+              onClick={() => toggle(row.group)}
+              className={
+                "flex w-full cursor-pointer items-baseline border-l-2 border-l-transparent " +
+                "border-t border-t-line py-3 pl-3 pr-0.5 text-left font-mono text-[10.5px] " +
+                "text-muted transition-colors hover:text-ink-soft"
+              }
+            >
+              {row.hidden} more…
+            </button>
+          );
+        }
+        const o = row.option;
+        const first = rows[i - 1]?.kind === "heading";
+        return (
+          <div
+            key={o.key}
+            role="option"
+            aria-selected={o.selected}
+            tabIndex={0}
+            onClick={o.onPick}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                o.onPick();
+              }
+            }}
+            className={
+              "flex cursor-pointer items-baseline gap-2.5 border-l-2 border-t py-3 pl-3 pr-0.5 " +
+              "text-[12px] transition-colors hover:text-ink " +
+              (i === 0 || first ? "border-t-transparent " : "border-t-line ") +
+              (o.selected ? "border-l-accent text-ink" : "border-l-transparent text-ink-soft")
+            }
+          >
+            <span className="min-w-0 truncate">{o.label}</span>
+            <span className="flex-1" />
+            <span
+              className={
+                "shrink-0 font-mono text-[10.5px] " + (o.selected ? "text-accent" : "text-muted")
+              }
+            >
+              {o.note}
+            </span>
+          </div>
         );
       })}
+      {/*
+        A LISTED MODEL IS NOT A PROMISE, and the panel should say so before the
+        turn does. A provider's own catalogue over-promises: Google lists
+        `gemini-2.5-flash` advertising the right method, then refuses it with "no
+        longer available to new users" — retired for keys made after a cutoff and
+        still on the list. Nothing visible distinguished it from a working model.
+
+        Deliberately not a per-row badge: which models a key may use is not
+        knowable until one is called, so a mark would be a guess on every row.
+        One honest line under the list beats thirty confident ones.
+      */}
+      <div
+        role="presentation"
+        className="border-t border-t-line px-3 py-2 font-mono text-[10px] text-disabled"
+      >
+        not every model here works with every key
+      </div>
     </div>
   );
 }
