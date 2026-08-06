@@ -617,6 +617,66 @@ scramble is a no-op everywhere too, and no text is rewritten.
 and the surfaces in **light and dark**: backgrounds, hairlines, and text all
 read correctly, focus rings visible.
 
+## 15. Interactive widgets (Phase-2 step 6 half A — checklist, note, timer)
+
+Three SAFE widget kinds shipped 2026-08-06 and **no human has used them.** They
+invoke no tools, so nothing here is a safety step; what it checks is that what
+you *did* with a widget is kept apart from what the widget *is*.
+
+**Make one of each, in Simple.** Ask Addison for a checklist, a note and a timer.
+Each arrives as a confirm card, then a row in the side panel. Plain language, no
+jargon; the accent is on actions only, never decoration.
+
+**Tick, type, start.** Tick two checklist lines — done lines read as done by more
+than colour (struck through, and the `n/total` count moves). Edit the note and
+click away; the text commits on blur. Start the timer, then pause it: the clock
+runs while you watch and **nothing rings and nothing fires at zero** — Addison
+never triggers itself (G2), and a widget that fired would be exactly that.
+
+**Keyboard.** Reach a checkbox by Tab and toggle it with Space. Personas are 54
+and 68; a checkbox that needs a mouse is a failure, not a nit.
+
+**THE STEP THAT MATTERS — state survives a relaunch.** Quit the app fully and
+reopen. Ticks, note text and timer position are all still there.
+
+**And a restore must NOT undo your ticks.** Take a restore point, tick another
+line, then restore. The configuration goes back; **your ticked lines do not.**
+`widget_state` is deliberately excluded from snapshot capture — restoring a
+configuration must never untick somebody's list. If a restore resets the ticks,
+that is the design being wrong, not a cosmetic bug.
+
+**Items are fixed at creation, on purpose.** There is no way to add a line to an
+existing checklist — a different list means a new widget, exactly as v1 has no
+routine step-editing. Confirm Addison *says* so rather than silently failing.
+
+## 16. Tool servers (Phase-2 step 7 phase 1 — configuration only)
+
+MCP is **dev-only for v1**, and phase 1 stores configuration and nothing else.
+The whole point of this section is that **nothing is callable**.
+
+**Hidden in Simple.** In the Simple profile, Settings has no "Tool servers"
+section at all. Switch to Developer: it appears.
+
+**Add one.** Any `https://` address works — it is never contacted. A restore
+point appears (§13a idiom). The section's standing line says plainly that Addison
+does not connect to a saved server yet; if it ever claims a status, a tool count,
+or "connected", that is a false claim about a capability that does not exist.
+
+**Addresses that must be refused**, each with a plain sentence and no row saved:
+a `http://` address that is not on this computer; one carrying a sign-in name or
+password; one with a query or fragment. A saved address lands in snapshots and
+sidecars in plain text, which is why the refusal is at the store and not the box.
+
+**Switching to Simple must not hide or trap it.** Go back to Simple: saved
+servers stay listed and Remove still works — hiding somebody's saved
+configuration, or making it un-removable, is the failure the 2026-08-06 artifact
+decision reversed. Only *adding* is refused there.
+
+**Nothing is callable.** Ask Addison in Developer to use a tool from the server
+you added. It cannot: no MCP tool exists in the registry yet. If a tool appears
+in the Tools surface or the model reaches one, phase 2 has landed early and this
+checklist is out of date.
+
 ---
 
 ## After the pass
