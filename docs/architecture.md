@@ -194,7 +194,7 @@ flowchart LR
         direction TB
         TR["ToolRegistry<br/>undo check at registration"]
         TR --> Tool["typed tools:<br/>calculator, read_file, save_file, …"]
-        TR --> MCP["McpClient<br/>step 7, not built"]
+        TR --> MCP["McpClient<br/>step 7, not built<br/>(phase 1 shipped config only)"]
     end
 
     subgraph providers["providers/"]
@@ -379,10 +379,12 @@ Component by component:
   (tokens + latency) at that single choke point; `stats.get` derives the token meter
   and per-provider latency from it. Widgets themselves are **declarative specs**
   (`agent_core/widgets.py`), validated at save *and* at render against the current
-  policy mode, never eval'd. Today's vocabulary is three kinds: the launchers
+  policy mode, never eval'd. Today's vocabulary is a **closed set of six kinds**,
+  five of them SAFE: the launchers
   `{kind:"routine", routineId, title}` and `{kind:"stat", source, title}` (source from
   the fixed whitelist `tokens_month` / `provider_latency` / `connections`) in both
-  modes, plus `{kind:"command", command, title}` in OPEN only — rejected at save under
+  modes; the three interactive kinds described below; and `{kind:"command", command,
+  title}` in OPEN only — rejected at save under
   SAFE, and stored `created_in_mode='open'` so that while Simple is active it renders
   as a disabled row (title + reason, no Run and no command text) rather than a working
   one. A command spec that is NOT stamped `'open'` still fails render-time validation
@@ -401,14 +403,20 @@ Component by component:
   Code-backed / system-capable kinds at the higher tiers remain future work,
   governed by workspace-trust, per-tool `undo()`, the snapshot floor, and the
   keyword gate.
-- **McpClient** *(Phase-2 step 7 — not built; nothing in `agent_core/` implements this
-  yet)* — Addison as an MCP **client**, not a server or gateway. It
+- **McpClient** *(Phase-2 step 7 — **still not built**. Phase 1 of five shipped
+  2026-08-06 and is CONFIGURATION ONLY: the `mcp_servers` table and the `mcp.*` RPC
+  namespace in `agent_core/rpc/mcp.py`. There is no protocol client, no discovery, no
+  registration and no dispatch, so nothing here is callable by a model.)* — Addison as
+  an MCP **client**, not a server or gateway. It
   connects to external MCP servers and surfaces their tools through the **existing
   ToolRegistry and PermissionGate** — never a side channel, so MCP tools are gated,
-  logged, and undo-aware like any native tool. It is mode-scoped: OPEN runs them under
-  workspace-trust, while SAFE admits only read-only or genuinely undo-able tools (a
-  mutating MCP tool with no `undo()` cannot be LOW-risk, so invariant 2 keeps it out of
-  the SAFE view automatically). Connecting an MCP server is reversible, snapshotted
+  logged, and undo-aware like any native tool. **MCP is Developer-only for v1** (owner
+  decision 2026-08-06): no MCP tool enters the SAFE view, and what SAFE would ever
+  admit is deferred rather than answered — underneath that, invariant 2 keeps a
+  mutating MCP tool with no `undo()` out of the SAFE view automatically, whatever a
+  server claims. **Transport is HTTP only for v1**, so a saved server is a URL and
+  never a program to launch ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns both
+  decisions). Connecting an MCP server is reversible, snapshotted
   provider-style config, addable by prompting, sharing the add-an-endpoint plumbing.
 - **SnapshotManager** — the G3 machinery described above: it captures app-state
   snapshots (config/DB rows, keys excluded) automatically before risky changes and on

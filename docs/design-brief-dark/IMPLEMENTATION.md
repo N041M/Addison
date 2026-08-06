@@ -319,3 +319,10 @@ mapping against a stale picture. None of them change the design language.
 - **The favicon is a raster on purpose** (already recorded above): the SVG drew the
   "a" with `<text>`, so its letterform depended on whichever font the rasterising
   platform resolved — measured at a 15–20% bbox difference off macOS.
+- **Two surfaces have grown since (2026-08-06), and the sections above do not list
+  the additions.** Settings gained a **Tool servers** section (Developer/Custom only,
+  between "Folders Addison may work in" and "Restore points") for the MCP client's
+  configuration; the right rail gained three **interactive** widget kinds — a
+  checklist you tick, a note you edit and a timer you start and pause — beside the
+  routine and stat rows. Both use the existing row idiom and neither changes the
+  design language; `../../ROADMAP.md` owns their status.

@@ -122,10 +122,11 @@ and where it goes.
   independently checked. Nothing in the tree can widen it today (it is read
   straight from `workspace_trust`); noted so the next thing that touches that path
   knows what it is standing on.
-- The data-versus-code edge is **unchanged by this step and is now the sharper of
-  the two** — the seatbelt profile denies writes to the data dir, not to a packaged
-  `/Applications/Addison.app`. It is the same owner call opened by steps 4 + 5 and
-  is stated once, below; it is not restated here.
+- The data-versus-code edge was **unchanged by this step and was then the sharper of
+  the two** — the seatbelt profile denied writes to the data dir but not to a packaged
+  `/Applications/Addison.app`. **That has since been closed for a packaged install
+  (2026-08-06)**; what is left open is the wording, not the code. It is the same owner
+  call opened by steps 4 + 5 and is stated once, below; it is not restated here.
 
 **The keychain integration has a plan (2026-07-31), and its first two steps are
 BUILT (2026-08-06):** [docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md).
@@ -308,6 +309,8 @@ against the tree on 2026-07-26:
   meantime the precedence question is answered defensively: `auto_grant_scope='none'`
   now beats trust (see rigor-pass item 6). **Decide at step 6 or 8** whether the
   panel grows the third guard or whether that precedence rule is the whole answer.
+  *(Step 6 shipped 2026-08-06 without touching it — it turned out to be entirely
+  widget-side — so this is step 8's decision now, or an owner call before it.)*
 - ~~`tsc --noEmit` does not cover the test files.~~ **CLOSED 2026-08-01.**
   `shell/tsconfig.test.json` + an `npm run typecheck` script that runs both
   configs. Every error it found on the first run was real, in four classes,

@@ -178,7 +178,8 @@ it now holds only what a *builder* needs that status does not convey.
 The v1 sequence (spec §11, steps 1–11) is complete and merged, as are Phase-2
 steps 1–6 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
 strategies, free-model endpoints, the coding harness + workspace-trust,
-containment for that harness, and the widget vocabulary + tiers). **No file is marked `TODO(step N)` any more** — that
+containment for that harness, and the widget vocabulary — whose *tiers* were cut, not
+built). **No file is marked `TODO(step N)` any more** — that
 sequence records the order the system was built in, not work outstanding.
 
 Two steps remain — 7 and 8. Step 6 landed on 2026-08-06 (both halves; the
@@ -237,8 +238,9 @@ ones), never a server/gateway.
 ## Do NOT build yet
 
 Still deferred: **fully-automatic task classification** for routing (the *choice
-logic* that picks a strategy per task — v2; the four *named* strategies below ship
-now), the Context Budget Manager / automatic long-conversation continuation (**v2**
+logic* that picks a strategy per task — v2; the three *named* strategies plus the
+Developer custom chain ship now — see the routing section above, where balanced's cut
+is recorded), the Context Budget Manager / automatic long-conversation continuation (**v2**
 — spec §4.8; v1 ships only the schema substrate, orchestrator machinery, never a
 registry tool), messaging channels, Routine step-editing UI, a Rust rewrite of the
 Agent Core, and the two v2 items from the 2026-07 ecosystem survey — Routine

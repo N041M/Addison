@@ -309,7 +309,8 @@ chat from any of them.
 **Settings sections, in order:** Where Addison thinks · Which model answers ·
 API keys · Run a model on this computer · Routines · Skills · Profile · How
 careful Addison is (Custom only) · Folders Addison may work in
-(Developer/Custom) · Restore points · Diagnostics. The description reads
+(Developer/Custom) · **Tool servers** (Developer/Custom) · Restore points ·
+Diagnostics. The description reads
 "Everything lives on this computer. Nothing leaves it without asking you
 first." Selecting a model role opens the **model popup** — a fixed-position
 270px `panel` with a 7px radius and a hairline ring, positioned so the selected
@@ -336,7 +337,9 @@ rows** (the prototype has them; they are demo content).
 blinking, finished steps dimmed to `muted`, from real ActivityUpdates), the
 accent **"Save as routine"** link, the token meter (**"Tokens this month"** with
 a 2px track and `ink` fill, from real `stats.get`), routine widgets as
-`name — Run` rows, stat widgets as name/value rows, and the footer **"＋ Ask
+`name — Run` rows, stat widgets as name/value rows, the three interactive kinds
+(a **checklist** you tick, a **note** you edit, a **timer** you start and pause —
+step 6 half A, 2026-08-06), and the footer **"＋ Ask
 Addison to build a widget"**, which opens the Build-a-widget surface. Unpinned
 widgets sit behind an "**N more widget(s)**" tray row; **edit** (footer, flips
 to **done**) reveals the pin toggle (⬤/◯) and remove (✕) per stored widget.

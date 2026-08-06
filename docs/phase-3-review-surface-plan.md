@@ -1,16 +1,20 @@
 # Phase 3 — The Review Surface: a bespoke IDE for the Developer/OPEN profile
 
-**Status:** PLAN, approved 2026-07-25. Not started. **Blocked on Phase-2 steps 6
-(widget capability tiers), 7 (MCP client) and 8 (automation keyword gate)** — none of
-which are built. The docs wave below (the Phase-3 redefinition) and the three
-prerequisites are the only parts unblocked today; the surface itself waits.
+**Status:** PLAN, approved 2026-07-25. Not started. **Blocked on Phase-2 steps 7 (MCP
+client) and 8 (automation keyword gate).** Step 6 (widget capability tiers) was the
+third prerequisite and **landed 2026-08-06**; step 7 is one phase of five in. The docs
+wave below (the Phase-3 redefinition) and the remaining prerequisites are the only
+parts unblocked today; the surface itself waits.
+[`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
 
-> **This redefines what "Phase 3" means.** Four documents currently define Phase 3 as
-> packaging / signing / notarisation / auto-updater / binary restore / Secure-Enclave
-> identity (`addison-design-doc.md` §11, `architecture.md:126–129`,
-> `addison-engineering-spec.md:1285`, `HANDOFF.md:1137`). This plan adds a Developer
-> *surface* to that phase. The redefinition must be written into those four places
-> before any code lands — amendment §14's rule is authoritative docs first.
+> **This redefines what "Phase 3" means.** Before this plan, Phase 3 meant packaging /
+> signing / notarisation / auto-updater / binary restore / Secure-Enclave identity, and
+> four documents scoped it that way (`addison-design-doc.md` §11, `architecture.md`,
+> `addison-engineering-spec.md` §11's Phase-3 note, `HANDOFF.md`). This plan adds a
+> Developer *surface* to that phase. **That redefinition has since been written into
+> those documents** (`ee38dbe`, 2026-07-25 — see [`BUILD-LOG.md`](BUILD-LOG.md)), so
+> amendment §14's authoritative-docs-first rule is already discharged for it; the line
+> numbers this paragraph used to carry are gone because they were stale within a week.
 
 ## Context
 
@@ -509,8 +513,11 @@ list** rather than pretending 12px settles it.
 
 ## Verification
 
-**The four gates** (`docs/VERIFICATION.md` §1), all green from repo root: `pytest`, `ruff`,
-strict `tsc` + `vite build`, `cargo test` + `clippy`.
+**Every gate green**, from the repo root: `./scripts/gates.sh`. That script is the one
+executable definition of the list and CI calls the same script
+([`VERIFICATION.md`](VERIFICATION.md) §1) — this line used to name four gates by hand
+and was missing four of them, which is exactly how the prose copies came to disagree
+with CI.
 
 **Tests this wave owes**, following the repo's own standard (mutation-proven; *"for each
 test added, name the mutation it kills"*):
@@ -552,10 +559,14 @@ than a failing button.
 
 1. **`UndoManager.prune()`** conflicts with the review surface (prerequisite 3). Recommended:
    recency arm on reverted rows only.
-2. **"The floor protects Addison's DATA, not Addison's CODE"** (`HANDOFF:1115`) — already an
-   open owner call, and this surface makes it vivid: if the repo or `/Applications/Addison.app`
-   sits under a trusted root, the person will *see* `policy.py` in the file tree. Recommended:
-   add the running app's resource root to `_protected_dirs` as part of this wave.
+2. ~~**"The floor protects Addison's DATA, not Addison's CODE"**~~ — **ANSWERED
+   2026-08-06, ahead of this wave, and as recommended.** The running app's bundle joined
+   the protected set (`filesystem.rs::addison_app_bundle`), so the seatbelt denies writes
+   to `/Applications/Addison.app` exactly as it denies the data dirs. A *developer's*
+   checkout is still writable by design. [`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns that entry
+   and states what remains open (the wording, not the code). The surface still makes it
+   vivid: if the repo sits under a trusted root, the person will *see* `policy.py` in the
+   file tree.
 3. **`style-src 'unsafe-inline'` applies to the Simple profile too.** Mitigations belong in
    the same PR: confirm/strip `<style>` and `style=` from mermaid's injected SVG, and give
    `PermissionCard` a hardened container (own stacking context, `isolation: isolate`, no

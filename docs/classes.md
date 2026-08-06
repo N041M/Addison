@@ -6,10 +6,11 @@
 > Do not consult the amendment to settle a question — it is a historical record.
 > Adds the `SnapshotManager` (global floor **G3**, guaranteed rollback), the
 > Simple/Developer/**Custom** mode-and-guard model with capability tiers, a
-> `RoutingStrategy` abstraction (four named strategies + custom, with graceful
-> fallback), and an `McpClient` external-tool surface over the existing registry +
-> gate. Members marked *(Phase-2)* describe shape the amendment implies but that is
-> not yet in code.
+> `RoutingStrategy` abstraction (the amendment listed four named strategies + custom;
+> **Balanced was cut 2026-07-24**, so three named strategies + custom ship, with
+> graceful fallback), and an `McpClient` external-tool surface over the existing
+> registry + gate. Members marked *(Phase-2)* describe shape the amendment implies but
+> that is not yet in code.
 
 The core in three views: orchestration, providers, and routines. Attributes and
 methods are the real ones from the code, trimmed to the load-bearing members. The

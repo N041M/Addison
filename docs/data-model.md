@@ -467,8 +467,10 @@ erDiagram
     than a permission.
   - `name` is UNIQUE case-insensitively, because phase 2 namespaces every discovered tool
     as `mcp:<server>:<tool>` and must refuse a collision rather than replace. Whether an
-    MCP tool is usable in SAFE is decided at the registry/gate (read-only or genuinely
-    undo-able only, per invariant 2), never by a column here.
+    MCP tool is usable in SAFE is decided at the registry/gate, never by a column here —
+    and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
+    2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
+    no-undo one out of it in any case.
 
 ## Widgets and usage tables
 
@@ -542,7 +544,10 @@ erDiagram
   `WIDGET_KINDS` and `STAT_SOURCES` (`tokens_month`, `provider_latency`,
   `connections`) are the closed vocabularies; an unknown kind or source is rejected at
   save and hidden at render. `created_in_mode` is `safe` | `open` — a command widget is
-  saved as `open` and never surfaces while Simple is active.
+  saved as `open`, and while Simple is active it is **listed but disabled** (the row
+  carries a display-only `unavailable` reason, no Run control and no command text) and
+  refused by `widget.run`. It was hidden outright until 2026-08-06 — see
+  [SAFETY.md](SAFETY.md), which owns the rule.
 
   **There is no capability column, and there will not be one** (owner decision
   2026-08-06). The amendment (§8.4) sketched a `required_capabilities` field plus a

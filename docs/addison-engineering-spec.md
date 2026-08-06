@@ -1614,9 +1614,12 @@ of that pass); code then follows in **dependency order, safety floor first**:
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers + safe storage (buildable
    in all modes); capability-tier gating; make `primary.txt` capability-aware
-   (§3 note, §8 note). **Not started.**
+   (§3 note, §8 note). **Shipped 2026-08-06, both halves — but the capability-tier
+   gating was CUT rather than built:** a widget's kind *is* its tier, from a closed
+   hard-coded list (§3 note, §4.10 head note).
 7. **MCP client integration** — external tools through the registry + gate,
-   mode-scoped (§4.12). **Not started.**
+   mode-scoped (§4.12). **STARTED — phase 1 of five shipped 2026-08-06**
+   (configuration only; nothing is callable) — [plan](step-7-mcp-plan.md).
 8. **Automation keyword gate** + author-OS-run automation (§6). **Not started.**
 
 **[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
@@ -1630,9 +1633,12 @@ proceed in parallel with 5–8 once 1–2 land. Of the amendment's §13 open que
 **snapshot retention (Q2), Custom reachability (Q3), the verified-working definition
 (Q4) and anchor binary capture (Q8) are resolved**, and **auto-routing depth (Q5) is
 half-resolved** — each with its reasoning recorded inline there; do not reopen them.
-Still genuinely open: **keyword-gate syntax (Q1), the MCP-in-SAFE constraint (Q6),
-and the widget kinds/capability grammar (Q7)** — all three belong to steps 6–8.
-Q6 in particular **blocks** step 7 rather than merely accompanying it.
+**Q7 (the widget kinds/capability grammar) was resolved 2026-08-06** by step 6 — the
+kinds are a closed hard-coded set and the capability grammar was cut. Still genuinely
+open: **keyword-gate syntax (Q1)** and **the MCP-in-SAFE constraint (Q6)**. Q6 used to
+**block** step 7; it no longer does — the owner's 2026-08-06 decision that MCP is
+**dev-only for v1** defers SAFE admission instead of answering it, and no code depends
+on it ([`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns that question).
 
 ### Phase 3 — redefined 2026-07-25: packaging *and* the Developer review surface
 
@@ -1652,8 +1658,9 @@ zero new model capability** — it is a flow and trust layer — but it carries 
 cost the plan states plainly: Monaco requires widening the webview CSP with
 `style-src 'unsafe-inline'`, globally, for one window.
 
-It is **sequenced after Phase-2 steps 6, 7 and 8**, none of which are built. Read
-the plan before starting either Phase-3 track.
+It is **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is one
+phase of five in, and 8 is not started. Read the plan before starting either Phase-3
+track.
 
 Note that **restoring a previous app binary remains a Phase-3 updater item and is
 not implemented** (owner decision 2026-07-20, §4.9): `shell/src-tauri/src/updater.rs`

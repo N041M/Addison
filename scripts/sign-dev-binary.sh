@@ -1,20 +1,37 @@
 #!/usr/bin/env bash
-# Give the dev build a STABLE code-signing identity, so the macOS keychain stops
-# asking for your password after every rebuild.
+# SUPERSEDED — this is the manual predecessor of `shell/src-tauri/sign-and-run.sh`.
+# ==============================================================================
+# Do NOT reach for this script to fix keychain prompts. `sign-and-run.sh` is the
+# live mechanism: a cargo *runner* (wired in `shell/src-tauri/.cargo/config.toml`)
+# that signs every dev build automatically and — the part that matters — passes an
+# EXPLICIT designated requirement. This script does not, and without it `codesign`
+# invents one for a self-signed leaf by falling back to `cdhash H"…"`, a hash of the
+# binary's CONTENTS. So every rebuild presents a new requirement and the "Always
+# Allow" you granted can never match again. That was measured on this repo;
+# `docs/KNOWN-GAPS.md` keeps the finding and `docs/CONVENTIONS.md` owns the
+# environment rule.
 #
-# WHY THIS EXISTS
-# ---------------
+# What is still worth reading here is the ONE-TIME certificate setup below,
+# including the TRUST step people get stuck on. `sign-and-run.sh` needs the same
+# certificate and does not create it either. Signing by hand is otherwise only
+# useful for a one-off binary built outside the cargo runner.
+#
+# WHY THIS EXISTED
+# ----------------
 # macOS binds an "Always Allow" keychain decision to the application's code-signing
 # identity. A `cargo build` produces an AD-HOC signature whose identifier embeds a
 # per-build hash (`addison-72d0…`), so every rebuild looks like a brand-new app,
 # the saved decision no longer matches, and you are prompted again. Clicking
 # "Always Allow" is working correctly — it is being invalidated on the next build.
 #
-# Signing with a self-signed certificate instead gives a designated requirement
-# based on the CERTIFICATE rather than the build hash, so the decision survives
-# rebuilds. This is free and local: the $99 Apple Developer Program is for
-# DISTRIBUTION (letting other people run the app without Gatekeeper blocking it),
-# not for this.
+# Signing with a self-signed certificate was expected to give a designated
+# requirement based on the CERTIFICATE rather than the build hash, so that the
+# decision survived rebuilds. **It does not, on its own** — see the superseded
+# banner above; the requirement has to be NAMED explicitly, which is what
+# `sign-and-run.sh` added and this script never did. The certificate is still
+# necessary, just not sufficient. It is free and local either way: the $99 Apple
+# Developer Program is for DISTRIBUTION (letting other people run the app without
+# Gatekeeper blocking it), not for this.
 #
 # ONE-TIME SETUP (yours to do — it creates a certificate, which is a security
 # setting, so it is not something this script should do on your behalf):
@@ -42,12 +59,10 @@
 # Confirm with:  security find-identity -v -p codesigning
 # You want "1 valid identities found" naming Addison Dev.
 #
-# THEN, after any `cargo build` / `npm run tauri dev` rebuild:
-#
-#   ./scripts/sign-dev-binary.sh
-#
-# The first launch after signing prompts once more (the identity genuinely
-# changed); choose "Always Allow" and it should stick from then on.
+# THEN you are done: the cargo runner signs every dev build for you. This
+# superseded script used to be re-run by hand after each `cargo build` /
+# `npm run tauri dev`; it no longer needs to be, and running it does not make
+# "Always Allow" stick.
 
 set -euo pipefail
 
@@ -92,6 +107,7 @@ echo
 echo "Done. The identity is now:"
 codesign -dvvv "$BINARY" 2>&1 | grep -E "^Identifier|^Authority|^Signature" | sed 's/^/  /'
 echo
-echo "Launch the app and choose 'Always Allow' once more — the identity changed, so"
-echo "that decision is being made against the certificate this time, and it will"
-echo "survive the next rebuild."
+echo "NOTE: this signature carries NO explicit designated requirement, so codesign"
+echo "falls back to a cdhash of this exact binary and an 'Always Allow' granted now"
+echo "will stop matching after the next rebuild. Use shell/src-tauri/sign-and-run.sh"
+echo "(the cargo runner, already wired) for a decision that survives rebuilds."

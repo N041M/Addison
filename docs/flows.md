@@ -15,7 +15,8 @@
 > workspace-trust half of **flow 12** (step 5). Two are still unbuilt and are marked
 > where they appear: the **keyword gate** in flow 12 (step 8), and — inside the now
 > mostly-shipped **flow 13** — the code-backed widget branch. **Flow 15** (MCP, step 7)
-> is unbuilt in its entirety. The `reason` slugs quoted throughout are entries of the
+> is unbuilt in its entirety: step 7's phase 1 (2026-08-06) shipped configuration only
+> and touches no part of that flow. The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
 > around them is not.
 
@@ -612,15 +613,18 @@ sequenceDiagram
 
 ## 15. MCP tool call through the existing gate
 
-**Phase-2 step 7 — not built.** No module in `agent_core/` implements an MCP client
-today; the names below are the target shape, not code.
+**Phase-2 step 7 — this flow is not built.** Phase 1 of five shipped 2026-08-06 and is
+CONFIGURATION ONLY (the `mcp_servers` table and `agent_core/rpc/mcp.py`); no module
+implements an MCP client, so every name below is the target shape, not code.
 
 Addison is an MCP **client**, not a server/gateway (amendment §8.5). External MCP tools are
 surfaced through the **existing registry and permission gate** — never a side channel — so
-they are gated, logged, and undo-aware like any tool. In OPEN they run under workspace-trust;
-in SAFE only read-only or genuinely undo-able MCP tools are admitted (invariant 2 keeps a
-mutating, un-undoable MCP tool out of the SAFE view automatically). Connecting the server is
-reversible config (flow 11 plumbing).
+they are gated, logged, and undo-aware like any tool. **MCP is Developer-only for v1**
+(owner decision 2026-08-06): they run in OPEN under workspace-trust, and **no MCP tool
+enters the SAFE view at all** — what SAFE would ever admit is deferred rather than
+answered, and invariant 2 keeps a mutating, un-undoable MCP tool out of that view
+automatically whatever is decided ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns this).
+Connecting the server is reversible config (flow 11 plumbing).
 
 ```mermaid
 sequenceDiagram
@@ -631,7 +635,7 @@ sequenceDiagram
     participant SRV as External MCP server
     participant UM as UndoManager
 
-    Note over REG: MCP tools registered as ordinary registry entries<br/>visible_tools(SAFE) admits only read-only / undo-able ones
+    Note over REG: MCP tools registered as ordinary registry entries<br/>dev-only for v1 — never in visible_tools(SAFE)
     ORC->>REG: resolve(tool_id) for an MCP-backed tool
     REG-->>ORC: Tool wrapper (mode-filtered)
     ORC->>PG: authorize(tool_id, mode, destructive, detail)

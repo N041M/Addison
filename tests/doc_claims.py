@@ -106,6 +106,18 @@ ARTIFACTS_LISTED_NOT_HIDDEN = True
 # add the column. Flip this the day stdio genuinely ships.
 MCP_TRANSPORT_HTTP_ONLY = True
 
+# MCP admission (owner decision 2026-08-06, step 7). Dev-only for v1: an MCP tool
+# never enters `visible_tools(SAFE)`, and what SAFE would ever admit is DEFERRED
+# rather than answered. This is registered because the pre-decision sketch — "in SAFE
+# only read-only or genuinely undo-able MCP tools are admitted" — had been copied into
+# five documents, and it is the most dangerous shape of stale sentence in this repo:
+# it reads as a specification for admitting a stranger's self-declared risk into SAFE,
+# which is precisely the hole invariant 2 exists to keep shut and precisely the
+# question the owner declined to answer. Deferring it is what unblocked step 7 at all
+# (amendment §13 Q6 / design-doc question 14). Flip this the day SAFE admission is
+# genuinely decided and built.
+MCP_IS_DEV_ONLY_IN_V1 = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -381,6 +393,56 @@ CLAIMS: tuple[Claim, ...] = (
         ),
         exempt=FROZEN,
     ),
+    # -- MCP admission: dev-only, so SAFE admits nothing ------------------
+    Claim(
+        id="mcp-is-dev-only-in-v1",
+        owner="docs/step-7-mcp-plan.md",
+        holds=MCP_IS_DEV_ONLY_IN_V1,
+        true_state=(
+            "MCP is DEV-ONLY for v1 (owner decision 2026-08-06). No MCP tool enters "
+            "visible_tools(SAFE); what SAFE would ever admit is deferred, not answered. "
+            "Deferring it is what unblocked step 7."
+        ),
+        false_state=(
+            "SAFE admission has been decided and built, so a document may state which "
+            "MCP tools the companion admits."
+        ),
+        # The exact pre-decision phrasing, in the five shapes the tree carried it —
+        # prefer these over an attempt at English. Every one pairs SAFE ADMISSION with
+        # "undo-able", and that pairing is what makes the rule precise: a first draft
+        # matched SAFE-admits-only on its own and immediately flagged two true WIDGET
+        # sentences ("SAFE admits only the non-destructive set"), which is the
+        # cries-wolf failure the module docstring warns about. Anchored on the
+        # admission verb so it never fires on invariant 2's TRUE statement that a
+        # no-undo tool is kept OUT of that view.
+        while_true=Wrong(
+            pattern=(
+                r"SAFE[^.\n]{0,80}\badmits?\s+only[^.\n]{0,60}undo-able"
+                r"|\bin SAFE only[^.\n]{0,80}undo-able[^.\n]{0,40}admitted"
+                r"|SAFE\s+read-only\s*/\s*undo-able only"
+                r"|constrained to read-only or genuinely\s+undo-able"
+                r"|read-only or genuinely\s+undo-able only"
+            ),
+            fix=(
+                "MCP is dev-only for v1, so SAFE admits NOTHING from a server and the "
+                "constraint was deferred rather than chosen. Amend the sentence, or delete "
+                "it and link to docs/step-7-mcp-plan.md §1, which owns the decision. If "
+                "SAFE admission has genuinely shipped, flip MCP_IS_DEV_ONLY_IN_V1 in "
+                "tests/doc_claims.py in the SAME commit."
+            ),
+            # Prose that states the deferral in the same breath is the correct shape.
+            excused_by=r"dev-only|Developer-only|deferred|defers",
+            window=400,
+        ),
+        while_false=Wrong(
+            pattern=r"no MCP tool enters the SAFE view|MCP is (?:dev|Developer)-only for v1",
+            fix=(
+                "SAFE admission has shipped — this line still says MCP is dev-only. Amend "
+                "it, or link to docs/step-7-mcp-plan.md, which owns the admission rule."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
     # -- The retired scope amendment ---------------------------------------
     Claim(
         id="retired-amendment-has-no-precedence",
@@ -438,6 +500,13 @@ CLAIMS: tuple[Claim, ...] = (
             excused_by=r"sign-and-run|supersed|predecessor|manual|one-time|history",
             window=400,
         ),
+        # The scripts too, and this is not belt-and-braces. The worst copy of this
+        # drift was never in a .md file — it was in `scripts/sign-dev-binary.sh`'s own
+        # header, which told a reader to re-run it after every rebuild and printed
+        # "it will survive the next rebuild" on success. A header beside the code it
+        # governs is the form this repo trusts MOST, so an unqualified mention there
+        # outranks any document that disagrees with it.
+        globs=("*.md", "scripts/*.sh", "shell/src-tauri/*.sh"),
     ),
     # -- The gate list -----------------------------------------------------
     Claim(

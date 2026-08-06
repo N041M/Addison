@@ -231,11 +231,14 @@ here for orientation. All ship in **Phase 2** (post-greenlight, §11); details t
 amendment leaves open are marked **Phase-2** at §14.
 
 *(Status 2026-08-06 — the five below did not land together. **Built:** the snapshot
-subsystem, free-model endpoints + add-by-prompt, the "make it cheaper" flow, and the
-SAFE half of the widget work (step 6): the vocabulary is now `routine` / `stat` /
-`checklist` / `note` / `timer`, plus the OPEN-only `command`. The capability
-*declaration* below was cut — the closed list of kinds is the gate. **Not started:**
-the MCP client (step 7); there is no MCP client in the tree. See §11.)*
+subsystem, free-model endpoints + add-by-prompt, the "make it cheaper" flow, and all
+of the widget work (step 6, both halves): the vocabulary is now `routine` / `stat` /
+`checklist` / `note` / `timer`, plus the OPEN-only `command`, and a widget or routine
+made in Developer is listed-but-disabled in Simple rather than hidden. The capability
+*declaration* below was cut — the closed list of kinds is the gate. **Started, phase 1
+of five:** the MCP client (step 7) — configuration only (`mcp_servers`,
+`mcp.list`/`add`/`remove`), Developer-only, HTTP transport only; nothing connects and
+there is still no MCP client in the tree. See §11.)*
 
 - **Snapshot / restore subsystem (the safety floor).** A point-in-time copy of
   Addison's *mutable state* (settings, provider config, routing choice, skills,
@@ -247,7 +250,8 @@ the MCP client (step 7); there is no MCP client in the tree. See §11.)*
   decision: a widget can be *built* in any mode; the mode gates only what a widget
   may *do*. SAFE/companion widgets come from a **safe, non-destructive vocabulary**
   — the existing routine/stat/command launchers **plus interactive display kinds**
-  (to-do / checklist, note, counter, timer) rendered by trusted Addison components
+  (to-do / checklist, note, timer — there is no `counter`; the status note above
+  gives the shipped list) rendered by trusted Addison components
   over Addison's own safe storage: no shell, no arbitrary code/eval, so the
   no-code invariant and the webview CSP still hold. Higher tiers (Developer /
   Custom) add **code-backed / system-capable** widgets — monitors, scripts, tools
@@ -266,9 +270,12 @@ the MCP client (step 7); there is no MCP client in the tree. See §11.)*
 - **MCP as a *client* (not a server).** Addison consumes external MCP
   servers/tools through its **existing tool registry and permission gate** — never
   a side channel: gated, logged, undo-aware. In the harness they run under
-  workspace-trust; in the companion they are constrained to read-only or genuinely
-  undo-able tools (the undo-at-registration rule keeps a mutating, no-undo MCP tool
-  out of the SAFE view automatically). Connecting a server is reversible config,
+  workspace-trust. *(The companion constraint sketched here — "read-only or genuinely
+  undo-able only" — was **not** the decision taken. MCP is **Developer-only for v1**
+  (owner, 2026-08-06): no MCP tool enters the SAFE view at all, and what SAFE would
+  ever admit is deferred rather than answered — question 14 below. The
+  undo-at-registration rule still holds underneath it, so a mutating, no-undo MCP tool
+  could not be admitted whatever else is decided.)* Connecting a server is reversible config,
   shared with add-an-endpoint plumbing. Addison is deliberately **not** an MCP
   server or gateway (§4).
 - **The "make it cheaper" flow (the exact request that bricked the story's user).**
@@ -994,7 +1001,8 @@ Installer signing/notarization for macOS/Windows, auto-update pipeline, a real l
 > size; its one real cost, stated plainly in the plan, is that Monaco requires
 > widening the webview CSP with `style-src 'unsafe-inline'` globally.
 >
-> It is sequenced **after Phase-2 steps 6, 7 and 8**, none of which are built.
+> It is sequenced **after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is one
+> phase of five in, and 8 is not started.
 > Note also that **restoring a previous app binary stays a Phase-3 updater item and
 > is not implemented** — `shell/src-tauri/src/updater.rs` is an unwired stub.
 
@@ -1102,10 +1110,12 @@ track (post-greenlight):
 6. **Widget capability tiers + expanded vocabulary** — safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers and safe storage
    (buildable in all modes), capability-tier gating, capability-aware guidance.
-   **Not started.**
+   **Shipped 2026-08-06, both halves — with capability-tier gating CUT** rather than
+   built: the closed hard-coded list of kinds is the gate.
 7. **MCP client integration** — external tools through the registry + gate,
-   mode-scoped (OPEN under workspace-trust; SAFE read-only / undo-able only).
-   **Not started.**
+   mode-scoped (OPEN under workspace-trust; SAFE admission **deferred**, since MCP
+   is Developer-only for v1). **STARTED — phase 1 of five shipped 2026-08-06**
+   (configuration only; nothing is callable).
 8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Not started.**
 
 **[`../ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*. Steps
@@ -1190,10 +1200,11 @@ built-in schedulers).
 **Amended 2026-07-20 — open questions from the butler amendment (to resolve during
 the docs/spec update; all Phase-2).**
 
-*(Status 2026-07-26: of the eight below, **10, 11, 12 and 16 are resolved** and
+*(Status 2026-08-06: of the eight below, **10, 11, 12, 15 and 16 are resolved** and
 **13 is half-resolved**, each with its reasoning recorded inline and in amendment
-§13 — do not reopen them. **9, 14 and 15 are genuinely still open**, and all three
-belong to Phase-2 steps 6–8, which are not started.)*
+§13 — do not reopen them. **9 and 14 are genuinely still open**; 9 belongs to step 8,
+which is not started, and 14 belongs to step 7, which is one phase of five in and was
+unblocked by deferring 14 rather than answering it.)*
 
 9. **Keyword-gate syntax** — the exact user-typed prefix (`!run`, `arm:`, `sudo:`…)
    and the precise set of actions it gates (running/arming powerful or OS-automation
@@ -1233,7 +1244,10 @@ belong to Phase-2 steps 6–8, which are not started.)*
     remains v2 substrate and is untouched. (Amendment §13 Q5.)
 14. **MCP tools in SAFE** — the exact companion constraint (read-only only? a
     curated allowlist? dev-only?) and how MCP tool metadata declares undo-ability
-    (§7.4). **Still open** — Phase-2 step 7, not started.
+    (§7.4). **Still open, and now deliberately DEFERRED rather than blocking** —
+    the owner decided 2026-08-06 that MCP is Developer-only for v1, so step 7 could
+    start (phase 1 of five shipped that day) with no code depending on the answer.
+    Promoting an MCP tool into SAFE is a later, separate decision.
 15. ~~**Widget capability tiers & vocabulary**~~ — **RESOLVED 2026-08-06 (Phase-2
     step 6, half A).** The safe interactive kinds are `checklist`, `note` and
     `timer`; a widget spec declares **no** capabilities and there is **no**

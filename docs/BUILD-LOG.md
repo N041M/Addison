@@ -1072,7 +1072,8 @@ with the suite still green, and **two G3 tests passed while restoring the wrong
 snapshot.** Same shape as the step-1 finding. Assume it is still true somewhere.
 
 **`ee38dbe` also redefined Phase 3.** `docs/phase-3-review-surface-plan.md` (a
-Developer/OPEN review surface, approved 2026-07-25, blocked on steps 6–8) is now
+Developer/OPEN review surface, approved 2026-07-25, blocked at the time on steps
+6–8 — 6 has since landed, 2026-08-06) is now
 part of that phase alongside packaging, signing, notarisation, the updater,
 binary restore and Secure-Enclave identity. The redefinition was written back
 into the four documents that had scoped Phase 3 the old way.
@@ -1297,7 +1298,8 @@ names the raw arg basename, not the resolved path. A failed *device-identity*
 read is still not negative-cached (aborts the turn visibly, no storm — deliberate);
 the wall-clock upper-bound assert in `test_shell_bridge.py` may flake under load;
 signing-script automation is still un-agreed (ask before imposing the split dev
-loop).
+loop) *(answered 2026-07-31 — `sign-and-run.sh` signs from the cargo runner seam,
+so there is no split dev loop to impose; see the entry below)*.
 
 **STATUS 2026-07-24: step 1 of the plan is DONE and working.** *(Superseded
 2026-07-31 by `sign-and-run.sh`, which does this as a cargo runner and adds the
@@ -1412,7 +1414,8 @@ unlock. Cause 1 below was the whole story.
 **Agreed plan, in order — do not skip to the end:**
 
 1. **A stable self-signed development certificate. — SHIPPED 2026-07-31.**
-   `sign-and-run.sh` + `.cargo/config.toml`: a cargo **runner** signs each dev
+   `shell/src-tauri/sign-and-run.sh` + `shell/src-tauri/.cargo/config.toml`: a
+   cargo **runner** signs each dev
    build with the `Addison Dev` identity and then execs it. The runner is the only
    available seam — `npm run tauri dev` builds and launches in one step,
    `beforeDevCommand` runs before the Rust build, and `bundle.macOS.signingIdentity`

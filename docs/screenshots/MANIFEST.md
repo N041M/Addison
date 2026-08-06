@@ -15,11 +15,17 @@ Source: [`shell/scripts/capture-screenshots.mjs`](../../shell/scripts/capture-sc
 | `hero-light.png` | The same, light theme. | `8768cab` |
 | `settings.png` | Settings — providers, keys, local models. Dark. | `8768cab` |
 
+**These three are STALE as of 2026-08-06 and the retake trigger below has fired.**
+Twelve commits have touched `shell/src` since `8768cab`: Settings gained a **Tool
+servers** section (step 7 phase 1) and the widget rail gained the `checklist`, `note`
+and `timer` kinds (step 6 half A), so `settings.png` and `hero.png` no longer show the
+shipped surfaces. Regenerate with the command above and bump the commit column.
+
 ## Why these are generated
 
 Images are the **only** documentation this repo's drift tests cannot check — a
-stale PNG is invisible to CI, and the UI has been redesigned wholesale four times
-(cool-slate → terminal → Fern → dark v4). Generating them makes "is this current?"
+stale PNG is invisible to CI, and the UI has been redesigned wholesale three times
+(cool-slate → terminal → Fern → dark v4 is four directions, so three replacements). Generating them makes "is this current?"
 answerable by re-running one command instead of by eye.
 
 ## What they are honest about

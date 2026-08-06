@@ -72,8 +72,13 @@ Not hypotheticals. Each of these is in the repo right now, and each shipped thro
   the `keep_last` floor is pinned; the age half of the rule is invisible.
 - **The self-referential bound.** `test_over_long_title_rejects` asserts on `MAX_TITLE_LEN + 1`
   and `MAX_TITLE_LEN`, so it adapts to any value — raising the bound 60 → 60000 passes. It can
-  detect that a comparison exists, never that the bound is right. Contrast `test_pinned_cap_is_six`
-  four lines below, which hard-pins the number and would catch it.
+  detect that a comparison exists, never that the bound is right. *(The contrast here used to
+  be `test_pinned_cap_is_six`, which hard-pinned its number. That test was **deleted** —
+  `assert MAX_PINNED == 6` asserts that a constant equals its own literal and stayed green
+  with both enforcement sites removed. The pinned-cap section of `tests/test_widgets.py` now
+  reaches the number behaviourally instead, by pinning `MAX_PINNED` widgets and watching the
+  next be turned away. That is the better shape for a bound too: exercise it, do not restate
+  it — which qualifies §5's "pin the number or do not write the test".)*
 - **The passing serialization test.** The `web_search` forgery — a page written with apostrophes
   could close a dict and forge a user message inside the untrusted wrapper — was live from the day
   the tool shipped, through every review, with tests green. It was found only when a new tool made

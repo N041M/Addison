@@ -213,7 +213,10 @@ left out.
 short version follows.
 
 Start with [CLAUDE.md](CLAUDE.md). It is the short version of how this repository
-works, and it wins wherever it and another document disagree.
+works. There is no precedence chain here: **every topic has exactly one owner**, named
+in [docs/README.md](docs/README.md), and a second mention anywhere is meant to be a
+link rather than a copy. Where two documents disagree, the owner is right — not the
+newer one, and not the shorter one.
 
 How the system is built:
 
@@ -224,8 +227,8 @@ How the system is built:
 - [docs/classes.md](docs/classes.md), class diagrams for the core, the providers and
   routines.
 
-Why it is built that way. These are layered, and a later one wins over an earlier
-one where they disagree:
+Why it is built that way. These are not layered and none of them overrules another —
+each owns its own topic:
 
 - [docs/addison-design-doc.md](docs/addison-design-doc.md), the product and UX
   reasoning, including the two non-technical people it is designed around.
