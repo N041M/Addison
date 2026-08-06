@@ -16,15 +16,61 @@
 /** Anything the panels render: it knows which company heading it sits under. */
 export interface GroupedRow {
   group?: string;
+  /** The model id, for deriving its family. Absent = no family row. */
+  id?: string;
+}
+
+// Words that are a PRODUCT rather than a version, so the family is the next
+// segment along: "claude-opus-4-8" is Opus, not Claude, and "gemini-2.5-pro" is
+// 2.5, not Gemini. Everything else takes its first segment, which is right for
+// "gpt-4.1", "o4-mini" and a local "llama3" alike.
+const _PRODUCT_PREFIXES = new Set(["claude", "gemini", "gemma", "gpt", "llama", "qwen", "mistral"]);
+// Rendered upper-case: these read as shouting in title case and as typos in lower.
+const _ACRONYMS = new Set(["gpt", "tts"]);
+
+function _titled(word: string): string {
+  if (_ACRONYMS.has(word)) return word.toUpperCase();
+  return word.charAt(0).toUpperCase() + word.slice(1);
+}
+
+/**
+ * The family a model id belongs to — "Claude Opus", "Gemini 2.5", "Gemma 4".
+ *
+ * STRUCTURAL, like the alias dedup and unlike the non-chat denylist: it reads the
+ * id's own shape rather than a table of known models, so a family nobody has
+ * heard of still groups correctly and nothing needs maintaining when a provider
+ * ships a new generation.
+ *
+ * Two segments, because one is never enough and three are always too many.
+ * "Claude" alone puts Opus and Haiku together; "Claude Opus 4.8" is not a family
+ * at all, it is the model. The middle is the useful grain, and it is the grain a
+ * person names out loud — "put it on Opus", "is 2.5 still around?".
+ *
+ * The axis differs per vendor and that is CORRECT, not a compromise: Anthropic
+ * names tiers (opus/sonnet/haiku) and Google names generations (2.5/3.1), so the
+ * second segment lands on whichever one that vendor actually uses to distinguish
+ * its models.
+ */
+export function modelFamily(id: string): string {
+  const parts = id.split("-").filter(Boolean);
+  if (parts.length === 0) return id;
+  const head = parts[0].toLowerCase();
+  if (_PRODUCT_PREFIXES.has(head) && parts.length > 1) {
+    return `${_titled(head)} ${_titled(parts[1])}`;
+  }
+  return _titled(parts[0]);
 }
 
 /** How many rows a collapsed group still shows. The brief's number, not a guess. */
 export const COLLAPSED_ROW_COUNT = 3;
 
 export type ModelListRow<T> =
-  | { kind: "heading"; group: string; total: number; collapsed: boolean }
+  /** The company, and the fold control: `key` is what a caller toggles. */
+  | { kind: "heading"; key: string; total: number; collapsed: boolean }
+  /** A family inside an EXPANDED company - a quiet label, never foldable. */
+  | { kind: "family"; key: string; family: string }
   | { kind: "option"; option: T; index: number }
-  | { kind: "more"; group: string; hidden: number };
+  | { kind: "more"; key: string; hidden: number };
 
 /**
  * The rows to draw, in order, for `options` under `collapsed`.
@@ -47,29 +93,52 @@ export function modelListRows<T extends GroupedRow>(
   let i = 0;
   while (i < options.length) {
     const group = options[i].group;
-    // A run, not a bucket: the same company appearing twice would legitimately
-    // produce two headings, and that is the caller's business to avoid.
+    // A RUN, not a bucket. The core already emits a provider's models together,
+    // so reading runs preserves the order the caller chose; bucketing would
+    // re-sort the menu out from under a keyboard position it is tracking.
     let end = i;
     while (end < options.length && options[end].group === group) end += 1;
     const run = options.slice(i, end);
 
-    if (group) {
-      const isCollapsed = collapsed.has(group);
-      rows.push({ kind: "heading", group, total: run.length, collapsed: isCollapsed });
-      const shown = isCollapsed ? Math.min(COLLAPSED_ROW_COUNT, run.length) : run.length;
-      for (let k = 0; k < shown; k += 1) rows.push({ kind: "option", option: run[k], index: i + k });
-      if (shown < run.length) {
-        rows.push({ kind: "more", group, hidden: run.length - shown });
-      }
-    } else {
+    if (!group) {
       for (let k = 0; k < run.length; k += 1) {
         rows.push({ kind: "option", option: run[k], index: i + k });
+      }
+      i = end;
+      continue;
+    }
+
+    const isCollapsed = collapsed.has(group);
+    rows.push({ kind: "heading", key: group, total: run.length, collapsed: isCollapsed });
+
+    if (isCollapsed) {
+      // FLAT while folded, and that is the point of folding: a three-row preview
+      // interrupted by family labels would spend its three rows on furniture.
+      const shown = Math.min(COLLAPSED_ROW_COUNT, run.length);
+      for (let k = 0; k < shown; k += 1) rows.push({ kind: "option", option: run[k], index: i + k });
+      if (shown < run.length) rows.push({ kind: "more", key: group, hidden: run.length - shown });
+    } else {
+      // EXPANDED, so the families earn their keep: nineteen Gemini ids in one
+      // column is a wall, and the same nineteen under "Gemini 3.1", "Gemini 2.5",
+      // "Gemma 4" is a list somebody can scan. The families do NOT fold — real
+      // ones hold one to three models, so a fold there would almost never fire
+      // and would cost a heading per model to say so.
+      let lastFamily: string | undefined;
+      for (let k = 0; k < run.length; k += 1) {
+        const option = run[k];
+        const family = option.id ? modelFamily(option.id) : undefined;
+        if (family && family !== lastFamily) {
+          rows.push({ kind: "family", key: `${group} ${family}`, family });
+          lastFamily = family;
+        }
+        rows.push({ kind: "option", option, index: i + k });
       }
     }
     i = end;
   }
   return rows;
 }
+
 
 /**
  * Which groups start collapsed: the long ones, minus whichever holds the row the
@@ -88,20 +157,19 @@ export function initialCollapsedGroups<T extends GroupedRow>(
   const selectedRank = new Map<string, number>();
   for (const option of options) {
     if (!option.group) continue;
-    const seen = counts.get(option.group) ?? 0;
-    counts.set(option.group, seen + 1);
-    if (isSelected(option) && !selectedRank.has(option.group)) {
-      selectedRank.set(option.group, seen);
-    }
+    const key = option.group;
+    const seen = counts.get(key) ?? 0;
+    counts.set(key, seen + 1);
+    if (isSelected(option) && !selectedRank.has(key)) selectedRank.set(key, seen);
   }
   const collapsed = new Set<string>();
-  for (const [group, total] of counts) {
+  for (const [key, total] of counts) {
     if (total <= COLLAPSED_ROW_COUNT) continue;
-    const rank = selectedRank.get(group);
-    // Already visible in the first COLLAPSED_ROW_COUNT rows? Then collapsing
-    // this group still shows it, and there is no reason to open the whole thing.
+    const rank = selectedRank.get(key);
+    // Already among the visible three? Then folding still shows it, and opening
+    // the whole family costs rows without telling anyone anything.
     if (rank !== undefined && rank >= COLLAPSED_ROW_COUNT) continue;
-    collapsed.add(group);
+    collapsed.add(key);
   }
   return collapsed;
 }

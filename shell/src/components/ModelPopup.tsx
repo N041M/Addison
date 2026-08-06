@@ -34,6 +34,8 @@ const EDGE_MARGIN = 12;
 export interface ModelPopupOption {
   /** Unique across cloud + local (the role is part of it for local rows). */
   key: string;
+  /** The model id, which is what the family label is derived from. */
+  id?: string;
   label: string;
   /**
    * Which company this model comes from — "Anthropic", "Google", "On this
@@ -177,26 +179,41 @@ export function ModelPopup({
       }
     >
       {rows.map((row, i) => {
+        if (row.kind === "family") {
+          // The vendor, once, as a plain label. NOT foldable: folding a whole
+          // company would hide every family under it in one click, which is the
+          // move somebody makes by accident and then has to undo.
+          return (
+            <div
+              key={`f:${row.key}`}
+              role="presentation"
+              className={
+                "px-3 pb-0.5 font-mono text-[10px] uppercase tracking-wider text-disabled " +
+                (i === 0 ? "pt-2" : "border-t border-t-line pt-3")
+              }
+            >
+              {row.family}
+            </div>
+          );
+        }
         if (row.kind === "heading") {
           return (
             <button
-              key={`h:${row.group}`}
+              key={`h:${row.key}`}
               type="button"
               // Presentational to the LISTBOX — a heading announced as an option
               // would be an unpickable row — but a real button, because it does
               // something. `aria-expanded` is the part that carries the state.
               aria-expanded={!row.collapsed}
-              onClick={() => toggle(row.group)}
+              onClick={() => toggle(row.key)}
               className={
-                "flex w-full items-baseline gap-2 px-3 pb-1.5 text-left font-mono " +
-                "text-[10.5px] uppercase tracking-wide text-muted transition-colors " +
-                "hover:text-ink-soft " +
-                (i === 0 ? "pt-2" : "border-t border-t-line pt-3")
+                "flex w-full items-baseline gap-2 px-3 pb-1.5 pt-1.5 text-left font-mono " +
+                "text-[10.5px] text-muted transition-colors hover:text-ink-soft"
               }
             >
-              <span className="min-w-0 truncate">{row.group}</span>
+              <span className="min-w-0 truncate">{row.key}</span>
               <span className="flex-1" />
-              <span className="shrink-0 normal-case tracking-normal">
+              <span className="shrink-0 text-disabled">
                 {row.collapsed ? row.total : "collapse"}
               </span>
             </button>
@@ -205,9 +222,9 @@ export function ModelPopup({
         if (row.kind === "more") {
           return (
             <button
-              key={`m:${row.group}`}
+              key={`m:${row.key}`}
               type="button"
-              onClick={() => toggle(row.group)}
+              onClick={() => toggle(row.key)}
               className={
                 "flex w-full cursor-pointer items-baseline border-l-2 border-l-transparent " +
                 "border-t border-t-line py-3 pl-3 pr-0.5 text-left font-mono text-[10.5px] " +

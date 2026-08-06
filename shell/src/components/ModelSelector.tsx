@@ -457,10 +457,22 @@ export function ModelSelector({
             className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
             {rows.map((row) => {
+              if (row.kind === "family") {
+                // Plain, and deliberately not foldable — see ModelPopup.
+                return (
+                  <div
+                    key={`f:${row.key}`}
+                    role="presentation"
+                    className="px-2.5 pb-0.5 pt-3 font-mono text-[10px] uppercase tracking-wider text-disabled"
+                  >
+                    {row.family}
+                  </div>
+                );
+              }
               if (row.kind === "heading") {
                 return (
                   <button
-                    key={`h:${row.group}`}
+                    key={`h:${row.key}`}
                     type="button"
                     // A real button because it acts, but OUT of the tab order
                     // (tabIndex -1): Tab cycles list -> effort -> list in this
@@ -469,16 +481,15 @@ export function ModelSelector({
                     // fold with Left/Right on the row itself instead.
                     tabIndex={-1}
                     aria-expanded={!row.collapsed}
-                    onClick={() => toggleGroup(row.group)}
+                    onClick={() => toggleGroup(row.key)}
                     className={
-                      "flex w-full items-baseline gap-2 px-2.5 pb-1 pt-3 text-left font-mono " +
-                      "text-[10px] uppercase tracking-wide text-disabled transition-colors " +
-                      "hover:text-muted"
+                      "flex w-full items-baseline gap-2 px-2.5 pb-0.5 pt-1 text-left font-mono " +
+                      "text-[10px] text-disabled transition-colors hover:text-muted"
                     }
                   >
-                    <span className="min-w-0 truncate">{row.group}</span>
+                    <span className="min-w-0 truncate">{row.key}</span>
                     <span className="flex-1" />
-                    <span className="shrink-0 normal-case tracking-normal">
+                    <span className="shrink-0">
                       {row.collapsed ? row.total : "collapse"}
                     </span>
                   </button>
@@ -487,10 +498,10 @@ export function ModelSelector({
               if (row.kind === "more") {
                 return (
                   <button
-                    key={`m:${row.group}`}
+                    key={`m:${row.key}`}
                     type="button"
                     tabIndex={-1}
-                    onClick={() => toggleGroup(row.group)}
+                    onClick={() => toggleGroup(row.key)}
                     className={
                       "flex w-full cursor-pointer items-baseline rounded-[4px] px-2.5 py-[7px] " +
                       "text-left font-mono text-[10px] text-disabled transition-colors " +

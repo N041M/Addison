@@ -15,7 +15,7 @@ import { ModelPopup, type ModelPopupOption } from "../components/ModelPopup";
 afterEach(cleanup);
 
 function option(label: string, group: string, selected = false): ModelPopupOption {
-  return { key: `${group}:${label}`, label, group, note: "quality", selected, onPick: vi.fn() };
+  return { key: `${group}:${label}`, id: label, label, group, note: "quality", selected, onPick: vi.fn() };
 }
 
 const OPTIONS: ModelPopupOption[] = [
@@ -66,7 +66,10 @@ describe("model picker grouping", () => {
 describe("model picker folding", () => {
   const many: ModelPopupOption[] = [
     option("Claude Opus 4.8", "Anthropic", true),
-    ...Array.from({ length: 8 }, (_, i) => option(`gemini-${i}`, "Google")),
+    ...["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+        "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+        "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemma-4-31b-it"]
+      .map((id) => option(id, "Google")),
   ];
 
   it("shows three of eight and offers the rest, then expands on click", () => {
@@ -86,11 +89,14 @@ describe("model picker folding", () => {
     // row is 7th in its company, so the fold must not apply to that group.
     const deep = [
       option("Claude Opus 4.8", "Anthropic"),
-      ...Array.from({ length: 8 }, (_, i) => option(`gemini-${i}`, "Google", i === 6)),
+      ...["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+          "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+          "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemma-4-31b-it"]
+        .map((id, i) => option(id, "Google", i === 6)),
     ];
     render(<ModelPopup anchor={{ x: 400, y: 300 }} options={deep} onClose={vi.fn()} />);
 
-    expect(screen.getByText("gemini-6")).toBeTruthy();
+    expect(screen.getByText("gemini-3.5-flash-lite")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /more/ })).toBeNull();
   });
 

@@ -10,23 +10,47 @@ import { describe, it, expect } from "vitest";
 import {
   COLLAPSED_ROW_COUNT,
   initialCollapsedGroups,
+  modelFamily,
   modelListRows,
 } from "../lib/modelGroups";
 
-const google = Array.from({ length: 8 }, (_, i) => ({ id: `g${i}`, group: "Google" }));
-const anthropic = [{ id: "a0", group: "Anthropic" }];
+// Real ids, because the family rule reads their shape: `gemini-2.5-*` are one
+// family, `gemini-3.1-*` another. Made-up ids like "g0" would each be their own
+// family and the test would prove nothing about grouping.
+const google = [
+  "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
+  "gemini-3.1-pro-preview", "gemini-3.1-flash-lite",
+  "gemini-3.5-flash", "gemini-3.5-flash-lite",
+  "gemma-4-31b-it",
+].map((id) => ({ id, group: "Google" }));
+const anthropic = [{ id: "claude-opus-4-8", group: "Anthropic" }];
 
 describe("modelListRows", () => {
   it("folds a long group to three rows plus a count, and leaves a short one alone", () => {
     const rows = modelListRows([...anthropic, ...google], new Set(["Google"]));
     const kinds = rows.map((r) => r.kind);
 
-    // Anthropic: heading + its single row, no "more" — folding a group smaller
-    // than the fold would hide nothing and cost a click.
-    expect(kinds.slice(0, 2)).toEqual(["heading", "option"]);
+    // Anthropic is expanded (one model, nothing to fold), so it draws its
+    // company heading, that model's family, then the model.
+    expect(kinds.slice(0, 3)).toEqual(["heading", "family", "option"]);
     expect(rows.filter((r) => r.kind === "option")).toHaveLength(1 + COLLAPSED_ROW_COUNT);
     const more = rows.find((r) => r.kind === "more");
-    expect(more).toMatchObject({ group: "Google", hidden: 8 - COLLAPSED_ROW_COUNT });
+    expect(more).toMatchObject({ key: "Google", hidden: google.length - COLLAPSED_ROW_COUNT });
+    // FLAT while FOLDED: a three-row preview interrupted by family labels would
+    // spend its three rows on furniture. Sliced from Google's own heading — the
+    // expanded Anthropic block above it legitimately carries one.
+    const googleAt = rows.findIndex((r) => r.kind === "heading" && r.key === "Google");
+    expect(kinds.slice(googleAt)).not.toContain("family");
+  });
+
+  it("labels families once an expanded company shows them", () => {
+    // The ask: nineteen Gemini ids in one column is a wall; the same nineteen
+    // under "Gemini 2.5", "Gemini 3.1", "Gemma 4" is a list somebody can scan.
+    const rows = modelListRows(google, new Set());
+    const families = rows.flatMap((r) => (r.kind === "family" ? [r.family] : []));
+    expect(families).toEqual(["Gemini 2.5", "Gemini 3.1", "Gemini 3.5", "Gemma 4"]);
+    // Every model still drawn — families organise, they never filter.
+    expect(rows.filter((r) => r.kind === "option")).toHaveLength(google.length);
   });
 
   it("keeps the caller's order and never re-buckets", () => {
@@ -71,7 +95,7 @@ describe("initialCollapsedGroups", () => {
     // saying nothing about what is on, which is the one thing it exists to say.
     const collapsed = initialCollapsedGroups(
       [...anthropic, ...google],
-      (o) => o.id === "g6",
+      (o) => o.id === "gemma-4-31b-it",
     );
     expect(collapsed.has("Google")).toBe(false);
   });
@@ -81,8 +105,31 @@ describe("initialCollapsedGroups", () => {
     // either way, and eight rows cost more than they inform.
     const collapsed = initialCollapsedGroups(
       [...anthropic, ...google],
-      (o) => o.id === "g1",
+      (o) => o.id === "gemini-2.5-flash",
     );
     expect(collapsed.has("Google")).toBe(true);
+  });
+});
+
+
+describe("modelFamily", () => {
+  it("finds the grain a person names out loud", () => {
+    // The axis DIFFERS per vendor and that is correct, not a compromise:
+    // Anthropic distinguishes its models by tier, Google by generation, so the
+    // second segment lands on whichever one that vendor actually uses.
+    expect(modelFamily("claude-opus-4-8")).toBe("Claude Opus");
+    expect(modelFamily("claude-haiku-4-5")).toBe("Claude Haiku");
+    expect(modelFamily("gemini-2.5-flash-lite")).toBe("Gemini 2.5");
+    expect(modelFamily("gemini-3.1-pro-preview")).toBe("Gemini 3.1");
+    expect(modelFamily("gemma-4-31b-it")).toBe("Gemma 4");
+    expect(modelFamily("gpt-4o-mini")).toBe("GPT 4o");
+  });
+
+  it("handles an id that is not two segments at all", () => {
+    // A local model, or anything a provider ships tomorrow. One segment is the
+    // family; nothing here may throw on a shape nobody anticipated.
+    expect(modelFamily("llama3")).toBe("Llama3");
+    expect(modelFamily("o4-mini")).toBe("O4");
+    expect(modelFamily("")).toBe("");
   });
 });

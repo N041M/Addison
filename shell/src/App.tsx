@@ -881,6 +881,7 @@ export function App() {
   const modelPopupOptions: ModelPopupOption[] = [
     ...models.cloudModels.map((m) => ({
       key: `primary:${m.id}`,
+      id: m.id,
       label: m.label,
       group: m.providerLabel ?? "Cloud",
       note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
@@ -893,6 +894,7 @@ export function App() {
     })),
     ...readyLocalModels.map((m) => ({
       key: `local:${m.id}`,
+      id: m.id,
       label: m.label,
       group: "On this computer",
       note: "local",
