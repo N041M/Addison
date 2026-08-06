@@ -35,6 +35,7 @@ from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate
 from agent_core.policy import (
     DENIED_CONTAINS,
+    kernel_confines_writes,
     DENIED_INSIDE,
     PolicyMode,
     _derived_data_dir,
@@ -258,8 +259,65 @@ def test_every_forbidden_command_is_refused():
     tool = RunCommandTool()
     for command in _MUST_BE_FORBIDDEN_INSIDE:
         assert _forbidden(tool, {"command": command}) == FORBIDDEN_CALL_INSIDE, command
+
+
+def test_only_a_platform_that_really_confines_writes_claims_to(monkeypatch):
+    """The predicate the whole relaxation hangs on, pinned to the platform.
+
+    Every other test here passes `kernel_confined` explicitly — which is right,
+    because a test that only runs on the other operating system is a test nobody
+    runs, but it leaves `kernel_confines_writes` itself unmeasured. Verified:
+    hard-coding it to True keeps the entire suite green while a Linux build
+    silently loses the only thing standing between `rm -rf ~` and the recovery
+    floor. So the mapping gets its own assertion, in both directions.
+
+    `sandbox_invocation` is `#[cfg(target_os = "macos")]`; everything else shells
+    out to /bin/sh with `sandboxed: false`. If a Landlock or bubblewrap path ever
+    lands, this is the line that changes — and the CONTAINS direction can retire
+    there too."""
+    import sys as _sys
+
+    monkeypatch.setattr(_sys, "platform", "linux")
+    assert kernel_confines_writes() is False
+    # ...and the default argument follows it, so the tool-level path is covered.
+    assert command_denied_path("rm -rf ~", DATA_DIR) is not None
+
+    monkeypatch.setattr(_sys, "platform", "darwin")
+    assert kernel_confines_writes() is True
+    assert command_denied_path("rm -rf ~", DATA_DIR) is None
+
+
+def test_the_contains_direction_still_guards_a_platform_the_kernel_does_not():
+    """`rm -rf ~` on a machine with no sandbox. Retired on macOS, NOT deleted.
+
+    Where `sandbox_invocation` shells out to `/bin/sh` with `sandboxed: false`,
+    this string is the only thing between the recovery floor and a command that
+    takes the whole home directory with it. The list is asserted at the predicate
+    rather than through the tool because the tool reads the real platform, and a
+    test that can only run on the OTHER operating system is a test nobody runs."""
     for command in _MUST_BE_FORBIDDEN_CONTAINS:
-        assert _forbidden(tool, {"command": command}) == FORBIDDEN_CALL_CONTAINS, command
+        assert command_denied_path(command, DATA_DIR, kernel_confined=False) is not None, command
+        assert command_denied_path(command, DATA_DIR, kernel_confined=False)[1] == (
+            DENIED_CONTAINS
+        ), command
+
+
+def test_reading_the_home_directory_is_ordinary_work_where_writes_are_confined():
+    """The other half, and the reason the direction was retired (2026-08-06).
+
+    `ls ~`, `ls .` and `grep -r TODO .` were refused OUTRIGHT — not carded,
+    refused — because read and write are indistinguishable in a `shell=True`
+    string. The seatbelt now makes that distinction at the kernel, so refusing
+    the read buys nothing and costs the coding harness its most ordinary
+    commands. A control a developer cannot approve past is one they route around
+    with `cd`, which also defeats this module's relative-path resolution."""
+    for command in (*_MUST_BE_FORBIDDEN_CONTAINS, "grep -r TODO .", "npm run build -- --out ."):
+        assert command_denied_path(command, DATA_DIR, kernel_confined=True) is None, command
+    # ...while every INSIDE refusal is untouched by confinement: the sandbox
+    # deliberately PERMITS reads, so `cat ~/.ssh/id_rsa` still has to be refused
+    # here or it is not refused anywhere.
+    for command in _MUST_BE_FORBIDDEN_INSIDE:
+        assert command_denied_path(command, DATA_DIR, kernel_confined=True) is not None, command
 
 
 def test_the_two_refusals_say_different_things():
@@ -293,7 +351,9 @@ def test_the_offending_token_is_reported_not_just_a_bool():
     # command_denied_path returns the token, so a future surface can say WHICH
     # path was refused without re-deriving it.
     assert command_denied_path("rm -rf ~/.addison", DATA_DIR) == ("~/.addison", DENIED_INSIDE)
-    assert command_denied_path("rm -rf ~", DATA_DIR) == ("~", DENIED_CONTAINS)
+    assert command_denied_path("rm -rf ~", DATA_DIR, kernel_confined=False) == (
+        "~", DENIED_CONTAINS,
+    )
     assert command_denied_path("ls -la ~/projects", DATA_DIR) is None
 
 

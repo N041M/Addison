@@ -921,12 +921,13 @@ Claude Code says outright that no system is immune. Addison's boundaries:
   the model, and the `tool_audit` trail records that it happened — but a secret
   in an unrecognised format, or deliberately encoded, passes. Redaction reduces
   exposure; it does not eliminate it.
-- **The floor protects Addison's DATA, not Addison's CODE.** A trusted root may
-  contain the repo (which *is* the harness working for a developer) or, in a
-  packaged install, `/Applications/Addison.app`, where the model could rewrite
-  `policy.py` card-free. The amendment's "inviolable machinery: Addison's code
-  and the global floors" is therefore broader than what ships. Tracked in
-  KNOWN-GAPS as an owner call; `exec.rs` is where the extra deny would go.
+- **The floor protects Addison's code only where that code is shipped.** Since
+  2026-08-06 a packaged install's bundle is in the protected set, so the seatbelt
+  denies writes to `/Applications/Addison.app` as it does to the data dirs. A
+  DEVELOPER's checkout is still writable, deliberately — that *is* the harness
+  working for a developer — so the amendment's "inviolable machinery: Addison's
+  code and the global floors" remains broader than what ships. Tracked in
+  KNOWN-GAPS, which owns its status.
 - **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
   Claude Code and Codex CLI both rely on. Acceptable; not permanent.
 - **Platforms with no profile.** Linux has no Landlock/bubblewrap path yet, so a

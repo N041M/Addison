@@ -318,12 +318,66 @@ fn restore_workspace_path(
 }
 
 /// Addison's own data directories: the live store's parent (ADDISON_DB_PATH's parent
-/// if set) and `~/.addison`. The core already refuses these (policy.workspace_trust_
-/// allows); this is the shell's independent floor (§6.6, defence in depth), so the
-/// coding harness can never write or read Addison's memory even if the core's check
-/// were bypassed.
+/// if set) and `~/.addison` — plus, in a packaged install, the app BUNDLE itself
+/// (see `addison_app_bundle`). The core already refuses the data dirs
+/// (policy.workspace_trust_allows); this is the shell's independent floor (§6.6,
+/// defence in depth), so the coding harness can never write or read Addison's
+/// memory even if the core's check were bypassed.
+///
+/// Named for what it was when it held two entries. It is now "the places the
+/// harness may not touch", data and code alike, and every caller wants all of
+/// them — the seatbelt profile and `refuse_addison_data_dir` both.
+/// The running app's own BUNDLE, when there is one — `/Applications/Addison.app`
+/// in a packaged install, `None` in a dev build.
+///
+/// THE FLOOR PROTECTED ADDISON'S DATA AND NOT ADDISON'S CODE, which has been the
+/// sharper of the two edges since step 5.5 closed the data side: a packaged
+/// install puts `policy.py` and the gate inside a bundle the harness could
+/// rewrite card-free, and rewriting the rules is a more complete bypass than
+/// deleting the snapshots ever was.
+///
+/// **`None` in dev, deliberately.** The dev binary lives at
+/// `…/shell/src-tauri/target/debug/addison`, so there is no bundle to deny —
+/// and the enclosing repo is exactly what the coding harness is FOR when the
+/// developer working on Addison is the user. Denying it would break the harness's
+/// most legitimate use to protect a threat that only exists once the code ships
+/// read-only. The bundle test is therefore structural (`.app/Contents/MacOS/…`),
+/// never a guess from the binary's name.
+pub fn addison_app_bundle() -> Option<PathBuf> {
+    bundle_root_of(&std::env::current_exe().ok()?)
+}
+
+/// The bundle containing `exe`, or None. Split out so both answers are testable:
+/// a unit test cannot relocate `current_exe`, and the packaged case is the one
+/// that will never be exercised on a developer's machine.
+fn bundle_root_of(exe: &Path) -> Option<PathBuf> {
+    // …/Addison.app/Contents/MacOS/addison -> …/Addison.app
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let shaped = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension()? == "app";
+    shaped.then(|| bundle.to_path_buf())
+}
+
 pub fn addison_data_dirs() -> Vec<PathBuf> {
+    data_dirs_with_bundle(addison_app_bundle())
+}
+
+/// The protected set, given whichever bundle the caller found. Takes the bundle
+/// rather than looking it up so the packaged case is reachable from a test: on a
+/// developer's machine `addison_app_bundle()` is always None, so a test that
+/// called `addison_data_dirs()` could only ever measure the empty half — which is
+/// exactly how the first version of this passed while contributing nothing.
+fn data_dirs_with_bundle(bundle: Option<PathBuf>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
+    // The app's own code, when it is a shipped bundle. First in the list so the
+    // deny is emitted for it exactly like every data dir — one mechanism, not a
+    // second one bolted on beside it.
+    if let Some(bundle) = bundle {
+        dirs.push(bundle);
+    }
     if let Ok(env) = std::env::var("ADDISON_DB_PATH") {
         if let Some(parent) = PathBuf::from(&env).parent() {
             if !parent.as_os_str().is_empty() {
@@ -516,6 +570,82 @@ fn is_image_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_packaged_install_protects_addisons_own_code_and_a_dev_build_does_not() {
+        // THE FLOOR PROTECTED ADDISON'S DATA, NOT ADDISON'S CODE — the sharper of
+        // the two edges since 5.5 closed the data side, because rewriting
+        // `policy.py` inside a shipped bundle is a more complete bypass than
+        // deleting the snapshots ever was.
+        assert_eq!(
+            bundle_root_of(Path::new("/Applications/Addison.app/Contents/MacOS/addison")),
+            Some(PathBuf::from("/Applications/Addison.app")),
+            "a packaged install must contribute its bundle to the protected set"
+        );
+
+        // ...and the OTHER half, which is not a technicality: the dev binary sits
+        // in the repo, and that repo is exactly what the coding harness is FOR
+        // when the person using it is the developer working on Addison. A rule
+        // that denied it would break the harness's most legitimate use to protect
+        // a threat that only exists once the code ships read-only.
+        for dev in [
+            "/Users/x/Addison/shell/src-tauri/target/debug/addison",
+            "/Users/x/Addison/target/release/addison",
+            "/tmp/addison",
+        ] {
+            assert_eq!(bundle_root_of(Path::new(dev)), None, "{dev}");
+        }
+
+        // Shape, never the name: a binary called `addison` outside a bundle is not
+        // a bundle, and one called anything else inside a real bundle is.
+        assert_eq!(
+            bundle_root_of(Path::new("/Applications/Whatever.app/Contents/MacOS/helper")),
+            Some(PathBuf::from("/Applications/Whatever.app")),
+        );
+        assert_eq!(bundle_root_of(Path::new("/x/notabundle/Contents/MacOS/addison")), None);
+    }
+
+    #[test]
+    fn the_protected_set_carries_the_bundle_it_is_given() {
+        // `addison_data_dirs` is what the seatbelt profile is built from, so a
+        // bundle the profile never hears about is a bundle nothing denies.
+        let bundle = PathBuf::from("/Applications/Addison.app");
+        assert!(
+            data_dirs_with_bundle(Some(bundle.clone())).contains(&bundle),
+            "the running bundle must reach the protected set"
+        );
+        assert!(
+            !data_dirs_with_bundle(None).iter().any(|d| d == &bundle),
+            "and must not appear from nowhere when there is no bundle"
+        );
+    }
+
+    #[test]
+    fn the_protected_set_actually_consults_the_running_bundle() {
+        // THE WIRING. Splitting the lookup out for testability moved the part that
+        // matters to its caller — docs/HANDOFF.md trap 3, which has now bitten
+        // this repo three times, once in this very change: the first version of
+        // the test above called `addison_data_dirs()` and matched on whatever it
+        // found, so deleting the bundle line entirely left it green, because a
+        // test binary is never in a bundle.
+        //
+        // Nothing on a developer's machine can make `current_exe` report a bundle,
+        // so the last link is pinned at the source, the same way the IPC pump's
+        // is. Coarse on purpose: it asserts the call exists, which is the property
+        // no runtime assertion here can reach.
+        let source = include_str!("filesystem.rs");
+        let start = source
+            .find("pub fn addison_data_dirs")
+            .expect("addison_data_dirs must exist");
+        let body = &source[start..];
+        let end = body.find("\n}\n").expect("addison_data_dirs must be a closed function");
+        assert!(
+            body[..end].contains("addison_app_bundle()"),
+            "addison_data_dirs must consult addison_app_bundle — otherwise a packaged \
+             install ships with its own code writable by the harness:\n{}",
+            &body[..end]
+        );
+    }
 
     #[test]
     fn only_http_and_https_pass_the_scheme_check() {

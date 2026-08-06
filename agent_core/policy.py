@@ -40,6 +40,7 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -423,8 +424,28 @@ DENIED_INSIDE = "inside"
 DENIED_CONTAINS = "contains"
 
 
+def kernel_confines_writes() -> bool:
+    """Will a command's WRITES be stopped by the OS rather than by this string?
+
+    True on macOS only, and that is not a guess. `shell.runCommand` builds a
+    seatbelt profile from the live trusted roots and emits the data-dir denies
+    after every allow; if `sandbox-exec` is missing or unusable it REFUSES the
+    command rather than running it bare (`exec.rs`, "REFUSE, never fall back").
+    So on macOS a command either runs confined or does not run. Everywhere else
+    `sandbox_invocation` shells out to `/bin/sh` with `sandboxed: false`, and the
+    only thing standing between `rm -rf ~` and the recovery floor is this module.
+
+    Deliberately a function, not a constant: it reads as the QUESTION the caller
+    is actually asking, and a test can drive both answers without pretending to
+    be another operating system."""
+    return sys.platform == "darwin"
+
+
 def command_denied_path(
-    command: str, data_dir: str | os.PathLike[str]
+    command: str,
+    data_dir: str | os.PathLike[str],
+    *,
+    kernel_confined: bool | None = None,
 ) -> tuple[str, str] | None:
     """The first denylisted path ``command`` appears to name and HOW it offends —
     ``(token, DENIED_INSIDE | DENIED_CONTAINS)`` — or None.
@@ -438,10 +459,32 @@ def command_denied_path(
     cost is real and narrow: naming a subfolder works, and step 5.5 item 2's
     sandbox is what will eventually make the read/write distinction properly.
 
-    **The CONTAINS direction is scaffolding.** Once the seatbelt profile denies
-    writes outside the trusted roots, ``rm -rf ~`` fails at the kernel while
-    ``ls ~`` succeeds, and this direction should be DELETED rather than tuned —
-    along with ``_names_a_directory``, which exists only to serve it.
+    **The CONTAINS direction is now RETIRED WHERE THE KERNEL DOES THE JOB**
+    (2026-08-06). It was scaffolding, and the condition its own docstring set for
+    removal — "once the seatbelt profile denies writes outside the trusted roots,
+    ``rm -rf ~`` fails at the kernel while ``ls ~`` succeeds" — has been met and
+    hardened. So on a platform where writes are confined, this direction is
+    skipped and ``ls ~``, ``ls .``, ``grep -r TODO .`` and
+    ``npm run build -- --out .`` are ordinary commands again.
+
+    It is retired BY PLATFORM, not deleted, because the guarantee is by platform:
+    see ``kernel_confines_writes``. On anything without a profile the command
+    runs bare, and this string is the only thing between ``rm -rf ~`` and the
+    recovery floor — so there, it still refuses.
+
+    WHY NOT A CLASSIFIER. The obvious middle road is to keep CONTAINS for
+    "write-shaped" commands (``rm``, ``mv``, ``dd``…) and drop it for readers.
+    That is precisely what this docstring warned against two paragraphs up —
+    read and write are not distinguishable in a ``shell=True`` string, and a verb
+    list is wrong in the PERMISSIVE direction the day someone writes ``python -c``
+    or a command this list has never heard of. The kernel already makes the
+    distinction correctly; a classifier would only be a second, worse copy of it.
+
+    The refusal this removes was never protecting the floor on macOS anyway — it
+    was refusing to let the model TRY. What made it worth removing is that a
+    control a developer cannot approve past is one they route around (``cd``
+    first), and that workaround also defeats the relative-path resolution here,
+    so the old behaviour bought less safety than it appeared to.
 
     THREE SPELLINGS OF ONE PATH, all refused: the literal one, the quoted one
     (quote characters and backslashes are removed first, as the shell removes
@@ -451,12 +494,17 @@ def command_denied_path(
     section; it is shorter than it was, and it is not empty.
 
     ``data_dir`` is required for the reason ``denylisted_roots`` gives."""
+    if kernel_confined is None:
+        kernel_confined = kernel_confines_writes()
     roots = [_canonical(root) for root in denylisted_roots(data_dir)]
     roots = [root for root in roots if root is not None]
     for token in _command_tokens(command):
         if _is_credential_basename(os.path.basename(token.rstrip("/"))):
             return (token, DENIED_INSIDE)
-        pathish = _names_a_directory(token)
+        # CONTAINS is only asked where nothing else will ask it. INSIDE is
+        # unconditional — the kernel stops the write, but naming ~/.ssh/id_rsa is
+        # a READ the sandbox deliberately permits, so that refusal stays.
+        pathish = _names_a_directory(token) and not kernel_confined
         if _has_glob(token):
             # A pattern cannot be realpath'd — resolving it would compare a
             # literal ``*`` against real directory names and always miss — so it

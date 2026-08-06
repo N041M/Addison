@@ -48,19 +48,26 @@ and where it goes.
 
 **Opened by step 5.5 items 1–3 (2026-07-31):**
 
-- **The denylist's CONTAINS direction is now scaffolding, and should be deleted.**
-  `ls ~`, `ls .` and `ls /` are refused outright, not carded, because `rm -rf ~`
-  takes the G3 floor with it and read/write are not distinguishable in a
-  `shell=True` string (#48, three times). **The seatbelt profile now makes exactly
-  that distinction at the kernel** — `rm -rf ~` fails, `ls ~` would succeed — so
-  the direction has outlived its reason. Deleting it means dropping the
-  `_names_a_directory` branch in `policy.command_denied_path` and the
-  `_MUST_BE_FORBIDDEN_CONTAINS` list. Not done in the same change as the sandbox
-  on purpose: removing a refusal on the same day the thing that replaces it lands
-  is how a gap opens. **Item 4's audit log now exists (2026-07-31), so the
-  mechanism is in place — what is missing is DATA.** A `forbidden` row now records
-  every time this fires; revisit once real use has produced some, rather than
-  guessing at the frequency.
+- ~~The denylist's CONTAINS direction is scaffolding and should be deleted.~~
+  **RETIRED WHERE THE KERNEL DOES THE JOB, 2026-08-06.** `ls ~`, `ls .`,
+  `grep -r TODO .` and `npm run build -- --out .` were refused outright — not
+  carded, refused — because `rm -rf ~` takes the G3 floor with it and read and
+  write are not distinguishable in a `shell=True` string (#48, three times). The
+  seatbelt makes that distinction at the kernel, which was this entry's own stated
+  condition for removal, so `policy.command_denied_path` now skips the direction
+  wherever writes are confined. INSIDE is untouched: the sandbox deliberately
+  permits reads, so `cat ~/.ssh/id_rsa` is refused here or nowhere.
+  **Retired by PLATFORM, not deleted** (`policy.kernel_confines_writes`) — where
+  `sandbox_invocation` shells out to `/bin/sh` with `sandboxed: false`, this
+  string is still the only thing between `rm -rf ~` and the recovery floor.
+  It was closed without waiting for the `forbidden` audit data this entry asked
+  for, and the reason is that the data would only have measured *frequency* while
+  the argument turned on *correctness*: the refusal never protected the floor on
+  macOS — the kernel did — it only refused to let the model try, and a control a
+  developer cannot approve past is one they route around with `cd`, which also
+  defeats the relative-path resolution. A verb-list classifier ("keep it for `rm`,
+  drop it for `ls`") was rejected for the reason the docstring already gave: it is
+  wrong in the permissive direction the first time someone writes `python -c`.
 - ~~A forbidden call is invisible outside the transcript.~~ **CLOSED 2026-07-31**
   by item 4's `tool_audit`: every refusal writes a row with `outcome='forbidden'`,
   at all three dispatch sites. The same change closed the older hole it was
@@ -259,15 +266,23 @@ against the tree on 2026-07-26:
   inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
   (case-insensitive), **wrong on a case-sensitive volume**, where it widens
   confinement. macOS-only assumption, currently undocumented in the function.
-- **The floor protects Addison's DATA, not Addison's CODE.** *(This is the single
-  statement of it; SAFETY.md, design-doc §9.x and HANDOFF all point here.)* A
-  trusted root may contain the repo (fine — that IS the harness working for a
-  developer) or, in a packaged install, `/Applications/Addison.app`, where the
-  model could rewrite `policy.py` card-free. The amendment's "inviolable machinery:
-  Addison's code and the global floors" is therefore broader than what ships.
-  Either narrow the wording or add the running app's resource root to
-  `_protected_dirs` — and since step 5.5, to the seatbelt denies in `exec.rs`,
-  which is now the cheaper of the two places to put it. **Owner call.**
+- ~~The floor protects Addison's DATA, not Addison's CODE.~~ **CLOSED FOR A
+  PACKAGED INSTALL, 2026-08-06.** *(This is the single statement of it; SAFETY.md,
+  design-doc §9.x and HANDOFF all point here.)* In a packaged install the model
+  could rewrite `policy.py` inside `/Applications/Addison.app` card-free, which is
+  a more complete bypass than deleting the snapshots ever was. The running app's
+  BUNDLE now joins the protected set (`filesystem.rs::addison_app_bundle`), so the
+  seatbelt denies writes to it exactly as it denies the data dirs — one mechanism,
+  not a second one beside it.
+  **A dev build contributes nothing, deliberately**, and that is not a gap: the
+  dev binary lives in the repo, and that repo is exactly what the coding harness
+  is FOR when the person using it is the developer working on Addison. Denying it
+  would break the harness's most legitimate use to stop a threat that only exists
+  once the code ships read-only. Detection is structural
+  (`…​.app/Contents/MacOS/…`), never a guess from the binary's name.
+  What remains open is the wording, not the code: the amendment's "inviolable
+  machinery: Addison's code and the global floors" is still broader than what
+  ships, because a *developer's* checkout is writable by design.
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
