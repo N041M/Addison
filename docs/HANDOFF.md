@@ -95,7 +95,21 @@ minutes on 2026-07-26 because `7444c8e` described the branch state accurately wh
 the redesign was unmerged, and PR #58 then falsified six passages without touching
 the file that contained them. No gate catches that.
 
-## Two commits on `master` are red, and it is not what you think
+## Three commits on `master` are red, and it is not what you think
+
+**`607c9ec` fails one vitest case**, `parseWidgetList > carries the unavailable
+marker through`. The test landed one commit early: `shell/src/__tests__/
+parsers.test.ts` was staged into the pyright/eslint commit while the
+`normalizeUnavailable` implementation it exercises lands in `562bb6e`. The tip is
+green (CI: all three jobs green at `562bb6e`), and no code is wrong at either.
+
+The same ordering mistake as the two below, made **while writing the paragraph
+warning about it** — and made worse by how it was missed: the commit WAS verified
+in isolation, but only its Python half (`pytest` + `pyright` in a worktree), and
+the result was then reported as "verified green in isolation". A partial check
+described as a complete one is the failure, not the ordering. **Verify an
+intermediate commit against the whole of `.github/workflows/ci.yml`, not the half
+that seems relevant.**
 
 **`22c8876` and `6690fd2` fail `test_every_markdown_link_resolves`.** Both link
 to `docs/secrets-and-keychain-plan.md`, which is not committed until `62d93a7`,
