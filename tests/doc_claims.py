@@ -263,9 +263,18 @@ CLAIMS: tuple[Claim, ...] = (
         id="g3-guarantee-defers-to-owner",
         owner="docs/SAFETY.md",
         holds=G3_RESOLVED_IN_OPEN,
+        # CORRECTED 2026-08-06, by reading the row against its owner. It used to say
+        # "six copies of its normative sentence lived in three other authoritative
+        # documents and every one went stale" — a count the tree has never had. On the
+        # day the row was written the sentence appeared five times outside the owner and
+        # the frozen record, across four documents (design-doc twice, the spec,
+        # architecture.md, classes.md), and two of those quote it while explaining why
+        # restore is not a registry tool, which is not a copy that went stale. A number
+        # in a `true_state` is printed to the next agent as fact, so it has to be one:
+        # this states the rule the row actually enforces instead.
         true_state=(
-            "docs/SAFETY.md owns G3's scope; six copies of its normative sentence "
-            "lived in three other authoritative documents and every one went stale."
+            "docs/SAFETY.md owns G3's scope and is the one place that states the "
+            "guarantee; every other mention must have a pointer back to it within reach."
         ),
         false_state=(
             "docs/SAFETY.md owns G3's scope, and while the floor is genuinely limited "
@@ -368,13 +377,25 @@ CLAIMS: tuple[Claim, ...] = (
         # the data-model sketch ("`config_json` — the launch command or base URL") and
         # the plan's own "this is the one genuinely open question". A doc asserting
         # either again is a doc pointing the next agent at a column that must not exist.
+        #
+        # Both were TIGHTENED on 2026-08-06 when the precision half of this gate was
+        # written (`test_the_claims_registry_is_silent_on_legitimate_prose`), because
+        # both fired on sentences that state today's decision correctly:
+        #   * "there is no launch command column, because stdio is not supported" — the
+        #     denial of the field, flagged as if it were the field. Hence `(?<!no )`.
+        #   * "stdio was a genuinely open question until 2026-08-06" — the history of
+        #     the decision, flagged as if it were the decision. Present tense only now,
+        #     the same rule the G3 polarity row above already follows; the pre-decision
+        #     wording this was written for ("this IS the one genuinely open question")
+        #     is still caught.
         while_true=Wrong(
             pattern=(
-                r"launch command"
+                r"(?<!no )launch command"
                 r"|\bMCP\b[^.\n]{0,80}\bcommand to (?:run|launch)\b"
                 r"|(?:transport|stdio)[^.\n]{0,60}\b(?:is|remains|stays)\s+"
                 r"(?:still\s+)?(?:an?\s+)?open question"
-                r"|genuinely open question"
+                r"|\b(?:is|are|remains?|stays)\s+(?:still\s+)?(?:the\s+|an?\s+)?"
+                r"(?:one\s+)?genuinely open question"
             ),
             fix=(
                 "Transport was answered on 2026-08-06: HTTP only, so an mcp_servers row "
@@ -543,6 +564,23 @@ CLAIMS: tuple[Claim, ...] = (
 # ---------------------------------------------------------------------------
 
 
+# The line every work order ends on, held once so no row can forget it.
+#
+# WHY. A row's `true_state` is a hand-written constant, not a reading of the tree —
+# nothing in this file verifies that what a row calls true IS what its owner
+# document says. A subtly wrong row is therefore worse than no row at all: it fails
+# the build on correct prose and hands the next agent a file:line telling them to
+# write the wrong sentence, with all the authority of a green-except-this gate. The
+# eight rows here were read against their owners on 2026-08-06 and one was corrected
+# (`g3-guarantee-defers-to-owner` asserted a copy count the tree never had), which is
+# exactly the rate that makes this sentence worth printing every time.
+THIS_ROW_MAY_BE_WRONG = (
+    "or   : this row is wrong. `true` above is a constant in tests/doc_claims.py, "
+    "not a reading of the tree — check {owner} before you rewrite anything, and "
+    "correct the row if the owner disagrees with it."
+)
+
+
 @dataclass(frozen=True)
 class Offender:
     claim: Claim
@@ -558,7 +596,8 @@ class Offender:
             f"(owner: {self.claim.owner})\n"
             f"    says : {self.line[:150]}\n"
             f"    true : {self.claim.state()}\n"
-            f"    do   : {wrong.fix}"
+            f"    do   : {wrong.fix}\n"
+            f"    {THIS_ROW_MAY_BE_WRONG.format(owner=self.claim.owner)}"
         )
 
 
@@ -593,14 +632,45 @@ def _is_quoted(line: str, start: int) -> bool:
     return line.count('"', 0, start) % 2 == 1
 
 
-def offenders_for(claim: Claim) -> list[Offender]:
-    """Every passage in the tree that contradicts ``claim``."""
+def findings_in_text(claim: Claim, text: str, rel: str = "<sample>") -> list[Offender]:
+    """Every passage in ``text`` that contradicts ``claim``.
+
+    Split out from `offenders_for` so the rule can be run over a SAMPLE and not
+    only over the tree — a gate needs both halves, and the precision half is only
+    honest if it exercises this function rather than a copy of it
+    (`tests/gate_precision.py` owns that argument).
+    """
     wrong = claim.active()
     if wrong is None:
         return []
     pattern = re.compile(wrong.pattern, re.I)
     excused = re.compile(wrong.excused_by, re.I) if wrong.excused_by else None
 
+    lines = text.split("\n")
+    fences = _fences(text) if wrong.in_code_fence else None
+    found: list[Offender] = []
+    for match in pattern.finditer(text):
+        if fences is not None and not fences.contains(match.start()):
+            continue
+        line_no = text.count("\n", 0, match.start()) + 1
+        line = lines[line_no - 1]
+        line_start = match.start() - (text.rfind("\n", 0, match.start()) + 1)
+        if wrong.quotation_is_citation and _is_quoted(line, line_start):
+            continue
+        if excused is not None:
+            scope = (
+                line
+                if wrong.window == 0
+                else text[max(0, match.start() - wrong.window) : match.end() + wrong.window]
+            )
+            if excused.search(scope):
+                continue
+        found.append(Offender(claim, rel, line_no, line.strip()))
+    return found
+
+
+def offenders_for(claim: Claim) -> list[Offender]:
+    """Every passage in the tree that contradicts ``claim``."""
     found: list[Offender] = []
     seen: set[tuple[str, int]] = set()
     for glob in claim.globs:
@@ -609,27 +679,9 @@ def offenders_for(claim: Claim) -> list[Offender]:
             rel = path.relative_to(REPO).as_posix()
             if rel in claim.exempt:
                 continue
-            text = path.read_text()
-            lines = text.split("\n")
-            fences = _fences(text) if wrong.in_code_fence else None
-            for match in pattern.finditer(text):
-                if fences is not None and not fences.contains(match.start()):
+            for offender in findings_in_text(claim, path.read_text(), rel):
+                if (rel, offender.line_no) in seen:
                     continue
-                line_no = text.count("\n", 0, match.start()) + 1
-                line = lines[line_no - 1]
-                line_start = match.start() - (text.rfind("\n", 0, match.start()) + 1)
-                if wrong.quotation_is_citation and _is_quoted(line, line_start):
-                    continue
-                if excused is not None:
-                    scope = (
-                        line
-                        if wrong.window == 0
-                        else text[max(0, match.start() - wrong.window) : match.end() + wrong.window]
-                    )
-                    if excused.search(scope):
-                        continue
-                if (rel, line_no) in seen:
-                    continue
-                seen.add((rel, line_no))
-                found.append(Offender(claim, rel, line_no, line.strip()))
+                seen.add((rel, offender.line_no))
+                found.append(offender)
     return found

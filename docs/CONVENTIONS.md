@@ -41,6 +41,16 @@ acts on it. So a load-bearing fact gets registered in
 [`tests/doc_claims.py`](../tests/doc_claims.py) rather than merely written down, and
 a run names the file and line that disagree.
 
+**A gate has two halves, and the second is the one that keeps it alive.** Mutating a
+gate proves it *can* fail. Nothing in that proves it stays quiet on prose the next
+honest edit would produce — and quiet is what decides whether it is still here in a
+month, because a gate that cries wolf gets deleted by the next agent and takes its
+real coverage with it. So a documentation gate ships with a precision test beside it,
+feeding the same scanner content it must not flag.
+[`tests/gate_precision.py`](../tests/gate_precision.py) owns that convention, its
+helper, and the reason a false positive costs more here than a missed one. Do not
+restate it — link.
+
 ## Writing a claim that will not go stale quietly
 
 - **A measurement is not a property. Mark it perishable.** An empirical number is
