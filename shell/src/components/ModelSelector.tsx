@@ -30,7 +30,15 @@
 // When there is no Effort section there is nothing to cycle to, so Tab keeps its
 // old behaviour and leaves.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
@@ -89,8 +97,10 @@ function defaultCloud(models: CloudModel[]): CloudModel | undefined {
 interface Option {
   role: ModelRole;
   id: string;
-  /** Row label (may carry a provider suffix when several providers connected). */
+  /** Row label — the model's own name, never provider-suffixed (see `group`). */
   label: string;
+  /** The company heading this row sits under ("Google", "On this computer"). */
+  group: string;
   /** Compact label for the composer's own label (never provider-suffixed). */
   pillLabel: string;
   /** The mono note at the right of the row: "local" | "free" | "quality". */
@@ -146,18 +156,16 @@ export function ModelSelector({
     ? selectedEffort
     : middleEffort;
 
-  // Attribute each model to its provider ("GPT-4.1 — OpenAI") only when more than
-  // one provider is connected — with a single provider the suffix is just noise.
-  const providerCount = new Set(cloud.map((m) => m.provider).filter((p): p is string => Boolean(p)))
-    .size;
-  const cloudRowLabel = (m: CloudModel) =>
-    providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label;
-
+  // Attribution moved from a per-row suffix ("GPT-4.1 — OpenAI") to a heading per
+  // company, so it is said once per group instead of once per row — and the row
+  // keeps its full width for the model's own name. The core already emits a
+  // provider's models together, so grouping is preserved here, never imposed.
   const options: Option[] = [
     ...cloud.map((m) => ({
       role: "primary" as ModelRole,
       id: m.id,
-      label: cloudRowLabel(m),
+      label: m.label,
+      group: m.providerLabel ?? "Cloud",
       pillLabel: m.label,
       // Only the core may call a model free (see the file header).
       note: m.free ? "free" : "quality",
@@ -167,6 +175,7 @@ export function ModelSelector({
       role: "local" as ModelRole,
       id: m.id,
       label: m.label,
+      group: "On this computer",
       pillLabel: m.label,
       note: "local",
       current: onLocal && m.id === activeLocalId,
@@ -395,36 +404,52 @@ export function ModelSelector({
             className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
             {options.map((o, i) => (
-              <div
-                key={`${o.role}:${o.id}`}
-                id={optionId(i)}
-                role="option"
-                aria-selected={o.current}
-                onClick={() => pickModel(o)}
-                onMouseEnter={() => setActiveIndex(i)}
-                className={
-                  "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
-                  (i === activeIndex ? "bg-line" : "")
-                }
-              >
-                <span
+              <Fragment key={`${o.role}:${o.id}`}>
+                {o.group !== options[i - 1]?.group && (
+                  // Presentational, NOT an option: a listbox's children are the
+                  // things you can pick, and Arrow-key navigation walks
+                  // `options` by index — a heading in that sequence would be a
+                  // row the keyboard lands on and Enter cannot choose.
+                  <div
+                    role="presentation"
+                    className={
+                      "px-2.5 font-mono text-[10px] uppercase tracking-wide text-disabled " +
+                      (i === 0 ? "pb-1 pt-1" : "pb-1 pt-3")
+                    }
+                  >
+                    {o.group}
+                  </div>
+                )}
+                <div
+                  id={optionId(i)}
+                  role="option"
+                  aria-selected={o.current}
+                  onClick={() => pickModel(o)}
+                  onMouseEnter={() => setActiveIndex(i)}
                   className={
-                    "min-w-0 truncate font-mono text-[10.5px] " +
-                    (o.current ? "text-ink" : "text-muted")
+                    "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
+                    (i === activeIndex ? "bg-line" : "")
                   }
                 >
-                  {o.label}
-                </span>
-                <span className="flex-1" />
-                <span
-                  className={
-                    "shrink-0 font-mono text-[10px] " +
-                    (o.current ? "text-accent" : "text-disabled")
-                  }
-                >
-                  {o.current ? `${o.note} ✓` : o.note}
-                </span>
-              </div>
+                  <span
+                    className={
+                      "min-w-0 truncate font-mono text-[10.5px] " +
+                      (o.current ? "text-ink" : "text-muted")
+                    }
+                  >
+                    {o.label}
+                  </span>
+                  <span className="flex-1" />
+                  <span
+                    className={
+                      "shrink-0 font-mono text-[10px] " +
+                      (o.current ? "text-accent" : "text-disabled")
+                    }
+                  >
+                    {o.current ? `${o.note} ✓` : o.note}
+                  </span>
+                </div>
+              </Fragment>
             ))}
           </div>
 

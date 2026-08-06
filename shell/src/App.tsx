@@ -874,13 +874,15 @@ export function App() {
   // inferred — only the core may call a model free.
   const defaultCloudId = resolveCloudModel(models.cloudModels, models.selectedCloudModel)?.id;
   const activeLocalId = models.selectedLocalModel ?? readyLocalModels[0]?.id;
-  const providerCount = new Set(
-    models.cloudModels.map((m) => m.provider).filter((p): p is string => Boolean(p)),
-  ).size;
+  // Grouped BY COMPANY, in the order the core sent them — the union builder
+  // already emits a provider's models together, so this preserves that rather
+  // than imposing an order of its own. The old "Model — Provider" suffix is gone:
+  // the heading says it once per group instead of once per row.
   const modelPopupOptions: ModelPopupOption[] = [
     ...models.cloudModels.map((m) => ({
       key: `primary:${m.id}`,
-      label: providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label,
+      label: m.label,
+      group: m.providerLabel ?? "Cloud",
       note: m.free ? "free" : "quality",
       selected: models.selectedRole !== "local" && m.id === defaultCloudId,
       onPick: () => {
@@ -891,6 +893,7 @@ export function App() {
     ...readyLocalModels.map((m) => ({
       key: `local:${m.id}`,
       label: m.label,
+      group: "On this computer",
       note: "local",
       selected: models.selectedRole === "local" && m.id === activeLocalId,
       onPick: () => {

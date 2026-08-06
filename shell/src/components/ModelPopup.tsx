@@ -15,7 +15,7 @@
 // itself flagged the model, because no cloud model may claim to cost nothing on
 // the frontend's authority (CLAUDE.md, Phase-2 step 4).
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isMotionEnabled } from "../lib/scramble";
 
 /** Panel geometry — the prototype's numbers, kept as named constants because the
@@ -34,6 +34,17 @@ export interface ModelPopupOption {
   /** Unique across cloud + local (the role is part of it for local rows). */
   key: string;
   label: string;
+  /**
+   * Which company this model comes from — "Anthropic", "Google", "On this
+   * computer". Rows are drawn under a heading per group, so a picker holding
+   * four providers' models reads as four short lists instead of one long one.
+   *
+   * Callers pass options ALREADY GROUPED (all of a company's rows adjacent). The
+   * heading is emitted wherever this value changes rather than by bucketing here,
+   * so the order the caller chose is the order drawn — the menu must never
+   * reshuffle itself out from under a keyboard position the caller is tracking.
+   */
+  group?: string;
   /** "quality" | "free" | "local" — derived from the CORE's flags, never guessed. */
   note: string;
   selected: boolean;
@@ -149,37 +160,58 @@ export function ModelPopup({
           : "pointer-events-none animate-[fade-out_.12s_ease_both]")
       }
     >
-      {options.map((o, i) => (
-        <div
-          key={o.key}
-          role="option"
-          aria-selected={o.selected}
-          tabIndex={0}
-          onClick={o.onPick}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              o.onPick();
-            }
-          }}
-          className={
-            "flex cursor-pointer items-baseline gap-2.5 border-l-2 border-t py-3 pl-3 pr-0.5 " +
-            "text-[12px] transition-colors hover:text-ink " +
-            (i === 0 ? "border-t-transparent " : "border-t-line ") +
-            (o.selected ? "border-l-accent text-ink" : "border-l-transparent text-ink-soft")
-          }
-        >
-          <span className="min-w-0 truncate">{o.label}</span>
-          <span className="flex-1" />
-          <span
-            className={
-              "shrink-0 font-mono text-[10.5px] " + (o.selected ? "text-accent" : "text-muted")
-            }
-          >
-            {o.note}
-          </span>
-        </div>
-      ))}
+      {options.map((o, i) => {
+        // A heading wherever the company changes — which makes the FIRST row of
+        // each group the top of a list, so it takes the group's own top border
+        // rather than the hairline that separates siblings.
+        const heading = o.group && o.group !== options[i - 1]?.group ? o.group : null;
+        return (
+          <Fragment key={o.key}>
+            {heading && (
+              <div
+                // Presentational: the listbox's children are its options, and a
+                // heading announced as one would be an unpickable row to anyone
+                // reading with a screen reader. The grouping is visual.
+                role="presentation"
+                className={
+                  "px-3 pb-1.5 font-mono text-[10.5px] uppercase tracking-wide text-muted " +
+                  (i === 0 ? "pt-2" : "border-t border-t-line pt-3")
+                }
+              >
+                {heading}
+              </div>
+            )}
+            <div
+              role="option"
+              aria-selected={o.selected}
+              tabIndex={0}
+              onClick={o.onPick}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  o.onPick();
+                }
+              }}
+              className={
+                "flex cursor-pointer items-baseline gap-2.5 border-l-2 border-t py-3 pl-3 pr-0.5 " +
+                "text-[12px] transition-colors hover:text-ink " +
+                (i === 0 || heading ? "border-t-transparent " : "border-t-line ") +
+                (o.selected ? "border-l-accent text-ink" : "border-l-transparent text-ink-soft")
+              }
+            >
+              <span className="min-w-0 truncate">{o.label}</span>
+              <span className="flex-1" />
+              <span
+                className={
+                  "shrink-0 font-mono text-[10.5px] " + (o.selected ? "text-accent" : "text-muted")
+                }
+              >
+                {o.note}
+              </span>
+            </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }
