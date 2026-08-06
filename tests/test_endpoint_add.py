@@ -229,7 +229,7 @@ def test_confirm_add_refuses_a_key_in_the_url_before_any_snapshot(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
-def test_primary_prompt_steers_to_the_cards_and_never_emits_json_or_a_key(tmp_path):
+def test_primary_prompt_steers_to_the_cards_and_never_emits_json_or_a_key():
     # primary.txt is MITIGATION guidance, not the mechanism (the RPC + card is). It
     # must STEER the user toward the cards — and it must never teach the model to
     # emit structured JSON or carry a key, because the key's only route is the card

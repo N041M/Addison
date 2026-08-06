@@ -113,8 +113,13 @@ def _package_of(module: str) -> str | None:
 
 
 def _iter_py_files():
+    """Every .py under the three packages, RECURSIVELY. ``rglob``, not ``glob``:
+    the module docstring promises the whole package is parsed, and a flat glob
+    quietly exempts the first subpackage anyone adds — a boundary that stops
+    applying the moment the tree grows a directory is not a boundary. No nested
+    .py exists today, so this is a no-op now and a real check later."""
     for pkg in _PACKAGES:
-        yield from sorted((_AGENT_CORE / pkg).glob("*.py"))
+        yield from sorted((_AGENT_CORE / pkg).rglob("*.py"))
 
 
 def test_boundary_packages_do_not_import_each_other():

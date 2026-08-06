@@ -392,7 +392,7 @@ def test_the_credential_check_guards_every_provider_not_only_custom(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
-def test_ordinary_server_addresses_are_still_accepted(tmp_path):
+def test_ordinary_server_addresses_are_still_accepted():
     """The other half of the bargain. Refusing is only free if it refuses the
     right things — a check that turned people away from their own working server
     would push them onto a worse path, so the shapes real endpoints use (a version

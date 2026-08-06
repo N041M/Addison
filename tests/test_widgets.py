@@ -2,13 +2,14 @@
 
 A widget is a DECLARATIVE spec, one of exactly two shapes, NEVER code. These
 tests pin that: both valid kinds accept; unknown kinds/sources reject; code-
-looking ids reject; over-long titles and extra fields reject; the pinned cap is a
-constant the server enforces.
+looking ids reject; over-long titles and extra fields reject.
 
-The last section leaves the validator and drives its two CALL SITES through the
-real server (rpc/widgets.py). Validating in isolation proved the rule; it did not
-prove either caller still asks — and each caller's filter was invisible to the
-suite, because the other one masked its removal (see the section header).
+The later sections leave the validator and drive the server's CALL SITES
+(rpc/widgets.py). Validating in isolation proved the rule; it did not prove either
+caller still asks — and each caller's filter was invisible to the suite, because
+the other one masked its removal (see the section header). The final section does
+the same for the pinned cap, which used to be "tested" by asserting the constant
+equals six — a statement about the test file, not about anything the server does.
 """
 
 from __future__ import annotations
@@ -86,10 +87,6 @@ def test_non_dict_rejects():
     assert validate_widget_spec("not a dict") is not None
     assert validate_widget_spec(None) is not None
     assert validate_widget_spec(["kind", "stat"]) is not None
-
-
-def test_pinned_cap_is_six():
-    assert MAX_PINNED == 6
 
 
 def test_widget_summary_is_plain_language():
@@ -356,5 +353,166 @@ def test_a_dev_stamped_widget_whose_spec_is_unreadable_is_still_not_listed(tmp_p
         reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_LIST})
         in_open = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
         assert in_open["result"]["widgets"] == []
+    finally:
+        _shutdown(reader, h.thread)
+
+
+# ===========================================================================
+# The pinned cap (MAX_PINNED), at the two places the server actually applies it.
+#
+# This section replaces `assert MAX_PINNED == 6`, which asserted that a constant
+# equals its own literal and would have stayed green with both enforcement sites
+# deleted. The cap has two of them, and they are easy to mistake for one:
+#
+#   * widget.setPinned refuses a pin that would exceed it (rpc/widgets.py), and
+#     excludes the widget being pinned from the count, so re-pinning something
+#     already pinned never counts itself against the cap;
+#   * widget.confirmSave uses it to decide whether a BRAND-NEW widget arrives
+#     pinned — a soft default, not a refusal: past the cap the widget is still
+#     saved, it just lands unpinned.
+#
+# The number six is never asserted directly below. It is reached by pinning
+# MAX_PINNED widgets and watching the next one be turned away — which is the only
+# form in which "six" is a claim about the rail rather than about arithmetic.
+# ===========================================================================
+
+_STAT_WIDGET = {"kind": "stat", "source": "connections", "title": "Conns"}
+
+
+def _seed_widgets(tmp_path, pinned_count: int, extra_unpinned: int = 0) -> None:
+    """Put ``pinned_count`` pinned widgets (and optionally some unpinned ones) in
+    the rail's database before the server opens it — the state the cap is a
+    function of, without driving a save for each one."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        for index in range(pinned_count + extra_unpinned):
+            store.insert_widget(
+                id=f"w-{index}",
+                spec_json=json.dumps(dict(_STAT_WIDGET, title=f"Conns {index}")),
+                pinned=index < pinned_count,
+                position=index,
+                created_at=int(time.time()),
+                created_in_mode="safe",
+            )
+    finally:
+        store.close()
+
+
+def _pinned_ids(reader, writer, request_id: int) -> list[str]:
+    """The ids widget.list currently reports as pinned — read back through the
+    server rather than the table, because the rail is what the person sees."""
+    reader.feed({"jsonrpc": "2.0", "id": request_id, "method": Method.WIDGET_LIST})
+    listed = writer.wait_for(lambda f: f.get("id") == request_id and "result" in f)
+    return [w["id"] for w in listed["result"]["widgets"] if w["pinned"]]
+
+
+def test_pinning_one_widget_too_many_is_refused_and_nothing_changes(tmp_path):
+    """The cap is enforced, in plain language, and the refusal is a real no-op.
+
+    A refusal that still wrote the row would be worse than no cap at all: the rail
+    would say it was full while quietly filling further, and the person would have
+    been told the opposite of what happened. So this checks the answer AND the
+    state behind it — with one widget already unpinned and waiting, which is the
+    only arrangement in which a silent success is visible."""
+    _seed_widgets(tmp_path, pinned_count=MAX_PINNED, extra_unpinned=1)
+    spare = f"w-{MAX_PINNED}"
+
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_PINNED,
+                     "params": {"id": spare, "pinned": True}})
+        refusal = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert refusal == {
+            "ok": False,
+            "error": "You can pin up to six widgets. Unpin one first.",
+        }
+        # Unchanged: the spare is still unpinned and the rail still holds exactly
+        # the ones it held before, so nothing was pinned "anyway".
+        pinned = _pinned_ids(reader, writer, 2)
+        assert spare not in pinned
+        assert pinned == [f"w-{i}" for i in range(MAX_PINNED)]
+
+        # And the cap is a live count, not a permanent verdict: free a slot and the
+        # same request succeeds. Without this, a handler that refused every pin
+        # unconditionally would pass the half above.
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_SET_PINNED,
+                     "params": {"id": "w-0", "pinned": False}})
+        writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 4, "method": Method.WIDGET_SET_PINNED,
+                     "params": {"id": spare, "pinned": True}})
+        accepted = writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)["result"]
+        assert accepted == {"ok": True}
+        assert spare in _pinned_ids(reader, writer, 5)
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_re_pinning_an_already_pinned_widget_at_the_cap_is_allowed(tmp_path):
+    """``exclude_id`` earns its place here. A full rail must not make a widget's
+    own pin state unwritable: the count the cap is compared against leaves out the
+    widget being pinned, so pinning something that is already pinned is a no-op
+    rather than the refusal a naive ``count >= MAX_PINNED`` would produce."""
+    _seed_widgets(tmp_path, pinned_count=MAX_PINNED)
+
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_SET_PINNED,
+                     "params": {"id": "w-0", "pinned": True}})
+        result = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+        assert result == {"ok": True}
+        assert _pinned_ids(reader, writer, 2) == [f"w-{i}" for i in range(MAX_PINNED)]
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_new_widget_arrives_pinned_until_the_rail_is_full_then_unpinned(tmp_path):
+    """The cap's OTHER site: widget.confirmSave's default-pinned decision.
+
+    This is a default, not a refusal — the distinction is the whole test. With a
+    slot free the new widget lands on the rail; with none free it is still SAVED,
+    just not pinned, because a full rail must not start throwing away the widgets
+    the person asked for. Both halves come from one conversation and one real save
+    path, so the transition happens at the cap and nowhere else.
+    """
+    _seed_widgets(tmp_path, pinned_count=MAX_PINNED - 1)
+
+    h = build_server(
+        tmp_path,
+        responses=[ModelResponse(text="You've used a few.", tool_calls=[])],
+        register_tool=False,
+    )
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.CONVERSATION_SEND_MESSAGE,
+                     "params": {"text": "how many tokens have I used?"}})
+        writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+
+        # One slot left -> the new widget is pinned, filling the rail.
+        reader.feed({"jsonrpc": "2.0", "id": 2,
+                     "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        preview = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert preview["kind"] == "stat"
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": True}})
+        first = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)["result"]
+        assert first["ok"] is True
+        assert first["pinned"] is True
+
+        # No slot left -> saved anyway, unpinned. Nothing is lost, it just waits.
+        reader.feed({"jsonrpc": "2.0", "id": 4,
+                     "method": Method.WIDGET_PROPOSE_FROM_CONVERSATION})
+        writer.wait_for(lambda f: f.get("id") == 4 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 5, "method": Method.WIDGET_CONFIRM_SAVE,
+                     "params": {"accept": True}})
+        second = writer.wait_for(lambda f: f.get("id") == 5 and "result" in f)["result"]
+        assert second["ok"] is True
+        assert second["pinned"] is False
+
+        listed_ids = _pinned_ids(reader, writer, 6)
+        assert first["widgetId"] in listed_ids
+        assert second["widgetId"] not in listed_ids
+        assert len(listed_ids) == MAX_PINNED
     finally:
         _shutdown(reader, h.thread)

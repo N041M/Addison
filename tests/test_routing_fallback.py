@@ -299,7 +299,7 @@ def test_cooled_provider_is_skipped_next_turn():
     assert b.sends == 2
 
 
-def test_all_cooled_tries_anyway_in_normal_order(monkeypatch):
+def test_all_cooled_tries_anyway_in_normal_order():
     a = _Provider([_answer("A answers")])
     b = _Provider([_answer("unused")])
     chain = [_cand("a", "pa"), _cand("b", "pb")]

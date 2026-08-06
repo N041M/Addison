@@ -1,10 +1,15 @@
 // Contract-drift guard for the frontend's defensive parsers (maintainability
-// review 2026-07-19, item 4). Each parser is exercised BOTH ways:
-//   (a) round-trip with a realistic payload shaped like what agent_core actually
-//       sends (field names taken from agent_core/main.py's stats.get,
-//       widget.list, profile.get, and model.availableRoles handlers), and
-//   (b) the documented fallback paths — null / missing / wrong-typed / unknown
-//       enum / junk — which must degrade, never throw.
+// review 2026-07-19, item 4). This file owns HALF the job: the documented
+// fallback paths — null / missing / wrong-typed / unknown enum / junk — which
+// must degrade, never throw.
+//
+// The other half, the happy-path round trip against a realistic payload, lives in
+// parsers.fixtures.test.ts, where the payloads are GENERATED from the real core
+// handlers (tests/ipc_fixtures.py) instead of hand-written here. A hand-built
+// "realistic" literal only ever proves the parser agrees with our memory of the
+// wire; the generated fixture is the wire. The duplicates were deleted for
+// parseStats / parseWidgetList / normalizeProfile / normalizeCloudModels — do not
+// reintroduce one; add the coverage to the fixture suite instead.
 //
 // These parsers are the only thing standing between a shifted core payload and a
 // crashed webview, so the assertions pin the FULL parsed output, not just a spot
@@ -63,31 +68,8 @@ describe("parseConversationRename", () => {
 // parseStats — mirrors main.py `_stats_get` + `_connections`.
 // ---------------------------------------------------------------------------
 describe("parseStats", () => {
-  it("round-trips a realistic stats.get payload", () => {
-    const wire = {
-      tokensMonth: { total: 12345, limit: null },
-      providerLatency: [
-        { provider: "anthropic", ms: 812 },
-        { provider: "openai", ms: 430 },
-      ],
-      connections: [
-        { id: "ollama", label: "Ollama · this computer", status: "idle", detail: "not running" },
-        { id: "anthropic", label: "Anthropic API", status: "reachable", detail: "812 ms" },
-      ],
-    };
-    expect(parseStats(wire)).toEqual({
-      tokensMonth: { total: 12345, limit: null },
-      providerLatency: [
-        { provider: "anthropic", ms: 812 },
-        { provider: "openai", ms: 430 },
-      ],
-      connections: [
-        { id: "ollama", label: "Ollama · this computer", status: "idle", detail: "not running" },
-        { id: "anthropic", label: "Anthropic API", status: "reachable", detail: "812 ms" },
-      ],
-    });
-  });
-
+  // Happy-path round trip: parsers.fixtures.test.ts, over the generated
+  // stats.get.json. Below is the junk/fallback half only.
   it("keeps a numeric monthly limit when the core sends one", () => {
     expect(parseStats({ tokensMonth: { total: 10, limit: 1000 } })).toEqual({
       tokensMonth: { total: 10, limit: 1000 },
@@ -146,54 +128,8 @@ describe("parseStats", () => {
 // intentionally dropped by the parser; `createdInMode` drives the DEV tag).
 // ---------------------------------------------------------------------------
 describe("parseWidgetList", () => {
-  it("round-trips a realistic widget.list payload (all three kinds)", () => {
-    const wire = {
-      widgets: [
-        {
-          id: "w1",
-          spec: { kind: "routine", routineId: "r1", title: "Morning digest" },
-          pinned: true,
-          position: 0,
-          createdInMode: "safe",
-        },
-        {
-          id: "w2",
-          spec: { kind: "stat", source: "tokens_month", title: "Tokens this month" },
-          pinned: false,
-          position: 1,
-          createdInMode: "safe",
-        },
-        {
-          id: "w3",
-          spec: { kind: "command", command: "ls -la", title: "List files" },
-          pinned: true,
-          position: 2,
-          createdInMode: "open",
-        },
-      ],
-    };
-    expect(parseWidgetList(wire)).toEqual([
-      {
-        id: "w1",
-        spec: { kind: "routine", routineId: "r1", title: "Morning digest" },
-        pinned: true,
-        createdInMode: "safe",
-      },
-      {
-        id: "w2",
-        spec: { kind: "stat", source: "tokens_month", title: "Tokens this month" },
-        pinned: false,
-        createdInMode: "safe",
-      },
-      {
-        id: "w3",
-        spec: { kind: "command", command: "ls -la", title: "List files" },
-        pinned: true,
-        createdInMode: "open",
-      },
-    ]);
-  });
-
+  // Happy-path round trip — all three kinds, `position` dropped, both modes:
+  // parsers.fixtures.test.ts, over the generated widget.list.json.
   it("defaults pinned to true and accepts snake_case created_in_mode", () => {
     const parsed = parseWidgetList({
       widgets: [
@@ -289,37 +225,9 @@ describe("parseWidgetList", () => {
 // affordances.
 // ---------------------------------------------------------------------------
 describe("normalizeProfile", () => {
-  it("round-trips a realistic profile.get payload (Developer/OPEN)", () => {
-    const wire = {
-      activeProfile: "developer",
-      mode: "open",
-      profiles: [
-        { id: "simple", label: "Simple", description: "Approachable by default." },
-        { id: "developer", label: "Developer", description: "Power on request." },
-      ],
-      flags: {
-        exposeRoutinePlan: true,
-        rawDiagnostics: true,
-        headlessCli: true,
-        byokFirstOnboarding: true,
-      },
-    };
-    expect(normalizeProfile(wire)).toEqual({
-      activeProfile: "developer",
-      mode: "open",
-      profiles: [
-        { id: "simple", label: "Simple", description: "Approachable by default." },
-        { id: "developer", label: "Developer", description: "Power on request." },
-      ],
-      flags: {
-        exposeRoutinePlan: true,
-        rawDiagnostics: true,
-        headlessCli: true,
-        byokFirstOnboarding: true,
-      },
-    });
-  });
-
+  // Happy-path round trip — Developer/OPEN with every flag on, and the real
+  // three-profile list: parsers.fixtures.test.ts, over the generated
+  // profile.get.json.
   it("carries `advanced` on the Custom profile only, and never invents it (step 2)", () => {
     const parsed = parsedProfile({
       activeProfile: "custom",
@@ -478,44 +386,9 @@ describe("normalizeRoles", () => {
 });
 
 describe("normalizeCloudModels", () => {
-  it("round-trips a realistic cloudModels entry (to_wire shape)", () => {
-    const wire = {
-      cloudModels: [
-        {
-          id: "claude-opus-4-8",
-          label: "Claude Opus 4.8",
-          description: "",
-          effortLevels: [
-            { id: "low", label: "low", default: false },
-            { id: "high", label: "high", default: true },
-            { id: "xhigh", label: "xhigh", default: false },
-          ],
-          default: true,
-          provider: "anthropic",
-          providerLabel: "Anthropic",
-        },
-      ],
-    };
-    // The parser keeps id/label + {id,label} effort levels and drops the wire's
-    // `description` and per-level `default`.
-    expect(normalizeCloudModels(wire)).toEqual([
-      {
-        id: "claude-opus-4-8",
-        label: "Claude Opus 4.8",
-        effortLevels: [
-          { id: "low", label: "low" },
-          { id: "high", label: "high" },
-          { id: "xhigh", label: "xhigh" },
-        ],
-        default: true,
-        provider: "anthropic",
-        providerLabel: "Anthropic",
-        // Absent on the wire (to_wire omits it) → false, never "probably not".
-        free: false,
-      },
-    ]);
-  });
-
+  // Happy-path round trip — the full to_wire catalog, `description` and the
+  // per-level `default` dropped, `free` absent → false: parsers.fixtures.test.ts,
+  // over the generated model.availableRoles.json.
   it("falls back cleanly for missing fields and junk", () => {
     expect(normalizeCloudModels(null)).toEqual([]);
     expect(normalizeCloudModels({})).toEqual([]);

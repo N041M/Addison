@@ -338,8 +338,10 @@ def test_provider_config_list_and_delete(store: Store):
 
 
 def test_provider_config_rejects_unknown_provider_id(store: Store):
-    # The CHECK constraint guards the four known provider ids.
-    with pytest.raises(Exception):
+    # The CHECK constraint guards the four known provider ids — named exactly, so a
+    # future refactor that fails for some OTHER reason (a bad column, a typo in the
+    # SQL) can't keep this green while the constraint itself has quietly gone.
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         store.upsert_provider_config("bogus", connected=True)
 
 

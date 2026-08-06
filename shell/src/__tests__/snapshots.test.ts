@@ -373,7 +373,7 @@ describe("the per-row restore on permanent rows", () => {
     // row gets the tick and loses its trigger while its neighbour keeps both.
     // (Rendering with the prop set two ways proves only that the component reads
     // a prop — that the tick waits for a REAL {ok:true} is a property of the hook
-    // and is driven click-by-click in restoreFeedback.test.tsx.)
+    // and is driven click-by-click in honestState.test.tsx.)
     renderRows(stateWith({ snapshots: [ANCHOR, SECOND_ANCHOR], ...NO_ONE_ACTION_TARGET }));
     expect(screen.queryByText("restored ✓")).toBeNull();
     expect(screen.getAllByRole("button", { name: /^Restore this one/ })).toHaveLength(2);

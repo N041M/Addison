@@ -629,22 +629,22 @@ def test_the_card_and_the_panel_can_never_show_a_different_string():
     ``run_command`` hid this, because it happens to truncate itself before returning
     — which is why testing this with ``run_command`` proves nothing. The tool used
     here is deliberately the un-truncating shape.
+
+    This is the CONSTRUCTOR half only. The panel's own belt is inline in
+    ``main._emit_activity`` — not callable apart from a running server — so it is
+    exercised end-to-end one test up, in
+    ``test_activity_detail_is_capped_so_a_page_cannot_flood_the_panel``, against
+    this same tool. Re-deriving the belt's formula here would have asserted only
+    that the test can do arithmetic.
     """
     flood = "a" * 400
     detail = call_permission_detail(_DestinationTool(), {"url": f"https://{flood}.example/"})
     assert detail is not None
 
-    # The CONSTRUCTOR did the cut, so the card sees a capped string too.
+    # The CONSTRUCTOR did the cut, so the card sees a capped string too — and it is
+    # the same length the panel test reads off the wire, from the same constant.
     assert len(detail) == MAX_PERMISSION_DETAIL_CHARS + 1
     assert detail.endswith("…")
-
-    # ...and the panel's belt is therefore a no-op, not a second, different cut.
-    recapped = (
-        detail
-        if len(detail) <= MAX_PERMISSION_DETAIL_CHARS
-        else detail[:MAX_PERMISSION_DETAIL_CHARS] + "…"
-    )
-    assert recapped == detail
 
     # A tool that already truncated to the same convention passes through untouched
     # rather than growing a second ellipsis — the shape claim, not just the number.
@@ -756,8 +756,9 @@ def test_routine_propose_confirm_list_run_round_trip(tmp_path):
         ModelResponse(text="Saved your summary.", tool_calls=[]),
     ]
     server, reader, writer, tool, thread = _server(tmp_path, responses)
-    # Give the tool call a generalizable arg (§6.3 heuristic).
-    server.conversation  # (built at construction; provider script drives the call)
+    # Give the tool call a generalizable arg (§6.3 heuristic). Mutated in place on
+    # the scripted response the provider will hand back, so the live turn below
+    # carries it — the server is already running by now.
     responses[0].tool_calls[0].args = {"filename": "summary.txt"}
     try:
         # Live turn: permission card -> allow -> turn completes.

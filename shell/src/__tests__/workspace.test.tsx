@@ -38,6 +38,7 @@ import { useWorkspace, type WorkspaceCardState } from "../hooks/useWorkspace";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
+import type { GuardsCardState } from "../hooks/useGuards";
 import type { ProfileState } from "../types/ui";
 
 // globals:false → testing-library's automatic cleanup isn't registered.
@@ -349,6 +350,17 @@ function renderSettings(profile: ProfileState, withWorkspace = true) {
     handleToggleSkill: vi.fn(async () => {}),
     handleDeleteSkill: vi.fn(async () => {}),
   };
+  // The guards card is beside the workspace card on the same page but no test
+  // here asserts on it, so this is the smallest HONEST GuardsCardState — nothing
+  // loaded yet — rather than a cast that would let the prop drift unnoticed.
+  const guards: GuardsCardState = {
+    guards: null,
+    guardsLoaded: false,
+    busy: false,
+    error: null,
+    refreshGuards: noop,
+    handleSave: vi.fn(async () => {}),
+  };
   const snapshots = {
     snapshots: [],
     snapshotsLoaded: true,
@@ -366,7 +378,7 @@ function renderSettings(profile: ProfileState, withWorkspace = true) {
       models={models as unknown as ModelSelection}
       skills={skills as unknown as SkillsState}
       snapshots={snapshots as unknown as SnapshotsState}
-      guards={stateWith() as unknown as never}
+      guards={guards}
       workspace={withWorkspace ? stateWith() : undefined}
       profile={profile}
       onSetProfile={noop}

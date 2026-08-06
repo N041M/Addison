@@ -4,8 +4,16 @@ the mechanical enforcement of the entire safety model (design-doc §7.9)."""
 
 import pytest
 
+from agent_core.memory.store import Store
 from agent_core.policy import PolicyMode
-from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
+from agent_core.snapshots.undo_manager import UndoManager
+from agent_core.tools.base import (
+    ActionSnapshot,
+    ExecutionContext,
+    RiskTier,
+    ToolDefinition,
+    ToolResult,
+)
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.registry import ToolRegistry
 
@@ -103,7 +111,12 @@ class _MediumToolWithNonCallableUndo:
 class _ReversibleTool:
     """A tool with a real undo, used for the round-trip below. Its effect is a
     single entry in ``self.written`` so the test can assert the state genuinely
-    changed and was genuinely restored."""
+    changed and was genuinely restored.
+
+    It returns a real ``ActionSnapshot`` because the round trip is driven through
+    the production ``UndoManager``, not by the test calling ``undo`` itself: the
+    payload is what the manager hands back, so a tool that recorded the wrong
+    thing fails there rather than passing on a value the test supplied."""
 
     definition = ToolDefinition(
         id="reversible_tool",
@@ -118,10 +131,20 @@ class _ReversibleTool:
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         self.written.append(args["value"])
-        return ToolResult(success=True, content="wrote it")
+        return ToolResult(
+            success=True,
+            content="wrote it",
+            snapshot=ActionSnapshot(
+                id="snap-1",
+                tool_call_id="call-1",
+                tool_id=self.definition.id,
+                undo_payload={"value": args["value"]},
+                created_at=1,
+            ),
+        )
 
-    def undo(self, snapshot) -> None:
-        self.written.remove(snapshot)
+    def undo(self, snapshot: ActionSnapshot) -> None:
+        self.written.remove(snapshot.undo_payload["value"])
 
 
 def test_a_non_callable_undo_is_refused_like_a_missing_one():
@@ -133,17 +156,43 @@ def test_a_non_callable_undo_is_refused_like_a_missing_one():
     assert registry.visible_tools(PolicyMode.SAFE) == []
 
 
-def test_a_real_undo_actually_reverses_the_effect():
+def test_a_real_undo_actually_reverses_the_effect(tmp_path):
     """The round trip the registration check can never make: execute, prove the
     state CHANGED, undo, prove it was restored. A hollow `def undo: pass` passes
-    every static check there is and fails this."""
+    every static check there is and fails this.
+
+    Driven through the PRODUCTION replay path — a real ``Store``, and
+    ``UndoManager.undo_last`` resolving the tool out of this very registry by the
+    snapshot's tool_id — because the interesting claim is not that the fixture's
+    own ``undo`` works. It is that what registration promised is what the machinery
+    a person's "undo that" reaches actually gets to call. Calling ``tool.undo``
+    from the test would prove the fixture and nothing about the tree.
+
+    Distinct from tests/test_undo_manager.py, which pins the manager's ORDERING,
+    marking and failure isolation with tools whose undo only appends to a log:
+    what is checked here is that a registered tool's undo genuinely reverses a
+    real effect when the manager invokes it."""
     tool = _ReversibleTool()
     registry = ToolRegistry()
     registry.register(tool)
-    context = ExecutionContext(conversation_id="c", policy_mode=PolicyMode.SAFE)
+    store = Store(tmp_path / "undo-round-trip.db")
+    try:
+        manager = UndoManager(store=store, tool_registry=registry)
+        context = ExecutionContext(conversation_id="c", policy_mode=PolicyMode.SAFE)
 
-    tool.execute({"value": "entry"}, context)
-    assert tool.written == ["entry"], "the tool did not actually do anything"
+        result = tool.execute({"value": "entry"}, context)
+        assert tool.written == ["entry"], "the tool did not actually do anything"
+        assert result.snapshot is not None, "a mutating tool must record what to undo"
+        manager.record(result.snapshot)
 
-    tool.undo("entry")
-    assert tool.written == [], "undo did not reverse the effect"
+        # Nothing below names the tool: the manager looks it up in the registry
+        # from the stored snapshot, which is the only route the live undo has.
+        [reverted] = manager.undo_last(n=1)
+        assert reverted.success, reverted.detail
+        assert reverted.tool_id == "reversible_tool"
+        assert tool.written == [], "undo did not reverse the effect"
+        # The production bookkeeping ran too: the snapshot is marked reverted, so a
+        # second pass cannot undo an action that has already been taken back.
+        assert store.recent_unreverted_snapshots(limit=10) == []
+    finally:
+        store.close()

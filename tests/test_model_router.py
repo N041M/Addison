@@ -1,8 +1,14 @@
-"""ModelRouter — multiple local models (item B) and capability flags (item A).
+"""ModelRouter — multiple local models (item B) and role resolution.
 
 Covers the v1 substrate that v2 auto-routing will build on: several local models
-configured at once, an explicit per-message pick, and the vision capability flag
-that gates the image path. All selection here is explicit — no auto-routing.
+configured at once and an explicit per-message pick. All selection here is
+explicit — no auto-routing.
+
+The vision capability flag (item A) is NOT covered here. Its gate lives in the
+orchestrator, not the router, and tests/test_local_setup.py drives it there —
+``test_vision_gate_blocks_image_for_text_only_model`` /
+``test_vision_capable_model_passes_image_through``. A test in this file could
+only have read the flag back off its own fake.
 """
 
 import pytest
@@ -72,11 +78,3 @@ def test_select_local_model_switches_default():
     assert _tag(router.resolve(ModelRole.LOCAL)) == "b"
     with pytest.raises(KeyError):
         router.select_local_model("missing")
-
-
-def test_vision_capability_flag_present_for_gating():
-    # The flag the orchestrator reads to gate the image path (item A).
-    vision_model = _FakeProvider("v", vision=True)
-    text_model = _FakeProvider("t", vision=False)
-    assert vision_model.capabilities().vision is True
-    assert text_model.capabilities().vision is False
