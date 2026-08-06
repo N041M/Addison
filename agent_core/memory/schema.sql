@@ -416,3 +416,39 @@ CREATE INDEX IF NOT EXISTS idx_config_snapshots_verified_created
     ON config_snapshots(verified_working, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_audit_created
     ON tool_audit(created_at);
+
+-- Provider attempts that FAILED (2026-08-07). The mirror of tool_audit for the
+-- other decision Addison makes on a person's behalf: which model answers.
+--
+-- WHY THIS EXISTS. `usage_log` records a provider call that SUCCEEDED — tokens
+-- and latency — so a provider that never once succeeded left no trace anywhere.
+-- A Google key spent an evening answering 404 while the Connections panel said
+-- "connected", and the only evidence was a line in the activity strip that
+-- scrolled away: "gemini-2.0-flash was busy". Nobody could tell a rate limit from
+-- a bad request from a model that does not exist, because the status code was
+-- discarded at the point it was classified. Diagnosing it took hours of probing a
+-- third-party API; with this table it is one query.
+--
+-- Only failures are stored. A success is already a `usage_log` row, and writing
+-- both would make the common case pay for the rare one.
+CREATE TABLE IF NOT EXISTS provider_attempts (
+    id              TEXT PRIMARY KEY,        -- uuid4
+    conversation_id TEXT,                    -- NULL for a routine/widget turn
+    provider        TEXT NOT NULL,           -- 'anthropic' | 'openai' | 'google' | 'ollama' | 'custom'
+    model           TEXT NOT NULL,           -- the raw model id that was called
+    -- unavailable  = transient; the chain walked on (429, 5xx, timeout)
+    -- key_rejected = the server answered 401/403 about the key Addison holds
+    -- auth_failed  = no key to send, or unusable bytes — never reached a server
+    -- rejected     = a 4xx the next provider would repeat; the turn failed
+    outcome         TEXT NOT NULL
+                        CHECK(outcome IN ('unavailable','key_rejected',
+                                          'auth_failed','rejected')),
+    -- The HTTP status, or NULL when the request never reached a server. NULL is
+    -- the honest answer for a timeout; inventing a 0 would claim a reply.
+    status_code     INTEGER,
+    -- The plain sentence the person was shown, redacted on write like tool_audit.
+    detail          TEXT,
+    created_at      INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_provider_attempts_created
+    ON provider_attempts(created_at);

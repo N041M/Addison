@@ -66,6 +66,11 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # than having no record. The audit trail must survive every rollback intact,
     # including a rollback performed to undo whatever the log recorded.
     "tool_audit":       "audit history; a restore must never rewrite what happened",
+    # 2026-08-07, on the tool_audit precedent and for the same reason: this is the
+    # record of what a provider DID, and a restore that rewrote it would erase the
+    # evidence somebody is rolling back BECAUSE of. The likeliest reason to restore
+    # after a provider goes wrong is the provider going wrong.
+    "provider_attempts": "failure history; a restore must never rewrite what happened",
     # Step 6 half A, on the `memory_facts` precedent. `widgets` IS captured — the
     # spec is configuration — but what the person has since DONE with one (a ticked
     # box, an edited note, a paused timer) is their content, not their setup.

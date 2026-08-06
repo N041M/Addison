@@ -20,9 +20,12 @@ from agent_core.policy import PolicyMode
 from agent_core.providers.base import (
     Message,
     ModelRole,
+    ProviderAuthFailed,
     ProviderKeyRejected,
+    ProviderRequestRejected,
     ProviderUnavailable,
     ToolCallRequest,
+    status_code_of,
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.redaction import redact, redacted_for_model
@@ -222,6 +225,7 @@ class Orchestrator:
         forbidden_check=None,
         trusted_roots=None,
         on_tool_audit=None,
+        on_provider_attempt=None,
     ) -> None:
         self.model_router = model_router
         self.tool_registry = tool_registry
@@ -295,6 +299,9 @@ class Orchestrator:
         # orchestrator must not learn about SQLite, and machinery — never a registry
         # tool — is the only thing allowed to write history.
         self._on_tool_audit = on_tool_audit
+        # Same shape, same reason, for the other decision made on the person's
+        # behalf: which model answered, and what went wrong when one did not.
+        self._on_provider_attempt = on_provider_attempt
         # In-memory cooldown, per provider id: expiry monotonic timestamps. Advice,
         # never a lock ([S-a]) — an all-cooled chain is still tried in normal order.
         self._cooldowns: dict[str, float] = {}
@@ -478,6 +485,7 @@ class Orchestrator:
                     #      key and false of a rejected one, which is why only the
                     #      narrow subclass walks and plain ProviderAuthFailed still
                     #      propagates untouched.
+                    self._record_attempt(conversation, cand, "key_rejected", exc)
                     if self._on_auth_rejected(cand.provider_id):
                         self.on_activity(
                             _ROUTING_ACTIVITY_ID,
@@ -503,12 +511,36 @@ class Orchestrator:
                     # so the honest move is to fail with this provider's own sentence.
                     # A stream that died before emitting anything showed nothing, so
                     # that case falls forward exactly as it always has.
+                    self._record_attempt(conversation, cand, "unavailable", exc)
                     if relay.shown_this_turn:
                         raise
                     last_unavailable = exc
                     self._cool(cand.provider_id)
                     idx += 1
                     continue
+                except (ProviderRequestRejected, ProviderAuthFailed) as exc:
+                    # RECORD AND RE-RAISE — the control flow is deliberately
+                    # unchanged. These two end the turn (D4): the next provider gets
+                    # the identical bad request, or there was no key to send and
+                    # another provider will not supply one.
+                    #
+                    # This clause exists ONLY so they leave a trace. Until it did,
+                    # these were the failures with no record anywhere: they never
+                    # reach `usage_log` (that is successes), they raise straight past
+                    # the fallback note, and the error frame that carries them is
+                    # gone the moment the person sends the next message. A real 404
+                    # went undiagnosed for an evening because of exactly this gap.
+                    #
+                    # It must sit AFTER the ProviderKeyRejected clause: that class is
+                    # a ProviderAuthFailed subclass, and Python takes the first match,
+                    # so ordering is what keeps a rejected key on its own path.
+                    self._record_attempt(
+                        conversation,
+                        cand,
+                        "rejected" if isinstance(exc, ProviderRequestRejected) else "auth_failed",
+                        exc,
+                    )
+                    raise
                 latency_ms = int((time.monotonic() - started) * 1000)
                 candidate = cand
                 break
@@ -781,6 +813,37 @@ class Orchestrator:
                 )
             conversation.append_tool_result(call.id, result)
         return calls_made, budget_spent
+
+    def _record_attempt(self, conversation, candidate, outcome: str, exc: BaseException) -> None:
+        """One row for a provider call that failed. Best-effort, always.
+
+        Swallowing here is the same rule the tool audit follows and it matters more
+        on this path: every caller is already handling a failure, and an exception
+        raised while recording one would replace a provider problem the person can
+        act on with a crash they cannot. A missing row loses history; a raise here
+        would lose the turn.
+
+        The MESSAGE is the plain sentence the person saw, so the row and the screen
+        cannot tell different stories, and the status code rides alongside it —
+        `str(exc)` says "Google is busy right now", `status_code` says 404, and only
+        together do they say the message was wrong."""
+        if self._on_provider_attempt is None:
+            return
+        try:
+            self._on_provider_attempt(
+                {
+                    "id": str(uuid.uuid4()),
+                    "conversation_id": getattr(conversation, "id", None),
+                    "provider": candidate.provider_id,
+                    "model": candidate.model_id,
+                    "outcome": outcome,
+                    "status_code": status_code_of(exc),
+                    "detail": str(exc) or None,
+                    "created_at": int(time.time()),
+                }
+            )
+        except Exception:
+            pass
 
     # --- cooldown + note helpers (D4) --------------------------------------
     def _is_cooled(self, provider_id: str) -> bool:

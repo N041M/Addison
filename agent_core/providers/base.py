@@ -138,13 +138,33 @@ def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
     429/5xx band.
 
     This function is the single choke point every provider's ``send`` funnels an
-    error status through, which is why §5.2 needs no per-provider edit — and why the
-    401/403 line is the one to mutate when checking that these tests can fail."""
+    error status through, which is why §5.2 needs no per-provider edit — and why
+    the 401/403 line is the one to mutate when checking that these tests can fail.
+
+    The status is ATTACHED to the exception as well as classified by it. The class
+    answers "may the loop try the next candidate?"; the number answers "what did
+    the server actually say?", and only the second one is any use to somebody
+    asking why a provider stopped working. Losing it is what made a real 404
+    indistinguishable from a rate limit in the provider-attempt log."""
+    exc: RuntimeError
     if status_code in (401, 403):
-        return ProviderKeyRejected(message)
-    if status_code == 429 or status_code >= 500:
-        return ProviderUnavailable(message)
-    return ProviderRequestRejected(message)
+        exc = ProviderKeyRejected(message)
+    elif status_code == 429 or status_code >= 500:
+        exc = ProviderUnavailable(message)
+    else:
+        exc = ProviderRequestRejected(message)
+    exc.status_code = status_code  # type: ignore[attr-defined]
+    return exc
+
+
+def status_code_of(exc: BaseException) -> int | None:
+    """The HTTP status behind a provider failure, or None when there wasn't one.
+
+    None is the honest answer for a connect/read timeout or a DNS failure — those
+    never reached a server, and recording a 0 or a 500 for them would invent a
+    reply nobody sent."""
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
 
 
 # --- streaming primitives (shared by every streaming provider) --------------
