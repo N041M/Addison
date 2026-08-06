@@ -19,160 +19,152 @@ unusual and green gates are explicitly not it.
 
 ---
 
+## Before you touch anything
+
+```bash
+./scripts/gates.sh          # every gate, exactly as CI runs them
+```
+
+**That script is the gate list.** `ci.yml` calls the same one, so there is no second
+copy to disagree with. Do not run a remembered subset: a whole session on 2026-08-06
+reported "all gates green" having never run pyright or ESLint, and writing the fix
+found that CI had *never once* run the test-file typecheck, and that `clippy` was not
+a gate at all.
+
+Two things it cannot check, both learned the hard way the same day:
+
+- **Platform-gated code.** `#[cfg(target_os = "macos")]` compiles here and vanishes
+  on CI's Linux runner, taking its imports and constants with it, so `-D warnings`
+  finds dead code there that does not exist here. Cross-checking locally is not
+  practical (a Linux build of the Tauri deps needs a webkit sysroot). When you gate a
+  symbol, check everything it was the sole user of.
+- **Anything resolved from outside the repo.** `tsconfig.test.json` passed locally for
+  weeks because TypeScript found `@types/node` in `/Users/karel/` — above the project
+  entirely. A gate green for a reason that is not in the repository is worse than a
+  gate that is red.
+
 ## Next up
 
-**Phase-2 step 5.5 is DONE (2026-07-31/08-01) — all five items.** Next is **6, 7
-or 8**, and they are independent of each other. `ROADMAP.md` has the descriptions,
-`CLAUDE.md`'s Build order has the dependencies. What is worth repeating here:
+**Two steps remain — 7 and 8.** `ROADMAP.md` owns status; trust it over this file.
 
-- **G3 is no longer overclaimed.** `run_command` executes in the Rust shell under
-  a Seatbelt profile built from the live trusted roots, with the data-dir denies
-  emitted after every allow. The headline test —
-  `an_approved_command_cannot_delete_the_recovery_floor` in
-  `shell/src-tauri/src/exec.rs` — is live and mutation-proven, and SAFETY.md's
-  qualification came off.
-- **Step 7 (MCP) is unblocked on one of its two counts.** The audit log exists
-  (`tool_audit`, written on all five outcomes at all three dispatch sites), so
-  "gated, logged, undo-aware" is satisfiable. **It is still blocked on the
-  MCP-in-SAFE question** in [`KNOWN-GAPS.md`](KNOWN-GAPS.md) — a server declares
-  its own risk, and admitting a tool to SAFE on that say-so breaks SAFE invariant
-  2 through a path the registration check cannot see. Close that first.
-- **One thing only the owner can decide** is still queued in KNOWN-GAPS: whether
-  `/Applications/Addison.app` joins the seatbelt denies — the DATA-not-CODE item,
-  which KNOWN-GAPS states in full. `exec.rs` is now where that deny would go, so it
-  is cheap. (The other, whether a 401 should mark a provider needs-attention, was
-  **answered on 2026-08-06: in**. Built as plan §5.2 — a definitive 401/403 marks
-  `provider_config.key_rejected_at`, says one plain line once, and lets routing
-  degrade.)
+- **7 — MCP client. STARTED: phase 1 of 5 is built.** Transport was decided by the
+  owner on 2026-08-06: **HTTP only for v1**, which is what keeps the client in the
+  Agent Core and adds no new highest-trust surface. Phase 1 is the `mcp_servers`
+  table and `mcp.list`/`add`/`remove` — **nothing is callable**, the registry and gate
+  are untouched, and there is no column that could hold a command. Phase 2 is connect
+  + discovery. Plan and remaining decisions: [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
+- **8 — the automation keyword gate.** Syntax decided (a per-automation nonce Addison
+  shows and you retype, chosen because a fixed prefix is forgeable by anything that
+  can write English). Nothing built. Until it exists, nothing in the tree can author
+  or arm automation, so G2 holds trivially.
 
-**If you are picking up the keychain thread:** read
-[`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) before touching
-`keychain.rs`. It is a repair-first plan (presence out of the keychain into
-`provider_config`; self-heal foreign items by delete-and-recreate; `Intent`
-replaces nine probe symbols), with the encrypted-vault rewrite kept as a
-destination behind named triggers. **§10.1 lists eight traps a vault build must
-re-fix** — the vault draft itself is gone (see the warning below), and that list
-is what survived of it.
+**The keychain thread is half done.** Plan steps 1–2 and §5.2/§5.3 shipped; steps 3–5
+(`Intent`, launch reconciliation, the shipped read counter, the cards) have not.
+Read [`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) before touching
+`keychain.rs`. **`FAILED_READS` survives on purpose** — its presence role is gone, but
+two background callers still fetch key *values*, and deleting it now would let a
+launch task re-raise a dialog somebody had dismissed.
 
 **Two queued, contract-first, not started:** rework local-model setup (state-aware —
 not-downloaded → one-click download plus a source link; downloaded → how to connect
 it; and more open-source models), and skills file-upload (an uploaded text file's
 contents become the skill's guidance text — editable, previewed, size-limited).
 
-## Committed and pushed (2026-08-01)
+## What changed on 2026-08-06, in one paragraph each
 
-**The tree is clean.** What this section warned about for most of 2026-08-01 — a
-`master` carrying roughly 30 uncommitted files — is over. It went out in the four
-pieces it was split into: step 5.5 (`22c8876`), the "Always Allow" signing fix
-(`6690fd2`), the secrets plan (`62d93a7`) and three gap closures (`b57917f`), all
-on `master` and all pushed. `ROADMAP.md` owns what they mean for status.
+The tree was carrying ~30 uncommitted files at the start of the day. All of it is
+committed and pushed; `master` is clean.
 
-**The lesson stays, because it was paid for and the tree being clean does not
-repay it:** during that session an untracked file was renamed and rewritten, and
-~700 lines of design work vanished with no git history to recover from — the doc
-that replaced it even claimed its history held the original. **Commit early.** An
-untracked file is not work-in-progress, it is work with no backup, and this repo
-has now lost some that way.
+- **Step 6 is COMPLETE, both halves.** Dev-made routines and widgets are now listed
+  in Simple as disabled rows that say why, instead of vanishing — that changed a
+  documented rule, and `SAFETY.md` owns the new one. Simple also gained three
+  interactive widget kinds (checklist, note, timer), with what you have *done* with a
+  widget kept in a separate `widget_state` table from what the widget *is*, excluded
+  from snapshots so a restore never unticks your list. The capability-declaration
+  lattice was **cut, not deferred**: the closed kind list is the same gate with
+  nothing to get out of step.
+- **The audit trail was leaking secrets.** `tool_audit.detail` stored the raw command
+  text, so an exported key landed verbatim in the one table excluded from snapshots
+  and never pruned. Redacted at the single write, and the test that was supposed to
+  catch it was vacuous — its tool defined no `permission_detail`.
+- **Four sandbox holes closed.** A sandboxed command could `kill -9` the Addison shell
+  itself (`signal` was granted unfiltered); `run_command` blocked the entire IPC pump
+  for up to 30s; a `setsid()` grandchild could wedge the shell indefinitely; and an
+  ancestor write-root could `mv` the recovery floor out from under its own deny.
+- **The keychain dialog storm is fixed at its source.** Presence left the keychain for
+  `provider_config.secret_presence`, so a polled question no longer touches the OS,
+  and a foreign item now self-heals by delete-then-add. Verified against the owner's
+  real keychain: the item's creation date moved to today and the key survived.
+- **The gates and the docs became executable.** `scripts/gates.sh` is the one gate
+  list; `tests/doc_claims.py` is a registry of load-bearing facts, one row each, with
+  a test that names the file and line of any document contradicting one.
 
-## Branch and PR state (verified 2026-08-01)
+## Branch and PR state (verified 2026-08-06)
 
-**No open pull requests. `master` carries everything**, committed and pushed —
-work from it.
+**No open pull requests. `master` carries everything**, committed and pushed — work
+from it. **Re-read this section immediately after any merge:** it was false for ninety
+minutes on 2026-07-26 because a merge falsified six passages without touching the file
+that contained them, and no gate catches that.
 
-- **PR #58 merged** (`a22badd`, 2026-07-26): the dark v4 redesign, the
-  adversarial-review fix wave, the docs passes, the brand/icon fixes and thread
-  windowing. `redesign/dark-v2` is still pushed, is fully contained in `master`,
-  and is safe to delete.
-- **Since then, direct on `master`:** the brand icon-pipeline fix (`cc70ea8`), the
-  pointer-glow revert (`e98828c`), the widget rail / model-menu fixes (`3ab1159`),
-  the starfield removal (`07cc9ee`), per-token streaming (`d2174c1`, `0d6eec6`) and
-  the documentation restructure (`f4ad86a` onward).
-- **`windowed-thread` no longer exists**, locally or on the remote — its commit was
-  rewritten as `839bcff` and merged with #58. Thread windowing **is** shipped.
+- `redesign/dark-v2` is fully contained in `master` and safe to delete.
 - `archive/thread-window-wip` and `archive/icon-gen-wip` are parked worktree
   experiments, kept only so the attempts are recoverable. Neither is for merge.
 
-**Re-read this section immediately after any merge.** It was false for ninety
-minutes on 2026-07-26 because `7444c8e` described the branch state accurately while
-the redesign was unmerged, and PR #58 then falsified six passages without touching
-the file that contained them. No gate catches that.
-
 ## Three commits on `master` are red, and it is not what you think
 
-**`607c9ec` fails one vitest case**, `parseWidgetList > carries the unavailable
-marker through`. The test landed one commit early: `shell/src/__tests__/
-parsers.test.ts` was staged into the pyright/eslint commit while the
-`normalizeUnavailable` implementation it exercises lands in `562bb6e`. The tip is
-green (CI: all three jobs green at `562bb6e`), and no code is wrong at either.
+**`607c9ec` fails one vitest case** (`parseWidgetList > carries the unavailable
+marker through`): the test was staged into the pyright/eslint commit while the
+implementation it exercises lands in `562bb6e`.
 
-The same ordering mistake as the two below, made **while writing the paragraph
-warning about it** — and made worse by how it was missed: the commit WAS verified
-in isolation, but only its Python half (`pytest` + `pyright` in a worktree), and
-the result was then reported as "verified green in isolation". A partial check
-described as a complete one is the failure, not the ordering. **Verify an
-intermediate commit against the whole of `.github/workflows/ci.yml`, not the half
-that seems relevant.**
+**`22c8876` and `6690fd2` fail `test_every_markdown_link_resolves`**: both link to
+`secrets-and-keychain-plan.md`, which is not committed until `62d93a7`.
 
-**`22c8876` and `6690fd2` fail `test_every_markdown_link_resolves`.** Both link
-to `docs/secrets-and-keychain-plan.md`, which is not committed until `62d93a7`,
-two commits later. `62d93a7` and everything after it are green (measured, in a
-worktree, at every commit in the range).
+No code is wrong at any of the three, and the tip is green. **If you `git bisect`
+across that range, expect them to fail for unrelated reasons** — `--skip` them.
 
-Nothing is wrong with the code at either commit — it is purely an ordering
-mistake in a four-way split of one large uncommitted tree: the docs went with the
-change they described instead of with the file they referenced. **If you
-`git bisect` across that range, expect those two to fail for an unrelated
-reason** — `--skip` them, or bisect with a test selection that excludes
-`test_docs_drift.py`.
+The lesson is not the ordering, which is obvious once seen. It is that `607c9ec` **was
+verified in isolation** — but only its Python half, and the result was then reported
+as "verified green in isolation". A partial check described as a complete one is the
+failure. Verify an intermediate commit against the whole of `ci.yml`.
 
-Not rewritten, deliberately. The history is pushed, and rewriting shared history
-to fix a docs-link test is a worse trade than a paragraph saying so. The lesson
-for the next split: **a commit that references a file must not precede the commit
-that adds it**, and the cheap way to catch it is to run the suite at each
-intermediate commit rather than only at the end — which is exactly what was not
-done here.
+## Six traps this session hit, all the same shape
 
-## Three traps this session hit, all the same shape
+Worth a minute before you write a test here. Each cost real time and each looked green.
 
-Worth thirty seconds before you write a test here, because each one cost real time
-and each looked green:
-
-1. **A deadline test that asserts output proves nothing about the deadline.**
-   `run_command`'s 30-second ceiling did not exist for any compound command (the
-   shell forks; killing the child left the grandchild holding the pipe) and the
-   test passed throughout, because it checked the message rather than the clock.
-   Fixed with a process group; the test now asserts elapsed time.
-2. **A negative test passes when the mechanism never ran.** Two sandbox tests
-   asserted "the forbidden file is absent" — equally true when the profile was
-   rejected and nothing executed. Every negative test now writes a marker into a
-   permitted location in the same command and asserts the marker landed.
+1. **A deadline test that asserts output proves nothing about the deadline.** Assert
+   the clock.
+2. **A negative test passes when the mechanism never ran.** Every negative sandbox
+   test now writes a marker in the same command and asserts the marker landed.
 3. **Purifying a function for testability moves the untested part to its caller.**
-   Making `seatbelt_profile` take its protected dirs as an argument fixed a flake
-   and simultaneously let a mutation delete the floor at the call site with all
-   six tests green.
+   This has now happened four times: `seatbelt_profile`, the IPC pump's
+   `dispatch_off_loop`, the bundle lookup in `addison_data_dirs`, and a source-pin I
+   wrote that matched the word `dispatch_off_loop` **inside a comment** the mutation
+   left behind. Where the last link cannot be reached at runtime, pin it at the
+   source — and match the CALL, never the word.
+4. **A normalizer whose every consumer is tested against hand-built fixtures.**
+   Deleting `normalizeRailRoutines`'s only real line left all 417 tests green. Worth
+   hunting elsewhere.
+5. **A test that asserts by RAISING through code whose job is to swallow.** Every
+   honest presence caller wraps its probe in `except Exception`, so an
+   `AssertionError` was eaten and the test could never fail. Count instead.
+6. **A guard the tests never exercise because the fixture cannot reach it.** The
+   `STATEFUL_KINDS` gate: a timer-shaped state walked through the timer arm for a
+   *routine* spec, because `0 > spec.get("seconds", 0)` is false.
 
-The habit that catches all three: **mutate the line you think matters and confirm
-the test dies.** It has been wrong four times in this repo now.
+The habit that catches all six: **mutate the line you think matters and confirm a
+NAMED test dies.** It has now been wrong six times in this repo — and twice the tell
+was that a mutation which *should* have killed something did not.
 
 ## Where the project stands
 
-- The v1 build order (engineering-spec §11, steps 1–11) is implemented and merged,
-  as are Phase-2 steps 1–5.5. **6, 7 and 8 remain** — `ROADMAP.md` owns this and is
-  the file to trust if it and this line ever disagree.
-- Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple =
-  an all-in-one companion; Custom tunes prompting guards. Safety means **guaranteed
-  rollback**, and that now has code and tests behind it in BOTH modes — the
-  OPEN-mode caveat that stood from 2026-07-26 was closed by step 5.5.
-- **The dark v4 UI is on `master`.** The Fern direction is gone from the tree, not
-  merely superseded; `docs/design-brief-fern/` is kept as history only.
-- **Gates all green on `master`:** pytest, pyright 0 errors (the remaining
-  diagnostics are pre-existing `reportMissingImports` for `pytest`/`httpx` — pyright
-  has no venv), ruff, vitest, ESLint, `tsc --noEmit`, `vite build`, `cargo test`.
-  `tsc` now covers the test files too (`npm run typecheck` runs both configs — the
-  second config found real errors in four classes the day it was added, all fixed;
-  KNOWN-GAPS has them).
-  **Counts are deliberately not written down** — they went stale twice in one day,
-  and a stale number reads as a claim. Commands are in `CONVENTIONS.md`;
-  `VERIFICATION.md` is the runbook.
-- **CI runs the same three job groups** (`.github/workflows/ci.yml`) on every PR and
-  every push to `master`. Keep it green.
+- v1 (spec §11, steps 1–11) and Phase-2 steps 1–6 are implemented and merged. **7 is
+  started, 8 is not.**
+- Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple = an
+  all-in-one companion; Custom tunes prompting guards. Safety means **guaranteed
+  rollback**, and that has code and tests behind it in both modes.
+- **The dark v4 UI is on `master`.** `docs/design-brief-fern/` is history only.
+- **Counts are deliberately not written down here** — they went stale twice in one
+  day, and a stale number reads as a claim. `scripts/gates.sh` prints the real ones.
+- CI runs the same three jobs on every push. Keep it green — and when a gate itself
+  changes, wait for the first CI run afterwards before calling it done. That run *is*
+  part of the change; twice on 2026-08-06 it was not treated as one.
