@@ -9,7 +9,11 @@ from agent_core.policy import PolicyMode
 from agent_core.protocol import Method
 from agent_core.routines.model import RoutineStep
 from agent_core.rpc.base import ServerContext
-from agent_core.rpc.constants import _SERVER_ERROR
+from agent_core.rpc.constants import (
+    _ROUTINE_DEV_ABILITIES_MESSAGE,
+    _SERVER_ERROR,
+    _unavailable_marker,
+)
 
 
 class RoutinesMixin(ServerContext):
@@ -56,13 +60,20 @@ class RoutinesMixin(ServerContext):
         # structural step editing stays v2 (§10).
         profile = self._active_profile
         expose_plan = profile is not None and profile.expose_routine_plan
-        safe_mode = self._mode() is PolicyMode.SAFE
+        mode = self._mode()
         rows = []
         for entry in self.routine_library.list():
-            # Dev-created routines are hidden while the Simple profile is active
-            # (policy.py) — never listed, and they return untouched in Developer mode.
-            if safe_mode and entry.get("createdInMode") == PolicyMode.OPEN.value:
-                continue
+            # Dev-created routines are LISTED while the Simple profile is active,
+            # visibly disabled, instead of vanishing (owner decision 2026-08-06;
+            # docs/SAFETY.md owns the rule). They return untouched in Developer.
+            #
+            # DISPLAY ONLY — this marker is not what stops the routine running.
+            # _handle_routine_run refuses it below with this very sentence, and the
+            # engine refuses a dev_only step underneath that. If the flag and
+            # dispatch ever disagree, DISPATCH WINS.
+            unavailable = _unavailable_marker(
+                mode, entry.get("createdInMode"), _ROUTINE_DEV_ABILITIES_MESSAGE
+            )
             routine = entry["routine"]
             row = {
                 "id": routine.id,
@@ -78,6 +89,10 @@ class RoutinesMixin(ServerContext):
                     for v in routine.variables
                 ],
             }
+            # Absent entirely when the routine is usable — an available row keeps
+            # exactly the shape older frontends already parse.
+            if unavailable is not None:
+                row["unavailable"] = unavailable
             if expose_plan:
                 row["planSteps"] = [
                     {
@@ -101,19 +116,17 @@ class RoutinesMixin(ServerContext):
         except KeyError as exc:
             self._respond_error(request_id, _SERVER_ERROR, str(exc))
             return
-        # A dev-created routine is REFUSED in SAFE mode — it waits for Developer mode
-        # (policy.py). Switching modes is always allowed, so the routine isn't lost.
+        # THE ENFORCEMENT. A dev-created routine is REFUSED in SAFE mode — it waits
+        # for Developer mode (policy.py). Switching modes is always allowed, so the
+        # routine isn't lost. The list marker above is display only and is computed
+        # from the same two facts; this refusal is what makes it true, and it holds
+        # whatever a stale frontend believes it may click.
         mode = self._mode()
         if (
             mode is PolicyMode.SAFE
             and self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
         ):
-            self._respond_error(
-                request_id,
-                _SERVER_ERROR,
-                "That routine uses developer abilities, so it's waiting in "
-                "Developer profile.",
-            )
+            self._respond_error(request_id, _SERVER_ERROR, _ROUTINE_DEV_ABILITIES_MESSAGE)
             return
         result = self.routine_engine.run(routine, params.get("variables") or {}, mode=mode)
         self.routine_library.record_run(routine.id)

@@ -13,7 +13,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Method, type ModelRole } from "../types/protocol";
-import { asRecord } from "../lib/parse";
+import { asRecord, normalizeUnavailable } from "../lib/parse";
 import {
   parseConversationSummaries,
   type ConversationSummary,
@@ -692,11 +692,15 @@ export function parseWidgetList(result: unknown): Widget[] {
     // created_in_mode ("safe" | "open") when the core forwards it — drives the
     // Developer "DEV" annotation tag. Accept either camel/snake spelling.
     const rawMode = row.createdInMode ?? row.created_in_mode;
+    // Why this widget can't be used under the active profile, when the core says
+    // so — the rail renders those rows disabled instead of dropping them.
+    const unavailable = normalizeUnavailable(row.unavailable);
     out.push({
       id: row.id,
       spec,
       pinned: row.pinned !== false,
       createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
+      ...(unavailable ? { unavailable } : {}),
     });
   }
   return out;

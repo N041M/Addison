@@ -291,9 +291,10 @@ core and nothing is saved until an explicit confirm. A widget is a **declarative
 spec (`agent_core/widgets.py`) — a saved-routine Run pill or a whitelisted stat
 display — never code, validated at save and at render **against the current policy
 mode**. In OPEN mode a third `command` kind is valid (it runs `run_command` on click,
-so the destructive-prompt rule still applies when clicked); it is rejected in SAFE
-mode, and OPEN-created widgets are hidden from `widget.list` while the Simple profile
-is active (`created_in_mode`). Saving is display-only (LOW-risk), so there is no
+so the destructive-prompt rule still applies when clicked); it is rejected at save in
+SAFE mode, and OPEN-created widgets are listed by `widget.list` while the Simple
+profile is active (`created_in_mode`) as disabled rows carrying a display-only
+reason — they were hidden until 2026-08-06; [SAFETY.md](SAFETY.md) owns the rule. Saving is display-only (LOW-risk), so there is no
 permission card; a routine/command widget keeps its own gates when it is actually run.
 
 ```mermaid
@@ -553,7 +554,7 @@ sequenceDiagram
     else code-backed / system-capable (Developer / Custom)
         Note over W: capability tier > SAFE -> requires OPEN/Custom<br/>refused if built under Simple
         W-->>SRV: None (valid in-tier) — else reject + plain reason
-        SRV->>DB: insert_widget (created_in_mode="open"/"custom", hidden in Simple)
+        SRV->>DB: insert_widget (created_in_mode="open"/"custom", disabled in Simple)
     end
     SRV-->>WV: {ok: true, widgetId}
     Note over WV: running/arming a system-capable widget -> workspace-trust + keyword gate (flow 12)

@@ -265,3 +265,96 @@ def test_a_command_widget_row_is_hidden_from_the_simple_rail_whatever_it_claims_
         assert [w["id"] for w in in_open["result"]["widgets"]] == ["w-command"]
     finally:
         _shutdown(reader, h.thread)
+
+
+# ===========================================================================
+# Listing a dev-created widget as DISABLED (owner decision 2026-08-06).
+#
+# The render-time filter above no longer drops a row just because it was made in
+# Developer: switching profiles made the person's own work vanish. It is listed
+# with a REASON instead — and the two tests here pin the pair of edges that
+# distinction created, because both are ways the change could quietly go wrong:
+#
+#   * a dev-STAMPED row is now judged against OPEN's vocabulary, so it must not
+#     become a hole for a spec nothing can read (a stamp is only as good as
+#     whoever wrote it — see the test above);
+#   * an ordinary SAFE widget must keep the payload it always had, with no
+#     marker at all, or every widget in Simple starts reading as disabled.
+# ===========================================================================
+
+
+def test_a_dev_created_widget_is_listed_in_simple_with_the_reason_it_cant_be_used(tmp_path):
+    """The feature itself, at the list handler: the row comes back, marked."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.insert_widget(
+        id="w-dev",
+        spec_json=json.dumps(_COMMAND_WIDGET),
+        pinned=True,
+        position=0,
+        created_at=int(time.time()),
+        created_in_mode="open",
+    )
+    store.insert_widget(
+        id="w-safe",
+        spec_json=json.dumps({"kind": "stat", "source": "connections", "title": "Conns"}),
+        pinned=True,
+        position=1,
+        created_at=int(time.time()),
+        created_in_mode="safe",
+    )
+    store.close()
+
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_LIST})
+        listed = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        rows = {w["id"]: w for w in listed["result"]["widgets"]}
+        assert set(rows) == {"w-dev", "w-safe"}
+        # A reason, not a boolean: a later cause is another slug in this field.
+        assert rows["w-dev"]["unavailable"] == {
+            "reason": "developer_abilities",
+            "message": "That widget uses developer abilities, so it's waiting in "
+            "Developer profile.",
+        }
+        # The positive control. An ordinary Simple widget is untouched — no
+        # marker, so nothing in the rail can read it as disabled.
+        assert "unavailable" not in rows["w-safe"]
+    finally:
+        _shutdown(reader, h.thread)
+
+
+def test_a_dev_stamped_widget_whose_spec_is_unreadable_is_still_not_listed(tmp_path):
+    """Judging a dev row against OPEN must not become 'anything stamped open goes'.
+
+    A disabled card is for work that is merely waiting. This spec is not waiting
+    for anything — it is not a widget in EITHER mode — so the render-time
+    validation still drops it, and the Simple rail never renders a row it cannot
+    describe. Listing it in Developer would be the same bug one profile along, so
+    the second half checks OPEN drops it too."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.insert_widget(
+        id="w-nonsense",
+        spec_json=json.dumps({"kind": "agent", "title": "Do things", "prompt": "go"}),
+        pinned=True,
+        position=0,
+        created_at=int(time.time()),
+        created_in_mode="open",
+    )
+    store.close()
+
+    h = build_server(tmp_path, responses=[], register_tool=False)
+    reader, writer = h.reader, h.writer
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.WIDGET_LIST})
+        in_safe = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        assert in_safe["result"]["widgets"] == []
+
+        reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.PROFILE_SET,
+                     "params": {"profileId": "developer"}})
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.WIDGET_LIST})
+        in_open = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+        assert in_open["result"]["widgets"] == []
+    finally:
+        _shutdown(reader, h.thread)

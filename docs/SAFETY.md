@@ -65,11 +65,47 @@ docstring); any other tool is destructive iff its tier is HIGH. Normal (non-dev)
 session-grant model in both modes — per-invocation is specific to destructive dev
 actions.
 
-**Artifact hiding.** Routines/widgets created in OPEN mode (`created_in_mode`
-column) are **hidden and disabled in SAFE mode** — never listed, never runnable —
-and return **untouched** when Developer mode is active again. Switching modes is
-always allowed. **Snapshots are the one exception and it is not negotiable — see
+**Artifact disabling** *(renamed from "artifact hiding"; owner decision
+2026-08-06).* Routines/widgets created in OPEN mode (`created_in_mode` column)
+are **listed but disabled in SAFE mode** — shown, never runnable — and return
+**untouched** when Developer mode is active again. Switching modes is always
+allowed. **Snapshots are the one exception and it is not negotiable — see
 "Snapshots are never hidden by mode" below.**
+
+*They used to be hidden: filtered out of `routine.list` and `widget.list`
+entirely.* The refusal was never the problem — losing sight of the work was.
+Switching Developer → Simple emptied the library and the rail, and the only
+honest reading available to the person was that Addison had deleted what they
+made. Nothing said otherwise, because the row that would have said it was the row
+being withheld. A profile switch is meant to be freely reversible (that is what
+makes "switch back" an acceptable answer to a refusal), and it cannot read as
+reversible while it looks destructive.
+
+So the row is listed, visibly inert, carrying the plain sentence dispatch already
+refuses it with: *"That routine uses developer abilities, so it's waiting in
+Developer profile."* (`rpc/constants.py` holds it once, for both the list and the
+refusal — the surface and the refusal cannot drift into telling two stories.)
+
+**This does not leak developer affordances into Simple.** The concern behind that
+rule is Simple *acquiring* developer capability — a control that runs one, a
+vocabulary that teaches one, an affordance that invites one. A disabled row has
+none: no Run control, and a command widget's command text is not printed in the
+Simple rail. What is on screen is a name the person typed themselves, on an
+artifact they made themselves, in their own library — Addison surfaces nobody
+else's artifacts, and there is nothing here to import or share (Routine
+export/import is v2 and deliberately not built).
+
+**The marker is DISPLAY ONLY, and this is the part to get right.** The list
+carries `unavailable: {reason, message}` on such a row (absent when usable;
+`reason` is an open slug vocabulary — `developer_abilities` today — so a later
+cause needs no schema change). It is what the surface SAYS. What actually refuses
+is dispatch: `routine.run`'s SAFE check, the routine engine's per-step `dev_only`
+refusal, and `widget.run`'s SAFE refusal before it touches the registry. **If the
+flag and dispatch ever disagree, dispatch wins** — the absence of a marker is not
+a permission, and a stale frontend that offers a Run anyway gets refused exactly
+like an honest one. A widget row whose spec is not valid in the profile it is
+waiting for is still dropped rather than shown: a disabled row is for work that
+is merely waiting, not for a spec nothing can read.
 
 ## The four global floors
 

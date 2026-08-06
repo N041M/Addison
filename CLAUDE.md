@@ -103,8 +103,13 @@ used to mean editing thirteen files.
 
 **Two rules that are easy to get wrong:**
 
-- **Artifact hiding** — routines/widgets created in OPEN are hidden and disabled in
-  SAFE (`created_in_mode`), and return untouched when Developer is active again.
+- **Artifact disabling** — routines/widgets created in OPEN are **listed but
+  disabled** in SAFE (`created_in_mode`), carrying a display-only
+  `unavailable: {reason, message}`, and return untouched when Developer is active
+  again. They used to be hidden; owner decision 2026-08-06 changed that, and
+  [docs/SAFETY.md](docs/SAFETY.md) owns why. The marker is never the enforcement:
+  dispatch (`routine.run` / `widget.run` / the engine's per-step check) refuses,
+  and **wins** if the two ever disagree.
 - **Snapshots are NEVER hidden by mode (C6).** `created_in_mode` ships on
   `config_snapshots` but is **display only**. No list, restore, prune or delete
   query may filter on it, in any mode. A source-level test enforces this.

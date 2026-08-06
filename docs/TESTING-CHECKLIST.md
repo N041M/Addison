@@ -454,10 +454,21 @@ place the danger token is correct here).
 
 **Mode never hides a row.** Create a routine and a snapshot in Developer, switch
 to Simple, open Restore points: **every row is still listed and still
-restorable.** Routines and widgets made in Developer are hidden in Simple;
-snapshots are the deliberate exception, because hiding them would hide the way
-back from the person most likely to need it. An empty or shortened list here is
-a **G3 failure**, not a cosmetic one.
+restorable.** Nothing in the app hides a row by mode any more — routines and
+widgets made in Developer are *listed and disabled* in Simple (see below), and
+snapshots were always the deliberate exception, because hiding them would hide
+the way back from the person most likely to need it. An empty or shortened list
+here is a **G3 failure**, not a cosmetic one.
+
+**A Developer-made routine or widget WAITS in Simple; it never disappears.**
+Make a routine (and a widget) in Developer, switch to Simple, open Settings →
+**Routines** and look at the rail. **Expect:** both are still there, annotated
+**Waiting** / `waiting`, with the sentence *"That routine uses developer
+abilities, so it's waiting in Developer profile."* (widgets say "That widget…"),
+**no Run control**, and — for a command widget — **no command text on screen**.
+Remove still works. Switch back to Developer: both are usable again, untouched.
+A row that vanishes instead is the bug this replaced (owner decision 2026-08-06);
+a row that offers Run is worse, because the core will refuse it.
 
 **The honest silences.** When restore points exist but the one-action restore
 has no target, the section must **say which silence this is** rather than going

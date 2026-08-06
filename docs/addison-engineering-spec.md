@@ -517,8 +517,9 @@ routines rows.
 > in any mode.** Read literally, it would hide the way back from exactly the user
 > who most needs it: someone who weakened a guard in Custom, broke something,
 > switched to Simple, and now opens Restore points to an empty list. Snapshots are
-> recovery machinery, not artifacts, and §8's artifact hiding is scoped to routines
-> and widgets. Two tests hold the line — a behavioural one, and a source-level one
+> recovery machinery, not artifacts, and §8's artifact rule is scoped to routines
+> and widgets (which are listed-but-disabled since 2026-08-06, never hidden — see
+> `docs/SAFETY.md`). Two tests hold the line — a behavioural one, and a source-level one
 > that reads the SQL in `store.py` and `snapshot_manager.py` and fails if the column
 > appears in a filter position.
 >
@@ -588,7 +589,8 @@ class WidgetCapability(str, Enum):
 #   SAFE  -> DISPLAY_SAFE only (buildable, non-destructive)
 #   OPEN/Custom -> DISPLAY_SAFE + SYSTEM (code-backed monitors/scripts; run/arm via keyword gate §6)
 # A widget MUST NOT exceed its mode's capability tier; a SAFE-tier widget MUST be
-# non-destructive. created_in_mode hiding (SAFE hides OPEN-built artifacts) still applies.
+# non-destructive. created_in_mode still applies — SAFE lists OPEN-built artifacts as
+# disabled rows (owner decision 2026-08-06; docs/SAFETY.md owns it), never runnable.
 ```
 
 **Routing config (§4.11).** The active routing strategy is non-secret app config,

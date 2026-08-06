@@ -11,7 +11,7 @@
 // Type-only import: erased at build, so this file keeps its runtime
 // dependency-free stance (types/ui.ts still imports `asRecord` from here at
 // runtime; nothing flows back the other way once the types are stripped).
-import type { ProfileState } from "../types/ui";
+import type { ArtifactUnavailable, ProfileState } from "../types/ui";
 
 /** Narrow an unknown value to a plain record, or null if it isn't an object. */
 export function asRecord(value: unknown): Record<string, unknown> | null {
@@ -58,6 +58,29 @@ export function normalizeProfile(result: unknown): ProfileState | null {
       byokFirstOnboarding: flags.byokFirstOnboarding === true,
     },
   };
+}
+
+/**
+ * Parse the `unavailable` marker a `routine.list` / `widget.list` row carries
+ * when the active profile can't use it (owner decision 2026-08-06 — such rows are
+ * listed and disabled, not hidden). Undefined when the key is absent, which is
+ * the shape of every usable row and of every payload from an older core.
+ *
+ * A row is only treated as unavailable when it says WHY in a sentence a person
+ * can read: no `message`, no disabled state. A row disabled with nothing to show
+ * for it is the "where did my stuff go?" bug wearing a different hat — the person
+ * would see their routine sitting there, inert, with no explanation.
+ *
+ * `reason` is passed through as a plain string, unknown slugs included: it is a
+ * machine-readable label for a cause the core owns, and this frontend must not
+ * decide that a cause it has not heard of means the row is fine.
+ */
+export function normalizeUnavailable(raw: unknown): ArtifactUnavailable | undefined {
+  const record = asRecord(raw);
+  if (!record) return undefined;
+  const { reason, message } = record;
+  if (typeof message !== "string" || !message.trim()) return undefined;
+  return { reason: typeof reason === "string" ? reason : "", message };
 }
 
 /** One fill-in-each-time routine variable, as surfaced by the core. */

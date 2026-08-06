@@ -182,6 +182,30 @@ export interface ProfileFlags {
   byokFirstOnboarding: boolean;
 }
 
+/**
+ * Why a saved routine or widget can't be used under the profile that's active
+ * right now (`routine.list` / `widget.list`, key `unavailable`). Absent on
+ * anything usable.
+ *
+ * Today there is one cause: it was made with developer abilities and the Simple
+ * profile is on. Those artifacts used to vanish from the lists, which read as
+ * "my work is gone"; they are listed and visibly disabled instead (owner
+ * decision 2026-08-06).
+ *
+ * DISPLAY ONLY. Hiding a Run control is a courtesy, never the enforcement — the
+ * core refuses the run itself, with this exact `message`, whatever this frontend
+ * decides to render. Never treat the ABSENCE of this field as permission.
+ *
+ * `reason` is a machine-readable slug from an OPEN vocabulary ("developer_abilities"
+ * is the only one the core sends today) — deliberately not a boolean, so a later
+ * cause needs no new field. Unknown slugs are still rendered: `message` is always
+ * the sentence to show.
+ */
+export interface ArtifactUnavailable {
+  reason: string;
+  message: string;
+}
+
 // ---------------------------------------------------------------------------
 // Widgets — DECLARATIVE specs mirrored from the core (agent_core/widgets.py).
 // Exactly two shapes: a saved-routine Run pill, or a whitelisted stat display.
@@ -231,6 +255,12 @@ export interface Widget {
    * widget is inherently OPEN-created even when this is absent.
    */
   createdInMode?: "safe" | "open";
+  /**
+   * Present when the active profile can't use this widget — the rail renders it
+   * as a disabled row carrying `message`, with no Run control. Display only (see
+   * ArtifactUnavailable): the core refuses `widget.run` on its own terms.
+   */
+  unavailable?: ArtifactUnavailable;
 }
 
 /** A drafted widget from `widget.proposeFromConversation`, awaiting confirm. */

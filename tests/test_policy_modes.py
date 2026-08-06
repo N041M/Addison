@@ -3,13 +3,15 @@
 The profile derives the mode (policy.py). SAFE (Simple) is byte-for-byte the
 historical safety model; OPEN (Developer) is "nearly completely open": real
 command execution, a gate that prompts only for destructive actions, and
-routines/widgets that may carry command steps. Dev-created artifacts are hidden
-and refused in SAFE mode and return untouched in OPEN mode. This file pins:
+routines/widgets that may carry command steps. Dev-created artifacts are listed
+but disabled in SAFE mode (owner decision 2026-08-06 — they used to be hidden),
+refused there, and return untouched in OPEN mode. This file pins:
 
   * mode_for_profile derivation;
   * PermissionGate.authorize under both modes (auto-allow vs. prompt, logging);
   * routine command steps (dev-only save, destructive prompt, template data);
-  * server round-trips: dev routine/widget hidden+refused in SAFE, back in OPEN.
+  * server round-trips: dev routine/widget listed-with-a-reason + refused in
+    SAFE, unmarked and runnable again in OPEN.
 
 The two GLOBAL invariants (keys keychain-only; no scheduling) are unchanged and
 are exercised elsewhere (tests/test_profiles_step11.py, the keys tests).
@@ -474,30 +476,84 @@ def _widget_ids(reader, writer, rid):
     return {w["id"] for w in rows}
 
 
-def test_dev_artifacts_hidden_in_safe_and_returned_in_open_round_trip(tmp_path):
+def test_dev_artifacts_listed_disabled_in_safe_and_returned_in_open_round_trip(tmp_path):
+    """Owner decision 2026-08-06: dev-created artifacts are LISTED in Simple,
+    carrying an unavailability REASON, instead of silently disappearing. What
+    refuses them is still dispatch, which this test keeps asserting in the same
+    breath — the list flag is display only.
+
+    (Until this decision the assertions below read ``== {"safe-r"}`` and
+    ``== {"safe-w"}``: the rows vanished. That is the behaviour being replaced,
+    not a guard being relaxed — the refusal half is untouched.)"""
     # Start in Developer (OPEN): both the safe and the dev artifacts are visible.
     server, reader, writer, thread, db_path = _artifact_server(tmp_path, "developer")
     try:
         assert _routine_ids(reader, writer, 1) == {"safe-r", "dev-r", "dev-d"}
         assert _widget_ids(reader, writer, 2) == {"safe-w", "dev-w", "dev-wd"}
 
-        # Switch to Simple (SAFE): the dev-created artifacts disappear from lists.
+        # Switch to Simple (SAFE): the dev-created artifacts are STILL listed...
         assert _rpc(reader, writer, 3, Method.PROFILE_SET, {"profileId": "simple"})[
             "result"
         ]["mode"] == "safe"
-        assert _routine_ids(reader, writer, 4) == {"safe-r"}
-        assert _widget_ids(reader, writer, 5) == {"safe-w"}
+        routines = _rpc(reader, writer, 4, Method.ROUTINE_LIST)["result"]["routines"]
+        assert {r["id"] for r in routines} == {"safe-r", "dev-r", "dev-d"}
+        widgets = _rpc(reader, writer, 5, Method.WIDGET_LIST)["result"]["widgets"]
+        assert {w["id"] for w in widgets} == {"safe-w", "dev-w", "dev-wd"}
 
-        # Running the dev routine in SAFE is refused with the plain waiting sentence.
+        # ...each dev row saying WHY it can't be used, in the sentence the run
+        # refusal uses; and the SAFE-created rows carry no marker at all.
+        by_id = {r["id"]: r for r in routines} | {w["id"]: w for w in widgets}
+        for artifact_id, noun in (("dev-r", "routine"), ("dev-d", "routine"),
+                                  ("dev-w", "widget"), ("dev-wd", "widget")):
+            marker = by_id[artifact_id]["unavailable"]
+            assert marker["reason"] == "developer_abilities"
+            assert marker["message"] == (
+                f"That {noun} uses developer abilities, so it's waiting in "
+                "Developer profile."
+            )
+        assert "unavailable" not in by_id["safe-r"]
+        assert "unavailable" not in by_id["safe-w"]
+
+        # Listing is NOT permission: running the dev routine in SAFE is still
+        # refused, with the same plain waiting sentence.
         err = _rpc(reader, writer, 6, Method.ROUTINE_RUN, {"routineId": "dev-r"})["error"]
         assert "waiting in Developer profile" in err["message"]
+        # ...and so is the dev command widget's Run pill.
+        run = _rpc(reader, writer, 7, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        assert run["ok"] is False
+        assert "waiting in Developer profile" in run["error"]
 
-        # Back to Developer: the artifacts return untouched.
-        assert _rpc(reader, writer, 7, Method.PROFILE_SET, {"profileId": "developer"})[
+        # Back to Developer: the artifacts return untouched, and unmarked.
+        assert _rpc(reader, writer, 8, Method.PROFILE_SET, {"profileId": "developer"})[
             "result"
         ]["mode"] == "open"
-        assert _routine_ids(reader, writer, 8) == {"safe-r", "dev-r", "dev-d"}
-        assert _widget_ids(reader, writer, 9) == {"safe-w", "dev-w", "dev-wd"}
+        assert _routine_ids(reader, writer, 9) == {"safe-r", "dev-r", "dev-d"}
+        assert _widget_ids(reader, writer, 10) == {"safe-w", "dev-w", "dev-wd"}
+        in_open = _rpc(reader, writer, 11, Method.ROUTINE_LIST)["result"]["routines"]
+        assert all("unavailable" not in r for r in in_open)
+    finally:
+        _shutdown(reader, thread)
+
+
+def test_the_listed_reason_and_the_run_refusal_are_the_same_sentence(tmp_path):
+    """The surface and the refusal must say ONE thing, read off the wire.
+
+    Both come from a single constant today, and that is precisely what this
+    protects: the next person to reword the disabled card has no reason to think
+    they are editing a refusal too. If a routine's card says it is waiting for
+    Developer and pressing Run says something else, the person is being told two
+    different stories about the same fact."""
+    server, reader, writer, thread, db_path = _artifact_server(tmp_path, "simple")
+    try:
+        listed = {
+            r["id"]: r for r in _rpc(reader, writer, 1, Method.ROUTINE_LIST)["result"]["routines"]
+        }
+        refusal = _rpc(reader, writer, 2, Method.ROUTINE_RUN, {"routineId": "dev-r"})["error"]
+        assert listed["dev-r"]["unavailable"]["message"] == refusal["message"]
+
+        widgets = {w["id"]: w for w in _rpc(reader, writer, 3, Method.WIDGET_LIST)["result"]["widgets"]}
+        widget_refusal = _rpc(reader, writer, 4, Method.WIDGET_RUN, {"id": "dev-w"})["result"]
+        assert widgets["dev-w"]["unavailable"]["message"] == widget_refusal["error"]
     finally:
         _shutdown(reader, thread)
 

@@ -396,11 +396,16 @@ def test_custom_stamps_open_mode():
     assert mode_for_profile(CUSTOM).value == "open"
 
 
-def test_custom_created_widget_hidden_and_refused_in_safe(tmp_path):
+def test_custom_created_widget_listed_disabled_and_refused_in_safe(tmp_path):
     """D6 regression: a command widget stamped 'open' (as a Custom-built one is)
-    disappears from the SAFE list and refuses to run there, waiting for a
-    developer-capable profile. Seeded via a separate Store before the server starts
-    (SQLite thread affinity — the server's own store belongs to the worker)."""
+    is LISTED in SAFE carrying its unavailability reason (owner decision
+    2026-08-06 — it used to disappear) and still refuses to run there, waiting for
+    a developer-capable profile. Seeded via a separate Store before the server
+    starts (SQLite thread affinity — the server's own store belongs to the worker).
+
+    The refusal half is what the D6 regression was always about, and it is
+    unchanged: a Custom-stamped artifact is refused in SAFE exactly like a
+    Developer one."""
     seed = Store(tmp_path / IPC_DB_NAME)
     seed.set_setting("widgets_seeded", "1")   # keep the rail to just this widget
     seed.insert_widget(
@@ -418,10 +423,19 @@ def test_custom_created_widget_hidden_and_refused_in_safe(tmp_path):
         call(Method.PROFILE_SET, {"profileId": "custom"})
         widgets = {w["id"]: w for w in call(Method.WIDGET_LIST)["widgets"]}
         assert "cust-w" in widgets and widgets["cust-w"]["createdInMode"] == "open"
-        # Switch to Simple (SAFE): the command widget disappears...
+        # In Custom itself (an OPEN-derived mode) it is usable — no marker.
+        assert "unavailable" not in widgets["cust-w"]
+        # Switch to Simple (SAFE): the command widget is still listed, now saying
+        # why it can't be used...
         call(Method.PROFILE_SET, {"profileId": "simple"})
-        assert "cust-w" not in {w["id"] for w in call(Method.WIDGET_LIST)["widgets"]}
-        # ...and running it is refused.
+        in_safe = {w["id"]: w for w in call(Method.WIDGET_LIST)["widgets"]}
+        assert "cust-w" in in_safe
+        assert in_safe["cust-w"]["unavailable"] == {
+            "reason": "developer_abilities",
+            "message": "That widget uses developer abilities, so it's waiting in "
+            "Developer profile.",
+        }
+        # ...and running it is refused all the same (the marker is display only).
         res = call(Method.WIDGET_RUN, {"id": "cust-w"})
         assert res["ok"] is False
         assert "waiting in Developer profile" in res["error"]

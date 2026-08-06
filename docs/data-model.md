@@ -98,9 +98,11 @@ erDiagram
 - **routines** — saved declarative plans. `plan_json` holds the ordered, DAG-shaped
   step plan; by construction it never contains code. `run_count` and `last_run_at`
   track usage. `created_in_mode` (`safe` | `open`) records the policy mode the routine
-  was saved under: a routine created in OPEN is hidden from `routine.list` and refused
+  was saved under: a routine created in OPEN is **listed but disabled** in
+  `routine.list` (the row carries a display-only `unavailable` reason) and refused
   by `routine.run` while the Simple profile is active, and returns untouched in
-  Developer.
+  Developer. It was hidden outright until 2026-08-06 — see
+  [SAFETY.md](SAFETY.md), which owns the rule.
 - **routine_runs** — the run log behind "show what you just did", one row per run with
   a `status` constrained to `running`, `completed`, `failed`, or `cancelled` and a
   JSON step log.
@@ -390,7 +392,8 @@ erDiagram
 
   **`created_in_mode` never hides a snapshot** *(a deliberate override, step 1)*. The
   engineering spec's provisional DDL commented that this column "mirrors existing artifact
-  hiding" (routines and widgets made in OPEN are hidden in SAFE). That was **overridden, not
+  hiding" (as routines and widgets made in OPEN were then hidden in SAFE — they are
+  listed-but-disabled since 2026-08-06). That was **overridden, not
   followed.** Taken literally it hides the way back from exactly the user who most needs it:
   weakened a guard in Custom, broke something, switched to Simple, opens Restore points and
   finds an empty list. Snapshots are recovery machinery, not artifacts. Two tests hold the

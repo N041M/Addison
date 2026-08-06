@@ -18,6 +18,13 @@ export const Method = {
   UndoRedoLastAction: "undo.redoLastAction",
   RoutineProposeFromConversation: "routine.proposeFromConversation",
   RoutineConfirmSave: "routine.confirmSave",
+  // A `routine.list` row carries `unavailable` {reason, message} when the ACTIVE
+  // profile can't use it — a routine made with developer abilities is listed in
+  // Simple, visibly disabled, rather than disappearing (owner decision
+  // 2026-08-06). Absent on a usable row; `reason` is an open slug vocabulary, not
+  // a boolean, so a later cause slots in. DISPLAY ONLY: `routine.run` refuses on
+  // its own, with the same sentence, whatever this field says. Mirrored in
+  // protocol.py; the parsed shape lives in types/ui.ts (ArtifactUnavailable).
   RoutineList: "routine.list",
   RoutineRun: "routine.run",
   RoutineDelete: "routine.delete",
@@ -47,6 +54,8 @@ export const Method = {
   // Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
   // pill or a whitelisted stat display, NEVER code. Proposed like routines
   // (draft-in-memory + explicit confirm) and saved LOW-risk (display-only).
+  // Rows carry the same `unavailable` {reason, message} marker on the same terms
+  // as `routine.list` above (absent when usable, display only).
   WidgetList: "widget.list",
   WidgetSetPinned: "widget.setPinned",
   WidgetDelete: "widget.delete",

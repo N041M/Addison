@@ -8,6 +8,8 @@ name (``_BYOK_ONBOARDING_MESSAGE`` / ``_UNKNOWN_PROFILE_MESSAGE``) so
 
 from __future__ import annotations
 
+from agent_core.policy import PolicyMode
+
 # JSON-RPC error codes. -32601 is the reserved "method not found"; the -32000
 # band is the "server error" range we use for provider/tool/not-built failures,
 # each carrying a plain-language message (never a stack trace).
@@ -57,6 +59,42 @@ _KEY_UNREADABLE_MESSAGE = (
     "Settings."
 )
 _UNKNOWN_PROFILE_MESSAGE = "That profile isn't available."
+
+# --- Artifact unavailability (owner decision 2026-08-06) ----------------------
+# A routine/widget created in OPEN used to be FILTERED OUT of the Simple lists, so
+# switching Developer -> Simple made the person's own work silently disappear
+# ("where did my stuff go?"). It is now LISTED and visibly disabled, carrying the
+# same sentence dispatch already refuses it with. docs/SAFETY.md owns the rule.
+#
+# The marker is a REASON, never a boolean: a later cause (a tool that becomes
+# dev-only in an app update, say) is a new slug in this vocabulary and needs no
+# schema change on either side of the wire.
+_UNAVAILABLE_DEV_ABILITIES = "developer_abilities"
+_ROUTINE_DEV_ABILITIES_MESSAGE = (
+    "That routine uses developer abilities, so it's waiting in Developer profile."
+)
+_WIDGET_DEV_ABILITIES_MESSAGE = (
+    "That widget uses developer abilities, so it's waiting in Developer profile."
+)
+
+
+def _unavailable_marker(mode: PolicyMode, created_in_mode, message: str) -> dict | None:
+    """The DISPLAY-ONLY unavailability marker for one list row, or None.
+
+    **This is not the enforcement, and must never become it.** What actually stops
+    a dev-created artifact in SAFE is dispatch: ``routine.run``'s refusal
+    (``rpc/routines.py``), the routine engine's per-step ``dev_only`` check, and
+    ``widget.run``'s SAFE refusal (``rpc/widgets.py``). This function only decides
+    what a list SAYS. If the two ever disagree — a row listed without a marker,
+    say — **dispatch wins**: the absence of a marker is not a permission, and a
+    stale or hand-edited frontend gets the same refusal as an honest one.
+
+    Returns ``{"reason": <slug>, "message": <plain sentence>}``; callers omit the
+    key entirely when this is None, so an available row's shape is unchanged.
+    """
+    if mode is not PolicyMode.SAFE or created_in_mode != PolicyMode.OPEN.value:
+        return None
+    return {"reason": _UNAVAILABLE_DEV_ABILITIES, "message": message}
 
 # G3: the store could not be opened. Plain, actionable, no stack trace. It names
 # Restore because Restore genuinely works in this state — snapshot.list and

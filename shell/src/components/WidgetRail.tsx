@@ -18,7 +18,7 @@
 
 import { useState, type ReactNode } from "react";
 import type { WidgetRunResult } from "../ipc/client";
-import type { Widget, Stats, WidgetStatSource } from "../types/ui";
+import type { ArtifactUnavailable, Widget, Stats, WidgetStatSource } from "../types/ui";
 
 const TRAY_OPEN_KEY = "addison.trayOpen";
 
@@ -29,6 +29,8 @@ export interface RailRoutine {
   variables: { name: string; prompt: string; default: string | null }[];
   /** The mode the routine was saved under ("safe" | "open"), when the core sends it. */
   createdInMode?: "safe" | "open";
+  /** Why the routine can't be used under the active profile, when the core says so. */
+  unavailable?: ArtifactUnavailable;
 }
 
 interface Props {
@@ -45,8 +47,8 @@ interface Props {
   /**
    * OPEN/Developer mode is active — surface the small "dev" annotation on
    * dev-created items (command widgets, and any widget/routine whose
-   * createdInMode is "open"). In Simple mode these items are already filtered
-   * out by the core, so this stays false.
+   * createdInMode is "open"). In Simple mode those items are listed as WAITING
+   * rows instead (see UnavailableWidgetBody), so this stays false there.
    */
   developer?: boolean;
   /** Stored widgets from `widget.list` (routine/stat/command specs). */
@@ -126,6 +128,13 @@ export function WidgetRail({
   /** True if this widget should draw. Records its source so nothing repeats it. */
   function claimsItsSource(w: Widget): boolean {
     if (w.spec.kind !== "stat") return true; // routine/command widgets never collide
+    // A stat widget the active profile can't use draws a WAITING row — a title
+    // and a reason, no numbers — so it draws without claiming. Claiming here
+    // would be the 07-26 bug in reverse: instead of a source appearing twice, the
+    // one row that shows it stands down for a row that never shows it, and the
+    // connection list quietly empties out. (Reachable since dev-made widgets are
+    // listed rather than hidden — before that, such a row was never here to claim.)
+    if (w.unavailable) return true;
     if (claimed.has(w.spec.source)) return false;
     claimed.add(w.spec.source);
     return true;
@@ -304,12 +313,18 @@ function WidgetRow({
   // marked created_in_mode="open" (the widget itself, or the routine it runs).
   const isDev =
     spec.kind === "command" || widget.createdInMode === "open" || routine?.createdInMode === "open";
+  // The core says this row can't be used under the active profile — either the
+  // widget itself, or (for a routine widget) the routine it would run. Both are
+  // the same disappointment one click later, so both read as waiting here.
+  const unavailable = widget.unavailable ?? routine?.unavailable;
 
   return (
     <Row>
       {developer && isDev && <DevTag />}
       <div className="flex items-baseline gap-2">
-        {spec.kind === "routine" ? (
+        {unavailable ? (
+          <UnavailableWidgetBody title={spec.title} reason={unavailable.message} />
+        ) : spec.kind === "routine" ? (
           <RoutineWidgetBody
             title={spec.title}
             routine={routine}
@@ -517,9 +532,35 @@ function CommandWidgetBody({
   );
 }
 
+// A widget the active profile can't use — a routine/widget made with developer
+// abilities, while Simple is on. It is SHOWN, not dropped: switching profiles used
+// to make the person's own work vanish out of the rail (owner decision
+// 2026-08-06). Nothing here is clickable: no Run pill, no command text (a Simple
+// rail never shows a shell command), just the title and the plain reason.
+//
+// Disabled reads three ways, never colour alone (personas 54/68): the "waiting"
+// annotation, the missing control, and the sentence itself. The accent is absent
+// on purpose — it is reserved for actions and live state, and this row is neither.
+// `muted` is as dim as this goes: `disabled`/`ghost` are for idle glyphs and
+// hairlines, and prose someone has to READ does not belong there.
+function UnavailableWidgetBody({ title, reason }: { title: string; reason: string }) {
+  return (
+    <span className="min-w-0 flex-1">
+      <span className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate text-muted">{title}</span>
+        <span className="flex-1" />
+        <span className="shrink-0 font-mono text-[10px] tracking-[.04em] text-muted">
+          waiting
+        </span>
+      </span>
+      <span className="mt-1.5 block text-[11px] leading-[1.5] text-muted">{reason}</span>
+    </span>
+  );
+}
+
 // The "dev" annotation — marks an item created with developer abilities. Shown
-// in the Developer/Custom profile only; Simple never sees these items at all
-// (core-filtered). A machine fact about the item, so mono.
+// in the Developer/Custom profile only; in Simple the same items appear as
+// waiting rows instead. A machine fact about the item, so mono.
 function DevTag() {
   return (
     <span className="mb-1 block font-mono text-[10px] tracking-[.04em] text-disabled">dev</span>

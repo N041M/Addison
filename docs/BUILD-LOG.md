@@ -12,6 +12,58 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-06 — dev-made artifacts are DISABLED in Simple, not hidden
+
+Owner decision, same day. Routines and widgets created in OPEN were filtered out
+of `routine.list` / `widget.list` under SAFE, so switching Developer → Simple
+emptied the library and the rail: the person's own work looked deleted, and the
+one row that could have said otherwise was the row being withheld. They are
+listed and visibly disabled now, carrying the plain sentence dispatch already
+refuses them with. [SAFETY.md](SAFETY.md) owns the rule (renamed there: *artifact
+hiding* → *artifact disabling*); `CLAUDE.md`, `architecture.md`, `data-model.md`,
+`flows.md` and the engineering spec were amended in the same commit.
+
+What is worth carrying forward from building it:
+
+- **The marker is a REASON, not a boolean.** The wire carries
+  `unavailable: {reason, message}` — absent on a usable row — with `reason` an
+  open slug vocabulary (`developer_abilities` today). A boolean would have needed
+  a second field the first time a different cause appeared, and the parser on the
+  frontend passes unknown slugs through rather than treating a cause it has not
+  heard of as "fine".
+- **DISPLAY ONLY, said in the code that computes it** (`rpc/constants.py`,
+  `_unavailable_marker`). The refusals in `routine.run` / `widget.run` and the
+  engine's per-step `dev_only` check are the enforcement and were left exactly
+  where they were; **if the flag and dispatch disagree, dispatch wins**. Both
+  refusals now read their sentence from the same constant the list does, so the
+  surface and the refusal cannot drift into telling two stories.
+- **Listing a dev row meant validating its spec against OPEN**, which is a hole
+  if written carelessly. It is scoped to rows *stamped* `'open'`; a command spec
+  behind a `'safe'` stamp still fails SAFE validation and stays hidden. The
+  existing test for that (`..._whatever_it_claims_it_was_made_in`) is what caught
+  the careless version — mutating the branch to an unconditional OPEN turns it
+  red.
+- **Two existing tests asserted the OLD rule** and were rewritten to the new one,
+  refusal halves untouched:
+  `test_dev_artifacts_hidden_in_safe_and_returned_in_open_round_trip` (now
+  `..._listed_disabled_...`) and `test_custom_created_widget_hidden_and_refused_in_safe`.
+  Both now assert the reason on the wire *and* that running is still refused.
+- **The rail's "first thing on screen claims the source" rule grew a new way to
+  break, and it is the 07-26 duplicate-source bug run backwards.** A stat widget
+  made in Developer is now IN the Simple rail, drawing a reason instead of
+  numbers — and it was still *claiming* its source, so the ambient connection
+  block stood down for a row that shows no connections and the person's
+  Ollama/Anthropic rows disappeared. Found by re-reading that rule against the
+  new row type, not by a failing test; `claimsItsSource` now lets an unavailable
+  widget draw without claiming. Any future row that renders something OTHER than
+  its source's value has to answer the same question.
+- **A parser can be dead code and nothing notices.** `normalizeRailRoutines` in
+  `useWidgets.ts` was the only producer of the rail's routine marker, and every
+  rail test builds its own `RailRoutine` object — so deleting the new line left
+  the whole suite green. It is exported and unit-tested now; the shape of that
+  gap (a normalizer whose consumers are all tested against hand-built fixtures)
+  is worth looking for elsewhere.
+
 ## Measured 07-31 — two keychain spikes for the vault redesign
 
 Nothing shipped; two claims of

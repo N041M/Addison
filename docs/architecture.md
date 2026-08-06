@@ -365,8 +365,10 @@ Component by component:
   may carry an OPEN-mode-only `command` (run through the `run_command` dev-only tool,
   same gate + registry, so a destructive command still prompts). A routine's
   `created_in_mode` column records the mode it was saved under; routines created in
-  OPEN mode are hidden from `routine.list` and refused by `routine.run` in SAFE mode,
-  and return untouched in OPEN. Command routines can only be saved in OPEN mode.
+  OPEN mode are listed by `routine.list` in SAFE mode carrying a display-only
+  `unavailable` reason, refused by `routine.run` there, and return untouched in
+  OPEN ([SAFETY.md](SAFETY.md) owns the rule — they were hidden outright until
+  2026-08-06). Command routines can only be saved in OPEN mode.
 - **Widgets and usage** — server/orchestrator machinery, not registry tools. After
   each provider call the orchestrator's `on_usage` hook records a `usage_log` row
   (tokens + latency) at that single choke point; `stats.get` derives the token meter
@@ -375,9 +377,11 @@ Component by component:
   policy mode, never eval'd. Today's vocabulary is three kinds: the launchers
   `{kind:"routine", routineId, title}` and `{kind:"stat", source, title}` (source from
   the fixed whitelist `tokens_month` / `provider_latency` / `connections`) in both
-  modes, plus `{kind:"command", command, title}` in OPEN only — rejected at save and
-  hidden at render under SAFE, and stored `created_in_mode='open'` so it never surfaces
-  while Simple is active. There is no eval, no expression field and no template field,
+  modes, plus `{kind:"command", command, title}` in OPEN only — rejected at save under
+  SAFE, and stored `created_in_mode='open'` so that while Simple is active it renders
+  as a disabled row (title + reason, no Run and no command text) rather than a working
+  one. A command spec that is NOT stamped `'open'` still fails render-time validation
+  and is dropped: what a row is decides what Simple may see, never what its stamp says. There is no eval, no expression field and no template field,
   and a routine id is matched against a plain-slug pattern so a spec cannot smuggle an
   expression through it. Widgets are proposed like routines (draft held in the core,
   saved only on an explicit confirm) and stored in the `widgets` table.

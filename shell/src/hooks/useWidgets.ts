@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import type { Stats, Widget, WidgetProposal } from "../types/ui";
 import { ipc, isEngineConnected } from "../ipc/client";
 import type { RailRoutine, RunOutcome } from "../components/WidgetRail";
-import { asRecord, normalizeVariables } from "../lib/parse";
+import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
 
 interface UseWidgetsArgs {
   connected: boolean;
@@ -154,8 +154,15 @@ export function useWidgets({ connected, railOpen, setStatusBanner }: UseWidgetsA
 }
 
 // Light copy of the routine library for the rail: just enough to prompt for a
-// routine widget's variables on Run. Mirrors RoutineLibrary's normalizer.
-function normalizeRailRoutines(result: unknown): RailRoutine[] {
+// routine widget's variables on Run — and to know when the routine behind a
+// widget can't be used, so the rail can draw that row as waiting instead of
+// offering a Run the core would refuse. Mirrors RoutineLibrary's normalizer.
+//
+// Exported for its own test: everything it feeds the rail is a field the rail
+// reads off a plain object, so a field dropped HERE is invisible to any test
+// that builds its own RailRoutine — which is exactly how the marker could have
+// been parsed nowhere and noticed by nothing.
+export function normalizeRailRoutines(result: unknown): RailRoutine[] {
   const record = asRecord(result);
   const list = record && Array.isArray(record.routines) ? record.routines : [];
   const out: RailRoutine[] = [];
@@ -165,11 +172,16 @@ function normalizeRailRoutines(result: unknown): RailRoutine[] {
     // created_in_mode ("safe" | "open"), camel or snake — drives the Developer
     // "DEV" tag on dev-created routine widgets.
     const rawMode = r.createdInMode ?? r.created_in_mode;
+    // Why the routine can't be used right now, when the core says so: a routine
+    // WIDGET is only as usable as the routine behind it, so the rail needs this
+    // to disable a Run pill that could only ever be refused.
+    const unavailable = normalizeUnavailable(r.unavailable);
     out.push({
       id: r.id,
       name: r.name,
       createdInMode: rawMode === "open" || rawMode === "safe" ? rawMode : undefined,
       variables: normalizeVariables(r.variables),
+      ...(unavailable ? { unavailable } : {}),
     });
   }
   return out;

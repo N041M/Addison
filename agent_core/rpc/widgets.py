@@ -12,7 +12,11 @@ from uuid import uuid4
 from agent_core.permissions.gate import PermissionStatus
 from agent_core.policy import PolicyMode
 from agent_core.rpc.base import ServerContext
-from agent_core.rpc.constants import _SERVER_ERROR
+from agent_core.rpc.constants import (
+    _SERVER_ERROR,
+    _WIDGET_DEV_ABILITIES_MESSAGE,
+    _unavailable_marker,
+)
 from agent_core.tools.base import (
     ExecutionContext,
     call_is_destructive,
@@ -52,30 +56,50 @@ class WidgetsMixin(ServerContext):
         a spec that fails validate_widget_spec is never surfaced or run)."""
         self._ensure_built()
         mode = self._mode()
-        safe_mode = mode is PolicyMode.SAFE
         widgets: list[dict] = []
         for row in self.store.list_widgets():
-            # Dev-created widgets are hidden while the Simple profile is active
-            # (policy.py) — and command widgets also fail SAFE-mode validation below.
-            if safe_mode and row.get("created_in_mode") == PolicyMode.OPEN.value:
-                continue
+            # Dev-created widgets are LISTED while the Simple profile is active,
+            # visibly disabled, instead of vanishing (owner decision 2026-08-06;
+            # docs/SAFETY.md owns the rule). They return untouched in Developer.
+            #
+            # DISPLAY ONLY — this marker is not what stops the widget running.
+            # _handle_widget_run refuses in SAFE before it touches the registry,
+            # with this very sentence, and the gate re-checks underneath that. If
+            # the flag and dispatch ever disagree, DISPATCH WINS.
+            unavailable = _unavailable_marker(
+                mode, row.get("created_in_mode"), _WIDGET_DEV_ABILITIES_MESSAGE
+            )
             try:
                 spec = json.loads(row["spec_json"])
             except ValueError:
                 continue
-            if validate_widget_spec(spec, mode) is not None:
+            # Render-time validation, against the mode this widget would actually
+            # run in: a dev-created row is judged by OPEN's vocabulary, because
+            # that is the profile it is waiting for. A spec that is broken THERE
+            # too is still dropped — a disabled card is for work that is merely
+            # waiting, never for a row nothing can read.
+            #
+            # A row whose spec needs developer abilities but is NOT stamped 'open'
+            # (a restored config, an older build, a hand-edited database) keeps
+            # failing SAFE validation here and stays hidden: what a row IS still
+            # decides what Simple may see, never what its stamp claims.
+            spec_mode = PolicyMode.OPEN if unavailable is not None else mode
+            if validate_widget_spec(spec, spec_mode) is not None:
                 continue
-            widgets.append(
-                {
-                    "id": row["id"],
-                    "spec": spec,
-                    "pinned": row["pinned"],
-                    "position": row["position"],
-                    # Display-only mode provenance for the frontend's "DEV" tag —
-                    # never consulted for permissions (the gate re-checks at run).
-                    "createdInMode": row.get("created_in_mode"),
-                }
-            )
+            widget = {
+                "id": row["id"],
+                "spec": spec,
+                "pinned": row["pinned"],
+                "position": row["position"],
+                # Display-only mode provenance for the frontend's "DEV" tag —
+                # never consulted for permissions (the gate re-checks at run).
+                "createdInMode": row.get("created_in_mode"),
+            }
+            # Absent entirely when the widget is usable — an available row keeps
+            # exactly the shape older frontends already parse.
+            if unavailable is not None:
+                widget["unavailable"] = unavailable
+            widgets.append(widget)
         return {"widgets": widgets}
 
     def _widget_set_pinned(self, params: dict) -> dict:
@@ -116,9 +140,10 @@ class WidgetsMixin(ServerContext):
         (routine.run / stats.get). The command runs through the SAME registry +
         gate path as a routine command step, so the per-invocation destructive
         prompt holds — clicking a widget can never skip a card the chat would
-        have shown. SAFE mode refuses before touching the registry (dev-created
-        widgets are already hidden from SAFE lists; this is the belt for a stale
-        frontend or a raced mode switch)."""
+        have shown. SAFE mode refuses before touching the registry: dev-created
+        widgets are LISTED in SAFE now (disabled, owner decision 2026-08-06), so
+        this refusal is the enforcement, not a belt — the list marker is display
+        only and a stale frontend, or a raced mode switch, lands here."""
         self._ensure_built()
         widget_id = params.get("id")
         row = self.store.get_widget(widget_id) if widget_id else None
@@ -150,11 +175,7 @@ class WidgetsMixin(ServerContext):
             self._audit_tool_by_id("run_command", spec, mode, "dev_only")
             self._respond(
                 request_id,
-                {
-                    "ok": False,
-                    "error": "That widget uses developer abilities, so it's waiting in "
-                    "Developer profile.",
-                },
+                {"ok": False, "error": _WIDGET_DEV_ABILITIES_MESSAGE},
             )
             return
         tool = self.tool_registry.get("run_command")

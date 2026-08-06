@@ -66,6 +66,14 @@ class Method:
     UNDO_REDO_LAST_ACTION = "undo.redoLastAction"
     ROUTINE_PROPOSE_FROM_CONVERSATION = "routine.proposeFromConversation"
     ROUTINE_CONFIRM_SAVE = "routine.confirmSave"
+    # routine.list rows: {id, name, description, runCount, lastRunAt, createdInMode,
+    # variables, planSteps?} — plus `unavailable` {reason, message} on a row the
+    # ACTIVE profile can't use (owner decision 2026-08-06: a dev-created routine is
+    # listed in Simple, visibly disabled, instead of vanishing). The key is ABSENT
+    # on a usable row. `reason` is an open slug vocabulary ("developer_abilities"
+    # today), never a boolean, so a later cause needs no shape change; `message` is
+    # the plain sentence to show, byte-identical to what routine.run refuses with.
+    # DISPLAY ONLY — dispatch, not this field, is what refuses the run.
     ROUTINE_LIST = "routine.list"
     ROUTINE_RUN = "routine.run"
     ROUTINE_DELETE = "routine.delete"
@@ -130,7 +138,10 @@ class Method:
     # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
     # pill or a whitelisted stat display. NEVER code. Widgets are proposed like
     # routines (draft-held-in-memory + explicit confirm) and saved LOW-risk.
-    WIDGET_LIST = "widget.list"                # {} -> {widgets: [{id, spec, pinned, position}]}
+    # {} -> {widgets: [{id, spec, pinned, position, createdInMode, unavailable?}]};
+    # `unavailable` is the same {reason, message} marker routine.list carries, on the
+    # same terms (absent when usable, display only). See ROUTINE_LIST above.
+    WIDGET_LIST = "widget.list"
     WIDGET_SET_PINNED = "widget.setPinned"     # {id, pinned} -> {ok, error?}
     WIDGET_DELETE = "widget.delete"            # {id} -> {ok}
     WIDGET_PROPOSE_FROM_CONVERSATION = "widget.proposeFromConversation"  # {} -> {title, kind, summary, spec}

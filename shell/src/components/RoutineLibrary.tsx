@@ -12,7 +12,8 @@
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
-import { asRecord, normalizeVariables } from "../lib/parse";
+import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
+import type { ArtifactUnavailable } from "../types/ui";
 import { RowAction, SurfaceRow } from "./Surface";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
@@ -37,6 +38,16 @@ interface RoutineRow {
   planSteps?: PlanStep[];
   /** The mode the routine was saved under ("safe" | "open"), when the core sends it. */
   createdInMode?: "safe" | "open";
+  /**
+   * Why this routine can't be used under the active profile, when the core says
+   * so — today: it was made with developer abilities and Simple is on. Such rows
+   * are LISTED and disabled rather than hidden (owner decision 2026-08-06), so
+   * switching profiles no longer looks like losing your work.
+   *
+   * Display only. Withholding Run here is a courtesy — the core refuses the run
+   * itself, with this same sentence.
+   */
+  unavailable?: ArtifactUnavailable;
 }
 
 interface RunOutcome {
@@ -52,8 +63,8 @@ interface Props {
   exposeRoutinePlan?: boolean;
   /**
    * OPEN/Developer mode is active — tag dev-created routines (created_in_mode
-   * "open") with the blocky "DEV" annotation. Simple never sees such routines
-   * (core-filtered), so this stays false there.
+   * "open") with the blocky "DEV" annotation. In Simple those routines appear as
+   * WAITING rows instead (they carry `unavailable`), so this stays false there.
    */
   developer?: boolean;
   /**
@@ -186,7 +197,9 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
         <SurfaceRow
           key={routine.id}
           tag={
-            developer && routine.createdInMode === "open" ? (
+            routine.unavailable ? (
+              <WaitingTag />
+            ) : developer && routine.createdInMode === "open" ? (
               <span className="mb-1 inline-block border-l-2 border-accent pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-accent">
                 Dev
               </span>
@@ -196,13 +209,18 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
           value={runSummary(routine)}
           actions={
             <>
-              <RowAction
-                disabled={running === routine.id}
-                ariaLabel={`Run ${routine.name}`}
-                onClick={() => startRun(routine)}
-              >
-                {running === routine.id ? "Running…" : "Run"}
-              </RowAction>
+              {/* No Run on a routine the active profile can't use: the click could
+                  only ever come back refused. Remove stays — it is the person's
+                  own routine and deleting it works in every profile. */}
+              {!routine.unavailable && (
+                <RowAction
+                  disabled={running === routine.id}
+                  ariaLabel={`Run ${routine.name}`}
+                  onClick={() => startRun(routine)}
+                >
+                  {running === routine.id ? "Running…" : "Run"}
+                </RowAction>
+              )}
               <RowAction
                 tone="danger"
                 ariaLabel={`Remove ${routine.name}`}
@@ -213,6 +231,12 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
             </>
           }
         >
+          {routine.unavailable && (
+            <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">
+              {routine.unavailable.message}
+            </p>
+          )}
+
           {filling === routine.id && (
             <div className="mt-2.5 border-l-2 border-rail pl-3.5">
               {routine.variables
@@ -262,6 +286,21 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
         </SurfaceRow>
       ))}
     </>
+  );
+}
+
+// The annotation on a routine the active profile can't use. Deliberately NOT the
+// accent "Dev" tag beside it: the accent means an action, a selection or live
+// state, and a row that is waiting is none of those — it sits on the inactive
+// 2px `rail` rule instead, the same way an unselected section label does.
+//
+// "Disabled" is said three ways, never colour alone (personas 54/68): this word,
+// the missing Run control, and the plain sentence under the row.
+function WaitingTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-rail pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-muted">
+      Waiting
+    </span>
   );
 }
 
@@ -330,6 +369,9 @@ function normalizeRoutines(result: unknown): RoutineRow[] {
       runCount: typeof r.runCount === "number" ? r.runCount : 0,
       lastRunAt: typeof r.lastRunAt === "number" ? r.lastRunAt : null,
       variables: normalizeVariables(r.variables),
+      // Why the active profile can't use it, when the core says so — the row is
+      // still listed, and reads as waiting rather than runnable.
+      unavailable: normalizeUnavailable(r.unavailable),
       // Present only under the Developer profile; absent (undefined) otherwise.
       planSteps: Array.isArray(r.planSteps) ? normalizePlanSteps(r.planSteps) : undefined,
       // The mode the routine was saved under, when the core forwards it (camel or
