@@ -6,11 +6,22 @@
 // that behavior: a late result must never resurrect stopped text or clobber a
 // newer turn's answer, and must not re-enable the composer.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, renderHook } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { act, render, renderHook } from "@testing-library/react";
 import { useTurn } from "../hooks/useTurn";
+import { ChatThread } from "../components/ChatThread";
 import { ipc } from "../ipc/client";
 import { setMotionEnabled } from "../lib/scramble";
+
+// Irrelevant here, and it drags a heavy async renderer into jsdom. Nothing else
+// is stubbed: the real Markdown component is the thing under test at the seam.
+vi.mock("../components/MermaidDiagram", () => ({ MermaidDiagram: () => null }));
+
+// jsdom ships no layout, so it ships no scrollIntoView; ChatThread's follow
+// effect calls it.
+beforeAll(() => {
+  Element.prototype.scrollIntoView = vi.fn();
+});
 
 // The hook only touches ipc.sendMessage on the tested paths; mock the whole
 // module so no Tauri context is needed (RawError is a type — erased at build).
@@ -275,8 +286,8 @@ describe("streamed text vs. the streaming scramble", () => {
   });
 
   // Settling does NOT cut the animation off where it stands. This is the whole
-  // reason replies looked like they arrived whole: the core sends the entire
-  // answer as one chunk immediately before returning the result, so the engine
+  // reason replies looked like they arrived whole: the core's last chunk lands
+  // immediately before it returns the result, so the engine's final push
   // and the settle land milliseconds apart, and a `finally` that killed the
   // engine left one frame of noise followed by the finished answer (owner report
   // 2026-07-26). Text that has fully arrived is a reveal, so it gets to finish.
@@ -309,7 +320,8 @@ describe("streamed text vs. the streaming scramble", () => {
 
   // The counterpart guard: an engine that has ALREADY caught up when the turn
   // settles is spent, and settling must clear it rather than promote it to a
-  // reveal that never ends (nothing would call `onDone` a second time).
+  // reveal that never ends. `onDone` reports every landing, but an idle engine
+  // has no landing left to report and no chunk is coming to give it one.
   it("clears a spent overlay when the turn settles", async () => {
     const { result } = sendAndStream();
 
@@ -325,6 +337,54 @@ describe("streamed text vs. the streaming scramble", () => {
     await act(async () => {
       deferreds[0].resolve({ text: TRUE_TEXT });
       await flushMicrotasks();
+    });
+
+    expect(result.current.streamDisplay).toBeNull();
+    expect(result.current.streamMessageId).toBeNull();
+    expect(result.current.messages.at(-1)).toMatchObject({
+      pending: false,
+      content: TRUE_TEXT,
+    });
+  });
+
+  // THE STUCK OVERLAY (owner screenshot, 2026-08-06). The core streams an answer
+  // as many small deltas, so the display CATCHES UP whenever the model pauses —
+  // between tool rounds, or just between tokens. That mid-turn catch-up used to
+  // spend the engine's one and only `onDone`, so every later landing was silent:
+  // `caughtUpRef` stayed false, the settle path promoted an engine that had
+  // already finished to a "reveal", and nothing was left to end it. The answer sat
+  // in plain pre-wrap text with the block cursor blinking after it — `**bold**` on
+  // screen as asterisks — for as long as the chat stayed open, while "Retry this
+  // answer" was offered beside it because the turn itself had settled fine.
+  //
+  // Named for the ordering, because that is the part that was missed: a catch-up
+  // BEFORE the last delta, not after it.
+  it("releases the overlay when a delta lands after an earlier one had caught up", async () => {
+    const args = makeArgs();
+    const { result } = renderHook(() => useTurn(args));
+    act(() => {
+      result.current.handleSend("have a look");
+    });
+
+    act(() => {
+      result.current.appendStreamedText(CHUNKS[0]);
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 20); // the display catches up while the model pauses
+    });
+    expect(result.current.streamDisplay).toBe(CHUNKS[0]);
+
+    // The model resumes, and the turn settles while that tail is still resolving.
+    act(() => {
+      result.current.appendStreamedText(CHUNKS[1] + CHUNKS[2]);
+    });
+    await act(async () => {
+      // The production shape: the result carries ids only, never the text.
+      deferreds[0].resolve({ assistantMessageId: "m-1" });
+      await flushMicrotasks();
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 60);
     });
 
     expect(result.current.streamDisplay).toBeNull();
@@ -364,10 +424,10 @@ describe("streamed text vs. the streaming scramble", () => {
 });
 
 // A reply whose text arrives in the RPC result rather than as a `streamChunk`.
-// The core does NOT take this path today (it emits the whole answer as one
-// chunk, and its result carries only message ids), so this covers the fallback
-// in `runTurn` — and it is the shape a reveal takes when the full length is
-// known up front. The honesty property from the streaming block above
+// The core does NOT take this path today (it relays the answer as `streamChunk`
+// notifications and its result carries only message ids), so this covers the
+// fallback in `runTurn` — and it is the shape a reveal takes when the full length
+// is known up front. The honesty property from the streaming block above
 // carries over unchanged and is the reason these tests exist: the overlay is
 // DECORATION over text that is already committed, so an interrupted reveal can
 // never cost the reader a character of the answer.
@@ -500,5 +560,108 @@ describe("revealing an answer that arrived whole", () => {
     expect(result.current.streamDisplay).toBeNull();
     expect(result.current.streamMessageId).toBeNull();
     expect(result.current.messages.at(-1)).toMatchObject({ content: ANSWER });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The seam: the hook's overlay state, and what the reader actually SEES.
+//
+// ChatThread's two halves are already pinned in chatThread.test.tsx — a revealing
+// message renders plain pre-wrap text, a settled one renders markdown — but both
+// take the overlay as a PROP. Neither can see the state useTurn really leaves
+// behind, and the stuck-overlay bug lived in exactly that gap: the component
+// rendered its props precisely as documented, over an overlay that never came
+// down, so an answer stayed as `**checklist or note widget**` on screen. These
+// two tests drive the hook and render its output, so the property (markdown once
+// it settles) and its deliberate exception (never mid-reveal) are enforced end to
+// end rather than described.
+// ---------------------------------------------------------------------------
+describe("what the thread shows for a turn useTurn has driven", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    setMotionEnabled(true);
+  });
+
+  // Two deltas with a pause between them — the ordering the core produces on any
+  // answer the model does not emit in one breath.
+  const HEAD = "Here is what I would do:\n\n";
+  const TAIL = "add a **checklist or note widget** to the rail.";
+
+  function thread(turn: ReturnType<typeof useTurn>, working: boolean) {
+    return render(
+      <ChatThread
+        messages={turn.messages}
+        onRetry={() => {}}
+        retryAvailable={!working}
+        onRewindTo={() => {}}
+        streamDisplay={turn.streamDisplay}
+        streamMessageId={turn.streamMessageId}
+      />,
+    );
+  }
+
+  it("renders the settled answer as markdown, not as asterisks", async () => {
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    act(() => {
+      result.current.handleSend("what should I add?");
+    });
+    act(() => {
+      result.current.appendStreamedText(HEAD);
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 20); // the display catches up during the pause
+    });
+    act(() => {
+      result.current.appendStreamedText(TAIL);
+    });
+    await act(async () => {
+      deferreds[0].resolve({ assistantMessageId: "m-1" });
+      await flushMicrotasks();
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 60);
+    });
+
+    const { container } = thread(result.current, result.current.isWorking);
+    expect(container.querySelector("strong")?.textContent).toBe("checklist or note widget");
+    expect(container.textContent).not.toContain("**");
+    // And the turn had settled, so Retry was on offer beside it — the exact frame
+    // from the owner's screenshot, with the answer formatted this time.
+    expect(container.textContent).toContain("Retry this answer");
+  });
+
+  // The exception, taken at the ONLY moment it decides anything: the turn has
+  // settled — so `pending` is already false and no longer suppresses anything —
+  // while the reveal plays on over text that has fully arrived. That window is
+  // what `!revealing` exists for, and it is where the asterisks are correct.
+  it("keeps a settled answer plain while its reveal is still running", async () => {
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    act(() => {
+      result.current.handleSend("what should I add?");
+    });
+    act(() => {
+      result.current.appendStreamedText(HEAD + TAIL);
+    });
+    await act(async () => {
+      deferreds[0].resolve({ assistantMessageId: "m-1" });
+      await flushMicrotasks();
+    });
+
+    // Settled, and still resolving: the answer is committed in full…
+    const settled = result.current.messages.at(-1)!;
+    expect(settled).toMatchObject({ pending: false, content: HEAD + TAIL });
+    expect(result.current.streamDisplay).not.toBe(HEAD + TAIL);
+
+    const { container } = thread(result.current, result.current.isWorking);
+    // …and NO markdown structure is parsed over it. A stray `#` in a frame would
+    // be a heading for 38ms and reflow the answer under the reader's eyes, which
+    // is why the frame is shown verbatim instead (ChatThread's file header).
+    expect(container.querySelector("strong")).toBeNull();
+    // The LAST body in the thread — the first one is what the person typed.
+    const bodies = container.querySelectorAll("[data-msg-text]");
+    expect(bodies[bodies.length - 1]?.textContent).toBe(result.current.streamDisplay);
   });
 });

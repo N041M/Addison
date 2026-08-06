@@ -323,10 +323,19 @@ describe("createStreamScramble", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  // `onDone` is documented "called once" and consumers tear down on it — useTurn
-  // drops the overlay, clears the revealing flag and releases the engine. Firing
-  // it again after a later push dismantles a reveal it never started.
-  it("reports done once, even when more text arrives after it caught up", () => {
+  // `onDone` is how a consumer learns the animation is over — useTurn drops its
+  // display overlay on it, handing the message back to markdown. It reports once
+  // per LANDING, and a paused-then-resumed stream lands more than once.
+  //
+  // This test used to assert the opposite ("done once, even when more text
+  // arrives"), and that assertion was the bug: the core streams an answer as many
+  // deltas, so the display catches up whenever the model pauses, and an engine
+  // that reported only its first landing left the overlay up for good — the
+  // answer stuck in plain pre-wrap text with a blinking cursor, asterisks and all
+  // (owner screenshot 2026-08-06). The hazard the old rule was standing in for —
+  // an emission reaching a torn-down consumer — is the next test, which holds it
+  // without refusing to report a landing that really happened.
+  it("reports done once per landing, and a resumed stream lands again", () => {
     const frames: string[] = [];
     let done = 0;
     const engine = createStreamScramble((f) => frames.push(f), { onDone: () => (done += 1) });
@@ -335,11 +344,37 @@ describe("createStreamScramble", () => {
     vi.advanceTimersByTime(38 * 20);
     expect(frames[frames.length - 1]).toBe("First half.");
     expect(done).toBe(1);
+    // Idling on that landing does not report it again, however long it sits.
+    vi.advanceTimersByTime(38 * 40);
+    expect(done).toBe(1);
 
     engine.push("First half. Second half.");
     vi.advanceTimersByTime(38 * 20);
     expect(frames[frames.length - 1]).toBe("First half. Second half.");
+    expect(done).toBe(2);
+  });
+
+  // `stop()` is a consumer saying it is finished with this engine. Both callbacks
+  // close over React state setters, so an emission after teardown writes to a hook
+  // that may be gone — and a `push` from a later turn must never resurrect the
+  // engine an earlier one released.
+  it("emits nothing at all once it has been torn down", () => {
+    const frames: string[] = [];
+    let done = 0;
+    const engine = createStreamScramble((f) => frames.push(f), { onDone: () => (done += 1) });
+
+    engine.push("First half.");
+    vi.advanceTimersByTime(38 * 20);
+    const after = frames.length;
     expect(done).toBe(1);
+
+    engine.stop();
+    engine.push("First half. Second half.");
+    vi.advanceTimersByTime(38 * 40);
+
+    expect(frames).toHaveLength(after);
+    expect(done).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("never renders more than has been received, however long it runs", () => {

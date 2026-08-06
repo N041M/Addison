@@ -229,9 +229,11 @@ export const STREAM_ADVANCE_CHARS = 5;
 /**
  * Roughly how long a whole-answer REVEAL should take, end to end.
  *
- * The core does not stream token by token: it emits the finished answer as a
- * single `conversation.streamChunk`, so the text arrives complete and would
- * otherwise appear in one frame. Revealing it with the same scramble language
+ * Some answers arrive whole: a provider that ignores `on_delta` is relayed as one
+ * finished `conversation.streamChunk` (`orchestrator.py`, `_DeltaRelay` — the
+ * `shown_this_send` fallback), so the text would otherwise appear in one frame.
+ * A provider that DOES stream sends many small deltas instead, and this same
+ * number paces the catch-up for those. Revealing it with the same scramble language
  * is the prototype's own behaviour — its canned reply is likewise whole, and it
  * animates it — but the prototype's fixed 5-chars-per-tick only reads well at
  * its demo length: a real 3,000-character answer would take ~23 seconds, which
@@ -255,7 +257,14 @@ interface StreamScrambleOptions {
    * honoured (see the clamp in `createStreamScramble`).
    */
   advanceChars?: number;
-  /** Called once, after the frame that lands on the exact received text. */
+  /**
+   * Called after the frame that lands on the exact received text — once per
+   * LANDING, not once per engine. A `push` can restart a landed engine (the
+   * stream paused and resumed), and that restart ends in a landing of its own
+   * that the caller has to hear about: useTurn drops its overlay on this signal,
+   * and an engine that reported only its first landing left the overlay up
+   * forever (owner screenshot 2026-08-06 — see the re-arm in `push`).
+   */
   onDone?: () => void;
 }
 
@@ -302,14 +311,27 @@ export function createStreamScramble(
   let caughtUp = false;
   // The streaming (no fixed rate) catch-up rate, in chars per tick.
   let adaptiveAdvance = STREAM_ADVANCE_CHARS;
-  // `onDone` is documented "called once" and consumers TEAR DOWN on it — useTurn
-  // drops the overlay and releases the engine — so a second call after a later
-  // push would dismantle a reveal it never started.
+  // Whether THIS landing has already been reported. Re-armed by a `push` that
+  // restarts the loop, because that is a new landing — see `onDone` above.
   let doneFired = false;
+  // Torn down for good. `stop()` is how a consumer says it is finished with this
+  // engine (useTurn's `endStream`, and the unmount cleanup), and after it nothing
+  // may reach the frame or done callbacks: they close over a hook's setters, and
+  // one that fires after teardown writes to state that is gone. This is the guard
+  // the one-shot `doneFired` was standing in for — and it holds for the case that
+  // actually mattered, rather than by refusing to report a landing that is real.
+  let stopped = false;
 
-  function stop(): void {
+  /** Park the loop. Idle, not finished — the next `push` picks up where it left
+   * off, which is what makes a pause in the stream a pause and not a restart. */
+  function clearLoop(): void {
     if (interval !== null) clearInterval(interval);
     interval = null;
+  }
+
+  function stop(): void {
+    stopped = true;
+    clearLoop();
   }
 
   function tick(): void {
@@ -351,7 +373,7 @@ export function createStreamScramble(
     if (resolved >= n) {
       caughtUp = true;
       adaptiveAdvance = STREAM_ADVANCE_CHARS;
-      stop();
+      clearLoop();
       if (!doneFired) {
         doneFired = true;
         options.onDone?.();
@@ -361,12 +383,23 @@ export function createStreamScramble(
 
   return {
     push(next: string): void {
+      if (stopped) return; // torn down; nothing may be emitted after that
       received = next;
       if (!isMotionEnabled()) {
         onFrame(received);
         return;
       }
       if (interval !== null) return; // already running; it will pick `next` up
+      // Restarting a landed engine is a NEW landing to report. The core streams
+      // an answer as many deltas, so the display catches up whenever the model
+      // pauses — and while `onDone` fired only once per ENGINE, that first
+      // mid-stream catch-up was the only one anyone heard about. useTurn drops its
+      // display overlay on this signal, so a message whose stream paused once and
+      // then resumed never got its markdown rendering back: it sat as plain text
+      // with a blinking cursor, for as long as the chat stayed open (owner
+      // screenshot 2026-08-06). One landing still reports once — the flag is
+      // re-armed here, where a restart is the thing being decided.
+      doneFired = false;
       // The FIRST frame is emitted SYNCHRONOUSLY, before any timer exists. The
       // caller sets "this message is being revealed" and receives this frame in
       // one React batch; scheduling the first frame 38ms out instead meant the

@@ -67,7 +67,7 @@ export function useTurn({
   // in place of the pending message's content while it is non-null, and the
   // moment the turn settles the overlay is dropped and the real content shows.
   // Scrambled glyphs must never be able to reach the message content — see
-  // `__tests__/streaming.test.tsx`, which pins exactly that.
+  // `__tests__/useTurn.test.tsx`, which pins exactly that.
   const [streamDisplay, setStreamDisplay] = useState<string | null>(null);
   // WHICH message the overlay decorates. The streaming path could key off the
   // `pending` flag, but the reveal below outlives it — the answer has landed,
@@ -273,9 +273,9 @@ export function useTurn({
       // The reply arrived with no `streamChunk` at all, so the text would appear
       // in a single frame. Reveal it with the scramble instead.
       //
-      // In production this branch does not run: the core delivers the answer as
-      // one `conversation.streamChunk` (the RPC result carries only ids, no
-      // text), so `streamTextRef` is already full and `finalText` is null. The
+      // In production this branch does not run: the answer reaches the webview as
+      // `conversation.streamChunk` notifications and the RPC result carries only
+      // ids, so `streamTextRef` is already full and `finalText` is null. The
       // scramble for that case is the engine `appendStreamedText` started, which
       // the `finally` below now lets finish. This stays as the fallback for a
       // reply that does carry its text in the result.
@@ -335,14 +335,22 @@ export function useTurn({
         // animation over text that has already landed. It ends itself.
         //
         // An engine still mid-resolve at this moment is exactly that case, and
-        // this is where every real turn lands. The core sends the whole answer as
-        // a single `streamChunk` immediately before returning the result, so the
-        // engine starts and the turn settles within the same handful of
-        // milliseconds — and killing it here meant one 15-character frame of
-        // noise and then the entire answer, which is why replies appeared to
-        // arrive whole (owner report 2026-07-26). Nothing further is coming for
-        // this turn, so the engine is finishing a reveal: promote it to one and
-        // let its `onDone` release the overlay.
+        // this is where every real turn lands. The core's last `streamChunk`
+        // arrives immediately before it returns the result, so the engine is
+        // pushed to and the turn settles within the same handful of milliseconds
+        // — and killing it here meant one 15-character frame of noise and then
+        // the entire answer, which is why replies appeared to arrive whole (owner
+        // report 2026-07-26). Nothing further is coming for this turn, so the
+        // engine is finishing a reveal: promote it to one and let its `onDone`
+        // release the overlay.
+        //
+        // `caughtUpRef` has to be TRUE-when-idle for this to be safe, and the
+        // engine is the only thing that can say so: it reports every landing, not
+        // just its first. When it reported only the first, an answer whose stream
+        // paused and resumed left this flag stuck at false, promoted a finished
+        // engine to a reveal, and the overlay never came down — the answer sat in
+        // plain pre-wrap text with the cursor blinking after it (owner screenshot
+        // 2026-08-06; `scramble.ts`, the re-arm in `push`).
         if (!caughtUpRef.current && streamRef.current) revealingRef.current = true;
         if (!revealingRef.current) endStream();
         // A turn just landed: refresh the sidebar so a new chat's auto-title
