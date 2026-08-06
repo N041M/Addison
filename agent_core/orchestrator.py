@@ -25,6 +25,7 @@ from agent_core.providers.base import (
     ProviderRequestRejected,
     ProviderUnavailable,
     ToolCallRequest,
+    server_detail_of,
     status_code_of,
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
@@ -839,6 +840,7 @@ class Orchestrator:
                     "outcome": outcome,
                     "status_code": status_code_of(exc),
                     "detail": str(exc) or None,
+                    "server_detail": server_detail_of(exc),
                     "created_at": int(time.time()),
                 }
             )

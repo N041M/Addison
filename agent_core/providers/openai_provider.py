@@ -36,6 +36,7 @@ from agent_core.providers.base import (
     ToolCallRequest,
     Usage,
     effective_timeout,
+    error_message_from_body,
     exception_for_http_status,
     iter_sse_json,
     open_stream,
@@ -171,7 +172,8 @@ class OpenAIProvider:
             # message as before; the new exception TYPE only lets the loop tell
             # "busy, try another" from "bad request" / "bad key" (D4).
             raise exception_for_http_status(
-                response.status_code, self._http_error_message(response.status_code)
+                response.status_code, self._http_error_message(response.status_code),
+                error_message_from_body(response),
             )
         return _translate_response(response.json())
 
@@ -200,7 +202,8 @@ class OpenAIProvider:
             ) as response:
                 if response.status_code >= 400:
                     raise exception_for_http_status(
-                        response.status_code, self._http_error_message(response.status_code)
+                        response.status_code, self._http_error_message(response.status_code),
+                        error_message_from_body(response),
                     )
                 return _translate_stream(iter_sse_json(response), on_delta)
         except httpx.HTTPError:

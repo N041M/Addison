@@ -522,6 +522,7 @@ erDiagram
         TEXT outcome "unavailable key_rejected auth_failed rejected"
         INTEGER status_code "NULL when it never reached a server"
         TEXT detail "the plain sentence the person saw; redacted on write"
+        TEXT server_detail "what the SERVER said; the diagnostic one"
         INTEGER created_at
     }
 ```

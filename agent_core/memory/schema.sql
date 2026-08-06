@@ -448,6 +448,11 @@ CREATE TABLE IF NOT EXISTS provider_attempts (
     status_code     INTEGER,
     -- The plain sentence the person was shown, redacted on write like tool_audit.
     detail          TEXT,
+    -- What the SERVER said, which is a different sentence and the diagnostic one.
+    -- Addison shows "The request to Google failed (status 404)"; Google says which
+    -- model and which API version. Recording only ours preserved our own guess
+    -- about a failure nobody understood. NULL when the body was unreadable.
+    server_detail   TEXT,
     created_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_provider_attempts_created

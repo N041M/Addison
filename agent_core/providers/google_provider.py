@@ -28,6 +28,7 @@ from agent_core.providers.base import (
     ToolCallRequest,
     Usage,
     effective_timeout,
+    error_message_from_body,
     exception_for_http_status,
     iter_sse_json,
     open_stream,
@@ -88,7 +89,8 @@ class GoogleProvider:
         response = self._post(headers, body, timeout)
         if response.status_code >= 400:
             raise exception_for_http_status(
-                response.status_code, _http_error_message(response.status_code)
+                response.status_code, _http_error_message(response.status_code),
+                error_message_from_body(response),
             )
         return _translate_response(response.json())
 
@@ -116,7 +118,8 @@ class GoogleProvider:
             ) as response:
                 if response.status_code >= 400:
                     raise exception_for_http_status(
-                        response.status_code, _http_error_message(response.status_code)
+                        response.status_code, _http_error_message(response.status_code),
+                        error_message_from_body(response),
                     )
                 return _translate_stream(iter_sse_json(response), on_delta)
         except httpx.HTTPError:

@@ -777,6 +777,7 @@ class Store:
         outcome: str,
         status_code: int | None,
         detail: str | None,
+        server_detail: str | None,
         created_at: int,
     ) -> None:
         """Record one provider call that FAILED (2026-08-07).
@@ -803,7 +804,7 @@ class Store:
         self._conn.execute(
             "INSERT INTO provider_attempts "
             "(id, conversation_id, provider, model, outcome, status_code, detail, "
-            " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " server_detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 id,
                 conversation_id,
@@ -812,6 +813,7 @@ class Store:
                 outcome,
                 None if status_code is None else int(status_code),
                 redact(detail).text if detail else detail,
+                redact(server_detail).text if server_detail else server_detail,
                 created_at,
             ),
         )
@@ -822,7 +824,7 @@ class Store:
         "why isn't Gemini working?" in one line instead of an evening."""
         rows = self._conn.execute(
             "SELECT id, conversation_id, provider, model, outcome, status_code, "
-            "       detail, created_at "
+            "       detail, server_detail, created_at "
             "FROM provider_attempts ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (int(limit),),
         ).fetchall()

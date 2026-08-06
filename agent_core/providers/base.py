@@ -131,7 +131,9 @@ class ProviderKeyRejected(ProviderAuthFailed):
     tell somebody to replace a key that works."""
 
 
-def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
+def exception_for_http_status(
+    status_code: int, message: str, server_detail: str | None = None
+) -> RuntimeError:
     """Classify a >=400 status into the hierarchy, carrying the caller's own plain
     message unchanged. 401/403 -> the key was rejected; 429 or 5xx -> unavailable;
     every other 4xx -> rejected. The order matters: auth is checked before the
@@ -154,6 +156,9 @@ def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
     else:
         exc = ProviderRequestRejected(message)
     exc.status_code = status_code  # type: ignore[attr-defined]
+    # The provider's own words, for the log only — never for the screen, which
+    # keeps the plain sentence ``message`` already carries.
+    exc.server_detail = server_detail  # type: ignore[attr-defined]
     return exc
 
 
@@ -165,6 +170,60 @@ def status_code_of(exc: BaseException) -> int | None:
     reply nobody sent."""
     code = getattr(exc, "status_code", None)
     return code if isinstance(code, int) else None
+
+
+# What a provider's error body is allowed to contribute to the log. Long enough
+# for the sentence that names the cause, short enough that a server which answers
+# an error with a page of HTML cannot fill the table.
+_MAX_SERVER_DETAIL = 400
+
+
+def server_detail_of(exc: BaseException) -> str | None:
+    """What the SERVER said, as opposed to what Addison told the person.
+
+    These are different sentences and only one of them is diagnostic. Addison
+    shows "The request to Google failed (status 404). Please try again." — plain
+    language, no jargon, the house rule and the right thing on screen. Google said
+    which model and which API version, and that is the sentence that ends an
+    investigation. Recording only ours meant the log faithfully preserved our own
+    guess about a failure we did not understand."""
+    detail = getattr(exc, "server_detail", None)
+    if not isinstance(detail, str):
+        return None
+    detail = detail.strip()
+    return detail[:_MAX_SERVER_DETAIL] or None
+
+
+def error_message_from_body(response: httpx.Response) -> str | None:
+    """The provider's own explanation, dug out of an error response.
+
+    Anthropic, OpenAI and Google all wrap it as ``{"error": {"message": ...}}``,
+    so one reader serves every provider rather than three that drift. Anything
+    unreadable — HTML from a proxy, an empty body, a truncated stream — yields
+    None, because a failure to explain a failure must never become a failure.
+
+    ``read()`` first, and that is not belt-and-braces: on the STREAMING path the
+    response arrives with its body deliberately unread (``open_stream`` returns as
+    soon as the status line lands), so ``.json()`` alone raises ``ResponseNotRead``
+    and every streamed failure — which is every failure a chat turn produces —
+    would explain nothing. Reading an ERROR response costs nothing; it is small by
+    construction and the stream is being abandoned either way."""
+    try:
+        if hasattr(response, "read"):
+            response.read()
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    return None
 
 
 # --- streaming primitives (shared by every streaming provider) --------------

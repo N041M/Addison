@@ -411,3 +411,40 @@ def test_a_throwing_attempt_sink_never_breaks_the_turn():
     orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
 
     assert [m.content for m in conv.messages if m.role == "assistant"][-1] == "done"
+
+
+def test_the_log_keeps_what_the_SERVER_said_not_only_what_addison_said():
+    """Two different sentences, and only one of them ends an investigation.
+
+    Addison shows "The request to Google failed (status 404). Please try again."
+    — plain language, the house rule, and the right thing on screen. The server
+    said WHICH model and WHICH API version. Recording only ours meant the log
+    faithfully preserved Addison's own guess about a failure nobody understood,
+    which is how a real 404 survived four rounds of theorising."""
+    rows: list[dict] = []
+    exc = exception_for_http_status(
+        404,
+        "The request to Google failed (status 404). Please try again.",
+        "models/gemini-2.5-flash is not found for API version v1beta, "
+        "or is not supported for generateContent.",
+    )
+    orch, conv = _build({"a": _Provider([exc]), "b": _Provider([_answer("x")])},
+                        [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    with pytest.raises(ProviderRequestRejected):
+        orch.run_turn(conv)
+
+    assert rows[0]["detail"].startswith("The request to Google failed")
+    assert "not found for API version v1beta" in rows[0]["server_detail"]
+
+
+def test_an_unreadable_error_body_records_no_server_detail():
+    """A failure to explain a failure must never become a failure. A proxy's HTML,
+    an empty body, a truncated stream — all yield None rather than raising."""
+    rows: list[dict] = []
+    exc = exception_for_http_status(500, "The service had a problem.", None)
+    orch, conv = _build({"a": _Provider([exc]), "b": _Provider([_answer("done")])},
+                        [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+    assert rows[0]["server_detail"] is None
