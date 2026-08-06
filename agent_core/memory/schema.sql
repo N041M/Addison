@@ -75,6 +75,15 @@ CREATE TABLE IF NOT EXISTS provider_config (
     base_url        TEXT,                          -- custom (OpenAI-compatible) server only
     catalog_json    TEXT,                          -- optional cached model catalog for this provider
     last_check_ok   INTEGER,                       -- 1/0/NULL: did the last connect ping pass
+    -- Is a key SAVED for this provider (plan §4.1)? 'present' | 'absent' | 'unknown'.
+    -- Non-secret by construction: it records WHETHER a key exists, never any part of
+    -- one. This column — not the OS keychain — is the authority for every presence
+    -- question with no person behind it, which is what retired the 60-second keychain
+    -- poll. 'unknown' MUST never read as "no key": see agent_core/secret_presence.py.
+    -- Distinct from `connected`, which records whether provider.connect's validating
+    -- request PASSED — a saved-but-rejected key is present + not connected.
+    secret_presence TEXT NOT NULL DEFAULT 'unknown'
+                        CHECK(secret_presence IN ('present','absent','unknown')),
     updated_at      INTEGER NOT NULL
 );
 -- Multi-provider (owner decision 2026-07-18): several providers can be connected

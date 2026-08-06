@@ -16,6 +16,7 @@ from agent_core.models_catalog import PROVIDER_IDS, provider_label
 from agent_core.providers.ollama_provider import is_running
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _GENERIC_TURN_ERROR
+from agent_core.secret_presence import SecretPresence
 
 _BAD_SCHEME = "Enter a web address that starts with http:// or https://."
 
@@ -242,7 +243,13 @@ def _valid_http_url(url) -> bool:
 class ProvidersMixin(ServerContext):
     def _connections(self, latency: list[dict]) -> list[dict]:
         """Ollama (probed live) + each connected cloud provider. Status/detail are
-        plain strings; there is NEVER any key material in this payload (§8.3)."""
+        plain strings; there is NEVER any key material in this payload (§8.3).
+
+        NOTHING HERE TOUCHES THE OS KEYCHAIN, and that is the point (plan §4.1). The
+        widget rail refreshes ``stats.get`` every 60 seconds, and this loop used to
+        ask the keychain "is a key saved?" for every provider without a stored row —
+        a presence question, on a timer, with no person behind it, answered by the one
+        call that can raise a password dialog. The stored row is the authority now."""
         conns: list[dict] = []
         try:
             ollama_up = is_running(self._ollama_base_url, self._ollama_client)
@@ -260,10 +267,7 @@ class ProvidersMixin(ServerContext):
         stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
         for provider_id in PROVIDER_IDS:
             cfg = stored.get(provider_id)
-            if cfg is not None:
-                connected = cfg["connected"]
-            else:
-                connected = provider_id != "custom" and self._provider_key_present(provider_id)
+            connected = cfg is not None and cfg["connected"]
             if not connected:
                 continue
             ms = latency_by_provider.get(provider_id)
@@ -279,23 +283,25 @@ class ProvidersMixin(ServerContext):
         return conns
 
     # --- provider connections (multi-provider, §4.1.1) --------------------
-    def _provider_key_present(self, provider_id: str) -> bool:
-        """Is a key stored for this provider? DISPLAY ONLY — it decides whether a
-        provider with no stored connection row renders as connected.
+    def _presence_now(self, provider_id: str) -> SecretPresence:
+        """What the keychain says about this provider's key, RIGHT NOW — the only
+        remaining OS-touching presence read outside the per-turn one, and it is
+        person-driven by construction: it runs inside `provider.connect`, which the
+        person reached by pressing Connect.
 
-        An unreadable keychain (the probe raises) reports False, i.e. "not
-        connected", which is the honest thing to render when Addison cannot see the
-        key: a row is either shown or not, and there is nowhere in that row to say
-        "couldn't tell". It costs nothing either, because no turn routes on this and
-        the shell caches a failed read, so a wrong False cannot become a password
-        dialog every time the widget rail polls."""
+        Free in practice on the healthy path: `_connect_provider` has already read the
+        same item a moment earlier, and the shell serves the second read from its
+        session cache without touching the OS.
+
+        A probe that RAISES is UNKNOWN, never absent — the plan's lesson 4. There is no
+        probe at all in CLI/tests, which is also UNKNOWN: no wiring is not evidence."""
         probe = self._provider_key_probe
         if probe is None:
-            return False
+            return SecretPresence.UNKNOWN
         try:
-            return bool(probe(provider_id))
+            return SecretPresence.PRESENT if probe(provider_id) else SecretPresence.ABSENT
         except Exception:
-            return False
+            return SecretPresence.UNKNOWN
 
     def _provider_list(self) -> dict:
         """provider.list -> {providers: [...]}. Carries ONLY non-secret status and
@@ -303,18 +309,18 @@ class ProvidersMixin(ServerContext):
         it is connected, and (when known) the added date, custom base URL, and the
         last connect-check result.
 
-        ``connected`` trusts a stored connection row exactly; only when there is NO
-        row does it fall back to 'a key is already in the keychain' — that fallback
-        exists so a legacy/migrated Anthropic key shows connected without a re-connect."""
+        ``connected`` is the stored connection row, exactly, and NOTHING here reads
+        the OS keychain (plan §4.1). The old no-row fallback ("a key is already in the
+        keychain") was a keychain read on a display path; it survives as a *recorded*
+        answer instead — ``Store.record_secret_presence`` writes the row the first time
+        the per-turn read proves a key is there, which is what keeps a legacy/migrated
+        Anthropic key showing connected without a re-connect."""
         self._ensure_built()
         stored = {c["provider_id"]: c for c in self.store.list_provider_configs()}
         rows: list[dict] = []
         for provider_id in PROVIDER_IDS:
             cfg = stored.get(provider_id)
-            if cfg is not None:
-                connected = cfg["connected"]
-            else:
-                connected = provider_id != "custom" and self._provider_key_present(provider_id)
+            connected = cfg is not None and cfg["connected"]
             row: dict = {
                 "id": provider_id,
                 "label": provider_label(provider_id),
@@ -335,7 +341,16 @@ class ProvidersMixin(ServerContext):
         stored by the Rust command; here the core pulls it from the keychain, makes ONE
         tiny validating request, and — on success — records metadata and folds the
         provider's models into the picker union. On failure it does NOT mark the provider
-        connected (the card offers Remove to clear the stored key)."""
+        connected (the card offers Remove to clear the stored key).
+
+        It also RECORDS PRESENCE (plan §4.1), on every branch. This is the person
+        pressing Connect, seconds after the Rust command wrote their key, so it is one
+        of the two occasions Addison legitimately learns whether a key is saved — and
+        writing it down here is what lets `stats.get`, `provider.list` and the catalog
+        gate answer the same question later without going near the OS. Presence and
+        `connected` are deliberately different facts: a key that saved fine and was
+        then REJECTED is `present` + not connected, and the difference is what stops
+        a rejected key being mistaken for no key at all."""
         self._ensure_built()
         provider_id = params.get("provider")
         base_url = (params.get("baseUrl") or "").strip() or None
@@ -374,12 +389,14 @@ class ProvidersMixin(ServerContext):
             # Provider errors already carry a plain, user-ready sentence. Record the
             # failed check WITHOUT marking connected, so provider.list shows it off.
             self.store.upsert_provider_config(
-                provider_id, connected=False, base_url=base_url, last_check_ok=False
+                provider_id, connected=False, base_url=base_url, last_check_ok=False,
+                secret_presence=self._presence_now(provider_id),
             )
             return {"ok": False, "error": str(exc)}
         except Exception:
             self.store.upsert_provider_config(
-                provider_id, connected=False, base_url=base_url, last_check_ok=False
+                provider_id, connected=False, base_url=base_url, last_check_ok=False,
+                secret_presence=self._presence_now(provider_id),
             )
             return {"ok": False, "error": _GENERIC_TURN_ERROR}
         self.store.upsert_provider_config(
@@ -388,6 +405,7 @@ class ProvidersMixin(ServerContext):
             added_at=int(time.time()),
             base_url=base_url,
             last_check_ok=True,
+            secret_presence=self._presence_now(provider_id),
         )
         self._set_provider_models(provider_id, models)
         return {"ok": True}

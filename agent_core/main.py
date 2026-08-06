@@ -72,9 +72,6 @@ from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
 from agent_core.rpc.constants import (
     _GENERIC_TURN_ERROR,
-    _KEY_MISSING,
-    _KEY_READY,
-    _KEY_UNREADABLE,
     _LOCAL_SETUP_BUSY_MESSAGE,
     _METHOD_NOT_FOUND,
     _NOT_BUILT_MESSAGE,
@@ -99,6 +96,7 @@ from agent_core.rpc.snapshots import SnapshotsMixin, snapshot_list_from_payloads
 from agent_core.rpc.undo import UndoMixin
 from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.rpc.workspace import WorkspaceMixin
+from agent_core.secret_presence import SecretPresence
 from agent_core.shell_bridge import IpcShellBridge, ServerShellBridge
 from agent_core.snapshots.snapshot_manager import (
     SnapshotManager,
@@ -522,8 +520,10 @@ class JsonRpcServer(
         # tiny request" to validate the provider, registers a provider instance per
         # model in the SAME ModelRouter, and returns that provider's catalog (raising
         # RuntimeError with a plain message on failure). ``provider_key_probe`` is a
-        # (provider_id) -> bool telling whether a key is stored (drives provider.list's
-        # implicit-connected state for a legacy/migrated key). Both None in CLI/tests
+        # (provider_id) -> bool telling whether a key is stored. It is NOT a presence
+        # source any more (plan §4.1 — provider_config is): the two callers left are
+        # both person-driven, provider.connect recording what it just learned and the
+        # post-restore keyless note. Both None in CLI/tests
         # that don't wire them — provider.* then reports metadata only, no live connect.
         self._connect_provider = connect_provider
         self._provider_key_probe = provider_key_probe
@@ -540,7 +540,7 @@ class JsonRpcServer(
         # None (CLI/tests), the key is treated as present — normal PRIMARY routing.
         # It may also RAISE RuntimeError, which is the third answer: the read itself
         # failed, so a key may well exist. ``_primary_key_status`` turns that into
-        # _KEY_UNREADABLE, and no keychain failure can reach the relay branch.
+        # SecretPresence.UNKNOWN, and no keychain failure can reach the relay branch.
         # ``primary_key_turn_probe`` is the same contract with `fresh` semantics —
         # used by the per-turn path only, so a person's message may retry past a
         # dismissed dialog while the launch/poll probes stay quiet. Falls back to
@@ -1370,49 +1370,62 @@ class JsonRpcServer(
             if source.exists():
                 source.rename(Path(f"{self._db_path}.damaged-{stamp}{suffix}"))
 
-    def _primary_key_status(self) -> str:
-        """Is a real PRIMARY key available right now — ready, missing, or unreadable?
+    def _primary_key_status(self) -> SecretPresence:
+        """Is a real PRIMARY key saved right now — present, absent, or unknown?
 
-        The probe IS the keychain read (main._primary_key_available reuses the
-        Anthropic getter), so its RuntimeError means the READ failed, not that no key
-        is saved. That distinction is the whole point of this method: a failed read
-        used to collapse to False, and False routes a Simple turn to the Setup
-        Assistant relay — so dismissing a macOS password dialog quietly sent the
-        person's message to an external service while their key sat in the keychain.
-        Unreadable is answered plainly by the caller instead; nothing leaves here.
+        **THE ONE CALLER WITH A PERSON BEHIND IT, and the only one that still reads
+        the OS.** Everything else answers presence from ``provider_config``
+        (plan §4.1); this runs on the person's own message, so a fresh read is both
+        affordable and correct — it is what lets a key added mid-conversation take
+        effect without a restart, and what makes a key deleted outside Addison stop
+        being claimed on the very next turn.
 
-        Anything OTHER than a RuntimeError still reads as missing: a probe that fails
-        in some way this code cannot interpret must not become a claim about a key.
+        The probe IS the keychain read, so its RuntimeError means the READ failed, not
+        that no key is saved. That distinction is the whole point: a failed read used
+        to collapse to False, and False routes a Simple turn to the Setup Assistant
+        relay — so dismissing a macOS password dialog quietly sent the person's
+        message to an external service while their key sat in the keychain. UNKNOWN is
+        answered plainly by the caller instead; ``may_reach_setup_relay`` is the single
+        place that rule lives.
+
+        Anything OTHER than a RuntimeError still reads as ABSENT: a probe that fails in
+        some way this code cannot interpret must not become a claim about a key.
 
         Prefers the TURN probe (fresh semantics — may retry past a dismissed dialog,
         because this method only runs on the person's own message) and falls back to
-        the plain probe when none is wired."""
+        the plain probe when none is wired.
+
+        What it learns is WRITTEN DOWN (``_record_presence``), which is how the
+        stored signal every other consumer reads stays true without anybody polling
+        the OS for it."""
         probe = self._primary_key_turn_probe or self._primary_key_probe
         if probe is None:
-            return _KEY_READY   # CLI/tests: no probe wired -> treat PRIMARY as ready
+            # CLI/tests: no probe wired -> treat PRIMARY as ready, and record nothing.
+            # A test harness's absence of a probe is not evidence about a keychain.
+            return SecretPresence.PRESENT
         try:
-            return _KEY_READY if probe() else _KEY_MISSING
+            presence = SecretPresence.PRESENT if probe() else SecretPresence.ABSENT
         except RuntimeError:
-            return _KEY_UNREADABLE
+            presence = SecretPresence.UNKNOWN
         except Exception:
-            return _KEY_MISSING
+            presence = SecretPresence.ABSENT
+        self._record_presence("anthropic", presence)
+        return presence
 
-    def _primary_key_available(self) -> bool:
-        """Ready-or-not, for the callers that only need to know whether a key fetch
-        is worth attempting at all (the live catalog load). An unreadable keychain
-        reads as not-available there — the same early return as no key, with nothing
-        shown to the person, so that path is unchanged.
+    def _record_presence(self, provider_id: str, presence: SecretPresence) -> None:
+        """Persist what a live read just proved, so no later question has to ask the OS.
 
-        Deliberately the PLAIN probe, never the turn probe: this runs on launch and
-        on polls, with no user action behind it, so it must not retry past a
-        remembered failure (that would re-raise a dismissed dialog unprompted)."""
-        probe = self._primary_key_probe
-        if probe is None:
-            return True   # CLI/tests: no probe wired -> treat PRIMARY as ready
+        NEVER RAISES and never fails a turn: this is bookkeeping beside the answer, not
+        the answer. A store that cannot be opened simply leaves the record as it was —
+        which is safe in both directions, because a stale record can only be PRESENT or
+        UNKNOWN (neither of which may reach the relay) or an ABSENT the next
+        person-driven read corrects."""
+        if self._store is None:
+            return
         try:
-            return bool(probe())
+            self.store.record_secret_presence(provider_id, presence)
         except Exception:
-            return False
+            pass
 
     # --- policy mode ------------------------------------------------------
     def _mode(self) -> PolicyMode:
@@ -1881,9 +1894,11 @@ def main() -> None:
         return bool(_fresh_anthropic_getter())
 
     def _provider_key_present(provider_id: str) -> bool:
-        # provider.list's implicit-connected signal for a legacy/migrated key. Raises
-        # like the getter on an unreadable keychain; each caller decides what that
-        # means for what it is rendering (rpc/providers: show it off, display only;
+        # The remaining PERSON-DRIVEN key probe. Polled callers no longer exist: the
+        # dot, provider.list and stats.get all read provider_config now (plan §4.1).
+        # What is left is provider.connect writing down what it just learned, and the
+        # post-restore keyless note. Raises like the getter on an unreadable keychain;
+        # each caller decides what that means (rpc/providers: UNKNOWN, never absent;
         # rpc/snapshots: drop the note rather than claim a key was removed).
         return bool(_provider_key_getter(provider_id)())
 

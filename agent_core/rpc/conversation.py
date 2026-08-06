@@ -12,12 +12,10 @@ from agent_core.providers.router import LOCAL_ONLY
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
     _BYOK_ONBOARDING_MESSAGE,
-    _KEY_MISSING,
-    _KEY_READY,
-    _KEY_UNREADABLE,
     _KEY_UNREADABLE_MESSAGE,
     _SERVER_ERROR,
 )
+from agent_core.secret_presence import SecretPresence, may_reach_setup_relay
 from agent_core.skills import compose_skills_prompt
 
 # Frozen copy (D6/D8). local_only's privacy invariant OUTRANKS the explicit picker
@@ -110,17 +108,19 @@ class ConversationMixin(ServerContext):
         # here rather than per branch — the probe is a keychain round-trip (§5). Only
         # a PRIMARY/default turn touches the key path; a LOCAL turn never probes.
         primary_role = requested_role in (None, ModelRole.PRIMARY)
-        key_status = self._primary_key_status() if primary_role else _KEY_READY
+        presence = (
+            self._primary_key_status() if primary_role else SecretPresence.PRESENT
+        )
 
         # A key Addison could not READ is not a key that isn't there, and the two
-        # must not share a branch: "missing" is onboarding, but "unreadable" is a
+        # must not share a branch: ABSENT is onboarding, but UNKNOWN is a
         # locked keychain or a password dialog nobody answered, with the person's own
         # key sitting behind it. Sending THAT turn to the Setup Assistant relay would
         # put their message on an external service because of a dialog — so this
         # answers here, before anything is persisted and before any model is called.
         # Both profiles get the same sentence: neither onboarding path applies when
         # the question "is there a key?" has no answer yet.
-        if key_status == _KEY_UNREADABLE:
+        if presence is SecretPresence.UNKNOWN:
             self._respond_error(request_id, _SERVER_ERROR, _KEY_UNREADABLE_MESSAGE)
             return
 
@@ -133,9 +133,12 @@ class ConversationMixin(ServerContext):
         # PRIMARY-capable setup, so the turn proceeds to normal routing; if that
         # provider is genuinely unreachable right now, the send fails with its own
         # plain sentence, which is honest — unlike the relay, which is silent.
-        if key_status == _KEY_MISSING and self._other_cloud_provider_connected():
-            key_status = _KEY_READY
-        primary_key_available = key_status == _KEY_READY
+        if presence is SecretPresence.ABSENT and self._other_cloud_provider_connected():
+            presence = SecretPresence.PRESENT
+        # The relay is reachable on ABSENT and on nothing else — ``may_reach_setup_relay``
+        # owns that rule (secret_presence.py), so this file cannot re-derive it as
+        # "not present" and quietly admit UNKNOWN.
+        primary_key_available = not may_reach_setup_relay(presence)
 
         # §4.7 onboarding by profile: the Developer profile is BYOK-first — with no
         # PRIMARY key it does NOT fall back to the Setup Assistant relay; it tells the

@@ -68,12 +68,23 @@ _EXCLUDED_TABLES: dict[str, str] = {
     "widget_state":     "what the person did with a widget, not configuration",
 }
 
-# Columns of a CAPTURED table that are deliberately not captured. Empty today.
-# Its existence is the point: test_capture_scope_covers_every_column_of_every_
-# captured_table compares each tuple above against PRAGMA table_info, so a new
-# column is either captured or a reviewed line of code here — never a silent
-# reset-to-default performed BY the recovery path.
-_EXCLUDED_COLUMNS: dict[str, tuple[str, ...]] = {}
+# Columns of a CAPTURED table that are deliberately not captured.
+# test_capture_scope_covers_every_column_of_every_captured_table compares each tuple
+# above against PRAGMA table_info, so a new column is either captured or a reviewed
+# line of code here — never a silent reset-to-default performed BY the recovery path.
+#
+# provider_config.secret_presence (plan §4.1, first entry here). It is an OBSERVATION
+# with a timestamp attached to it, not configuration: it records what a keychain read
+# proved at some past moment. Restoring one would assert a fortnight-old answer about
+# a store the person has been editing since — the plan's own snapshot caveat, but for
+# a field where the stale value is the claim itself rather than a flag beside it.
+# Leaving it out means a restore resets it to the schema default, 'unknown', which is
+# both the honest post-restore answer (Addison genuinely does not know any more) and
+# the safe one: 'unknown' can never read as "no key saved", so no restore can route a
+# turn to the external relay. The next person-driven read corrects it for free.
+_EXCLUDED_COLUMNS: dict[str, tuple[str, ...]] = {
+    "provider_config": ("secret_presence",),
+}
 
 # app_settings keys that survive a replace-all restore. One-way latches, not
 # reversible config: restoring a payload that predates the flag must not un-set

@@ -41,15 +41,13 @@ _BYOK_ONBOARDING_MESSAGE = (
 )
 
 # --- PRIMARY key status (§4.6) ------------------------------------------------
-# THREE outcomes, not two. "No key saved" and "the key could not be read" look the
-# same to a bool and are not the same thing at all: the first is onboarding, the
-# second is a locked keychain or a password dialog the person dismissed, with a
-# perfectly good key sitting behind it. Collapsed together, a failed read sent the
-# turn to the Setup Assistant relay — Addison would answer a BYOK user's message
-# through an external service because macOS asked for a password and got no answer.
-_KEY_READY = "ready"            # a usable key came back
-_KEY_MISSING = "missing"        # nothing saved -> today's onboarding, byte-for-byte
-_KEY_UNREADABLE = "unreadable"  # the read failed -> a key may exist; never onboard
+# THREE outcomes, not two — and they now live in ONE vocabulary,
+# ``agent_core.secret_presence.SecretPresence`` (present | absent | unknown), shared
+# with the stored ``provider_config.secret_presence`` column. There used to be a
+# second, parallel set of words here (ready/missing/unreadable) meaning exactly the
+# same three things, which is how a rule gets restated and then drifts. The relay
+# rule itself is ``may_reach_setup_relay`` and lives nowhere else.
+#
 # Said instead of running the turn when the read failed. It names the way out
 # (Allow, or re-add) and stays true whichever of the two happened. "your computer's
 # keychain" matches the wording already used on the connect card (rpc/providers.py).

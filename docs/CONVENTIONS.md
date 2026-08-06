@@ -92,15 +92,23 @@ reason; they went stale twice in a day, and a stale number reads as a claim.
 
 ## Environment facts
 
-- **Keychain prompts on every rebuild — fixed by signing, not by code.** Dev builds
-  are ad-hoc signed (`Signature=adhoc`, `TeamIdentifier=not set`, and the identifier
-  embeds a per-build hash), and macOS binds an "Always Allow" keychain decision to
-  the code-signing identity. So each `cargo build` looks like a new app and the
-  saved decision stops matching. `scripts/sign-dev-binary.sh` signs the dev binary
-  with a stable self-signed certificate; the one-time certificate creation is in its
-  header. Free — the $99 Apple Developer Program is for distribution (Gatekeeper),
-  not for this. Within one process `KEY_CACHE` already collapses provider-key reads
-  to one, so repeated prompts mean repeated rebuilds, not a cache miss.
+- **Keychain prompts were fixed by signing, not by code — and "Always Allow" now
+  STICKS across rebuilds (verified 2026-08-06).** An unsigned `cargo build` is ad-hoc
+  signed (`Signature=adhoc`, `TeamIdentifier=not set`, identifier embedding a
+  per-build hash), and macOS binds an "Always Allow" decision to the code-signing
+  identity — so each rebuild looked like a new app. **`shell/src-tauri/sign-and-run.sh`
+  is the live mechanism**: a cargo *runner* that signs each dev build as `Addison Dev`
+  with an EXPLICIT designated requirement and execs it, so a recompile presents a
+  byte-identical requirement and the granted ACL keeps matching. It fails open on a
+  machine without the identity (warns, runs unsigned). The one-time certificate
+  creation — including the TRUST step people get stuck on — is in
+  `scripts/sign-dev-binary.sh`'s header; that script is the superseded manual
+  predecessor and does **not** set the designated requirement, so do not reach for it
+  as the fix. Free: the $99 Apple Developer Program is for distribution (Gatekeeper),
+  not for this. Within one process `KEY_CACHE` still collapses provider-key reads to
+  one. Since 2026-08-06 a foreign item is also self-healed on the first successful
+  read ([BUILD-LOG](BUILD-LOG.md)), so a prompt inherited from an older build is a
+  one-off rather than a fixture of every session.
 
 
 - Python venv: `agent_core/.venv` (pytest, ruff, httpx). **Note:** when working

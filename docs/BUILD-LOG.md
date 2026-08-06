@@ -12,6 +12,82 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-06 — presence left the keychain, and every write heals
+
+Steps 1 and 2 of [secrets-and-keychain-plan.md](secrets-and-keychain-plan.md), which
+owns the design; this entry records what building them taught. Step 1: presence is a
+column (`provider_config.secret_presence`, three-way, `present | absent | unknown`)
+and no polled path asks the OS. Step 2: every credential write in `keychain.rs` is an
+explicit, verified delete-then-add, foreign items self-heal after a successful read,
+and an unchanged Save writes nothing.
+
+**§14 decision 6 — the one-click experiment — is ANSWERED, and it voids a paragraph
+of the plan.** Press *Always Allow* once, rebuild, relaunch: **no dialog.** Verified
+this session with a genuine recompile through `npm run tauri dev`, and confirmed by
+the owner. The plan's §4.2 "honest limit" said self-heal could only reset the clock to
+the next rebuild on dev builds, because spike 1 (07-31) had measured an app-created
+item prompting after a rebuild under the same certificate. What changed is not the
+keychain, it is the signature: `sign-and-run.sh` now passes an explicit designated
+requirement (`identifier "addison" and certificate leaf H"<cert>"`) instead of letting
+`codesign` fall back to a per-build `cdhash`, so the rebuilt binary presents a
+byte-identical requirement and the granted ACL still matches. **Self-heal is "once
+ever" on dev builds too**, and spike 1's conclusion is now history. Its 29 ms
+app-owned read is not history — it is the number the foreign-item threshold is
+calibrated against.
+
+What is worth carrying forward from building it:
+
+- **`connected` could not carry presence, and the plan's §4.1 assumed it would.**
+  "Did the validating request pass?" and "is a key saved?" are different facts, and a
+  key that saved fine and was then REJECTED is the case that separates them. Folding
+  them would have made a revoked key indistinguishable from no key — the exact
+  collapse the three-way rule exists to prevent, one column over. Hence a new column.
+- **The relay rule lives in ONE function, over three values, and the test asserts all
+  three.** `may_reach_setup_relay` is true of ABSENT and nothing else. The plausible
+  wrong version is `not present`, which is the 07-25 bug re-derived at a call site;
+  it passes a two-value test and dies on the three-value one.
+- **A "no row" is ABSENT, not UNKNOWN, and that needed arguing.** UNKNOWN is reserved
+  for what the plan names: a read that FAILED, and a row predating the column. A
+  provider Addison has never recorded a key for is a *recorded* state — it is the
+  claim `provider.list` has always made by rendering it as not connected. Making it
+  UNKNOWN would have meant a fresh keyless user attempting a live catalog fetch on
+  every `availableRoles`, which trades an OS read for a network request.
+- **The legacy implicit-connected fallback survived by being written down instead of
+  re-asked.** `provider.list` used to render "a key is in the keychain with no
+  connection row" as connected, computed by probing the OS. `record_secret_presence`
+  persists the same answer the first time the per-turn read proves it.
+- **A probe that RAISES is swallowed, so an OS-touch test must COUNT.** The first
+  version of `presence_is_answered_without_touching_the_os` used a probe that raised
+  `AssertionError` — and every honest presence caller wraps its probe in
+  `except Exception`, because an unreadable keychain must not be a stack trace. The
+  mutation that re-added the poll SURVIVED. A counter cannot be caught. This is the
+  general shape: **never assert by raising through code whose job is to swallow.**
+- **§5.4 cancels §4.2 unless it is qualified.** "Skip the write when the value is
+  unchanged" would short-circuit the person whose item is foreign out of the very
+  repair they need — pressing Save with nothing happening, which is the original
+  reported symptom. The skip therefore also requires that the item is not foreign and
+  that no repair has already lost the key.
+- **Foreignness is detectable without a new API.** A foreign item always prompts, and
+  a prompt always waits on a human — so a *successful read that waited* is a read of a
+  foreign item. 400 ms, against a measured 29 ms app-owned read. One-sided: a slow but
+  owned read costs one unnecessary (and verified) re-creation; a foreign read cannot
+  slip under the bar without a dialog nobody saw.
+- **The migration writes an item, and it must not then be healed.** The legacy
+  migration spends its time on the LEGACY item's dialog while creating a fresh
+  destination item under this build's identity. Elapsed time alone would have fired,
+  and Addison would have run the one data-losing operation against an item it minted
+  seconds earlier. Hence `OsRead.freshly_written`.
+- **Delete-then-add needs a fourth read outcome.** If the re-add cannot be made to
+  stick, the item is gone — and a later read finding nothing must not answer "no key
+  saved", which is the cue to onboard. `KeyRead::LostInRepair` carries a plain
+  sentence naming the only fix. `NothingSaved` stays a normal result; the two never
+  merge.
+- **What no test can reach, said out loud.** `get_provider_key`'s body needs a real OS
+  keychain, so two properties are pinned by source-level backstops instead (the save
+  path never calling `set_password`, the legacy delete gated on a verified copy), and
+  one — caching the key *before* healing, so a torn repair cannot cost the current
+  session — survived its mutation and is guarded by comment alone.
+
 ## What shipped 08-06 — dev-made artifacts are DISABLED in Simple, not hidden
 
 Owner decision, same day. Routines and widgets created in OPEN were filtered out

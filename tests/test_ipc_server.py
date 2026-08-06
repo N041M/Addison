@@ -24,6 +24,7 @@ from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
 from agent_core.providers.base import ModelProvider, ModelResponse, ToolCallRequest, Usage
+from agent_core.secret_presence import SecretPresence
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.tools.base import (
     MAX_PERMISSION_DETAIL_CHARS,
@@ -819,6 +820,18 @@ def _provider_server(tmp_path, connect_fn=None, key_probe=None, catalog=None):
     return h.server, h.reader, h.writer, h.thread
 
 
+def _record_anthropic_presence(tmp_path) -> None:
+    """Record what a person-driven read proves — the ONLY way anything is connected
+    now that presence lives in ``provider_config`` instead of the OS keychain
+    (plan §4.1). Written on the test's own connection, before the server starts, the
+    same way the running app writes it before anything polls."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        store.record_secret_presence("anthropic", SecretPresence.PRESENT)
+    finally:
+        store.close()
+
+
 def _no_key_material(writer: _FrameWriter, secret: str) -> None:
     """No captured frame may ever carry key material (invariant §8.3)."""
     blob = json.dumps(writer.frames)
@@ -826,16 +839,21 @@ def _no_key_material(writer: _FrameWriter, secret: str) -> None:
 
 
 def test_provider_list_reports_all_four_and_never_leaks_keys(tmp_path):
-    # A key-probe that reports anthropic connected (a legacy/migrated key), the rest not.
-    server, reader, writer, thread = _provider_server(
-        tmp_path, key_probe=lambda pid: pid == "anthropic"
-    )
+    # A RECORDED presence for anthropic (what a legacy/migrated key looks like once
+    # the per-turn read has written it down), the rest untouched. The probe EXPLODES:
+    # provider.list answers presence from provider_config and must never reach the OS
+    # keychain for it (plan §4.1).
+    def _never_call_me(_pid):
+        raise AssertionError("provider.list reached the keychain for a presence question")
+
+    _record_anthropic_presence(tmp_path)
+    server, reader, writer, thread = _provider_server(tmp_path, key_probe=_never_call_me)
     try:
         reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.PROVIDER_LIST})
         res = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
         providers = {p["id"]: p for p in res["providers"]}
         assert set(providers) == {"anthropic", "openai", "google", "custom"}
-        assert providers["anthropic"]["connected"] is True   # implicit via key probe
+        assert providers["anthropic"]["connected"] is True   # implicit via recorded presence
         assert providers["openai"]["connected"] is False
         # NON-secret metadata only — no key field anywhere.
         for p in res["providers"]:
@@ -1134,6 +1152,10 @@ def test_usage_recorded_after_turn_and_stats_get_shape(tmp_path):
     responses = [
         ModelResponse(text="Hello.", tool_calls=[], usage=Usage(input_tokens=100, output_tokens=40))
     ]
+    # stats.get renders connections from provider_config, never from a keychain probe
+    # (plan §4.1) — so the connected provider is a RECORDED row, written here the way
+    # provider.connect or the per-turn read writes it in the running app.
+    _record_anthropic_presence(tmp_path)
     server, reader, writer, thread = _widget_server(
         tmp_path, responses, key_probe=lambda pid: pid == "anthropic"
     )

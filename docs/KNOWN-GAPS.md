@@ -110,31 +110,51 @@ and where it goes.
   `/Applications/Addison.app`. It is the same owner call opened by steps 4 + 5 and
   is stated once, below; it is not restated here.
 
-**The keychain integration has a plan (2026-07-31):**
-[docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md). The
-double-password diagnosis first produced a ground-up encrypted-vault rewrite;
-scrutiny (60 findings) and two spikes then **turned it into a repair-first
-plan** — presence moves out of the keychain into the existing `provider_config`
-table, foreign items self-heal by delete-and-recreate, and `Intent` replaces the
-probe zoo. The vault survives as a documented destination with named triggers
-(step 7's MCP tokens, Android, or the Phase-3 identity rotation). Also new and
-independent of either path: a 401 currently changes nothing (a revoked key fails
-every turn forever), keys are trimmed only in the frontend, and G1's
-zeroization stops at the Python boundary — all three are written up in §5.
-**PROPOSED, not scheduled**; §14 lists the owner decisions.
+**The keychain integration has a plan (2026-07-31), and its first two steps are
+BUILT (2026-08-06):** [docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md).
+The double-password diagnosis first produced a ground-up encrypted-vault rewrite;
+scrutiny (60 findings) and two spikes then **turned it into a repair-first plan**.
+Steps 1 and 2 landed on 2026-08-06 — presence left the keychain for
+`provider_config.secret_presence`, and every credential write is now an explicit,
+verified delete-then-add with self-heal on top of it. **Steps 3–5 are still
+PROPOSED**: `Intent` and the background-caller re-arm (§4.3), launch reconciliation
+(§5.1), 401 handling (§5.2), store-boundary normalisation (§5.3), the shipped read
+counter (§5.6), and the click-anchored cards (§6). So these remain true today: a
+401 changes nothing (a revoked key fails every turn forever), keys are trimmed
+only in the frontend, and G1's zeroization stops at the Python boundary. The vault
+survives as a documented destination with named triggers (step 7's MCP tokens,
+Android, or the Phase-3 identity rotation). §14 lists the owner decisions;
+**decision 6 is now answered** — see [BUILD-LOG.md](BUILD-LOG.md).
 
-**The presence probe is no longer a theoretical cost — it was observed
-(2026-08-01).** The plan's first repair (move presence into `provider_config`)
-was argued from reading. It has now been watched happening: with
-`ADDISON_KEYCHAIN_TRACE=1`, `_primary_key_available()` (`main.py`) shows up as a
-real OS keychain read, because — as `main.py` says in its own words — **the probe
-IS the keychain read**, and it runs on polls with no user action behind it. On a
-machine whose items carry access lists written by builds that no longer exist,
-that is one password dialog PER POLL: roughly ten stacked at once in a single
-session, none of them dismissible, because each was orphaned when the app
-restarted. This does not change the plan; it changes how well-evidenced its
-first item is, and it is the concrete answer to "what does the probe zoo
-actually cost". **Still an owner call to schedule.**
+**The presence probe cost is CLOSED (built 2026-08-06).** It had been watched
+happening on 2026-08-01: with `ADDISON_KEYCHAIN_TRACE=1`, `_primary_key_available()`
+(`main.py`) showed up as a real OS keychain read, because **the probe IS the
+keychain read**, and it ran on polls with no user action behind it — roughly ten
+undismissible dialogs stacked in one session, each orphaned when the app restarted.
+Presence is now a SQLite column and no polled or launch-driven path reads a key to
+answer it; the `_connections` / `_provider_list` fallbacks and the server's
+`_primary_key_available` are gone. What is left is deliberate and person-driven: the
+per-turn read (`_primary_key_status`, still fresh, because it is the one caller with
+a person behind it), `provider.connect`, and the post-restore keyless note. The one
+caller class NOT yet fixed is the background pair the plan's §4.3 owns —
+`_maybe_load_live_catalog` and `_maybe_reconnect_saved_providers` still fetch a key
+value without a person behind them, which is why `FAILED_READS` survives in
+`keychain.rs` as a decline memory (§5.5) rather than being deleted with the poll.
+
+**Self-heal does NOT cover the device-identity item, deliberately (2026-08-06).**
+The plan's §4.2 says self-heal "applies to provider keys and the device-identity
+item alike". Only the provider keys got it. The reason is the asymmetry §7 of the
+plan already names: **a provider key can be pasted again from the vendor's website;
+the device identity's private half can be recovered by nobody.** Self-heal is a
+delete-then-add, and delete-then-add is the one operation in this subsystem that can
+lose data — so running it against the single irreplaceable secret needs its own
+verification pass, not a shared one. Consequence, stated plainly: on a build whose
+signing identity has rotated, the device item stays foreign and keeps costing one
+dialog per session, which is exactly the symptom self-heal exists to end. Doing it
+would mean at minimum a read-back verification that reconstructs and test-signs with
+the restored key before the old item is trusted as replaced, plus a decision about
+what the app should DO if the identity is lost (it cannot tell: it would mint a fresh
+one and the relay would see a brand-new device). Follow-up item, owner call.
 
 **A stable signing identity was NOT enough to make "Always Allow" stick, and the
 reason is worth keeping.** `sign-and-run.sh` was written on the premise that

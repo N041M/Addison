@@ -51,6 +51,7 @@ from agent_core.providers.base import (
     ProviderCapabilities,
 )
 from agent_core.providers.router import ModelRouter
+from agent_core.secret_presence import SecretPresence
 from agent_core.tools.registry import ToolRegistry
 
 _TEXT_RESPONSE = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
@@ -750,11 +751,27 @@ def test_all_supported_efforts_reach_provider(tmp_path, effort):
 # ===========================================================================
 # Server-level — lazy live-catalog swap on availableRoles
 # ===========================================================================
-def _live_server(tmp_path, *, key_probe, fetcher):
+def _record_presence(tmp_path, presence):
+    """Write what a person-driven read would have recorded about the Anthropic key.
+
+    The live-catalog gate reads ``provider_config.secret_presence`` and NEVER the OS
+    (plan §4.1), so a test that wants "a key is saved" says so here — the same way
+    ``provider.connect`` and the per-turn read say it in the running app."""
+    store = Store(tmp_path / "live.sqlite3")
+    try:
+        store.record_secret_presence("anthropic", presence)
+    finally:
+        store.close()
+
+
+def _live_server(tmp_path, *, key_probe, fetcher, presence=None):
     """A server seeded with the built-in fallback catalog/pool (like main()), plus a
     live ``fetcher`` and a provider factory that records the models it builds.
-    ``key_probe`` gates whether a swap is attempted; ``fetcher`` returns the live
-    catalog or raises."""
+    ``fetcher`` returns the live catalog or raises; ``presence`` is the RECORDED
+    answer to "is an Anthropic key saved?", which is what gates a swap. ``key_probe``
+    is still wired as the per-turn probe, but no presence question consults it."""
+    if presence is not None:
+        _record_presence(tmp_path, presence)
     fallback = load_cloud_catalog()
     fb_providers = {entry.id: _RecordingProvider(entry.id) for entry in fallback}
     default_id = default_cloud_model(fallback).id
@@ -816,7 +833,10 @@ _LIVE_CATALOG = [
 
 def test_available_roles_swaps_in_live_list_and_registers_providers(tmp_path):
     _server, reader, writer, router, made, thread = _live_server(
-        tmp_path, key_probe=lambda: True, fetcher=lambda: _LIVE_CATALOG
+        tmp_path,
+        key_probe=lambda: True,
+        fetcher=lambda: _LIVE_CATALOG,
+        presence=SecretPresence.PRESENT,
     )
     try:
         result = _ask_roles(reader, writer, 1)
@@ -832,9 +852,14 @@ def test_available_roles_swaps_in_live_list_and_registers_providers(tmp_path):
 
 
 def test_available_roles_keeps_fallback_until_key_appears(tmp_path):
-    key = {"present": False}
+    def _never_call_me():
+        raise AssertionError("a presence question reached the keychain probe")
+
     _server, reader, writer, _router, made, thread = _live_server(
-        tmp_path, key_probe=lambda: key["present"], fetcher=lambda: _LIVE_CATALOG
+        tmp_path,
+        key_probe=_never_call_me,
+        fetcher=lambda: _LIVE_CATALOG,
+        presence=SecretPresence.ABSENT,
     )
     try:
         # No key yet: no fetch attempted, the built-in fallback stands.
@@ -844,8 +869,10 @@ def test_available_roles_keeps_fallback_until_key_appears(tmp_path):
         ]
         assert made == {}
 
-        # Key saved; the frontend re-requests roles -> the live list swaps in.
-        key["present"] = True
+        # The key appears, and a person-driven path records it (a connect, or the
+        # per-turn read). The frontend re-requests roles -> the live list swaps in,
+        # with no keychain touch from the polled path at any point.
+        _record_presence(tmp_path, SecretPresence.PRESENT)
         second = _ask_roles(reader, writer, 2)
         assert [m["id"] for m in second["cloudModels"]] == ["claude-live-a", "claude-live-b"]
         assert set(made) == {"claude-live-a", "claude-live-b"}
@@ -872,7 +899,12 @@ def test_a_polled_availableRoles_never_touches_the_keychain_when_a_key_is_saved(
         )
 
     store = Store(tmp_path / "live.sqlite3")
+    # `connected` only, with `secret_presence` left at its schema default of
+    # 'unknown' — deliberately. UNKNOWN must never read as "no key", so the swap
+    # still happens; a version that gated on PRESENT alone would turn an
+    # unanswerable signal into "nothing saved", which is the 07-25 bug.
     store.upsert_provider_config(provider_id="anthropic", connected=True)
+    store.close()
 
     _server, reader, writer, _router, made, thread = _live_server(
         tmp_path, key_probe=_never_call_me, fetcher=lambda: _LIVE_CATALOG
@@ -899,7 +931,7 @@ def test_available_roles_retries_live_fetch_after_a_failure(tmp_path):
         return _LIVE_CATALOG
 
     _server, reader, writer, _router, made, thread = _live_server(
-        tmp_path, key_probe=lambda: True, fetcher=fetcher
+        tmp_path, key_probe=lambda: True, fetcher=fetcher, presence=SecretPresence.PRESENT
     )
     try:
         # First fetch fails -> fallback kept, nothing marked loaded.

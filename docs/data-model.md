@@ -144,6 +144,7 @@ erDiagram
         TEXT base_url "custom server only"
         TEXT catalog_json "cached catalog"
         INTEGER last_check_ok
+        TEXT secret_presence "present|absent|unknown"
         INTEGER updated_at
     }
     skills {
@@ -213,6 +214,21 @@ erDiagram
   went, `added_at` when the key was first connected, `base_url` is the custom
   OpenAI-compatible server's address (the one permitted `http://` case), and
   `catalog_json` an optional cached model catalog. API keys are never stored here.
+  `secret_presence` (2026-08-06, secrets-and-keychain plan §4.1) answers a DIFFERENT
+  question from `connected`: whether a key is **saved** for this provider, not whether
+  the validating request passed — a key that saved fine and was then rejected is
+  `present` and not `connected`. It is the authority for every presence question with
+  no person behind it, which is what retired the 60-second keychain poll: `stats.get`,
+  `provider.list` and the live-catalog gate read this column and never the OS. Three
+  values, never two: `present` | `absent` | `unknown`, and **`unknown` must never read
+  as "no key"** — that collapse is the 2026-07-25 relay-routing bug, and the rule lives
+  in exactly one function (`agent_core/secret_presence.py::may_reach_setup_relay`). It
+  is written by the two paths that genuinely learn the answer — `provider.connect`, and
+  the per-turn read in `_primary_key_status`, which stays a fresh keychain read because
+  it is the one caller with a person behind it. It is also the **only column excluded
+  from snapshot capture** (`snapshots/scope.py`): it is a timestamped observation about
+  a store the person has been editing since, so a restore resets it to `unknown` rather
+  than asserting a snapshot-era answer.
   Endpoints added by prompting (amendment §6.2) land here exactly like a normal
   provider, through `endpoint.confirmAdd` → `provider.connect` — reversible,
   snapshotted config. It carries **no** routing metadata: a model's `quality_rank` and

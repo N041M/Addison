@@ -34,6 +34,7 @@ from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel, EffortLevel
 from agent_core.providers.base import ModelResponse, ModelRole, ProviderCapabilities
 from agent_core.providers.router import ModelRouter
+from agent_core.secret_presence import SecretPresence
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
@@ -132,6 +133,17 @@ def _seeded_store(db_path: Path) -> Store:
     # profile.get shows the relaxed mode). The parsers' SAFE fallbacks are covered
     # by the junk-input tests; the fixtures pin the fullest real shape.
     store.set_setting("active_profile", "developer")
+    # Exactly one connected cloud provider → one "reachable" connection row in
+    # stats.get. It is a STORED ROW rather than a key probe because presence left
+    # the keychain (plan §4.1): stats.get is polled, so it answers from
+    # provider_config and never asks the OS whether a key is saved.
+    store.upsert_provider_config(
+        "anthropic",
+        connected=True,
+        added_at=_T0,
+        last_check_ok=True,
+        secret_presence=SecretPresence.PRESENT,
+    )
     for i, (provider, inp, out, ms) in enumerate(
         [("anthropic", 1200, 400, 850), ("anthropic", 300, 90, 640), ("openai", 500, 120, 720)]
     ):
@@ -304,8 +316,6 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # Ollama probe fails fast → the deterministic "idle / not running" row.
         ollama_base_url="http://127.0.0.1:11434",
         ollama_client=httpx.Client(transport=httpx.MockTransport(_down)),
-        # Exactly one connected cloud provider → one "reachable" connection row.
-        provider_key_probe=lambda provider_id: provider_id == "anthropic",
     )
     server._ensure_built()
     return {

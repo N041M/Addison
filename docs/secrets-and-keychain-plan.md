@@ -1,10 +1,18 @@
 # Secrets and the keychain — the plan
 
-**Status: PROPOSED, not scheduled.** Drafted 2026-07-31 as a ground-up vault
-redesign; **revised the same day to a repair-first plan** after a six-lens
-adversarial review (60 findings), two live spikes, and two verifications that
-undercut the rewrite's own justification. §15 records what changed and why.
-Owner decisions: §14. ROADMAP owns scheduling.
+**Status: steps 1 and 2 BUILT (2026-08-06); steps 3–5 PROPOSED.** Drafted
+2026-07-31 as a ground-up vault redesign; **revised the same day to a repair-first
+plan** after a six-lens adversarial review (60 findings), two live spikes, and two
+verifications that undercut the rewrite's own justification. §15 records what
+changed and why. Owner decisions: §14 — **decision 6 is now answered, and its
+answer voids §4.2's honest limit** (see there). ROADMAP owns scheduling.
+
+**What is built** (per §13's order, and each section says so in place): §4.1
+presence in `provider_config.secret_presence`, three-way, with the relay rule in one
+function; §4.2 delete-then-add on every credential write, plus self-heal for provider
+keys; §5.4 idempotent writes. **What is not**: §4.3 `Intent` and the background-caller
+re-arm, §5.1 reconciliation, §5.2 401 handling, §5.3 normalisation, §5.6 the read
+counter, §6 the cards.
 
 **The recommendation in one line: repair the existing integration — the three
 changes in §4 kill every measured symptom — and keep the encrypted vault as a
@@ -66,13 +74,17 @@ probe/getter symbols and a 342-line failure-mode test file.
 9. **`keyring` hid what mattered** *at diagnosis time* — no attributes-only
    query, no ACL control, and it silently chose the legacy SecKeychain API.
    (§4.4 keeps it anyway, on measured terms.)
-10. **(Spike 1, 07-31.) Under a self-signed identity, creator trust does not
-    survive a rebuild.** An item created by an "Addison Dev"-signed binary read
-    back silently from that binary (29 ms) and **prompted from a rebuilt binary
-    signed with the same certificate**. Without a team ID there is no stable
-    partition for trust to anchor to, so the Chrome/VS Code zero-prompt steady
-    state needs an **Apple-issued identity** (Phase 3). Dev floor: silent across
-    relaunches, one sequence per *rebuild* — matching the owner's own report.
+10. **(Spike 1, 07-31 — SUPERSEDED 2026-08-06, kept as the measurement it was.)**
+    It read: under a self-signed identity, creator trust does not survive a rebuild.
+    An item created by an "Addison Dev"-signed binary read back silently from that
+    binary (29 ms) and **prompted from a rebuilt binary signed with the same
+    certificate**. The 29 ms is still the number self-heal's detection threshold is
+    calibrated against. The CONCLUSION is void: the rebuilt binary presented a
+    per-build `cdhash` designated requirement, and `sign-and-run.sh` now names the
+    requirement explicitly, so a recompile presents the same identity and the ACL
+    keeps matching (§4.2, and §14 decision 6). An Apple-issued identity is still
+    wanted for distribution, but the dev floor is now zero prompts in the steady
+    state, not one sequence per rebuild.
 11. **(Spike 2, 07-31.) The data-protection keychain is measured, not assumed:**
     `kSecUseDataProtectionKeychain` fails `-34018 errSecMissingEntitlement`
     under current signing. The Phase-3 deferral now has an error code.
@@ -117,7 +129,17 @@ then adds an envelope, a file layer, and a migration.
 
 ### 4.1 Presence leaves the keychain
 
-`provider_config.connected` (already in the schema, already non-secret) becomes
+**BUILT 2026-08-06.** As built it is a NEW column, `provider_config.secret_presence`,
+not `connected` — the two answer different questions and collapsing them would have
+made a saved-but-rejected key indistinguishable from no key. `connected` still means
+"did `provider.connect`'s validating request pass". Written by `provider.connect` and
+by the per-turn `_primary_key_status`, which keeps its fresh keychain read because it
+is the one caller with a person behind it. The vocabulary and both rules live in
+`agent_core/secret_presence.py`; the column is excluded from snapshot capture (see the
+caveat below, which that choice answers). Deleted with it: the `_connections` /
+`_provider_list` probe fallbacks and `JsonRpcServer._primary_key_available`.
+
+`provider_config` (already in the schema, already non-secret) becomes
 the authority for *"is a key saved for this provider?"* Written on
 store/delete/connect; read by everything that renders a dot, gates routing, or
 answers `provider.list` / `stats.get` / `availableRoles`.
@@ -143,6 +165,9 @@ which is the worse lie.
 
 ### 4.2 Self-heal: repair a foreign item by re-creating it
 
+**BUILT 2026-08-06**, for provider keys only — see the scope note at the end of this
+section, which is a deliberate departure from what it used to say.
+
 A keychain item's ACL — the list of apps that may read it without asking — is
 minted **at creation**, with the creating app on it. That is why creating never
 prompts, reading your own item never prompts, and reading someone else's always
@@ -166,12 +191,36 @@ under the old foreign ACL, and a user's instinct ("I'll just save it again")
 accomplishes nothing. **Every write of a credential item is delete-then-add,
 explicitly.** §5.4 keeps that from causing needless churn.
 
-Applies to provider keys and the device-identity item alike.
+**Scope as built: provider keys ONLY.** This paragraph used to read "applies to
+provider keys and the device-identity item alike", and that was the wrong call. A
+provider key can be pasted again from the vendor's website; the device identity's
+private half can be recovered by nobody (§7). Self-heal IS a delete-then-add, i.e.
+the one operation here that can lose data, so it does not get pointed at the single
+irreplaceable secret on the strength of a shared implementation. The cost — the
+device item stays foreign after an identity rotation, one dialog per session — and
+what a future pass would have to add are written up in
+[KNOWN-GAPS.md](KNOWN-GAPS.md).
 
-**Honest limit:** spike 1 showed that under the self-signed dev cert even an
-app-created item prompts after a rebuild, so on dev builds self-heal resets the
-clock to the next rebuild rather than "once ever". With an Apple-issued identity
-it is once ever.
+**Detection, as built.** Nothing in the API says "this item is foreign", so the
+signal is elapsed time: a foreign item ALWAYS prompts, and a prompt always waits on
+a human, so a *successful read that waited* is a read of a foreign item. Spike 1
+measured an app-owned read at 29 ms; the threshold is 400 ms
+(`FOREIGN_READ_THRESHOLD`). One-sided and cheap in both directions — a slow but
+app-owned read costs one unnecessary, verified re-creation, and a foreign read
+cannot slip under the bar without a dialog nobody saw.
+
+**~~Honest limit~~ — VOID as of 2026-08-06.** This section used to say: *"spike 1
+showed that under the self-signed dev cert even an app-created item prompts after a
+rebuild, so on dev builds self-heal resets the clock to the next rebuild rather than
+'once ever'."* That is **no longer true**, and the reason is that spike 1 measured a
+build signed with a `cdhash` designated requirement. `sign-and-run.sh` now passes an
+explicit one (`identifier "addison" and certificate leaf H"<cert>"`), so a genuine
+recompile produces a byte-identical requirement and the granted ACL keeps matching.
+Verified 2026-08-06 (§14 decision 6's experiment; evidence in
+[BUILD-LOG.md](BUILD-LOG.md)): a real rebuild through `npm run tauri dev` raised no
+dialog, and the owner confirmed Always Allow now holds. **Self-heal is therefore
+"once ever" on dev builds too.** Lesson 10 in §2 is the pre-fix measurement and
+should be read as history, not as current behaviour.
 
 ### 4.3 `Intent` replaces the probe zoo
 
@@ -279,10 +328,19 @@ it converts a mystifying 401 into a fixable message.
 
 ### 5.4 Idempotent writes — don't churn the ACL
 
-Since every write is now delete-then-add (§4.2), a naive "Save" on an unchanged
-value would needlessly destroy and re-mint an item. Read-compare-then-write: if
-the stored value is byte-identical, do nothing. (The comparison is a read we may
-already have cached; it never adds a promptable access on the healthy path.)
+**BUILT 2026-08-06.** Since every write is now delete-then-add (§4.2), a naive
+"Save" on an unchanged value would needlessly destroy and re-mint an item.
+Read-compare-then-write: if the stored value is byte-identical, do nothing. (The
+comparison is a read we may already have cached; it never adds a promptable access
+on the healthy path.)
+
+Two conditions were added while building it, because §5.4 as written cancels §4.2.
+The short-circuit ALSO requires that the item is not foreign, and that the provider
+is not on the repair-lost list. Without the first, a person re-saving the same key
+onto an item this build cannot read without a dialog would be short-circuited out of
+the very repair they need — pressing Save forever with nothing happening, which is
+the original reported symptom. Without the second, a Save after a torn write would
+compare against the session cache and skip writing to a keychain that holds nothing.
 
 ### 5.5 Decline backoff — never a dialog the person did not ask for
 
@@ -326,11 +384,12 @@ rules (variant words only, never a value, a length, or a prefix).
   UI shows an explained card and **its button performs the read**. A password
   sheet never lands on top of a person's first message with a 600 s budget
   behind it — the worst timing for personas 54 and 68.
-- **Steady state:** zero dialogs with an Apple-issued identity; with the dev
-  cert, spike 1's measured floor — silent across relaunches, one sequence per
-  rebuild. `sign-and-run.sh` fails open, so the shell **detects its own signing
-  state** and the card says plainly *"Always Allow won't stick on this build"*
-  rather than letting dialogs recur unexplained.
+- **Steady state:** zero dialogs, with an Apple-issued identity AND — since
+  2026-08-06 — with the self-signed dev cert, once `sign-and-run.sh` has named the
+  designated requirement explicitly (§4.2, §14.6). `sign-and-run.sh` still fails
+  open, so the shell should detect its own signing state and say plainly *"Always
+  Allow won't stick on this build"* when it is genuinely ad-hoc — that is now the
+  UNSIGNED case only, not every dev build.
 - **Declined:** remembered for the session; a persistent, non-dismissible row in
   the Settings provider card plus a chat notice, carried to the webview on the
   existing `provider.list`/`stats.get` responses (no new event channel).
@@ -396,7 +455,7 @@ safely.
 
 | Platform | Store | Dialogs | Attrs-only presence | Self-heal |
 |---|---|---|---|---|
-| **macOS** | login keychain | 0 (Apple ID) / per-rebuild (dev cert) | `SecItem*`, verified | needed, implemented |
+| **macOS** | login keychain | 0 (Apple ID **and**, since 2026-08-06, the signed dev cert — §4.2) | `SecItem*`, verified | needed, **built for provider keys**; device identity deferred |
 | **Windows** | Credential Manager (DPAPI-backed) | **0 — no credential-ACL prompt mechanism exists** | `CredEnumerate` metadata | not needed (no ACL) |
 | **Linux** | Secret Service | 0 with a login-unlocked collection; ≤1 collection unlock/session | attribute search without secret | not needed |
 | **iOS** | data-protection keychain, app-scoped by entitlement | **0 — the mechanism does not exist** | same crate | not needed |
@@ -498,18 +557,29 @@ will contain them again unless it is checked against this list.
 
 ## 12. Tests
 
-New: `launch_makes_zero_promptable_os_touches` (panicking fake, full RPC boot,
-100× polls; attrs-only permitted and counted),
-`background_intent_never_touches_the_os`,
-`a_session_never_makes_a_second_promptable_os_access` (counting fake),
-`presence_is_answered_without_touching_the_os`,
+BUILT with steps 1–2 (2026-08-06): `presence_is_answered_without_touching_the_os`,
 `unknown_presence_never_reads_as_no_key`,
 `a_foreign_item_is_re_created_after_a_successful_read`,
 `a_write_is_never_an_update_in_place`,
+`an_unchanged_save_does_not_re_create_the_item` — plus, unplanned and earned during
+the build: `a_write_is_never_reported_successful_without_reading_it_back`,
+`a_write_that_cannot_delete_leaves_the_old_key_exactly_where_it_was`,
+`a_lost_repair_is_never_reported_as_nothing_saved`,
+`a_migration_never_heals_the_item_it_just_created`, and two source-level backstops
+(`the_shipped_save_path_never_calls_set_password_directly`,
+`the_legacy_migration_deletes_only_against_a_verified_copy`) for the wiring no
+in-process test can reach without an OS keychain. **Note the counting fakes:** a
+probe that RAISES is swallowed by the `except Exception` every honest presence caller
+wraps it in, so the OS-touch assertion must COUNT, not raise — a raising version of
+`presence_is_answered_without_touching_the_os` survived its own mutation.
+
+Still to come with steps 3–5: `launch_makes_zero_promptable_os_touches` (panicking
+fake, full RPC boot, 100× polls; attrs-only permitted and counted),
+`background_intent_never_touches_the_os`,
+`a_session_never_makes_a_second_promptable_os_access` (counting fake),
 `reconciliation_at_launch_raises_no_dialog`,
 `a_401_marks_the_provider_and_a_429_does_not`,
 `a_key_with_a_line_break_is_refused_at_the_store_boundary`,
-`an_unchanged_save_does_not_re_create_the_item`,
 `a_declined_read_is_retried_only_from_the_card`,
 `a_timed_out_read_neither_declines_nor_double_reads`,
 `a_restored_snapshot_never_resurrects_a_key_only_a_flag`.
@@ -532,11 +602,14 @@ zero-dialog line), TESTING-CHECKLIST.md, CONVENTIONS.md.
 
 Each step lands green and is independently useful:
 
-1. **Presence to `provider_config`** + three-way `secret_presence` + the routing
-   rule. Deletes the poll, `FAILED_READS`, and most of the probe zoo. *Biggest
-   win, smallest risk, no OS-behaviour dependency.*
-2. **Self-heal + delete-then-add + idempotent writes** (§4.2, §5.4). *Closes the
-   reported bug class permanently.*
+1. ~~**Presence to `provider_config`** + three-way `secret_presence` + the routing
+   rule.~~ **BUILT 2026-08-06.** Deleted the poll and most of the probe zoo.
+   `FAILED_READS` SURVIVES, narrowed: it is no longer a presence cache, but the two
+   §4.3 background callers still fetch key *values* without a person behind them, so
+   it stays as the §5.5 decline memory until step 3 lands. Deleting it now would let
+   a launch task re-raise a dialog the person had dismissed.
+2. ~~**Self-heal + delete-then-add + idempotent writes** (§4.2, §5.4).~~ **BUILT
+   2026-08-06**, provider keys only (§4.2).
 3. **`Intent`** + the unlock re-arm for the two Background consumers (§4.3).
 4. **Reconciliation, 401 handling, key normalisation, the read counter**
    (§5.1–5.3, §5.6) — product-facing, independent of each other.
@@ -555,10 +628,11 @@ Each step lands green and is independently useful:
 5. **Phase 3**: Apple-issued identity (the only thing that makes R4 absolute),
    data-protection keychain (precondition measured, spike 2), Secure Enclave for
    the device identity (P-256 — a relay-contract change).
-6. **A one-click experiment only you can run:** press **Always Allow** once on
-   the dev build, rebuild, relaunch. No dialog ⇒ the partition edit is durable
-   under the self-signed cert and the dev floor improves from per-rebuild to
-   once-ever. Either result belongs in BUILD-LOG.
+6. ~~**A one-click experiment only you can run:**~~ **ANSWERED 2026-08-06 — no
+   dialog.** Always Allow, a genuine recompile through `npm run tauri dev`, relaunch:
+   the ACL still matched, because the explicit designated requirement makes the
+   rebuilt binary present the same identity. The dev floor is **once-ever**, not
+   per-rebuild, and §4.2's honest-limit paragraph is void. Evidence in BUILD-LOG.
 
 ## 15. Record
 

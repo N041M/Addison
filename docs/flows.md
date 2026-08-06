@@ -280,6 +280,7 @@ sequenceDiagram
     P-->>SRV: 200 ok, or 401/timeout
     Note over SRV: a restore point is taken per connect ATTEMPT, before it<br/>(reason "provider_connect", or "add_endpoint" for a custom server)
     Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false, so provider.list shows it off
+    Note over SRV: EVERY branch also records secret_presence (present/absent/unknown).<br/>That column — never the OS — answers every later presence question:<br/>provider.list, stats.get and the live-catalog gate (data-model.md)
     SRV-->>UI: {ok: true} or {ok: false, error}
     UI->>SRV: provider.list + model.availableRoles (refresh)
 ```

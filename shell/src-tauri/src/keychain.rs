@@ -21,7 +21,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -66,9 +66,16 @@ fn cache_evict(provider: &str) {
 
 /// Provider ids whose last OS read FAILED for a reason other than "nothing saved" —
 /// a denied or dismissed password dialog, or a keychain error. Those are answered
-/// from here without touching the OS again, because the widget rail polls
-/// `stats.get` every 60 seconds and each poll probes for a key: without this a
-/// single denial becomes a fresh password dialog every minute, forever.
+/// from here without touching the OS again.
+///
+/// **NO LONGER A PRESENCE CACHE** (secrets-and-keychain plan §4.1, built 2026-08-06).
+/// It existed because the widget rail polled `stats.get` every 60 seconds and each
+/// poll probed the keychain for a key, so a single denial became a fresh password
+/// dialog every minute, forever. That poll is gone: "is a key saved?" is answered
+/// core-side from `provider_config.secret_presence` and never reaches this file. What
+/// is left is the DECLINE MEMORY (plan §5.5) for the callers that genuinely want a
+/// value without a person behind them — the background catalog load and the saved-
+/// provider reconnect — so a dismissed dialog is not re-raised by a launch task.
 ///
 /// TRADE-OFF, stated plainly: a denial holds for the rest of the session. The retry
 /// signal is the USER acting on the key — `store_provider_key` and
@@ -216,6 +223,168 @@ fn account_for_provider(provider: &str) -> String {
     format!("provider-key:{provider}")
 }
 
+// ===========================================================================
+// WRITES: delete-then-add, always — and the self-heal that rests on it
+// ===========================================================================
+// An item's ACL — the list of apps allowed to read it without asking — is minted
+// AT CREATION, with the creating app on it. That is why creating never prompts,
+// reading your own item never prompts, and reading someone else's always does. An
+// item goes FOREIGN when a previous build made it, when a keychain is restored onto
+// a new Mac, or when the signing identity rotates.
+//
+// **You cannot repair an ACL by writing to the item.** `security-framework`'s
+// `set_password_internal` is:
+//
+//     let status = SecItemAdd(...);
+//     if status == errSecDuplicateItem { SecItemUpdate(query, update) }
+//
+// — and `SecItemUpdate` preserves the item AND its old, foreign ACL. So the
+// convenient write path can never heal anything: it rewrites the value under the
+// stale access list, and the user's own instinct ("I'll just save it again")
+// accomplishes precisely nothing. Every write here is therefore an explicit
+// delete-then-add, which mints a fresh ACL naming this build.
+//
+// **THIS IS THE ONE OPERATION IN THE SUBSYSTEM THAT CAN LOSE DATA.** Between the
+// delete and the add there is a window in which the user's key exists only in this
+// process's memory. Hence, without exception: hold the value first, retry the add,
+// VERIFY BY READING IT BACK before reporting success, and — if it still could not be
+// restored — remember that so the person is told a plain sentence instead of being
+// quietly handed "no key saved" (which would route their next message to the relay).
+//
+// SCOPE: provider keys only. The device-identity item is deliberately excluded —
+// a provider key can be pasted again from the vendor's website, while the device
+// identity's private half is recoverable by nobody. See docs/KNOWN-GAPS.md.
+
+/// How long a successful OS read has to take before it is treated as a read of a
+/// FOREIGN item — i.e. one that raised a password dialog somebody answered.
+///
+/// This is the detection mechanism, and it is exact rather than heuristic about the
+/// thing that matters: a foreign item ALWAYS prompts (that is what foreign means),
+/// and a prompt always waits on a human. Spike 1 measured an app-owned read at 29 ms;
+/// the fastest conceivable human answer is two orders of magnitude above that. So the
+/// gap this threshold sits in is enormous, and the failure mode is one-sided and
+/// cheap: an unusually slow but app-owned read costs one unnecessary (and verified)
+/// re-creation, while a foreign read cannot slip under it without a dialog nobody saw.
+const FOREIGN_READ_THRESHOLD: Duration = Duration::from_millis(400);
+
+/// The rule, pure and injected, so the test drives values rather than a real clock.
+fn read_looked_foreign(elapsed: Duration) -> bool {
+    elapsed >= FOREIGN_READ_THRESHOLD
+}
+
+/// Providers whose key was destroyed by a repair that could not put it back. There is
+/// no honest way to hide this: the bytes are gone from the keychain, and the ONLY
+/// thing that can fix it is the person pasting the key again.
+///
+/// It is consulted where it matters and nowhere else — when a later read finds NOTHING
+/// for a provider whose repair failed, that is not "no key saved" (which is a normal
+/// answer and the cue to onboard), it is a loss with a name. The session cache still
+/// holds the value, so nothing breaks until the app is relaunched; this is what makes
+/// the relaunch say why instead of silently offering to set the person up again.
+static REPAIR_LOST: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn repair_lost() -> &'static Mutex<HashSet<String>> {
+    REPAIR_LOST.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn repair_lost_remember(provider: &str) {
+    if let Ok(mut lost) = repair_lost().lock() {
+        lost.insert(provider.to_string());
+    }
+}
+
+fn repair_lost_recorded(provider: &str) -> bool {
+    repair_lost().lock().map(|lost| lost.contains(provider)).unwrap_or(false)
+}
+
+fn repair_lost_forget(provider: &str) {
+    if let Ok(mut lost) = repair_lost().lock() {
+        lost.remove(provider);
+    }
+}
+
+/// Why a credential write did not complete. The distinction is the whole point: one
+/// of these leaves the user's key exactly where it was, and the other means it is gone.
+#[derive(Debug, PartialEq, Eq)]
+enum WriteFailure {
+    /// The old item was never removed, so whatever was saved is still saved.
+    Untouched,
+    /// The delete landed and the value could not be put back, verified. The key is
+    /// gone from the keychain and only the person can restore it.
+    Lost,
+}
+
+/// How many times the whole delete-add-verify ladder is attempted before a write is
+/// declared lost. Two: a first go, and one retry with the value still in hand.
+const WRITE_ATTEMPTS: u32 = 2;
+
+/// The write, as a sequence, over injected operations.
+///
+/// The closures exist for the reason the module comment gives for `migrate_legacy_key`:
+/// keyring 3.6.3's mock store hands out a fresh empty credential per `Entry::new`, so a
+/// test cannot pre-seed the entries the real code constructs, and a `cargo test` run
+/// must never touch the user's own keychain. Injecting the three operations is what
+/// makes the ORDER, the RETRY and the READ-BACK provable rather than asserted in prose.
+///
+/// The ladder, and why each rung is where it is:
+///
+///   1. `delete`. `NoEntry` is success — deleting an absent item is the normal case
+///      for a first save. Any OTHER delete error on the FIRST attempt aborts with
+///      `Untouched`: the old item may still be there under its foreign ACL, and
+///      calling `add` then would fall into the `SecItemUpdate` trap this function
+///      exists to avoid — writing the value under the stale access list while
+///      reporting success.
+///   2. `add`. Now a pure `SecItemAdd`, so the ACL is minted for this build.
+///   3. `read_back`, compared byte-for-byte. **Success is never reported on the
+///      strength of the add's return code alone.** This is the one operation that can
+///      lose the user's key, and the only evidence worth having that it did not is
+///      the value being readable again.
+///
+/// A failure at 2 or 3 retries the whole ladder — the value is still in memory, and a
+/// transient keychain error is exactly the case a retry is for. Only after
+/// `WRITE_ATTEMPTS` does it give up, and it says `Lost` when it does, because by then
+/// the delete has landed.
+///
+/// G1: `value` is compared and passed on. It is never traced, never logged, never
+/// returned. The trace lines below carry variant words only.
+fn write_credential_with(
+    value: &str,
+    delete: &dyn Fn() -> Result<(), keyring::Error>,
+    add: &dyn Fn(&str) -> Result<(), keyring::Error>,
+    read_back: &dyn Fn() -> Result<String, keyring::Error>,
+) -> Result<(), WriteFailure> {
+    for attempt in 0..WRITE_ATTEMPTS {
+        match delete() {
+            Ok(()) | Err(keyring::Error::NoEntry) => {}
+            Err(_) if attempt == 0 => return Err(WriteFailure::Untouched),
+            Err(_) => continue,
+        }
+        if add(value).is_err() {
+            continue;
+        }
+        // The read-back. A mismatch is as bad as an error: it means something else
+        // holds that account name, and serving it later would hand the core somebody
+        // else's bytes.
+        if read_back().is_ok_and(|stored| stored == value) {
+            return Ok(());
+        }
+    }
+    Err(WriteFailure::Lost)
+}
+
+/// `write_credential_with` bound to a real keyring entry.
+///
+/// Called only with `os_guard()` already held — every caller is inside the OS lock,
+/// and the lock is not reentrant.
+fn write_credential(entry: &Entry, value: &str) -> Result<(), WriteFailure> {
+    write_credential_with(
+        value,
+        &|| entry.delete_credential(),
+        &|v| entry.set_password(v),
+        &|| entry.get_password(),
+    )
+}
+
 /// The legacy role-based Anthropic account, from before the per-provider scheme.
 /// Read once and migrated to `provider-key:anthropic` so an already-saved key keeps
 /// working across the upgrade (see `get_provider_key`).
@@ -245,9 +414,28 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     let _os = os_guard();
     let entry = Entry::new(SERVICE, &account_for_provider(provider))
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
-    entry
-        .set_password(key)
-        .map_err(|_| "Couldn't save your key to the system keychain.".to_string())?;
+    if save_would_change_nothing(provider, &entry, key) {
+        trace!("save", &format!("provider={provider}"), "unchanged (no write)");
+        failure_forget(provider);
+        return Ok(());
+    }
+    // NOT `set_password`. See the WRITES block above: `set_password` falls back to
+    // `SecItemUpdate` on a duplicate, which preserves the old foreign ACL — so the
+    // convenient call is exactly the one that makes "save it again" useless.
+    match write_credential(&entry, key) {
+        Ok(()) => {}
+        Err(WriteFailure::Untouched) => {
+            return Err("Couldn't save your key to the system keychain.".to_string())
+        }
+        Err(WriteFailure::Lost) => {
+            // The old item is gone and the new one would not stick. Say so plainly and
+            // remember it, rather than letting a later read report "nothing saved".
+            repair_lost_remember(provider);
+            trace!("save", &format!("provider={provider}"), "lost-in-write");
+            return Err(KEY_LOST_MESSAGE.to_string());
+        }
+    }
+    repair_lost_forget(provider);
     // Keep the session cache coherent so a Replace takes effect immediately
     // without another OS keychain round-trip (and prompt).
     cache_put(provider, key);
@@ -255,6 +443,43 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     // session — drop the negative entry so reads reach the OS again.
     failure_forget(provider);
     Ok(())
+}
+
+/// §5.4 — read-compare-then-write. Is this Save a no-op?
+///
+/// Every write is now a destroy-and-re-mint, so a naive Save on an unchanged value
+/// would run the one data-losing operation in the subsystem for no reason at all. The
+/// comparison costs nothing on the healthy path: the value is normally already in the
+/// session cache, and a cached value means the item was read (and, if it needed it,
+/// healed) earlier this session.
+///
+/// THREE conditions, all required, and the last two are what keep §5.4 from cancelling
+/// §4.2:
+///
+///   * the stored value is byte-identical — otherwise there is a real change to write;
+///   * the item is not FOREIGN. A person re-saving the same key onto an item this build
+///     cannot read without a dialog is the exact case self-heal exists for, and
+///     short-circuiting it would leave them pressing Save forever with nothing
+///     happening — the original reported symptom;
+///   * the provider is not on the repair-lost list, where the keychain holds nothing at
+///     all and the cached value is the only copy left.
+///
+/// Anything unreadable answers `false`: when Addison cannot see what is stored, the
+/// safe move is to write, which also repairs. A dialog dismissed here therefore still
+/// lets the Save go through.
+fn save_would_change_nothing(provider: &str, entry: &Entry, key: &str) -> bool {
+    if repair_lost_recorded(provider) {
+        return false;
+    }
+    if let Some(cached) = cache_get(provider) {
+        return cached == key;
+    }
+    let started = Instant::now();
+    let stored = entry.get_password();
+    if read_looked_foreign(started.elapsed()) {
+        return false;
+    }
+    stored.is_ok_and(|stored| stored == key)
 }
 
 /// Webview -> Shell. Delete a provider's stored key (the "Remove" action). A
@@ -274,6 +499,9 @@ fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
     // signal for a read that failed earlier this session.
     cache_evict(provider);
     failure_forget(provider);
+    // A deliberate removal settles any earlier repair loss: from here on "nothing
+    // saved" is the truth, not a wound, and the person must be able to onboard again.
+    repair_lost_forget(provider);
 
     let _os = os_guard();
     // Evict AGAIN under the lock. A read parked at a password dialog holds the lock
@@ -282,6 +510,7 @@ fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
     // eviction above — and a removed key must never keep being served from memory.
     cache_evict(provider);
     failure_forget(provider);
+    repair_lost_forget(provider);
     let entry = Entry::new(SERVICE, &account_for_provider(provider))
         .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
     match entry.delete_credential() {
@@ -306,10 +535,11 @@ fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
 }
 
 /// The outcome of a provider-key read, mapped 1:1 onto the wire protocol the core is
-/// written against (`provider_key_response`). The three cases are deliberately
-/// distinct: collapsing the last two is what let a DENIED read look like "no key
-/// saved", so the core quietly rerouted the turn to the external Setup Assistant
-/// relay while the user's key sat in the keychain the whole time.
+/// written against (`provider_key_response`). The cases are deliberately distinct:
+/// collapsing "nothing saved" with any of the others is what let a DENIED read look
+/// like "no key saved", so the core quietly rerouted the turn to the external Setup
+/// Assistant relay while the user's key sat in the keychain the whole time. Exactly
+/// ONE of them means "you may onboard this person", and it is `NothingSaved`.
 enum KeyRead {
     /// A key is saved. The value goes core-ward and nowhere else.
     Found(String),
@@ -318,6 +548,10 @@ enum KeyRead {
     /// The read itself failed (denied dialog, keychain error). A key MAY exist, so
     /// this must never be reported as "no key saved".
     Unreadable,
+    /// The item is genuinely gone because a repair could not put it back (§4.2). Also
+    /// never "no key saved" — it is a loss with a cause, and the only fix is the person
+    /// pasting the key again, so it carries a sentence that says exactly that.
+    LostInRepair,
 }
 
 impl KeyRead {
@@ -330,9 +564,18 @@ impl KeyRead {
             KeyRead::Found(_) => "found",
             KeyRead::NothingSaved => "nothing-saved",
             KeyRead::Unreadable => "unreadable",
+            KeyRead::LostInRepair => "lost-in-repair",
         }
     }
 }
+
+/// Said when a repair destroyed the item and could not restore it. Plain, and it names
+/// the one action that fixes it — never a stack trace, never an error code, and never
+/// silence. "your computer's keychain" is the noun used everywhere else the person
+/// meets this subsystem.
+const KEY_LOST_MESSAGE: &str =
+    "Addison couldn't save your key back to your computer's keychain, so it isn't \
+     stored any more. Add it again in Settings.";
 
 /// Agent-Core-internal read. Never exposed as a Tauri command, so the webview has no
 /// route to it.
@@ -361,16 +604,86 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
         return answer;
     }
 
-    let outcome = read_provider_key_from_os(provider);
+    // TIMED, because the elapsed time is the foreign-item signal (see
+    // FOREIGN_READ_THRESHOLD): a read that waited on a password dialog is by
+    // definition a read of an item this build is not on the access list for.
+    let started = Instant::now();
+    let read = read_provider_key_from_os(provider);
+    let elapsed = started.elapsed();
+
+    let freshly_written = read.freshly_written;
+    let mut outcome = read.outcome;
     trace!("cached-as", &format!("provider={provider}"), outcome.trace_word());
     match &outcome {
-        KeyRead::Found(key) => cache_put(provider, key),
-        // Remembered so the next stats poll answers from memory instead of raising
-        // another dialog. `NothingSaved` is deliberately never remembered.
+        KeyRead::Found(key) => {
+            // CACHE BEFORE HEALING, deliberately. The heal is the one operation that
+            // can destroy the item, and the session must survive it even in the worst
+            // case: with the value already cached, a failed repair costs the person a
+            // sentence at the next launch, never this message.
+            cache_put(provider, key);
+            if should_self_heal(freshly_written, elapsed) {
+                self_heal(provider, key);
+            }
+        }
+        // Remembered so a later background caller answers from memory instead of
+        // raising another dialog. `NothingSaved` is deliberately never remembered.
         KeyRead::Unreadable => failure_remember(provider),
-        KeyRead::NothingSaved => {}
+        // "Nothing saved" is a normal answer — UNLESS a repair in this session is why
+        // there is nothing there. Then it is a loss, and saying "no key saved" would
+        // hand the person an onboarding flow instead of the one sentence that fixes it.
+        KeyRead::NothingSaved if repair_lost_recorded(provider) => {
+            outcome = KeyRead::LostInRepair;
+        }
+        KeyRead::NothingSaved | KeyRead::LostInRepair => {}
     }
     outcome
+}
+
+/// Does this successful read call for a repair? Pure, so the decision is provable
+/// without an OS keychain — and because the two conditions pull in opposite
+/// directions and would otherwise sit inline in a match arm nobody can reach.
+///
+///   * the read WAITED, so a dialog was answered, so the item is foreign;
+///   * and the item was not created during this very read. The legacy migration
+///     mints a fresh item under this build's identity but spends its time on the
+///     LEGACY item's dialog — so without this the elapsed signal would fire and
+///     Addison would destroy-and-re-mint an item it made seconds ago, running the
+///     one data-losing operation for nothing at all.
+fn should_self_heal(freshly_written: bool, elapsed: Duration) -> bool {
+    !freshly_written && read_looked_foreign(elapsed)
+}
+
+/// §4.2 — repair a foreign item by re-creating it, with the bytes we just read.
+///
+/// "One dialog every session, forever" becomes "one dialog, once": the delete and the
+/// add both belong to this build, so the item that comes back names this app on its
+/// access list and every later read is silent.
+///
+/// Called with `os_guard()` held (from `get_provider_key`, which owns it) — the lock is
+/// not reentrant, so this must never take it.
+///
+/// PROVIDER KEYS ONLY. `ensure_device_keypair` deliberately does not call this: a
+/// provider key can be pasted again from the vendor's site, and the device identity's
+/// private half cannot be recovered by anyone. See docs/KNOWN-GAPS.md.
+fn self_heal(provider: &str, key: &str) {
+    trace!("heal", &format!("provider={provider}"), "foreign item -> re-creating");
+    let Ok(entry) = Entry::new(SERVICE, &account_for_provider(provider)) else {
+        return;   // no handle, nothing deleted — the item is exactly as it was
+    };
+    match write_credential(&entry, key) {
+        Ok(()) => trace!("heal", &format!("provider={provider}"), "re-created"),
+        // Nothing was removed; the person keeps the item they had, foreign ACL and all,
+        // and the next session tries again.
+        Err(WriteFailure::Untouched) => {
+            trace!("heal", &format!("provider={provider}"), "declined (item untouched)")
+        }
+        // The bad one. The item is gone; remember it so the next read that finds
+        // nothing says why instead of offering to set the person up from scratch.
+        Err(WriteFailure::Lost) => {
+            repair_lost_remember(provider);
+            trace!("heal", &format!("provider={provider}"), "lost-in-repair");
+        }
+    }
 }
 
 /// The answer that can be given without touching the OS at all: a key already read
@@ -390,44 +703,69 @@ fn cached_answer(provider: &str, fresh: bool) -> Option<KeyRead> {
 /// fall back to the legacy role-based account (`provider-key:primary`) and migrate
 /// it into `provider-key:anthropic` so an existing key survives the upgrade to the
 /// per-provider scheme without the user re-pasting it.
-fn read_provider_key_from_os(provider: &str) -> KeyRead {
+fn read_provider_key_from_os(provider: &str) -> OsRead {
     let account = account_for_provider(provider);
     // THE LINE THAT COSTS A PASSWORD DIALOG. Every one of these is one prompt on a
     // build whose ACL has been invalidated; counting them is the whole diagnostic.
     trace!("OS-TOUCH", &account, "reading…");
     let Ok(entry) = Entry::new(SERVICE, &account) else {
         trace!("OS-TOUCH", &account, "unreadable (no entry handle)");
-        return KeyRead::Unreadable;
+        return OsRead::plain(KeyRead::Unreadable);
     };
     match entry.get_password() {
-        Ok(key) => KeyRead::Found(key),
+        Ok(key) => OsRead::plain(KeyRead::Found(key)),
         Err(keyring::Error::NoEntry) if provider == LEGACY_PROVIDER => legacy_anthropic_key(&entry),
-        Err(keyring::Error::NoEntry) => KeyRead::NothingSaved,
-        Err(_) => KeyRead::Unreadable,
+        Err(keyring::Error::NoEntry) => OsRead::plain(KeyRead::NothingSaved),
+        Err(_) => OsRead::plain(KeyRead::Unreadable),
+    }
+}
+
+/// One OS read, plus the one thing the caller cannot infer from its outcome.
+///
+/// `freshly_written` says the item the key came back from was CREATED by this build
+/// during the read — today only the legacy migration does that. It matters because
+/// the caller's foreign-item signal is elapsed time, and the migration path spends
+/// its time on the LEGACY item's dialog: without this flag, a migration would be
+/// followed by a self-heal of an item that was minted seconds ago under this build's
+/// own identity, which is the data-losing operation run for nothing.
+struct OsRead {
+    outcome: KeyRead,
+    freshly_written: bool,
+}
+
+impl OsRead {
+    fn plain(outcome: KeyRead) -> Self {
+        Self { outcome, freshly_written: false }
     }
 }
 
 /// Read the legacy Anthropic key and migrate it into `destination`. Returns the key
 /// either way — a migration that couldn't complete must not cost the user their key
 /// for this launch.
-fn legacy_anthropic_key(destination: &Entry) -> KeyRead {
+fn legacy_anthropic_key(destination: &Entry) -> OsRead {
     // A SECOND OS touch inside one logical read — and therefore a second dialog.
     // Only reached when `provider-key:anthropic` reported NoEntry, but that is
     // exactly the case worth seeing in a trace: `NothingSaved` is never cached, so
     // if this path is live it runs again on the very next caller.
     trace!("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "reading (legacy migration)…");
     let Ok(legacy) = Entry::new(SERVICE, LEGACY_ANTHROPIC_ACCOUNT) else {
-        return KeyRead::Unreadable;
+        return OsRead::plain(KeyRead::Unreadable);
     };
     match legacy.get_password() {
         Ok(key) => {
             trace!("OS-TOUCH", LEGACY_ANTHROPIC_ACCOUNT, "found -> migrating + WRITING + deleting");
-            migrate_legacy_key(|| destination.set_password(&key), || legacy.delete_credential());
-            KeyRead::Found(key)
+            // The copy goes through the delete-then-add path like every other write.
+            // The destination reported NoEntry a moment ago, so the delete is a no-op
+            // and this is a plain add — but routing it here is what keeps "every write
+            // is delete-then-add" a property of the module rather than of three call
+            // sites that each remembered.
+            let copied = write_credential(destination, &key).is_ok();
+            migrate_legacy_key(|| copied, || legacy.delete_credential());
+            OsRead { outcome: KeyRead::Found(key), freshly_written: copied }
         }
         // Nothing to migrate: there is simply no Anthropic key saved.
-        Err(keyring::Error::NoEntry) => KeyRead::NothingSaved,
-        Err(_) => KeyRead::Unreadable,
+        Err(keyring::Error::NoEntry) => OsRead::plain(KeyRead::NothingSaved),
+        Err(_) => OsRead::plain(KeyRead::Unreadable),
     }
 }
 
@@ -437,12 +775,15 @@ fn legacy_anthropic_key(destination: &Entry) -> KeyRead {
 /// entry stays exactly where it is and the migration is retried on the next read —
 /// which is only true in every ordering because of this guard.
 ///
-/// Written over closures so the ordering is testable without an OS keychain.
+/// Written over closures so the ordering is testable without an OS keychain. `copy`
+/// reports whether the destination write landed AND VERIFIED (`write_credential`
+/// reads it back), so the legacy entry is now only removed against proof rather than
+/// against a return code.
 fn migrate_legacy_key(
-    copy: impl FnOnce() -> Result<(), keyring::Error>,
+    copy: impl FnOnce() -> bool,
     delete_legacy: impl FnOnce() -> Result<(), keyring::Error>,
 ) {
-    if copy().is_ok() {
+    if copy() {
         let _ = delete_legacy();
     }
 }
@@ -617,6 +958,10 @@ fn provider_key_response(outcome: KeyRead) -> Result<Value, RpcError> {
         KeyRead::Unreadable => {
             Err(RpcError::app("Couldn't read your saved key from the keychain."))
         }
+        // Also an error, for the same reason and one more: the key is genuinely gone,
+        // and the empty string would send the person into onboarding as though they
+        // had never saved one. The sentence names the only thing that fixes it.
+        KeyRead::LostInRepair => Err(RpcError::app(KEY_LOST_MESSAGE)),
     }
 }
 
@@ -697,7 +1042,7 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
 mod tests {
     use super::*;
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     #[test]
     fn account_is_namespaced_by_provider() {
@@ -921,6 +1266,287 @@ mod tests {
         assert_eq!(err.message, "Couldn't read your saved key from the keychain.");
     }
 
+    // =======================================================================
+    // WRITES — delete-then-add, verified, and what happens when it goes wrong.
+    // =======================================================================
+    // Exercised through `write_credential_with`'s injected operations, for the reason
+    // the module comment gives: keyring's mock store cannot stand in for the OS here,
+    // and a `cargo test` run must never touch the user's real keychain.
+
+    /// A recording stand-in for one keychain item. `present` is the item itself, so a
+    /// test can assert what the OS would hold after a torn write — which is the only
+    /// thing that matters about the operation that can lose somebody's key.
+    struct FakeItem {
+        present: Cell<Option<String>>,
+        ops: RefCell<Vec<&'static str>>,
+        add_failures: Cell<u32>,
+        delete_fails: Cell<bool>,
+        read_back_fails: Cell<bool>,
+    }
+
+    impl FakeItem {
+        fn holding(value: Option<&str>) -> Self {
+            Self {
+                present: Cell::new(value.map(str::to_string)),
+                ops: RefCell::new(Vec::new()),
+                add_failures: Cell::new(0),
+                delete_fails: Cell::new(false),
+                read_back_fails: Cell::new(false),
+            }
+        }
+
+        fn write(&self, value: &str) -> Result<(), WriteFailure> {
+            write_credential_with(
+                value,
+                &|| {
+                    self.ops.borrow_mut().push("delete");
+                    if self.delete_fails.get() {
+                        return Err(keyring::Error::Invalid("delete".into(), "denied".into()));
+                    }
+                    match self.present.take() {
+                        Some(_) => Ok(()),
+                        None => Err(keyring::Error::NoEntry),
+                    }
+                },
+                &|v| {
+                    self.ops.borrow_mut().push("add");
+                    let left = self.add_failures.get();
+                    if left > 0 {
+                        self.add_failures.set(left - 1);
+                        return Err(keyring::Error::Invalid("add".into(), "denied".into()));
+                    }
+                    self.present.set(Some(v.to_string()));
+                    Ok(())
+                },
+                &|| {
+                    self.ops.borrow_mut().push("read");
+                    if self.read_back_fails.get() {
+                        return Err(keyring::Error::Invalid("read".into(), "denied".into()));
+                    }
+                    let value = self.present.take();
+                    self.present.set(value.clone());
+                    value.ok_or(keyring::Error::NoEntry)
+                },
+            )
+        }
+
+        fn ops(&self) -> Vec<&'static str> {
+            self.ops.borrow().clone()
+        }
+
+        fn stored(&self) -> Option<String> {
+            let value = self.present.take();
+            self.present.set(value.clone());
+            value
+        }
+    }
+
+    #[test]
+    fn a_write_is_never_an_update_in_place() {
+        // THE trap, as a test. `security-framework`'s `set_password` does SecItemAdd
+        // and, on errSecDuplicateItem, falls back to SecItemUpdate — which preserves
+        // the item AND its old, foreign ACL. So a write that reaches an existing item
+        // without deleting it first can never heal anything, and the user's own
+        // instinct ("I'll just save it again") accomplishes nothing at all.
+        //
+        // The assertion is on the ORDER, because "delete happened" is not enough: an
+        // add followed by a delete would leave the person with no key whatsoever.
+        let item = FakeItem::holding(Some("sk-old"));
+        assert_eq!(item.write("sk-new"), Ok(()));
+        assert_eq!(
+            item.ops(),
+            vec!["delete", "add", "read"],
+            "the item was rewritten in place — its foreign ACL survives, and so does the bug"
+        );
+        assert_eq!(item.stored().as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn a_write_is_never_reported_successful_without_reading_it_back() {
+        // This is the one operation in the subsystem that can lose the user's key, and
+        // an add's return code is not evidence that it did not. A store that reports
+        // success on a value that is not there hands the person a keychain they
+        // believe holds their key, and they find out at the next launch.
+        let item = FakeItem::holding(Some("sk-old"));
+        item.read_back_fails.set(true);
+        assert_eq!(item.write("sk-new"), Err(WriteFailure::Lost));
+        assert!(
+            item.ops().iter().filter(|op| **op == "read").count() >= 1,
+            "the write never verified itself"
+        );
+    }
+
+    #[test]
+    fn a_write_retries_before_it_gives_up_on_the_key() {
+        // The value is still in memory between the delete and the add, so a transient
+        // failure is exactly what a retry is for — and the difference between one
+        // attempt and two is the difference between a lost key and a saved one.
+        let item = FakeItem::holding(Some("sk-old"));
+        item.add_failures.set(1);
+        assert_eq!(item.write("sk-new"), Ok(()));
+        assert_eq!(item.ops(), vec!["delete", "add", "delete", "add", "read"]);
+        assert_eq!(item.stored().as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn a_write_that_cannot_be_completed_says_the_key_is_gone() {
+        // Never silence, and never a stack trace. `Lost` is what makes the shipped
+        // path surface KEY_LOST_MESSAGE instead of "nothing saved", which would send
+        // the person into onboarding for a key they had until a moment ago.
+        let item = FakeItem::holding(Some("sk-old"));
+        item.add_failures.set(WRITE_ATTEMPTS);
+        assert_eq!(item.write("sk-new"), Err(WriteFailure::Lost));
+        assert_eq!(item.stored(), None, "the fake must model the real loss");
+    }
+
+    #[test]
+    fn a_write_that_cannot_delete_leaves_the_old_key_exactly_where_it_was() {
+        // The safe half of the failure split. If the delete is refused, the old item
+        // may still be there under its foreign ACL — and calling `add` then is the
+        // SecItemUpdate trap. So this branch writes nothing and says nothing was lost.
+        let item = FakeItem::holding(Some("sk-old"));
+        item.delete_fails.set(true);
+        assert_eq!(item.write("sk-new"), Err(WriteFailure::Untouched));
+        assert_eq!(item.ops(), vec!["delete"], "an add followed a refused delete");
+        assert_eq!(item.stored().as_deref(), Some("sk-old"));
+    }
+
+    #[test]
+    fn a_first_save_is_a_plain_add() {
+        // Deleting an absent item is the normal case for somebody's first key, and it
+        // must not be an error.
+        let item = FakeItem::holding(None);
+        assert_eq!(item.write("sk-first"), Ok(()));
+        assert_eq!(item.stored().as_deref(), Some("sk-first"));
+    }
+
+    #[test]
+    fn a_write_never_reports_success_for_somebody_elses_value() {
+        // A read-back that returns something OTHER than what was written means another
+        // item holds that account name. Serving it later would hand the core bytes
+        // that are not the user's key, so a mismatch is a failure like any other.
+        // The "add" lands, but the item reads back as something else every time.
+        let result = write_credential_with(
+            "sk-new",
+            &|| Ok(()),
+            &|_| Ok(()),
+            &|| Ok("sk-somebody-else".to_string()),
+        );
+        assert_eq!(result, Err(WriteFailure::Lost));
+    }
+
+    // --- Self-heal: WHEN it runs. The delete-then-add above is what it runs.
+
+    #[test]
+    fn a_foreign_item_is_re_created_after_a_successful_read() {
+        // Foreign means "this build is not on the item's access list", and macOS
+        // answers that with a password dialog — so a successful read that WAITED is a
+        // successful read of a foreign item. That is the signal, and it is why
+        // self-heal needs no new OS API to know when to run.
+        //
+        // Spike 1 measured an app-owned read at 29 ms. The threshold sits two orders
+        // of magnitude above that and far below any human answer.
+        assert!(read_looked_foreign(Duration::from_secs(4)));
+        assert!(read_looked_foreign(FOREIGN_READ_THRESHOLD));
+        assert!(!read_looked_foreign(Duration::from_millis(29)));
+        assert!(!read_looked_foreign(Duration::from_millis(200)));
+        assert!(
+            FOREIGN_READ_THRESHOLD >= Duration::from_millis(100),
+            "a threshold this low re-mints healthy items on a slow disk — and the \
+             re-mint is the one operation that can lose the key"
+        );
+    }
+
+    #[test]
+    fn a_migration_never_heals_the_item_it_just_created() {
+        // The legacy migration waits on the LEGACY item's password dialog, so the
+        // elapsed-time signal fires — but the destination item was minted by THIS
+        // build moments ago and is not foreign at all. Healing it would run the one
+        // data-losing operation in the subsystem for nothing.
+        let slow = Duration::from_secs(3);
+        assert!(!should_self_heal(true, slow), "a just-migrated item was re-created");
+        // The control: an ordinary slow read of an item nobody just wrote IS healed,
+        // or this test would pass for a version that never heals anything.
+        assert!(should_self_heal(false, slow));
+        assert!(!should_self_heal(false, Duration::from_millis(29)));
+        // And the flag genuinely rides on an ordinary read as `false`, so the
+        // condition above is the one the shipped path evaluates.
+        assert!(!OsRead::plain(KeyRead::NothingSaved).freshly_written);
+    }
+
+    #[test]
+    fn the_shipped_save_path_never_calls_set_password_directly() {
+        // A source-level backstop, in the idiom this repo already uses for C6. The
+        // behavioural tests above pin `write_credential_with`; this pins the SHAPE,
+        // because the next version of this bug will not be a rewritten ladder — it
+        // will be one convenient `entry.set_password(key)` put back into the save
+        // path, which silently becomes SecItemUpdate and heals nothing.
+        assert!(
+            !item_source("fn store_provider_key_blocking").contains(".set_password("),
+            "the save path writes with set_password again — that is SecItemUpdate on a \
+             duplicate, which preserves the old foreign ACL and heals nothing"
+        );
+    }
+
+    #[test]
+    fn an_unchanged_save_does_not_re_create_the_item() {
+        // §5.4. Every write is now a destroy-and-re-mint, so a Save that changes
+        // nothing would run the dangerous operation for no reason. The cached value is
+        // the comparison, and a cached value means the item was already read (and
+        // healed if it needed it) this session.
+        cache_put("save-test-a", "sk-same");
+        let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
+        assert!(save_would_change_nothing("save-test-a", &entry, "sk-same"));
+        assert!(!save_would_change_nothing("save-test-a", &entry, "sk-different"));
+        cache_evict("save-test-a");
+    }
+
+    #[test]
+    fn a_save_after_a_lost_repair_always_writes() {
+        // The keychain holds nothing at all, and the session cache is the only copy of
+        // the key left. Short-circuiting here on "it matches what I have in memory"
+        // would leave the person pressing Save against an empty keychain forever —
+        // the original reported symptom, reintroduced through the optimisation.
+        cache_put("save-test-b", "sk-same");
+        repair_lost_remember("save-test-b");
+        let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
+        assert!(!save_would_change_nothing("save-test-b", &entry, "sk-same"));
+        repair_lost_forget("save-test-b");
+        assert!(save_would_change_nothing("save-test-b", &entry, "sk-same"));
+        cache_evict("save-test-b");
+    }
+
+    #[test]
+    fn a_lost_repair_is_never_reported_as_nothing_saved() {
+        // The seam that keeps a lost key off the relay. "No key saved" is a normal
+        // answer and the cue for the Setup Assistant; a key destroyed by a repair is
+        // neither, and the sentence has to name the one thing that fixes it.
+        let err = provider_key_response(KeyRead::LostInRepair).unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(err.message, KEY_LOST_MESSAGE);
+        // The contrast that makes it load-bearing: "nothing saved" is still the
+        // empty-string RESULT, and this must never become that.
+        assert_eq!(
+            provider_key_response(KeyRead::NothingSaved).unwrap(),
+            json!({ "key": "" })
+        );
+        assert!(KEY_LOST_MESSAGE.contains("Add it again in Settings"));
+        // G1: the sentence is a constant. It cannot carry the key, a length or a prefix.
+        assert!(!KEY_LOST_MESSAGE.contains("sk-"));
+    }
+
+    #[test]
+    fn the_repair_loss_memory_is_per_provider_and_cleared_by_removing_the_key() {
+        // Per provider, because one provider's torn write says nothing about another's.
+        // Cleared by Remove, because after a deliberate removal "nothing saved" is the
+        // truth rather than a wound — and the person must be able to onboard again.
+        repair_lost_remember("lost-test-a");
+        assert!(repair_lost_recorded("lost-test-a"));
+        assert!(!repair_lost_recorded("lost-test-b"));
+        repair_lost_forget("lost-test-a");
+        assert!(!repair_lost_recorded("lost-test-a"));
+    }
+
     // --- Migration ordering, exercised through the closure seam (see the module
     // comment above for why the mock keychain can't stand in here).
 
@@ -928,7 +1554,7 @@ mod tests {
     fn migration_deletes_the_legacy_entry_only_after_the_copy_lands() {
         let deleted = Cell::new(false);
         migrate_legacy_key(
-            || Ok(()),
+            || true,
             || {
                 deleted.set(true);
                 Ok(())
@@ -943,13 +1569,45 @@ mod tests {
         // deleting it here destroys it.
         let deleted = Cell::new(false);
         migrate_legacy_key(
-            || Err(keyring::Error::NoEntry),
+            || false,
             || {
                 deleted.set(true);
                 Ok(())
             },
         );
         assert!(!deleted.get(), "a failed copy must leave the legacy entry in place");
+    }
+
+    /// The body of one top-level item in this file, for the source-level backstops.
+    /// Two of them exist because the wiring they check cannot be reached in-process:
+    /// the real paths need an OS keychain, and `cargo test` must never touch one.
+    fn item_source(signature: &str) -> &'static str {
+        let source = include_str!("keychain.rs");
+        let start = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("{signature} moved — re-point this test"));
+        let body = &source[start..];
+        let end = body[1..].find("\nfn ").expect("no following item") + 1;
+        &body[..end]
+    }
+
+    #[test]
+    fn the_legacy_migration_deletes_only_against_a_verified_copy() {
+        // `migration_deletes_the_legacy_entry_only_after_the_copy_lands` pins the
+        // ORDER through the closure seam. This pins the WIRING, which that seam
+        // cannot see: the boolean handed to `migrate_legacy_key` has to be
+        // `write_credential`'s VERIFIED result and not a literal or a bare return
+        // code. Until the copy is confirmed readable, the legacy item is the only
+        // durable copy of the key, and deleting it is how somebody loses it.
+        let body = item_source("fn legacy_anthropic_key");
+        assert!(
+            body.contains("let copied = write_credential(destination, &key).is_ok();"),
+            "the legacy copy no longer goes through the verified write"
+        );
+        assert!(
+            body.contains("migrate_legacy_key(|| copied,"),
+            "the legacy delete is gated on something other than the verified copy"
+        );
     }
 
     #[test]

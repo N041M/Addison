@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from agent_core.redaction import redact
+from agent_core.secret_presence import SecretPresence
 from agent_core.skills import Skill
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES, _PRESERVED_SETTING_KEYS
@@ -65,6 +66,17 @@ class Store:
         )
         self._add_column_if_missing(
             "widgets", "created_in_mode", "TEXT NOT NULL DEFAULT 'safe'"
+        )
+        # Presence leaves the keychain (plan §4.1). Same idiom, same guard: a fresh
+        # DB already has the column from schema.sql (no-op); an older one gets it
+        # with the ONLY safe default. 'unknown' — never 'absent' — because a row
+        # written before this column says nothing about whether a key is saved, and
+        # a stored "no key" is what routes a turn to the external relay.
+        self._add_column_if_missing(
+            "provider_config",
+            "secret_presence",
+            "TEXT NOT NULL DEFAULT 'unknown' "
+            "CHECK(secret_presence IN ('present','absent','unknown'))",
         )
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
@@ -466,22 +478,32 @@ class Store:
         base_url: str | None = None,
         catalog_json: str | None = None,
         last_check_ok: bool | None = None,
+        secret_presence: SecretPresence | None = None,
     ) -> None:
         """Insert or update one provider's connection metadata. ``added_at`` is
         first-write-wins (``COALESCE`` keeps the earliest connect time), so re-connecting
         a provider never resets its "added" date. ``last_check_ok`` maps True/False/None
-        to 1/0/NULL."""
+        to 1/0/NULL.
+
+        ``secret_presence`` is LEAVE-ALONE when omitted (plan §4.1): the answer to "is
+        a key saved?" is learned on a different occasion than the answer to "did the
+        connect ping pass", so a caller that only knows the second must not overwrite
+        the first. A brand-new row with no presence supplied starts ``unknown`` — the
+        schema default, and the only safe one."""
         last_ok = None if last_check_ok is None else int(last_check_ok)
+        presence = None if secret_presence is None else SecretPresence(secret_presence).value
         self._conn.execute(
             "INSERT INTO provider_config "
-            "(provider_id, connected, added_at, base_url, catalog_json, last_check_ok, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "(provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
+            " secret_presence, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT(provider_id) DO UPDATE SET "
             "  connected = excluded.connected, "
             "  added_at = COALESCE(provider_config.added_at, excluded.added_at), "
             "  base_url = excluded.base_url, "
             "  catalog_json = excluded.catalog_json, "
             "  last_check_ok = excluded.last_check_ok, "
+            "  secret_presence = COALESCE(?, provider_config.secret_presence), "
             "  updated_at = excluded.updated_at",
             (
                 provider_id,
@@ -490,16 +512,76 @@ class Store:
                 base_url,
                 catalog_json,
                 last_ok,
+                presence or SecretPresence.UNKNOWN.value,
                 int(time.time()),
+                presence,
             ),
         )
         self._conn.commit()
 
+    def record_secret_presence(self, provider_id: str, presence: SecretPresence) -> None:
+        """Write down what a live keychain read just proved about this provider's key
+        (plan §4.1) — the ONLY way ``secret_presence`` becomes anything but ``unknown``.
+
+        Creates the row when there is none, and that row's ``connected`` mirrors
+        ``present``. That is not a new claim: ``provider.list`` already rendered "a key
+        is in the keychain, with no connection row" as connected, so that a legacy key
+        migrated from the pre-multi-provider account showed up without a re-connect.
+        This persists the same answer instead of re-asking the OS for it every time
+        something needs a dot drawn.
+
+        An EXISTING row keeps its ``connected`` untouched: a real ``provider.connect``
+        result outranks a presence read, which knows only that bytes are saved and
+        nothing at all about whether the provider accepts them."""
+        value = SecretPresence(presence).value
+        row = self._conn.execute(
+            "SELECT secret_presence FROM provider_config WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        if row is not None:
+            if row["secret_presence"] == value:
+                return   # idempotent: nothing learned, nothing written
+            self._conn.execute(
+                "UPDATE provider_config SET secret_presence = ?, updated_at = ? "
+                "WHERE provider_id = ?",
+                (value, int(time.time()), provider_id),
+            )
+        else:
+            self._conn.execute(
+                "INSERT INTO provider_config "
+                "(provider_id, connected, secret_presence, updated_at) VALUES (?, ?, ?, ?)",
+                (
+                    provider_id,
+                    int(presence is SecretPresence.PRESENT),
+                    value,
+                    int(time.time()),
+                ),
+            )
+        self._conn.commit()
+
+    def secret_presence(self, provider_id: str) -> SecretPresence:
+        """Is a key saved for this provider? Answered from SQLite — NEVER by touching
+        the OS keychain, which is the whole of plan §4.1.
+
+        A provider with no row at all is ``ABSENT``: Addison has never recorded a key
+        for it, which is exactly the claim ``provider.list`` has always made by
+        rendering it as not connected. That is a RECORDED state, not a stale or
+        unreadable one — ``UNKNOWN`` is reserved for the two the plan names (a read
+        that failed, and a row predating this column), and only those may never read
+        as "no key"."""
+        row = self._conn.execute(
+            "SELECT secret_presence FROM provider_config WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        if row is None:
+            return SecretPresence.ABSENT
+        return SecretPresence.parse(row["secret_presence"])
+
     def get_provider_config(self, provider_id: str) -> dict[str, Any] | None:
         """One provider's stored connection metadata, or None if never connected."""
         row = self._conn.execute(
-            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok "
-            "FROM provider_config WHERE provider_id = ?",
+            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
+            "secret_presence FROM provider_config WHERE provider_id = ?",
             (provider_id,),
         ).fetchone()
         return _provider_config_row(row) if row is not None else None
@@ -507,8 +589,8 @@ class Store:
     def list_provider_configs(self) -> list[dict[str, Any]]:
         """Every provider that has connection metadata, in insertion order."""
         rows = self._conn.execute(
-            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok "
-            "FROM provider_config ORDER BY rowid ASC"
+            "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
+            "secret_presence FROM provider_config ORDER BY rowid ASC"
         ).fetchall()
         return [_provider_config_row(row) for row in rows]
 
@@ -1363,4 +1445,8 @@ def _provider_config_row(row) -> dict[str, Any]:
         "base_url": row["base_url"],
         "catalog_json": row["catalog_json"],
         "last_check_ok": None if last_ok is None else bool(last_ok),
+        # Widened through ``parse`` rather than handed over raw: a value this layer
+        # cannot recognise must arrive as UNKNOWN, never as something a caller could
+        # compare against "absent" by accident.
+        "secret_presence": SecretPresence.parse(row["secret_presence"]),
     }

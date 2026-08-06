@@ -21,6 +21,7 @@ from agent_core.rpc.constants import (
     _MODEL_UNAVAILABLE_MESSAGE,
     _SERVER_ERROR,
 )
+from agent_core.secret_presence import SecretPresence, may_have_a_key
 
 
 class ModelsMixin(ServerContext):
@@ -48,7 +49,7 @@ class ModelsMixin(ServerContext):
         loaded). Registration is idempotent (dict replace), so repeated calls are safe."""
         if self._cloud_catalog_loaded or self._cloud_fetcher is None:
             return
-        if not self._primary_key_is_probably_saved():
+        if not may_have_a_key(self._secret_presence("anthropic")):
             return
         try:
             catalog = self._cloud_fetcher()
@@ -65,56 +66,41 @@ class ModelsMixin(ServerContext):
                     entry.id, self._cloud_provider_factory(entry)
                 )
 
-    def _primary_key_is_probably_saved(self) -> bool:
-        """Is an Anthropic key saved? Answered WITHOUT touching the OS keychain.
+    def _secret_presence(self, provider_id: str) -> SecretPresence:
+        """Is a key saved for this provider? Answered WITHOUT touching the OS
+        keychain — plan §4.1, and THE POINT OF THIS METHOD IS WHAT IT DOES NOT DO.
 
-        THE POINT OF THIS METHOD IS WHAT IT DOES NOT DO. `_primary_key_available`
-        reuses the real Anthropic getter, and as `_primary_key_status` says in its
-        own words, the probe IS the keychain read. This runs from
-        `availableRoles`, which the UI polls — so a presence question with no
-        person behind it was raising a macOS password dialog per poll. Observed
-        2026-08-01: roughly ten stacked at once, none answerable, because each was
-        orphaned when the app restarted. That is the plan's §4.1 in miniature
-        (`docs/secrets-and-keychain-plan.md`) — presence is not a secret and does
-        not belong in the keychain.
+        Every consumer that renders a dot, gates a background fetch, or answers
+        `provider.list` / `stats.get` / `availableRoles` comes through here. The
+        earlier version of this method short-circuited on `provider_config.connected`
+        and then FELL THROUGH to the real Anthropic getter — and that getter is the
+        keychain read. So a presence question with no person behind it raised a macOS
+        password dialog. Observed 2026-08-01: roughly ten stacked at once, none
+        answerable, because each was orphaned when the app restarted.
 
-        `provider_config.connected` is the same non-secret signal
-        `_maybe_reconnect_saved_providers` below already trusts for every OTHER
-        provider; Anthropic was the odd one out.
+        There is no fall-through any more, and that is the change: presence is a
+        recorded fact (`provider_config.secret_presence`), written by the paths that
+        genuinely learn it — `provider.connect`, and the per-turn read in
+        `_primary_key_status`, which is the one caller with a person behind it. A key
+        that appears mid-session is therefore picked up on the person's next message
+        rather than by re-asking the OS on a timer.
 
-        DELIBERATELY OPTIMISTIC, and this is the safe direction. A false TRUE
-        costs one catalog fetch that fails and retries on a later call — the
-        method it gates already treats every failure that way. A false FALSE would
-        silently withhold the live model list. It also never decides anything
-        about ROUTING: `_primary_key_status` still owns whether a turn may reach
-        the Setup Assistant relay, still reads fresh, and is still driven by the
-        person's own message — because answering "no key" from a stale flag would
-        send someone's message to an external service while their key sat in the
-        keychain (the 07-25 relay bug). Nothing here may become that.
-
-        WHY A KNOWN-YES SHORT-CIRCUITS AND A KNOWN-NO DOES NOT. The dialog only
-        appears when reading an item that EXISTS under an ACL this build does not
-        match. So the expensive case is exactly the one the flag can answer —
-        `connected = 1` means an item is there, which is when probing would
-        prompt — while the fall-through case is a user with no key saved, where
-        the read finds nothing and returns promptlessly. Short-circuiting the yes
-        removes every dialog that mattered; keeping the fall-through keeps the
-        behaviour that lets a key appearing mid-session swap the live catalog in
-        on the next poll, with no reconciliation machinery and no stale-flag
-        window.
+        It never decides anything about ROUTING: `_primary_key_status` still owns
+        whether a turn may reach the Setup Assistant relay, still reads fresh, and is
+        still driven by the person's own message — because answering "no key" from a
+        stale flag would send someone's message to an external service while their key
+        sat in the keychain (the 07-25 relay bug). Nothing here may become that.
 
         NO ENV CHECK HERE, deliberately. A first version short-circuited on
-        ANTHROPIC_API_KEY, which was redundant — the getter this falls through to
-        already honours the env fallback — and actively harmful: it made the
-        result depend on the developer's own shell, so
-        `test_available_roles_keeps_fallback_until_key_appears` passed or failed
-        according to whether the machine running it had a key exported. A test
-        that reads the environment is not testing the code."""
-        if self._store is not None:
-            config = self.store.get_provider_config("anthropic")
-            if config and config["connected"]:
-                return True
-        return self._primary_key_available()
+        ANTHROPIC_API_KEY, which made the result depend on the developer's own shell,
+        so `test_available_roles_keeps_fallback_until_key_appears` passed or failed
+        according to whether the machine running it had a key exported. A test that
+        reads the environment is not testing the code."""
+        if self._store is None:
+            # CLI/tests with no store: nothing has been recorded, and an absence of
+            # bookkeeping is not evidence of an absent key.
+            return SecretPresence.UNKNOWN
+        return self.store.secret_presence(provider_id)
 
     def _maybe_reconnect_saved_providers(self) -> None:
         """Reconnect the non-Anthropic providers persisted as connected in a prior
