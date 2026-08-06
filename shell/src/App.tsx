@@ -883,7 +883,8 @@ export function App() {
       key: `primary:${m.id}`,
       label: m.label,
       group: m.providerLabel ?? "Cloud",
-      note: m.free ? "free" : "quality",
+      note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
+      unavailable: Boolean(m.unavailable),
       selected: models.selectedRole !== "local" && m.id === defaultCloudId,
       onPick: () => {
         models.handleChangeDefaultCloudModel(m.id);

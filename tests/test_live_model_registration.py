@@ -272,3 +272,52 @@ def test_an_alias_survives_a_base_that_was_filtered_out_for_another_reason():
     an otherwise-usable alias with it."""
     kept = [m.id for m in catalog_from_live_ids("google", ["gemini-9-flash-001"])]
     assert kept == ["gemini-9-flash-001"], "no base present, so nothing to be a duplicate of"
+
+
+# --- the only filter built on what HAPPENED ----------------------------------
+
+
+def test_a_refused_model_is_marked_and_sunk_but_never_removed():
+    """Evidence, not inference. `refused` comes from `provider_attempts`, where a
+    `model_gone` row means the provider answered 404 for that exact id — Google
+    listing `gemini-2.5-flash` and then calling it "no longer available to new
+    users". Every other filter reasons about what a model probably is; this one
+    reports what happened.
+
+    MARKED, NEVER REMOVED: a refusal could have been a bad afternoon, and a model
+    that quietly vanished would be a worse mystery than one visibly out of order.
+
+    Sunk to the end of ITS OWN provider run, not the end of the list — the picker
+    groups by company, and a model exiled to the bottom of everything would leave
+    its heading behind."""
+    from agent_core.models_catalog import CloudModel, mark_refused
+
+    models = [
+        CloudModel(id="a1", label="A1", description="", provider="anthropic"),
+        CloudModel(id="g1", label="G1", description="", provider="google"),
+        CloudModel(id="dead", label="Dead", description="", provider="google", quality_rank=20),
+        CloudModel(id="g2", label="G2", description="", provider="google"),
+    ]
+    out = mark_refused(models, {"dead"})
+
+    assert [m.id for m in out] == ["a1", "g1", "g2", "dead"]
+    assert out[-1].unavailable == "model_gone"
+    # ...and automatic routing must exhaust everything else first. Leaving a
+    # known-refused model where cost-first can reach for it is how the evening of
+    # 2026-08-06 was spent.
+    sunk_rank = out[-1].quality_rank
+    assert sunk_rank is not None
+    assert sunk_rank > max(m.quality_rank or 0 for m in out[:-1])
+    # The wire carries it only when it is true, so an older frontend sees the
+    # payload it always saw.
+    assert "unavailable" not in out[0].to_wire()
+    assert out[-1].to_wire()["unavailable"] == "model_gone"
+
+
+def test_nothing_refused_means_nothing_changes():
+    """A missing or empty log is "nothing is KNOWN to be refused" — never a claim
+    that everything works, and never a reordering."""
+    from agent_core.models_catalog import CloudModel, mark_refused
+
+    models = [CloudModel(id="a", label="A", description="", provider="anthropic")]
+    assert mark_refused(models, set()) == models

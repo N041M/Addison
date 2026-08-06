@@ -9,6 +9,7 @@ helpers tests monkeypatch on the ``agent_core.main`` namespace."""
 from __future__ import annotations
 
 from agent_core.models_catalog import (
+    mark_refused,
     CloudModel,
     default_cloud_model,
     find_cloud_model,
@@ -127,6 +128,20 @@ class ModelsMixin(ServerContext):
         others = [m for m in self._cloud_catalog if m.provider != provider_id]
         self._cloud_catalog = merge_catalogs([others, list(models)])
 
+    def _marked_catalog(self) -> list:
+        """The catalog with anything the provider has actually refused dimmed and
+        sunk. Store-free callers (CLI, tests without a store) get the plain list —
+        a missing log means nothing is known to be refused, which is the honest
+        default and never a claim that everything works."""
+        store = getattr(self, "store", None)
+        if store is None:
+            return self._cloud_catalog
+        try:
+            refused = store.refused_model_ids()
+        except Exception:
+            return self._cloud_catalog
+        return mark_refused(self._cloud_catalog, refused)
+
     def _available_roles(self) -> dict:
         return {
             # SETUP_ASSISTANT is an internal onboarding role, never a user-selectable
@@ -140,7 +155,9 @@ class ModelsMixin(ServerContext):
             # The curated cloud menu the PRIMARY picker renders (§4.1.1, §6.8): each
             # entry carries its plain-language label/description and its "answer style"
             # (effort) choices — empty for a model with no effort control.
-            "cloudModels": [model.to_wire() for model in self._cloud_catalog],
+            # Marked + sunk at the WIRE, not at connect: a model refused an hour
+            # ago must read as refused on the next open, without reconnecting.
+            "cloudModels": [model.to_wire() for model in self._marked_catalog()],
         }
 
     def _selection_error(

@@ -135,6 +135,14 @@ export interface CloudModel {
   provider?: string;
   providerLabel?: string;
   /**
+   * Set when the CORE has watched this provider refuse this model — a
+   * `model_gone` row in `provider_attempts`, i.e. observed rather than guessed.
+   * The picker dims the row and sinks it to the end of its company; it stays
+   * PICKABLE, because a refusal could have been a bad afternoon and a model that
+   * quietly vanished would be a worse mystery than one visibly out of order.
+   */
+  unavailable?: string;
+  /**
    * Whether this is a genuinely free model, as the CORE reports it. The composer
    * menu's note reads "free" only when this is true — the frontend never infers
    * it from a price, a provider name, or a "free tier" claim (CLAUDE.md, Phase-2

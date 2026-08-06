@@ -71,6 +71,11 @@ class CloudModel:
     # free model" disclaimer (D5) — custom-endpoint models are excluded there by the
     # candidate builder, never by this flag.
     free: bool = False
+    # Set when this provider has actually REFUSED this model — a `model_gone`
+    # row in `provider_attempts`, i.e. observed, not inferred. Holds the reason
+    # slug; the picker dims the row and the sentence explaining the class lives
+    # once under the list rather than thirty times inside it.
+    unavailable: str | None = None
 
     @property
     def supported_effort(self) -> tuple[str, ...]:
@@ -96,6 +101,9 @@ class CloudModel:
             "default": self.default,
             "provider": self.provider,
             "providerLabel": provider_label(self.provider),
+            # Absent when the model is fine, so an older frontend sees exactly the
+            # payload it always saw — the `unavailable` widget idiom.
+            **({"unavailable": self.unavailable} if self.unavailable else {}),
         }
 
 
@@ -209,6 +217,9 @@ def static_catalog_for(provider_id: str) -> list[CloudModel]:
 # reachable by name and by an explicit custom chain, and is the last thing
 # quality-first routing reaches for on its own.
 _UNRANKED_QUALITY_RANK = 80
+# Below even an unassessed model: a provider has refused this one, so automatic
+# routing must exhaust everything else before trying it again.
+_REFUSED_QUALITY_RANK = 99
 
 # Model families a provider lists that cannot hold a conversation. Google's
 # listing says which methods a model supports and is filtered on that; OpenAI's
@@ -326,6 +337,47 @@ def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
                 quality_rank=_UNRANKED_QUALITY_RANK,
             )
         )
+    return out
+
+
+def mark_refused(models: list[CloudModel], refused: set[str]) -> list[CloudModel]:
+    """Mark the models this provider has actually refused, and sink them.
+
+    EVIDENCE, NOT INFERENCE — `refused` comes from `provider_attempts`, where a
+    `model_gone` row means the provider answered 404 for that exact id. Every other
+    filter in this file reasons about what a model probably is; this one reports
+    what happened. Google listed `gemini-2.5-flash` advertising the right method
+    and then refused it as "no longer available to new users", and nothing on the
+    row could have shown that until the log existed.
+
+    MARKED, NEVER REMOVED. A refusal could have been a bad afternoon, and a model
+    that quietly vanished from the picker would be a worse mystery than one that
+    is visibly out of order. It stays pickable — the person may know something the
+    log does not.
+
+    Sunk to the END OF ITS OWN PROVIDER RUN rather than the end of the list, so the
+    picker's grouping survives; the fold then hides it by default, which is the
+    whole reason marking and sinking are one change and not two. Its quality rank
+    goes to last-resort in the same move: leaving a known-refused model where
+    automatic routing can reach for it is how an evening gets spent."""
+    if not refused:
+        return models
+    out: list[CloudModel] = []
+    i = 0
+    while i < len(models):
+        provider = models[i].provider
+        end = i
+        while end < len(models) and models[end].provider == provider:
+            end += 1
+        run = models[i:end]
+        ok = [m for m in run if m.id not in refused]
+        bad = [
+            replace(m, unavailable="model_gone", quality_rank=_REFUSED_QUALITY_RANK)
+            for m in run
+            if m.id in refused
+        ]
+        out.extend(ok + bad)
+        i = end
     return out
 
 

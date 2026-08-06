@@ -48,6 +48,8 @@ export interface ModelPopupOption {
   group?: string;
   /** "quality" | "free" | "local" — derived from the CORE's flags, never guessed. */
   note: string;
+  /** The provider has refused this model before (core-observed, never inferred). */
+  unavailable?: boolean;
   selected: boolean;
   onPick: () => void;
 }
@@ -235,10 +237,16 @@ export function ModelPopup({
               "flex cursor-pointer items-baseline gap-2.5 border-l-2 border-t py-3 pl-3 pr-0.5 " +
               "text-[12px] transition-colors hover:text-ink " +
               (i === 0 || first ? "border-t-transparent " : "border-t-line ") +
-              (o.selected ? "border-l-accent text-ink" : "border-l-transparent text-ink-soft")
+              (o.unavailable
+                ? "border-l-transparent text-disabled"
+                : o.selected
+                  ? "border-l-accent text-ink"
+                  : "border-l-transparent text-ink-soft")
             }
           >
-            <span className="min-w-0 truncate">{o.label}</span>
+            <span className={"min-w-0 truncate " + (o.unavailable ? "line-through" : "")}>
+              {o.label}
+            </span>
             <span className="flex-1" />
             <span
               className={

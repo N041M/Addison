@@ -105,6 +105,8 @@ interface Option {
   pillLabel: string;
   /** The mono note at the right of the row: "local" | "free" | "quality". */
   note: string;
+  /** The provider has refused this model before — dimmed, and sunk by the core. */
+  unavailable?: boolean;
   current: boolean;
 }
 
@@ -168,7 +170,8 @@ export function ModelSelector({
       group: m.providerLabel ?? "Cloud",
       pillLabel: m.label,
       // Only the core may call a model free (see the file header).
-      note: m.free ? "free" : "quality",
+      note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
+      unavailable: Boolean(m.unavailable),
       current: !onLocal && m.id === activeCloud?.id,
     })),
     ...locals.map((m) => ({
@@ -516,7 +519,8 @@ export function ModelSelector({
                   <span
                     className={
                       "min-w-0 truncate font-mono text-[10.5px] " +
-                      (o.current ? "text-ink" : "text-muted")
+                      (o.unavailable ? "text-disabled line-through" :
+                        o.current ? "text-ink" : "text-muted")
                     }
                   >
                     {o.label}

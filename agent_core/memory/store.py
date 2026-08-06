@@ -838,6 +838,19 @@ class Store:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def refused_model_ids(self) -> set[str]:
+        """Model ids a provider has answered 404 for (`model_gone`).
+
+        The picker reads this to dim and sink a model that is listed but will not
+        answer — the only filter in the app built on what HAPPENED rather than on
+        what a model looks like. Ids only: the reason is in the row, and the
+        picker deliberately shows one sentence for the class rather than repeating
+        a provider's own wording thirty times in plain sight."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT model FROM provider_attempts WHERE outcome = 'model_gone'"
+        ).fetchall()
+        return {row["model"] for row in rows if row["model"]}
+
     def prune_usage_log(self, cutoff: int) -> None:
         """Retention for the §4.8 usage substrate: delete every usage row strictly
         older than ``cutoff`` (its ``created_at`` epoch seconds is less than it).
