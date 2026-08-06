@@ -30,9 +30,9 @@ describe("modelListRows", () => {
     const rows = modelListRows([...anthropic, ...google], new Set(["Google"]));
     const kinds = rows.map((r) => r.kind);
 
-    // Anthropic is expanded (one model, nothing to fold), so it draws its
-    // company heading, that model's family, then the model.
-    expect(kinds.slice(0, 3)).toEqual(["heading", "family", "option"]);
+    // Anthropic is expanded (one model, nothing to fold) and its single family
+    // groups nothing, so no family label — heading straight to the model.
+    expect(kinds.slice(0, 2)).toEqual(["heading", "option"]);
     expect(rows.filter((r) => r.kind === "option")).toHaveLength(1 + COLLAPSED_ROW_COUNT);
     const more = rows.find((r) => r.kind === "more");
     expect(more).toMatchObject({ key: "Google", hidden: google.length - COLLAPSED_ROW_COUNT });
@@ -131,5 +131,38 @@ describe("modelFamily", () => {
     expect(modelFamily("llama3")).toBe("Llama3");
     expect(modelFamily("o4-mini")).toBe("O4");
     expect(modelFamily("")).toBe("");
+  });
+});
+
+describe("families only label what they group", () => {
+  it("stays silent when every family holds exactly one model", () => {
+    // Opus, Sonnet and Haiku are three families of one. A label above each heads
+    // a run of one and says nothing the model's own name does not — the same
+    // furniture problem that ruled out folding at family level, one scale down.
+    const rows = modelListRows(
+      ["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"].map((id) => ({
+        id,
+        group: "Anthropic",
+      })),
+      new Set(),
+    );
+    expect(rows.filter((r) => r.kind === "family")).toHaveLength(0);
+    expect(rows.filter((r) => r.kind === "option")).toHaveLength(3);
+  });
+
+  it("labels as soon as one family holds more than one", () => {
+    // A single grouping family is enough: once any label covers two rows, the
+    // labels are describing structure rather than restating names.
+    const rows = modelListRows(
+      ["gemini-2.5-pro", "gemini-2.5-flash", "gemma-4-31b-it"].map((id) => ({
+        id,
+        group: "Google",
+      })),
+      new Set(),
+    );
+    expect(rows.flatMap((r) => (r.kind === "family" ? [r.family] : []))).toEqual([
+      "Gemini 2.5",
+      "Gemma 4",
+    ]);
   });
 });

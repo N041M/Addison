@@ -123,10 +123,18 @@ export function modelListRows<T extends GroupedRow>(
       // "Gemma 4" is a list somebody can scan. The families do NOT fold — real
       // ones hold one to three models, so a fold there would almost never fire
       // and would cost a heading per model to say so.
+      // FAMILIES ONLY EARN A LABEL WHEN THEY GROUP SOMETHING. If every family in
+      // this company holds exactly one model, each label heads a run of one and
+      // says nothing the model's own name does not — three headings for
+      // Opus/Sonnet/Haiku is the same furniture problem that ruled out folding at
+      // family level, one scale smaller. Google's nineteen genuinely group; a
+      // three-model Anthropic catalogue genuinely does not.
+      const families = new Set(run.map((o) => (o.id ? modelFamily(o.id) : "")));
+      const familiesGroup = families.size < run.length;
       let lastFamily: string | undefined;
       for (let k = 0; k < run.length; k += 1) {
         const option = run[k];
-        const family = option.id ? modelFamily(option.id) : undefined;
+        const family = familiesGroup && option.id ? modelFamily(option.id) : undefined;
         if (family && family !== lastFamily) {
           rows.push({ kind: "family", key: `${group} ${family}`, family });
           lastFamily = family;
