@@ -203,15 +203,35 @@ device item stays foreign after an identity rotation, one dialog per session —
 what a future pass would have to add are written up in
 [KNOWN-GAPS.md](KNOWN-GAPS.md).
 
-**Detection, as built.** Nothing in the API says "this item is foreign", so the
-signal is elapsed time: a foreign item ALWAYS prompts, and a prompt always waits on
-a human, so a *successful read that waited* is a read of a foreign item. Spike 1
-measured an app-owned read at 29 ms *(measured 2026-07-31 · a warm read of an
-app-owned item from the signing binary itself, on the owner's machine; a cold
-first read or a slower machine moves it)*; the threshold is 400 ms
-(`FOREIGN_READ_THRESHOLD`). One-sided and cheap in both directions — a slow but
-app-owned read costs one unnecessary, verified re-creation, and a foreign read
-cannot slip under the bar without a dialog nobody saw.
+**Detection, as built (revised 2026-08-06).** Nothing in the API says "this item is
+foreign", so detection is a **recorded fact first, and the clock only as a
+fallback**.
+
+The fact: every write goes through `write_credential_with`, so the app knows when
+IT minted an item, and records that in the **mint ledger**. A ledger entry
+*vetoes* a heal — an item this build minted is not foreign, whatever the stopwatch
+says.
+
+The fallback, for an item with no record: a foreign item ALWAYS prompts, and a
+prompt always waits on a human, so a *successful read that waited* is a read of a
+foreign item. Spike 1 measured an app-owned read at 29 ms *(measured 2026-07-31 ·
+a warm read of an app-owned item from the signing binary itself, on the owner's
+machine; a cold first read or a slower machine moves it)*; the threshold is 400 ms
+(`FOREIGN_READ_THRESHOLD`).
+
+**Why the clock was demoted.** It is a threshold calibrated on one machine, and
+what it gates is the one operation here that can lose a key. On 2026-08-06 the
+owner's machine produced repeated re-creations of the same item under rebuild
+churn — a legitimate app-owned read crossing 400 ms because the app was
+relaunching while the tree was being recompiled. The heuristic's reasoning was
+never wrong; it is simply not something to point at a credential when a fact is
+available.
+
+**The asymmetry that decides the tie.** When the ledger says "ours" and the read
+nonetheless waited, the record is dropped *and the veto still stands for this
+read*. The two ways to be wrong are not equal: a stale record costs ONE extra
+session with a dialog and then converges, while trusting the clock over the record
+can cost the key. The recoverable mistake is the one to make.
 
 **~~Honest limit~~ — VOID as of 2026-08-06.** This section used to say: *"spike 1
 showed that under the self-signed dev cert even an app-created item prompts after a

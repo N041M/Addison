@@ -19,9 +19,10 @@
 // emitted, and never crosses an IPC boundary.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
@@ -255,21 +256,212 @@ fn account_for_provider(provider: &str) -> String {
 // a provider key can be pasted again from the vendor's website, while the device
 // identity's private half is recoverable by nobody. See docs/KNOWN-GAPS.md.
 
-/// How long a successful OS read has to take before it is treated as a read of a
-/// FOREIGN item — i.e. one that raised a password dialog somebody answered.
+// ===========================================================================
+// THE MINT LEDGER — a fact, where there used to be only a stopwatch
+// ===========================================================================
+// Self-heal is a delete-then-add on somebody's live API key. Until 2026-08-06 the
+// only thing standing between a healthy item and that operation was ELAPSED TIME:
+// a read slower than 400 ms was called foreign. The reasoning was sound (a foreign
+// item always prompts, a prompt always waits on a human) but the number was
+// calibrated on one machine, and a legitimate app-owned read that stalls past the
+// bar — a loaded machine, a slow disk, a laptop coming out of sleep — bought an
+// unnecessary destroy-and-re-mint of a real credential.
+//
+// There is a FACT available where there was a guess. Every credential write in this
+// module goes through `write_credential`, so the app knows exactly which items IT
+// created — and since `sign-and-run.sh` began passing an explicit designated
+// requirement, an item minted by this build stays matchable across rebuilds (which
+// is what voided the plan's "honest limit"). An item we minted is not foreign. So
+// the ledger below records the mint, the ledger's answer VETOES the heal, and the
+// clock is consulted only for an item we have no record of.
+//
+// **WHERE IT LIVES, and why not `provider_config`.** A JSON file beside Addison's
+// data, `~/.addison/keychain-mints.json`, holding one account name and one epoch
+// second each. Three reasons it is not a column on `provider_config`, which is where
+// the rest of the non-secret per-provider bookkeeping (`secret_presence`,
+// `key_rejected_at`) lives:
+//
+//   1. **The shell cannot reach it.** `provider_config` is SQLite, owned by the Agent
+//      Core, and the IPC runs core -> shell. This decision is made INSIDE the shell's
+//      own read path with the OS lock held; routing it through a channel that does
+//      not exist, in the process with the fewest permissions, to answer a question
+//      about an OS keychain item, would be a new inversion of the trust gradient for
+//      a boolean.
+//   2. **A snapshot restore must never be able to fire the destructive operation.**
+//      `provider_config` IS snapshot-captured (`snapshots/scope.py`). Restoring a
+//      snapshot taken BEFORE a mint would erase the record for an item we do own —
+//      and an erased record is the one direction that costs a key: the next slow read
+//      falls back to the clock and re-mints a healthy credential, i.e. G3's recovery
+//      path handing the subsystem its own data-losing operation. Restoring one taken
+//      AFTER an item was replaced outside Addison resurrects a veto for an item that
+//      is now foreign — the harmless direction, but still a lie. A file outside the
+//      capture scope is structurally incapable of both. `secret_presence` and
+//      `key_rejected_at` reach the same conclusion by being listed in
+//      `_EXCLUDED_COLUMNS`; correctness that depends on another process's exclusion
+//      list staying right is weaker than correctness that depends on nothing.
+//   3. **The record is about a keychain ITEM, not about a provider.** It is keyed by
+//      account name, so it is deleted with the item and follows the same lifetime.
+//
+// What a snapshot restore does to it, stated plainly: **nothing at all.** No list,
+// capture, restore or prune path in `agent_core/snapshots/` touches a file; a
+// restore rewrites table rows. The ledger's answer after a restore is exactly its
+// answer before one.
+//
+// **G1.** The ledger holds account names and epoch seconds. Never a key, never a
+// length, never a prefix — the same rule the trace lives under, and
+// `the_mint_ledger_never_holds_key_material` is the test that keeps it.
+
+/// The ledger file, beside Addison's data. Not a dotfile: somebody looking for what
+/// Addison keeps on their machine should be able to see it, read it, and delete it.
+const MINT_LEDGER_FILE: &str = "keychain-mints.json";
+
+/// What the file says about itself, so a person who opens it does not have to come
+/// back here to find out whether it holds a secret.
+const MINT_LEDGER_NOTE: &str =
+    "Keychain items this copy of Addison created, and when. No key material is \
+     stored here — only the account name and a timestamp. Deleting this file is \
+     safe: Addison falls back to detecting a foreign item by how long a read took.";
+
+/// The durable record of which keychain items this app minted.
 ///
-/// This is the detection mechanism, and it is exact rather than heuristic about the
-/// thing that matters: a foreign item ALWAYS prompts (that is what foreign means),
-/// and a prompt always waits on a human. Spike 1 measured an app-owned read at 29 ms;
-/// the fastest conceivable human answer is two orders of magnitude above that. So the
-/// gap this threshold sits in is enormous, and the failure mode is one-sided and
-/// cheap: an unusually slow but app-owned read costs one unnecessary (and verified)
-/// re-creation, while a foreign read cannot slip under it without a dialog nobody saw.
-const FOREIGN_READ_THRESHOLD: Duration = Duration::from_millis(400);
+/// Best-effort by construction: every operation swallows its errors, because the
+/// worst case of an unwritable ledger is the behaviour this module had before the
+/// ledger existed (the clock decides), and that is not worth failing a key read for.
+///
+/// The directory is held rather than looked up so the whole thing is drivable from a
+/// test against a temp directory — `cargo test` must never write to the user's real
+/// data directory, exactly as it must never touch their real keychain. `None` means
+/// there is nowhere to keep it (no `HOME`), and every answer is then "no record".
+///
+/// SERIALIZATION: every live mutation happens with `os_guard()` held, so the
+/// read-modify-write below cannot interleave with another one in this process.
+struct MintLedger {
+    dir: Option<PathBuf>,
+}
+
+impl MintLedger {
+    /// The live ledger, beside Addison's own data.
+    fn live() -> Self {
+        Self { dir: std::env::var("HOME").ok().filter(|home| !home.is_empty()).map(|home| {
+            PathBuf::from(home).join(".addison")
+        }) }
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        self.dir.as_ref().map(|dir| dir.join(MINT_LEDGER_FILE))
+    }
+
+    /// The `minted` map as it stands on disk. A missing, unreadable or corrupt file
+    /// is an EMPTY map, never an error: "no record" is the safe answer, because it
+    /// only ever falls back to the clock.
+    fn minted(&self) -> serde_json::Map<String, Value> {
+        let Some(path) = self.path() else {
+            return serde_json::Map::new();
+        };
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|value| value.get("minted").and_then(Value::as_object).cloned())
+            .unwrap_or_default()
+    }
+
+    fn write(&self, minted: serde_json::Map<String, Value>) {
+        let (Some(dir), Some(path)) = (self.dir.as_ref(), self.path()) else {
+            return;
+        };
+        let _ = std::fs::create_dir_all(dir);
+        let document = json!({ "note": MINT_LEDGER_NOTE, "minted": minted });
+        // Via a temp file, so an interrupted write cannot leave a half-written
+        // document that reads as "we minted nothing" for every account at once —
+        // which is the erasure direction, the one that costs a key.
+        let temporary = path.with_extension("json.tmp");
+        if std::fs::write(&temporary, document.to_string()).is_ok() {
+            let _ = std::fs::rename(&temporary, &path);
+        }
+    }
+
+    /// Does the ledger say this build created the item behind `account`?
+    fn recorded(&self, account: &str) -> bool {
+        self.minted().contains_key(account)
+    }
+
+    /// Record a mint. The value is the epoch second it happened — nothing reads it
+    /// today (presence is the whole signal), and it is stored anyway because this
+    /// subsystem is diagnosed by reading things, and "when did we create this item?"
+    /// is the first question anybody debugging a returning dialog will have.
+    fn remember(&self, account: &str) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since| since.as_secs())
+            .unwrap_or(0);
+        let mut minted = self.minted();
+        minted.insert(account.to_string(), json!(now));
+        self.write(minted);
+    }
+
+    /// Forget a mint. Called when the item is gone (a deliberate removal, or a
+    /// repair that could not put it back) and when the record is falsified by a
+    /// read that waited.
+    fn forget(&self, account: &str) {
+        let mut minted = self.minted();
+        if minted.remove(account).is_some() {
+            self.write(minted);
+        }
+    }
+}
+
+/// How long a successful OS read has to take before it is treated as a read of a
+/// FOREIGN item. **The FALLBACK signal**, used only for an item the mint ledger has
+/// no record of — see the ledger block above for why it is no longer the primary one.
+///
+/// It is still exact about the thing that matters: a foreign item ALWAYS prompts
+/// (that is what foreign means), and a prompt always waits on a human. The gap it
+/// sits in is enormous in both directions — an app-owned read was measured at 29 ms
+/// *(measured 2026-07-31 · a warm read of an app-owned keychain item from the signing
+/// binary itself, on the owner's machine; a cold first read or a slower machine moves
+/// it)*, while answering a dialog means noticing a window that just appeared and
+/// clicking or typing in it, which no one does inside a second and a half.
+///
+/// **Widened from 400 ms to 1500 ms on 2026-08-06**, in the same change that added
+/// the ledger, and the two go together: 400 ms defended a narrow band against a
+/// destructive penalty, on a number taken on one machine. What sits below the bar is
+/// a delay nobody paid for; what sits above it is a human being. A stalled but
+/// app-owned read is not rare, and the cost of calling one foreign is a
+/// destroy-and-re-mint of a live credential — so the bar belongs at the edge of the
+/// human range, not at the edge of the machine range. The failure mode stays
+/// one-sided: a genuinely foreign read that somehow lands under 1500 ms costs one
+/// more session with a dialog, which is a nuisance, not a loss.
+const FOREIGN_READ_THRESHOLD: Duration = Duration::from_millis(1500);
 
 /// The rule, pure and injected, so the test drives values rather than a real clock.
 fn read_looked_foreign(elapsed: Duration) -> bool {
     elapsed >= FOREIGN_READ_THRESHOLD
+}
+
+/// The ledger's answer for THIS read — and the one place a stale record is caught.
+///
+/// `true` vetoes the heal: we created this item, so it is not foreign, so there is
+/// nothing to repair.
+///
+/// A read that WAITED contradicts a record: an item on whose access list this build
+/// sits does not raise a dialog. Something outside Addison changed underneath the
+/// record — a keychain restored onto another Mac, an item replaced in Keychain
+/// Access, a signing identity that rotated. The record is therefore dropped here,
+/// **and the veto still stands for this read**, deliberately. The alternative is to
+/// destroy a credential on the strength of the very timing signal the record exists
+/// to overrule, and one of those two mistakes is recoverable by the person doing
+/// nothing at all. With the record gone the next read has no veto, falls back to the
+/// clock, and heals. A stale record therefore costs ONE extra session with a dialog
+/// and then converges — against a design that could cost a key.
+fn mint_record_vetoes_heal(ledger: &MintLedger, account: &str, elapsed: Duration) -> bool {
+    if !ledger.recorded(account) {
+        return false;
+    }
+    if read_looked_foreign(elapsed) {
+        trace!("heal", account, "ledger says ours but the read waited -> record dropped");
+        ledger.forget(account);
+    }
+    true
 }
 
 /// Providers whose key was destroyed by a repair that could not put it back. There is
@@ -372,17 +564,48 @@ fn write_credential_with(
     Err(WriteFailure::Lost)
 }
 
-/// `write_credential_with` bound to a real keyring entry.
+/// What a completed write means for the mint ledger. Split out of `write_credential`
+/// so the rule is provable without an OS keychain, and stated once rather than at the
+/// three call sites:
+///
+///   * `Ok` — the item that exists now was created by this build, moments ago, with
+///     this build on its access list. That is the whole fact self-heal needs.
+///   * `Lost` — the delete landed and nothing could be put back. There is no item, so
+///     there is nothing we minted; leaving the record would veto the repair of
+///     whatever the person saves next.
+///   * `Untouched` — nothing happened. Whatever the ledger said before is still true.
+fn record_write_outcome(ledger: &MintLedger, account: &str, outcome: &Result<(), WriteFailure>) {
+    match outcome {
+        Ok(()) => ledger.remember(account),
+        Err(WriteFailure::Lost) => ledger.forget(account),
+        Err(WriteFailure::Untouched) => {}
+    }
+}
+
+/// `write_credential_with` bound to a real keyring entry, plus the mint record.
+///
+/// `account` is passed rather than read off `entry` because `keyring::Entry` does not
+/// expose it — and it is required, not optional, so that "every write records the
+/// mint" is a property of this function instead of something three call sites each
+/// remembered.
 ///
 /// Called only with `os_guard()` already held — every caller is inside the OS lock,
-/// and the lock is not reentrant.
-fn write_credential(entry: &Entry, value: &str) -> Result<(), WriteFailure> {
-    write_credential_with(
+/// and the lock is not reentrant. That is also what serializes the ledger's
+/// read-modify-write.
+fn write_credential(
+    entry: &Entry,
+    ledger: &MintLedger,
+    account: &str,
+    value: &str,
+) -> Result<(), WriteFailure> {
+    let outcome = write_credential_with(
         value,
         &|| entry.delete_credential(),
         &|v| entry.set_password(v),
         &|| entry.get_password(),
-    )
+    );
+    record_write_outcome(ledger, account, &outcome);
+    outcome
 }
 
 /// The legacy role-based Anthropic account, from before the per-provider scheme.
@@ -492,9 +715,11 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
         }
     };
     let _os = os_guard();
-    let entry = Entry::new(SERVICE, &account_for_provider(provider))
+    let account = account_for_provider(provider);
+    let ledger = MintLedger::live();
+    let entry = Entry::new(SERVICE, &account)
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
-    if save_would_change_nothing(provider, &entry, key) {
+    if save_would_change_nothing(provider, &ledger, &account, &entry, key) {
         trace!("save", &format!("provider={provider}"), "unchanged (no write)");
         failure_forget(provider);
         return Ok(());
@@ -502,7 +727,7 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     // NOT `set_password`. See the WRITES block above: `set_password` falls back to
     // `SecItemUpdate` on a duplicate, which preserves the old foreign ACL — so the
     // convenient call is exactly the one that makes "save it again" useless.
-    match write_credential(&entry, key) {
+    match write_credential(&entry, &ledger, &account, key) {
         Ok(()) => {}
         Err(WriteFailure::Untouched) => {
             return Err("Couldn't save your key to the system keychain.".to_string())
@@ -544,10 +769,24 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
 ///   * the provider is not on the repair-lost list, where the keychain holds nothing at
 ///     all and the cached value is the only copy left.
 ///
+/// Foreignness is decided by the SAME rule the read path uses — the mint ledger first,
+/// the clock only where the ledger is silent — and it must stay the same rule, because
+/// the two disagreeing means one of them is running delete-then-add on an item the
+/// other calls healthy. In particular this path is where a stale record gets falsified
+/// for somebody who reaches for Save rather than for their next message: the veto holds
+/// for this press (nothing is destroyed), the record is dropped, and the second press
+/// writes and repairs. Twice, not forever.
+///
 /// Anything unreadable answers `false`: when Addison cannot see what is stored, the
 /// safe move is to write, which also repairs. A dialog dismissed here therefore still
 /// lets the Save go through.
-fn save_would_change_nothing(provider: &str, entry: &Entry, key: &str) -> bool {
+fn save_would_change_nothing(
+    provider: &str,
+    ledger: &MintLedger,
+    account: &str,
+    entry: &Entry,
+    key: &str,
+) -> bool {
     if repair_lost_recorded(provider) {
         return false;
     }
@@ -556,7 +795,8 @@ fn save_would_change_nothing(provider: &str, entry: &Entry, key: &str) -> bool {
     }
     let started = Instant::now();
     let stored = entry.get_password();
-    if read_looked_foreign(started.elapsed()) {
+    let elapsed = started.elapsed();
+    if !mint_record_vetoes_heal(ledger, account, elapsed) && read_looked_foreign(elapsed) {
         return false;
     }
     stored.is_ok_and(|stored| stored == key)
@@ -591,12 +831,19 @@ fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
     cache_evict(provider);
     failure_forget(provider);
     repair_lost_forget(provider);
-    let entry = Entry::new(SERVICE, &account_for_provider(provider))
+    let account = account_for_provider(provider);
+    let entry = Entry::new(SERVICE, &account)
         .map_err(|_| "Couldn't reach the system keychain to remove your key.".to_string())?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => {}
         Err(_) => return Err("Couldn't remove your key from the system keychain.".to_string()),
     }
+    // The item is gone, so the mint record is a claim about nothing. Forgotten only
+    // AFTER the delete lands: on a failed delete the item is still there, still ours,
+    // and still owed its veto. Whatever the person saves next mints a fresh item and
+    // a fresh record, and anything that turns up under this account name in the
+    // meantime was not put there by Addison.
+    MintLedger::live().forget(&account);
     // The legacy account is a SECOND durable copy of the same key: left behind, it
     // resurrects the removed key on the next read through the migration fallback in
     // `get_provider_key`. Removal has to clear both. A missing legacy entry is the
@@ -676,6 +923,8 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
         return answer;
     }
     let _os = os_guard();
+    let account = account_for_provider(provider);
+    let ledger = MintLedger::live();
     // Re-check under the OS lock: a caller that queued behind another request for the
     // same provider must read ITS result rather than raise a second dialog for an
     // item that has just been fetched.
@@ -684,9 +933,10 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
         return answer;
     }
 
-    // TIMED, because the elapsed time is the foreign-item signal (see
+    // TIMED, because elapsed time is the FALLBACK foreign-item signal (see
     // FOREIGN_READ_THRESHOLD): a read that waited on a password dialog is by
-    // definition a read of an item this build is not on the access list for.
+    // definition a read of an item this build is not on the access list for. The
+    // primary signal is the mint ledger, consulted below.
     let started = Instant::now();
     let read = read_provider_key_from_os(provider);
     let elapsed = started.elapsed();
@@ -694,6 +944,10 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
     let freshly_written = read.freshly_written;
     let mut outcome = read.outcome;
     trace!("cached-as", &format!("provider={provider}"), outcome.trace_word());
+    // INSTRUMENTATION for the fallback. The threshold is argued from one machine's
+    // numbers, so the read's own duration is worth being able to see on another's —
+    // and a duration is not key material, so it costs G1 nothing.
+    trace!("OS-READ", &account, &format!("took {}ms", elapsed.as_millis()));
     match &outcome {
         KeyRead::Found(key) => {
             // CACHE BEFORE HEALING, deliberately. The heal is the one operation that
@@ -701,8 +955,15 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
             // case: with the value already cached, a failed repair costs the person a
             // sentence at the next launch, never this message.
             cache_put(provider, key);
-            if should_self_heal(freshly_written, elapsed) {
-                self_heal(provider, key);
+            // The ledger is asked ONLY about an item this read did not create. The
+            // legacy migration mints the destination moments before this line and
+            // then spends its time on the LEGACY item's dialog — so asking would
+            // falsify (and drop) a record written seconds ago, on the strength of a
+            // wait that belonged to a different item.
+            let minted_by_this_app =
+                !freshly_written && mint_record_vetoes_heal(&ledger, &account, elapsed);
+            if should_self_heal(freshly_written, minted_by_this_app, elapsed) {
+                self_heal(provider, &ledger, &account, key);
             }
         }
         // Remembered so a later background caller answers from memory instead of
@@ -720,17 +981,24 @@ fn get_provider_key(provider: &str, fresh: bool) -> KeyRead {
 }
 
 /// Does this successful read call for a repair? Pure, so the decision is provable
-/// without an OS keychain — and because the two conditions pull in opposite
+/// without an OS keychain — and because the three conditions pull in opposite
 /// directions and would otherwise sit inline in a match arm nobody can reach.
 ///
-///   * the read WAITED, so a dialog was answered, so the item is foreign;
-///   * and the item was not created during this very read. The legacy migration
-///     mints a fresh item under this build's identity but spends its time on the
-///     LEGACY item's dialog — so without this the elapsed signal would fire and
-///     Addison would destroy-and-re-mint an item it made seconds ago, running the
-///     one data-losing operation for nothing at all.
-fn should_self_heal(freshly_written: bool, elapsed: Duration) -> bool {
-    !freshly_written && read_looked_foreign(elapsed)
+///   * the item was not created during this very read. The legacy migration mints a
+///     fresh item under this build's identity but spends its time on the LEGACY
+///     item's dialog — so without this the elapsed signal would fire and Addison
+///     would destroy-and-re-mint an item it made seconds ago, running the one
+///     data-losing operation for nothing at all;
+///   * and the mint ledger has no record of this build creating the item. A record is
+///     a FACT about who made it, and it beats any inference from a stopwatch (see the
+///     ledger block above);
+///   * and, where the ledger is silent, the read WAITED — so a dialog was answered,
+///     so the item is foreign.
+///
+/// Ordering matters and is asserted: `freshly_written` wins over the ledger's answer,
+/// or the migration case would consult a record it wrote moments earlier.
+fn should_self_heal(freshly_written: bool, minted_by_this_app: bool, elapsed: Duration) -> bool {
+    !freshly_written && !minted_by_this_app && read_looked_foreign(elapsed)
 }
 
 /// §4.2 — repair a foreign item by re-creating it, with the bytes we just read.
@@ -745,12 +1013,15 @@ fn should_self_heal(freshly_written: bool, elapsed: Duration) -> bool {
 /// PROVIDER KEYS ONLY. `ensure_device_keypair` deliberately does not call this: a
 /// provider key can be pasted again from the vendor's site, and the device identity's
 /// private half cannot be recovered by anyone. See docs/KNOWN-GAPS.md.
-fn self_heal(provider: &str, key: &str) {
+fn self_heal(provider: &str, ledger: &MintLedger, account: &str, key: &str) {
     trace!("heal", &format!("provider={provider}"), "foreign item -> re-creating");
-    let Ok(entry) = Entry::new(SERVICE, &account_for_provider(provider)) else {
+    let Ok(entry) = Entry::new(SERVICE, account) else {
         return;   // no handle, nothing deleted — the item is exactly as it was
     };
-    match write_credential(&entry, key) {
+    // The write records the mint, which is what makes this run ONCE: the item that
+    // comes back is one we created, so the next read is vetoed out of healing it
+    // again even if that read is slow for its own reasons.
+    match write_credential(&entry, ledger, account, key) {
         Ok(()) => trace!("heal", &format!("provider={provider}"), "re-created"),
         // Nothing was removed; the person keeps the item they had, foreign ACL and all,
         // and the next session tries again.
@@ -794,7 +1065,9 @@ fn read_provider_key_from_os(provider: &str) -> OsRead {
     };
     match entry.get_password() {
         Ok(key) => OsRead::plain(KeyRead::Found(key)),
-        Err(keyring::Error::NoEntry) if provider == LEGACY_PROVIDER => legacy_anthropic_key(&entry),
+        Err(keyring::Error::NoEntry) if provider == LEGACY_PROVIDER => {
+            legacy_anthropic_key(&entry, &account)
+        }
         Err(keyring::Error::NoEntry) => OsRead::plain(KeyRead::NothingSaved),
         Err(_) => OsRead::plain(KeyRead::Unreadable),
     }
@@ -822,7 +1095,7 @@ impl OsRead {
 /// Read the legacy Anthropic key and migrate it into `destination`. Returns the key
 /// either way — a migration that couldn't complete must not cost the user their key
 /// for this launch.
-fn legacy_anthropic_key(destination: &Entry) -> OsRead {
+fn legacy_anthropic_key(destination: &Entry, destination_account: &str) -> OsRead {
     // A SECOND OS touch inside one logical read — and therefore a second dialog.
     // Only reached when `provider-key:anthropic` reported NoEntry, but that is
     // exactly the case worth seeing in a trace: `NothingSaved` is never cached, so
@@ -838,8 +1111,11 @@ fn legacy_anthropic_key(destination: &Entry) -> OsRead {
             // The destination reported NoEntry a moment ago, so the delete is a no-op
             // and this is a plain add — but routing it here is what keeps "every write
             // is delete-then-add" a property of the module rather than of three call
-            // sites that each remembered.
-            let copied = write_credential(destination, &key).is_ok();
+            // sites that each remembered. It also records the mint, which is what
+            // makes `freshly_written` and the ledger agree about this item instead of
+            // the caller having to keep them in step by hand.
+            let ledger = MintLedger::live();
+            let copied = write_credential(destination, &ledger, destination_account, &key).is_ok();
             migrate_legacy_key(|| copied, || legacy.delete_credential());
             OsRead { outcome: KeyRead::Found(key), freshly_written: copied }
         }
@@ -1535,6 +1811,21 @@ mod tests {
             "a threshold this low re-mints healthy items on a slow disk — and the \
              re-mint is the one operation that can lose the key"
         );
+        // The 2026-08-06 widening, as bounds rather than as a comment. The fallback
+        // only ever runs for an item the ledger cannot vouch for, and what it decides
+        // is whether to destroy a live credential — so the bar belongs at the bottom
+        // of the HUMAN range (noticing a window and clicking it), not just above the
+        // machine range.
+        assert!(
+            FOREIGN_READ_THRESHOLD >= Duration::from_millis(1000),
+            "back below a second: a stalled but app-owned read is now called foreign, \
+             and the penalty for that is a destroy-and-re-mint of somebody's key"
+        );
+        assert!(
+            FOREIGN_READ_THRESHOLD <= Duration::from_millis(2500),
+            "so high that a genuinely foreign item is never repaired, which leaves the \
+             dialog coming back every session — the symptom self-heal exists to end"
+        );
     }
 
     #[test]
@@ -1544,14 +1835,217 @@ mod tests {
         // build moments ago and is not foreign at all. Healing it would run the one
         // data-losing operation in the subsystem for nothing.
         let slow = Duration::from_secs(3);
-        assert!(!should_self_heal(true, slow), "a just-migrated item was re-created");
+        assert!(!should_self_heal(true, false, slow), "a just-migrated item was re-created");
         // The control: an ordinary slow read of an item nobody just wrote IS healed,
         // or this test would pass for a version that never heals anything.
-        assert!(should_self_heal(false, slow));
-        assert!(!should_self_heal(false, Duration::from_millis(29)));
+        assert!(should_self_heal(false, false, slow));
+        assert!(!should_self_heal(false, false, Duration::from_millis(29)));
         // And the flag genuinely rides on an ordinary read as `false`, so the
         // condition above is the one the shipped path evaluates.
         assert!(!OsRead::plain(KeyRead::NothingSaved).freshly_written);
+    }
+
+    // --- The mint ledger: the FACT that outranks the stopwatch ---------------
+
+    /// A ledger with nowhere to live. Every answer is "no record" and nothing is
+    /// written, which is the pre-ledger behaviour — so a test that uses this one is
+    /// exercising the clock, deliberately.
+    fn nowhere_ledger() -> MintLedger {
+        MintLedger { dir: None }
+    }
+
+    /// A ledger in its own throwaway directory, removed when the test ends.
+    /// `cargo test` must no more write to `~/.addison` than it may touch the real
+    /// keychain: both are the user's, and both are what this module can damage.
+    struct ScratchLedger {
+        dir: PathBuf,
+    }
+
+    impl ScratchLedger {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("addison-mint-{}-{name}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self { dir }
+        }
+
+        fn ledger(&self) -> MintLedger {
+            MintLedger { dir: Some(self.dir.clone()) }
+        }
+
+        /// The raw file, for the G1 sweep. `None` before anything is written.
+        fn contents(&self) -> Option<String> {
+            std::fs::read_to_string(self.dir.join(MINT_LEDGER_FILE)).ok()
+        }
+    }
+
+    impl Drop for ScratchLedger {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    #[test]
+    fn a_minted_item_is_never_healed_however_slow_the_read_was() {
+        // THE point of the ledger, as one line. A read of an item this build created
+        // is not a read of a foreign item, whatever the clock says — and what the
+        // clock used to be allowed to order is a delete-then-add on a live API key.
+        let very_slow = Duration::from_secs(30);
+        assert!(
+            !should_self_heal(false, true, very_slow),
+            "a stalled read of an item we minted still ordered the destroy-and-re-mint"
+        );
+        // The control, or this passes for a version that never heals anything.
+        assert!(should_self_heal(false, false, very_slow));
+    }
+
+    #[test]
+    fn a_mint_record_outlives_the_process_that_wrote_it() {
+        // It has to be DURABLE, not remembered: the decision it feeds is made on the
+        // first read after a launch, and the mint it describes happened in some
+        // earlier one. A second `MintLedger` over the same directory is the closest a
+        // unit test gets to the next launch.
+        let scratch = ScratchLedger::new("durable");
+        scratch.ledger().remember("provider-key:anthropic");
+        assert!(
+            scratch.ledger().recorded("provider-key:anthropic"),
+            "the record did not survive the ledger handle that wrote it"
+        );
+        // Per ACCOUNT, because that is what a keychain item is keyed by. One
+        // provider's mint says nothing about another's.
+        assert!(!scratch.ledger().recorded("provider-key:openai"));
+        assert!(!scratch.ledger().recorded(DEVICE_ACCOUNT));
+    }
+
+    #[test]
+    fn a_write_records_the_mint_and_a_lost_write_erases_it() {
+        // The three outcomes, each mapped to the only honest ledger state: an item
+        // that exists because we just made it; no item at all; and an item nothing
+        // touched. Getting `Lost` wrong is the expensive one — a record left behind
+        // for a destroyed item vetoes the repair of whatever the person saves next.
+        let scratch = ScratchLedger::new("outcomes");
+        let ledger = scratch.ledger();
+        let account = "provider-key:anthropic";
+
+        record_write_outcome(&ledger, account, &Ok(()));
+        assert!(ledger.recorded(account));
+
+        record_write_outcome(&ledger, account, &Err(WriteFailure::Untouched));
+        assert!(ledger.recorded(account), "a write that changed nothing changed the record");
+
+        record_write_outcome(&ledger, account, &Err(WriteFailure::Lost));
+        assert!(!ledger.recorded(account), "the item is gone and the record still claims it");
+    }
+
+    #[test]
+    fn the_mint_ledger_never_holds_key_material() {
+        // G1, on the newest place a key could leak to. The ledger is handed an
+        // account name and writes a timestamp beside it; nothing in its signatures
+        // can carry a value, and this is the assertion that keeps it that way if
+        // somebody later decides a hash or a length would be "useful for debugging".
+        let scratch = ScratchLedger::new("g1");
+        let secret = "sk-ant-do-not-write-this-0123456789";
+        let item = FakeItem::holding(Some("sk-old"));
+        let outcome = item.write(secret);
+        record_write_outcome(&scratch.ledger(), "provider-key:anthropic", &outcome);
+
+        let text = scratch.contents().expect("the ledger wrote a file");
+        assert!(!text.contains(secret), "the mint ledger wrote the key: {text}");
+        assert!(!text.contains("sk-"), "the mint ledger wrote a key prefix: {text}");
+        // STRUCTURAL, not a substring sweep, because a length is two digits and a
+        // timestamp is ten — "does 35 appear anywhere" would pass or fail by
+        // coincidence. Every key in the map is an account name, every value is a
+        // number, and the document has no third field: there is nowhere a length, a
+        // hash or a prefix could be hiding.
+        let document: Value = serde_json::from_str(&text).expect("the ledger writes JSON");
+        let object = document.as_object().unwrap();
+        assert_eq!(object.len(), 2, "the ledger document grew a field: {text}");
+        assert!(object.contains_key("note") && object.contains_key("minted"));
+        let minted = object["minted"].as_object().unwrap();
+        for (account, when) in minted {
+            assert_eq!(account, "provider-key:anthropic", "an account name we never passed");
+            assert!(when.is_u64(), "a mint record's value is not a plain timestamp: {when}");
+        }
+        // And it does hold what it is for, or the assertions above are vacuous.
+        assert_eq!(minted.len(), 1);
+    }
+
+    #[test]
+    fn a_record_contradicted_by_a_waiting_read_is_dropped_and_then_the_item_heals() {
+        // The falsification path, end to end. A record says we minted the item; the
+        // read raised a dialog anyway, so something outside Addison changed under it
+        // (a restored keychain, an item replaced in Keychain Access, a rotated
+        // identity). Two things have to happen, in this order:
+        let scratch = ScratchLedger::new("falsified");
+        let ledger = scratch.ledger();
+        let account = "provider-key:anthropic";
+        ledger.remember(account);
+
+        // ONE — this read is still vetoed. Destroying a credential on the strength of
+        // the very signal the record exists to overrule is the mistake that costs a
+        // key; the other one costs a dialog.
+        let slow = Duration::from_secs(4);
+        assert!(mint_record_vetoes_heal(&ledger, account, slow));
+        assert!(!should_self_heal(false, true, slow));
+
+        // TWO — the record is gone, so the NEXT read falls back to the clock and
+        // repairs. Without this the contradiction is permanent and the dialog returns
+        // every session, forever, which is the symptom self-heal was built to end.
+        assert!(!ledger.recorded(account), "the falsified record survived");
+        assert!(!mint_record_vetoes_heal(&ledger, account, slow));
+        assert!(should_self_heal(false, false, slow));
+    }
+
+    #[test]
+    fn a_fast_read_leaves_the_mint_record_exactly_where_it_is() {
+        // The steady state, and the guard on the falsification above: a silent read is
+        // what an item we own does. Dropping the record here would put every healthy
+        // item back on the stopwatch one read later.
+        let scratch = ScratchLedger::new("steady");
+        let ledger = scratch.ledger();
+        let account = "provider-key:openai";
+        ledger.remember(account);
+        assert!(mint_record_vetoes_heal(&ledger, account, Duration::from_millis(29)));
+        assert!(ledger.recorded(account));
+    }
+
+    #[test]
+    fn an_item_with_no_record_still_falls_back_to_the_clock() {
+        // The upgrade path, and it is most of the installed base on day one: items
+        // minted by a build that had no ledger. No record must mean "ask the clock",
+        // exactly as before — not "assume ours", which would strand every genuinely
+        // foreign item with a dialog it can never lose.
+        let scratch = ScratchLedger::new("unknown");
+        let ledger = scratch.ledger();
+        assert!(!mint_record_vetoes_heal(&ledger, "provider-key:google", Duration::from_secs(4)));
+        assert!(!mint_record_vetoes_heal(&ledger, "provider-key:google", Duration::from_millis(3)));
+        // A ledger with nowhere to live answers the same way, so an unwritable data
+        // directory degrades to the pre-ledger behaviour rather than to silence.
+        assert!(!nowhere_ledger().recorded("provider-key:google"));
+    }
+
+    #[test]
+    fn the_read_path_asks_the_ledger_before_the_clock_and_never_about_a_fresh_item() {
+        // A source-level backstop, in this file's established idiom: `get_provider_key`
+        // needs a real OS keychain, so the WIRING cannot be reached in-process. Two
+        // properties, both of which the pure functions above are blind to:
+        //
+        //   * the heal decision is fed the LEDGER's answer, not just the clock;
+        //   * and the ledger is not consulted for a freshly-written item. It would be
+        //     consulted and FALSIFIED — the migration mints the destination and then
+        //     waits on the legacy item's dialog, so the record written seconds earlier
+        //     would be dropped by the wait that belonged to a different item.
+        let body = item_source("fn get_provider_key");
+        assert!(
+            body.contains("let minted_by_this_app =\n                !freshly_written && mint_record_vetoes_heal(&ledger, &account, elapsed);"),
+            "the read path no longer guards the ledger lookup with `!freshly_written`"
+        );
+        assert!(
+            body.contains("if should_self_heal(freshly_written, minted_by_this_app, elapsed)"),
+            "the heal decision no longer takes the ledger's answer — it is back on the \
+             stopwatch alone, which is what re-mints healthy items on a slow read"
+        );
     }
 
     #[test]
@@ -1576,8 +2070,8 @@ mod tests {
         // healed if it needed it) this session.
         cache_put("save-test-a", "sk-same");
         let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
-        assert!(save_would_change_nothing("save-test-a", &entry, "sk-same"));
-        assert!(!save_would_change_nothing("save-test-a", &entry, "sk-different"));
+        assert!(save_would_change_nothing("save-test-a", &nowhere_ledger(), "unused", &entry, "sk-same"));
+        assert!(!save_would_change_nothing("save-test-a", &nowhere_ledger(), "unused", &entry, "sk-different"));
         cache_evict("save-test-a");
     }
 
@@ -1686,9 +2180,9 @@ mod tests {
         cache_put("save-test-c", "sk-same");
         let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
         let normalised = normalised_key(" sk-same\n").unwrap();
-        assert!(save_would_change_nothing("save-test-c", &entry, normalised));
+        assert!(save_would_change_nothing("save-test-c", &nowhere_ledger(), "unused", &entry, normalised));
         // The control: the raw paste does NOT, which is what makes the order matter.
-        assert!(!save_would_change_nothing("save-test-c", &entry, " sk-same\n"));
+        assert!(!save_would_change_nothing("save-test-c", &nowhere_ledger(), "unused", &entry, " sk-same\n"));
         cache_evict("save-test-c");
     }
 
@@ -1701,9 +2195,9 @@ mod tests {
         cache_put("save-test-b", "sk-same");
         repair_lost_remember("save-test-b");
         let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
-        assert!(!save_would_change_nothing("save-test-b", &entry, "sk-same"));
+        assert!(!save_would_change_nothing("save-test-b", &nowhere_ledger(), "unused", &entry, "sk-same"));
         repair_lost_forget("save-test-b");
-        assert!(save_would_change_nothing("save-test-b", &entry, "sk-same"));
+        assert!(save_would_change_nothing("save-test-b", &nowhere_ledger(), "unused", &entry, "sk-same"));
         cache_evict("save-test-b");
     }
 
@@ -1792,7 +2286,9 @@ mod tests {
         // durable copy of the key, and deleting it is how somebody loses it.
         let body = item_source("fn legacy_anthropic_key");
         assert!(
-            body.contains("let copied = write_credential(destination, &key).is_ok();"),
+            body.contains(
+                "let copied = write_credential(destination, &ledger, destination_account, &key).is_ok();"
+            ),
             "the legacy copy no longer goes through the verified write"
         );
         assert!(
