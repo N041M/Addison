@@ -218,7 +218,7 @@ class _RecordingProvider:
 
     def __init__(self, responses):
         self._responses = list(responses)
-        self.seen: list[list[Message]] = []
+        self.seen: list[list[str]] = []
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -299,7 +299,7 @@ def _run_turn(audit_sink=None, tool=None, args=None):
     orch = Orchestrator(
         model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
         tool_registry=registry,
-        permission_gate=PermissionGate(on_request=lambda *a, **k: True),
+        permission_gate=PermissionGate(on_request=lambda *a, **k: PermissionStatus.GRANTED),
         undo_manager=UndoManager(store=_FakeStore(), tool_registry=registry),
         on_tool_audit=audit_sink,
     )
@@ -420,7 +420,7 @@ def test_a_routine_step_is_audited_too(tmp_path):
     )
     engine = RoutineEngine(
         tool_registry=registry,
-        permission_gate=PermissionGate(on_request=lambda *a, **k: True),
+        permission_gate=PermissionGate(on_request=lambda *a, **k: PermissionStatus.GRANTED),
         undo_manager=UndoManager(store=store, tool_registry=registry),
         store=store,
         on_tool_audit=rows.append,
@@ -460,7 +460,7 @@ def test_a_throwing_sink_never_breaks_a_ROUTINE_either(tmp_path):
     )
     engine = RoutineEngine(
         tool_registry=registry,
-        permission_gate=PermissionGate(on_request=lambda *a, **k: True),
+        permission_gate=PermissionGate(on_request=lambda *a, **k: PermissionStatus.GRANTED),
         undo_manager=UndoManager(store=store, tool_registry=registry),
         store=store,
         on_tool_audit=_explode,
@@ -540,9 +540,16 @@ def test_nothing_is_scanned_for_secrets_when_no_audit_sink_is_wired(monkeypatch)
 # ===========================================================================
 
 
-class _ExplodingGate:
+class _ExplodingGate(PermissionGate):
     """A gate that must never be consulted. Every refusal below sits ABOVE the
-    gate by design, so reaching it is itself the failure."""
+    gate by design, so reaching it is itself the failure.
+
+    Subclasses the real gate rather than duck-typing it: the callers annotate a
+    `PermissionGate`, and a stand-in that is not one only type-checks by accident.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
 
     def authorize(self, *args, **kwargs):  # pragma: no cover - must not run
         raise AssertionError("a refusal must never reach the permission gate")

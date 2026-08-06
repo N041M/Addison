@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from agent_core.routines.engine import RoutineEngine
     from agent_core.routines.library import RoutineLibrary
     from agent_core.routines.model import Routine
-    from agent_core.shell_bridge import IpcShellBridge
+    from agent_core.shell_bridge import ServerShellBridge
     from agent_core.snapshots.snapshot_manager import SnapshotManager
     from agent_core.snapshots.undo_manager import UndoManager
     from agent_core.tools.registry import ToolRegistry
@@ -72,7 +72,9 @@ class ServerContext:
         model_router: ModelRouter
         tool_registry: ToolRegistry
         permission_gate: PermissionGate
-        _shell_bridge: IpcShellBridge | None
+        # Widened to the Protocol for the reason ServerShellBridge documents: a
+        # concrete class here means no test double can ever satisfy it.
+        _shell_bridge: ServerShellBridge | None
         _active_profile: Profile | None
         _draft_routine: Routine | None
         _draft_widget: dict | None
@@ -165,3 +167,16 @@ class ServerContext:
         #     so both sides type-check without importing the mixin.
         def _routing_strategy(self) -> str: ...
         def _model_label(self, model_id: str) -> str: ...
+
+        # --- step 5.5 (main.py): the three the widget rail reaches across the
+        #     namespace boundary. The rail is the THIRD site a command can start,
+        #     so it runs the same pre-gate denylist, sends the same live trusted
+        #     roots, and writes the same audit row as the live loop and the routine
+        #     engine — which means it calls all three of these and none of them
+        #     were declared here. Undeclared meant unchecked: pyright reported four
+        #     "cannot access attribute" errors against `rpc/widgets.py`, and a
+        #     rename on the server side would have been caught by nothing until it
+        #     failed at runtime on the one surface a person clicks.
+        def _is_forbidden_call(self, tool, args) -> str | None: ...
+        def _trusted_roots(self) -> list[str]: ...
+        def _record_tool_audit(self, row: dict) -> None: ...

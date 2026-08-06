@@ -23,7 +23,32 @@ from __future__ import annotations
 import os
 import threading
 
+from typing import Protocol
+
 from agent_core.protocol import Method
+from agent_core.tools.base import ShellBridge
+
+
+class ServerShellBridge(ShellBridge, Protocol):
+    """What the SERVER needs from a bridge: every tool-facing method, plus the two
+    it binds itself.
+
+    ``ShellBridge`` (tools/base.py) is the TOOL-facing contract and deliberately
+    stops there — a tool has no business binding the server's writer. But the
+    server also calls ``bind_sender`` and ``get_app_build_ref``, so annotating its
+    parameter with the tool Protocol would not typecheck, and annotating it with
+    the concrete ``IpcShellBridge`` (which is what it said) means no test double
+    can ever satisfy it: pyright rejected three of them, and the fakes were right
+    — a fake that implements the whole contract IS a valid bridge.
+
+    So: the contract the server actually depends on, named. Structural, so
+    ``IpcShellBridge`` satisfies it without declaring anything."""
+
+    def bind_sender(self, send) -> None: ...
+
+    def get_app_build_ref(self) -> dict: ...
+
+    def resolve_response(self, req_id, result, error) -> bool: ...
 
 # How long a single Core -> Shell request may wait before we give up on it. The
 # shell answers a file/clipboard/draft call from its own process, so a stall this

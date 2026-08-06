@@ -99,7 +99,7 @@ from agent_core.rpc.snapshots import SnapshotsMixin, snapshot_list_from_payloads
 from agent_core.rpc.undo import UndoMixin
 from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.rpc.workspace import WorkspaceMixin
-from agent_core.shell_bridge import IpcShellBridge
+from agent_core.shell_bridge import IpcShellBridge, ServerShellBridge
 from agent_core.snapshots.snapshot_manager import (
     SnapshotManager,
     rebuild_rows_from_payloads,
@@ -475,7 +475,7 @@ class JsonRpcServer(
         store_factory,
         model_router: ModelRouter,
         db_path: str | Path | None = None,
-        shell_bridge: IpcShellBridge | None = None,
+        shell_bridge: ServerShellBridge | None = None,
         conversation_id: str | None = None,
         primary_key_probe=None,
         primary_key_turn_probe=None,

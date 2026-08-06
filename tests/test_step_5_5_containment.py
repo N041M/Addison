@@ -32,7 +32,7 @@ import os
 import pathlib
 
 from agent_core.orchestrator import Conversation, Orchestrator
-from agent_core.permissions.gate import PermissionGate
+from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import (
     DENIED_CONTAINS,
     kernel_confines_writes,
@@ -75,6 +75,19 @@ DATA_DIR = _derived_data_dir()
 
 def _forbidden(tool, args) -> str | None:
     return call_is_forbidden(tool, args, DATA_DIR)
+
+
+def _denied(command: str, **kwargs) -> tuple[str, str]:
+    """``command_denied_path`` for the cases that MUST be refused, narrowed.
+
+    The predicate returns ``(token, direction) | None`` and a refusal test wants
+    the direction, so every call site used to read ``…​[1]`` — which subscripts an
+    Optional and is a type error the day anyone runs pyright (it was: four of
+    them). Asserting the refusal here means the failure message says "this was
+    allowed" instead of "None is not subscriptable"."""
+    result = command_denied_path(command, DATA_DIR, **kwargs)
+    assert result is not None, f"expected {command!r} to be refused, and it was not"
+    return result
 
 
 # ===========================================================================
@@ -296,10 +309,7 @@ def test_the_contains_direction_still_guards_a_platform_the_kernel_does_not():
     rather than through the tool because the tool reads the real platform, and a
     test that can only run on the OTHER operating system is a test nobody runs."""
     for command in _MUST_BE_FORBIDDEN_CONTAINS:
-        assert command_denied_path(command, DATA_DIR, kernel_confined=False) is not None, command
-        assert command_denied_path(command, DATA_DIR, kernel_confined=False)[1] == (
-            DENIED_CONTAINS
-        ), command
+        assert _denied(command, kernel_confined=False)[1] == DENIED_CONTAINS, command
 
 
 def test_reading_the_home_directory_is_ordinary_work_where_writes_are_confined():
@@ -383,8 +393,8 @@ def test_a_quoted_path_names_what_the_shell_says_it_names():
     """`rm -rf ~/.addi"son"` was conceded in the docstring and live in the code.
     Conceding an evasion does not make it acceptable when the fix is to delete the
     characters the shell itself deletes."""
-    assert command_denied_path('rm -rf ~/.addi"son"', DATA_DIR)[1] == DENIED_INSIDE
-    assert command_denied_path('cat "$HOME"/.ssh/id_rsa', DATA_DIR)[1] == DENIED_INSIDE
+    assert _denied('rm -rf ~/.addi"son"')[1] == DENIED_INSIDE
+    assert _denied('cat "$HOME"/.ssh/id_rsa')[1] == DENIED_INSIDE
     # Quotes around something harmless stay harmless once removed.
     assert command_denied_path("git commit -m 'fix: a thing'", DATA_DIR) is None
 
@@ -404,7 +414,8 @@ def test_a_long_command_is_scanned_in_full():
     padding = "echo " + ("x" * 400)
     command = f"{padding}; rm -rf ~/.addison"
     tool = RunCommandTool()
-    assert tool.permission_detail({"command": command}).endswith("…")
+    detail = tool.permission_detail({"command": command})
+    assert detail is not None and detail.endswith("…")
     assert _forbidden(tool, {"command": command}) == FORBIDDEN_CALL_INSIDE
 
 
@@ -536,7 +547,7 @@ def test_live_loop_is_not_vacuous_an_allowed_command_still_runs():
     # command — it cards (a real gate that grants) and it runs.
     tool = _RecordingRunCommand()
     registry = _registry_with(tool)
-    gate = PermissionGate(on_request=lambda *a, **k: True)
+    gate = PermissionGate(on_request=lambda *a, **k: PermissionStatus.GRANTED)
     result = _run_one_call(registry, gate, {"command": "ls ~/projects"})
     assert result.content == "ran"
     assert tool.ran == [{"command": "ls ~/projects"}]
@@ -698,7 +709,11 @@ def test_the_live_server_binds_the_denylist_to_its_own_store(tmp_path):
     live.mkdir()
 
     class _Server(WorkspaceMixin):
-        _db_path = live / "addison.sqlite3"
+        # Annotated because ServerContext declares `store` as a read-only
+        # property; a bare assignment on the subclass is a type error even though
+        # it is exactly what this stand-in needs to do.
+        store: Store
+        _db_path: pathlib.Path = live / "addison.sqlite3"
 
         def __init__(self):
             self.store = Store(self._db_path)

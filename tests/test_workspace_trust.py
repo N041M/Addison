@@ -59,6 +59,7 @@ from agent_core.tools.base import (
 from agent_core.tools.read_project_file import ReadProjectFileTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.write_project_file import WriteProjectFileTool
+from tests.conftest import ShellBridgeStubs
 
 
 # --- fakes -----------------------------------------------------------------
@@ -132,6 +133,11 @@ class _FakeWorkspaceBridge:
     def pick_directory(self) -> str:
         raise NotImplementedError
 
+    # Step-5.5: execution crosses this Protocol now, so the fake carries it. The
+    # command tests live in test_step_5_5_containment.py / test_run_command.py.
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        raise NotImplementedError
+
 
 class _ScriptedProvider:
     def __init__(self, responses: list[ModelResponse]) -> None:
@@ -155,15 +161,11 @@ class _FakeStore:
         self.inserted.append(snapshot)
 
 
-class _FakeExecBridge:
-    """The shell's half of ``shell.runCommand`` (step 5.5, item 1), plus the two
-    methods the server binds on every bridge."""
-
-    def bind_sender(self, send) -> None:
-        pass
-
-    def get_app_build_ref(self) -> dict:
-        return {"version": "test", "identifier": "test"}
+class _FakeExecBridge(ShellBridgeStubs):
+    """The shell's half of ``shell.runCommand`` (step 5.5, item 1). Everything
+    else comes from ``ShellBridgeStubs`` and raises — this fake answers one
+    method, and inheriting the rest is what makes it a real bridge to pyright
+    rather than a subset that happened to be enough."""
 
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
         return {"stdout": "ok", "stderr": "", "exitCode": 0, "sandboxed": True}

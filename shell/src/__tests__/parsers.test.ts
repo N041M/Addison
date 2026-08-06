@@ -236,6 +236,37 @@ describe("parseWidgetList", () => {
     expect(parsed).toEqual([]);
   });
 
+  it("carries the unavailable marker through, and leaves usable rows without one", () => {
+    // A dev-made widget is LISTED in Simple now (owner decision 2026-08-06)
+    // instead of vanishing, so the marker is the only thing telling the rail to
+    // draw it as waiting rather than as a working Run pill.
+    const parsed = parseWidgetList({
+      widgets: [
+        {
+          id: "w-dev",
+          spec: { kind: "command", command: "ls", title: "List" },
+          pinned: true,
+          createdInMode: "open",
+          unavailable: {
+            reason: "developer_abilities",
+            message: "That widget uses developer abilities, so it's waiting in Developer profile.",
+          },
+        },
+        {
+          id: "w-safe",
+          spec: { kind: "stat", source: "connections", title: "Connections" },
+          pinned: true,
+          createdInMode: "safe",
+        },
+      ],
+    });
+    expect(parsed[0].unavailable).toEqual({
+      reason: "developer_abilities",
+      message: "That widget uses developer abilities, so it's waiting in Developer profile.",
+    });
+    expect("unavailable" in parsed[1]).toBe(false);
+  });
+
   it("marks createdInMode undefined for an unknown mode value", () => {
     const parsed = parseWidgetList({
       widgets: [

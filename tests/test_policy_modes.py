@@ -38,6 +38,7 @@ from agent_core.routines.model import Routine, RoutineStep, routine_to_json
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
 from agent_core.tools.registry import ToolRegistry
+from tests.conftest import ShellBridgeStubs
 # NOTE: the REAL run_command now returns is_destructive=True for every command
 # (owner decision 2026-07-20 — classifying arbitrary shell as read-only is a
 # losing game). The double below keeps a tiny per-call classifier ON PURPOSE: its
@@ -418,7 +419,7 @@ def _seed_artifacts(db_path: Path) -> None:
     store.close()
 
 
-class _FakeExecBridge:
+class _FakeExecBridge(ShellBridgeStubs):
     """The shell's half of ``shell.runCommand`` (step 5.5, item 1).
 
     ``run_command`` no longer executes anything in the Agent Core — it crosses the
@@ -428,13 +429,6 @@ class _FakeExecBridge:
     assertions depend on. The real boundary is tested where it lives:
     ``shell/src-tauri/src/exec.rs``."""
 
-    def bind_sender(self, send) -> None:
-        # The server binds its writer into every bridge; nothing here sends frames.
-        pass
-
-    def get_app_build_ref(self) -> dict:
-        # Read by the snapshot machinery when a restore point is minted (G4).
-        return {"version": "test", "identifier": "test"}
 
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
         return {"stdout": "ok", "stderr": "", "exitCode": 0, "sandboxed": True}

@@ -83,6 +83,69 @@ def _never_touch_the_live_database(monkeypatch, tmp_path):
     yield
 
 
+class ShellBridgeStubs:
+    """Every ``ShellBridge`` method, each raising. Inherit and override the two or
+    three a test actually exercises.
+
+    A test double that implements a SUBSET of the Protocol is not a bridge, and
+    pyright says so — the server's parameter is typed `ServerShellBridge` because
+    it hands the bridge to tool constructors, so a partial fake is only ever
+    accidentally sufficient. Rather than repeat a dozen `raise NotImplementedError`
+    lines in each test module (three already did), the stubs live here once.
+
+    Raising, never returning a bland default: a fake that silently answers a call
+    the test did not intend is how a test passes while measuring nothing."""
+
+    def save_new_file(self, filename: str, content: str) -> str:
+        raise NotImplementedError
+
+    def delete_file(self, path: str) -> None:
+        raise NotImplementedError
+
+    def restore_file(self, path: str, content: str) -> None:
+        raise NotImplementedError
+
+    def open_draft(self, to: str, subject: str, body: str) -> str:
+        raise NotImplementedError
+
+    def discard_draft(self, draft_ref: str) -> None:
+        raise NotImplementedError
+
+    def read_clipboard(self) -> str:
+        raise NotImplementedError
+
+    def open_external(self, url: str) -> None:
+        raise NotImplementedError
+
+    def read_scoped_file(self, file_handle: str) -> dict:
+        raise NotImplementedError
+
+    def write_workspace_file(self, path: str, content: str) -> dict:
+        raise NotImplementedError
+
+    def read_workspace_file(self, path: str) -> str:
+        raise NotImplementedError
+
+    def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        raise NotImplementedError
+
+    def pick_directory(self) -> str:
+        raise NotImplementedError
+
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        raise NotImplementedError
+
+    # The two the SERVER binds, rather than the tools (see ServerShellBridge).
+    def bind_sender(self, send) -> None:
+        pass
+
+    def get_app_build_ref(self) -> dict:
+        return {"version": "test", "identifier": "test"}
+
+    def resolve_response(self, req_id, result, error) -> bool:
+        return False
+
+
 class _PipeReader:
     """Blocking readline() fed frame-by-frame from the test."""
 

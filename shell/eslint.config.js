@@ -25,6 +25,22 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      // A leading underscore is this codebase's existing signal for "declared on
+      // purpose, deliberately unused" — a parameter kept so a mock matches the
+      // signature of the field it stands in for, a destructured key skipped over.
+      // The rule's default `after-used` hid that: `_name` before a USED parameter
+      // was silently fine while `_userText` as the only parameter was an error,
+      // so the convention worked or failed depending on argument position, which
+      // is not a rule anybody can hold in their head. Honour the prefix instead —
+      // it is an explicit author signal, so nothing real is being suppressed.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
       // Rules-of-hooks violations are always bugs — keep them fatal.
       "react-hooks/rules-of-hooks": "error",
       // Every finding was reviewed; real/harmless ones are fixed, the handful of

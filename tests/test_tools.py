@@ -86,6 +86,12 @@ class FakeShellBridge:
     def pick_directory(self) -> str:
         raise NotImplementedError
 
+    # Step-5.5: execution moved OUT of the core and onto this Protocol, so the
+    # fake has to carry it too. Exercised in tests/test_step_5_5_containment.py
+    # and tests/test_run_command.py, never here.
+    def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
+        raise NotImplementedError
+
 
 def _ctx(bridge=None) -> ExecutionContext:
     return ExecutionContext(conversation_id="t", shell_bridge=bridge)
