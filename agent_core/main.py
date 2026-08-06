@@ -821,6 +821,11 @@ class JsonRpcServer(
             routing_chain=self._routing_chain,
             on_answered=self._record_answered,
             model_label=self._model_label,
+            # A rejected key marks the provider (plan §5.2). The store write and the
+            # "told once" answer live in rpc/providers.py; the sentence and the
+            # degradation live in the orchestrator.
+            on_auth_rejected=self._record_key_rejected,
+            provider_label=self._provider_display_label,
             # Workspace-trust confinement (step 5, D3): resolves whether a path is
             # inside a trusted root AND past the data-dir floor, reading the store.
             trust_check=self._is_trusted_path,

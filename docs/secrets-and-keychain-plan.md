@@ -1,6 +1,7 @@
 # Secrets and the keychain — the plan
 
-**Status: steps 1 and 2 BUILT (2026-08-06); steps 3–5 PROPOSED.** Drafted
+**Status: steps 1 and 2 BUILT (2026-08-06), and step 4's §5.2 + §5.3 with them;
+steps 3 and 5 PROPOSED.** Drafted
 2026-07-31 as a ground-up vault redesign; **revised the same day to a repair-first
 plan** after a six-lens adversarial review (60 findings), two live spikes, and two
 verifications that undercut the rewrite's own justification. §15 records what
@@ -10,9 +11,10 @@ answer voids §4.2's honest limit** (see there). ROADMAP owns scheduling.
 **What is built** (per §13's order, and each section says so in place): §4.1
 presence in `provider_config.secret_presence`, three-way, with the relay rule in one
 function; §4.2 delete-then-add on every credential write, plus self-heal for provider
-keys; §5.4 idempotent writes. **What is not**: §4.3 `Intent` and the background-caller
-re-arm, §5.1 reconciliation, §5.2 401 handling, §5.3 normalisation, §5.6 the read
-counter, §6 the cards.
+keys; §5.4 idempotent writes; **§5.2 a rejected key marks the provider** and **§5.3
+normalisation at the store boundary** (both 2026-08-06 — §14 decision 3 is answered,
+and the answer is IN). **What is not**: §4.3 `Intent` and the background-caller
+re-arm, §5.1 reconciliation, §5.6 the read counter, §6 the cards.
 
 **The recommendation in one line: repair the existing integration — the three
 changes in §4 kill every measured symptom — and keep the encrypted vault as a
@@ -300,31 +302,87 @@ self-correcting.
 
 ### 5.2 A rejected key must change something
 
-**Today a 401 does nothing to stored state.** `ProviderAuthError` exists and the
-routing chain handles it, but nothing touches `provider_config.last_check_ok`
-and nothing tells the person their key stopped working — so a revoked or expired
-key fails every turn, forever, with a per-turn error and no path forward. That
-is the most likely real-world failure of the whole subsystem, and no part of
-this thread had looked at it.
+**BUILT 2026-08-06** (owner decision, §14.3: in). What follows describes what
+shipped; the paragraph it replaces described the hole.
 
-On a **definitive** auth failure (401/403 — never a 429, never a network error),
-mark the provider `needs attention`, surface one plain line ("X rejected
-Addison's key — it may have been revoked. Add a new one in Settings."), and let
-routing degrade to another connected provider exactly as it does for an
-unavailable one. Idempotent: repeated 401s do not re-notify.
+Before it, a 401 changed no stored state at all: nothing tells the person their key
+stopped working, so a revoked or expired key failed every turn, forever, with a
+per-turn error and no path forward. That was the most likely real-world failure of
+the whole subsystem, and no part of the original thread had looked at it. (The
+draft named the exception `ProviderAuthError`; it is and always was
+`ProviderAuthFailed`.)
+
+On a **definitive** auth failure — 401/403, never a 429, never a 5xx, never a
+network error or a timeout — the provider is marked needs-attention, one plain line
+is surfaced ("X rejected Addison's key — it may have been revoked. Add a new one in
+Settings."), and routing degrades to another connected provider exactly as it does
+for an unavailable one. Idempotent: repeated 401s do not re-notify.
+
+**As built, five decisions worth having in writing:**
+
+- **A THIRD signal, not a re-use of one.** `provider_config.key_rejected_at` (epoch
+  seconds, NULL = not rejected). NOT `last_check_ok`, which this section used to
+  point at: it answers "did the last CONNECT PING pass", every write of `0` to it is
+  paired with `connected = 0`, so a reader cannot tell "never connected" from
+  "connected, then revoked" — the only state that earns the sentence — and it has
+  nowhere to record that the person has been told. NOT `connected`, which gates the
+  reconnect path. And **never** `secret_presence`: a rejected key is `present` and
+  rejected, and writing `absent` would make `may_reach_setup_relay` true and hand
+  the next message to the external relay while the key sits in the keychain — the
+  07-25 bug through a new door. `data-model.md` owns the column.
+- **A narrow exception type carries the distinction.** `ProviderKeyRejected`
+  subclasses `ProviderAuthFailed` and is returned by `exception_for_http_status` for
+  401/403 only. The parent is also raised locally for a missing or malformed key,
+  which is no evidence about a SAVED key; only the subclass marks anything. Every
+  existing `except ProviderAuthFailed` still catches both, so nothing else moved.
+- **The walk.** `ProviderKeyRejected` now advances the chain and cools the provider
+  — the same two lines `ProviderUnavailable` runs, not a second mechanism. The old
+  "auth never walks" rule reasoned that the next provider gets the same bad key;
+  that is true of a MISSING key and false of a rejected one, and plain
+  `ProviderAuthFailed` still fails the turn immediately.
+- **Told once, decided at the store.** `Store.record_key_rejected` returns True only
+  the first time; the orchestrator says the sentence only on True. Cleared by
+  `provider.connect` succeeding — and by that branch alone, since the failing
+  branches write the config row too and a failed connect is no evidence the revoked
+  key was replaced.
+- **The note channel is the routing one**, beside the fallback note, and it
+  *replaces* "X was busy, so Addison used Y" when the head was rejected: "was busy"
+  is a plain falsehood about a revoked key.
+
+Not built here, and deliberately: the Settings needs-attention ROW (§6's cards), so
+the column is core-side state plus one chat-side line, not yet a wire field.
 
 ### 5.3 Normalise a key at the store boundary
 
-`SettingsPage.tsx` does `key.trim()` — but only there, and `.trim()` is the
-frontend's courtesy, not a contract. The Rust store path takes the string as-is,
-so any other route (or one frontend regression) can persist a key with a
-trailing newline — the classic paste bug that produces an auth failure
-indistinguishable from a wrong key.
+**BUILT 2026-08-06**, in `keychain.rs` (`normalised_key`).
 
-Normalise **where it is stored**: strip surrounding whitespace, reject embedded
-newlines and control/zero-width characters with a plain sentence ("That key has
-a line break in it — paste it again as one line"). Cheap, defence in depth, and
-it converts a mystifying 401 into a fixable message.
+`SettingsPage.tsx` does `key.trim()` — but only there, and `.trim()` is the
+frontend's courtesy, not a contract. The Rust store path took the string as-is, so
+any other route (or one frontend regression) could persist a key with a trailing
+newline — the classic paste bug that produces an auth failure indistinguishable from
+a wrong key.
+
+Normalised **where it is stored**: surrounding whitespace is stripped; an embedded
+line break, any other control character, and the zero-width marks a styled copy
+carries along are REFUSED, each with its own plain sentence ("That key has a line
+break in it — paste it again as one line."). Refusing beats silently mangling — a
+key Addison quietly altered is a key that fails mysteriously later. A value that is
+empty after the strip is refused too, because an empty item reads back as the empty
+string, which is how this subsystem says "nothing saved", and that is the one answer
+that may reach the relay.
+
+Two composition points, both load-bearing:
+
+- it runs **before** `save_would_change_nothing` (§5.4), or a re-paste with a
+  trailing newline reads as a change and needlessly re-mints the item — the one
+  operation here that can lose a key. A source-level test pins the order;
+- the refusal has to **reach the person**. A Tauri command returning `Err(String)`
+  rejects with the bare string and the Settings row only re-shows `err.message`, so
+  `ipc/client.ts` wraps it in an `Error`. Without that the one sentence that says
+  how to fix the paste was replaced by the generic "check the key and try again".
+
+G1 holds absolutely: the three sentences are constants, and no branch logs, traces
+or embeds the value, its length or its prefix — only the SHAPE of the problem.
 
 ### 5.4 Idempotent writes — don't churn the ACL
 
@@ -573,13 +631,29 @@ probe that RAISES is swallowed by the `except Exception` every honest presence c
 wraps it in, so the OS-touch assertion must COUNT, not raise — a raising version of
 `presence_is_answered_without_touching_the_os` survived its own mutation.
 
-Still to come with steps 3–5: `launch_makes_zero_promptable_os_touches` (panicking
+BUILT with §5.2/§5.3 (2026-08-06): `a_401_marks_the_provider_and_a_429_does_not`,
+`a_needs_attention_provider_is_still_present_and_never_relay_eligible`,
+`marking_a_rejection_never_disconnects_the_provider`,
+`repeated_rejections_never_re_notify`,
+`a_connect_that_passes_clears_the_mark_and_one_that_fails_does_not`,
+`a_rejected_key_falls_forward_to_the_next_provider`,
+`a_missing_key_still_fails_the_turn_without_walking_or_marking`,
+`a_restored_snapshot_never_resurrects_a_rejection` (all `tests/test_key_rejection.py`),
+`a_key_with_a_line_break_is_refused_at_the_store_boundary`,
+`surrounding_whitespace_is_stripped_rather_than_refused`,
+`the_save_path_normalises_before_it_decides_the_save_changes_nothing`
+(`keychain.rs`). **Note the two mutations that first SURVIVED**, both because the
+harness aimed at the wrong line rather than because the tests were weak: dropping a
+redundant `IS NOT NULL` from the clear query changes nothing (the real mutation is
+folding the clear into `upsert_provider_config`), and deleting a column from
+`_EXCLUDED_COLUMNS` without adding it to `_CAPTURED_TABLES` leaves it captured by
+neither. A mutation that changes no behaviour proves nothing about the test.
+
+Still to come with steps 3 and 5: `launch_makes_zero_promptable_os_touches` (panicking
 fake, full RPC boot, 100× polls; attrs-only permitted and counted),
 `background_intent_never_touches_the_os`,
 `a_session_never_makes_a_second_promptable_os_access` (counting fake),
 `reconciliation_at_launch_raises_no_dialog`,
-`a_401_marks_the_provider_and_a_429_does_not`,
-`a_key_with_a_line_break_is_refused_at_the_store_boundary`,
 `a_declined_read_is_retried_only_from_the_card`,
 `a_timed_out_read_neither_declines_nor_double_reads`,
 `a_restored_snapshot_never_resurrects_a_key_only_a_flag`.
@@ -612,7 +686,8 @@ Each step lands green and is independently useful:
    2026-08-06**, provider keys only (§4.2).
 3. **`Intent`** + the unlock re-arm for the two Background consumers (§4.3).
 4. **Reconciliation, 401 handling, key normalisation, the read counter**
-   (§5.1–5.3, §5.6) — product-facing, independent of each other.
+   (§5.1–5.3, §5.6) — product-facing, independent of each other. **401 handling
+   (§5.2) and normalisation (§5.3) BUILT 2026-08-06**; §5.1 and §5.6 remain.
 5. **Cards + copy table + ad-hoc detection** (§6); docs sweep (§12).
 
 ## 14. Owner decisions
@@ -621,8 +696,10 @@ Each step lands green and is independently useful:
    documented with triggers (§10).
 2. **The `provider_config` snapshot caveat** (§4.1): reconcile-and-correct as
    planned, or exclude the presence column? Plan says reconcile.
-3. **A 401 marking a provider needs-attention** (§5.2) — new behaviour; changes
-   what routing does with a revoked key. In or out?
+3. ~~**A 401 marking a provider needs-attention** (§5.2)~~ **ANSWERED 2026-08-06 —
+   IN.** ONE definitive auth failure marks it; not N consecutive, because a 401 is
+   unambiguous in a way a 429 or a 500 is not. Built as described in §5.2, including
+   the routing change it implies (a rejected key now walks the chain).
 4. **The shipped read counter** (§5.6) — Settings diagnostics line, or keep the
    trace dev-only?
 5. **Phase 3**: Apple-issued identity (the only thing that makes R4 absolute),
@@ -654,5 +731,7 @@ self-signed builds; spike 2 measured the data-protection precondition
 `security-framework` 3.7.0 supports the whole surface; the step-5.5 seatbelt
 denies `mach-lookup`, so a sandboxed command cannot reach `securityd`; keychain
 responses never reach the webview; `provider_config` already exists as a
-non-secret presence home; keyring already covers four platforms; a 401 currently
-changes nothing; the key is trimmed only in the frontend.
+non-secret presence home; keyring already covers four platforms. The last two
+verifications on that list — *a 401 currently changes nothing* and *the key is
+trimmed only in the frontend* — were both true when measured and are **no longer
+true**: §5.2 and §5.3 closed them on 2026-08-06.

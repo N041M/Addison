@@ -82,8 +82,18 @@ _EXCLUDED_TABLES: dict[str, str] = {
 # both the honest post-restore answer (Addison genuinely does not know any more) and
 # the safe one: 'unknown' can never read as "no key saved", so no restore can route a
 # turn to the external relay. The next person-driven read corrects it for free.
+#
+# provider_config.key_rejected_at (plan §5.2) joins it, for the same reason and one
+# more. It records that a provider refused the saved key at a moment in time —
+# an observation, not configuration — and it doubles as the "the person has been
+# told" latch. Capturing it would make a restore able to do two wrong things: assert
+# a fortnight-old rejection about a key that has been replaced since (a
+# needs-attention state nothing can clear except another connect), or silence the
+# notice for a key that IS revoked, because the restored row already says "told".
+# Left out, a restore resets it to NULL, which is the honest post-restore answer —
+# Addison no longer knows — and the next definitive rejection says so once.
 _EXCLUDED_COLUMNS: dict[str, tuple[str, ...]] = {
-    "provider_config": ("secret_presence",),
+    "provider_config": ("secret_presence", "key_rejected_at"),
 }
 
 # app_settings keys that survive a replace-all restore. One-way latches, not

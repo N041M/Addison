@@ -37,11 +37,13 @@ or 8**, and they are independent of each other. `ROADMAP.md` has the description
   MCP-in-SAFE question** in [`KNOWN-GAPS.md`](KNOWN-GAPS.md) — a server declares
   its own risk, and admitting a tool to SAFE on that say-so breaks SAFE invariant
   2 through a path the registration check cannot see. Close that first.
-- **Two things only the owner can decide**, both queued in KNOWN-GAPS: whether a
-  401 should mark a provider needs-attention (it currently changes nothing, so a
-  revoked key fails every turn forever), and whether `/Applications/Addison.app`
-  joins the seatbelt denies — the DATA-not-CODE item, which KNOWN-GAPS states in
-  full. `exec.rs` is now where that deny would go, so it is cheap.
+- **One thing only the owner can decide** is still queued in KNOWN-GAPS: whether
+  `/Applications/Addison.app` joins the seatbelt denies — the DATA-not-CODE item,
+  which KNOWN-GAPS states in full. `exec.rs` is now where that deny would go, so it
+  is cheap. (The other, whether a 401 should mark a provider needs-attention, was
+  **answered on 2026-08-06: in**. Built as plan §5.2 — a definitive 401/403 marks
+  `provider_config.key_rejected_at`, says one plain line once, and lets routing
+  degrade.)
 
 **If you are picking up the keychain thread:** read
 [`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) before touching

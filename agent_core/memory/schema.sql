@@ -84,6 +84,29 @@ CREATE TABLE IF NOT EXISTS provider_config (
     -- request PASSED — a saved-but-rejected key is present + not connected.
     secret_presence TEXT NOT NULL DEFAULT 'unknown'
                         CHECK(secret_presence IN ('present','absent','unknown')),
+    -- When this provider DEFINITIVELY rejected the saved key (plan §5.2): epoch
+    -- seconds of the first 401/403 since the last successful connect, or NULL for
+    -- "not rejected". Cleared when provider.connect passes, which is the person
+    -- adding a working key.
+    --
+    -- A THIRD signal, deliberately, and not either of the two above:
+    --   * NOT `connected` — an auth failure mid-conversation must not silently
+    --     disconnect a provider; `connected` gates the reconnect path.
+    --   * NOT `secret_presence` — a rejected key is PRESENT and rejected. Writing
+    --     'absent' here would make may_reach_setup_relay() true and route the
+    --     person's next message to the external Setup Assistant relay while their
+    --     key sits in the keychain: the 2026-07-25 bug, reached by a new road.
+    --   * NOT `last_check_ok`, which was the obvious candidate and is wrong. It
+    --     answers "did the last CONNECT PING pass", and every write of 0 to it is
+    --     paired with connected = 0 — so a reader could not tell "never connected"
+    --     from "connected, then revoked", which is the only state that earns the
+    --     sentence. It also has nowhere to record that the person has been TOLD,
+    --     and telling them once is half the requirement.
+    -- A timestamp rather than a flag: non-NULL IS the "already told them" latch, so
+    -- repeated 401s cannot re-notify, and "when" is worth having in a support
+    -- screenshot. NOT captured by snapshots (snapshots/scope.py) — like
+    -- secret_presence it is an observation about the live world, not configuration.
+    key_rejected_at INTEGER,
     updated_at      INTEGER NOT NULL
 );
 -- Multi-provider (owner decision 2026-07-18): several providers can be connected

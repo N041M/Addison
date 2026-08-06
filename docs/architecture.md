@@ -323,11 +323,16 @@ Component by component:
   cost-first). The head of every chain is the user's standing default, so a strategy
   orders only the tail and never overrides a deliberate pick; the companion surface
   exposes a single "prefer quality / prefer free" toggle over the same setting. The
-  turn falls forward **only** on `ProviderUnavailable` — the structured exception
-  hierarchy in `providers/base.py` (`ProviderUnavailable` /
-  `ProviderRequestRejected` / `ProviderAuthFailed`, all `RuntimeError` subclasses so
-  every existing handler still catches them) is what keeps a bad request or a bad key
-  from being amplified across the whole chain. Degrading emits a plain-language note,
+  turn falls forward on `ProviderUnavailable` **and on `ProviderKeyRejected`** — the
+  structured exception hierarchy in `providers/base.py` (`ProviderUnavailable` /
+  `ProviderRequestRejected` / `ProviderAuthFailed`, plus `ProviderKeyRejected` as a
+  subclass of the last, all `RuntimeError` subclasses so every existing handler still
+  catches them) is what keeps a bad request or a *missing* key from being amplified
+  across the whole chain. A **rejected** key is the one auth case that does walk
+  (secrets-and-keychain plan §5.2, built 2026-08-06): a 401/403 is definitive
+  evidence about THAT provider's key and says nothing about the next provider's, so
+  the loop marks it needs-attention — once — and degrades exactly as it does for an
+  unavailable one. Degrading emits a plain-language note,
   cools the failed provider (in-memory, a module constant), and an "Answered with a
   free model." chip appears when a free model answered *and* routing rather than the
   user chose it.

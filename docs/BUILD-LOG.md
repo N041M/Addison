@@ -12,6 +12,74 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-06 — a rejected key changes something, and a key is normalised where it is stored
+
+Plan §5.2 and §5.3 (half of step 4 in
+[secrets-and-keychain-plan.md](secrets-and-keychain-plan.md));
+the plan owns the design and now records what shipped. §14 **decision 3 is answered:
+IN** — ONE definitive auth failure marks a provider needs-attention.
+
+What building them taught:
+
+- **`last_check_ok` was the obvious column and was the wrong one.** The plan itself
+  points at it ("written but never read"), and re-using it would have been one line.
+  It answers "did the last CONNECT PING pass" — and *every* existing write of `0` to
+  it is paired with `connected = 0`, so a reader cannot distinguish "never connected"
+  from "connected, then revoked", which is the only state that earns the sentence. It
+  also has nowhere to record that the person has been TOLD, and "told once, not once
+  per turn" is half the requirement. So: a third column, `key_rejected_at`, a
+  timestamp because non-NULL IS the told-once latch.
+- **The dangerous interaction is one word wide.** Writing `secret_presence = 'absent'`
+  on a rejection is a perfectly reasonable-sounding "the key doesn't work, so treat it
+  as no key" — and it is the 2026-07-25 relay-routing bug reached by a new road,
+  because `may_reach_setup_relay` fires on exactly that value. A person's next message
+  would go to the external Setup Assistant relay while their key sat in the keychain.
+  It has its own named test, and the mutation that writes that one word makes it red.
+- **"401" is not the same fact as "auth failed", and the code did not distinguish
+  them.** `ProviderAuthFailed` is raised both by the wire classifier for 401/403 AND
+  locally when there is no key to send or its bytes are unusable. Marking on the
+  parent would have told somebody with no key configured that their key "may have been
+  revoked". A subclass — `ProviderKeyRejected`, returned by
+  `exception_for_http_status` for 401/403 only — carries the narrower fact without
+  moving anything: every `except ProviderAuthFailed` still catches both. Because that
+  classifier is the single choke point every provider's `send` funnels through, §5.2
+  needed no per-provider edit.
+- **Degrading forced a documented rule to be corrected rather than worked around.**
+  `providers/base.py` said auth failures never walk the chain, "the next provider gets
+  the same bad key". That is true of a MISSING key and false of a REJECTED one — the
+  next provider has a different key entirely — so the narrow subclass now walks (cool +
+  advance, the same two lines `ProviderUnavailable` runs) and the plain parent still
+  fails the turn immediately. `architecture.md` and `classes.md` were amended in the
+  same commit, per docs/README rule 2.
+- **"X was busy, so Addison used Y" is a lie about a revoked key**, and it would have
+  been the second line the person read. The rejection note now replaces it for a
+  rejected head. The test for that needed a CONTROL — an unavailable head must still
+  say "was busy" — because otherwise deleting the fallback note outright passes.
+- **Normalisation has to run before the unchanged-compare.** §5.3 composed with §5.4
+  is not obvious: `save_would_change_nothing` compares against a STORED (already
+  normalised) value, so handing it the raw paste makes `"sk-same\n"` look like a
+  change, and the write that follows is the delete-then-add — the one operation in
+  `keychain.rs` that can lose a key, run for a difference that does not exist. A
+  source-level test pins the ORDER, and a behavioural one pins the equality.
+- **A refusal that cannot be displayed is not a refusal.** Rust returns
+  `Err(String)`; a Tauri command's rejection arrives at the webview as a BARE STRING,
+  and the Settings row's catch is `err instanceof Error ? err.message : <generic>`.
+  So the one sentence that says how to fix the paste was being replaced by "check the
+  key and try again" — about a key that is not wrong. `ipc/client.ts` wraps it.
+- **Two mutations SURVIVED on the first pass, and both were harness bugs rather than
+  weak tests** — which is its own lesson about how easy it is to conclude the wrong
+  thing from a green mutation. Dropping a redundant `AND key_rejected_at IS NOT NULL`
+  from the clear query changes no behaviour (the real mutation is folding the clear
+  into `upsert_provider_config`, which makes a FAILED connect clear the mark — that
+  one dies). And removing a column from `_EXCLUDED_COLUMNS` without adding it to
+  `_CAPTURED_TABLES` leaves it captured by neither, so the restore path is unchanged;
+  the real mutation captures it, and that one dies too. **A mutation that changes no
+  behaviour proves nothing about the test it was aimed at.**
+
+Not built here, deliberately: the Settings needs-attention ROW. That is §6's
+click-anchored cards, so today the mark is core-side state plus one chat-side line
+and rides on no wire field.
+
 ## What shipped 08-06 — presence left the keychain, and every write heals
 
 Steps 1 and 2 of [secrets-and-keychain-plan.md](secrets-and-keychain-plan.md), which

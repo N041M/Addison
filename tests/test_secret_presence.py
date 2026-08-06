@@ -188,7 +188,7 @@ def test_a_restored_snapshot_resets_presence_rather_than_asserting_a_stale_one(t
     safe rather than merely tidy: the recovery path can therefore never write a "no
     key saved" that the relay rule would act on.
     """
-    assert _EXCLUDED_COLUMNS["provider_config"] == ("secret_presence",)
+    assert "secret_presence" in _EXCLUDED_COLUMNS["provider_config"]
     assert "secret_presence" not in _CAPTURED_TABLES["provider_config"]
 
     store = Store(tmp_path / "p.sqlite3")

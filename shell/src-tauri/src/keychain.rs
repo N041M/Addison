@@ -395,6 +395,72 @@ const LEGACY_ANTHROPIC_ACCOUNT: &str = "provider-key:primary";
 /// a second durable copy of its key.
 const LEGACY_PROVIDER: &str = "anthropic";
 
+// --- §5.3: the shape a key must have before it is stored --------------------
+//
+// `SettingsPage.tsx` trims the box's contents, but that is the frontend's courtesy
+// and not a contract: any other route into `store_provider_key` — or one regression
+// in that component — persists whatever it was handed. A key with a trailing newline
+// is the classic paste bug, and what it produces is an auth failure indistinguishable
+// from a wrong key, days later, with nothing on screen pointing at the cause.
+//
+// Three refusals, each with its own sentence, because "that key looks wrong" tells
+// somebody nothing they can act on. G1: every one of them is a CONSTANT. No branch
+// here logs, traces or embeds the value, its length or its prefix — they name the
+// SHAPE of the problem and nothing else.
+
+/// Nothing left after the strip. Refused rather than stored, because an empty item
+/// reads back as the empty string — which is how this whole subsystem says "nothing
+/// saved", and "nothing saved" is the ONE answer that may reach the external Setup
+/// Assistant relay. Storing whitespace would put a person's turn on that road.
+const KEY_IS_BLANK: &str = "That key is blank — paste the key and try again.";
+
+/// The paste bug §5.3 is named after, in its unfixable-by-trimming form: a break in
+/// the MIDDLE. Refused, never repaired — a key Addison quietly altered is a key that
+/// fails mysteriously later, which is the outcome this exists to prevent.
+const KEY_HAS_A_LINE_BREAK: &str =
+    "That key has a line break in it — paste it again as one line.";
+
+/// Tabs, NULs, and the zero-width marks a copy out of a styled web page carries
+/// along. Invisible by definition, so the sentence has to name the fix rather than
+/// ask the person to look for something they cannot see.
+const KEY_HAS_HIDDEN_CHARACTERS: &str =
+    "That key has hidden characters in it — copy it straight from the provider's \
+     page and paste it again.";
+
+/// Characters that cannot legitimately appear inside an API key and are invisible
+/// when they do. Line breaks are matched separately (they get their own sentence),
+/// so this is the rest: `Cc` controls, the zero-width / directional marks in
+/// U+200B–U+200F, the word joiner, the BOM, and the soft hyphen.
+fn is_invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c, '\u{200B}'..='\u{200F}' | '\u{2060}' | '\u{FEFF}' | '\u{00AD}')
+}
+
+/// The store boundary's own normalisation (§5.3). Returns the value that will be
+/// written — a borrowed slice of the caller's string — or the plain sentence to
+/// refuse with.
+///
+/// Surrounding whitespace is STRIPPED, not refused: a trailing newline off a web
+/// page is not a different key, it is the same key with a paste artefact on the end,
+/// and refusing it would tell somebody to fix something they cannot see. Everything
+/// else that cannot be repaired without guessing is refused.
+fn normalised_key(raw: &str) -> Result<&str, &'static str> {
+    let key = raw.trim();
+    if key.is_empty() {
+        return Err(KEY_IS_BLANK);
+    }
+    // U+2028/U+2029 are line breaks too; `trim` takes them off the ends (both are
+    // White_Space) but neither is a `Cc` control, so an embedded one would otherwise
+    // fall through both checks.
+    if key.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
+        return Err(KEY_HAS_A_LINE_BREAK);
+    }
+    if key.chars().any(is_invisible) {
+        return Err(KEY_HAS_HIDDEN_CHARACTERS);
+    }
+    Ok(key)
+}
+
 /// Webview -> Shell. Write-only path for a BYOK key the user typed. The key goes
 /// straight into the OS keychain, keyed by provider id, and is never echoed back
 /// anywhere (§8.3).
@@ -411,6 +477,20 @@ pub async fn store_provider_key(provider: String, key: String) -> Result<(), Str
 }
 
 fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> {
+    // §5.3, and it happens FIRST, for two separate reasons. A key refused for its
+    // shape must not queue behind a password dialog somebody else's read is parked
+    // on — the refusal needs nothing from the OS. And the compare inside
+    // `save_would_change_nothing` has to see the same bytes the write would store:
+    // comparing the raw paste against a stored, already-normalised key reads a
+    // trailing newline as a change and re-mints the item for nothing, which is the
+    // one operation in this module that can lose a key (§5.4, §4.2).
+    let key = match normalised_key(key) {
+        Ok(normalised) => normalised,
+        Err(problem) => {
+            trace!("save", &format!("provider={provider}"), "refused-shape");
+            return Err(problem.to_string());
+        }
+    };
     let _os = os_guard();
     let entry = Entry::new(SERVICE, &account_for_provider(provider))
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
@@ -1499,6 +1579,117 @@ mod tests {
         assert!(save_would_change_nothing("save-test-a", &entry, "sk-same"));
         assert!(!save_would_change_nothing("save-test-a", &entry, "sk-different"));
         cache_evict("save-test-a");
+    }
+
+    // --- §5.3: normalisation at the store boundary ------------------------
+
+    #[test]
+    fn a_key_with_a_line_break_is_refused_at_the_store_boundary() {
+        // The refusal, not a repair. Addison cannot know whether the break is a paste
+        // artefact or two halves of something the person meant to join, and a key it
+        // quietly altered is a key that fails mysteriously a week later — which is the
+        // failure §5.3 exists to convert into a fixable message.
+        assert_eq!(normalised_key("sk-abc\ndef"), Err(KEY_HAS_A_LINE_BREAK));
+        assert_eq!(normalised_key("sk-abc\r\ndef"), Err(KEY_HAS_A_LINE_BREAK));
+        // U+2028 is a line break that is NOT a `Cc` control, so it slips past
+        // `is_control` — it is named explicitly for exactly that reason.
+        assert_eq!(normalised_key("sk-abc\u{2028}def"), Err(KEY_HAS_A_LINE_BREAK));
+        // The control: an ordinary key is not refused, or this test would pass for a
+        // version that refuses everything.
+        assert_eq!(normalised_key("sk-abcdef"), Ok("sk-abcdef"));
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_stripped_rather_than_refused() {
+        // The trailing newline is the COMMON case — it comes off the end of a copy
+        // from a web page — and it is repairable without guessing, so refusing it
+        // would tell somebody to fix something they cannot see. The frontend also
+        // trims, but §5.3's whole point is that the frontend's trim is a courtesy and
+        // this is the contract.
+        assert_eq!(normalised_key("sk-abcdef\n"), Ok("sk-abcdef"));
+        assert_eq!(normalised_key("  sk-abcdef\t\r\n "), Ok("sk-abcdef"));
+        // NBSP off a rich-text paste is whitespace too, and at the edges it strips.
+        assert_eq!(normalised_key("\u{00A0}sk-abcdef\u{00A0}"), Ok("sk-abcdef"));
+    }
+
+    #[test]
+    fn hidden_characters_inside_a_key_are_refused() {
+        // A zero-width space in the middle of a key is invisible in the box, invisible
+        // in the provider's dashboard, and fatal at the API. Storing it produces a 401
+        // that looks exactly like a wrong key.
+        assert_eq!(normalised_key("sk-abc\u{200B}def"), Err(KEY_HAS_HIDDEN_CHARACTERS));
+        assert_eq!(normalised_key("sk-abc\u{FEFF}def"), Err(KEY_HAS_HIDDEN_CHARACTERS));
+        assert_eq!(normalised_key("sk-abc\tdef"), Err(KEY_HAS_HIDDEN_CHARACTERS));
+        assert_eq!(normalised_key("sk-abc\u{00AD}def"), Err(KEY_HAS_HIDDEN_CHARACTERS));
+    }
+
+    #[test]
+    fn a_blank_key_is_refused_rather_than_stored_as_nothing_saved() {
+        // An empty item reads back as the empty string, which is how this subsystem
+        // says "nothing saved" — and "nothing saved" is the one answer that may reach
+        // the external Setup Assistant relay. A whitespace-only paste must therefore
+        // never become a stored key.
+        assert_eq!(normalised_key(""), Err(KEY_IS_BLANK));
+        assert_eq!(normalised_key("   \n\t "), Err(KEY_IS_BLANK));
+        // The seam this protects, restated: an empty stored value IS "nothing saved".
+        assert_eq!(
+            provider_key_response(KeyRead::NothingSaved).unwrap(),
+            json!({ "key": "" })
+        );
+    }
+
+    #[test]
+    fn a_refusal_never_carries_any_part_of_the_key() {
+        // G1. The three sentences are constants; nothing formats a value, a length or
+        // a prefix into them, so a refusal cannot become the leak.
+        for message in [KEY_IS_BLANK, KEY_HAS_A_LINE_BREAK, KEY_HAS_HIDDEN_CHARACTERS] {
+            assert!(!message.contains("sk-"));
+            assert!(!message.contains("characters long"));
+        }
+        // And the refusal path says what to do next, in every case (CONVENTIONS: a
+        // plain message plus one suggested step).
+        assert!(KEY_IS_BLANK.contains("paste"));
+        assert!(KEY_HAS_A_LINE_BREAK.contains("paste"));
+        assert!(KEY_HAS_HIDDEN_CHARACTERS.contains("paste"));
+    }
+
+    #[test]
+    fn the_save_path_normalises_before_it_decides_the_save_changes_nothing() {
+        // §5.3 composed with §5.4, and it can only be checked at the source: the real
+        // path needs an OS keychain, and `cargo test` must never touch one.
+        //
+        // Order is the whole property. `save_would_change_nothing` compares against
+        // what is STORED — a normalised value. Handing it the raw paste makes
+        // "sk-same\n" look like a change to "sk-same", and the write that follows is a
+        // delete-then-add: the one operation here that can lose somebody's key, run
+        // for a difference that does not exist.
+        let body = item_source("fn store_provider_key_blocking");
+        let normalise = body
+            .find("normalised_key(key)")
+            .expect("the save path no longer normalises the key at all (§5.3)");
+        // The CALL, not the mentions of it in the comments above.
+        let compare = body
+            .find("if save_would_change_nothing(")
+            .expect("the unchanged-compare moved — re-point this test");
+        assert!(
+            normalise < compare,
+            "the unchanged-compare runs before normalisation, so a re-pasted key with \
+             a trailing newline re-mints the item for no change at all"
+        );
+    }
+
+    #[test]
+    fn a_normalised_key_matches_the_stored_one_so_the_save_short_circuits() {
+        // The behavioural half of the pair above: once normalised, a re-paste of the
+        // same key with paste whitespace on it compares EQUAL, so §5.4's short-circuit
+        // fires and the item is left alone.
+        cache_put("save-test-c", "sk-same");
+        let entry = Entry::new(SERVICE, "unused-in-this-path").unwrap();
+        let normalised = normalised_key(" sk-same\n").unwrap();
+        assert!(save_would_change_nothing("save-test-c", &entry, normalised));
+        // The control: the raw paste does NOT, which is what makes the order matter.
+        assert!(!save_would_change_nothing("save-test-c", &entry, " sk-same\n"));
+        cache_evict("save-test-c");
     }
 
     #[test]

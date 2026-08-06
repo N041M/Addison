@@ -364,6 +364,9 @@ classDiagram
     class ProviderAuthFailed {
         <<exception>>
     }
+    class ProviderKeyRejected {
+        <<exception>>
+    }
     class ProviderCapabilities {
         +native_tool_calling
         +max_context_tokens
@@ -447,6 +450,7 @@ classDiagram
     ModelProvider ..> ProviderUnavailable
     ModelProvider ..> ProviderRequestRejected
     ModelProvider ..> ProviderAuthFailed
+    ProviderAuthFailed <|-- ProviderKeyRejected
     ModelResponse --> ToolCallRequest
     ModelResponse --> Usage
     ModelRouter o-- ModelProvider

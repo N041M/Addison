@@ -145,6 +145,7 @@ erDiagram
         TEXT catalog_json "cached catalog"
         INTEGER last_check_ok
         TEXT secret_presence "present|absent|unknown"
+        INTEGER key_rejected_at "NULL = not rejected"
         INTEGER updated_at
     }
     skills {
@@ -225,10 +226,30 @@ erDiagram
   in exactly one function (`agent_core/secret_presence.py::may_reach_setup_relay`). It
   is written by the two paths that genuinely learn the answer — `provider.connect`, and
   the per-turn read in `_primary_key_status`, which stays a fresh keychain read because
-  it is the one caller with a person behind it. It is also the **only column excluded
+  it is the one caller with a person behind it. It is one of **two columns excluded
   from snapshot capture** (`snapshots/scope.py`): it is a timestamped observation about
   a store the person has been editing since, so a restore resets it to `unknown` rather
   than asserting a snapshot-era answer.
+  `key_rejected_at` (2026-08-06, plan §5.2) is the other, and it is a **THIRD** signal
+  beside those two rather than a re-use of either: epoch seconds of the first
+  DEFINITIVE rejection (a 401/403 from the provider itself — never a 429, never a
+  network error) since the last successful connect, or NULL. It is not `connected`,
+  because an auth failure mid-conversation must not silently disconnect a provider and
+  drop it out of the reconnect path; it is emphatically not `secret_presence`, because
+  a rejected key is `present` and rejected, and writing `absent` would make
+  `may_reach_setup_relay` true and hand the person's next message to the external
+  relay while their key sits in the keychain. It is also not `last_check_ok`, the
+  obvious candidate: that answers "did the last CONNECT PING pass", every write of `0`
+  to it is paired with `connected = 0`, and a reader therefore cannot tell "never
+  connected" from "connected, then revoked" — the only state that earns the sentence.
+  A timestamp rather than a flag because non-NULL IS the "the person has been told"
+  latch, which is what keeps repeated 401s from re-notifying. Written by the
+  orchestrator's attempt loop through one callback, cleared when `provider.connect`
+  passes (and by that branch only — a connect that FAILED is no evidence the revoked
+  key was replaced). Excluded from capture for the same reason as `secret_presence`
+  plus one more: a restore that resurrected it would either assert a fortnight-old
+  rejection about a key replaced since, or silence the notice for one that really is
+  revoked.
   Endpoints added by prompting (amendment §6.2) land here exactly like a normal
   provider, through `endpoint.confirmAdd` → `provider.connect` — reversible,
   snapshotted config. It carries **no** routing metadata: a model's `quality_rank` and

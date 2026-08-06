@@ -20,6 +20,7 @@ from agent_core.policy import PolicyMode
 from agent_core.providers.base import (
     Message,
     ModelRole,
+    ProviderKeyRejected,
     ProviderUnavailable,
     ToolCallRequest,
 )
@@ -85,6 +86,13 @@ _FALLBACK_BUDGET_SECONDS = 120.0  # a real per-attempt deadline ([MF-A]), not a 
 # (D4); a synthetic id keeps _emit_activity's tool-agnostic contract intact.
 _ROUTING_ACTIVITY_ID = "routing"
 _FALLBACK_NOTE = "{busy} was busy, so Addison used {used}."  # D8 frozen copy
+# Plan §5.2, and the copy table in §6 — said ONCE per revoked key, not once per turn.
+# It names the provider (not the model), because a key belongs to a provider and
+# Settings is where a provider's key lives. No jargon, no status code, one next step.
+_KEY_REJECTED_NOTE = (
+    "{provider} rejected Addison's key — it may have been revoked. "
+    "Add a new one in Settings."
+)
 # Only reached when the chain is exhausted having never captured a provider's own
 # plain message (an empty chain). Normally the last ProviderUnavailable's own
 # sentence is re-raised, which is more specific than this.
@@ -208,6 +216,8 @@ class Orchestrator:
         routing_chain=lambda requested_role, model_name: None,
         on_answered=lambda model_id, label, free, routed: None,
         model_label=lambda model_id: model_id,
+        on_auth_rejected=lambda provider_id: False,
+        provider_label=lambda provider_id: provider_id,
         trust_check=lambda path: False,
         forbidden_check=None,
         trusted_roots=None,
@@ -247,6 +257,17 @@ class Orchestrator:
         # human label for that chip and the fallback note.
         self.on_answered = on_answered
         self._model_label = model_label
+        # Plan §5.2. Called with a provider id when THAT PROVIDER answered a send with
+        # 401/403 — never on a 429, a 5xx, a timeout or a connection error. Returns
+        # True only the first time, and that return is the whole idempotency
+        # mechanism: a revoked key fails every turn, and the person is told once.
+        # Wired like on_usage, for the same reason — the orchestrator must not learn
+        # about SQLite. Unwired (CLI/tests) it records nothing and says nothing.
+        self._on_auth_rejected = on_auth_rejected
+        # A provider id -> the plain name a person would recognise ("Claude"), for the
+        # sentence above. Alongside ``model_label`` because they are different nouns:
+        # a key belongs to a provider, an answer comes from a model.
+        self._provider_label = provider_label
         # Workspace-trust confinement (step 5, D3). Given a RESOLVED absolute path,
         # returns whether it may be touched right now (under a trusted root AND past
         # the data-dir floor). Store-backed, so it is wired in by the server
@@ -392,7 +413,12 @@ class Orchestrator:
         idx = 0
         committed: str | None = None   # provider id locked once a tool round completes
         noted = False
-        last_unavailable: ProviderUnavailable | None = None
+        # Set when the chain head — what the person's settings say should answer — was
+        # skipped because it rejected Addison's key. The rejection sentence already
+        # explains the substitution, and explains it better than "was busy", which
+        # would be a plain falsehood about a revoked key (§5.2).
+        preferred_rejected = False
+        last_unavailable: RuntimeError | None = None
         answered: RoutingCandidate | None = None
         calls_made = 0
         budget_spent = False
@@ -436,6 +462,37 @@ class Orchestrator:
                         timeout=remaining,
                         on_delta=relay,
                     )
+                except ProviderKeyRejected as exc:
+                    # §5.2. The provider ANSWERED, and said the key is no good — the
+                    # one failure that is definitive evidence about a stored key. Two
+                    # things follow, in this order:
+                    #
+                    #   1. Record it, once. The callback returns True only the first
+                    #      time, so a key that has been revoked for a week does not
+                    #      produce a fresh notice on every turn.
+                    #   2. Degrade EXACTLY as an unavailable provider does — cool it,
+                    #      advance the index — because that is the mechanism that
+                    #      already exists and another provider holds a different key.
+                    #      The original "no walk" rule (base.py) reasoned that the next
+                    #      provider gets the same bad key; that is true of a MISSING
+                    #      key and false of a rejected one, which is why only the
+                    #      narrow subclass walks and plain ProviderAuthFailed still
+                    #      propagates untouched.
+                    if self._on_auth_rejected(cand.provider_id):
+                        self.on_activity(
+                            _ROUTING_ACTIVITY_ID,
+                            _KEY_REJECTED_NOTE.format(
+                                provider=self._provider_label(cand.provider_id)
+                            ),
+                        )
+                    if preferred is not None and cand.provider_id == preferred.provider_id:
+                        preferred_rejected = True
+                    if relay.shown_this_turn:
+                        raise
+                    last_unavailable = exc
+                    self._cool(cand.provider_id)
+                    idx += 1
+                    continue
                 except ProviderUnavailable as exc:
                     # Text already on the reader's screen bars the walk, for the same
                     # reason `committed` bars a cross-provider advance: the next
@@ -463,6 +520,7 @@ class Orchestrator:
             # user expected (the preferred head) produced the answer (D4/D8).
             if (
                 not noted
+                and not preferred_rejected
                 and preferred is not None
                 and candidate.model_id != preferred.model_id
             ):

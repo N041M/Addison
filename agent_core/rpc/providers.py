@@ -303,6 +303,35 @@ class ProvidersMixin(ServerContext):
         except Exception:
             return SecretPresence.UNKNOWN
 
+    # --- a rejected key marks the provider (plan §5.2) --------------------
+    def _record_key_rejected(self, provider_id: str) -> bool:
+        """The orchestrator's ``on_auth_rejected`` callback. A provider answered a
+        send with 401/403; write it down and say whether this is NEW — the caller
+        surfaces the plain sentence only on True, which is the whole of "the person
+        is told once, not once per turn".
+
+        Bounded to the four known provider ids. A local Ollama server answering 401
+        is not a saved key being refused, and ``provider_config`` would reject the row
+        anyway; it degrades through the same chain walk either way, silently.
+
+        Best-effort, on the ``_audit`` precedent: a SQLite hiccup must not be the
+        reason somebody's turn dies, and the cost of swallowing it is one un-recorded
+        rejection that the next turn records instead."""
+        if provider_id not in PROVIDER_IDS:
+            return False
+        try:
+            return self.store.record_key_rejected(provider_id)
+        except Exception:
+            return False
+
+    def _provider_display_label(self, provider_id: str) -> str:
+        """The name a person would recognise for a provider id, for the §5.2
+        sentence. Falls back to the id, which is never pretty but is never wrong."""
+        try:
+            return provider_label(provider_id) or provider_id
+        except Exception:
+            return provider_id
+
     def _provider_list(self) -> dict:
         """provider.list -> {providers: [...]}. Carries ONLY non-secret status and
         metadata — NEVER any key material (invariant §8.3): id, plain label, whether
@@ -407,6 +436,11 @@ class ProvidersMixin(ServerContext):
             last_check_ok=True,
             secret_presence=self._presence_now(provider_id),
         )
+        # Plan §5.2's clearing signal, and the only one there is: this provider just
+        # accepted a key, seconds after the Rust command wrote it. Deliberately on the
+        # SUCCESS branch alone — the two failure branches above also write the row,
+        # and a connect that failed is no evidence that a revoked key was replaced.
+        self.store.clear_key_rejected(provider_id)
         self._set_provider_models(provider_id, models)
         return {"ok": True}
 

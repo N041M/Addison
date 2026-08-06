@@ -92,8 +92,11 @@ def request_with_retry(
 #
 # The distinction the loop cares about is ONLY "may I try the next candidate?":
 #   * ProviderUnavailable  -> transient; the loop MAY walk the chain.
-#   * ProviderRequestRejected / ProviderAuthFailed -> fail the turn immediately, no
-#     walk (the next provider gets the same bad request / the same missing key).
+#   * ProviderKeyRejected  -> definitive, and about THIS provider's key alone; the
+#     loop walks (another provider has a different key) and marks it needs-attention.
+#   * ProviderRequestRejected / plain ProviderAuthFailed -> fail the turn
+#     immediately, no walk (the next provider gets the same bad request, or we had
+#     no key to send in the first place and a different provider will not fix that).
 
 
 class ProviderUnavailable(RuntimeError):
@@ -111,12 +114,34 @@ class ProviderAuthFailed(RuntimeError):
     cannot route around for THIS candidate. The turn fails immediately (D4)."""
 
 
+class ProviderKeyRejected(ProviderAuthFailed):
+    """The provider ANSWERED, and its answer was 401/403: the key Addison holds was
+    refused (plan §5.2).
+
+    A subclass, so every existing ``except ProviderAuthFailed`` still catches it and
+    nothing that reads the message changes. What the narrower type buys is the one
+    distinction §5.2 turns on and the parent cannot express: a server that refused
+    the key is DEFINITIVE evidence about that key, while ``ProviderAuthFailed`` is
+    also raised locally when there is no key to send or the bytes are unusable —
+    which says nothing about whether a saved key is any good, and must never produce
+    "your key was rejected".
+
+    It is deliberately NOT raised for a 429, a 5xx, a timeout or a connection error.
+    Those are ``ProviderUnavailable``; treating a rate limit as a revoked key would
+    tell somebody to replace a key that works."""
+
+
 def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
     """Classify a >=400 status into the hierarchy, carrying the caller's own plain
-    message unchanged. 401/403 -> auth; 429 or 5xx -> unavailable; every other 4xx
-    -> rejected. The order matters: auth is checked before the 429/5xx band."""
+    message unchanged. 401/403 -> the key was rejected; 429 or 5xx -> unavailable;
+    every other 4xx -> rejected. The order matters: auth is checked before the
+    429/5xx band.
+
+    This function is the single choke point every provider's ``send`` funnels an
+    error status through, which is why §5.2 needs no per-provider edit — and why the
+    401/403 line is the one to mutate when checking that these tests can fail."""
     if status_code in (401, 403):
-        return ProviderAuthFailed(message)
+        return ProviderKeyRejected(message)
     if status_code == 429 or status_code >= 500:
         return ProviderUnavailable(message)
     return ProviderRequestRejected(message)

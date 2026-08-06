@@ -78,6 +78,10 @@ class Store:
             "TEXT NOT NULL DEFAULT 'unknown' "
             "CHECK(secret_presence IN ('present','absent','unknown'))",
         )
+        # A rejected key changes something (plan §5.2). Same idiom; the safe default
+        # for an older row is NULL — "nobody has been told anything", so the first
+        # 401 after the upgrade notifies once and every later one does not.
+        self._add_column_if_missing("provider_config", "key_rejected_at", "INTEGER")
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -559,6 +563,66 @@ class Store:
             )
         self._conn.commit()
 
+    def record_key_rejected(self, provider_id: str, at: int | None = None) -> bool:
+        """This provider DEFINITIVELY rejected the saved key (plan §5.2). Returns
+        True only the FIRST time, which is what makes the notice idempotent: a
+        revoked key fails every turn, and the person is told once, not once per turn.
+
+        Writes ``key_rejected_at`` and NOTHING else. Not ``connected`` — an auth
+        failure must not silently disconnect a provider. And above all not
+        ``secret_presence``: the key is still saved, so it stays ``present``, and
+        writing ``absent`` here would make the router relay-eligible and send the
+        person's message to an external service while their key sits in the keychain
+        (the 2026-07-25 bug — see ``secret_presence.py``).
+
+        A provider with no row at all gets one, ``connected = 0``: something reached
+        that provider with a key and was refused, which is worth recording even
+        where no connect ever completed. The new row's ``secret_presence`` takes the
+        schema default ``unknown`` — never ``absent``, for the reason above."""
+        now = int(time.time()) if at is None else at
+        row = self._conn.execute(
+            "SELECT key_rejected_at FROM provider_config WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        if row is not None and row["key_rejected_at"] is not None:
+            return False   # already marked, already told — say nothing again
+        if row is not None:
+            self._conn.execute(
+                "UPDATE provider_config SET key_rejected_at = ?, updated_at = ? "
+                "WHERE provider_id = ?",
+                (now, now, provider_id),
+            )
+        else:
+            self._conn.execute(
+                "INSERT INTO provider_config "
+                "(provider_id, connected, key_rejected_at, updated_at) VALUES (?, ?, ?, ?)",
+                (provider_id, 0, now, now),
+            )
+        self._conn.commit()
+        return True
+
+    def clear_key_rejected(self, provider_id: str) -> None:
+        """Forget a recorded rejection — the person supplied a key the provider
+        accepted (``provider.connect`` passed). Idempotent, and a no-op for a
+        provider with no row. Deliberately NOT folded into
+        ``upsert_provider_config``: the FAILING branches of connect call that too,
+        and a failed connect is no evidence that the revoked key was replaced."""
+        self._conn.execute(
+            "UPDATE provider_config SET key_rejected_at = NULL, updated_at = ? "
+            "WHERE provider_id = ? AND key_rejected_at IS NOT NULL",
+            (int(time.time()), provider_id),
+        )
+        self._conn.commit()
+
+    def key_rejected_at(self, provider_id: str) -> int | None:
+        """When this provider last rejected the saved key, or None. Read by the
+        needs-attention state and by the idempotency check above."""
+        row = self._conn.execute(
+            "SELECT key_rejected_at FROM provider_config WHERE provider_id = ?",
+            (provider_id,),
+        ).fetchone()
+        return None if row is None else row["key_rejected_at"]
+
     def secret_presence(self, provider_id: str) -> SecretPresence:
         """Is a key saved for this provider? Answered from SQLite — NEVER by touching
         the OS keychain, which is the whole of plan §4.1.
@@ -581,7 +645,7 @@ class Store:
         """One provider's stored connection metadata, or None if never connected."""
         row = self._conn.execute(
             "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
-            "secret_presence FROM provider_config WHERE provider_id = ?",
+            "secret_presence, key_rejected_at FROM provider_config WHERE provider_id = ?",
             (provider_id,),
         ).fetchone()
         return _provider_config_row(row) if row is not None else None
@@ -590,7 +654,7 @@ class Store:
         """Every provider that has connection metadata, in insertion order."""
         rows = self._conn.execute(
             "SELECT provider_id, connected, added_at, base_url, catalog_json, last_check_ok, "
-            "secret_presence FROM provider_config ORDER BY rowid ASC"
+            "secret_presence, key_rejected_at FROM provider_config ORDER BY rowid ASC"
         ).fetchall()
         return [_provider_config_row(row) for row in rows]
 
@@ -1449,4 +1513,8 @@ def _provider_config_row(row) -> dict[str, Any]:
         # cannot recognise must arrive as UNKNOWN, never as something a caller could
         # compare against "absent" by accident.
         "secret_presence": SecretPresence.parse(row["secret_presence"]),
+        # Plan §5.2. Epoch seconds of the first definitive rejection since the last
+        # successful connect, or None. A THIRD signal — it never stands in for
+        # `connected` or `secret_presence`, and neither of those stands in for it.
+        "key_rejected_at": row["key_rejected_at"],
     }

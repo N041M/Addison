@@ -279,7 +279,7 @@ sequenceDiagram
     SRV->>P: one tiny request — Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI GET /v1/models, custom GET {base}/models<br/>(a custom base URL normally already ends in /v1)
     P-->>SRV: 200 ok, or 401/timeout
     Note over SRV: a restore point is taken per connect ATTEMPT, before it<br/>(reason "provider_connect", or "add_endpoint" for a custom server)
-    Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false, so provider.list shows it off
+    Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>CLEAR key_rejected_at (this is the person supplying a key the provider accepts — plan §5.2),<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false and the mark is LEFT STANDING, so provider.list shows it off
     Note over SRV: EVERY branch also records secret_presence (present/absent/unknown).<br/>That column — never the OS — answers every later presence question:<br/>provider.list, stats.get and the live-catalog gate (data-model.md)
     SRV-->>UI: {ok: true} or {ok: false, error}
     UI->>SRV: provider.list + model.availableRoles (refresh)
@@ -571,11 +571,14 @@ sequenceDiagram
 Shipped in Phase-2 step 3, so the names below are real. Routing is
 **strong-first, degrade-down** (amendment §10), and the chain's head is always the
 user's standing default model — a strategy orders only the fallback tail, so routing
-never overrides a deliberate choice. The turn falls forward only on a
-**provider-unavailable** failure (429, 5xx, network); a rejected request or a bad key
-ends the turn at once, because the next provider would just get the same bad request.
-The cooldown is in-memory, and the per-attempt deadline is threaded into each attempt so
-one hanging candidate cannot stall the turn.
+never overrides a deliberate choice. The turn falls forward on a
+**provider-unavailable** failure (429, 5xx, network) **and on a rejected key** (a
+401/403 from the provider itself — plan §5.2, built 2026-08-06: the next provider has
+a different key, so this one is worth walking past, and the provider is marked
+needs-attention as it goes). A rejected REQUEST, or a missing/malformed key, still
+ends the turn at once — the next provider would just get the same bad request, or the
+same nothing. The cooldown is in-memory, and the per-attempt deadline is threaded into
+each attempt so one hanging candidate cannot stall the turn.
 
 ```mermaid
 sequenceDiagram
@@ -596,6 +599,12 @@ sequenceDiagram
         ORC->>B: send(..., timeout=budget remaining)
         B-->>ORC: response
         Note over ORC: activity note "A was busy, so Addison used B."
+    else ProviderKeyRejected (401 / 403 — plan §5.2)
+        A-->>ORC: raises
+        Note over ORC: mark A needs-attention (key_rejected_at), ONCE — then cool and advance,<br/>the same two lines the unavailable branch runs
+        ORC->>B: send(..., timeout=budget remaining)
+        B-->>ORC: response
+        Note over ORC: activity note "A rejected Addison's key — it may have been revoked.<br/>Add a new one in Settings." — and it REPLACES the "was busy" note,<br/>which would be a plain falsehood about a revoked key
     end
     Note over ORC: on_answered(model, label, free, routed) -> reply carries answeredWith
     Note over ORC: chip "Answered with a free model." iff free AND routed<br/>(routed = the answering model was not the user's explicit pick)

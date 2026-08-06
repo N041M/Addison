@@ -1305,7 +1305,18 @@ export async function storeProviderKey(provider: string, key: string): Promise<v
   if (!isEngineConnected()) {
     throw new Error(NOT_CONNECTED_MESSAGE);
   }
-  await invoke("store_provider_key", { provider, key });
+  try {
+    await invoke("store_provider_key", { provider, key });
+  } catch (err) {
+    // §5.3. The Rust store boundary refuses a key whose SHAPE is wrong with a
+    // plain, fixable sentence ("That key has a line break in it — paste it again
+    // as one line."). A Tauri command returning `Err(String)` rejects with the
+    // BARE STRING, and the Settings row only re-shows `err.message` — so without
+    // this the one sentence that says how to fix the paste is thrown away and
+    // replaced by the generic "check the key and try again", which is the
+    // mystifying failure §5.3 exists to remove.
+    throw new Error(toPlainMessage(err));
+  }
 }
 
 // The "Remove" action: delete a provider's stored key from the OS keychain. Like

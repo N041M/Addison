@@ -116,15 +116,20 @@ The double-password diagnosis first produced a ground-up encrypted-vault rewrite
 scrutiny (60 findings) and two spikes then **turned it into a repair-first plan**.
 Steps 1 and 2 landed on 2026-08-06 — presence left the keychain for
 `provider_config.secret_presence`, and every credential write is now an explicit,
-verified delete-then-add with self-heal on top of it. **Steps 3–5 are still
-PROPOSED**: `Intent` and the background-caller re-arm (§4.3), launch reconciliation
-(§5.1), 401 handling (§5.2), store-boundary normalisation (§5.3), the shipped read
-counter (§5.6), and the click-anchored cards (§6). So these remain true today: a
-401 changes nothing (a revoked key fails every turn forever), keys are trimmed
-only in the frontend, and G1's zeroization stops at the Python boundary. The vault
-survives as a documented destination with named triggers (step 7's MCP tokens,
-Android, or the Phase-3 identity rotation). §14 lists the owner decisions;
-**decision 6 is now answered** — see [BUILD-LOG.md](BUILD-LOG.md).
+verified delete-then-add with self-heal on top of it. **Two of step 4's four items
+landed the same day**: a definitive 401/403 now marks the provider needs-attention
+on a third column, `provider_config.key_rejected_at`, says one plain line ONCE, and
+lets routing degrade to another connected provider (§5.2); and a key is normalised
+and shape-checked where it is STORED, in `keychain.rs`, rather than trusted to the
+frontend's `.trim()` (§5.3). **What is still PROPOSED**: `Intent` and the
+background-caller re-arm (§4.3), launch reconciliation (§5.1), the shipped read
+counter (§5.6), and the click-anchored cards (§6) — which is where a
+needs-attention Settings ROW will live; today §5.2's state is core-side plus one
+chat-side line. So one item on the old list remains true: G1's zeroization stops at
+the Python boundary. The vault survives as a documented destination with named
+triggers (step 7's MCP tokens, Android, or the Phase-3 identity rotation). §14 lists
+the owner decisions; **decisions 3 and 6 are now answered** — see
+[BUILD-LOG.md](BUILD-LOG.md).
 
 **The presence probe cost is CLOSED (built 2026-08-06).** It had been watched
 happening on 2026-08-01: with `ADDISON_KEYCHAIN_TRACE=1`, `_primary_key_available()`
