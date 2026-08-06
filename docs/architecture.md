@@ -386,11 +386,14 @@ Component by component:
   `{kind:"routine", routineId, title}` and `{kind:"stat", source, title}` (source from
   the fixed whitelist `tokens_month` / `provider_latency` / `connections`) in both
   modes; the three interactive kinds described below; and `{kind:"command", command,
-  title}` in OPEN only — rejected at save under
-  SAFE, and stored `created_in_mode='open'` so that while Simple is active it renders
-  as a disabled row (title + reason, no Run and no command text) rather than a working
-  one. A command spec that is NOT stamped `'open'` still fails render-time validation
-  and is dropped: what a row is decides what Simple may see, never what its stamp says. There is no eval, no expression field and no template field,
+  title}` in OPEN only — rejected at save under SAFE, and rendered while Simple is
+  active as a disabled row (title + reason, no Run and no command text) rather than a
+  working one. **What makes it disabled is the spec, not the `created_in_mode` stamp**
+  (`widget_uses_dev_abilities`: OPEN accepts it and SAFE does not, plus a look-through
+  to what a launcher points at). A command spec stamped `'safe'` — a restored config,
+  an older build, a hand-edited row — is caught identically and refused by
+  `widget.run`, and a checklist stamped `'open'` is an ordinary usable row: what a row
+  IS decides what Simple may do with it, never where it was born. There is no eval, no expression field and no template field,
   and a routine id is matched against a plain-slug pattern so a spec cannot smuggle an
   expression through it. Widgets are proposed like routines (draft held in the core,
   saved only on an explicit confirm) and stored in the `widgets` table.

@@ -134,7 +134,11 @@ class ToolRegistry:
         ]
 
     def list_for_model(self) -> list[ToolDefinition]:
-        """The SAFE view (dev_only tools excluded). Kept as the historical name so
-        SAFE-mode callers and tests are unchanged; the orchestrator resolves the
-        live view per turn via ``visible_tools(mode)``."""
+        """The SAFE view (dev_only tools excluded), by its historical name.
+
+        **Nothing in ``agent_core/`` calls this any more** — the orchestrator, the
+        routine engine and the RPC layer all resolve the live view per turn via
+        ``visible_tools(mode)``. Its remaining callers are tests, where naming the
+        SAFE view directly is the clearer way to say what is being asserted. Kept
+        for them; delete it the day they stop asking."""
         return self.visible_tools(PolicyMode.SAFE)

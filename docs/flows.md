@@ -290,14 +290,16 @@ sequenceDiagram
 
 Addison proposes widgets the same way it proposes routines: a draft is held in the
 core and nothing is saved until an explicit confirm. A widget is a **declarative**
-spec (`agent_core/widgets.py`) — a saved-routine Run pill or a whitelisted stat
-display — never code, validated at save and at render **against the current policy
-mode**. In OPEN mode a third `command` kind is valid (it runs `run_command` on click,
-so the destructive-prompt rule still applies when clicked); it is rejected at save in
-SAFE mode, and OPEN-created widgets are listed by `widget.list` while the Simple
-profile is active (`created_in_mode`) as disabled rows carrying a display-only
-reason — they were hidden until 2026-08-06; [SAFETY.md](SAFETY.md) owns the rule. Saving is display-only (LOW-risk), so there is no
-permission card; a routine/command widget keeps its own gates when it is actually run.
+spec (`agent_core/widgets.py`) — a saved-routine Run pill, a whitelisted stat display,
+or one of the three interactive kinds (checklist, note, timer) — never code, validated
+at save and at render **against the current policy mode**. In OPEN mode a sixth
+`command` kind is valid (it runs `run_command` on click, so the destructive-prompt rule
+still applies when clicked); it is rejected at save in SAFE mode, and a widget that
+NEEDS developer abilities is listed by `widget.list` while the Simple profile is active
+as a disabled row carrying a display-only reason — they were hidden until 2026-08-06,
+and the test was the `created_in_mode` stamp until 2026-08-06; [SAFETY.md](SAFETY.md)
+owns the rule. Saving is display-only (LOW-risk), so there is no permission card; a
+routine/command widget keeps its own gates when it is actually run.
 
 ```mermaid
 sequenceDiagram
@@ -555,13 +557,14 @@ sequenceDiagram
     alt a SAFE kind (checklist, note, timer, or a launcher)
         Note over W: closed vocabulary — no code/eval, SAFE-1 + CSP hold
         W-->>SRV: None (valid)
-        SRV->>DB: insert_widget (created_in_mode="safe")
+        SRV->>DB: insert_widget (created_in_mode = the ACTIVE mode)
         SRV->>DB: set_widget_state (core-derived: un-ticked / initial text / paused)
     else code-backed / system-capable (Developer / Custom)
-        Note over W: kind absent from SAFE's list -> requires OPEN/Custom<br/>refused if built under Simple
+        Note over W: kind absent from SAFE's list -> requires OPEN<br/>refused if built under Simple
         W-->>SRV: None (valid in-tier) — else reject + plain reason
-        SRV->>DB: insert_widget (created_in_mode="open"/"custom", disabled in Simple)
+        SRV->>DB: insert_widget (created_in_mode="open")
     end
+    Note over DB: the stamp is WHERE IT WAS BORN, never what it may do:<br/>a checklist made in Developer is stamped "open" and is still<br/>an ordinary row in Simple. What Simple may use is asked of the<br/>SPEC at render (widget_uses_dev_abilities), never of this column.<br/>"custom" is a PROFILE — only snapshots ever record it as a mode.
     SRV-->>WV: {ok: true, widgetId}
     Note over SRV: later, a tick or an edit or a pause -> widget.setState<br/>validated per kind against the spec, and NOT snapshot-captured
     Note over WV: running/arming a system-capable widget -> workspace-trust + keyword gate (flow 12)

@@ -110,11 +110,15 @@ used to mean editing thirteen files.
 
 **Two rules that are easy to get wrong:**
 
-- **Artifact disabling** — routines/widgets created in OPEN are **listed but
-  disabled** in SAFE (`created_in_mode`), carrying a display-only
+- **Artifact disabling** — routines/widgets that **need** developer abilities are
+  **listed but disabled** in SAFE, carrying a display-only
   `unavailable: {reason, message}`, and return untouched when Developer is active
   again. They used to be hidden; owner decision 2026-08-06 changed that, and
-  [docs/SAFETY.md](docs/SAFETY.md) owns why. The marker is never the enforcement:
+  [docs/SAFETY.md](docs/SAFETY.md) owns why. Ask the **artifact**, never the
+  `created_in_mode` stamp — that stamp is display-only provenance, and a checklist
+  made in Developer needs nothing developer about it. Widgets ask correctly
+  (`widget_uses_dev_abilities`); **routines still read the stamp** — a live gap in
+  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). The marker is never the enforcement:
   dispatch (`routine.run` / `widget.run` / the engine's per-step check) refuses,
   and **wins** if the two ever disagree.
 - **Snapshots are NEVER hidden by mode (C6).** `created_in_mode` ships on
@@ -179,8 +183,10 @@ The v1 sequence (spec §11, steps 1–11) is complete and merged, as are Phase-2
 steps 1–6 (snapshots/G3, the Custom profile + guards + the G4 anchor, routing
 strategies, free-model endpoints, the coding harness + workspace-trust,
 containment for that harness, and the widget vocabulary — whose *tiers* were cut, not
-built). **No file is marked `TODO(step N)` any more** — that
-sequence records the order the system was built in, not work outstanding.
+built). **Exactly one `TODO(step N)` marker survives** — `shell/src-tauri/src/updater.rs`,
+which is genuinely outstanding Phase-3 work, not a leftover. Nothing in the v1
+sequence is marked: that sequence records the order the system was built in, not
+work still to do.
 
 Two steps remain — 7 and 8. Step 6 landed on 2026-08-06 (both halves; the
 capability-declaration lattice was cut in favour of the closed kind list — see
@@ -214,7 +220,13 @@ entry auto-migrates on first read). The core reads a key via
 the webview or SQLite (`provider.list`/`connect` responses carry status/metadata
 ONLY). `provider.connect` validates with one tiny request (Anthropic: `GET /v1/models`;
 OpenAI/custom: `GET {base}/v1/models`; Google: `GET /v1beta/models`), then folds the
-provider's models into the single picker union. Non-secret connection metadata lives
+provider's models into the single picker union. **That request's REPLY is the model
+list** — one call, both jobs. It used to be issued for validation and discarded, with
+the hardcoded ids in `models_catalog.py` registered instead, so a connected Google key
+offered two models and answered `404` to every message (fixed 2026-08-06). The curated
+table now supplies labels and `quality_rank` for ids a provider actually lists, and
+never the set of models. `tests/test_live_model_registration.py` holds the line at
+source level, because the nesting puts the wiring out of a unit test's reach. Non-secret connection metadata lives
 in the `provider_config` table; the custom base URL is the ONE permitted `http://`
 case (validated http(s)://). The orchestrator stays provider-agnostic — capability
 differences via `ProviderCapabilities`, never `isinstance`.
