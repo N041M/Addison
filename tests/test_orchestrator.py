@@ -27,7 +27,7 @@ from agent_core.tools.base import (
     ToolDefinition,
     ToolResult,
 )
-from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
 
 
 # --- fakes -----------------------------------------------------------------
@@ -199,6 +199,43 @@ def test_granted_permission_executes_and_appends_result():
     tool_result = next(m for m in conv.messages if m.role == "tool")
     assert tool_result.tool_call_id == "call-9"
     assert tool_result.content == "42"  # append_tool_result stringifies content
+
+
+def test_a_tool_use_naming_an_id_nothing_is_registered_under_is_answered_not_raised():
+    # A model can name a tool that existed when it last saw the list: every `mcp:`
+    # id leaves the registry on a refresh, a removal, a failed check or a snapshot
+    # restore, and the transcript it was used in survives all four.
+    #
+    # The turn must SURVIVE it. A tool_use with no tool_result is the one shape the
+    # provider rejects on every later request of the session (§4.4), which is why
+    # every other failure on this path is a refused step — an unregistered id is
+    # now one too. Mutation: change `tool_registry.find` back to `get` in
+    # `_run_tool_calls` — this fails with a KeyError before the second send.
+    tool = _SpyTool("calculator")
+    registry = ToolRegistry()
+    registry.register(tool)
+    provider = _ScriptedProvider([
+        _calls_response(_tool_call("call-7", "mcp:Design docs:search", {"q": "roadmap"})),
+        _text_response("I couldn't look that up."),
+    ])
+    gate = PermissionGate(on_request=lambda tid: pytest.fail("nothing to ask about"))
+    orchestrator, _ = _make_orchestrator(provider, registry, gate)
+
+    conv = _conversation_with("search the docs")
+
+    orchestrator.run_turn(conv)
+
+    assert [m.role for m in conv.messages] == ["user", "assistant", "tool", "assistant"]
+    tool_result = next(m for m in conv.messages if m.role == "tool")
+    assert tool_result.tool_call_id == "call-7"          # the pairing holds
+    assert tool_result.content == UNKNOWN_TOOL_REFUSAL
+    assert "mcp:" not in tool_result.content             # plain language, not an id
+    assert tool.calls == []                              # and nothing else ran instead
+    # The model saw the pairing on the round it was sent, which is the half that
+    # keeps the rest of the conversation usable.
+    replayed = provider.histories[1]
+    assert replayed[1].tool_calls[0].id == "call-7"
+    assert replayed[2].tool_call_id == "call-7"
 
 
 def test_denied_permission_skips_execution():

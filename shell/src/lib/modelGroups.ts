@@ -85,16 +85,39 @@ export interface FolderState {
   family?: string;
 }
 
+/**
+ * Where a row sits in the tree — the three numbers a panel announces.
+ *
+ * `posinset`/`setsize` ARE AUTHORED HERE BECAUSE NOTHING CAN COMPUTE THEM. Both
+ * panels draw the tree as one flat run of `treeitem` siblings carrying
+ * `aria-level`, with no `role="group"` around a folder's contents, and a screen
+ * reader may only derive an ordinal from a DOM hierarchy that mirrors the tree.
+ * Left unauthored it counts the whole list instead: with rows Anthropic(1),
+ * opus(2), haiku(2), Google(1), the second of two companies announces as "level
+ * 1, 4 of 4", and a family of four reads "5 of 10".
+ *
+ * They live in the row model rather than in either panel so that the two cannot
+ * disagree about the ordinal for a row they both draw from the same call.
+ */
+interface RowPosition {
+  /** 1 company, 2 family (or a model in a company with no family level), 3 model. */
+  level: number;
+  /** 1-based position among the children of the folder this row sits in. */
+  posinset: number;
+  /** How many children that folder has. */
+  setsize: number;
+}
+
 export type ModelListRow<T> =
   /**
    * A company folder. `key` is both the label and what a caller toggles.
    * `total` is the models inside — the closed hint, in the brief's idiom.
    */
-  | { kind: "company"; key: string; level: number; total: number; open: boolean }
+  | ({ kind: "company"; key: string; total: number; open: boolean } & RowPosition)
   /** A family folder inside the open company. `key` is the family name. */
-  | { kind: "family"; key: string; company: string; level: number; total: number; open: boolean }
+  | ({ kind: "family"; key: string; company: string; total: number; open: boolean } & RowPosition)
   /** A model. `index` is its position in the ORIGINAL options array. */
-  | { kind: "option"; option: T; index: number; level: number };
+  | ({ kind: "option"; option: T; index: number } & RowPosition);
 
 /** Every row this module names itself: the folders, never a caller's model. */
 export type ModelListFurnitureRow = Exclude<ModelListRow<never>, { kind: "option" }>;
@@ -205,58 +228,110 @@ function familyFolderOf<T extends GroupedRow>(options: T[], option: T): string |
  * all: what is drawn is the path that is open, and nothing else.
  *
  * `index` on a model row is its position in the ORIGINAL array, so a caller
- * holding indices (the popup's anchor row, App's `onPick` closures) keeps
- * meaning them however the folders move.
+ * holding indices keeps meaning them however the folders move. The popup's
+ * anchor row — the one it positions itself by — is the consumer.
  */
 export function modelListRows<T extends GroupedRow>(
   options: T[],
   state: FolderState,
 ): ModelListRow<T>[] {
   const rows: ModelListRow<T>[] = [];
-  for (const bucket of bucketByCompany(options)) {
+  const buckets = bucketByCompany(options);
+  // The root level holds a row per company PLUS every option a caller left
+  // ungrouped: `aria-setsize` is what is drawn at that level, not what a tidier
+  // catalogue would have drawn.
+  const roots = buckets.reduce((n, b) => n + (b.company ? 1 : b.models.length), 0);
+  let rootAt = 0;
+  for (const bucket of buckets) {
     if (!bucket.company) {
       // A caller that grouped nothing gets exactly what it passed, undecorated —
       // there is no folder to open, so there is nothing to close either.
       for (const m of bucket.models) {
-        rows.push({ kind: "option", option: m.option, index: m.index, level: 1 });
+        rootAt += 1;
+        rows.push({
+          kind: "option",
+          option: m.option,
+          index: m.index,
+          level: 1,
+          posinset: rootAt,
+          setsize: roots,
+        });
       }
       continue;
     }
 
-    const open = state.company === bucket.company;
+    const company = bucket.company;
+    const open = state.company === company;
+    rootAt += 1;
     rows.push({
       kind: "company",
-      key: bucket.company,
+      key: company,
       level: 1,
       total: bucket.models.length,
       open,
+      posinset: rootAt,
+      setsize: roots,
     });
     if (!open) continue;
 
     const families = familyBuckets(bucket.models);
     if (!families) {
-      for (const m of bucket.models) {
-        rows.push({ kind: "option", option: m.option, index: m.index, level: 2 });
-      }
+      bucket.models.forEach((m, at) => {
+        rows.push({
+          kind: "option",
+          option: m.option,
+          index: m.index,
+          level: 2,
+          posinset: at + 1,
+          setsize: bucket.models.length,
+        });
+      });
       continue;
     }
-    for (const family of families) {
+    families.forEach((family, familyAt) => {
       const familyOpen = state.family === family.family;
       rows.push({
         kind: "family",
         key: family.family,
-        company: bucket.company,
+        company,
         level: 2,
         total: family.models.length,
         open: familyOpen,
+        posinset: familyAt + 1,
+        setsize: families.length,
       });
-      if (!familyOpen) continue;
-      for (const m of family.models) {
-        rows.push({ kind: "option", option: m.option, index: m.index, level: 3 });
-      }
-    }
+      if (!familyOpen) return;
+      family.models.forEach((m, at) => {
+        rows.push({
+          kind: "option",
+          option: m.option,
+          index: m.index,
+          level: 3,
+          posinset: at + 1,
+          setsize: family.models.length,
+        });
+      });
+    });
   }
   return rows;
+}
+
+/**
+ * The option the folders open around: the one in effect, or the first when
+ * nothing is.
+ *
+ * ONE RULE, shared by the seed and the toggle below. They used to disagree —
+ * the seed fell back to option 0 and opened its family, the toggle fell back to
+ * nothing and left every family shut — so with no selection the same company
+ * click produced two different trees depending on whether it was the opening or
+ * a press. The fallback is the popup's own: its positioning aims at the first
+ * row when there is nothing selected to aim at.
+ */
+function anchorOption<T extends GroupedRow>(
+  options: T[],
+  isSelected: (option: T) => boolean,
+): T | undefined {
+  return options[Math.max(0, options.findIndex(isSelected))];
 }
 
 /**
@@ -266,16 +341,12 @@ export function modelListRows<T extends GroupedRow>(
  * on a closed tree says nothing about what is on, which is the one thing it
  * exists to say — so the company holding the selection opens, and its family
  * with it. Everything else stays shut, which is what the person asked for.
- *
- * No selection at all falls back to the first option, matching what the popup's
- * own positioning does with an empty selection.
  */
 export function initialFolderState<T extends GroupedRow>(
   options: T[],
   isSelected: (option: T) => boolean,
 ): FolderState {
-  const at = Math.max(0, options.findIndex(isSelected));
-  const option = options[at];
+  const option = anchorOption(options, isSelected);
   if (!option?.group) return {};
   return { company: option.group, family: familyFolderOf(options, option) };
 }
@@ -288,7 +359,8 @@ export function initialFolderState<T extends GroupedRow>(
  * HAND starts with its families all closed, unless it happens to hold the model
  * in effect, in which case that family opens too: opening the company you are
  * already using should show you where you are, and opening any other should not
- * pre-empt what you came to look for.
+ * pre-empt what you came to look for. With nothing in effect, `anchorOption`'s
+ * one rule decides — the same tree the menu would have opened on.
  */
 export function toggleCompany<T extends GroupedRow>(
   state: FolderState,
@@ -297,8 +369,7 @@ export function toggleCompany<T extends GroupedRow>(
   isSelected: (option: T) => boolean,
 ): FolderState {
   if (state.company === company) return {};
-  const at = options.findIndex(isSelected);
-  const selected = at >= 0 ? options[at] : undefined;
+  const selected = anchorOption(options, isSelected);
   const family =
     selected && selected.group === company ? familyFolderOf(options, selected) : undefined;
   return { company, family };

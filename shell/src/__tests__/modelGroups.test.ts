@@ -121,8 +121,8 @@ describe("modelListRows", () => {
   });
 
   it("gives every model its index in the ORIGINAL array", () => {
-    // App's `onPick` closures and the popup's anchor row both mean positions in
-    // the caller's array, so bucketing must not renumber them.
+    // The popup's anchor row — the one it positions itself by — means a position
+    // in the caller's array, so bucketing must not renumber them.
     const rows = modelListRows(interleaved, { company: "Google", family: "Gemini 2.5" });
     const picked = rows.flatMap((r) => (r.kind === "option" ? [[r.option.id, r.index]] : []));
     expect(picked).toEqual([
@@ -154,6 +154,55 @@ describe("modelListRows", () => {
     const rows = modelListRows<Model>([{ id: "x" }, { id: "y" }], {});
     expect(kinds(rows)).toEqual(["option", "option"]);
     expect(rows.every((r) => r.level === 1)).toBe(true);
+  });
+});
+
+describe("where a row says it sits", () => {
+  // `aria-posinset`/`aria-setsize` have to be AUTHORED: both panels draw the tree
+  // as flat sibling rows carrying `aria-level`, with no `role="group"` around a
+  // folder's contents, and a screen reader can only count an ordinal from a DOM
+  // hierarchy that mirrors the tree. Left to it, it counted the whole list —
+  // "Google, level 1, 4 of 4" for the second of two companies.
+  const ordinals = (rows: Row[]) =>
+    rows.map((r) => [
+      r.kind === "option" ? r.option.id : r.key,
+      `${r.posinset} of ${r.setsize}`,
+    ]);
+
+  it("counts a row against its own folder's children, not the list", () => {
+    const rows = modelListRows(catalogue, { company: "Anthropic" });
+    expect(ordinals(rows)).toEqual([
+      ["Anthropic", "1 of 2"],
+      // The two models are the company's children, not rows 2 and 3 of four.
+      ["claude-opus-4-8", "1 of 2"],
+      ["claude-haiku-4-5", "2 of 2"],
+      // And the company after them is the SECOND of two companies.
+      ["Google", "2 of 2"],
+    ]);
+  });
+
+  it("counts families against their company and models against their family", () => {
+    const rows = modelListRows(catalogue, { company: "Google", family: "Gemini 3.1" });
+    expect(ordinals(rows)).toEqual([
+      ["Anthropic", "1 of 2"],
+      ["Google", "2 of 2"],
+      ["Gemini 2.5", "1 of 4"],
+      ["Gemini 3.1", "2 of 4"],
+      ["gemini-3.1-pro-preview", "1 of 2"],
+      ["gemini-3.1-flash-lite", "2 of 2"],
+      ["Gemini 3.5", "3 of 4"],
+      ["Gemma 4", "4 of 4"],
+    ]);
+  });
+
+  it("counts an ungrouped option among the rows drawn beside it", () => {
+    // A caller that grouped nothing draws options at the root, so the root's set
+    // is what is on screen — not what a foldered catalogue would have shown.
+    const rows = modelListRows<Model>([{ id: "x" }, { id: "y" }], {});
+    expect(ordinals(rows)).toEqual([
+      ["x", "1 of 2"],
+      ["y", "2 of 2"],
+    ]);
   });
 });
 
@@ -191,6 +240,20 @@ describe("the accordion", () => {
     // otherwise, which is why it is one field and not a set.
     const next = toggleCompany(open, "Anthropic", catalogue, () => false);
     expect(next).toEqual({ company: "Anthropic", family: undefined });
+  });
+
+  it("opens the same tree as the seed would when nothing is selected", () => {
+    // The two used to disagree about the no-selection case — the seed fell back
+    // to the first option and opened ITS family, the toggle fell back to nothing
+    // — so the same company click produced two different trees depending on
+    // whether it was the opening or a press.
+    const nothingSelected = () => false;
+    for (const company of ["Anthropic", "Google"]) {
+      const seeded = initialFolderState(catalogue, nothingSelected);
+      const toggled = toggleCompany({}, company, catalogue, nothingSelected);
+      if (seeded.company === company) expect(toggled).toEqual(seeded);
+      else expect(toggled.family).toBeUndefined();
+    }
   });
 
   it("shows you where you are when you open the company you are using", () => {

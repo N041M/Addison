@@ -18,6 +18,7 @@ destroy the evidence that a leak happened, which is the opposite of the goal.
 from __future__ import annotations
 
 import pathlib
+import time
 
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -145,6 +146,106 @@ def test_a_private_key_block_is_removed_body_and_all():
     # ...and a key truncated before its footer still must not pass.
     truncated = redact("-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAxyz\n")
     assert "MIIEowIBAAKCAQEAxyz" not in truncated.text
+
+
+def test_a_key_inside_a_diff_is_removed_body_and_all():
+    """A DELETED KEY ARRIVES WITH SIX DASHES, and that is the shape most likely to
+    reach this function at all.
+
+    `git diff` prefixes a removed line with `-`, so a key deleted from a file has
+    `------BEGIN` and `------END` on its armour lines — and deleting a committed
+    key, then reading the diff, is how a person usually discovers they committed
+    one. A footer rule counting exactly five dashes cannot start where the body
+    stopped, so the block match fails and the truncated rule takes over: it emits
+    the marker and then the bytes, which is the one outcome the rule above exists
+    to forbid. The assertion that matters is the second one — a `kinds` entry
+    proves only that SOMETHING matched, and the bug produced one of those."""
+    body = "MIIEowIBAAKCAQEAxyzABCDEFGH0123456789abcdefghij"
+    diff = (
+        "@@ -1,4 +0,0 @@\n"
+        "------BEGIN RSA PRIVATE KEY-----\n"
+        f"-{body}\n"
+        "------END RSA PRIVATE KEY-----\n"
+    )
+    result = redact(diff)
+    assert result.kinds == ("private key",)
+    assert body not in result.text
+    # The same key with no footer at all, still inside a diff: the fallback rule
+    # has to cross the per-line `-` prefixes, or it stops at the first one and
+    # leaves everything after it.
+    headless = redact(f"------BEGIN RSA PRIVATE KEY-----\n-{body}\n-and prose\n")
+    assert body not in headless.text
+
+
+def test_a_key_rule_is_not_paid_for_in_dashes():
+    """A DASH IS THREE KEYSTROKES AND THE HEADER IS TRIED AT EVERY POSITION.
+
+    The footer counts five-or-more dashes so that a diff still matches; the header
+    must not, because it is the part re-tried at every offset in the text. Spelled
+    as a run count, it rescans the whole run from inside it — turning a wall of
+    bare dashes, which any server can send, into seconds of a blocked worker
+    thread. That is the same denial this rule's bounded body was written to close,
+    arriving through the other end."""
+    start = time.monotonic()
+    redact("-" * 131072)
+    assert time.monotonic() - start < 0.5
+
+
+def test_a_private_key_rule_cannot_be_made_to_scan_the_same_text_twice():
+    """THE COST OF A RULE ON ITS WORST INPUT IS PART OF THE RULE, and this is the
+    one rule that had to be rewritten to have a bounded one.
+
+    Written with a lazy ``.*?`` under DOTALL, the block rule scans to the end of the
+    input from EVERY header that has no footer after it — quadratic in the number of
+    headers, and a header is three dozen characters somebody else's server can
+    repeat as often as the 512 KB response cap allows. 128 KB of them took 2.42
+    seconds *(measured 2026-08-07 · python 3.13 in agent_core/.venv on the owner's
+    machine)*, on the worker thread, after the MCP call's own deadline had already
+    passed — so everything queued behind it waited too.
+
+    BOTH HALVES OR NEITHER. A performance assertion on its own would pass for a rule
+    that had simply stopped matching, which is the cheapest way to make a redactor
+    fast, so the same test proves a real multi-kilobyte key is still taken whole —
+    header, body and footer — including one whose armour lines carry hyphens of
+    their own.
+
+    Mutation: put ``.*?`` and ``re.DOTALL`` back — the budget assertion fails by
+    more than an order of magnitude. Mutation: match only the header — the body
+    assertion fails."""
+    headers = "-----BEGIN PRIVATE KEY-----" * 4740
+    assert len(headers) > 125_000
+    started = time.perf_counter()
+    redact(headers)
+    spent = time.perf_counter() - started
+    assert spent < 0.5, f"the private-key rule took {spent:.2f}s on {len(headers)} characters"
+
+    body = "\n".join("MIIEowIBAAKCAQEAxyzABCDEFGH0123456789abcdefghij+/KLMNOPQRSTUV" for _ in range(80))
+    for pem in (
+        f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----",
+        # An encrypted key: its armour headers contain hyphens, which is why the
+        # body cannot simply be "anything without a hyphen in it".
+        "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\n"
+        f"DEK-Info: AES-128-CBC,7A9B3C\n\n{body}\n-----END RSA PRIVATE KEY-----",
+    ):
+        result = redact(f"the key follows:\n{pem}\nand that was the key")
+        assert result.kinds == ("private key",)
+        assert "MIIEowIBAAKCAQEAxyz" not in result.text
+        assert "BEGIN RSA PRIVATE KEY" not in result.text
+        assert "END RSA PRIVATE KEY" not in result.text
+        assert result.text == "the key follows:\n[redacted: private key]\nand that was the key"
+
+
+def test_a_key_body_past_the_ceiling_falls_to_the_truncated_rule_rather_than_through():
+    """The bound on the block rule is a bound on COST, and a bound on cost must not
+    become a hole. A body longer than :data:`_MAX_PEM_BODY_CHARS` no longer matches
+    the header-to-footer rule at all — so the truncated-key rule underneath it is
+    what has to catch the bytes, and this is the test that says so.
+
+    Mutation: delete the truncated-key rule — an oversized body arrives whole."""
+    huge = "-----BEGIN PRIVATE KEY-----\n" + "A" * 40000 + "\n-----END PRIVATE KEY-----"
+    result = redact(huge)
+    assert "A" * 100 not in result.text
+    assert "private key" in result.kinds
 
 
 def test_ordinary_output_is_left_alone():

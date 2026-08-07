@@ -1320,9 +1320,10 @@ function parseMcpMutation(result: unknown): McpMutationResult {
   };
 }
 
-/** The four states the core can report. `checking` is deliberately absent — that
- * one is the frontend's own in-flight marker (see `McpServerStatus`), so a core
- * claiming it would be a payload describing a thing the core cannot know. */
+/** The three states a row may arrive in — the whole of `McpServerStatus`.
+ * Anything else is not a state this side knows how to draw, so it becomes
+ * "never": on a page about what Addison can reach, the safe way to be wrong is
+ * to understate. */
 const MCP_CORE_STATUSES = new Set(["never", "ok", "failed"]);
 
 /** How many tools one row may carry into the UI. The core caps discovery well

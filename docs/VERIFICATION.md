@@ -89,7 +89,24 @@ CLAUDE.md, not just a green run:
 
 - [ ] `agent_core/tools/registry.py` — undo-required-at-registration intact
       (`undo` present, own, **and callable**); `open_only` /
-      `allow_missing_undo` still two separate dimensions.
+      `allow_missing_undo` still two separate dimensions; `removable` still the
+      only route out of the registry, and **every mutator and every reader still
+      on the one worker thread** — this file does not lock, and an `mcp.*` method
+      answered inline on the read loop would be a mutation during somebody's turn.
+- [ ] **Any dispatch path that resolves a tool id** — `find`, never `get`. An
+      `mcp:` id leaves the registry on a refresh, a removal, a failed check, a
+      snapshot restore and every restart, so a raise there costs a turn its
+      `tool_result` or leaves a routine run recorded as `running` for ever.
+- [ ] `agent_core/redaction.py` — every rule still anchored on a vendor prefix or
+      a structural marker, and every rule still bounded on its WORST input: this
+      runs on the worker thread over text a stranger chose, after that call's
+      deadline has passed. A rule that can backtrack must say in its own comment
+      why it cannot. Nothing may cut a string before the redactor has read it.
+- [ ] `agent_core/memory/store.py` — a migration that rebuilds a durable table
+      (`tool_audit`) still runs inside ONE explicit transaction and still builds
+      the replacement under a separate name. `executescript` defeats an implicit
+      transaction, and these rows are excluded from snapshots and never pruned, so
+      an interrupted rebuild is the only way they can be lost.
 - [ ] `agent_core/permissions/gate.py` — grant/deny semantics unchanged
       (denials one turn only; grants persist; no new bypass); destructive calls
       never enter the coarse SAFE flow under any `auto_grant_scope`.

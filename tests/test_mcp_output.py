@@ -138,17 +138,23 @@ class Wiring:
         self._client.close()
 
 
-def answer(result: dict) -> str:
-    """Run one call against a server that answers with ``result``, and give back
-    exactly what a model would read."""
+def executed(result: dict):
+    """Run one call against a server that answers with ``result``, and give back the
+    whole ``ToolResult`` — the content a model would read AND the redaction kinds
+    the audit row is written from."""
     made = Wiring(result)
     try:
         tool = made.registry.get(TOOL_ID)
         return tool.execute(
             {}, ExecutionContext(conversation_id="c", policy_mode=PolicyMode.OPEN)
-        ).content
+        )
     finally:
         made.close()
+
+
+def answer(result: dict) -> str:
+    """Exactly what a model would read, for the tests that only ask about that."""
+    return executed(result).content
 
 
 def text_item(text: str) -> dict:
@@ -319,26 +325,32 @@ def test_a_secret_in_a_nested_structured_field_is_removed_and_named():
     walker has to know which fields might hold a credential, and a server chooses the
     field names.
 
-    Mutation: attach ``answer.structured`` instead of the redacted copy in
-    ``McpTool.execute`` — the key reaches the model and this fails."""
-    made = Wiring(
+    Mutation: hand ``compose_result`` the unscrubbed document (skip
+    ``_scrub_strings`` in ``_structured_answer``) — the key reaches the model and
+    this fails."""
+    result = executed(
         {
             "content": [text_item("done")],
             "structuredContent": {"account": {"credentials": {"key": AWS_KEY}}},
         }
     )
-    try:
-        tool = made.registry.get(TOOL_ID)
-        result = tool.execute(
-            {}, ExecutionContext(conversation_id="c", policy_mode=PolicyMode.OPEN)
-        )
-        assert AWS_KEY not in result.content
-        assert AWS_MARKER in result.content
-        # The kinds ride back so the audit row can name what was caught — from
-        # EITHER channel. A leak the log denies is the failure the row exists for.
-        assert result.redacted_kinds == ("AWS access key",)
-    finally:
-        made.close()
+    assert AWS_KEY not in result.content
+    assert AWS_MARKER in result.content
+    # The kinds ride back so the audit row can name what was caught — from
+    # EITHER channel. A leak the log denies is the failure the row exists for.
+    assert result.redacted_kinds == ("AWS access key",)
+
+
+def test_a_secret_a_server_used_as_a_FIELD_NAME_is_removed_too():
+    """A server chooses its own field names, so a credential can be the key rather
+    than the value. Walking only values would leave it in a document Addison then
+    fences and hands to a model.
+
+    Mutation: stop recursing into keys in ``_scrub_strings`` — this fails."""
+    result = executed({"content": [], "structuredContent": {AWS_KEY: "the account"}})
+    assert AWS_KEY not in result.content
+    assert AWS_MARKER in result.content
+    assert result.redacted_kinds == ("AWS access key",)
 
 
 def test_a_secret_straddling_the_structured_cap_never_leaves_a_head():
@@ -424,8 +436,8 @@ def test_a_structured_answer_that_will_not_serialize_is_a_refusal_not_a_raise():
     and in the running app a turn ends on a ``TypeError`` from a serializer."""
     circular: dict = {}
     circular["self"] = circular
-    assert mcp_client._structured_answer(circular) == (None, True)
-    assert mcp_client._structured_answer({"opaque": object()}) == (None, True)
+    assert mcp_client._structured_answer(circular) == (None, True, ())
+    assert mcp_client._structured_answer({"opaque": object()}) == (None, True, ())
 
 
 def test_a_structured_answer_deep_enough_to_be_expensive_is_simply_too_big():
@@ -535,6 +547,54 @@ def test_the_trim_marker_states_both_totals():
     assert out.endswith(RESULT_TRIMMED.format(sent=sent, shown=MAX_RESULT_CHARS))
 
 
+def test_the_trim_markers_numbers_describe_the_same_thing_its_sentence_does():
+    """:data:`RESULT_TRIMMED` says "this tool's long ANSWER", and an answer is both
+    channels. The numbers used to be the text channel's alone, so a result carrying
+    2000 characters of structured data beside a trimmed 8000 of prose reported "it
+    sent 8000, 8000 are shown" — which reads as nothing missing, in the same
+    sentence that exists to say something is.
+
+    Both cases, because they differ: a structured payload that was CARRIED counts on
+    both sides of the sentence, and one that was dropped for being too big counts
+    only on the "sent" side, with the line below the marker saying where it went.
+
+    Mutation: drop ``elsewhere_sent``/``elsewhere_shown`` from ``compose_result``'s
+    call — both halves fail on the totals."""
+    structured = '{"pad":"' + "z" * 500 + '"}'
+    text = "b" * (MAX_RESULT_CHARS * 2)
+
+    carried = compose_result(text=text, structured=structured)
+    assert RESULT_TRIMMED.format(
+        sent=len(text) + len(structured), shown=MAX_RESULT_CHARS
+    ) in carried
+
+    too_big = '{"pad":"' + "z" * (MAX_STRUCTURED_CHARS + 100) + '"}'
+    dropped = compose_result(text=text, structured=too_big)
+    assert RESULT_TRIMMED.format(
+        sent=len(text) + len(too_big), shown=MAX_RESULT_CHARS - len(too_big)
+    ) not in dropped
+    assert RESULT_TRIMMED.format(
+        sent=len(text) + len(too_big), shown=MAX_RESULT_CHARS
+    ) in dropped
+    assert STRUCTURED_TOO_BIG in dropped
+
+
+def test_both_structured_notes_are_decided_on_their_own_input():
+    """``compose_result``'s standard is that its promises hold whatever it is
+    handed — the same standard the ``text.strip()`` line beside it is written to.
+    Chained as ``if unreadable … elif structured``, a caller passing both had one of
+    the two silently dropped, and which one depended on the order of two branches
+    rather than on anything about the answer.
+
+    Mutation: put the ``elif`` back — the payload disappears and this fails."""
+    out = compose_result(
+        text="the text", structured='{"ok":true}', structured_unreadable=True
+    )
+    assert STRUCTURED_UNREADABLE in out
+    assert '{"ok":true}' in out
+    assert "the text" in out
+
+
 def test_a_trimmed_answer_still_discloses_what_was_not_carried():
     """The disclosure line is Addison's, so the cut may not eat it. A result long
     enough to trim is exactly the result whose missing pictures are easiest to lose.
@@ -577,6 +637,101 @@ def test_no_combination_of_empty_parts_can_produce_silence(kwargs):
 # ---------------------------------------------------------------------------
 # (4) The §7 re-read's hardening
 # ---------------------------------------------------------------------------
+
+
+#: A separator, and whether cleaning is supposed to re-join what it split. The
+#: second column is a DECISION each way round, not a description of today's code:
+#:
+#:   * True — the character is invisible or occupies no width, so a reader looking
+#:     at the answer cannot tell the credential was ever broken up. Nothing is lost
+#:     by removing it and a key is caught by removing it.
+#:   * False — the character is one a reader can see, and one that means something
+#:     in prose. A newline between two lines of a table is the table; a quotation
+#:     mark is a quotation mark. Removing them to catch a credential would mangle
+#:     every honest answer, so a key split by one of these PASSES, and that is the
+#:     backstop-not-a-boundary rule ``agent_core/redaction.py`` states in its own
+#:     docstring rather than an oversight to be quietly closed.
+_SPLIT_BY = [
+    pytest.param("\x00", True, id="a NUL"),
+    pytest.param("​", True, id="a zero-width space"),
+    pytest.param("‍", True, id="a zero-width joiner"),
+    pytest.param("‮", True, id="a right-to-left override"),
+    pytest.param("﻿", True, id="a byte-order mark"),
+    pytest.param("́", True, id="a combining acute"),
+    pytest.param("️", True, id="a variation selector"),
+    pytest.param("ㅤ", True, id="a Hangul filler"),
+    pytest.param("ﾠ", True, id="a halfwidth Hangul filler"),
+    pytest.param("⠀", True, id="a blank Braille pattern"),
+    pytest.param("\n", False, id="a newline"),
+    pytest.param("\t", False, id="a tab"),
+    pytest.param('"', False, id="a quotation mark"),
+    pytest.param("\\", False, id="a backslash"),
+]
+
+
+@pytest.mark.parametrize("separator, rejoined", _SPLIT_BY)
+def test_the_two_channels_treat_a_split_credential_identically(separator, rejoined):
+    """THE TEST THIS SECTION GREW FOR. The two channels are ONE answer, so the same
+    key split the same way has to come out the same way in both — and for a while it
+    did not: ``structuredContent`` was cleaned and redacted AFTER ``json.dumps`` had
+    escaped it, so a NUL inside a value had already become the six visible
+    characters ``\\u0000`` by the time anything looked for one. The cleaner never
+    saw a NUL to remove, the key stayed split, every contiguous rule missed it, and
+    ``redacted_kinds`` came back empty — the audit row denying a leak that happened.
+
+    Both columns of the table matter. Where cleaning re-joins, BOTH channels must
+    redact and BOTH must name the kind; where it does not, both must fail the same
+    way, because a difference in either direction is one channel quietly having
+    different rules from the other.
+
+    Mutation: clean and redact the SERIALIZED string in ``_structured_answer``
+    (phase 4's version) — the NUL row fails on the structured half."""
+    split = AWS_KEY[:8] + separator + AWS_KEY[8:]
+    through_text = executed({"content": [text_item(f"the key is {split}")]})
+    through_structured = executed(
+        {"content": [], "structuredContent": {"note": f"the key is {split}"}}
+    )
+
+    for channel, result in (("text", through_text), ("structured", through_structured)):
+        assert (AWS_MARKER in result.content) is rejoined, channel
+        assert (result.redacted_kinds == ("AWS access key",)) is rejoined, channel
+        assert AWS_KEY not in result.content, channel
+
+
+@pytest.mark.parametrize(
+    "kept",
+    [
+        pytest.param("\U0001f468‍\U0001f469‍\U0001f467", id="a family emoji"),
+        pytest.param("नमस्ते", id="Devanagari"),
+        pytest.param("مَرْحَبًا", id="Arabic"),
+        pytest.param("cafe\u0301 au lait", id="a decomposed accent before a space"),
+    ],
+)
+def test_the_invisible_rule_leaves_a_persons_own_writing_alone(kept):
+    """The other half of the rule above, and the reason it is a CONTEXT rule rather
+    than a list of characters to delete.
+
+    A zero-width joiner is what makes three people one family; a combining mark
+    between two Devanagari or Arabic letters is the writing system. Removing either
+    everywhere would cost a person their own language and their own emoji to catch a
+    credential that is ASCII by construction — so removal happens only between two
+    characters a credential could be made of, which are ASCII.
+
+    Mutation: drop the ``_CREDENTIAL_ALPHABET`` condition in ``clean_result_text``
+    — the family becomes three people and the Devanagari loses its vowels."""
+    assert answer({"content": [text_item(kept)]}) == kept
+
+
+def test_a_decomposed_accent_inside_a_word_is_the_cost_and_it_is_a_small_one():
+    """Stated as a test so it is a decision rather than a surprise, on
+    ``test_a_bare_forty_character_secret_is_NOT_redacted``'s precedent.
+
+    ``cafés`` written in decomposed form puts a combining mark between two ASCII
+    letters, which is exactly the shape a split credential has, so the mark goes and
+    the word arrives as ``cafes``. The alternative is a rule that cannot tell that
+    shape from a key cut in half. Readable-but-unaccented is the failure this trade
+    can produce; it is visible, it is small, and it is confined to ASCII words."""
+    assert answer({"content": [text_item("cafe\u0301s")]}) == "cafes"
 
 
 def test_a_credential_split_by_invisible_characters_is_still_caught():
@@ -627,6 +782,22 @@ def test_terminal_escape_sequences_are_removed_whole_not_beheaded():
     assert "FAILED: two of nine" in out
     assert "[31m" not in out and "[0m" not in out
     assert "window title" not in out
+
+
+def test_an_escape_sequence_a_server_never_closes_takes_its_payload_with_it():
+    """"Removed WHOLE" has to hold for the sequence a server does not finish, or it
+    is a claim rather than a rule. An OSC string with no BEL and no ST kept its
+    payload — the ESC and the ``]`` went and everything after them arrived as prose,
+    which is exactly the shape this rule exists to stop, reachable by leaving one
+    byte off the end.
+
+    Over-removing a stranger's characters is the only direction this trade may go,
+    and it is the direction taken: an unterminated sequence is read to the next
+    escape or to the end of the answer.
+
+    Mutation: make the terminator required again — the payload comes back."""
+    out = answer({"content": [text_item("real output\x1b]0;then a stranger's payload")]})
+    assert out == "real output"
 
 
 def test_lines_survive_the_cleaning_because_an_answer_is_prose():

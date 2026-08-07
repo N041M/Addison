@@ -326,3 +326,21 @@ mapping against a stale picture. None of them change the design language.
   checklist you tick, a note you edit and a timer you start and pause — beside the
   routine and stat rows. Both use the existing row idiom and neither changes the
   design language; `../../ROADMAP.md` owns their status.
+- **The two model lists are a FOLDER TREE, and that is a deviation from the
+  prototype (2026-08-07, owner decision).** §8 and §9 of the designer's reference draw
+  a flat list of rows, which was right for the five models the app had; a single
+  connected Google key now contributes twenty-two, and a panel that shows all of them
+  is not a menu, it is a scroll. So the Settings popup and the composer menu both draw
+  company → family → model, **one folder open at a time**, from one engine
+  (`shell/src/lib/modelGroups.ts`) so the two cannot disagree. Everything else in §8
+  and §9 is unchanged — the geometry, the hairline rows, the accent rail on the
+  selected row, the notes, the footer hint. Three consequences worth writing down:
+  the popup's vertical placement is **measured** rather than computed from a row
+  index, because folders sit between the top of the panel and the selected row and
+  index × row-height stopped describing anything; each panel opens with the model in
+  effect already revealed, which is what keeps the macOS-select promise a folder tree
+  could otherwise break; and the rows are a `role="tree"` with the WAI-ARIA keyboard,
+  one tab stop for the whole list, with a single deliberate departure — Up and Down
+  **wrap**, because that is what a menu does. **This supersedes the sidebar's "3 rows
+  + N more…" preview idiom for these two panels only**; §4's chat list keeps it, where
+  a preview is still right because those rows have no hierarchy to stand for them.

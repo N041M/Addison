@@ -1,9 +1,9 @@
 # Phase 3 — The Review Surface: a bespoke IDE for the Developer/OPEN profile
 
-**Status:** PLAN, approved 2026-07-25. Not started. **Blocked on Phase-2 steps 7 (MCP
-client) and 8 (automation keyword gate).** Step 6 (widget capability tiers) was the
-third prerequisite and **landed 2026-08-06**; step 7 is one phase of five in. The docs
-wave below (the Phase-3 redefinition) and the remaining prerequisites are the only
+**Status:** PLAN, approved 2026-07-25. Not started. **Blocked on Phase-2 step 8
+(the automation keyword gate).** The other two prerequisites have landed — step 6
+(widget capability tiers) on 2026-08-06 and step 7 (the MCP client) on 2026-08-07.
+The docs wave below (the Phase-3 redefinition) and step 8 are the only
 parts unblocked today; the surface itself waits.
 [`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
 

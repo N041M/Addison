@@ -127,6 +127,28 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
     ]);
   });
 
+  it("turns the core's refusal slug into a sentence, and an unknown one into nothing", () => {
+    // `unavailable` carries a `provider_attempts` outcome — `model_gone` is a row
+    // in a table, not English. Forwarded as it stands it reaches the picker and is
+    // printed under the model's name, which is the app showing a person the word
+    // "model_gone" (CLAUDE.md: plain language, no jargon; the readers are 54 and
+    // 68). Translating at this boundary is what keeps either panel from rendering
+    // one by forgetting to.
+    const withSlug = {
+      cloudModels: [
+        { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", unavailable: "model_gone" },
+        { id: "gemini-3-pro", label: "Gemini 3 Pro", unavailable: "invented_later" },
+      ],
+    };
+    const [gone, unknown] = normalizeCloudModels(withSlug);
+    expect(gone.unavailable).toMatch(/^This provider answered/);
+    expect(gone.unavailable).not.toMatch(/model_gone|_/);
+    // A slug this build has never heard of says nothing rather than saying itself:
+    // the row still dims and still reads "unavailable" beside its name, which is
+    // the part that is true whatever the reason was.
+    expect(unknown.unavailable).toBeUndefined();
+  });
+
   it("carries the full cloud catalog with effort levels", () => {
     expect(normalizeCloudModels(rolesFixture)).toEqual([
       {
@@ -241,11 +263,17 @@ describe("parseMcpServers over the real mcp.list payload", () => {
     // class of mapping the roots/folders mismatch hid in. Pinning it against the
     // generated fixture is what makes a rename on either side a red build.
     //
-    // Three rows, one per discovery state (step 7 phase 2), because the shape is
+    // Three rows, one per discovery state (step 7), because the shape is
     // not one shape: an unchecked row carries no `checkedAt`, a checked one carries
     // its tools and counts, a failed one carries a sentence and no tools. A fixture
     // with only the happy row would let the parser drop `error` or invent a
     // `toolCount` and stay green on both sides.
+    //
+    // THE CHECKED SERVER OFFERED TWO TOOLS AND ONE WAS REFUSED — its namespaced id
+    // was already taken — so the row below is the honest asymmetry: `toolCount` is 1,
+    // `tools` names only what registered, and `skipped` is 2 (one turned away by the
+    // client, one by admission). `toolCount` describing what the SERVER offered
+    // rather than what a call could reach is the drift this pins.
     expect(parseMcpServers(mcpListFixture)).toEqual([
       {
         id: "mcp-fixture-0",
@@ -268,12 +296,9 @@ describe("parseMcpServers over the real mcp.list payload", () => {
         addedAt: 4102444801,
         status: "ok",
         checkedAt: 4102444800,
-        toolCount: 2,
-        tools: [
-          { name: "search_docs", description: "Search the team's documentation." },
-          { name: "open_ticket", description: "Open a support ticket." },
-        ],
-        skipped: 1,
+        toolCount: 1,
+        tools: [{ name: "search_docs", description: "Search the team's documentation." }],
+        skipped: 2,
         error: undefined,
       },
       {

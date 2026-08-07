@@ -1,10 +1,14 @@
 """mcp.* handlers — the external MCP servers Addison consumes as a CLIENT
-(step 7, phases 1–3). Addison is never an MCP server or a gateway.
+(step 7, phases 1–4). Addison is never an MCP server or a gateway.
 
 Phase 1 stored addresses; phase 2 added ``mcp.refresh``, which connects, lists what
 a server offers, and registers each tool namespaced and dev-only through the ONE
-registry; phase 3 made those tools callable — through the ordinary gate, which
-cards every invocation, in OPEN only.
+registry; phase 3 made those tools callable — in OPEN only, and through the
+ordinary gate, where every call arrives as HIGH and destructive because a server's
+own claim about its own risk is exactly what v1 refuses to trust. What the gate then
+DOES with a destructive call is the gate's, and the Custom profile's guards can tune
+it (``permissions/gate.py``, ``policy.GuardConfig``); on the defaults that is a card
+per invocation. Phase 4 settled what may come back.
 [docs/step-7-mcp-plan.md](../../docs/step-7-mcp-plan.md) owns the phase order, and
 ``agent_core/mcp_catalog.py`` owns the one constant that turned dispatch on.
 
@@ -91,6 +95,12 @@ _NO_SNAPSHOT_ON_REMOVE = (
     "Try again in a moment."
 )
 _NO_SUCH_SERVER = "That tool server isn't saved any more."
+# Said when a saved-but-switched-off server is asked for. Nothing in the tree can
+# switch one off today — there is no toggle RPC and no surface for one — so this
+# sentence is written for the phase that adds them, and the column it reads is
+# honoured now rather than then (see ``_mcp_refresh``). It promises no control it
+# cannot point at.
+_SERVER_OFF = "That tool server is turned off, so Addison didn't check it."
 # The last resort when the check failed for a reason mcp_client did not name.
 # mcp_client's own failures already arrive as plain sentences with a next step;
 # this one covers a defect in Addison, so it says so rather than blaming the server.
@@ -111,9 +121,20 @@ def _is_loopback_host(hostname: str | None) -> bool:
     address for somebody else's machine behind the exception.
 
     ``localhost`` and the reserved ``.localhost`` suffix (RFC 6761) count by name;
-    everything else must be a literal loopback address. The IPv4-in-IPv6 forms are
-    unwrapped first, on ``net_vetting.address_is_public``'s reasoning: ``::ffff:127.0.0.1``
-    is the 127.0.0.1 it says it is.
+    everything else must be a literal loopback address. ONE unwrap is applied first
+    and only one: ``::ffff:127.0.0.1`` is IPv4-MAPPED, which is a way of writing
+    127.0.0.1 rather than an address of its own, so the packet goes to the loopback
+    interface exactly as the short form does.
+
+    **6to4 (``2002::/16``) is deliberately NOT unwrapped, and the polarity is why.**
+    ``net_vetting.address_is_public`` unwraps it to make its check STRICTER — an
+    address that decodes to something private is not public, whatever prefix it
+    wears. Here an unwrap makes the check LOOSER: this is the gate on plain
+    ``http://``, so the same line that costs a caller nothing there would put a
+    routable, off-machine address behind the exception. ``2002:7f00:1::1`` is a 6to4
+    address in a globally-routed prefix; it is not this computer, and the fact that
+    its embedded 127.0.0.1 makes it unroutable in practice is a property of the
+    wider internet rather than a reason to send a person's plaintext to it.
     """
     if not hostname:
         return False
@@ -125,8 +146,6 @@ def _is_loopback_host(hostname: str | None) -> bool:
     except ValueError:
         return False
     mapped = getattr(address, "ipv4_mapped", None)
-    if mapped is None:
-        mapped = getattr(address, "sixtofour", None)
     if mapped is not None:
         address = mapped
     return address.is_loopback
@@ -187,15 +206,26 @@ class McpMixin(ServerContext):
         if state.checked_at is not None:
             wire["checkedAt"] = state.checked_at
         if state.status == STATUS_OK:
-            wire["toolCount"] = len(state.tools)
+            # WHAT IS ACTUALLY REGISTERED, never what was merely offered. A tool
+            # whose namespaced id was already taken is REFUSED at admission
+            # (mcp_catalog.record_success): it is in no registry, dispatch would
+            # never find it, and listing it on the Tools surface would advertise a
+            # tool that answers nothing. ``refused`` names exactly those, so they
+            # come out of the list here and are counted once, below, with the rest.
+            refused = set(state.refused)
+            available = [tool for tool in state.tools if tool.name not in refused]
+            wire["toolCount"] = len(available)
             wire["tools"] = [
-                {"name": tool.name, "description": tool.description} for tool in state.tools
+                {"name": tool.name, "description": tool.description} for tool in available
             ]
             # How many the server offered that Addison would not take — an
             # implausible name, a name already in use, or past the per-server cap.
             # A COUNT, never the names: it is the one number that lets the panel be
             # honest about "this server offers more than you see here" without
-            # putting a refused string on a screen.
+            # putting a refused string on a screen. ``skipped`` counts what
+            # ``mcp_client`` turned away before admission and ``refused`` what
+            # admission turned away, so the two sets are disjoint and every tool is
+            # in this number at most once.
             not_taken = state.skipped + len(state.refused)
             if not_taken:
                 wire["skipped"] = not_taken
@@ -231,11 +261,12 @@ class McpMixin(ServerContext):
         walk to one budget on top of that, so the worst case is a wait, never a hang.
 
         TWO FAILURE CHANNELS, and the difference is deliberate. ``ok:false`` means
-        the check did not RUN — wrong profile, or a server that is no longer saved —
-        and there is no row to show. A check that ran and failed answers ``ok:true``
-        with the row's ``status`` set to failed and one plain sentence in ``error``,
-        because that IS the outcome the panel has to render, and a person who pressed
-        "Check now" on a server that is switched off has not made a mistake.
+        the check did not RUN — wrong profile, a server that is no longer saved, or
+        a row whose ``enabled`` is 0 — and there is no row to show. A check that ran
+        and failed answers ``ok:true`` with the row's ``status`` set to failed and
+        one plain sentence in ``error``, because that IS the outcome the panel has
+        to render, and a person who pressed "Check now" on a machine that is not
+        running has not made a mistake.
 
         No snapshot hook: a refresh writes nothing to the store. What it changes —
         the in-memory catalog and this server's registry entries — is rebuilt by
@@ -250,6 +281,16 @@ class McpMixin(ServerContext):
         row = self.store.get_mcp_server(server_id)
         if row is None:
             return {"ok": False, "error": _NO_SUCH_SERVER}
+        if not row["enabled"]:
+            # ``enabled`` IS CONSULTED WHERE IT CLAIMS TO MATTER, in both places: a
+            # switched-off server is not connected to here, and ``_mcp_endpoint_for``
+            # resolves no address for one, so no call can reach it either. Nothing
+            # can set the column to 0 today, which is precisely why the reads go in
+            # first: it is stored, snapshot-captured and restored, so the phase that
+            # adds a toggle should be adding a control over behaviour that already
+            # exists, rather than discovering that a switched-off server is checked
+            # and dispatched to exactly like any other.
+            return {"ok": False, "error": _SERVER_OFF}
         checked_at = int(time.time())
         try:
             discovery = self._mcp_discover(row["url"])
@@ -292,8 +333,13 @@ class McpMixin(ServerContext):
 
         Hook (G3): ``mcp_connect``, snapshot-and-proceed on the ``provider_connect``
         class — a server that was added can be removed again in one click, so a
-        capture failure warns (sticky) rather than blocking the add. Placed after
-        validation so a refused add never mints a restore point."""
+        capture failure warns (sticky) rather than blocking the add. It sits as low
+        as a restore point can sit: below every refusal that can be decided without
+        touching the store, and above the insert, because a restore point records
+        the configuration as it was BEFORE the change it is a way back from. The one
+        refusal left underneath it is the UNIQUE-index branch, which does mint one —
+        a restore point of unchanged configuration, which costs a row and promises
+        nothing false."""
         self._ensure_built()
         if self._mode() is not PolicyMode.OPEN:
             return {"ok": False, "error": _DEV_ONLY}
@@ -318,9 +364,13 @@ class McpMixin(ServerContext):
         try:
             self.store.insert_mcp_server(id=server_id, name=name, url=url, created_at=added_at)
         except sqlite3.IntegrityError:
-            # The UNIQUE NOCASE index caught what the check above raced past. The
-            # index is the authority; this branch is what keeps the person's answer a
-            # sentence rather than an error frame.
+            # The UNIQUE NOCASE index is the authority on names, and this branch is
+            # what keeps its answer a sentence rather than an error frame. It cannot
+            # be reached by two adds racing: every ``mcp.*`` method runs on the one
+            # worker thread, so the check above and this insert are never separated
+            # by another add — nor by a restore, which is a worker job too. It is
+            # the backstop for the day that stops being true: the index refuses
+            # whatever the caller believed, and the person still gets a sentence.
             return {"ok": False, "error": _NAME_TAKEN}
         return {
             "ok": True,
@@ -376,13 +426,24 @@ class McpMixin(ServerContext):
         keyed by it. A row whose name no longer matches is not the server this tool
         claims to come from, whatever its id says.
 
+        A row that is switched off resolves to nothing, for those same reasons and
+        one more: ``enabled`` is stored, captured and restored, so a column dispatch
+        ignored would be a setting the recovery path faithfully puts back and
+        nothing obeys. What the caller then says is ``mcp_catalog.SERVER_GONE`` —
+        this seam answers an address or None, and widening it to carry a reason
+        belongs with the toggle that can produce one.
+
+        The store may not exist yet (an early failure leaves it unbuilt), and
+        ``self.store`` ASSERTS rather than answering None, so the private field is
+        what "has it been built?" has to ask — main.py's own rule for this code.
+
         Lives here rather than in ``mcp_catalog`` for the module-boundary reason
         that put the client at top level: the address is in SQLite, and this layer
         is the one that reads rows."""
-        if self.store is None:
+        if self._store is None:
             return None
-        row = self.store.get_mcp_server(server_id)
-        if row is None or str(row["name"]) != server_name:
+        row = self._store.get_mcp_server(server_id)
+        if row is None or str(row["name"]) != server_name or not row["enabled"]:
             return None
         url = row["url"]
         return str(url) if url else None

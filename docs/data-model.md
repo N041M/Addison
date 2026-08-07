@@ -8,7 +8,7 @@
 > keys excluded, an undeletable Custom-mode anchor), a third **Custom** profile,
 > **capability-tiered** widgets, **routing-strategy** config, and **MCP client** server
 > config. **`config_snapshots` (step 1), `workspace_trust` (step 5), `widget_state`
-> (step 6) and `mcp_servers` (step 7 phase 1) have shipped and their DDL is final.** The
+> (step 6) and `mcp_servers` (step 7) have shipped and their DDL is final.** The
 > ER diagrams show only what `agent_core/memory/schema.sql` actually creates. The
 > amendment's **`required_capabilities` widget column was CUT** (owner decision
 > 2026-08-06): the widget vocabulary is a closed set of kinds instead — see the `widgets`
@@ -205,8 +205,11 @@ erDiagram
   at grant time, so the confinement check (`rpc/workspace.is_trusted`) compares
   realpath against realpath. Inside a trusted root a typed, path-bounded, undoable file
   edit skips the per-change card; the edit is still logged and reversible, and
-  `run_command` still cards every time (its `affected_path` is `None`, so confinement
-  never governs it). Addison's own data directory can never be a trusted root — the
+  **trust never reaches `run_command` at all** — its `affected_path` is `None`, so
+  confinement never governs it and the caller cannot mark the call trusted, which is
+  what keeps a command on whatever the gate's own destructive path is (a card per
+  invocation by default; [`SAFETY.md`](SAFETY.md) owns the Custom guards that tune
+  it). Addison's own data directory can never be a trusted root — the
   floor is `policy.workspace_trust_allows`, applied both at grant time and at
   authorize time. **Excluded from every snapshot** on the `tool_grants` precedent:
   trust is standing consent, and a restore that reinstated a revoked trust would be a
@@ -445,28 +448,38 @@ erDiagram
   finds an empty list. Snapshots are recovery machinery, not artifacts. Two tests hold the
   line — a behavioural one and a **source-level** one that reads the SQL in `store.py` and
   `snapshot_manager.py` and fails if the column ever appears in a filter position.
-- **mcp_servers** *(Phase-2 step 7, phase 1 — **built 2026-08-06**; DDL is final)* —
+- **mcp_servers** *(Phase-2 step 7 — **built 2026-08-06**; DDL is final)* —
   non-secret configuration of the external **MCP servers Addison consumes as a client**
   (Addison is never an MCP server/gateway). A row is a plain `name` the person chose, the
-  server's `url`, `transport`, `enabled` and `created_at` — and it is **inert**: phase 1
-  ships no protocol client, no tool discovery and no dispatch, so nothing reads this table
-  to reach anything. [`step-7-mcp-plan.md`](step-7-mcp-plan.md) owns the phase order.
+  server's `url`, `transport`, `enabled` and `created_at`. It was inert when it shipped;
+  since phases 2–4 (2026-08-07) it is what a check connects to and what a call's address
+  is resolved from at the moment of use. [`step-7-mcp-plan.md`](step-7-mcp-plan.md) owns
+  the phase order.
   - **`url`, never a command.** Transport is **HTTP only for v1** (owner decision
     2026-08-06) — `transport` is CHECK-constrained to `http`, and there is no column that
     could carry an executable to launch. The plan's §5 owns that decision and keeps stdio
     as the documented later option.
   - **No credential column, per G1.** Any secret a server needs goes to the **OS
-    keychain**, never here; phase 1 connects to nothing, so it needs none at all. The URL
+    keychain**, never here; v1 connects without credentials at all, so a server asking
+    for a sign-in gets one plain sentence instead. The URL
     itself is validated where it is stored (`agent_core/rpc/mcp.py`) on the
     `provider_config.base_url` precedent — no userinfo, no query or fragment, no key-shaped
     path segment — and `https://` is required unless the host is this computer.
+  - **`enabled` is READ and never written.** There is no toggle RPC and no surface for
+    one, so no row is ever 0 today — but a refresh refuses a switched-off server and no
+    address resolves for one, so a 0 would already mean no connection and no call. The
+    reads went in first deliberately: this column is captured and restored with the rest
+    of the row, and a setting the recovery path faithfully puts back while dispatch
+    ignores it is worse than no setting at all.
   - **Snapshot-CAPTURED** (`snapshots/scope.py`): a server connection is reversible config
     (spec §4.12) — revocable, snapshotted, and addable by prompting. Unlike
     `workspace_trust` it is *not* standing consent: a configured server grants Addison
     nothing on this machine, so a restore that brings one back re-instates a setting rather
     than a permission.
-  - `name` is UNIQUE case-insensitively, because phase 2 namespaces every discovered tool
-    as `mcp:<server>:<tool>` and must refuse a collision rather than replace. Whether an
+  - `name` is UNIQUE case-insensitively, because every discovered tool is namespaced
+    as `mcp:<server>:<tool>` and a collision must be refused rather than replaced.
+    A refused tool is in no registry, so it is absent from what `mcp.list` reports as
+    found and is counted with everything else Addison would not take. Whether an
     MCP tool is usable in SAFE is decided at the registry/gate, never by a column here —
     and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
     2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
@@ -510,7 +523,7 @@ erDiagram
         TEXT detail "the permission card's own value; never a secret"
         TEXT mode "safe or open"
         INTEGER destructive
-        TEXT outcome "granted denied forbidden confined_out dev_only"
+        TEXT outcome "granted denied forbidden confined_out dev_only not_callable failed"
         TEXT redacted "kinds the redactor removed, never values"
         INTEGER created_at
     }
@@ -544,8 +557,17 @@ erDiagram
   already show (`tools/base.call_permission_detail`) — a HOST for `read_web_page`,
   never a full URL, never tool output, never arguments. `redacted` lists the KINDS
   the redactor (`agent_core/redaction.py`) stripped on the way to the model, never
-  the values. **Excluded from snapshots** on the `tool_grants` precedent: a restore
+  the values — and never a guarantee that nothing else came back, because the
+  redactor is a backstop and [`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns the shapes it does
+  not catch. **Excluded from snapshots** on the `tool_grants` precedent: a restore
   that rewrote the record of what happened would be worse than no record.
+  `outcome` is a CHECK-constrained vocabulary, and step 7 phase 3 widened it
+  (`not_callable`, `failed`). SQLite cannot ALTER a CHECK, so
+  `Store._migrate_tool_audit_outcomes` rebuilds the table — **inside one explicit
+  transaction, building the replacement under a third name** so the live table is
+  never renamed out of the way. These rows are excluded from snapshots and never
+  pruned, so an interrupted rebuild is the one way they can be lost, and "or nothing"
+  is as much of the promise as "every row survives".
 - **provider_attempts** — the model-routing counterpart of `tool_audit` (2026-08-07).
   One row per provider call that **failed**, written by the same orchestrator
   machinery as `on_usage` and never by a registry tool. It exists because

@@ -146,6 +146,30 @@ describe("the composer menu as folders", () => {
     ]);
     expect(modelRows().every((r) => r.getAttribute("aria-level") === "3")).toBe(true);
   });
+
+  it("says where each row sits among ITS OWN folder's children", () => {
+    // The rows are flat siblings, so a screen reader cannot count them: with
+    // aria-level alone it announced the whole list, and the second of two
+    // companies read as "level 1, 4 of 4". Authored per level instead
+    // (lib/modelGroups.ts owns the arithmetic).
+    const tree = openMenu(CATALOG, "gemini-2.0-flash-lite");
+    const ordinals = Array.from(tree.querySelectorAll('[role="treeitem"]')).map((r) => [
+      r.textContent ?? "",
+      `${r.getAttribute("aria-posinset")} of ${r.getAttribute("aria-setsize")}`,
+    ]);
+    expect(ordinals).toEqual([
+      [expect.stringContaining("Anthropic"), "1 of 2"],
+      [expect.stringContaining("Google"), "2 of 2"],
+      [expect.stringContaining("Gemini 2.5"), "1 of 4"],
+      [expect.stringContaining("Gemini 2.0"), "2 of 4"],
+      // The two models inside the open family are 1 and 2 OF THAT FAMILY — they
+      // read as "5 of 10" and "6 of 10" when nothing authored this.
+      [expect.stringContaining("gemini-2.0-flash"), "1 of 2"],
+      [expect.stringContaining("gemini-2.0-flash-lite"), "2 of 2"],
+      [expect.stringContaining("Gemini 3.1"), "3 of 4"],
+      [expect.stringContaining("Gemini 3.5"), "4 of 4"],
+    ]);
+  });
 });
 
 describe("the tree keyboard", () => {
@@ -177,6 +201,20 @@ describe("the tree keyboard", () => {
     fireEvent.keyDown(tree, { key: "ArrowLeft" });
     expect(screen.queryByText("Gemini 2.5")).toBeNull();
     expect(cursorRow(tree)?.textContent).toContain("Google");
+  });
+
+  it("stops at a model, and steps INTO a folder that is already open", () => {
+    // Two halves of one rule: Right opens what can be opened, walks into what is
+    // open, and does nothing on a leaf. It used to walk on from a model row,
+    // which made Right a second, slower ArrowDown.
+    const tree = openMenu(CATALOG, "claude-opus-4-8");
+    expect(cursorRow(tree)?.textContent).toContain("claude-opus-4-8");
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+    expect(cursorRow(tree)?.textContent).toContain("claude-opus-4-8");
+
+    fireEvent.keyDown(tree, { key: "ArrowLeft" }); // up to Anthropic, still open
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // into it
+    expect(cursorRow(tree)?.textContent).toContain("claude-opus-4-8");
   });
 
   it("climbs to the folder a model sits in", () => {
@@ -265,6 +303,10 @@ describe("a refused model", () => {
     m.id === "gemini-2.5-flash" ? { ...m, unavailable: "no longer available to new users" } : m,
   );
 
+  /** The note at the right of a row — the word, not the reason under it. */
+  const noteOf = (row: HTMLElement) =>
+    Array.from(row.querySelectorAll("span")).find((s) => /^unavailable/.test(s.textContent ?? ""));
+
   it("is dimmed, struck through, and says so in its note", () => {
     openMenu(withRefusal, "gemini-2.5-pro");
     const row = screen.getByRole("treeitem", { name: /gemini-2\.5-flash/ });
@@ -276,12 +318,38 @@ describe("a refused model", () => {
     expect(ok.textContent).toContain("quality");
   });
 
+  it("carries the provider's own reason into the row", () => {
+    // The core sends a sentence — "no longer available to new users" — and the
+    // menu reduced it to the word "unavailable", which tells a person nothing
+    // they can act on. In the row rather than a `title`: not hover-only, and it
+    // rides into the row's accessible name.
+    openMenu(withRefusal, "gemini-2.5-pro");
+    const row = screen.getByRole("treeitem", { name: /no longer available to new users/ });
+    expect(row.textContent).toContain("gemini-2.5-flash");
+    const ok = screen.getByRole("treeitem", { name: /gemini-2\.5-pro/ });
+    expect(ok.textContent).not.toContain("no longer available");
+  });
+
   it("still reads as struck through when it is the model in effect", () => {
     openMenu(withRefusal, "gemini-2.5-flash");
     const row = screen.getByRole("treeitem", { selected: true });
     expect(row.textContent).toContain("gemini-2.5-flash");
     expect(row.querySelector(".line-through")).toBeTruthy();
     expect(row.textContent).toContain("unavailable ✓");
+    // …and the note is NOT in the accent. The accent is for actions, selection
+    // and live state (CLAUDE.md); "unavailable ✓" in violet is a refusal wearing
+    // the colour of the thing that answers. The rail was fixed and the note was
+    // not, because the old assertion here only read the text.
+    expect(noteOf(row)?.className).not.toContain("text-accent");
+    expect(noteOf(row)?.className).toContain("text-disabled");
+  });
+
+  it("leaves the accent on a working model that IS in effect", () => {
+    // The other half of the rule: refused beats current, current still beats
+    // nothing.
+    openMenu(withRefusal, "gemini-2.5-pro");
+    const row = screen.getByRole("treeitem", { selected: true });
+    expect(row.querySelector(".text-accent")?.textContent).toBe("quality ✓");
   });
 });
 

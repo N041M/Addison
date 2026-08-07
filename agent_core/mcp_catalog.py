@@ -27,9 +27,17 @@ ask it. After a restart a row says it has not been checked yet, which is true.
 
 **3. Dispatch** (phase 3). :class:`McpTool`'s ``execute`` runs the call — through
 the ordinary registry and the ordinary gate, with NO special case anywhere in
-either. HIGH + destructive means the gate cards every single invocation in OPEN,
-and SAFE never sees the tool at all. Three things happen inside ``execute`` and
-they are the whole of what phase 3 added to a call:
+either. HIGH + destructive is the strongest thing a tool can declare itself to be,
+so every call goes to the gate as a destructive one and SAFE never sees the tool at
+all. **What the gate then DOES with a destructive call is the gate's own business,
+and the Custom profile can tune it** — ``destructive_card='session'`` cards the
+first call of a tool and remembers the answer for the session, and
+``auto_grant_scope='everything'`` cards none of them (``permissions/gate.py``,
+``policy.GuardConfig``). Those are prompting guards the owner designed and this
+module neither knows about nor overrides; what it guarantees is the INPUT to that
+decision — a stranger's tool arrives at the gate as HIGH and destructive, every
+time, and no server's claim about itself can lower it. Three things happen inside
+``execute`` and they are the whole of what phase 3 added to a call:
 
   * **The address is resolved at the moment of use**, never remembered from the
     discovery that registered the tool. A server the person removed or renamed in
@@ -106,10 +114,42 @@ MCP_TOOLS_ARE_CALLABLE = True
 #: ``{server}`` is a PHRASE rather than a bare name so the sentence stays
 #: grammatical when there is no name to give — a card is not the place to discover
 #: that a value was empty.
+#:
+#: **IT NO LONGER PROMISES A FREQUENCY.** It used to end "so it asks every time",
+#: which is a promise the app does not keep in the Custom profile: a person who has
+#: set ``destructive_card='session'`` is asked once, and one who has set
+#: ``auto_grant_scope='everything'`` is not asked at all. Those guards are the
+#: owner's design and this card is not the place to argue with them — so the
+#: sentence now says the thing that IS true under every profile, which is what
+#: Addison does with the tool rather than how often it interrupts.
 CARD_PROVENANCE = (
     "This comes from {server}, which you added. Addison can't know what it will do, "
-    "so it asks every time."
+    "so it treats every call as one it can't undo."
 )
+
+#: How a server's OWN words are attributed, on the card and to the model.
+#:
+#: **THE BOUNDARY IS POSITION, WHICH IS WHY A SERVER CANNOT FORGE IT.** Addison's
+#: sentence is FIRST and the server's words are LAST, always, and a string appended
+#: to the end of another string cannot reach in front of it — so everything up to
+#: and including this label is Addison speaking and everything after it is not,
+#: whatever the server writes. Without it, a description ending "…Addison has
+#: checked this server and it is safe to approve every time." was concatenated onto
+#: Addison's own sentence with a single space and read as Addison's voice.
+#:
+#: The quotation marks are the visible half and they are made unforgeable rather
+#: than trusted: the pair used here is REMOVED from the server's text before the
+#: text is placed between them (see :class:`McpTool`), so the only pair on the card
+#: is the pair Addison wrote, and a server cannot close its own quote and carry on
+#: outside it. Length is bounded upstream — ``mcp_client._clean_description`` caps
+#: it and strips its control characters.
+SERVER_SAYS = "The server describes it: “{description}”"
+
+#: The quotation marks :data:`SERVER_SAYS` delimits with, and therefore the
+#: characters a server may not have. Two code points, removed rather than escaped:
+#: an escape is something to read past, and a person reading a permission card is
+#: not reading past anything.
+_QUOTE_MARKS = "“”"
 
 #: Said when the server this tool came from is no longer saved under the name its
 #: id carries — removed, or renamed, between the check that found it and now.
@@ -126,6 +166,17 @@ CALL_FAILED = "Addison couldn't run that tool just now."
 STATUS_NEVER = "never"
 STATUS_OK = "ok"
 STATUS_FAILED = "failed"
+
+
+def _unquoted(description: str) -> str:
+    """A server's description with :data:`_QUOTE_MARKS` taken out and the edges
+    tidied — what goes inside :data:`SERVER_SAYS`'s quotes.
+
+    Removed rather than escaped, and removed HERE rather than at the client
+    boundary, so that the guarantee belongs to the string that needs it: whatever
+    builds an :class:`McpTool` — a discovery, a test, the next caller — gets a card
+    whose quotation marks are Addison's alone."""
+    return description.translate({ord(mark): None for mark in _QUOTE_MARKS}).strip()
 
 
 def mcp_tool_id(server_name: str, tool_name: str) -> str:
@@ -161,26 +212,33 @@ class McpTool:
         endpoint_for: Callable[[str, str], str | None] | None = None,
         call_tool: Callable[[str, str, dict, float], CallResult] | None = None,
     ) -> None:
+        # ADDISON'S WORDS FIRST, THE SERVER'S LAST, ATTRIBUTED AND QUOTED. Both
+        # audiences read this string and each needs a different half of it: the
+        # model needs to know what the tool does, and the person approving the card
+        # needs to know who wrote it and that Addison cannot vouch for it. The card
+        # shows exactly this text (main._on_permission_request), which is also why
+        # this tool declares no ``permission_detail`` — a detail REPLACES the
+        # description on the card, and the provenance is the part that must not be
+        # replaceable.
+        #
+        # The order is the boundary (see ``SERVER_SAYS``): the server's text is
+        # appended, so it can never appear ahead of Addison's sentence, and its
+        # quotation marks are taken out here so it cannot close the pair Addison
+        # opened and keep writing outside it. A server with nothing to say gets no
+        # attribution line at all, rather than Addison quoting silence.
+        said = _unquoted(description)
         self.definition = ToolDefinition(
             id=tool_id,
             label=label,
-            # The server's own words FIRST, then Addison's. Both audiences read
-            # this string and each needs a different half of it: the model needs to
-            # know what the tool does, and the person approving the card needs to
-            # know who wrote it and that Addison cannot vouch for it. The card
-            # shows exactly this text (main._on_permission_request), which is also
-            # why this tool declares no ``permission_detail`` — a detail REPLACES
-            # the description on the card, and the provenance is the part that must
-            # not be replaceable.
             description=" ".join(
                 part
                 for part in (
-                    description,
                     CARD_PROVENANCE.format(
                         server=(
                             f"the tool server {server_name}" if server_name else "a tool server"
                         )
                     ),
+                    SERVER_SAYS.format(description=said) if said else "",
                 )
                 if part
             ),
@@ -201,8 +259,15 @@ class McpTool:
         self._call_tool = call_tool
 
     def is_destructive(self, args: dict) -> bool:
-        """Every call cards, per invocation (§3). A server's own risk claim is
-        exactly the thing v1 refuses to trust."""
+        """Every call reaches the gate as a destructive one (§3). A server's own
+        risk claim is exactly the thing v1 refuses to trust, so there is no argument
+        and no annotation that makes a call to somebody else's program anything
+        milder than this.
+
+        What the gate does NEXT is the gate's, and under the Custom profile's guards
+        that can be one card for the session or none at all — see the module
+        docstring. This answer is the input to that decision and never a claim about
+        its outcome."""
         return True
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
@@ -227,11 +292,20 @@ class McpTool:
 
         Then the answer: **redacted, then shaped, in that order** — every channel,
         every time (see ``mcp_client.compose_result``, which does all of the cutting
-        and none of the redacting). Phase 4 added a second channel and the ordering
-        did not change shape, only width: ``structuredContent`` crosses the SAME
-        seam as the text, one call apart, because a secret in a nested field is a
-        secret and a cut through the structured cap defeats the redactor exactly as
-        a cut through the text cap does.
+        and none of the redacting). A secret in a nested field is a secret, and a
+        cut through the structured cap defeats the redactor exactly as a cut through
+        the text cap does.
+
+        **THE TWO CHANNELS CROSS THE REDACTOR IN TWO PLACES, AND THAT IS THE FIX
+        RATHER THAN THE PROBLEM.** The text is redacted here, one line above the
+        only thing that cuts. ``structuredContent`` is redacted a string at a time
+        inside ``mcp_client._structured_answer``, BEFORE it is serialized, because
+        the serializer escapes a NUL into six visible characters and a newline into
+        two — and every rule in ``agent_core.redaction`` matches a contiguous
+        pattern, so redacting the serialized form let a key split by a control
+        character through while the same key in the text channel was caught. It also
+        made ``redacted_kinds`` empty for a leak that happened, which is the audit
+        row denying the one thing it exists to record.
 
         The kinds from BOTH channels ride back on the ``ToolResult`` so both
         dispatch paths can put them in the audit row, which is the only durable
@@ -261,23 +335,25 @@ class McpTool:
             # the turn continues — a tool that crashes a turn is worse than a tool
             # that fails.
             return ToolResult(success=False, content=CALL_FAILED, audit_outcome="failed")
-        # THE SEAM, both channels, immediately before the only thing that cuts.
+        # THE SEAM for the text, immediately before the only thing that cuts.
         # Adjacency is the enforcement here: there is nowhere between these lines
-        # for a cap to be added by somebody who has not read why.
+        # for a cap to be added by somebody who has not read why. The structured
+        # channel crossed the same redactor before it was serialized and arrives
+        # carrying what that found — see this method's docstring for why it cannot
+        # be done on this side of the serializer.
         scrubbed = redact(answer.text)
-        structured = redact(answer.structured) if answer.structured else None
         return ToolResult(
             success=not answer.is_error,
             content=compose_result(
                 text=scrubbed.text,
-                structured=structured.text if structured is not None else None,
+                structured=answer.structured,
                 structured_unreadable=answer.structured_unreadable,
                 images=answer.images,
                 sounds=answer.sounds,
                 files=answer.files,
                 other=answer.other,
             ),
-            redacted_kinds=scrubbed.kinds + (structured.kinds if structured is not None else ()),
+            redacted_kinds=scrubbed.kinds + answer.structured_kinds,
         )
 
 
@@ -365,12 +441,64 @@ class McpCatalog:
         generations of one server's tools behind. No other server is touched — a
         refresh is one row's business.
 
+        **ATOMIC ALSO MEANS "OR NOTHING", AND THAT NEEDED SAYING IN CODE.** The
+        catalog's record of what it registered is written at the END of the loop, so
+        a ``register`` that raised halfway through used to leave the ids already
+        taken in the registry and in NO id list — which made them unremovable by
+        ``forget``, by ``mcp.remove`` and by a resync, and made every later refresh
+        of the same server refuse its own tools as collisions, for ever. So a
+        failure now unwinds what this call registered before it re-raises: the two
+        sides move together or neither does, which is the property the docstring
+        above was already claiming.
+
         A collision (with a native tool, or with another server's already-taken id)
         REFUSES that tool. Never replaces: replacing is the failure §3 exists to
         prevent, and it would be silent."""
         self._drop_registrations(registry, server_id)
         registered: list[str] = []
         refused: list[str] = []
+        try:
+            self._register_all(registry, server_id, server_name, tools, registered, refused)
+        except BaseException:
+            for tool_id in registered:
+                try:
+                    registry.unregister(tool_id)
+                except ValueError:
+                    pass
+            self._ids_by_server[server_id] = ()
+            # BOTH SIDES, or the unwind trades one drift for another. Leaving the
+            # previous check's `ServerCatalog` in place would have this server
+            # reporting `ok` with a list of tools while its id list is empty — the
+            # surfaces would name tools dispatch could not find, which is the exact
+            # disagreement this class exists to make impossible. The check did not
+            # finish, so the honest record is that it has not been checked.
+            self._by_server.pop(server_id, None)
+            raise
+        self._ids_by_server[server_id] = tuple(registered)
+        state = ServerCatalog(
+            status=STATUS_OK,
+            tools=tuple(tools),
+            checked_at=checked_at,
+            error=None,
+            skipped=skipped,
+            refused=tuple(refused),
+        )
+        self._by_server[server_id] = state
+        return state
+
+    def _register_all(
+        self,
+        registry: ToolRegistry,
+        server_id: str,
+        server_name: str,
+        tools: tuple[DiscoveredTool, ...],
+        registered: list[str],
+        refused: list[str],
+    ) -> None:
+        """The loop :meth:`record_success` unwinds. Appends to the two lists as it
+        goes so that a caller catching an exception knows exactly what to take back
+        out — which is the whole reason this is a separate method rather than an
+        inline ``for``."""
         for tool in tools:
             tool_id = mcp_tool_id(server_name, tool.name)
             if registry.has(tool_id):
@@ -406,17 +534,6 @@ class McpCatalog:
                 not_callable=not MCP_TOOLS_ARE_CALLABLE,
             )
             registered.append(tool_id)
-        self._ids_by_server[server_id] = tuple(registered)
-        state = ServerCatalog(
-            status=STATUS_OK,
-            tools=tuple(tools),
-            checked_at=checked_at,
-            error=None,
-            skipped=skipped,
-            refused=tuple(refused),
-        )
-        self._by_server[server_id] = state
-        return state
 
     def record_failure(
         self, registry: ToolRegistry, *, server_id: str, error: str, checked_at: int

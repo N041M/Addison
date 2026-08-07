@@ -118,6 +118,22 @@ MCP_TRANSPORT_HTTP_ONLY = True
 # genuinely decided and built.
 MCP_IS_DEV_ONLY_IN_V1 = True
 
+# Redaction's strength (step 5.5 item 4, and load-bearing since step 7). It is a
+# pattern matcher over text: a secret in a format nobody has enumerated passes, and
+# so does an enumerated one a stranger has split with a newline, a tab, a quote or a
+# backslash, or written in fullwidth characters. `agent_core/redaction.py`'s own
+# docstring says it in those words — "a backstop, not a boundary … no doc may
+# describe it as elimination" — which is a rule, and a rule this registry can
+# execute. There is no meaningful opposite to register: nothing would ever make a
+# finite list of vendor prefixes complete, so this row is one-directional.
+#
+# It is here because the failure it guards is the shape a reviewer found twice in one
+# day: a document promising a leak cannot happen is a document that stops the next
+# person building the control that would actually stop one, AND the audit row is
+# written from the redactor's own report, so an over-claim in prose is an over-claim
+# a reader has no way to check.
+REDACTION_IS_A_BACKSTOP = True
+
 # MCP dispatch (step 7). FALSE since phase 3 shipped on 2026-08-07: an MCP tool IS
 # invoked, through the ordinary gate, with a card on every invocation in OPEN — and
 # `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` was flipped in the same commit, as this
@@ -567,6 +583,55 @@ CLAIMS: tuple[Claim, ...] = (
             window=200,
         ),
         exempt=FROZEN,
+    ),
+    # -- Redaction: a backstop, never elimination --------------------------
+    Claim(
+        id="redaction-is-a-backstop",
+        owner="agent_core/redaction.py",
+        holds=REDACTION_IS_A_BACKSTOP,
+        true_state=(
+            "Redaction is a pattern matcher over text: a BACKSTOP, not a boundary. A "
+            "secret in a format nobody enumerated passes, and so does an enumerated one "
+            "split by a newline, tab, quote or backslash, or written in fullwidth "
+            "characters (docs/KNOWN-GAPS.md owns those two). It reduces exposure and "
+            "does not eliminate it."
+        ),
+        # Anchored on a UNIVERSAL plus a credential noun plus a removal verb, in the
+        # four shapes an over-claim actually takes. Deliberately silent on the honest
+        # forms this doc set already writes — "the credential shapes it knows", "the
+        # passwords and keys Addison recognises" — because those carry no universal at
+        # all, which is the whole difference. It is also anchored away from G1: "keys
+        # never reach the webview" is a floor about Addison's OWN keys, enforced by
+        # storage rather than by a regex, so every branch below requires a redaction
+        # verb or the model/provider as the destination.
+        while_true=Wrong(
+            pattern=(
+                r"redact\w*[^.\n]{0,60}\b(?:every|all|any)\b[^.\n]{0,40}"
+                r"(?:credential|secret|key|password|token)"
+                r"|\b(?:every|all)\s+(?:\w+\s+){0,2}"
+                r"(?:credential|secret|key|password|token)s?\b"
+                r"[^.\n]{0,50}\b(?:redact|strip|scrub|remov)"
+                r"|\b(?:no|never any)\s+(?:credential|secret|key|password|token)s?\b"
+                r"[^.\n]{0,60}\breach(?:es)?\b[^.\n]{0,20}(?:model|provider)"
+                r"|redact\w*[^.\n]{0,50}\b(?:ensures?|guarantees?|prevents?)\b"
+            ),
+            fix=(
+                "Redaction is a backstop, not a boundary — say what it removes (the "
+                "shapes somebody enumerated) rather than what it prevents. "
+                "agent_core/redaction.py's docstring owns the rule and states it in "
+                "those words; docs/KNOWN-GAPS.md owns the two shapes a listed "
+                "credential can still take. If a document needs the strong sentence, it "
+                "needs a different control."
+            ),
+            # Prose that states the limit in the same breath is the correct shape, and
+            # it is how every honest passage in the tree already reads.
+            excused_by=(
+                r"backstop|not a boundary|does not eliminate|passes untouched|"
+                r"reduces exposure|enumerat|it knows|recognis|nobody has (?:listed|"
+                r"enumerated)|KNOWN-GAPS"
+            ),
+            window=400,
+        ),
     ),
     # -- The retired scope amendment ---------------------------------------
     Claim(

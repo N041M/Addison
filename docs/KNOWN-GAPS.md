@@ -221,16 +221,18 @@ twice.
   guard. The block still HOLDS — nothing is written; what is lost is the loud
   message, in the one place a loud message is the whole point. Changing it alters
   every existing handler's behaviour, so it needs its own verification pass.
-- **`routines/engine.py` — THREE pre-gate guards each duplicate `on_failure`
-  handling.** The dev-only guard, the confinement guard and (since 2026-07-31)
-  the step-5.5 denylist each shape their refusal as a failed step and
-  re-implement abort / ask_user / skip **inline** instead of falling through to
-  the canonical `if not result.success:` block (~L255). All three match that
-  block today and will silently diverge the moment someone adds a fourth
-  `on_failure` policy. The denylist copy was written to match its neighbours
-  rather than introduce a fourth shape — which is the right call for one diff and
-  the wrong equilibrium overall. **Fix by restructuring so all four paths share
-  one block**; it is now cheaper to do than to keep deferring.
+- **`routines/engine.py` — FIVE pre-gate guards each duplicate `on_failure`
+  handling.** The unknown-tool refusal, the dev-only guard, the not-callable
+  guard, the step-5.5 denylist and the confinement guard each shape their refusal
+  as a failed step and re-implement abort / ask_user / skip **inline** instead of
+  falling through to the canonical `if not result.success:` block. All five match
+  that block today and will silently diverge the moment someone adds a fourth
+  `on_failure` policy. **This entry has been overtaken twice** — it was written
+  about three guards, phase 2 added a fourth and the 2026-08-07 review added a
+  fifth, and each copy was written to match its neighbours rather than introduce a
+  new shape. That is the right call for one diff and the wrong equilibrium overall,
+  and the rate at which the list grows is now the argument. **Fix by restructuring
+  so all six paths share one block**; it is cheaper to do than to keep deferring.
 
 **Open design questions, each blocking a specific step** (moved here from the scope
 amendment's §13 when that document was retired, 2026-07-27 — the other four §13
@@ -344,9 +346,11 @@ against the tree on 2026-07-26:
   CHECK, so a new value would have worked on a fresh DB and been swallowed by
   `_audit`'s best-effort `except` on an upgraded one — a log that quietly stops
   logging, which is worse than no row at all. `Store._migrate_tool_audit_outcomes`
-  rebuilds the table by rename-copy-drop, preserving every existing row, and the
+  rebuilds the table, preserving every existing row, and the
   vocabulary gained `not_callable` (the refusal this entry was about) and `failed`
   (the gate said yes and the call never landed). Both dispatch paths write both.
+  *(The rebuild's first version preserved those rows only when nothing interrupted
+  it; how that was closed is in [BUILD-LOG.md](BUILD-LOG.md).)*
   The refusal branch itself is now quiet for MCP tools — they are callable — and
   remains the mechanism `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` operates through.
 
@@ -366,6 +370,42 @@ against the tree on 2026-07-26:
   same per-invocation card, once there is a reason to trust the provenance —
   which is the promoted-allowlist decision wearing a different hat, and is
   therefore the same later conversation.
+
+**Opened by the 2026-08-07 review of all four step-7 phases:**
+
+Two shapes of credential still cross `agent_core/redaction.py` untouched, and both
+are deliberate as far as they go. The redactor is a **backstop, not a boundary** —
+its own header says so and [step-7-mcp-plan.md](step-7-mcp-plan.md) §7 owns the
+strength that may be claimed for it — so these are not bugs against a promise. They
+are here because somebody will meet them, and because anything built on top of
+"the redactor saw it" is built on sand.
+
+- **A credential split by a newline, tab, quote or backslash passes, in BOTH the
+  text and the structured channel.** `mcp_client.clean_result_text` rejoins a key
+  cut in half by an *invisible* character, which is what makes cleaning a security
+  change rather than hygiene, and it deliberately stops there. A newline between two
+  table rows IS the table; a tab is a column; a quote and a backslash are what JSON
+  is made of. Removing them to reunite a key would mangle every honest answer in
+  order to catch a dishonest one, and a redactor that mangles ordinary text is one
+  people switch off. Nothing at all is redacted *(measured 2026-08-07 · an sk-ant-
+  key of 24 characters with one newline at character 12, taken through
+  clean_result_text and then redact, python 3.13 in agent_core/.venv on the owner's
+  machine)*, and the audit row honestly records that nothing was.
+  **What it costs:** getting a key past this pass costs a server one
+  keystroke, so no later control may assume the text it receives has been cleared.
+  **What would close it** is not a wider character class — it is the untrusted-
+  content screening deferred to v2, which three separate triggers already point at
+  (above, and §7 of the plan).
+- **A fullwidth or homoglyph credential (`ＡＫＩＡ…`) is not caught, and NFKC
+  normalization was deliberately not half-built.** Folding a copy of the text and
+  matching against the fold finds the key and then cannot say where it was: the
+  folded string has different offsets from the original, so replacing what was found
+  means the redactor must expose SPANS and map them back — a change to the shape of
+  the most safety-critical file in the tree, made for a shape nobody has yet been
+  seen to send. The half-built version is the one that must not exist: a redactor
+  that matches on the fold and returns the original names a kind in the audit row it
+  did not actually remove from the text, which is worse than this gap, because this
+  gap at least reports itself honestly. Owner call, with the cost written down.
 
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 

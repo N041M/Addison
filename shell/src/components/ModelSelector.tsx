@@ -23,11 +23,17 @@
 //
 // ACCESSIBILITY IS NOT RESTYLED AWAY. The readers are 54 and 68: the label stays
 // a real button (aria-haspopup="tree"), the list is a role="tree" of
-// role="treeitem" rows carrying aria-level and aria-expanded, with the WAI-ARIA
-// tree keys (Up/Down walk what is drawn, Right opens a folder, Left closes it or
-// climbs to its parent, Enter picks), focus moves into the tree on open and back
-// to the label on close, and outside-click dismisses. A listbox cannot say
-// "folder", which is why this is no longer one.
+// role="treeitem" rows carrying aria-level, aria-expanded and — because the rows
+// are flat siblings rather than nested groups — the aria-posinset/aria-setsize
+// that `lib/modelGroups.ts` authors for them. The keys are the WAI-ARIA tree's,
+// with ONE deliberate departure: Up and Down WRAP at the ends, because this is a
+// menu of a dozen rows and walking off the bottom to reach the top is what a
+// menu does (pinned by modelSelectorFolding.test.tsx). Right opens a closed
+// folder and steps into an open one; on a model it does nothing, which is where
+// the pattern says a leaf ends. Left closes an open folder or climbs to its
+// parent, Enter picks, focus moves into the tree on open and back to the label
+// on close, and outside-click dismisses. A listbox cannot say "folder", which is
+// why this is no longer one.
 //
 // TAB WALKS THE PANEL, it does not leave it. Tab used to close the menu
 // outright, which meant the three `aria-pressed` Effort buttons could never take
@@ -37,7 +43,15 @@
 // When there is no Effort section there is nothing to cycle to, so Tab keeps its
 // old behaviour and leaves.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
@@ -109,12 +123,14 @@ interface Option {
   label: string;
   /** The company folder this row sits under ("Google", "On this computer"). */
   group: string;
-  /** Compact label for the composer's own label (never provider-suffixed). */
-  pillLabel: string;
   /** The mono note at the right of the row: "local" | "free" | "quality". */
   note: string;
-  /** The provider has refused this model before — dimmed, and sunk by the core. */
-  unavailable?: boolean;
+  /**
+   * The provider's own words for refusing this model, when the core has watched
+   * it happen. The SENTENCE, not a flag: the strike-through says a row was
+   * refused and only this says why.
+   */
+  unavailable?: string;
   current: boolean;
 }
 
@@ -123,8 +139,12 @@ interface Option {
  * to read anything on the way out. */
 const MENU_EXIT_MS = 140;
 
-/** Left padding per tree level, in the panel's own px scale. */
-const INDENT = ["pl-2.5", "pl-2.5", "pl-5", "pl-7"];
+/** Left padding per tree level, indexed by `level - 1` — levels are 1-based. */
+const INDENT = ["pl-2.5", "pl-5", "pl-7"];
+
+/** The empty catalogue, as one value. A fresh `[]` per render would churn the
+ * memo below for a person with no local model set up — which is most of them. */
+const NO_MODELS: { id: string; label: string }[] = [];
 
 export function ModelSelector({
   roles,
@@ -137,13 +157,13 @@ export function ModelSelector({
   onSelectEffort,
   disabled,
 }: Props) {
-  const localModels = roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
+  const localModels = roles.find((r) => r.role === "local" && r.configured)?.models ?? NO_MODELS;
 
   // Nothing real to offer yet (disconnected design review): fall back to inert
   // placeholders so the row still reads as part of the composer.
   const usingPlaceholder = cloudModels.length === 0 && localModels.length === 0;
   const cloud = usingPlaceholder ? PLACEHOLDER_CLOUD : cloudModels;
-  const locals = usingPlaceholder ? [] : localModels;
+  const locals = usingPlaceholder ? NO_MODELS : localModels;
   // Two distinct notions: `blockOpen` (a turn is running — don't let the picker
   // open at all) vs `dimmed`/inert placeholder mode (disconnected design review —
   // the label is dimmed but the menu still opens so the catalog is *browsable*;
@@ -172,29 +192,35 @@ export function ModelSelector({
   // Attribution moved from a per-row suffix ("GPT-4.1 — OpenAI") to a company
   // folder, so it is said once per company instead of once per row — and the row
   // keeps its full width for the model's own name.
-  const options: Option[] = [
-    ...cloud.map((m) => ({
-      role: "primary" as ModelRole,
-      id: m.id,
-      label: m.label,
-      group: m.providerLabel ?? "Cloud",
-      pillLabel: m.label,
-      // Only the core may call a model free, and only the core may call one
-      // refused: both are reports off the wire (see the file header).
-      note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
-      unavailable: Boolean(m.unavailable),
-      current: !onLocal && m.id === activeCloud?.id,
-    })),
-    ...locals.map((m) => ({
-      role: "local" as ModelRole,
-      id: m.id,
-      label: m.label,
-      group: "On this computer",
-      pillLabel: m.label,
-      note: "local",
-      current: onLocal && m.id === activeLocalId,
-    })),
-  ];
+  //
+  // Memoised because this component re-renders with the composer, which is on
+  // every keystroke of a message: the rows below are built from these, and
+  // rebuilding a folder tree nobody has opened is work done for a menu that is
+  // not on screen.
+  const options: Option[] = useMemo(
+    () => [
+      ...cloud.map((m) => ({
+        role: "primary" as ModelRole,
+        id: m.id,
+        label: m.label,
+        group: m.providerLabel ?? "Cloud",
+        // Only the core may call a model free, and only the core may call one
+        // refused: both are reports off the wire (see the file header).
+        note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
+        unavailable: m.unavailable,
+        current: !onLocal && m.id === activeCloud?.id,
+      })),
+      ...locals.map((m) => ({
+        role: "local" as ModelRole,
+        id: m.id,
+        label: m.label,
+        group: "On this computer",
+        note: "local",
+        current: onLocal && m.id === activeLocalId,
+      })),
+    ],
+    [cloud, locals, onLocal, activeCloud?.id, activeLocalId],
+  );
   const isCurrent = (o: Option) => o.current;
   const currentOption = options[Math.max(0, options.findIndex(isCurrent))];
 
@@ -231,13 +257,16 @@ export function ModelSelector({
   // focus stranded on <body>. Asking for it a render later cost exactly that.
   const menuPresent = open || exiting;
 
-  // Which folders are open. Re-seeded every time the menu OPENS (below) rather
-  // than held across openings: the menu is a glance surface, and yesterday's
-  // expansion is a stale answer to "what is on right now?".
-  const [folders, setFolders] = useState<FolderState>(() =>
-    initialFolderState(options, isCurrent),
-  );
-  const rows = modelListRows(options, folders);
+  // Which folders are open. Seeded when the menu OPENS (below) and never held
+  // across openings: the menu is a glance surface, and yesterday's expansion is
+  // a stale answer to "what is on right now?". Closed at mount, so there is
+  // nothing to seed here — a tree nobody is looking at has no open path.
+  const [folders, setFolders] = useState<FolderState>({});
+  // THERE IS ALWAYS AT LEAST ONE ROW: `usingPlaceholder` guarantees a non-empty
+  // catalogue, and `modelListRows` draws at least a folder for it. The cursor
+  // below therefore always has somewhere to be, and no branch here has to
+  // pretend otherwise.
+  const rows = useMemo(() => modelListRows(options, folders), [options, folders]);
   /** What a row IS, across a fold: a model keeps its identity when its folders
    * move, so the keyboard's cursor survives an accordion it did not ask for. */
   const rowKeyOf = (row: ModelListRow<Option>) =>
@@ -254,13 +283,14 @@ export function ModelSelector({
   const treeId = useId();
   const rowDomId = (i: number) => `${treeId}-row-${i}`;
 
+  /** Move the cursor, wrapping at both ends — see the file header for why a
+   * menu wraps where a tree would stop. */
   const stepActive = (delta: number) => {
-    if (rows.length === 0) return;
     setActiveKey(rowKeys[(activeAt + delta + rows.length) % rows.length]);
   };
   /** The folder row this row sits inside: the first shallower row above it. */
   const parentAt = (at: number) => {
-    const level = rows[at]?.level ?? 1;
+    const level = rows[at].level;
     for (let i = at - 1; i >= 0; i -= 1) if (rows[i].level < level) return i;
     return at;
   };
@@ -341,18 +371,19 @@ export function ModelSelector({
         stepActive(-1);
         break;
       case "ArrowRight":
-        // A closed folder opens; anything else walks on. This is how a keyboard
-        // reaches a folder at all: the rows are clickable for the mouse, but
-        // putting each one in the tab order would break the panel's Tab contract
-        // (tree -> effort -> tree), so the tree grows the left/right idiom
-        // instead of the menu growing tab stops.
+        // A closed folder opens; an open one steps to the first row inside it,
+        // which is the next row drawn; a model has nothing to open, so Right
+        // stops there. This is how a keyboard reaches a folder at all: the rows
+        // are clickable for the mouse, but putting each one in the tab order
+        // would break the panel's Tab contract (tree -> effort -> tree), so the
+        // tree grows the left/right idiom instead of the menu growing tab stops.
         e.preventDefault();
-        if (row && row.kind !== "option" && !row.open) activateFolder(row);
-        else stepActive(1);
+        if (row.kind === "option") break;
+        if (row.open) stepActive(1);
+        else activateFolder(row);
         break;
       case "ArrowLeft": {
         e.preventDefault();
-        if (!row) break;
         // An open folder closes; anything else climbs to the folder it is in.
         if (row.kind !== "option" && row.open) {
           activateFolder(row);
@@ -364,16 +395,15 @@ export function ModelSelector({
       }
       case "Home":
         e.preventDefault();
-        if (rows.length) setActiveKey(rowKeys[0]);
+        setActiveKey(rowKeys[0]);
         break;
       case "End":
         e.preventDefault();
-        if (rows.length) setActiveKey(rowKeys[rows.length - 1]);
+        setActiveKey(rowKeys[rows.length - 1]);
         break;
       case "Enter":
       case " ":
         e.preventDefault();
-        if (!row) break;
         if (row.kind === "option") pickModel(row.option);
         else activateFolder(row);
         break;
@@ -482,7 +512,7 @@ export function ModelSelector({
             role="tree"
             tabIndex={-1}
             aria-label="Which model Addison uses"
-            aria-activedescendant={rows.length ? rowDomId(activeAt) : undefined}
+            aria-activedescendant={rowDomId(activeAt)}
             onKeyDown={onTreeKeyDown}
             className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
@@ -496,6 +526,11 @@ export function ModelSelector({
                     type="button"
                     role="treeitem"
                     aria-level={row.level}
+                    // Authored, not inferred: these rows are flat siblings, so
+                    // nothing can count a folder's children but us
+                    // (lib/modelGroups.ts).
+                    aria-posinset={row.posinset}
+                    aria-setsize={row.setsize}
                     aria-expanded={row.open}
                     // OUT of the tab order (tabIndex -1): Tab cycles tree ->
                     // effort -> tree in this panel, and adding a stop per folder
@@ -507,7 +542,7 @@ export function ModelSelector({
                     className={
                       "flex w-full items-baseline gap-2 py-[5px] pr-2.5 text-left font-mono " +
                       "text-[10px] transition-colors hover:text-muted " +
-                      INDENT[row.level] +
+                      INDENT[row.level - 1] +
                       (active ? " bg-line text-muted" : " text-disabled")
                     }
                   >
@@ -533,39 +568,61 @@ export function ModelSelector({
                   id={rowDomId(i)}
                   role="treeitem"
                   aria-level={row.level}
+                  aria-posinset={row.posinset}
+                  aria-setsize={row.setsize}
                   aria-selected={o.current}
                   onClick={() => pickModel(o)}
                   onMouseEnter={() => setActiveKey(`m:${o.role}:${o.id}`)}
                   className={
-                    "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] py-[7px] pr-2.5 " +
-                    INDENT[row.level] +
+                    "flex cursor-pointer flex-col rounded-[4px] py-[7px] pr-2.5 " +
+                    INDENT[row.level - 1] +
                     (active ? " bg-line" : "")
                   }
                 >
-                  <span
-                    className={
-                      "min-w-0 truncate font-mono text-[10.5px] " +
-                      // Refused beats current: a model the core has watched a
-                      // provider refuse reads as struck through even where it is
-                      // the one in effect, which is the state worth seeing most.
-                      (o.unavailable
-                        ? "text-disabled line-through"
-                        : o.current
-                          ? "text-ink"
-                          : "text-muted")
-                    }
-                  >
-                    {o.label}
+                  <span className="flex w-full items-baseline gap-2.5">
+                    <span
+                      className={
+                        "min-w-0 truncate font-mono text-[10.5px] " +
+                        // Refused beats current: a model the core has watched a
+                        // provider refuse reads as struck through even where it
+                        // is the one in effect, which is the state worth seeing
+                        // most.
+                        (o.unavailable
+                          ? "text-disabled line-through"
+                          : o.current
+                            ? "text-ink"
+                            : "text-muted")
+                      }
+                    >
+                      {o.label}
+                    </span>
+                    <span className="flex-1" />
+                    <span
+                      className={
+                        "shrink-0 font-mono text-[10px] " +
+                        // Refused beats current here too: the accent is reserved
+                        // for actions, selection and live state (CLAUDE.md), and
+                        // "unavailable ✓" in violet is a refusal dressed as one.
+                        (o.unavailable
+                          ? "text-disabled"
+                          : o.current
+                            ? "text-accent"
+                            : "text-disabled")
+                      }
+                    >
+                      {o.current ? `${o.note} ✓` : o.note}
+                    </span>
                   </span>
-                  <span className="flex-1" />
-                  <span
-                    className={
-                      "shrink-0 font-mono text-[10px] " +
-                      (o.current ? "text-accent" : "text-disabled")
-                    }
-                  >
-                    {o.current ? `${o.note} ✓` : o.note}
-                  </span>
+                  {/* THE PROVIDER'S OWN REASON, which the note's one word throws
+                      away: "no longer available to new users" is the difference
+                      between a mystery and a fact. In the row rather than a
+                      `title`, so it is not hover-only and rides into the row's
+                      accessible name. */}
+                  {o.unavailable && (
+                    <span className="mt-1 font-mono text-[10px] leading-[1.5] text-disabled">
+                      {o.unavailable}
+                    </span>
+                  )}
                 </div>
               );
             })}

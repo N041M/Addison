@@ -17,7 +17,12 @@
 //   (e) The page-level gate: both surfaces render ONLY on the Developer/Custom
 //       surfaces (keyed off the active profile, never the mode); Simple never
 //       sees them — and the core refuses `mcp.add`/`mcp.refresh` independently.
+//   (f) A RESTORE PUTS THIS LIST BACK. `mcp_servers` is snapshot-captured, so a
+//       restore can delete a server out from under a surface still offering to
+//       check and remove it.
 
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   render,
@@ -728,5 +733,47 @@ describe("the tool-servers section gate", () => {
   it("is omitted when no mcp bundle is supplied (older callers)", () => {
     renderSettings({ ...PROFILE, activeProfile: "developer", mode: "open" }, false);
     expect(screen.queryByText(SECTION_TITLE)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) a restore puts this list back with everything else
+// ---------------------------------------------------------------------------
+// `mcp_servers` IS a snapshot-captured table, so restoring a snapshot taken
+// before a server was added deletes that row core-side. App re-reads every other
+// captured table on `onRestored` and did not re-read this one: Settings went on
+// offering Check now / Remove for a server the core had already forgotten, the
+// Tools surface went on listing its tools, and Remove answered "Addison has
+// forgotten X" about a row that was gone before the press.
+//
+// The subject is the WIRING, which has no unit to render: the closure lives in
+// App and every call inside it is a different hook's. So this reads the file —
+// the same way a source-level rule is enforced anywhere else in this tree.
+describe("the restore path", () => {
+  // Read as TEXT and off the cwd, not `import.meta.url`: under vitest's
+  // transform that resolves to a virtual URL, and the app's own module is not
+  // what is being checked — the line in it is.
+  const APP = readFileSync(
+    ["src/App.tsx", "shell/src/App.tsx"].map((p) => resolve(process.cwd(), p)).find(existsSync)!,
+    "utf8",
+  );
+
+  it("re-reads the tool servers along with every other restored table", () => {
+    const restore = /onRestored:\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\},/.exec(APP);
+    expect(restore, "App no longer has an onRestored closure to check").toBeTruthy();
+    const body = restore![1];
+    // The company it must keep: every other captured table is re-read here.
+    for (const call of [
+      "refreshRoles",
+      "refreshProviders",
+      "refreshProfile",
+      "refreshWidgets",
+      "refreshSkills",
+      "refreshGuards",
+      "refreshRouting",
+      "refreshServers",
+    ]) {
+      expect(body, `a restore must re-read ${call}`).toContain(call);
+    }
   });
 });

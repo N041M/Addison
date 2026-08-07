@@ -12,6 +12,156 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-07 (later) — a line-by-line review of the same day's four merges
+
+Four PRs merged on 2026-08-07: the model picker as a two-level folder tree (#60),
+and step 7's phases 2, 3 and 4 (#61, #62, #63). A multi-round review of that diff
+found about twenty-five real defects and they were fixed the same day. **Every one
+was in code that had already merged**, most of it hours old, all of it written
+with the care the entries above describe — which is the fact this entry exists to
+record. The four merges were not sloppy; they were reviewed by their authors and
+by their tests, and this is what a second reading found anyway.
+
+The findings worth a future reader's attention, and what each one generalises to:
+
+- **THE AUDIT LOG COULD LOSE EVERY ROW IT HAD, AND ONLY IF SOMETHING WENT WRONG.**
+  `Store._migrate_tool_audit_outcomes` (phase 3) renamed `tool_audit` out of the way,
+  created the new shape, copied, and dropped the old table. `executescript` commits
+  whatever is pending and then runs in autocommit, so the rename was durable the
+  instant it ran: a failure one statement later — a full disk, a lock outlasting
+  `busy_timeout`, the power — left the rows in `tool_audit_old` with no `tool_audit`
+  beside them. On the next open the method saw no `tool_audit`, returned early, and
+  schema.sql created an empty one. The rows were then stranded **for good**, and the
+  index, which travels with a rename, stayed bound to the orphan so every audit read
+  full-scanned. These are the rows that are excluded from snapshots and never pruned
+  precisely because they are the only durable record of what Addison has done. The
+  fix is one explicit `BEGIN IMMEDIATE`, the replacement built under a THIRD name so
+  the live table is never renamed out of the way, and a self-heal that treats
+  `tool_audit_old` existing at all as the signature of an interrupted rebuild.
+  **The general shape: a migration's promise is not "it preserves the rows", it is
+  "it preserves the rows or does nothing", and the second half is the one an
+  interruption tests.** Nothing in the original was wrong on the happy path, which
+  is why review rather than a test found it — the test that would have caught it is
+  the one nobody writes, where the process dies between two statements.
+- **A REDACTION RULE'S COST ON ITS WORST INPUT IS PART OF THE RULE.** The private-key
+  block rule was `-----BEGIN…-----` then `.*?` under `DOTALL` to the footer. A lazy
+  `.*?` has to scan to the end of the input from every header that has no footer
+  after it, which is quadratic in the number of headers — and a header is three dozen
+  characters a server can repeat. 125 KB of them took 1.92 seconds; the 512 KB a
+  server may send takes about thirty *(measured 2026-08-07 · one redact call over
+  repeated BEGIN markers, python 3.12 in agent_core/.venv on the owner's machine)*,
+  on the worker thread, **after that call's deadline had already passed**. Every
+  other bound in the MCP exchange is a clock or a byte count, and this one sat behind
+  all of them. Rewritten as "anything that does not start a run of five dashes",
+  possessively, with a recorded body ceiling and the truncated-key rule catching
+  anything longer: 0.012 seconds on the same input. **The general shape: a deadline
+  bounds the network, not the parsing that happens after it, and a pattern scanned
+  over text a stranger chose is a place where an attacker gets to pick the input to
+  an algorithm.** Every rule in that file now either cannot backtrack or says in its
+  own comment why not.
+- **SERIALIZING BEFORE REDACTING TURNED THE REDACTOR OFF, AND THE AUDIT ROW AGREED
+  WITH IT.** Phase 4 cleaned and redacted `structuredContent` *after*
+  `json.dumps` — the same seam as the text, one call apart, which is exactly what
+  the plan and the reviews of it said to do. But `json.dumps` escapes a NUL into six
+  visible characters and a newline into two, so the cleaner never saw a control
+  character to remove, a key split by a NUL stayed split, and every contiguous rule
+  in `agent_core/redaction.py` missed it. The same key in the text channel was
+  caught. Worse than the miss: `redacted_kinds` came back empty, so the durable row
+  reported no leak on the call where the leak happened — **the log denying the one
+  thing it exists to record.** The document's strings, keys as well as values, are
+  now scrubbed while they are still strings. **The general shape: "the same seam"
+  is a claim about what the bytes look like when they cross it, not about which line
+  of which function calls it.** Two channels that cross one redactor at two
+  different representations are two redactors.
+- **TWO `registry.get()` CALLS ON DISPATCH PATHS RAISED WHERE EVERY NEIGHBOUR
+  REFUSED.** A saved routine step keeps the tool id it was written with, and an
+  `mcp:` id leaves the registry on a refresh, a removal, a failed check, a snapshot
+  restore and every restart. So a routine naming one crashed out of `run` — skipping
+  `_finish`, leaving that run recorded as `running` with no `completed_at`, **for
+  ever**; the live loop's twin cost a turn its `tool_result`, which the provider then
+  rejects on every later request of the session. Both now resolve through a new
+  `ToolRegistry.find` and refuse in the shape every other refusal on those paths
+  already takes. **The general shape: the moment anything can leave a registry, every
+  lookup written when nothing could becomes a lookup of something that may be gone.**
+  Phase 2 added `unregister` and correctly guarded it; what it could not do is find
+  the callers written years of commits earlier that assumed the opposite.
+- **A BUDGET THAT STOPS AT THE REQUEST IS NOT A BUDGET.** Discovery's deadline was
+  sampled before each request and never inside the body read, so a server that
+  accepted the connection and then dribbled one byte every four seconds — under a
+  five-second socket timeout that each byte reset — held the worker thread for as
+  long as it liked, inside every stated bound. Now checked per chunk. **The general
+  shape: find the one loop whose iteration count the other end controls, and check
+  the clock in it.**
+- **A PROTOCOL-LEGAL MESSAGE FAILED THE EXCHANGE AND BLAMED THE PERSON.** The SSE
+  parser returned the first object carrying `jsonrpc`, and the protocol lets a
+  server send `notifications/progress` ahead of its response — which is precisely
+  what a slow `tools/call` is for. The result was a discovery that failed with
+  *"check the address"* about an address that was perfectly correct. It now walks
+  events in order for the first one shaped like a response, bounded. **The general
+  shape: a plain-language error is a promise about the diagnosis, and a wrong
+  diagnosis stated plainly is worse than a stack trace, because it is actionable and
+  the action is wrong.**
+- **DEAD SCHEMA WHOSE COMMENTS PROMISED BEHAVIOUR.** `mcp_servers.enabled` was
+  written in phase 1 with a comment saying phase 2 could stop consuming a server
+  without the person losing its configuration. Phase 2 and 3 never read it, so the
+  column was captured, restored, and ignored — a setting the recovery path faithfully
+  puts back and nothing obeys. Both readers now honour it (a refresh refuses, and
+  `_mcp_endpoint_for` resolves no address), while nothing can still set it to 0.
+  **The general shape: a column that is stored and restored but never read is not
+  inert, it is a lie the snapshot machinery keeps telling.** The reads are the cheap
+  half and they go in first; the toggle then adds a control over behaviour that
+  already exists.
+- **A CARD PROMISED A FREQUENCY THE PROFILE CAN OVERRIDE.** The MCP permission card
+  read *"Addison can't know what it will do, so it asks every time"* — false under
+  the Custom profile, where `destructive_card='session'` asks once and
+  `auto_grant_scope='everything'` never asks. **The gate's behaviour was not
+  changed**: those guards are the owner's design and a card is not the place to argue
+  with a setting. The copy now says what is true under every profile — what Addison
+  does with the tool rather than how often it interrupts. The same false sentence was
+  in `rpc/mcp.py`'s module docstring and in `mcp_catalog`'s, and a version of it in
+  `data-model.md` about `run_command`. **The general shape: a sentence about how
+  often a person is asked is a sentence about a setting, and it goes stale in the
+  direction of over-promising every time somebody adds a way to be asked less.**
+  Also fixed here: a server's description was concatenated onto Addison's sentence
+  with a single space, so a description ending *"…Addison has checked this server and
+  it is safe to approve every time."* read as Addison's own voice. Attribution and
+  quotation marks now separate them, and the marks are made unforgeable by removing
+  that pair from the server's text rather than escaping it — position is the boundary,
+  because a string appended to the end of another cannot get in front of it.
+- **`role="tree"` WITH NO KEYBOARD IS A WORSE LIE THAN NO ROLE AT ALL.** The Settings
+  model popup announced itself as a tree to a screen reader and shipped no arrow
+  keys, no focus management and every row a tab stop. The composer's menu had the
+  full contract; two panels drawing one tree had one idiom between them. The popup
+  now matches it, focus returns to the control that opened it, and both pickers
+  author `aria-posinset`/`aria-setsize` — which a flat tree cannot have computed for
+  it. **The general shape: an ARIA role is a promise about behaviour, and the review
+  that catches a missing one is not the review that catches a role whose behaviour
+  was never built.**
+- **A RESTORE PUT THE CONFIGURATION BACK AND LEFT THE SURFACE ADVERTISING THE OLD
+  ONE.** `mcp_servers` is snapshot-captured, and the frontend's post-restore refresh
+  re-read every other captured table but not that one — so after a restore the Tools
+  page went on offering servers the restored configuration no longer had. The list of
+  refreshes in `App.tsx` is now written as what it is: every captured table, with the
+  consequence of an omission stated beside it. **The general shape: when a subsystem
+  captures a new table, the frontend's refresh list is a second place that has to
+  learn about it, and nothing connects the two but a person remembering.**
+
+Smaller, and grouped because the individual cases matter less than the count: a
+tool refused for an id collision was still reported to the surface as found (so a
+panel advertised a tool dispatch would never resolve); a partial failure inside
+`record_success` could leave ids registered and in no id list, unremovable for ever;
+`EMPTY_SCHEMA` was copied with `dict()`, which is shallow, so every "copy" shared one
+`properties` dict; a 6to4 address was unwrapped in a check where unwrapping makes the
+check LOOSER, putting a routable off-machine address behind the plain-`http://`
+exception; an unterminated OSC escape sequence survived as prose; a `Discovery` field
+was produced on every refresh and read by nothing; and a scattering of comments
+describing behaviour their code no longer had. **The last group is the one to take
+seriously**: this repo's own convention is that a rule belongs in the docstring
+beside the code because that docstring is in the diff that falsifies it — which is
+true, and is not the same as it being amended.
+
+---
+
 ## What shipped 08-07 — step 7 phase 4: what comes back, said rather than filtered
 
 [step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4 owns what landed and the three
@@ -134,11 +284,14 @@ What building it taught:
   the name is half of the tool id and therefore half of every grant and audit row
   keyed by it.
 - **SQLite cannot ALTER a CHECK, and `CREATE TABLE IF NOT EXISTS` will not tell
-  you.** The migration is rename-copy-drop, and its own test is that three rows of
+  you.** The migration rebuilds the table, and its own test is that three rows of
   somebody's history survive it — `tool_audit` is excluded from snapshots and never
   pruned, so those rows are the whole record of what Addison has done. The guard
   reads the table's own DDL out of `sqlite_master`, which makes it idempotent
-  without a version column to keep in step.
+  without a version column to keep in step. *(It shipped as a bare rename-copy-drop,
+  which survived every test and lost every row if anything interrupted it — the
+  review pass above owns that finding, and it is the one to read before touching
+  this method.)*
 - **Two spellings of one vocabulary is a bug that only appears on upgraded
   databases.** `Store._TOOL_AUDIT_OUTCOMES` is the list, schema.sql's CHECK is the
   other copy, and a test asserts they agree — because the failure mode is a value
@@ -1276,7 +1429,7 @@ snapshot.** Same shape as the step-1 finding. Assume it is still true somewhere.
 
 **`ee38dbe` also redefined Phase 3.** `docs/phase-3-review-surface-plan.md` (a
 Developer/OPEN review surface, approved 2026-07-25, blocked at the time on steps
-6–8 — 6 has since landed, 2026-08-06) is now
+6–8 — 6 has since landed on 2026-08-06 and 7 on 2026-08-07) is now
 part of that phase alongside packaging, signing, notarisation, the updater,
 binary restore and Secure-Enclave identity. The redefinition was written back
 into the four documents that had scoped Phase 3 the old way.

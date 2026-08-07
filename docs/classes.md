@@ -303,17 +303,26 @@ store is up) and calls only `capture(...)`, never restore/delete/prune.
 ## External tools via MCP
 
 Addison is an MCP **client** — it consumes external MCP servers — never a server or
-gateway. `McpClient` adapts each remote tool into the *existing* `ToolRegistry`, so an
+gateway. Each remote tool is adapted into the *existing* `ToolRegistry`, so an
 MCP tool is registered, gated, logged, and undo-checked exactly like a native tool
 (§ Core orchestration). Because a mutating tool with no `undo()` cannot be LOW-risk,
 invariant 2 automatically keeps such an MCP tool out of the SAFE view. Connecting a
 server is reversible, snapshotted config, sharing the add-an-endpoint plumbing.
 
+**The diagram below is the SHAPE, and the shape is what shipped — under different
+names.** Step 7 (phases 1–4, 2026-08-06 to 2026-08-07) built it as
+`agent_core/mcp_client.py` (module-level protocol functions and a private
+`_Session`, not a client object anybody holds), `mcp_catalog.McpCatalog` (admission
+and the in-memory per-server catalog, which is what `McpConnection` draws) and
+`mcp_catalog.McpTool` (one registry entry per discovered tool, which is what
+`McpToolAdapter` draws). The three boxes are kept because they are how the
+subsystem is *arranged*; the markers name what to grep for.
+
 ```mermaid
 classDiagram
-    %% not-in-code: McpClient — Phase-2 step 7, not built; phase 1 (2026-08-06) shipped configuration only
-    %% not-in-code: McpConnection — Phase-2 step 7, not built; target shape, no protocol client exists
-    %% not-in-code: McpToolAdapter — Phase-2 step 7, not built; target shape, nothing registers an MCP tool yet
+    %% not-in-code: McpClient — the role, not a class: agent_core/mcp_client.py is module-level functions over a private _Session, because one call is one session and nothing outlives it
+    %% not-in-code: McpConnection — the role, not a class: what a refresh found lives in mcp_catalog.ServerCatalog, in memory only, and there is no open connection to model
+    %% not-in-code: McpToolAdapter — drawn under its role name; the class is mcp_catalog.McpTool, one registry entry per discovered tool
     class McpClient {
         +connect(server_config) McpConnection
         +disconnect(server_id)
@@ -339,8 +348,13 @@ classDiagram
     McpClient ..> ToolRegistry
 ```
 
-`McpToolAdapter` satisfies the same `Tool` protocol as native tools, which is what lets
-it flow through the one shared registry + gate. All members here are *(Phase-2)*.
+`McpToolAdapter` — `mcp_catalog.McpTool` in the tree — satisfies the same `Tool`
+protocol as native tools, which is what lets it flow through the one shared registry +
+gate. It registers `dev_only=True`, HIGH and destructive unconditionally, so a
+stranger's tool reaches the gate as the strongest thing a tool can declare itself to
+be, and `visible_tools(SAFE)` has never held one. What the gate then does with a
+destructive call is the gate's own business, and the Custom profile's guards can tune
+it ([`SAFETY.md`](SAFETY.md) owns them).
 
 ## Providers and routing
 

@@ -45,21 +45,20 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**Two steps remain — 7 and 8.** `ROADMAP.md` owns status; trust it over this file.
+**One step remains — 8.** `ROADMAP.md` owns status; trust it over this file.
 
-- **7 — MCP client. STARTED: phases 1–2 of 5 are built.** Transport was decided by
-  the owner on 2026-08-06: **HTTP only for v1**, which is what keeps the client in
-  the Agent Core and adds no new highest-trust surface. Phase 1 is the `mcp_servers`
-  table and `mcp.list`/`add`/`remove`. Phase 2 (2026-08-07) is connect + discovery:
-  `agent_core/mcp_client.py` speaks the protocol, `agent_core/mcp_catalog.py` admits
-  what it finds to the ONE registry namespaced and dev-only, and `mcp.refresh` runs
-  it on the worker thread. **Nothing is still callable**, held by two mechanisms —
-  an `mcp:` id is absent from `visible_tools` in every mode, and both dispatch paths
-  refuse one. Phase 3 flips `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` and writes
-  `McpTool.execute`; read the plan's §4.2 first, especially the three scoping
-  decisions (no auth, on-demand only, catalog in memory) — each is a thing phase 3
-  may want and must decide again rather than inherit. Plan:
-  [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
+- **7 — MCP client. DONE FOR v1: phases 1–4 of five, 2026-08-06 to 2026-08-07.**
+  Transport was decided by the owner on 2026-08-06: **HTTP only for v1**, which is
+  what keeps the client in the Agent Core and adds no new highest-trust surface.
+  Configuration, then connect + discovery (`agent_core/mcp_client.py` speaks the
+  protocol, `agent_core/mcp_catalog.py` admits what it finds to the ONE registry
+  namespaced and dev-only), then dispatch through the ordinary gate as HIGH and
+  destructive with `tool_audit` on every outcome, then output handling. **Phase 5 is
+  a recorded later option, not a missing piece** — stdio under containment, and SAFE
+  admission via a promoted allowlist. If you are picking this subsystem up, read the
+  plan's §4.2 scoping decisions first (no auth, on-demand only, catalog in memory):
+  each is a thing the next phase may want and must decide again rather than inherit.
+  Plan: [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
 - **8 — the automation keyword gate.** Syntax decided (a per-automation nonce Addison
   shows and you retype, chosen because a fixed prefix is forgeable by anything that
   can write English). Nothing built. Until it exists, nothing in the tree can author
@@ -76,6 +75,29 @@ launch task re-raise a dialog somebody had dismissed.
 not-downloaded → one-click download plus a source link; downloaded → how to connect
 it; and more open-source models), and skills file-upload (an uploaded text file's
 contents become the skill's guidance text — editable, previewed, size-limited).
+
+## What changed on 2026-08-07, in one paragraph each
+
+Four PRs merged (#60–#63), then a review of all four found about twenty-five real
+defects and they were fixed the same day. `BUILD-LOG.md` owns the findings; these are
+the ones that change how you should read the tree.
+
+- **Step 7 is COMPLETE for v1.** Phases 2, 3 and 4 all landed: a tool server's tools
+  are discovered, callable through the ordinary gate, and what one answers is
+  redacted, bounded and disclosed rather than filtered. Simple sees none of it.
+- **The two model pickers are a folder tree** — company, then family, then model, one
+  folder open at a time, drawn by the composer menu and the Settings popup from one
+  engine (`shell/src/lib/modelGroups.ts`) so they cannot disagree. Owner decision.
+- **The review's two biggest finds are worth knowing before you touch either file.**
+  The `tool_audit` rebuild could strand every audit row permanently if it was
+  interrupted; and the structured channel's redaction ran after serialization, which
+  turned it off for any credential a control character had split — and made the audit
+  row report no leak on the call where the leak happened. Both fixed; both were in
+  code merged hours earlier.
+- **Two redaction gaps are recorded rather than closed**, deliberately: a credential
+  split by a newline, tab, quote or backslash, and a fullwidth/homoglyph one.
+  `KNOWN-GAPS.md` owns both, with what each costs. The redactor is a backstop, not a
+  boundary, and nothing may be built on it having seen everything.
 
 ## What changed on 2026-08-06, in one paragraph each
 
@@ -106,14 +128,17 @@ committed and pushed; `master` is clean.
   list; `tests/doc_claims.py` is a registry of load-bearing facts, one row each, with
   a test that names the file and line of any document contradicting one.
 
-## Branch and PR state (verified 2026-08-06)
+## Branch and PR state (verified 2026-08-07)
 
-**No open pull requests. `master` carries everything**, committed and pushed — work
-from it. **Re-read this section immediately after any merge:** it was false for ninety
-minutes on 2026-07-26 because a merge falsified six passages without touching the file
-that contained them, and no gate catches that.
+**No open pull requests. `master` carries everything through #63**, committed and
+pushed — work from it. **Re-read this section immediately after any merge:** it was
+false for ninety minutes on 2026-07-26 because a merge falsified six passages without
+touching the file that contained them, and no gate catches that.
 
-- `redesign/dark-v2` is fully contained in `master` and safe to delete.
+- Every `claude/*` branch in the clone is fully contained in `master` and safe to
+  delete: `bespoke-widgets-feasibility-72d532`, `mcp-phase-2-connect-discovery`,
+  `mcp-phase-3-dispatch`, `mcp-phase-4-output-handling` and
+  `model-switching-menu-ui-7f1c9c` (#60–#63).
 - `archive/thread-window-wip` and `archive/icon-gen-wip` are parked worktree
   experiments, kept only so the attempts are recoverable. Neither is for merge.
 
@@ -164,8 +189,8 @@ was that a mutation which *should* have killed something did not.
 
 ## Where the project stands
 
-- v1 (spec §11, steps 1–11) and Phase-2 steps 1–6 are implemented and merged. **7 is
-  started, 8 is not.**
+- v1 (spec §11, steps 1–11) and Phase-2 steps 1–7 are implemented and merged. **8 is
+  not started.**
 - Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple = an
   all-in-one companion; Custom tunes prompting guards. Safety means **guaranteed
   rollback**, and that has code and tests behind it in both modes.
