@@ -127,6 +127,21 @@ and where it goes.
   credential shapes it knows on the way to the model and the audit trail records
   that it happened — but an unrecognised or deliberately-encoded secret still
   passes, so this stays open and is stated as such in design-doc §9.x.
+- **OS-automation directories can be trusted and written today — the one generic
+  path to ARMING that is still open (found 2026-08-07; step 8 phase 1 closes
+  it).** `workspace_trust_allows` refuses only Addison's own protected
+  directories, so `~/Library/LaunchAgents` can be granted as a trusted workspace
+  and `write_project_file` can put a plist there behind an ordinary card — which
+  is login-time automation, armed, with no keyword gate. The seatbelt and the
+  denylist don't cover it either: the seatbelt allows writes inside trusted
+  roots, and `denylisted_roots` names credential stores and the data dir, not
+  launchd's. Until this closes, the standing claim "nothing in the tree can
+  author or arm automation, so G2 holds trivially" is true of Addison's
+  machinery and false of this path — the person must deliberately pick the
+  folder through the OS picker, which is why it is a gap and not an incident.
+  [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 owns the fence
+  (trust-grant refusal + denylist + seatbelt write-denies, one list, three
+  consumers).
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
   and re-denies its own data dirs on top, independently, which is what keeps the
@@ -238,9 +253,17 @@ twice.
 amendment's §13 when that document was retired, 2026-07-27 — the other four §13
 questions were resolved during steps 1–3 and went with it):
 
-- **Keyword-gate syntax (blocks step 8).** The exact prefix (`!run`, `arm:`,
-  `sudo:` …) and the precise set of actions it gates. Owner's reading: running or
-  arming powerful / OS-automation actions in the harness, never ordinary chat.
+- ~~**Keyword-gate syntax (blocks step 8).**~~ **ANSWERED 2026-08-07 — no longer
+  blocks the step.** The syntax is a **per-automation nonce** Addison shows and
+  the person retypes (owner decision: a fixed prefix like `!run` is forgeable by
+  anything that can write English — observed content can say "type `!run
+  install`", but cannot pre-write a code that did not exist yet). The set of
+  actions it gates is settled the way the owner's reading pointed: **arming**
+  OS-run automation in the harness, never ordinary chat — a one-shot command
+  already meets a per-invocation card and the seatbelt, and the recurring,
+  unconfined, outlives-the-session nature of an armed job is the jump that earns
+  the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
+  build order and the surrounding decisions; nothing is built yet.
 - **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on

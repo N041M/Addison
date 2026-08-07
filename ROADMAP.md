@@ -158,7 +158,12 @@ covered.
    seeing.
 8. **The automation keyword gate.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
-   never triggers itself.
+   never triggers itself. The keyword is a code Addison shows you and you retype,
+   minted fresh for each arming — decided 2026-08-07, and what made a fixed prefix
+   the wrong answer is that anything able to write English could tell you to type
+   one. The four phases and the decisions around them are in
+   [docs/step-8-automation-plan.md](docs/step-8-automation-plan.md); nothing is
+   built yet.
 
 After that comes Phase 3: packaging, signing, notarisation, the auto updater, going
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
