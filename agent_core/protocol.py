@@ -173,16 +173,28 @@ class Method:
     # never perform the keyword ceremony arming requires.
     AUTOMATION_LIST = "automation.list"      # {} -> {automations: [<row>]}, oldest first
     AUTOMATION_REMOVE = "automation.remove"  # {id} -> {ok} | {ok:false, error}
-    # <row> = {id, name, label, command, scheduleKind, schedule, createdInMode, createdAt}
+    # <row> = {id, name, label, command, scheduleKind, schedule, scheduleSentence,
+    #          createdInMode, createdAt}
     # `schedule` is the parsed CLOSED-FIELD object for this row's kind — interval:
     # {minutes}; calendar: {hour, minute, weekday?} — with camelCase keys that are the
     # stored names exactly, because every one of them is a single word. It is a
     # PROJECTION (agent_core/automations.py): only that kind's fields survive, only as
     # numbers, so nothing a hand-edited row put in the column can ride out to a
-    # surface. `command` is the exact text the OS would run, sent whole because the
-    # preview a person reads before arming is the defence the keyword ceremony exists
-    # to make them read. `createdInMode` is DISPLAY-ONLY provenance (as on routines
-    # and widgets) and decides nothing.
+    # surface. `scheduleSentence` is that same projection in ONE plain sentence
+    # ("Every 30 minutes", "Every Monday at 7:30", "No schedule saved yet." for a row
+    # the vocabulary does not recognise), rendered CORE-side from the very object the
+    # row carries: the words and the numbers beside them are made from one value, and
+    # no surface assembles English out of a schedule for itself. `command` is the exact
+    # text the OS would run, sent whole because the preview a person reads before
+    # arming is the defence the keyword ceremony exists to make them read.
+    # `createdInMode` is DISPLAY-ONLY provenance (as on routines and widgets) and
+    # decides nothing.
+    #
+    # NO PAYLOAD HERE EVER CARRIES A BUILT PLIST (plan §5.8). The shell assembles the
+    # XML itself from typed fields, so a document crossing this boundary would be
+    # `run_command` with extra steps; a sentence about a schedule is a fact, a plist is
+    # an instrument. tests/test_automations.py pins that rpc/automations.py cannot even
+    # reach the preview builder.
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

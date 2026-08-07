@@ -176,6 +176,19 @@ covered.
    and no memory of "armed": what is armed is the OS's truth, so a restore can
    never re-arm anything by putting a database row back.
 
+   **What phase 2 shipped (2026-08-07, same day):** asking Addison for an
+   automation now writes one down — in the Developer profile only. Addison saves
+   what to run and when, shows the schedule as one plain sentence ("Every Monday
+   at 7:30"), and shows in chat the exact text it would one day hand to the
+   computer, before anything can act on it. It refuses at the door what it would
+   refuse to run — a command reaching into protected folders, a command that
+   itself hands work to the OS clock, anything that looks like it has a password
+   or key in it (saved automations are copied into restore points, so a secret
+   belongs in a file the command reads instead). Drafts are listed in Settings
+   with a remove button, every answer ends by saying nothing is armed, and
+   turning one on is still impossible anywhere in the app — that is the next
+   phase, behind the retyped code.
+
 After that comes Phase 3: packaging, signing, notarisation, the auto updater, going
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
 line stub today. There is also an approved plan for a Developer review surface in

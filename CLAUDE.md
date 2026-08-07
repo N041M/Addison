@@ -207,8 +207,14 @@ The one dependency that is not obvious from the list was inside 7:
   server row holds a URL and never a command.
   [`docs/step-7-mcp-plan.md`](docs/step-7-mcp-plan.md) owns the phases and both
   decisions.
-- **8 — the automation keyword gate** + author-OS-run automation. Until it exists,
-  nothing in the tree can author or arm automation, so G2 holds trivially.
+- **8 — the automation keyword gate** + author-OS-run automation. Phases 1–2 of
+  four are built (2026-08-07): the fence that makes the gated path the only path,
+  and authoring as inert drafts (`create_automation`, dev-only — a row and a
+  preview, no armed state anywhere). **Nothing in the tree can ARM automation** —
+  the gate and the arming surface are phase 3, so G2 holds: by the fence for the
+  generic paths, and by absence for the rest.
+  [`docs/step-8-automation-plan.md`](docs/step-8-automation-plan.md) owns the
+  phases and decisions.
 
 When adding a capability, ask which profile and tier surfaces it — do not leak
 developer affordances into Simple.

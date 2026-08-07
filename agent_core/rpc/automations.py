@@ -43,7 +43,7 @@ surface phase 3 adds.
 
 from __future__ import annotations
 
-from agent_core.automations import Automation, schedule_fields
+from agent_core.automations import Automation, schedule_fields, schedule_sentence
 from agent_core.rpc.base import ServerContext
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
@@ -74,28 +74,53 @@ class AutomationsMixin(ServerContext):
         surface. A row whose JSON says nothing this vocabulary recognises arrives as
         ``{}`` rather than making the whole list unanswerable.
 
+        ``scheduleSentence`` is that same schedule in ONE plain sentence ("Every 30
+        minutes", "Every Monday at 7:30", or "No schedule saved yet." for a row this
+        vocabulary does not recognise). Two decisions are folded into that one line:
+
+          * **The words come from the CORE, not from each surface.** A frontend that
+            assembled English out of ``schedule`` would be a second renderer of the
+            same fact, and the second one is the one that says "Every day at 7:5" or
+            guesses am/pm — on a row whose whole job is to tell somebody what will run
+            while they are asleep. One wording, said the same way in chat, on the
+            Settings row and (phase 3) above the keyword field they type into.
+          * **It is rendered from the PROJECTION computed here, once** — the very
+            object this row carries as ``schedule`` — never from a second read of the
+            column. That is what makes the sentence and the numbers beside it
+            incapable of disagreeing: a row that answers ``{}`` cannot also claim an
+            hourly schedule, because the sentence was made out of that same ``{}``.
+
         ``command`` rides WHOLE. It is the one field a person must read before arming
         anything, and the keyword ceremony phase 3 adds exists to make them read it —
         a truncated or summarised command would defeat the defence at its one moment.
+
+        WHAT IS NOT HERE, AND STRUCTURALLY CANNOT BE: the plist preview. A schedule
+        rendered as a sentence is a fact ABOUT the row; the plist is a DOCUMENT, and
+        the shell builds its own from typed fields and never accepts one from this
+        process (plan §5.8). So no payload may normalise carrying one, and a test in
+        ``tests/test_automations.py`` pins that this module neither imports the
+        preview builder nor names it.
 
         ``updated_at`` is deliberately not on the wire: nothing can edit a row yet, so
         it equals ``created_at`` on every row that exists, and a field that is always
         a copy of another one teaches a frontend to render a fact nobody has. Phase 2
         adds it with the edit that makes it differ."""
+        schedule = schedule_fields(row.schedule_kind, row.schedule_json)
         return {
             "id": row.id,
             "name": row.name,
             "label": row.label,
             "command": row.command,
             "scheduleKind": row.schedule_kind,
-            "schedule": schedule_fields(row.schedule_kind, row.schedule_json),
+            "schedule": schedule,
+            "scheduleSentence": schedule_sentence(row.schedule_kind, schedule),
             "createdInMode": row.created_in_mode,
             "createdAt": row.created_at,
         }
 
     def _automation_list(self) -> dict:
         """automation.list -> {automations: [{id, name, label, command, scheduleKind,
-        schedule, createdInMode, createdAt}]}, oldest first.
+        schedule, scheduleSentence, createdInMode, createdAt}]}, oldest first.
 
         Answers in EVERY profile (see the module docstring) and answers ``[]`` on
         every install today, because nothing in the tree can write a row until phase 2.

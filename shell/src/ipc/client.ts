@@ -12,7 +12,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Method, type ModelRole } from "../types/protocol";
+import { Method, type Automation, type ModelRole } from "../types/protocol";
 import { asRecord, normalizeUnavailable } from "../lib/parse";
 import {
   parseConversationSummaries,
@@ -554,6 +554,17 @@ export const ipc = {
     call(Method.McpRemove, { id }).then(parseMcpMutation),
   refreshMcpServer: (id: string): Promise<McpRefreshResult> =>
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
+
+  // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
+  // NEITHER OF THESE REACHES THE OPERATING SYSTEM. `listAutomations` reads saved
+  // rows and `removeAutomation` takes one away; there is no arm here and no plist,
+  // because arming is phase 3 and belongs to the Rust shell. Both answer in every
+  // profile — a saved automation is configuration, not an ability, so a profile
+  // switch never hides one and never traps a removal.
+  listAutomations: (): Promise<Automation[]> =>
+    call(Method.AutomationList).then(parseAutomations),
+  removeAutomation: (id: string): Promise<AutomationMutationResult> =>
+    call(Method.AutomationRemove, { id }).then(parseAutomationMutation),
 };
 
 // ---------------------------------------------------------------------------
@@ -1433,6 +1444,111 @@ export function parseMcpRefresh(result: unknown): McpRefreshResult {
   const server = parseMcpServerRow(obj.server);
   if (!server) return { ok: false, error };
   return { ok: true, server };
+}
+
+// ---------------------------------------------------------------------------
+// Automations (Phase-2 step 8) — the work Addison has written down for THIS
+// COMPUTER to run on a schedule. A row is a draft: nothing in the app arms one
+// yet, and when arming lands it is the Rust shell that writes the job file.
+// ---------------------------------------------------------------------------
+
+/** The core's own words for a row whose schedule says nothing this vocabulary
+ * recognises (agent_core/automations.py `schedule_sentence`). Repeated here as the
+ * FALLBACK and nothing else: when the core's sentence is missing or unusable, the
+ * honest answer is that no schedule is saved — never a guess assembled from the
+ * numbers, which is how a surface ends up telling somebody a job runs hourly
+ * because a field parsed as a 1. Kept byte-for-byte in step with the core; the
+ * generated fixture is where the two are held together. */
+const NO_SCHEDULE_SENTENCE = "No schedule saved yet.";
+
+/** `automation.remove` → {ok, error?}. A refusal — the row is already gone, or a
+ * restore point could not be saved first — is a resolved {ok:false} carrying the
+ * core's plain sentence, never a reject. */
+export interface AutomationMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+function parseAutomationMutation(result: unknown): AutomationMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/** The closed schedule vocabulary, exactly as the core declares it
+ * (`automations.SCHEDULE_KINDS`). Anything else is a kind this build has never
+ * heard of, and the row simply does not say which — the sentence still speaks. */
+const AUTOMATION_SCHEDULE_KINDS = new Set(["interval", "calendar"]);
+
+/** The schedule's numbers, and only numbers. The core already projects the stored
+ * JSON against the closed field set; this is the belt on those braces, so a string
+ * that arrives where a number belongs can never be rendered as one. */
+function parseAutomationSchedule(value: unknown): Record<string, number> {
+  const record = asRecord(value);
+  if (!record) return {};
+  const out: Record<string, number> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry === "number" && Number.isFinite(entry)) out[key] = entry;
+  }
+  return out;
+}
+
+/** One `automation.list` row, or `null` when it isn't usable.
+ *
+ * Fails CLOSED on the `parseWorkspaceRoots` / `parseMcpServerRow` reasoning, with
+ * one addition of its own. A row is dropped without a usable `id` and `name` — the
+ * Remove control is named after the automation, so a row that cannot be named is
+ * one the section would offer a button for and then fail to act on — AND without a
+ * usable `command`, because the command IS the automation. A row that cannot say
+ * what would run would render as a schedule with no consequence attached, which is
+ * the one thing this surface must never show.
+ */
+function parseAutomationRow(value: unknown): Automation | null {
+  const row = asRecord(value);
+  if (!row || typeof row.id !== "string" || !row.id) return null;
+  if (typeof row.name !== "string" || !row.name) return null;
+  if (typeof row.command !== "string" || !row.command) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    label: typeof row.label === "string" ? row.label : "",
+    command: row.command,
+    scheduleKind:
+      typeof row.scheduleKind === "string" && AUTOMATION_SCHEDULE_KINDS.has(row.scheduleKind)
+        ? (row.scheduleKind as Automation["scheduleKind"])
+        : undefined,
+    schedule: parseAutomationSchedule(row.schedule),
+    // The core's sentence, or the core's own "nothing saved" line. Never one built
+    // here out of `schedule`: two renderers of one fact is how the second one ends
+    // up saying something the first never would.
+    scheduleSentence:
+      typeof row.scheduleSentence === "string" && row.scheduleSentence
+        ? row.scheduleSentence
+        : NO_SCHEDULE_SENTENCE,
+    createdInMode:
+      row.createdInMode === "safe" || row.createdInMode === "open"
+        ? row.createdInMode
+        : undefined,
+    createdAt:
+      typeof row.createdAt === "number" && Number.isFinite(row.createdAt)
+        ? row.createdAt
+        : undefined,
+  };
+}
+
+/** Parse `automation.list` → the saved automations, oldest first. Unusable rows are
+ * dropped; junk never throws. */
+export function parseAutomations(result: unknown): Automation[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.automations) ? (obj.automations as unknown[]) : [];
+  const out: Automation[] = [];
+  for (const item of list) {
+    const row = parseAutomationRow(item);
+    if (row) out.push(row);
+  }
+  return out;
 }
 
 /** workspace.pickDirectory → the chosen absolute path, or `null` when the person

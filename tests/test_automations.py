@@ -38,7 +38,13 @@ from pathlib import Path
 
 import pytest
 
-from agent_core.automations import SCHEDULE_FIELDS, SCHEDULE_KINDS, schedule_fields
+from agent_core.automations import (
+    SCHEDULE_FIELDS,
+    SCHEDULE_KINDS,
+    plist_text,
+    schedule_fields,
+    schedule_sentence,
+)
 from agent_core.memory.store import Store
 from agent_core.rpc.automations import _NO_SUCH_AUTOMATION
 from agent_core.snapshots.scope import _CAPTURED_TABLES
@@ -528,7 +534,7 @@ def test_the_wire_shape_is_the_one_the_frontend_parses(tmp_path):
         for row in rows:
             assert set(row) == {
                 "id", "name", "label", "command", "scheduleKind", "schedule",
-                "createdInMode", "createdAt",
+                "scheduleSentence", "createdInMode", "createdAt",
             }
         assert rows[0]["name"] == "Tidy up downloads"
         assert rows[0]["label"] == "com.addison.auto.tidy-downloads"
@@ -540,6 +546,185 @@ def test_the_wire_shape_is_the_one_the_frontend_parses(tmp_path):
         assert rows[1]["schedule"] == {"hour": 7, "minute": 30, "weekday": 1}
     finally:
         _shutdown(h.reader, h.thread)
+
+
+def test_every_row_says_its_schedule_in_one_plain_sentence(tmp_path):
+    """Phase 2's addition to the row (plan §4.2): the schedule in words, said ONCE
+    and said by the core.
+
+    Frozen copy, byte-for-byte, and asserted as literals rather than by calling
+    ``schedule_sentence`` again — a test that re-renders the sentence it is checking
+    would pass no matter what either side said, and the frontend pins these same
+    three strings so a reword lands as a red build on both sides rather than as new
+    wording in front of a person.
+
+    The third row is the one that matters most: a schedule column that says nothing
+    this vocabulary recognises answers the plain "no schedule" line and does not take
+    the other two off the list with it. That is a real state — a hand edit, an older
+    build, a payload restored from a sidecar.
+
+    Mutation: drop ``"scheduleSentence"`` from ``_automation_wire_row`` — this fails
+    on the first row, and the wire-shape test above fails with it."""
+    junk = {
+        **_INTERVAL,
+        "id": "auto-3",
+        "label": "com.addison.auto.junk",
+        "schedule_json": "every now and then",
+        "created_at": 1_700_000_200,
+    }
+    h = _server_with(tmp_path, _INTERVAL, _CALENDAR, junk)
+    try:
+        rows = _call(h, "automation.list", {}, 1)["automations"]
+        assert [r["scheduleSentence"] for r in rows] == [
+            "Every hour",                 # interval, 60 minutes, collapsed
+            "Every Monday at 7:30",       # calendar, weekday 1, two-digit minute
+            "No schedule saved yet.",     # a column this vocabulary cannot read
+        ]
+        # ...and the unreadable row is still a row, with everything else intact. One
+        # malformed schedule costs itself and nothing else.
+        assert rows[2]["schedule"] == {}
+        assert rows[2]["command"] == _INTERVAL["command"]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_sentence_and_the_numbers_beside_it_are_made_from_one_value(tmp_path):
+    """The words on the row and the numbers on the row are the SAME projection,
+    computed once per row — so they cannot disagree.
+
+    This is the assertion that makes that structural rather than hoped-for: the
+    sentence a payload carries must be exactly what ``schedule_sentence`` produces
+    from the ``schedule`` that payload also carries. A wire row rendered from a
+    second read of the column would pass every other test in this file and fail here
+    the moment the two reads see different things — which is precisely the case a
+    hand-edited or restored row creates.
+
+    The rows below are chosen so a second read would notice: one carries a key the
+    projection drops, one an out-of-range weekday the projection KEEPS (it is an
+    integer) and the sentence refuses, and one a weekday spelled as a WORD — where
+    the projection and a plain ``json.loads`` genuinely part company, the projection
+    dropping it to "Every day at 7:30" and the raw column reading "no schedule". A
+    surface that printed "Every 9 at 7:30" would be laundering a broken row into
+    confident prose about when a command runs.
+
+    Mutation: render the sentence from ``json.loads(row.schedule_json)`` — the
+    obvious "I already have the column here" shortcut — and the worded-weekday row
+    fails, because the payload's words and its numbers stop describing each other."""
+    extra_key = {
+        **_CALENDAR,
+        "id": "auto-3",
+        "label": "com.addison.auto.extra",
+        "schedule_json": json.dumps({"hour": 7, "minute": 30, "note": "run this first"}),
+        "created_at": 1_700_000_200,
+    }
+    bad_weekday = {
+        **_CALENDAR,
+        "id": "auto-4",
+        "label": "com.addison.auto.weekday",
+        "schedule_json": json.dumps({"hour": 7, "minute": 30, "weekday": 9}),
+        "created_at": 1_700_000_300,
+    }
+    worded_weekday = {
+        **_CALENDAR,
+        "id": "auto-5",
+        "label": "com.addison.auto.worded",
+        "schedule_json": json.dumps({"hour": 7, "minute": 30, "weekday": "Monday"}),
+        "created_at": 1_700_000_400,
+    }
+    h = _server_with(tmp_path, _INTERVAL, _CALENDAR, extra_key, bad_weekday, worded_weekday)
+    try:
+        rows = _call(h, "automation.list", {}, 1)["automations"]
+        for row in rows:
+            assert row["scheduleSentence"] == schedule_sentence(
+                row["scheduleKind"], row["schedule"]
+            ), row["id"]
+        # The dropped key leaves an every-day schedule behind, not a broken one...
+        assert rows[2]["schedule"] == {"hour": 7, "minute": 30}
+        assert rows[2]["scheduleSentence"] == "Every day at 7:30"
+        # ...and a weekday no calendar has is refused in words, though the number
+        # itself survives the projection (it is an integer, and the projection is a
+        # field filter, not a validator).
+        assert rows[3]["schedule"] == {"hour": 7, "minute": 30, "weekday": 9}
+        assert rows[3]["scheduleSentence"] == "No schedule saved yet."
+        # ...while a weekday spelled as a word never reaches the sentence at all: the
+        # projection drops it for not being a number, so what the person reads is the
+        # every-day schedule the row actually has.
+        assert rows[4]["schedule"] == {"hour": 7, "minute": 30}
+        assert rows[4]["scheduleSentence"] == "Every day at 7:30"
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_rpc_layer_cannot_put_a_plist_on_the_wire():
+    """THE SHELL NEVER TAKES A DOCUMENT FROM THE CORE (plan §5.8), so no payload may
+    normalise carrying one.
+
+    ``agent_core/automations.py`` builds a plist preview, and it is a good thing to
+    have: the person reads exactly what would be handed to the OS before they arm it.
+    But it is a PREVIEW for a human, not an artifact for a machine — phase 3's shell
+    surface takes typed fields and assembles the XML itself, enforcing the label
+    prefix and its one directory. A shell surface that accepted markup would be
+    ``run_command`` with extra steps, and the first step towards one is a payload
+    that already contains the markup: at that point "just pass it through" is a
+    one-line change nobody would think to question.
+
+    So the rule is structural and it is at the boundary, not at the shell: the module
+    that builds automation payloads cannot import the preview builder, cannot name
+    it, and cannot fetch it by string. What it may do is EXPLAIN it — the docstrings
+    are read too, and prose about why the document stays here is what should be
+    written there. Same instinct as ``test_registration_feeds_the_list_call_into_the
+    _catalog_rather_than_discarding_it``: read the source, because the mistake is a
+    line that can be quietly added and the behaviour it breaks has no other witness
+    until an OS is involved.
+
+    Mutation: add ``from agent_core.automations import plist_text`` to
+    rpc/automations.py, or send ``"plist": plist_text(row)`` on the row — either
+    fails here."""
+    source = _AUTOMATIONS_SRC.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                assert alias.name != "plist_text", (
+                    "rpc/automations.py imports plist_text: the preview is for a "
+                    "person to read, and the shell builds its own XML from typed "
+                    "fields (plan §5.8) — nothing may carry a document across this "
+                    "boundary"
+                )
+        elif isinstance(node, ast.Name):
+            assert node.id != "plist_text", f"rpc/automations.py names plist_text at line {node.lineno}"
+        elif isinstance(node, ast.Attribute):
+            assert node.attr != "plist_text", (
+                f"rpc/automations.py reaches automations.plist_text at line {node.lineno}"
+            )
+
+    # ...and not by string either, which is the way round an identifier check
+    # (``getattr(automations, "plist_text")``). Docstrings are excluded for the
+    # reason above; every other literal is checked, exactly as the
+    # cannot-reach-a-process pin does it.
+    docstrings = {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and id(node) not in docstrings
+        ):
+            assert "plist" not in node.value, (
+                f"rpc/automations.py builds a string naming a plist: {node.value!r}"
+            )
+
+    # The preview itself is still there and still tested — this pin is about WHERE it
+    # may be reached from, never about whether it exists.
+    assert callable(plist_text)
 
 
 def test_two_automations_cannot_share_a_label(store: Store):

@@ -112,6 +112,7 @@ from agent_core.snapshots.snapshot_manager import (
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import MAX_PERMISSION_DETAIL_CHARS, ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
+from agent_core.tools.create_automation import CreateAutomationTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
 from agent_core.tools.read_clipboard import ReadClipboardTool
@@ -185,6 +186,7 @@ def build_registry(
     shell_bridge=None,
     snapshot_manager_ref: Callable[[], SnapshotManager | None] | None = None,
     on_snapshot_captured: Callable[[], None] | None = None,
+    store_ref: Callable[[], Store | None] | None = None,
 ) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
@@ -214,11 +216,18 @@ def build_registry(
     restore point just yet" until a manager exists. ``on_snapshot_captured`` is run
     after a successful capture so a save via the tool clears the server's sticky
     capture-failure warning, exactly as the Settings control does.
+
+    ``store_ref`` is the same late-bound shape for the same reason (step 8 phase 2):
+    ``create_automation`` writes a row, and the ``Store`` is built later on the
+    worker thread. Left None, the tool registers normally and answers "can't save an
+    automation just yet" — the honest answer on a path with no store at all.
     """
     profile = profile or resolve_active_profile()
     # None → a ref that always resolves to no manager, so a snapshot_now built
     # without wiring (CLI, tests) is honest about not being able to save yet.
     manager_ref = snapshot_manager_ref if snapshot_manager_ref is not None else (lambda: None)
+    # Same shape, same honesty, for the tool that writes an automation row.
+    live_store_ref = store_ref if store_ref is not None else (lambda: None)
     all_tools = {
         "web_search": WebSearchTool(),
         "read_web_page": ReadWebPageTool(),
@@ -247,6 +256,13 @@ def build_registry(
     # bridge is injected here (used only by undo(), which gets no ExecutionContext).
     registry.register(ReadProjectFileTool(), open_only=True)
     registry.register(WriteProjectFileTool(shell_bridge=shell_bridge), open_only=True)
+    # Step 8 phase 2: WRITING an automation down (never arming one — that is phase 3
+    # and does not exist). ``open_only`` on write_project_file's exact terms (R3):
+    # hidden from the SAFE view and refused at dispatch outside OPEN, yet
+    # undo-ENFORCED, because it is MEDIUM with a real undo() that deletes the row it
+    # wrote. ``dev_only`` would waive that check for a tool that does not need the
+    # waiver. Its store is late-bound (see ``store_ref`` above).
+    registry.register(CreateAutomationTool(store_ref=live_store_ref), open_only=True)
     return registry
 
 
@@ -1911,6 +1927,16 @@ def main() -> None:
         srv = _server_holder.get("server")
         return srv._snapshot_manager if srv is not None else None
 
+    def _live_store() -> Store | None:
+        # Step 8 phase 2, and the same window as the manager above: the registry is
+        # built here, the Store is built later on the worker thread. Reads the
+        # PRIVATE field for the same reason — the property asserts before
+        # _ensure_built has run, and this ref must answer None during that window
+        # rather than raise. Resolved at execute time, on the worker thread, which
+        # is the thread that owns the connection.
+        srv = _server_holder.get("server")
+        return srv._store if srv is not None else None
+
     def _clear_snapshot_warning() -> None:
         # Sticky-warning parity with the Settings control (rpc/snapshots._snapshot_create):
         # a successful save proves writes work again, so the "couldn't save a restore
@@ -1925,6 +1951,7 @@ def main() -> None:
         shell_bridge=shell_bridge,
         snapshot_manager_ref=_live_snapshot_manager,
         on_snapshot_captured=_clear_snapshot_warning,
+        store_ref=_live_store,
     )
 
     # The real SQLite Store + UndoManager are built by the server on its worker

@@ -139,10 +139,18 @@ than working around it silently):
   self-scheduling, in any mode. Addison *may author* automation the OS runs (a
   launchd/cron entry, a watcher script) — like Claude Code scaffolding a cron job;
   the OS runs it, Addison never fires itself. Running/arming a powerful action
-  **will require** a **user-typed keyword prefix** (e.g. `!run …`) — designed, and
-  **not built**: it is Phase-2 step 8 and there is no keyword-gate code in the tree,
-  so nothing today can author or arm automation. Because it is
-  user-typed, observed/injected content can never supply it, so the prefix is also
+  **will require** a user-typed keyword — decided 2026-08-07 as a **per-automation
+  nonce** Addison shows and the person retypes
+  ([step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it) — designed,
+  and **not built**: it is step 8 phase 3 and there is no keyword-gate code in the
+  tree. What DOES exist (phases 1–2, 2026-08-07): Addison can *author* an
+  automation as an inert draft (`create_automation`, dev-only — a database row and
+  a preview, with no armed state anywhere), and **nothing in the tree can ARM
+  one** — there is no arming surface, and the phase-1 fence closed the generic
+  paths too (the OS-automation directories are un-trustable, un-writable under
+  the seatbelt, and refused in commands, as is invoking
+  `launchctl`/`crontab`/`at`/`batch`). Because the keyword is
+  user-typed, observed/injected content can never supply it, so the nonce is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
   "no scheduling in v1" wording.)
 - **G3 — Guaranteed rollback (the operative meaning of "safety").** Neither the

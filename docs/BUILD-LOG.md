@@ -12,7 +12,49 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
-## What shipped 08-07 (last) — step 8 phase 1: the fence, and a table nothing can fill
+## What shipped 08-07 (last) — step 8 phase 2: authoring, and a preview that may not travel
+
+`create_automation` (dev-only) writes a draft row; the Settings surface lists
+drafts; nothing can arm one. The plan's phase-2 entry owns the decisions; what
+belongs here is what building found.
+
+- **THE PLAN CONTRADICTED ITSELF AND THE BUILD CAUGHT IT.** Phase 2's sketch said
+  the plist is "previewed in chat and on the surface"; §5.8 says the shell never
+  takes a document from the core. A surface preview means the built plist crossing
+  IPC — a payload shape that would normalise exactly what §5.8 forbids. Resolved:
+  the preview is chat-only (the tool's result text, where the person is deciding),
+  the surface shows the row's truth (name, sentence, command), and a source test
+  pins that `rpc/automations.py` cannot even import `plist_text`. The
+  generalisation: when two sections of one plan disagree, the build is where it
+  surfaces — re-read the stricter section before implementing the looser one.
+- **`dev_only` WOULD HAVE WAIVED THE UNDO CHECK ON A TOOL THAT HAS A REAL UNDO.**
+  The brief said `dev_only=True`; the builder registered `open_only=True` instead
+  and was right: identical visibility and dispatch refusal, but `dev_only` also
+  sets `allow_missing_undo`, and a MEDIUM tool with a real `undo()` must stay
+  undo-ENFORCED so that dropping the method fails registration. The registry's R3
+  split exists for exactly this shape; reach for the narrow flag, not the alias.
+- **A WORD-TRIGGERED GATE NEEDS A CLAIM-SHAPED EXEMPTION.** The
+  capability-claims test scans tool descriptions for scheduling language;
+  `create_automation`'s honest description trips it while `primary.txt`'s "the
+  app cannot schedule anything" is still TRUE (a draft nothing can run schedules
+  nothing). The exemption is one id, OPEN-view only, with three staleness guards
+  — and its comment forbids its own growth: phase 3 changes the sentence, not
+  the exemption set.
+- **THE LABEL IS A FILENAME, SO UNIQUE ISN'T UNIQUE ENOUGH.** SQLite's UNIQUE
+  compares bytes; macOS folds Unicode when the label becomes
+  `<label>.plist`. Labels are therefore ASCII-folded at derivation
+  (`Zálohování` → `zalohovani`), and a name that folds to nothing is refused
+  with a plain sentence — recorded as the honest v1 answer for non-Latin names.
+- **TWO AGENTS, ONE MODULE, AND THE GROUNDWORK RULE HELD.** The coordinator wrote
+  the shared pure functions (`schedule_sentence`, `plist_text`) before spawning,
+  so the tool builder and the wire builder consumed a stable contract in
+  parallel; their only file intersection (`test_automations.py`'s exact-key-set
+  assertion) was a declared, forced edit. The near-miss worth recording: the
+  wire builder observed the tool builder's in-flight syntax error blocking
+  repo-wide pytest collection and correctly scoped its own runs around it —
+  disjoint FILE ownership does not make `pytest tests/` disjoint.
+
+## What shipped 08-07 (second-last) — step 8 phase 1: the fence, and a table nothing can fill
 
 The step-8 plan (the per-automation-nonce keyword gate; the owner's syntax decision
 was already on record) was written, and its first phase built the same day: the

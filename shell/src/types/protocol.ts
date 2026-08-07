@@ -157,12 +157,18 @@ export const Method = {
   // you see is what is really installed — after a restore, a reinstall, or a file
   // deleted by hand alike. Mirrored in protocol.py.
   //
-  // A row is {id, name, label, command, scheduleKind, schedule, createdInMode,
-  // createdAt}. `scheduleKind` is "interval" | "calendar" and `schedule` holds that
-  // kind's numbers and nothing else — {minutes} or {hour, minute, weekday?} — so a
-  // row can never carry a field of its own onto the screen. `command` is the exact
-  // text that would run, whole and unshortened, because reading it is the point.
-  // `createdInMode` is display-only provenance and decides nothing.
+  // A row is {id, name, label, command, scheduleKind, schedule, scheduleSentence,
+  // createdInMode, createdAt}. `scheduleKind` is "interval" | "calendar" and
+  // `schedule` holds that kind's numbers and nothing else — {minutes} or {hour,
+  // minute, weekday?} — so a row can never carry a field of its own onto the screen.
+  // `scheduleSentence` is those same numbers written out as one plain sentence, by
+  // the core: "Every 30 minutes", "Every Monday at 7:30", or "No schedule saved
+  // yet." when the row does not say. This side RENDERS that sentence and never
+  // writes its own out of the numbers — one wording, wherever a schedule is shown.
+  // `command` is the exact text that would run, whole and unshortened, because
+  // reading it is the point. `createdInMode` is display-only provenance and decides
+  // nothing. Nothing here is ever the file itself: your computer's job file is
+  // written by the Rust shell from those fields, so no payload carries a document.
   AutomationList: "automation.list",
   AutomationRemove: "automation.remove",
 
@@ -236,6 +242,49 @@ export interface PermissionRequest {
   label: string;
   description: string;
   riskTier: RiskTier;
+}
+
+/**
+ * One `automation.list` row — the work Addison has written down for THIS COMPUTER
+ * to run on a schedule (Phase-2 step 8). HAND-SYNCED with `_automation_wire_row`
+ * in agent_core/rpc/automations.py; the comment on `Method.AutomationList` above
+ * is the same shape said in plain words, and shell/src/__tests__/fixtures/
+ * automation.list.json is the generated artifact both sides are pinned against.
+ *
+ * NOTHING HERE SAYS WHETHER IT IS ARMED. No field carries it, because the
+ * operating system owns that answer and is asked for it when the surface loads
+ * (plan §5.6) — a remembered flag is exactly what a one-action restore would put
+ * back, and a restore cannot perform the ceremony that arming requires.
+ *
+ * And nothing here is the job FILE. The shell writes that from typed fields; a
+ * document crossing this boundary would make the webview a courier for something
+ * the highest-trust process is supposed to author (plan §5.8).
+ */
+export interface Automation {
+  /** The core's row id — what `automation.remove` takes. */
+  id: string;
+  /** The plain name this automation was saved under. */
+  name: string;
+  /** Its launchd label — the filename stem the shell would write, and unique. */
+  label: string;
+  /** The exact text that would run, whole. Never shortened: reading it is the point. */
+  command: string;
+  /** Which schedule vocabulary this row speaks. Absent when it says nothing usable. */
+  scheduleKind?: "interval" | "calendar";
+  /** That kind's numbers and nothing else — {minutes} or {hour, minute, weekday?}. */
+  schedule: Record<string, number>;
+  /**
+   * The schedule as ONE plain sentence, written by the core. Rendered here as it
+   * arrives: a second renderer on this side is how a row ends up reading "Every
+   * day at 7:5" or guessing am/pm on the one line a person checks before letting
+   * something run while they sleep. Falls back to the core's own "No schedule
+   * saved yet." — never to an invented schedule.
+   */
+  scheduleSentence: string;
+  /** Display-only provenance ("safe" | "open"). Decides nothing, here or anywhere. */
+  createdInMode?: "safe" | "open";
+  /** Unix seconds when it was saved, when the core reports it. */
+  createdAt?: number;
 }
 
 export interface ActivityUpdate {
