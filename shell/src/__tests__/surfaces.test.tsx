@@ -237,10 +237,15 @@ describe("the model popup", () => {
     render(
       <ModelPopup anchor={{ x: 900, y: 400 }} options={POPUP_OPTIONS} onClose={vi.fn()} />,
     );
-    const panel = screen.getByRole("listbox");
-    // x = right − 250; y = centre − 14 − (selected index 1) × 29.
+    const panel = screen.getByRole("tree");
+    // x = right − 250, still closed-form. The vertical placement is not: it is
+    // the click point less the selected row's MEASURED centre inside the panel,
+    // because headings and folded rows sit between the two. jsdom lays nothing
+    // out, so every row measures as a zero-height sliver at the panel's top and
+    // the panel lands on the click point exactly — the arithmetic itself is
+    // pinned in modelPopupGroups.test.tsx, over synthetic measurements.
     expect(panel.style.left).toBe("650px");
-    expect(panel.style.top).toBe("357px");
+    expect(panel.style.top).toBe("400px");
     expect(panel.style.width).toBe("270px");
   });
 
@@ -254,7 +259,7 @@ describe("the model popup", () => {
         onClose={vi.fn()}
       />,
     );
-    const panel = screen.getByRole("listbox");
+    const panel = screen.getByRole("tree");
     expect(panel.style.left).toBe("12px");
     expect(panel.style.top).toBe("12px");
   });
@@ -269,7 +274,7 @@ describe("the model popup", () => {
         onClose={onClose}
       />,
     );
-    fireEvent.click(screen.getByRole("option", { name: /Most capable/ }));
+    fireEvent.click(screen.getByRole("treeitem", { name: /Most capable/ }));
     expect(onPick).toHaveBeenCalledTimes(1);
 
     fireEvent.mouseDown(document.body);

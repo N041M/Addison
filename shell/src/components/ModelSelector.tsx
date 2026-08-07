@@ -9,6 +9,10 @@
 // "Effort" section follows in the same row idiom. A footer hint says where the
 // permanent choice lives: this menu is per message.
 //
+// THE MODEL LIST IS A FOLDER TREE (owner decision 2026-08-07 — company → family
+// → model, one folder open at a time). `lib/modelGroups.ts` owns the shape and
+// the reasoning; this file draws it and gives it a keyboard.
+//
 // ROWS ARE THE REAL CATALOG. Every entry comes from `model.availableRoles` —
 // cloud models from the connected providers, plus whatever is set up under the
 // local role. `free` is never assumed: the note says so only if the core's own
@@ -18,30 +22,34 @@
 // nothing on its own authority.
 //
 // ACCESSIBILITY IS NOT RESTYLED AWAY. The readers are 54 and 68: the label stays
-// a real button (aria-haspopup="listbox"), the model list stays a role="listbox"
-// with role="option" rows and Arrow/Home/End/Enter, focus moves into the list on
-// open and back to the label on close, and outside-click dismisses.
+// a real button (aria-haspopup="tree"), the list is a role="tree" of
+// role="treeitem" rows carrying aria-level and aria-expanded, with the WAI-ARIA
+// tree keys (Up/Down walk what is drawn, Right opens a folder, Left closes it or
+// climbs to its parent, Enter picks), focus moves into the tree on open and back
+// to the label on close, and outside-click dismisses. A listbox cannot say
+// "folder", which is why this is no longer one.
 //
 // TAB WALKS THE PANEL, it does not leave it. Tab used to close the menu
 // outright, which meant the three `aria-pressed` Effort buttons could never take
 // focus: a keyboard user could choose a model but never the effort the composer
 // label is advertising back at them ("Claude Opus 4.8 · high"). Tab now cycles
-// list → effort → list; Escape is the way out and returns focus to the label.
+// tree → effort → tree; Escape is the way out and returns focus to the label.
 // When there is no Effort section there is nothing to cycle to, so Tab keeps its
 // old behaviour and leaves.
 
-import {
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
-import { initialCollapsedGroups, modelListRows } from "../lib/modelGroups";
+import {
+  initialFolderState,
+  modelListRows,
+  rowRenderKey,
+  toggleCompany,
+  toggleFamily,
+  type FolderState,
+  type ModelListRow,
+} from "../lib/modelGroups";
 
 interface Props {
   roles: RoleOption[];
@@ -99,7 +107,7 @@ interface Option {
   id: string;
   /** Row label — the model's own name, never provider-suffixed (see `group`). */
   label: string;
-  /** The company heading this row sits under ("Google", "On this computer"). */
+  /** The company folder this row sits under ("Google", "On this computer"). */
   group: string;
   /** Compact label for the composer's own label (never provider-suffixed). */
   pillLabel: string;
@@ -114,6 +122,9 @@ interface Option {
  * an exit that matches its entrance reads as sluggish, because nobody is waiting
  * to read anything on the way out. */
 const MENU_EXIT_MS = 140;
+
+/** Left padding per tree level, in the panel's own px scale. */
+const INDENT = ["pl-2.5", "pl-2.5", "pl-5", "pl-7"];
 
 export function ModelSelector({
   roles,
@@ -158,10 +169,9 @@ export function ModelSelector({
     ? selectedEffort
     : middleEffort;
 
-  // Attribution moved from a per-row suffix ("GPT-4.1 — OpenAI") to a heading per
-  // company, so it is said once per group instead of once per row — and the row
-  // keeps its full width for the model's own name. The core already emits a
-  // provider's models together, so grouping is preserved here, never imposed.
+  // Attribution moved from a per-row suffix ("GPT-4.1 — OpenAI") to a company
+  // folder, so it is said once per company instead of once per row — and the row
+  // keeps its full width for the model's own name.
   const options: Option[] = [
     ...cloud.map((m) => ({
       role: "primary" as ModelRole,
@@ -169,7 +179,8 @@ export function ModelSelector({
       label: m.label,
       group: m.providerLabel ?? "Cloud",
       pillLabel: m.label,
-      // Only the core may call a model free (see the file header).
+      // Only the core may call a model free, and only the core may call one
+      // refused: both are reports off the wire (see the file header).
       note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
       unavailable: Boolean(m.unavailable),
       current: !onLocal && m.id === activeCloud?.id,
@@ -184,10 +195,8 @@ export function ModelSelector({
       current: onLocal && m.id === activeLocalId,
     })),
   ];
-  const currentIndex = Math.max(
-    0,
-    options.findIndex((o) => o.current),
-  );
+  const isCurrent = (o: Option) => o.current;
+  const currentOption = options[Math.max(0, options.findIndex(isCurrent))];
 
   // The composer's label: the active model, plus its effort word when it has one.
   const activeLabel = onLocal
@@ -221,62 +230,77 @@ export function ModelSelector({
   // or the effect below has nothing to move focus to and the menu opens with
   // focus stranded on <body>. Asking for it a render later cost exactly that.
   const menuPresent = open || exiting;
-  const [activeIndex, setActiveIndex] = useState(currentIndex);
-  // Folded companies. Re-seeded every time the menu OPENS (below) rather than
-  // held across openings: the menu is a glance surface, and yesterday's expansion
-  // is a stale answer to "what is on right now?".
-  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
-    initialCollapsedGroups(options, (o) => o.current),
+
+  // Which folders are open. Re-seeded every time the menu OPENS (below) rather
+  // than held across openings: the menu is a glance surface, and yesterday's
+  // expansion is a stale answer to "what is on right now?".
+  const [folders, setFolders] = useState<FolderState>(() =>
+    initialFolderState(options, isCurrent),
   );
-  const toggleGroup = (group: string) =>
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (!next.delete(group)) next.add(group);
-      return next;
-    });
-  const rows = modelListRows(options, collapsed);
-  // ARROW KEYS WALK WHAT IS ON SCREEN, not what is in `options`. Collapsing hides
-  // rows without removing them, so navigating the full array would step onto rows
-  // nobody can see — `aria-activedescendant` would name an element that is not
-  // rendered, and the list would appear to freeze for a keyboard user.
-  //
-  // `activeIndex` still indexes `options`, so identity survives a fold/unfold;
-  // only the ORDER of travel comes from here.
-  const visible = rows.flatMap((r) => (r.kind === "option" ? [r.index] : []));
-  const stepActive = (delta: number) =>
-    setActiveIndex((i) => {
-      if (visible.length === 0) return i;
-      const at = visible.indexOf(i);
-      // Not visible (its group was just folded): re-enter at the nearest end
-      // rather than jumping to an arbitrary row.
-      if (at === -1) return delta > 0 ? visible[0] : visible[visible.length - 1];
-      return visible[(at + delta + visible.length) % visible.length];
-    });
+  const rows = modelListRows(options, folders);
+  /** What a row IS, across a fold: a model keeps its identity when its folders
+   * move, so the keyboard's cursor survives an accordion it did not ask for. */
+  const rowKeyOf = (row: ModelListRow<Option>) =>
+    row.kind === "option" ? `m:${row.option.role}:${row.option.id}` : rowRenderKey(row);
+  const rowKeys = rows.map(rowKeyOf);
+  const [activeKey, setActiveKey] = useState<string>("");
+  // RESOLVED AGAINST WHAT IS DRAWN, every render. `aria-activedescendant` naming
+  // an element that is not in the document is the classic failure of this
+  // pattern — a screen reader is told the cursor is on nothing — and an
+  // accordion closes over the cursor from three directions (its own folder, a
+  // parent, a sibling company opening). Deriving the id from the rendered rows
+  // makes that unrepresentable rather than a case to remember.
+  const activeAt = Math.max(0, rowKeys.indexOf(activeKey));
+  const treeId = useId();
+  const rowDomId = (i: number) => `${treeId}-row-${i}`;
+
+  const stepActive = (delta: number) => {
+    if (rows.length === 0) return;
+    setActiveKey(rowKeys[(activeAt + delta + rows.length) % rows.length]);
+  };
+  /** The folder row this row sits inside: the first shallower row above it. */
+  const parentAt = (at: number) => {
+    const level = rows[at]?.level ?? 1;
+    for (let i = at - 1; i >= 0; i -= 1) if (rows[i].level < level) return i;
+    return at;
+  };
+  function activateFolder(row: ModelListRow<Option>) {
+    if (row.kind === "option") return;
+    setFolders((prev) =>
+      row.kind === "company"
+        ? toggleCompany(prev, row.key, options, isCurrent)
+        : toggleFamily(prev, row.key),
+    );
+    // The cursor follows the folder that was acted on. It is the one row certain
+    // to survive the accordion — opening Google closes Anthropic underneath a
+    // cursor that was standing in it.
+    setActiveKey(rowRenderKey(row));
+  }
+
   const rootRef = useRef<HTMLDivElement | null>(null);
   const labelRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const effortRef = useRef<HTMLDivElement | null>(null);
-  const listboxId = useId();
-  const optionId = (i: number) => `${listboxId}-opt-${i}`;
 
-  // On open, aim the highlight at the current selection and move focus into the
-  // list (listbox pattern with aria-activedescendant).
+  // On open, open the path to the model in effect, put the cursor on it, and
+  // move focus into the tree (aria-activedescendant pattern).
   useLayoutEffect(() => {
     if (open) {
-      setActiveIndex(currentIndex);
-      setCollapsed(initialCollapsedGroups(options, (o) => o.current));
+      setFolders(initialFolderState(options, isCurrent));
+      setActiveKey(currentOption ? `m:${currentOption.role}:${currentOption.id}` : "");
       listRef.current?.focus();
     }
     // Only re-run when the menu toggles.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // Keep the highlighted row scrolled into view as the user arrows through.
+  // Keep the cursor's row scrolled into view as it walks, and after a fold moves
+  // the rows under it.
   useEffect(() => {
     if (!open) return;
-    document.getElementById(optionId(activeIndex))?.scrollIntoView({ block: "nearest" });
+    document.getElementById(rowDomId(activeAt))?.scrollIntoView({ block: "nearest" });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, open]);
+  }, [activeKey, folders, open]);
 
   // Outside-click closes.
   useEffect(() => {
@@ -305,7 +329,8 @@ export function ModelSelector({
     close();
   }
 
-  function onListKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+  function onTreeKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const row = rows[activeAt];
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
@@ -316,45 +341,50 @@ export function ModelSelector({
         stepActive(-1);
         break;
       case "ArrowRight":
-      case "ArrowLeft": {
-        // Fold and unfold the active row's company. This is how a keyboard
-        // reaches an expansion at all: the headings are buttons for the mouse,
-        // but putting them in the tab order would break the panel's Tab
-        // contract (list -> effort -> list), so the listbox grows the
-        // left/right idiom instead of the menu growing tab stops.
+        // A closed folder opens; anything else walks on. This is how a keyboard
+        // reaches a folder at all: the rows are clickable for the mouse, but
+        // putting each one in the tab order would break the panel's Tab contract
+        // (tree -> effort -> tree), so the tree grows the left/right idiom
+        // instead of the menu growing tab stops.
         e.preventDefault();
-        const group = options[activeIndex]?.group;
-        if (!group) break;
-        const wantOpen = e.key === "ArrowRight";
-        setCollapsed((prev) => {
-          const next = new Set(prev);
-          if (wantOpen) next.delete(group);
-          else next.add(group);
-          return next;
-        });
+        if (row && row.kind !== "option" && !row.open) activateFolder(row);
+        else stepActive(1);
+        break;
+      case "ArrowLeft": {
+        e.preventDefault();
+        if (!row) break;
+        // An open folder closes; anything else climbs to the folder it is in.
+        if (row.kind !== "option" && row.open) {
+          activateFolder(row);
+          break;
+        }
+        const parent = parentAt(activeAt);
+        if (parent !== activeAt) setActiveKey(rowKeys[parent]);
         break;
       }
       case "Home":
         e.preventDefault();
-        if (visible.length) setActiveIndex(visible[0]);
+        if (rows.length) setActiveKey(rowKeys[0]);
         break;
       case "End":
         e.preventDefault();
-        if (visible.length) setActiveIndex(visible[visible.length - 1]);
+        if (rows.length) setActiveKey(rowKeys[rows.length - 1]);
         break;
       case "Enter":
       case " ":
         e.preventDefault();
-        if (options[activeIndex]) pickModel(options[activeIndex]);
+        if (!row) break;
+        if (row.kind === "option") pickModel(row.option);
+        else activateFolder(row);
         break;
       default:
         break;
     }
     // Escape and Tab are handled once, on the panel, so they behave the same
-    // whether focus is on the list or on an Effort button.
+    // whether focus is on the tree or on an Effort button.
   }
 
-  /** The panel's tab ring, in DOM order: the model listbox, then each Effort
+  /** The panel's tab ring, in DOM order: the model tree, then each Effort
    * button. */
   function panelStops(): HTMLElement[] {
     const stops: HTMLElement[] = [];
@@ -393,7 +423,7 @@ export function ModelSelector({
         ref={labelRef}
         type="button"
         data-scramble="440"
-        aria-haspopup="listbox"
+        aria-haspopup="tree"
         aria-expanded={open}
         disabled={blockOpen}
         aria-label={
@@ -449,89 +479,80 @@ export function ModelSelector({
 
           <div
             ref={listRef}
-            role="listbox"
+            role="tree"
             tabIndex={-1}
             aria-label="Which model Addison uses"
-            aria-activedescendant={optionId(activeIndex)}
-            onKeyDown={onListKeyDown}
+            aria-activedescendant={rows.length ? rowDomId(activeAt) : undefined}
+            onKeyDown={onTreeKeyDown}
             className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
-            {rows.map((row) => {
-              if (row.kind === "family") {
-                // Plain, and deliberately not foldable — see ModelPopup.
-                return (
-                  <div
-                    key={`f:${row.key}`}
-                    role="presentation"
-                    className="px-2.5 pb-0.5 pt-3 font-mono text-[10px] uppercase tracking-wider text-disabled"
-                  >
-                    {row.family}
-                  </div>
-                );
-              }
-              if (row.kind === "heading") {
+            {rows.map((row, i) => {
+              const active = i === activeAt;
+              if (row.kind !== "option") {
                 return (
                   <button
-                    key={`h:${row.key}`}
+                    key={rowRenderKey(row)}
+                    id={rowDomId(i)}
                     type="button"
-                    // A real button because it acts, but OUT of the tab order
-                    // (tabIndex -1): Tab cycles list -> effort -> list in this
-                    // panel, and adding a stop per company would rewrite that
-                    // contract for anyone who already knows it. Keyboard users
-                    // fold with Left/Right on the row itself instead.
+                    role="treeitem"
+                    aria-level={row.level}
+                    aria-expanded={row.open}
+                    // OUT of the tab order (tabIndex -1): Tab cycles tree ->
+                    // effort -> tree in this panel, and adding a stop per folder
+                    // would rewrite that contract for anyone who already knows
+                    // it. The keyboard folds with Left/Right on the row instead.
                     tabIndex={-1}
-                    aria-expanded={!row.collapsed}
-                    onClick={() => toggleGroup(row.key)}
+                    onClick={() => activateFolder(row)}
+                    onMouseEnter={() => setActiveKey(rowRenderKey(row))}
                     className={
-                      "flex w-full items-baseline gap-2 px-2.5 pb-0.5 pt-1 text-left font-mono " +
-                      "text-[10px] text-disabled transition-colors hover:text-muted"
+                      "flex w-full items-baseline gap-2 py-[5px] pr-2.5 text-left font-mono " +
+                      "text-[10px] transition-colors hover:text-muted " +
+                      INDENT[row.level] +
+                      (active ? " bg-line text-muted" : " text-disabled")
                     }
                   >
-                    <span className="min-w-0 truncate">{row.key}</span>
-                    <span className="flex-1" />
-                    <span className="shrink-0">
-                      {row.collapsed ? row.total : "collapse"}
+                    {/* Upper-case belongs to the family LABEL, not the row — on
+                        the row it shouted the "collapse" hint too. */}
+                    <span
+                      className={
+                        "min-w-0 truncate" +
+                        (row.kind === "family" ? " uppercase tracking-wider" : "")
+                      }
+                    >
+                      {row.key}
                     </span>
-                  </button>
-                );
-              }
-              if (row.kind === "more") {
-                return (
-                  <button
-                    key={`m:${row.key}`}
-                    type="button"
-                    tabIndex={-1}
-                    onClick={() => toggleGroup(row.key)}
-                    className={
-                      "flex w-full cursor-pointer items-baseline rounded-[4px] px-2.5 py-[7px] " +
-                      "text-left font-mono text-[10px] text-disabled transition-colors " +
-                      "hover:bg-line hover:text-muted"
-                    }
-                  >
-                    {row.hidden} more…
+                    <span className="flex-1" />
+                    <span className="shrink-0">{row.open ? "collapse" : row.total}</span>
                   </button>
                 );
               }
               const o = row.option;
-              const i = row.index;
               return (
                 <div
                   key={`${o.role}:${o.id}`}
-                  id={optionId(i)}
-                  role="option"
+                  id={rowDomId(i)}
+                  role="treeitem"
+                  aria-level={row.level}
                   aria-selected={o.current}
                   onClick={() => pickModel(o)}
-                  onMouseEnter={() => setActiveIndex(i)}
+                  onMouseEnter={() => setActiveKey(`m:${o.role}:${o.id}`)}
                   className={
-                    "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
-                    (i === activeIndex ? "bg-line" : "")
+                    "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] py-[7px] pr-2.5 " +
+                    INDENT[row.level] +
+                    (active ? " bg-line" : "")
                   }
                 >
                   <span
                     className={
                       "min-w-0 truncate font-mono text-[10.5px] " +
-                      (o.unavailable ? "text-disabled line-through" :
-                        o.current ? "text-ink" : "text-muted")
+                      // Refused beats current: a model the core has watched a
+                      // provider refuse reads as struck through even where it is
+                      // the one in effect, which is the state worth seeing most.
+                      (o.unavailable
+                        ? "text-disabled line-through"
+                        : o.current
+                          ? "text-ink"
+                          : "text-muted")
                     }
                   >
                     {o.label}
@@ -591,6 +612,10 @@ export function ModelSelector({
             </>
           )}
 
+          {/* The second line is the same honesty the Settings popup carries: a
+              provider's catalogue lists models a given key may not be allowed to
+              call, and which ones is not knowable until one is called. One line
+              under the list beats a guess on every row. */}
           <div className="mt-1.5 border-t border-line px-2.5 pb-1 pt-2 font-mono text-[10px] text-disabled">
             picked per message · default in Settings
             <div className="pt-1">not every model works with every key</div>

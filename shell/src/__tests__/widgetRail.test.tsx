@@ -111,12 +111,12 @@ describe("the model menus close with an animation", () => {
     );
     const trigger = screen.getByRole("button", { name: /^Model:/ });
     fireEvent.click(trigger);
-    expect(screen.getByRole("listbox")).toBeTruthy();
+    expect(screen.getByRole("tree")).toBeTruthy();
 
     fireEvent.click(trigger); // close
 
     // Gone from the a11y tree at once...
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("tree")).toBeNull();
     // ...but still painted, carrying the exit animation, so it is not a plop.
     const panel = container.querySelector('[aria-hidden="true"][role="presentation"]');
     expect(panel, "the closing panel should still be painted").toBeTruthy();
