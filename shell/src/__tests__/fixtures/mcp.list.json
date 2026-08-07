@@ -5,7 +5,39 @@
       "name": "Fixture tool server",
       "url": "https://tools.example/mcp",
       "enabled": true,
-      "addedAt": 4102444800
+      "addedAt": 4102444800,
+      "status": "never"
+    },
+    {
+      "id": "mcp-fixture-1",
+      "name": "Checked server",
+      "url": "https://checked.example/mcp",
+      "enabled": true,
+      "addedAt": 4102444801,
+      "status": "ok",
+      "checkedAt": 4102444800,
+      "toolCount": 2,
+      "tools": [
+        {
+          "name": "search_docs",
+          "description": "Search the team's documentation."
+        },
+        {
+          "name": "open_ticket",
+          "description": "Open a support ticket."
+        }
+      ],
+      "skipped": 1
+    },
+    {
+      "id": "mcp-fixture-2",
+      "name": "Unreachable server",
+      "url": "https://offline.example/mcp",
+      "enabled": true,
+      "addedAt": 4102444802,
+      "status": "failed",
+      "checkedAt": 4102444800,
+      "error": "Addison couldn't reach that server. Check the address, and that the server is running."
     }
   ]
 }

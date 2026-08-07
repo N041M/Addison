@@ -118,6 +118,20 @@ MCP_TRANSPORT_HTTP_ONLY = True
 # genuinely decided and built.
 MCP_IS_DEV_ONLY_IN_V1 = True
 
+# MCP dispatch (step 7, phase 2 built 2026-08-07). NOTHING an MCP server offers is
+# callable yet: an `mcp:` id is absent from `visible_tools(mode)` in every mode, and
+# both dispatch paths refuse one that is named anyway. Registered because this is
+# the shape of stale sentence phase 1 already produced once — every document had to
+# say "nothing is callable", and phase 2 changed HALF of that sentence (Addison can
+# now see a server's tools) while leaving the other half exactly as true. A document
+# that rounds "can see" up to "can use" tells the next agent that dispatch exists,
+# and dispatch is the phase where a stranger's code starts running.
+#
+# Flip this the day phase 3 ships, IN THE SAME COMMIT as
+# `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` — that constant and this one are the same
+# fact, one enforced in code and one in prose.
+MCP_TOOLS_ARE_NOT_CALLABLE = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -460,6 +474,61 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "SAFE admission has shipped — this line still says MCP is dev-only. Amend "
                 "it, or link to docs/step-7-mcp-plan.md, which owns the admission rule."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- MCP dispatch: nothing a server offers is callable yet -------------
+    Claim(
+        id="mcp-tools-are-not-callable",
+        owner="docs/step-7-mcp-plan.md",
+        holds=MCP_TOOLS_ARE_NOT_CALLABLE,
+        true_state=(
+            "Step 7 phase 2 (2026-08-07) can SEE what a tool server offers and can run "
+            "none of it. An mcp: id is absent from visible_tools(mode) in every mode, and "
+            "both dispatch paths refuse one. Dispatch is phase 3."
+        ),
+        false_state=(
+            "Phase 3 has shipped, so an MCP tool really is invoked through the gate and a "
+            "document may describe Addison using one."
+        ),
+        # The offence is a document promoting "can see" to "can use" — asserted of
+        # Addison, in the present tense. Anchored on the SUBJECT (Addison, not a
+        # server and not a person) plus a use-verb, because "you can use a tool
+        # server to..." and "a server's tools are used by its own author" are both
+        # ordinary sentences that say nothing about this phase. The `run`/`call`
+        # halves are the shapes phase 3's own prose will use, which is the point:
+        # they must not appear until it ships.
+        while_true=Wrong(
+            pattern=(
+                r"Addison\s+(?:can|does|will)\s+(?:now\s+)?(?:use|run|call|invoke)\s+"
+                r"(?:a\s+|the\s+|its\s+|those\s+|these\s+|their\s+)?"
+                r"(?:tool[- ]server|MCP)[^.\n]{0,20}\btools?\b"
+                r"|MCP tools? (?:are|is) (?:now )?(?:callable|dispatched|runnable)"
+            ),
+            fix=(
+                "Phase 2 discovers tools and runs none of them: an mcp: id is kept out of "
+                "visible_tools in every mode and refused at both dispatch paths. Amend the "
+                "sentence to say Addison can SEE what a server offers, or link to "
+                "docs/step-7-mcp-plan.md §4.2, which owns the phase. If phase 3 has "
+                "genuinely shipped, flip MCP_TOOLS_ARE_NOT_CALLABLE in tests/doc_claims.py "
+                "AND mcp_catalog.MCP_TOOLS_ARE_CALLABLE in the SAME commit."
+            ),
+            # Prose that states the limit in the same breath is the correct shape —
+            # "Addison can't use those tools yet", "it still can't run them".
+            excused_by=r"can't|cannot|not yet|isn't callable|is not callable|phase 3",
+            window=200,
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"nothing (?:a|the) (?:tool )?server offers is callable"
+                r"|Addison can see this tool but can't use it yet"
+                r"|no MCP tool is callable"
+            ),
+            fix=(
+                "Phase 3 has shipped — this line still says nothing an MCP server offers "
+                "can run. Amend it, or link to docs/step-7-mcp-plan.md, which owns the "
+                "phase order."
             ),
         ),
         exempt=FROZEN,

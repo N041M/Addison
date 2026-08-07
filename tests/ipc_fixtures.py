@@ -351,24 +351,55 @@ def _workspace_list_fixture(server: JsonRpcServer) -> dict:
 
 
 def _mcp_list_fixture(server: JsonRpcServer) -> dict:
-    """An mcp.list payload with a row in it (step 7 phase 1) — an empty list would
+    """An mcp.list payload with a row in it (step 7 phases 1–2) — an empty list would
     parse the same whichever key the frontend read, which is exactly how the
     `roots`/`folders` mismatch above survived both suites. Written through the store
     and read back through the real handler, so the camelCase mapping (`created_at`
     -> `addedAt`) is pinned rather than assumed. The address is a fixed literal.
 
-    Removed again afterwards so the rest of the fixtures (snapshot payloads capture
-    this table) stay byte-stable."""
-    server.store.insert_mcp_server(
-        id="mcp-fixture-0",
-        name="Fixture tool server",
-        url="https://tools.example/mcp",
-        created_at=_T0,
+    THREE rows, one per discovery state, because phase 2's shape is not one shape:
+    an unchecked row carries no `checkedAt` at all, a checked one carries its tools
+    and counts, and a failed one carries a plain sentence and no tool list. A fixture
+    with only the happy row would let the parser drop `error`, or invent a `toolCount`
+    for a server that answered nothing, and both suites would stay green.
+
+    The discovered row is produced through the REAL catalog and the REAL registry, so
+    the wire shape is what a genuine refresh emits — including a tool refused for an
+    id collision, which is what `skipped` counts. Everything is torn down afterwards
+    so the rest of the fixtures (snapshot payloads capture this table) stay
+    byte-stable and no fixture tool is left in the registry."""
+    from agent_core.mcp_client import DiscoveredTool
+
+    rows = [
+        ("mcp-fixture-0", "Fixture tool server", "https://tools.example/mcp"),
+        ("mcp-fixture-1", "Checked server", "https://checked.example/mcp"),
+        ("mcp-fixture-2", "Unreachable server", "https://offline.example/mcp"),
+    ]
+    for index, (server_id, name, url) in enumerate(rows):
+        server.store.insert_mcp_server(id=server_id, name=name, url=url, created_at=_T0 + index)
+    server._mcp_catalog.record_success(
+        server.tool_registry,
+        server_id="mcp-fixture-1",
+        server_name="Checked server",
+        tools=(
+            DiscoveredTool("search_docs", "Search the team's documentation."),
+            DiscoveredTool("open_ticket", "Open a support ticket."),
+        ),
+        skipped=1,
+        checked_at=_T0,
+    )
+    server._mcp_catalog.record_failure(
+        server.tool_registry,
+        server_id="mcp-fixture-2",
+        error="Addison couldn't reach that server. Check the address, and that the server is running.",
+        checked_at=_T0,
     )
     try:
         return server._mcp_list()
     finally:
-        server.store.delete_mcp_server("mcp-fixture-0")
+        for server_id, _name, _url in rows:
+            server._mcp_catalog.forget(server.tool_registry, server_id)
+            server.store.delete_mcp_server(server_id)
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:

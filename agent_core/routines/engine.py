@@ -284,6 +284,29 @@ class RoutineEngine:
                             step_log,
                         )
                 continue
+            # DISCOVERED BUT NOT WIRED (step 7 phase 2). The live loop's twin, here
+            # because a boundary only one dispatch path enforces is not a boundary
+            # (SAFE invariant 3's reasoning) — and a routine is the path that runs
+            # with nobody watching, so a step saved naming an MCP tool must refuse
+            # here rather than reach a server. Shaped as a FAILED STEP, so
+            # `on_failure` still decides what happens next, exactly like the branch
+            # above. No audit row, for the reason the live loop's comment gives.
+            not_callable_refusal = self.tool_registry.refuse_if_not_callable(tool_id)
+            if not_callable_refusal is not None:
+                result = ToolResult(success=False, content=not_callable_refusal)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, not_callable_refusal))
+                if step.on_failure == "abort":
+                    return self._finish(
+                        run_id, "failed", step_results, not_callable_refusal, step_log
+                    )
+                if step.on_failure == "ask_user":
+                    if not self._on_ask_user(step, run_id, not_callable_refusal):
+                        return self._finish(
+                            run_id, "cancelled", step_results, "Stopped at your request.",
+                            step_log,
+                        )
+                continue
             # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
             # naming Addison's own restore storage or the user's credential stores
             # does not run, and is never offered as a card. A routine is persisted,

@@ -27,6 +27,8 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
+    from agent_core.mcp_catalog import McpCatalog
+    from agent_core.mcp_client import Discovery
     from agent_core.memory.store import Store
     from agent_core.models_catalog import CloudModel
     from agent_core.orchestrator import Conversation, Orchestrator
@@ -96,6 +98,14 @@ class ServerContext:
         _providers_reconnected: bool
         _ollama_base_url: str | None
         _ollama_client: Any | None
+        # Step 7 phase 2. The discovery state of every configured tool server, IN
+        # MEMORY ONLY — a catalog is the server's truth, not Addison's configuration
+        # (scoping decision 3, 2026-08-07), and mcp_servers is snapshot-captured, so
+        # persisting a stranger's names and prose there would copy untrusted text
+        # into every later payload and sidecar. ``_mcp_discover`` is the network seam
+        # (``mcp_client.discover_tools`` in the app, a fake in tests).
+        _mcp_catalog: McpCatalog
+        _mcp_discover: Callable[[str], Discovery]
         _setup_prompt: str | None
         _primary_prompt: str | None
         _perm_lock: threading.Lock
@@ -142,6 +152,10 @@ class ServerContext:
         ) -> str | None: ...
         def _set_provider_models(self, provider_id: str, models: list[CloudModel]) -> None: ...
         def _connections(self, latency: list[dict]) -> list[dict]: ...
+        # Step 7 phase 2: the post-restore resync rpc/snapshots calls, on the
+        # _resync_providers precedent — mcp_servers is captured, the registry
+        # entries a checked server made are not.
+        def _resync_mcp_after_restore(self) -> None: ...
 
         # --- G3 hooks called from OTHER namespace mixins (profile/providers/
         #     skills/widgets/conversation) and from the worker loop. Declared here

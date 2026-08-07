@@ -1200,6 +1200,7 @@ export function App() {
                 roles={models.roles}
                 trustedRoots={trustedRoots}
                 showTrustedFolders={showTrustedFolders}
+                mcpServers={mcpState.servers}
                 workspaceBusy={workspaceState.busy}
                 onAddKey={handleStartSetup}
                 onStopTrusting={(dir) => void workspaceState.handleRevoke(dir)}

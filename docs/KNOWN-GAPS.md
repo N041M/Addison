@@ -322,6 +322,22 @@ against the tree on 2026-07-26:
   described by the model as a malfunction; routine-save affordance is a small
   link in the activity strip.
 
+**Opened by step 7 phase 2 (2026-08-07):**
+
+- **A refused MCP tool call leaves no audit row.** Both dispatch paths refuse an
+  `mcp:` id (`registry.refuse_if_not_callable`), and unlike every neighbouring
+  refusal — `dev_only`, `forbidden`, `confined_out` — that branch writes nothing to
+  `tool_audit`. Deliberate, not forgotten: `tool_audit.outcome` is a CHECK-constrained
+  vocabulary, so widening it is a schema migration and not an insert (`schema.sql`
+  says exactly that of the widget kinds), and a `CREATE TABLE IF NOT EXISTS` leaves
+  every existing database on the old CHECK — a new value would work on a fresh DB
+  and be swallowed by `_audit`'s best-effort `except` on an upgraded one, which is
+  worse than no row at all. **Phase 3 owns the fix**: it makes MCP dispatch real and
+  its plan entry already promises `tool_audit` on every MCP outcome, so the
+  migration belongs beside that work. The exposure until then is small — the model
+  is never told an `mcp:` id exists, so reaching this branch means something odd
+  already happened, and the refusal itself holds.
+
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 
 - **The webview cannot open an external link, at all.** `main.rs` registers three

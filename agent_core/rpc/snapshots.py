@@ -167,6 +167,15 @@ class SnapshotsMixin(ServerContext):
             self.permission_gate.revoke_all()
         except Exception:
             pass
+        # (f) mcp_servers is captured, but the tools a checked server registered are
+        #     in memory — so a restore that drops a server would otherwise leave that
+        #     stranger's tool ids in the shared registry, belonging to nothing the
+        #     person can see or remove (step 7 phase 2). Rolling back must never be
+        #     the way to acquire a tool.
+        try:
+            self._resync_mcp_after_restore()
+        except Exception:
+            pass
         # (e) A restored provider row comes back saying connected, but keys are
         #     excluded from snapshots by design (G1) — so one whose keychain entry
         #     was removed since would look fine and fail every turn. Report it;

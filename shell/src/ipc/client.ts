@@ -39,6 +39,8 @@ import {
   type CostPlan,
   type WorkspaceRoot,
   type McpServer,
+  type McpServerStatus,
+  type McpDiscoveredTool,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -539,17 +541,19 @@ export const ipc = {
     call(Method.WorkspacePickDirectory).then(parseWorkspaceDirectory),
 
   // MCP servers — external tool servers Addison consumes as a client (Phase-2
-  // step 7, phase 1). CONFIGURATION ONLY: `addMcpServer` saves a name and an
-  // address and nothing connects, because this phase ships no client — the panel
-  // says so rather than implying a live connection. A refusal (a bad address, a
-  // name already used, or the Developer-only refusal) is a resolved {ok:false}
-  // carrying the core's own plain sentence, never a reject. No key or token ever
-  // rides these payloads.
+  // step 7, phases 1–2). `addMcpServer` saves a name and an address; nothing
+  // connects until somebody calls `refreshMcpServer`, and even then Addison can
+  // only SEE what the server offers — nothing it finds is callable. A refusal (a
+  // bad address, a name already used, the Developer-only sentence) is a resolved
+  // {ok:false} carrying the core's own plain words, never a reject. No key or
+  // token ever rides these payloads.
   listMcpServers: (): Promise<McpServer[]> => call(Method.McpList).then(parseMcpServers),
   addMcpServer: (name: string, url: string): Promise<McpMutationResult> =>
     call(Method.McpAdd, { name, url }).then(parseMcpMutation),
   removeMcpServer: (id: string): Promise<McpMutationResult> =>
     call(Method.McpRemove, { id }).then(parseMcpMutation),
+  refreshMcpServer: (id: string): Promise<McpRefreshResult> =>
+    call(Method.McpRefresh, { id }).then(parseMcpRefresh),
 };
 
 // ---------------------------------------------------------------------------
@@ -1316,34 +1320,118 @@ function parseMcpMutation(result: unknown): McpMutationResult {
   };
 }
 
-/**
- * Parse `mcp.list` → the configured tool servers. Fails CLOSED, on the
- * `parseWorkspaceRoots` reasoning: a row without a usable id AND name is dropped,
- * because a row the panel can't name is one it would render a "Remove" button for
- * and then fail to act on. `url` is shown to the person as the address they are
- * about to trust later, so a non-http(s) string is dropped too — the core already
- * refuses one at the store boundary, and this is the belt on those braces.
- * `enabled` is trusted only on a strict boolean.
+/** The four states the core can report. `checking` is deliberately absent — that
+ * one is the frontend's own in-flight marker (see `McpServerStatus`), so a core
+ * claiming it would be a payload describing a thing the core cannot know. */
+const MCP_CORE_STATUSES = new Set(["never", "ok", "failed"]);
+
+/** How many tools one row may carry into the UI. The core caps discovery well
+ * below this; the belt is here because these rows are a STRANGER'S text and a
+ * surface that renders ten thousand of them is unusable whatever the reason. */
+const MAX_MCP_TOOLS_RENDERED = 200;
+
+function parseMcpTools(value: unknown): McpDiscoveredTool[] {
+  const list = Array.isArray(value) ? (value as unknown[]) : [];
+  const out: McpDiscoveredTool[] = [];
+  for (const item of list) {
+    if (out.length >= MAX_MCP_TOOLS_RENDERED) break;
+    const row = asRecord(item);
+    // A nameless tool is a row nothing can be said about, so it is dropped
+    // rather than rendered as a blank line the person has to interpret. A
+    // missing description is fine — the section says so in its own words.
+    if (!row || typeof row.name !== "string" || !row.name) continue;
+    out.push({
+      name: row.name,
+      description: typeof row.description === "string" ? row.description : "",
+    });
+  }
+  return out;
+}
+
+/** One `mcp.list` / `mcp.refresh` row, or `null` when it isn't usable.
+ *
+ * Fails CLOSED on the `parseWorkspaceRoots` reasoning: a row without a usable id
+ * AND name is dropped, because a row the panel can't name is one it would render
+ * a "Remove" button for and then fail to act on. `url` is shown to the person as
+ * the address Addison reaches, so a non-http(s) string is dropped too — the core
+ * already refuses one at the store boundary, and this is the belt on those braces.
+ *
+ * The discovery fields fail closed in the direction that UNDERSTATES: an
+ * unrecognised `status` becomes `never`, a `toolCount` that isn't a number is
+ * dropped rather than guessed from the array, and `tools` outside an `ok` row is
+ * ignored. Every one of those defaults lands on "Addison doesn't know", which is
+ * the only safe way for a page about what Addison can reach to be wrong.
  */
+function parseMcpServerRow(value: unknown): McpServer | null {
+  const row = asRecord(value);
+  if (!row || typeof row.id !== "string" || !row.id) return null;
+  if (typeof row.name !== "string" || !row.name) return null;
+  if (typeof row.url !== "string" || !/^https?:\/\//i.test(row.url)) return null;
+  const status =
+    typeof row.status === "string" && MCP_CORE_STATUSES.has(row.status)
+      ? (row.status as McpServerStatus)
+      : "never";
+  const tools = status === "ok" ? parseMcpTools(row.tools) : [];
+  return {
+    id: row.id,
+    name: row.name,
+    url: row.url,
+    enabled: row.enabled !== false,
+    addedAt:
+      typeof row.addedAt === "number" && Number.isFinite(row.addedAt) ? row.addedAt : undefined,
+    status,
+    checkedAt:
+      typeof row.checkedAt === "number" && Number.isFinite(row.checkedAt)
+        ? row.checkedAt
+        : undefined,
+    toolCount:
+      status === "ok" && typeof row.toolCount === "number" && Number.isFinite(row.toolCount)
+        ? row.toolCount
+        : undefined,
+    tools,
+    skipped:
+      typeof row.skipped === "number" && Number.isFinite(row.skipped) && row.skipped > 0
+        ? row.skipped
+        : undefined,
+    error: status === "failed" && typeof row.error === "string" ? row.error : undefined,
+  };
+}
+
+/** Parse `mcp.list` → the configured tool servers, each with what the last check
+ * found. Unusable rows are dropped; junk never throws. */
 export function parseMcpServers(result: unknown): McpServer[] {
   const obj = asRecord(result);
   const list = obj && Array.isArray(obj.servers) ? (obj.servers as unknown[]) : [];
   const out: McpServer[] = [];
   for (const item of list) {
-    const row = asRecord(item);
-    if (!row || typeof row.id !== "string" || !row.id) continue;
-    if (typeof row.name !== "string" || !row.name) continue;
-    if (typeof row.url !== "string" || !/^https?:\/\//i.test(row.url)) continue;
-    out.push({
-      id: row.id,
-      name: row.name,
-      url: row.url,
-      enabled: row.enabled !== false,
-      addedAt:
-        typeof row.addedAt === "number" && Number.isFinite(row.addedAt) ? row.addedAt : undefined,
-    });
+    const row = parseMcpServerRow(item);
+    if (row) out.push(row);
   }
   return out;
+}
+
+/** `mcp.refresh` → the refreshed row, or the core's refusal.
+ *
+ * TWO FAILURE CHANNELS, mirroring the handler. `ok:false` means the check did not
+ * RUN (wrong profile, or a server no longer saved) and there is no row. A check
+ * that ran and FAILED comes back `ok:true` with `server.status === "failed"` and
+ * the reason on the row — a person who pressed "Check now" on a server that is
+ * switched off has not made a mistake, and flattening the two would tell them
+ * they had. A missing/unusable row on an `ok:true` answer degrades to `ok:false`,
+ * so the panel never has to render a success with nothing in it. */
+export interface McpRefreshResult {
+  ok: boolean;
+  server?: McpServer;
+  error?: string;
+}
+
+export function parseMcpRefresh(result: unknown): McpRefreshResult {
+  const obj = asRecord(result);
+  const error = typeof obj?.error === "string" ? obj.error : undefined;
+  if (obj?.ok !== true) return { ok: false, error };
+  const server = parseMcpServerRow(obj.server);
+  if (!server) return { ok: false, error };
+  return { ok: true, server };
 }
 
 /** workspace.pickDirectory → the chosen absolute path, or `null` when the person

@@ -47,12 +47,19 @@ Two things it cannot check, both learned the hard way the same day:
 
 **Two steps remain — 7 and 8.** `ROADMAP.md` owns status; trust it over this file.
 
-- **7 — MCP client. STARTED: phase 1 of 5 is built.** Transport was decided by the
-  owner on 2026-08-06: **HTTP only for v1**, which is what keeps the client in the
-  Agent Core and adds no new highest-trust surface. Phase 1 is the `mcp_servers`
-  table and `mcp.list`/`add`/`remove` — **nothing is callable**, the registry and gate
-  are untouched, and there is no column that could hold a command. Phase 2 is connect
-  + discovery. Plan and remaining decisions: [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
+- **7 — MCP client. STARTED: phases 1–2 of 5 are built.** Transport was decided by
+  the owner on 2026-08-06: **HTTP only for v1**, which is what keeps the client in
+  the Agent Core and adds no new highest-trust surface. Phase 1 is the `mcp_servers`
+  table and `mcp.list`/`add`/`remove`. Phase 2 (2026-08-07) is connect + discovery:
+  `agent_core/mcp_client.py` speaks the protocol, `agent_core/mcp_catalog.py` admits
+  what it finds to the ONE registry namespaced and dev-only, and `mcp.refresh` runs
+  it on the worker thread. **Nothing is still callable**, held by two mechanisms —
+  an `mcp:` id is absent from `visible_tools` in every mode, and both dispatch paths
+  refuse one. Phase 3 flips `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` and writes
+  `McpTool.execute`; read the plan's §4.2 first, especially the three scoping
+  decisions (no auth, on-demand only, catalog in memory) — each is a thing phase 3
+  may want and must decide again rather than inherit. Plan:
+  [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
 - **8 — the automation keyword gate.** Syntax decided (a per-automation nonce Addison
   shows and you retype, chosen because a fixed prefix is forgeable by anything that
   can write English). Nothing built. Until it exists, nothing in the tree can author

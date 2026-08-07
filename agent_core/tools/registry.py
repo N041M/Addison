@@ -23,6 +23,18 @@ them and one new tool needs them apart:
 (hidden from SAFE) AND undo-ENFORCED (it has a real ``undo()`` and a future edit
 dropping it must fail registration). ``dev_only=True`` stays as a convenience alias
 that sets BOTH — the exact shape ``run_command`` needs.
+
+Two further dimensions arrived with the MCP client (step 7 phase 2), and BOTH are
+about tools that came from OUTSIDE this codebase. Every native tool is registered
+once at startup by ``build_registry`` and stays for the life of the process; a
+discovered tool belongs to a server that can change its mind or be removed:
+  * ``removable`` — this id may later be ``unregister``ed. Off by default, and
+    ``unregister`` REFUSES anything without it, so no future caller can quietly
+    take a native tool out of the registry the safety model is built on.
+  * ``not_callable`` — the person may see the tool; the MODEL never does, and
+    dispatch refuses it (``refuse_if_not_callable``). Phase 2 discovers tools
+    without being able to run them, and "we simply won't call it" is not a
+    mechanism — this is.
 """
 
 from __future__ import annotations
@@ -35,11 +47,19 @@ from agent_core.tools.base import RiskTier, Tool, ToolDefinition
 # capability belongs to another profile, not shown an enforcement detail.
 DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
 
+# Said when a tool that has been DISCOVERED but not yet wired for dispatch is
+# named anyway (step 7 phase 2's MCP tools). Byte-for-byte what the Tools surface
+# prints under such a row, because they are the same fact told to two audiences:
+# Addison knows this tool exists and cannot run it.
+NOT_CALLABLE_REFUSAL = "Addison can see this tool but can't use it yet."
+
 
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
         self._open_only: set[str] = set()   # tool ids only visible/runnable in OPEN mode
+        self._removable: set[str] = set()   # ids `unregister` may take out (MCP only)
+        self._not_callable: set[str] = set()  # ids hidden from the model + refused at dispatch
 
     def register(
         self,
@@ -48,6 +68,8 @@ class ToolRegistry:
         dev_only: bool = False,
         open_only: bool = False,
         allow_missing_undo: bool = False,
+        removable: bool = False,
+        not_callable: bool = False,
     ) -> None:
         """Register a tool along the two independent OPEN dimensions (R3).
 
@@ -60,7 +82,11 @@ class ToolRegistry:
         The undo-at-registration check still raises for any non-LOW tool without a
         real ``undo()`` UNLESS ``allow_missing_undo`` — so ``write_project_file``
         (``open_only=True, allow_missing_undo=False``) is hidden from SAFE yet stays
-        undo-ENFORCED, the case the split exists for."""
+        undo-ENFORCED, the case the split exists for.
+
+        ``removable`` and ``not_callable`` are the two externally-sourced-tool
+        dimensions (see the module docstring). Both default OFF, so every native
+        registration keeps exactly the properties it had before they existed."""
         open_only = open_only or dev_only
         allow_missing_undo = allow_missing_undo or dev_only
         if tool.definition.risk_tier != RiskTier.LOW and not allow_missing_undo:
@@ -90,12 +116,47 @@ class ToolRegistry:
         self._tools[tool.definition.id] = tool
         if open_only:
             self._open_only.add(tool.definition.id)
+        if removable:
+            self._removable.add(tool.definition.id)
+        if not_callable:
+            self._not_callable.add(tool.definition.id)
 
     def get(self, tool_id: str) -> Tool:
         try:
             return self._tools[tool_id]
         except KeyError:
             raise KeyError(f"No tool registered with id '{tool_id}'.") from None
+
+    def has(self, tool_id: str) -> bool:
+        """Whether this id is taken — asked BEFORE registering a discovered tool.
+
+        ``register`` already raises on a duplicate, but a server offering a name
+        that collides with a native tool is an ordinary, expected event that must
+        cost one skipped row and a plain sentence, not an exception the caller has
+        to catch to keep the other ninety-nine tools."""
+        return tool_id in self._tools
+
+    def unregister(self, tool_id: str) -> None:
+        """Take a REMOVABLE tool back out. Raises for anything else.
+
+        Discovery is re-runnable, so a server's registrations have to be replaceable
+        — and removing a server has to remove its tools, or ``mcp.remove`` would
+        leave a stranger's ids behind in the registry every dispatch path consults.
+
+        THE REFUSAL IS THE POINT. This is the first way anything has ever left the
+        registry, and an unconditional version would be a supported route to
+        deleting ``save_file``'s undo-enforced registration, or ``snapshot_now``, at
+        runtime. Only ids registered with ``removable=True`` are eligible, which
+        today is exactly the MCP-discovered set; a native tool raises."""
+        if tool_id not in self._removable:
+            raise ValueError(
+                f"Tool '{tool_id}' was not registered as removable and cannot be "
+                "unregistered. Only externally-discovered tools may be."
+            )
+        self._tools.pop(tool_id, None)
+        self._open_only.discard(tool_id)
+        self._not_callable.discard(tool_id)
+        self._removable.discard(tool_id)
 
     def is_dev_only(self, tool_id: str) -> bool:
         """True for an OPEN-only tool — hidden from SAFE and refused at dispatch
@@ -122,15 +183,39 @@ class ToolRegistry:
             return DEV_ONLY_REFUSAL
         return None
 
+    def refuse_if_not_callable(self, tool_id: str) -> str | None:
+        """The SECOND layer under a discovered-but-not-wired tool: a plain refusal
+        sentence when ``tool_id`` was registered ``not_callable``, else None.
+
+        Mode-independent, unlike its dev-only sibling — this is not "wrong profile",
+        it is "no dispatch exists". ``visible_tools`` already keeps these ids away
+        from the model, and this is the layer that holds when something names one
+        anyway: a stale transcript replayed after a refresh, a routine step saved
+        before the tool went away, a model that guessed the id. Called by BOTH
+        dispatch paths (the orchestrator turn and the routine step) BEFORE the gate
+        and before any network is touched, exactly as the dev-only check is —
+        a boundary only one path enforces is not a boundary."""
+        if tool_id in self._not_callable:
+            return NOT_CALLABLE_REFUSAL
+        return None
+
     def visible_tools(self, mode: PolicyMode) -> list[ToolDefinition]:
         """The tool definitions the model may call under ``mode``.
 
         SAFE mode hides every ``open_only`` tool — the SAFE view is byte-for-byte the
-        historical registry contents. OPEN mode surfaces all of them."""
+        historical registry contents. OPEN mode surfaces all of them.
+
+        A ``not_callable`` tool is absent from EVERY mode's view. This is the list
+        that is sent to the model as its tool definitions, so an id in it is an
+        invitation; step 7 phase 2 discovers tools it cannot yet run, and the person
+        seeing them on the Tools surface is a different thing from the model being
+        offered them. It also keeps phase 2 clear of the plan's §7 trigger: a
+        server's text does not reach a model's context at all until dispatch exists."""
         return [
             tool.definition
             for tool_id, tool in self._tools.items()
-            if mode is PolicyMode.OPEN or tool_id not in self._open_only
+            if (mode is PolicyMode.OPEN or tool_id not in self._open_only)
+            and tool_id not in self._not_callable
         ]
 
     def list_for_model(self) -> list[ToolDefinition]:

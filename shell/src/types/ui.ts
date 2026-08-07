@@ -562,16 +562,40 @@ export interface WorkspaceRoot {
 
 // ---------------------------------------------------------------------------
 // MCP servers — the external tool servers Addison consumes as a CLIENT
-// (mcp.list; Phase-2 step 7, phase 1 of five). A row is CONFIGURATION AND
-// NOTHING ELSE: this phase ships no connection, no tools and nothing Addison can
-// call, so what the panel renders is a saved address, not a capability. Nothing
-// secret rides the payload — the address is refused core-side if it carries a
-// sign-in name, password or key, and a token (when a later phase needs one) lives
-// in the OS keychain, never here. The parser fails CLOSED: a row without a usable
-// id and name is DROPPED rather than rendered with a Remove button it can't act on.
+// (mcp.list / mcp.refresh; Phase-2 step 7, phases 1–2 of five). A row is a saved
+// address PLUS whatever the last check found. What it is NOT is a capability:
+// Addison can list a server's tools and cannot run one, so every surface that
+// renders this says so in its own words rather than letting a tool count imply
+// otherwise. Nothing secret rides the payload — the address is refused core-side
+// if it carries a sign-in name, password or key, and no token is stored anywhere
+// (a server that wants one gets a plain sentence). The parser fails CLOSED: a row
+// without a usable id and name is DROPPED rather than rendered with a Remove
+// button it can't act on.
 // ---------------------------------------------------------------------------
+
+/**
+ * Where a server stands.
+ *
+ * - `never` — nobody has checked it. The honest state for a new row AND after a
+ *   restart: the discovered catalog lives in the core's memory and is never
+ *   persisted, because a catalog is the server's truth, not Addison's config.
+ * - `checking` — a refresh is in flight. **Set by the frontend, never by the
+ *   core**: `mcp.list` and `mcp.refresh` answer on the same worker thread, so a
+ *   list request queues behind the refresh and could not observe it.
+ * - `ok` / `failed` — the last check landed, or didn't (`error` says why).
+ */
+export type McpServerStatus = "never" | "checking" | "ok" | "failed";
+
+/** One tool a server offered. Name and description only, both already cleaned
+ * and length-capped in the core — and both are still a STRANGER'S TEXT, so they
+ * are rendered as plain text through React's own escaping and never as markdown. */
+export interface McpDiscoveredTool {
+  name: string;
+  description: string;
+}
+
 export interface McpServer {
-  /** The core's row id — what `mcp.remove` takes. */
+  /** The core's row id — what `mcp.remove` and `mcp.refresh` take. */
   id: string;
   /** The plain name the person gave this server. */
   name: string;
@@ -581,6 +605,20 @@ export interface McpServer {
   enabled: boolean;
   /** Unix seconds when it was added, when the core reports it. */
   addedAt?: number;
+  /** Where the last check got to. Defaults to `never` on anything unrecognised. */
+  status: McpServerStatus;
+  /** Unix seconds of the last check. Absent until there has been one. */
+  checkedAt?: number;
+  /** How many tools that check found. Absent unless the check succeeded. */
+  toolCount?: number;
+  /** What it found. Empty for every state but `ok`. */
+  tools: McpDiscoveredTool[];
+  /** How many the server offered that Addison would not take — an odd name, a
+   * name already in use, or past its cap. A count, never the names. */
+  skipped?: number;
+  /** Why the last check failed, as one plain sentence from the core. Never the
+   * server's own words. */
+  error?: string;
 }
 
 /** The full profile picture from `profile.get`. */

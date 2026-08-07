@@ -12,6 +12,69 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-07 — step 7 phase 2: Addison can see a stranger's tools, and run none of them
+
+[step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and records what
+landed: `agent_core/mcp_client.py` (Streamable HTTP), `agent_core/mcp_catalog.py`
+(admission + the in-memory catalog), `mcp.refresh`, two new registry dimensions,
+and the per-server sections on the Tools surface.
+
+What building it taught:
+
+- **A safety test can pass for the wrong reason, and only a mutation finds out.**
+  "No MCP tool is in the SAFE view" was asserted through `visible_tools(SAFE)`, and
+  it passed with `dev_only=True` deleted — because phase 2 ALSO hides these ids from
+  every view via `not_callable`, and the second filter was silently carrying the
+  first. Phase 3 turns `not_callable` off. The test would have gone green the whole
+  way and failed open on exactly the day nobody was looking at it. It now asserts on
+  the REGISTRATION (`is_dev_only`, and the dispatch refusal), which is the property
+  that has to survive the flip. **Where two mechanisms produce one observable, a
+  test on the observable proves neither.**
+- **"Nothing is callable" had to be a mechanism, not an omission.** The tempting
+  version of this phase is to register the tools and simply not write dispatch. That
+  is an absence, and absences are not testable. So it is two layers with one switch:
+  ids are kept out of `visible_tools(mode)` in every mode (that list is what is SENT
+  to the model, so an id in it is an invitation), and both dispatch paths refuse one
+  named anyway. `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` is the single constant phase 3
+  flips, which also means the boundary is one grep away rather than a property of
+  what has not been written yet.
+- **The refusal that cannot be recorded.** Every neighbouring refusal —
+  `dev_only`, `forbidden`, `confined_out` — writes a `tool_audit` row, and this one
+  does not. `outcome` is a CHECK-constrained vocabulary, and `CREATE TABLE IF NOT
+  EXISTS` means an upgraded database keeps the old CHECK: a new value would work on
+  a fresh DB and be swallowed by `_audit`'s best-effort `except` on everybody else's.
+  A gate that logs on new installs and stays silent on old ones is worse than one
+  that admits it logs nothing. Tracked in [KNOWN-GAPS.md](KNOWN-GAPS.md); phase 3
+  owns the migration, because phase 3 is what makes the row worth having.
+- **Rolling back must never be a way to ACQUIRE a capability.** `mcp_servers` is
+  snapshot-captured; the registry those tools land in is memory a restore does not
+  touch. So a restore to a point before a server existed left that server's tools
+  registered, owned by nothing the person could see or remove. Fixed as step (f) of
+  the post-restore resync, beside `_resync_providers`, which had the identical shape
+  for the identical reason. **Any subsystem that mirrors a captured table into
+  memory owes `_finish_restore` a line**, and there is now a second precedent saying
+  so.
+- **`net_vetting` needed a verb, not a fork.** MCP is JSON-RPC over POST and that
+  module was GET-only, which is exactly the moment somebody writes a second
+  resolve-vet-pin loop "just for this one". It took `method`/`content` plus
+  `same_origin_only`, all defaulted so the two older callers are byte-identical. The
+  new parameter earned its place on its own: dropping a credential protects the
+  SECRET, while refusing a cross-origin hop protects the person from being walked to
+  an address they never typed — different promises, and a body-carrying caller wants
+  both.
+- **`unregister` had to refuse by default.** Discovery is re-runnable, so
+  registrations must be replaceable — and that is the first way anything has ever
+  left the registry the whole safety model is built on. An unconditional version
+  would be a supported route to deleting `save_file`'s undo-enforced registration at
+  runtime. Only ids registered `removable=True` are eligible; a native tool raises.
+- **A status the core cannot honestly report should not exist in the core.**
+  `checking` looks like it belongs beside `never`/`ok`/`failed`, but `mcp.list` and
+  `mcp.refresh` answer on the same worker thread, so a list request queues behind
+  the refresh and could never observe it. It is the frontend's state, set while its
+  own request is out, and both protocol files say so. A source test keeps
+  `STATUS_CHECKING` from being added back — machinery that defends nothing is this
+  repo's own anti-pattern, and an unobservable enum value is exactly that.
+
 ## What shipped 08-06 — step 7 phase 1: MCP configuration that does nothing
 
 [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and now records what

@@ -1,19 +1,25 @@
-// The MCP tool-server list (mcp.list / mcp.add / mcp.remove; Phase-2 step 7,
-// phase 1 of five). This hook owns the configured servers, the add/remove
-// handlers, and the two transient lines the panel shows — a plain error (the
-// core's own refusal sentence) and a plain notice (a removal landed). It mirrors
-// useWorkspace.
+// The MCP tool-server list (mcp.list / mcp.add / mcp.remove / mcp.refresh;
+// Phase-2 step 7, phases 1–2 of five). This hook owns the configured servers,
+// their discovery state, the add/remove/check handlers, and the two transient
+// lines the panel shows — a plain error (the core's own refusal sentence) and a
+// plain notice (a removal landed). It mirrors useWorkspace.
 //
-// WHAT IT DOES NOT DO, and must not start doing here: connect to anything. Phase 1
-// ships no MCP client at all — adding a server saves an address and that is the
-// whole effect. Nothing in this hook should ever report a server as reachable,
-// online, or offering tools, because the app has no way to know any of that yet
-// and a fabricated status on a page about what Addison can reach is the one lie
-// that surface must never tell (Surface.tsx's standing rule 1).
+// EVERY STATUS HERE CAME FROM A CHECK SOMEBODY ASKED FOR. Nothing in this hook
+// polls, retries on a timer, or checks a server on mount: discovery is on demand
+// only, so a status is never older or newer than the last press of "Check now".
+// It is also never invented — a status the core did not send reads as "never
+// checked", because a fabricated one on a page about what Addison can reach is the
+// one lie that surface must never tell (Surface.tsx's standing rule 1).
+//
+// `checking` is the ONE state this side owns: the core answers `list` and
+// `refresh` on the same worker thread, so it cannot report a check as in flight —
+// the row that is in flight is the one we are waiting on, and we know which.
+//
+// A discovered tool is still not callable. Nothing here should ever say otherwise.
 //
 // The panel renders only on the Developer/Custom surfaces (keyed off the active
 // profile, never the mode) — that gate lives in SettingsPage, not here, and the
-// core independently refuses `mcp.add` outside Developer.
+// core independently refuses `mcp.add` and `mcp.refresh` outside Developer.
 
 import { useCallback, useEffect, useState } from "react";
 import type { McpServer } from "../types/ui";
@@ -34,6 +40,10 @@ export function useMcpServers({ connected }: UseMcpServersArgs) {
   const [error, setError] = useState<string | null>(null);
   // The last removal's plain outcome line. Stays put rather than fading.
   const [notice, setNotice] = useState<string | null>(null);
+  // Which rows have a check in flight. A SET rather than a single id: two servers
+  // can be checked one after the other without the first one's row silently
+  // reverting to its old status while the second is still out.
+  const [checking, setChecking] = useState<ReadonlySet<string>>(() => new Set());
 
   const refreshServers = useCallback(() => {
     if (!isEngineConnected()) return;
@@ -106,15 +116,53 @@ export function useMcpServers({ connected }: UseMcpServersArgs) {
     [refreshServers],
   );
 
+  /** Check one server now — the only thing in the app that reaches an MCP server.
+   *
+   * Never blocks the other rows: `busy` (which disables add and remove) is
+   * deliberately not set, because a check can take up to the core's ten-second
+   * budget and freezing the whole panel behind a stranger's server would make one
+   * slow server look like a broken page. The row's own control is disabled by its
+   * membership of `checking` instead.
+   *
+   * The refreshed row is applied straight from the answer rather than re-fetching
+   * the list: the core just told us the newest truth about exactly this row, and a
+   * second round-trip could only overwrite it with something older. */
+  const handleCheck = useCallback(async (id: string): Promise<void> => {
+    setChecking((current) => new Set(current).add(id));
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await ipc.refreshMcpServer(id);
+      if (res.ok && res.server) {
+        const updated = res.server;
+        setServers((rows) => rows.map((row) => (row.id === updated.id ? updated : row)));
+      } else {
+        // The check did not run at all (wrong profile, or the server is gone).
+        // A failed CHECK is not this branch — that comes back on the row.
+        setError(res.error ?? "Addison couldn't check that server just now.");
+      }
+    } catch {
+      setError("Addison couldn't check that server just now.");
+    } finally {
+      setChecking((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
+    }
+  }, []);
+
   return {
     servers,
     serversLoaded: loaded,
     busy,
+    checking,
     error,
     notice,
     refreshServers,
     handleAdd,
     handleRemove,
+    handleCheck,
   };
 }
 

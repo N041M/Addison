@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agent_core import live_db_guard
+from agent_core.mcp_catalog import McpCatalog
+from agent_core.mcp_client import discover_tools
 from agent_core.memory.store import Store
 from agent_core.models_catalog import (
     CatalogFetchError,
@@ -488,6 +490,7 @@ class JsonRpcServer(
         cloud_provider_factory=None,
         connect_provider=None,
         provider_key_probe=None,
+        mcp_discover=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -535,6 +538,19 @@ class JsonRpcServer(
         # client so no real Ollama (or network) is ever touched.
         self._ollama_base_url = ollama_base_url
         self._ollama_client = ollama_client
+        # Step 7 phase 2 (MCP connect + discovery). The catalog holds what each
+        # configured tool server last offered, IN MEMORY ONLY: a catalog is the
+        # server's truth rather than Addison's configuration, and `mcp_servers` is
+        # snapshot-captured, so writing a stranger's names and prose there would copy
+        # untrusted text into every later payload and sidecar. After a restart every
+        # row honestly reads "not checked yet" — which is also why nothing here
+        # connects at start-up: discovery is on demand only.
+        #
+        # `_mcp_discover` is the network seam, injected the way `_ollama_client` is
+        # so tests drive an httpx.MockTransport instead of a real server. The real
+        # one owns and closes its own client per refresh.
+        self._mcp_catalog = McpCatalog()
+        self._mcp_discover = mcp_discover or discover_tools
         # §4.6 Setup Assistant handoff: with no PRIMARY key yet, a turn runs on the
         # SETUP_ASSISTANT relay under its onboarding system prompt. ``primary_key_probe``
         # is a ()-> bool that reports whether a real PRIMARY key is available right now
@@ -1213,6 +1229,8 @@ class JsonRpcServer(
                     self._respond(request_id, self._mcp_add(params))
                 elif kind == "mcp_remove":
                     self._respond(request_id, self._mcp_remove(params))
+                elif kind == "mcp_refresh":
+                    self._respond(request_id, self._mcp_refresh(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1814,12 +1832,19 @@ _WORKSPACE_JOBS = {
 
 # mcp.* read/write the `mcp_servers` table and mint an auto-snapshot through the
 # SnapshotManager, so they run on the worker like every other store op. Method ->
-# worker job kind. (Step 7 phase 1: configuration only — none of these connects to
-# a server or makes anything callable.)
+# worker job kind.
+#
+# `mcp_refresh` (step 7 phase 2) is here for a SECOND reason as well, and it is the
+# one provider.connect already taught: it reaches the network. A connect + tools/list
+# walk on the read loop would hold the IPC pump for as long as a stranger's server
+# felt like taking — the run_command stall, with somebody else's hand on the clock.
+# On the worker it queues like a turn, and mcp_client bounds the whole walk to one
+# budget on top of that.
 _MCP_JOBS = {
     Method.MCP_LIST: "mcp_list",
     Method.MCP_ADD: "mcp_add",
     Method.MCP_REMOVE: "mcp_remove",
+    Method.MCP_REFRESH: "mcp_refresh",
 }
 
 
