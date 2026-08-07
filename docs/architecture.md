@@ -408,12 +408,14 @@ Component by component:
   Code-backed / system-capable kinds at the higher tiers remain future work,
   governed by workspace-trust, per-tool `undo()`, the snapshot floor, and the
   keyword gate.
-- **McpClient** *(Phase-2 step 7 — **partly built: phases 1–2 of five**. Phase 1
+- **McpClient** *(Phase-2 step 7 — **partly built: phases 1–3 of five**. Phase 1
   shipped 2026-08-06 (the `mcp_servers` table and the `mcp.*` RPC namespace in
   `agent_core/rpc/mcp.py`); phase 2 shipped 2026-08-07 — `agent_core/mcp_client.py`
   (the Streamable-HTTP protocol client) and `agent_core/mcp_catalog.py` (admission +
-  the in-memory catalog). **Nothing is callable yet**: dispatch is phase 3.)* —
-  Addison as an MCP **client**, not a server or gateway. It
+  the in-memory catalog); phase 3 shipped the same day — `tools/call`, a bounded
+  `inputSchema`, `McpTool.execute`, and `tool_audit` on every outcome. Phases 4–5
+  (the rest of output handling; stdio under containment, SAFE admission) are
+  future work.)* — Addison as an MCP **client**, not a server or gateway. It
   connects to external MCP servers and surfaces their tools through the **existing
   ToolRegistry and PermissionGate** — never a side channel, so MCP tools are gated,
   logged, and undo-aware like any native tool. **MCP is Developer-only for v1** (owner
@@ -426,19 +428,30 @@ Component by component:
   reversible, snapshotted provider-style config, addable by prompting, sharing the
   add-an-endpoint plumbing.
 
-  Phase 2's shape, because it is what phase 3 builds on. `mcp.refresh` runs on the
-  worker thread (the `provider.connect` pattern — a stranger's server must never hold
-  the IPC pump) and bounds the whole handshake-plus-pagination walk to one budget. A
-  discovered tool registers namespaced `mcp:<server>:<tool>`, `dev_only`, HIGH and
-  destructive unconditionally; an id collision REFUSES that tool rather than
+  Discovery's shape, because it is what dispatch is built on. `mcp.refresh` runs on
+  the worker thread (the `provider.connect` pattern — a stranger's server must never
+  hold the IPC pump) and bounds the whole handshake-plus-pagination walk to one
+  budget. A discovered tool registers namespaced `mcp:<server>:<tool>`, `dev_only`,
+  HIGH and destructive unconditionally; an id collision REFUSES that tool rather than
   replacing anything. Everything a server sends is untrusted text, so names,
-  descriptions, counts and response bodies are capped and cleaned at the
+  descriptions, schemas, counts and response bodies are capped and cleaned at the
   `mcp_client` boundary. Two registry dimensions arrived with it — `removable` (only
   a discovered tool may ever be unregistered) and `not_callable` (absent from
-  `visible_tools` in every mode, refused at both dispatch sites). What a check found
-  lives in memory only: a catalog is the server's truth, not Addison's configuration,
-  and `mcp_servers` is snapshot-captured. Discovery is on demand only — nothing
-  connects at start-up or on a timer.
+  `visible_tools` in every mode, refused at both dispatch sites; nothing sets it
+  since dispatch shipped, and it stays as the mechanism the phase constant operates
+  through). What a check found lives in memory only: a catalog is the server's truth,
+  not Addison's configuration, and `mcp_servers` is snapshot-captured. Discovery is
+  on demand only — nothing connects at start-up or on a timer.
+
+  Dispatch's shape (phase 3). `McpTool.execute` resolves the server's address at the
+  MOMENT OF USE — a server removed or renamed since the check refuses rather than
+  being reached where it used to be — and runs one `tools/call` inside one ~15s
+  budget, over a session that begins and ends with the call. HIGH + destructive means
+  the existing gate cards EVERY invocation in OPEN; SAFE refuses above the gate as
+  before. The answer is redacted and then capped, in that order (a cut through a
+  credential defeats the redactor), and every outcome writes a `tool_audit` row from
+  BOTH dispatch paths — including the two values the vocabulary gained for it,
+  `not_callable` and `failed`.
 - **SnapshotManager** — the G3 machinery described above: it captures app-state
   snapshots (config/DB rows, keys excluded) automatically before risky changes and on
   command, marks a configuration verified-working after a turn completes against it,

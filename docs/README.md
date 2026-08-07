@@ -66,7 +66,7 @@ stands relative to the tree.
 |---|---|
 | [`step-5.5-containment-plan.md`](step-5.5-containment-plan.md) | **COMPLETE.** Written 2026-07-26, all five items shipped 2026-07-31. Kept as the record of what was planned and why — its body is written in the present tense of 2026-07-26. |
 | [`secrets-and-keychain-plan.md`](secrets-and-keychain-plan.md) | **PARTLY BUILT** (2026-08-06): steps 1 and 2, plus §5.2 and §5.3 of step 4; steps 3 and 5 still proposed. Repair-first plan for the keychain integration, with the encrypted vault kept as a destination behind named triggers. Its own header states what is built; owner decisions in its §14. |
-| [`step-7-mcp-plan.md`](step-7-mcp-plan.md) | **STARTED** — phase 1 of five built 2026-08-06 (configuration only; nothing is callable). Build order for the MCP *client*, unblocked by the dev-only-for-v1 decision. One decision still open in its §5 — where a server's tools appear; transport was answered (HTTP only for v1). |
+| [`step-7-mcp-plan.md`](step-7-mcp-plan.md) | **STARTED** — phases 1–3 of five built (2026-08-06 configuration, 2026-08-07 discovery, 2026-08-07 dispatch: a tool server's tools run in Developer, carding every invocation). Build order for the MCP *client*, unblocked by the dev-only-for-v1 decision. Both §5 decisions are answered (HTTP-only transport; a section per server on the Tools surface); the phase entries carry seven more taken while building. |
 | [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) | Approved 2026-07-25, not started. Blocked on steps 7 and 8 (6 landed 2026-08-06). |
 
 ## Design

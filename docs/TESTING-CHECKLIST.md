@@ -649,33 +649,53 @@ that is the design being wrong, not a cosmetic bug.
 existing checklist — a different list means a new widget, exactly as v1 has no
 routine step-editing. Confirm Addison *says* so rather than silently failing.
 
-## 16. Tool servers (Phase-2 step 7 phase 1 — configuration only)
+## 16. Tool servers (Phase-2 step 7, phases 1–3: save, check, run)
 
-MCP is **dev-only for v1**, and phase 1 stores configuration and nothing else.
-The whole point of this section is that **nothing is callable**.
+MCP is **dev-only for v1**. Phase 1 saved an address, phase 2 taught Addison to
+ask a server what it offers, and phase 3 lets it run one of those tools — **with
+your approval, every single time**. Have a small HTTP MCP server on `localhost` to
+hand; without one, everything up to "Check now" is still worth doing.
 
 **Hidden in Simple.** In the Simple profile, Settings has no "Tool servers"
-section at all. Switch to Developer: it appears.
+section at all, and the Tools page has no tool-server section either. Switch to
+Developer: both appear.
 
-**Add one.** Any `https://` address works — it is never contacted. A restore
-point appears (§13a idiom). The section's standing line says plainly that Addison
-does not connect to a saved server yet; if it ever claims a status, a tool count,
-or "connected", that is a false claim about a capability that does not exist.
+**Add one.** A restore point appears (§13a idiom). Nothing is contacted by
+adding — no status, no tool count, no "connected" until you press Check now. A
+number that appears on its own is a claim about reach nobody verified.
 
 **Addresses that must be refused**, each with a plain sentence and no row saved:
 a `http://` address that is not on this computer; one carrying a sign-in name or
 password; one with a query or fragment. A saved address lands in snapshots and
 sidecars in plain text, which is why the refusal is at the store and not the box.
 
-**Switching to Simple must not hide or trap it.** Go back to Simple: saved
-servers stay listed and Remove still works — hiding somebody's saved
-configuration, or making it un-removable, is the failure the 2026-08-06 artifact
-decision reversed. Only *adding* is refused there.
+**Check now.** The row reports what the server offers, and the Tools page grows a
+section headed by that server with one entry per tool. A server that is switched
+off, or that wants a sign-in, says so in one plain sentence on its own row rather
+than failing quietly. Quit and reopen: every row honestly reads "not checked yet"
+again, because what a check found is never written down.
 
-**Nothing is callable.** Ask Addison in Developer to use a tool from the server
-you added. It cannot: no MCP tool exists in the registry yet. If a tool appears
-in the Tools surface or the model reaches one, phase 2 has landed early and this
-checklist is out of date.
+**THE STEP THAT MATTERS — every use asks first.** Ask Addison in Developer to use
+one of the tools. A permission card appears **before anything happens**, and it
+says which tool server the tool came from and that Addison cannot know what it
+will do. Decline it: nothing runs. Ask again: the card appears **again** — a tool
+server is somebody else's program, and approving it once must never approve it
+twice.
+
+**A server that goes quiet costs a wait, not the turn.** Stop your server mid-
+answer (or point a row at a port nothing is listening on) and ask Addison to use
+one of its tools. Within about fifteen seconds it says the server did not answer
+and CARRIES ON with the rest of the reply. A frozen app here is a bug, not slowness.
+
+**Remove is not trapped by a profile switch.** Go back to Simple: saved servers
+stay listed and Remove still works — hiding somebody's saved configuration, or
+making it un-removable, is the failure the 2026-08-06 artifact decision reversed.
+Only *adding*, *checking* and *running* are refused there. Ask Addison in Simple
+to use a tool server's tool: it will not, and it says so plainly.
+
+**And a removed server is not called.** Check a server, then remove it, then ask
+Addison to use one of its tools in the same session. It refuses — the address is
+looked up when a tool is used, not remembered from the check.
 
 ---
 

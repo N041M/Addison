@@ -55,6 +55,7 @@ class Store:
 
     def _apply_schema(self) -> None:
         self._migrate_provider_config()
+        self._migrate_tool_audit_outcomes()
         self._conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
         self._conn.commit()
         # Mode-scoped safety (owner decision 2026-07-19): add created_in_mode to
@@ -107,6 +108,79 @@ class Store:
         if cols and not any(row["name"] == "connected" for row in cols):
             self._conn.execute("DROP TABLE provider_config")
             self._conn.commit()
+
+    #: The outcomes ``tool_audit`` accepts today. ONE list, read by the migration
+    #: below and matching schema.sql's CHECK — a second spelling of a vocabulary is
+    #: how a value ends up legal in one place and rejected in the other.
+    _TOOL_AUDIT_OUTCOMES = (
+        "granted",
+        "denied",
+        "forbidden",
+        "confined_out",
+        "dev_only",
+        "not_callable",
+        "failed",
+    )
+
+    def _migrate_tool_audit_outcomes(self) -> None:
+        """Widen ``tool_audit.outcome``'s CHECK, keeping every row (step 7 phase 3).
+
+        SQLite cannot ALTER a CHECK constraint, and ``CREATE TABLE IF NOT EXISTS``
+        does nothing to a table that already exists — so a database opened before
+        this change would reject 'not_callable' and 'failed' forever, silently: each
+        audit caller swallows write failures by design (a missing row must never end
+        a person's turn), so the rows would simply never appear and the log would
+        read as "nothing happened". That is the failure this rebuild exists to
+        prevent, and it is why the fix is a migration rather than an edit to
+        schema.sql.
+
+        **EVERY EXISTING ROW SURVIVES.** These rows are durable by design —
+        excluded from snapshots, never pruned — so a rebuild that dropped them would
+        destroy the only record of what Addison has done. Rename, copy, drop: the
+        old table is renamed (its index travels with it), the new shape is created
+        from this method's own DDL, every column is copied across by name, and only
+        then is the old table dropped, taking its index with it. schema.sql's
+        ``CREATE INDEX IF NOT EXISTS`` re-creates the index moments later, in the
+        ``executescript`` this runs before.
+
+        schema.sql's "never drop this table" warning is about ``config_snapshots``
+        and applies to that table alone: a snapshot's rows are the recovery floor
+        itself, so no rebuild of THAT table is ever acceptable. An audit rebuild
+        that preserves its rows is a different act entirely.
+
+        IDEMPOTENT in all three states: a fresh database has no table yet (the
+        script that follows creates today's shape), an already-widened one is
+        recognised from its own DDL, and an old one is rebuilt exactly once."""
+        row = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tool_audit'"
+        ).fetchone()
+        if row is None:
+            return
+        existing = row["sql"] or ""
+        if all(f"'{outcome}'" in existing for outcome in self._TOOL_AUDIT_OUTCOMES):
+            return
+        allowed = ",".join(f"'{outcome}'" for outcome in self._TOOL_AUDIT_OUTCOMES)
+        self._conn.executescript(
+            "ALTER TABLE tool_audit RENAME TO tool_audit_old;\n"
+            "CREATE TABLE tool_audit (\n"
+            "    id              TEXT PRIMARY KEY,\n"
+            "    conversation_id TEXT,\n"
+            "    tool_id         TEXT NOT NULL,\n"
+            "    detail          TEXT,\n"
+            "    mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),\n"
+            "    destructive     INTEGER NOT NULL DEFAULT 0,\n"
+            f"    outcome         TEXT NOT NULL CHECK(outcome IN ({allowed})),\n"
+            "    redacted        TEXT,\n"
+            "    created_at      INTEGER NOT NULL\n"
+            ");\n"
+            "INSERT INTO tool_audit\n"
+            "    (id, conversation_id, tool_id, detail, mode, destructive, outcome,\n"
+            "     redacted, created_at)\n"
+            "SELECT id, conversation_id, tool_id, detail, mode, destructive, outcome,\n"
+            "       redacted, created_at FROM tool_audit_old;\n"
+            "DROP TABLE tool_audit_old;\n"
+        )
+        self._conn.commit()
 
     # --- action snapshots (UndoManager) -----------------------------------
     def insert_action_snapshot(self, snapshot: ActionSnapshot) -> None:

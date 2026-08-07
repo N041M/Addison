@@ -1,18 +1,19 @@
-// Tool servers — the Settings face of the MCP client (Phase-2 step 7, phases 1–2
+// Tool servers — the Settings face of the MCP client (Phase-2 step 7, phases 1–3
 // of five), in the dark direction's row idiom. It is shown ONLY on the Developer
 // and Custom surfaces (keyed off the active profile, never the policy mode);
 // Simple never sees it, and the core independently refuses `mcp.add` and
 // `mcp.refresh` outside Developer.
 //
-// THE HONEST LINE IS STILL THE FEATURE HERE, and phase 2 changed exactly half of
-// it. Addison can now look at a saved server and list what it offers; it still
-// cannot use any of it. So the standing line says both halves in one breath, and
-// a row never shows anything the app has not been told: a server nobody has
-// checked says so, a check that failed shows the core's own plain sentence, and a
-// tool count appears only after a check that actually landed. Inventing a status
-// on the one page a person opens to see what Addison can reach is the lie
-// Surface.tsx's standing rule 1 forbids — a stale one would be the same lie with
-// a timestamp.
+// THE HONEST LINE IS STILL THE FEATURE HERE, and each phase has changed exactly
+// half of it. Phase 2: Addison could look at a saved server and list what it
+// offers. Phase 3: it can run those tools — with approval, every time, in
+// Developer. So the standing line still says both halves in one breath, and the
+// second half is now the safeguard rather than the limitation. A row never shows
+// anything the app has not been told: a server nobody has checked says so, a check
+// that failed shows the core's own plain sentence, and a tool count appears only
+// after a check that actually landed. Inventing a status on the one page a person
+// opens to see what Addison can reach is the lie Surface.tsx's standing rule 1
+// forbids — a stale one would be the same lie with a timestamp.
 //
 // Checking is ALWAYS a press. Nothing here checks on mount, on a timer, or after
 // an add: Addison makes no network request the person did not just cause.
@@ -28,13 +29,14 @@ import { RowAction, SurfaceRow } from "./Surface";
 
 // --- Frozen plain-language copy ---------------------------------------------
 
-/** The panel's standing line. Says what a saved server does today and what it
- * still does not, because the alternative is a person believing Addison has
- * gained an ability it has not. Do NOT soften the second half into "Addison will
- * use these": it can see them, and that is all. */
+/** The panel's standing line. Says what a saved server does and what protects the
+ * person while it does it. The second half is not decoration and must not be
+ * dropped as the feature matures: these tools belong to somebody else's program,
+ * Addison cannot know what one will do, and "it asks first, every time" is the
+ * entire reason adding a server is a safe thing to do. */
 const STANDING_LINE =
   "A tool server is a program on the web that offers Addison extra tools. Addison can " +
-  "check what a server offers and list it here — it still can't use any of those tools yet.";
+  "check what a server offers, and it asks you before using any of those tools.";
 
 /** Under the address field. Names the one case where a plain http:// address is
  * accepted, so a refusal is never a surprise. */
@@ -65,7 +67,7 @@ function statusLine(server: McpServer, isChecking: boolean): string {
         server.skipped && server.skipped > 0
           ? ` ${server.skipped} more Addison won't take.`
           : "";
-      return `${found}${when ? `, checked ${when}` : ""}. Addison can't use them yet.${skipped}`;
+      return `${found}${when ? `, checked ${when}` : ""}. Addison asks before each use.${skipped}`;
     }
     case "failed":
       return server.error ?? "That check didn't work. Try again in a moment.";

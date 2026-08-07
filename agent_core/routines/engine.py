@@ -176,11 +176,20 @@ class RoutineEngine:
         self._on_ask_user = on_ask_user or (lambda step, run_id, message: False)
         self._store = store   # optional: writes the routine_runs log (§6.4)
 
-    def _audit(self, routine, tool_id, detail, mode, destructive, outcome) -> None:
+    def _audit(
+        self, routine, tool_id, detail, mode, destructive, outcome, redacted=None
+    ) -> None:
         """One tool-decision row for a routine step. Best-effort, like the live
         loop's: history must never be the reason a run dies. ``conversation_id`` is
         None — a routine is not a conversation — and the routine is identifiable
-        from ``routine_runs`` by timestamp."""
+        from ``routine_runs`` by timestamp.
+
+        ``redacted`` arrives only from a tool that scrubbed its own output (MCP
+        dispatch, step 7 phase 3). The live loop ALSO classifies ordinary tool
+        output here by re-running the redactor; this path does not, and the
+        difference is honest rather than an omission — a routine's results do not
+        cross the orchestrator's send boundary, so there is no "on its way to the
+        model" for this column to describe except where a tool redacted itself."""
         if self._on_tool_audit is None:
             return
         try:
@@ -193,7 +202,10 @@ class RoutineEngine:
                     "mode": mode.value if hasattr(mode, "value") else str(mode),
                     "destructive": bool(destructive),
                     "outcome": outcome,
-                    "redacted": None,
+                    # KINDS, deduplicated and sorted — the live loop's rule, for the
+                    # same reason: one entry per kind, never one per match, in a
+                    # table that is never pruned.
+                    "redacted": ", ".join(sorted(set(redacted))) if redacted else None,
                     "created_at": int(time.time()),
                 }
             )
@@ -284,15 +296,17 @@ class RoutineEngine:
                             step_log,
                         )
                 continue
-            # DISCOVERED BUT NOT WIRED (step 7 phase 2). The live loop's twin, here
-            # because a boundary only one dispatch path enforces is not a boundary
-            # (SAFE invariant 3's reasoning) — and a routine is the path that runs
-            # with nobody watching, so a step saved naming an MCP tool must refuse
-            # here rather than reach a server. Shaped as a FAILED STEP, so
-            # `on_failure` still decides what happens next, exactly like the branch
-            # above. No audit row, for the reason the live loop's comment gives.
+            # DISCOVERED BUT NOT WIRED. The live loop's twin, here because a
+            # boundary only one dispatch path enforces is not a boundary (SAFE
+            # invariant 3's reasoning) — and a routine is the path that runs with
+            # nobody watching, so a step naming a tool with no dispatch behind it
+            # must refuse here rather than reach a server. Shaped as a FAILED STEP,
+            # so `on_failure` still decides what happens next, exactly like the
+            # branch above. Quiet for MCP since phase 3, and still the mechanism the
+            # phase constant operates through; the audit row is phase 3's too.
             not_callable_refusal = self.tool_registry.refuse_if_not_callable(tool_id)
             if not_callable_refusal is not None:
+                self._audit(routine, tool_id, None, mode, destructive, "not_callable")
                 result = ToolResult(success=False, content=not_callable_refusal)
                 step_results[step.step_id] = result
                 step_log.append(self._log_entry(index, step, not_callable_refusal))
@@ -388,13 +402,24 @@ class RoutineEngine:
             # Announced only once the step is actually granted, so a declined step
             # is never reported as something Addison did.
             self.on_activity(tool_id, tool.definition.label, detail)
-            self._audit(routine, tool_id, detail, mode, destructive, "granted")
             try:
                 result = tool.execute(resolved_args, context)
             except RuntimeError as exc:
                 result = ToolResult(success=False, content=str(exc))
             except Exception:
                 result = ToolResult(success=False, content="That step didn't work.")
+            # AUDITED AFTER EXECUTION, the live loop's shape (step 7 phase 3). The
+            # row used to be written before the call, which cost it the two things
+            # only the result knows: what the redactor took out of THIS step's
+            # output, and whether an approved call reached anything at all. Nothing
+            # between the gate and here can return early — both failure shapes are
+            # caught above — so the row is written on exactly the runs it was
+            # before. Both fields are empty for every native tool.
+            self._audit(
+                routine, tool_id, detail, mode, destructive,
+                result.audit_outcome or "granted",
+                redacted=result.redacted_kinds or None,
+            )
             if result.snapshot:
                 result.snapshot.tool_call_id = f"{run_id}:{step.step_id}"
                 self.undo_manager.record(result.snapshot)   # Routine runs are undoable too

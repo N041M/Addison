@@ -98,12 +98,14 @@ class ServerContext:
         _providers_reconnected: bool
         _ollama_base_url: str | None
         _ollama_client: Any | None
-        # Step 7 phase 2. The discovery state of every configured tool server, IN
+        # Step 7 phases 2–3. The discovery state of every configured tool server, IN
         # MEMORY ONLY — a catalog is the server's truth, not Addison's configuration
         # (scoping decision 3, 2026-08-07), and mcp_servers is snapshot-captured, so
         # persisting a stranger's names and prose there would copy untrusted text
         # into every later payload and sidecar. ``_mcp_discover`` is the network seam
-        # (``mcp_client.discover_tools`` in the app, a fake in tests).
+        # (``mcp_client.discover_tools`` in the app, a fake in tests); the catalog
+        # carries the two dispatch seams (``endpoint_for``, ``call_tool``), which
+        # main.py hands it — ``_mcp_endpoint_for`` below is the first of them.
         _mcp_catalog: McpCatalog
         _mcp_discover: Callable[[str], Discovery]
         _setup_prompt: str | None

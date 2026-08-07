@@ -1,12 +1,15 @@
-"""MCP connect + discovery — step 7, PHASE 2 (docs/step-7-mcp-plan.md §4.2).
+"""MCP connect + discovery — step 7, PHASE 2, and what PHASE 3 changed about it
+(docs/step-7-mcp-plan.md §4.2 and §4.3). **Dispatch itself is
+``test_mcp_dispatch.py``**; this file owns everything up to the moment of a call.
 
-Phase 1 proved a saved server was inert. Phase 2's claim is narrower and harder:
-**Addison can now SEE what a stranger's server offers and still cannot use any of
-it.** So this file is again as much about what cannot happen as about what does,
-and it sits deliberately beside ``test_tool_registry.py`` — the single most
-important test in the codebase — because two of its sections are the same
-invariant seen from a new direction: an MCP tool never enters the SAFE view, and a
-tool with no ``undo()`` can never be anything but HIGH.
+Phase 1 proved a saved server was inert. Phase 2's claim was that Addison could
+SEE what a stranger's server offers and use none of it. Phase 3 changed exactly
+half of that sentence, and the sections below are marked where it did: what a
+person sees is unchanged, the model is now offered these tools in OPEN, and the
+SAFE half never moved. It sits deliberately beside ``test_tool_registry.py`` — the
+single most important test in the codebase — because two of its sections are the
+same invariant seen from a new direction: an MCP tool never enters the SAFE view,
+and a tool with no ``undo()`` can never be anything but HIGH.
 
 Six sections:
 
@@ -15,12 +18,13 @@ Six sections:
       ``httpx.MockTransport``, so no test here touches a network.
   (2) UNTRUSTED TEXT — everything a server sends is capped, cleaned or refused at
       the ``mcp_client`` boundary, before a byte reaches an id, a payload or a
-      screen. A tool with an implausible name is skipped AND COUNTED.
+      screen. A tool with an implausible name is skipped AND COUNTED; a schema
+      Addison will not hold costs the model its hints, never the person the tool.
   (3) ADMISSION — namespaced ids, a collision REFUSED rather than replaced (the
       native-shadow attempt is the test that matters), re-discovery replacing one
       server's registrations, and removal taking its tools with it.
-  (4) NOTHING IS CALLABLE, in two mechanical layers: the model is never offered an
-      ``mcp:`` id, and BOTH dispatch paths refuse one that is named anyway.
+  (4) WHAT THE PHASE GATE TURNS ON — the model is offered an ``mcp:`` id in OPEN
+      and never in SAFE, and the card says whose program it is about to run.
   (5) THE RPC SURFACE — Developer-only refresh, the status transitions, the wire
       shape, and the post-restore resync.
   (6) STRUCTURE — the client modules cannot start a process, which is the transport
@@ -568,10 +572,19 @@ def test_a_tool_with_no_description_is_still_admitted():
     assert result.skipped == 0
 
 
-def test_a_servers_input_schema_is_not_kept():
-    """Phase 2 calls nothing, so it does not need a server's inputSchema and does
-    not hold one — an unused JSON Schema from a stranger is text kept for no
-    reason. Phase 3 adds it WITH its own bounds, beside dispatch."""
+def test_a_servers_input_schema_is_kept_within_bounds():
+    """Phase 3 calls tools, so it keeps the schema: a model cannot form a call to a
+    tool whose arguments nobody described. Phase 2 deliberately kept none, for the
+    equal and opposite reason — it called nothing, so the schema was a stranger's
+    text held for no purpose.
+
+    Mutation: drop ``inputSchema`` from the DiscoveredTool — the model is offered a
+    tool it cannot pass an argument to, and this fails."""
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "What to look for."}},
+        "required": ["query"],
+    }
     result = run_discovery(
         FakeServer(
             pages=[
@@ -580,7 +593,7 @@ def test_a_servers_input_schema_is_not_kept():
                         {
                             "name": "with_schema",
                             "description": "",
-                            "inputSchema": {"type": "object", "properties": {"a": {}}},
+                            "inputSchema": schema,
                             "annotations": {"destructiveHint": False},
                         }
                     ]
@@ -588,9 +601,58 @@ def test_a_servers_input_schema_is_not_kept():
             ]
         ).handler
     )
-    assert result.tools == (DiscoveredTool("with_schema", ""),)
-    tool = McpTool(mcp_tool_id("S", "with_schema"), "with_schema", "")
-    assert tool.definition.parameters_schema == {"type": "object", "properties": {}}
+    assert result.tools == (DiscoveredTool("with_schema", "", schema),)
+    tool = McpTool(mcp_tool_id("S", "with_schema"), "with_schema", "", schema=schema)
+    assert tool.definition.parameters_schema == schema
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        pytest.param({"type": "string"}, id="not an object schema"),
+        pytest.param("a schema, honestly", id="not a schema at all"),
+        pytest.param(
+            {"type": "object", "properties": {"a": {"description": "x" * 20000}}},
+            id="oversized",
+        ),
+        pytest.param(None, id="absent"),
+    ],
+)
+def test_a_schema_addison_will_not_hold_costs_the_model_its_hints_not_the_tool(schema):
+    """THE RULE THIS SECTION EXISTS FOR, in the phase-3 half. A schema that is
+    oversized, too deep, or not a JSON-Schema object at all falls back to the empty
+    one — and THE TOOL IS STILL ADMITTED. Refusing the tool would let a server cost
+    a person a capability by describing it badly; refusing the schema costs the
+    model its hints, which is the direction that fails safely.
+
+    ``type: object`` is required rather than preferred because every provider's
+    tool translator requires it, and MCP specifies it — a schema that is not one is
+    a schema nothing downstream can use.
+
+    Mutation: return ``value`` unchanged from ``_clean_schema`` — the oversized row
+    puts 20 KB of a stranger's prose into every request to a provider."""
+    entry = {"name": "shady", "description": ""}
+    if schema is not None:
+        entry["inputSchema"] = schema
+    result = run_discovery(FakeServer(pages=[{"tools": [entry]}]).handler)
+    (tool,) = result.tools
+    assert tool.name == "shady"
+    assert tool.schema == {"type": "object", "properties": {}}
+    assert result.skipped == 0
+
+
+def test_a_deeply_nested_schema_is_refused_without_a_recursive_walk():
+    """Depth is the cheap way to make a small document expensive for everything
+    that walks it. The check is iterative on purpose: a recursive one would be the
+    very bug it is looking for, one level up.
+
+    Mutation: delete the ``_too_deep`` call — the deep schema is admitted whole."""
+    deep: dict = {"type": "string"}
+    for _ in range(400):
+        deep = {"type": "object", "properties": {"n": deep}}
+    result = run_discovery(FakeServer(pages=[{"tools": [{"name": "deep", "inputSchema": deep}]}]).handler)
+    (tool,) = result.tools
+    assert tool.schema == {"type": "object", "properties": {}}
 
 
 def test_a_servers_declared_risk_is_never_believed():
@@ -679,7 +741,9 @@ def test_a_collision_refuses_that_tool_and_reports_it_rather_than_replacing():
     )
 
     assert state.refused == ("search",)
-    assert registry.get("mcp:Shared:search").definition.description == "first server"
+    # The FIRST server's tool is the one still registered — its own description is
+    # what proves which of the two survived.
+    assert registry.get("mcp:Shared:search").definition.description.startswith("first server")
     assert catalog.registered_ids("s-2") == ("mcp:Shared:other",)
 
 
@@ -750,15 +814,17 @@ def test_an_mcp_tool_registers_at_high_with_no_undo_and_that_is_the_only_reason_
 
 
 # ---------------------------------------------------------------------------
-# (4) Nothing is callable — two mechanical layers
+# (4) What the phase gate turns on, and what it never touches
 # ---------------------------------------------------------------------------
 
 
-def test_the_phase_gate_is_off_and_is_one_deliberate_constant():
-    """Phase 3 flips this and implements ``McpTool.execute``. If it is ever True
-    while the rest of this section still passes, something is registering callable
-    tools by omission rather than by decision."""
-    assert MCP_TOOLS_ARE_CALLABLE is False
+def test_the_phase_gate_is_on_and_is_one_deliberate_constant():
+    """Phase 3 turned this on and implemented ``McpTool.execute``. It stays ONE
+    constant so that turning dispatch off again is a complete answer rather than
+    half of one — the layers it governs are exercised in ``test_mcp_dispatch.py``
+    (``test_turning_the_phase_gate_back_off_stops_dispatch_everywhere``), which is
+    where the callable half of this step is proven."""
+    assert MCP_TOOLS_ARE_CALLABLE is True
 
 
 def test_no_mcp_tool_is_in_the_safe_view_in_any_circumstance():
@@ -767,11 +833,11 @@ def test_no_mcp_tool_is_in_the_safe_view_in_any_circumstance():
     from outside — the companion profile admits nothing from a stranger's server.
 
     ASSERTED ON THE REGISTRATION, not only on today's view, and that distinction is
-    the whole test. Phase 2 also hides these ids from every view via
-    ``not_callable``; phase 3 turns that off. A test that only read
-    ``visible_tools(SAFE)`` would still pass with ``dev_only`` deleted TODAY and
-    fail silently the day the phase gate flips — which is the one day nobody would
-    be looking at this file.
+    what saved this test: phase 2 also hid these ids from EVERY view via
+    ``not_callable``, so a test that only read ``visible_tools(SAFE)`` would have
+    passed with ``dev_only`` deleted on the day it was written and failed silently
+    the day phase 3 flipped the gate — the one day nobody would have been looking at
+    this file. That day has now happened, and this test did not move.
 
     Mutation: drop ``dev_only=True`` from the registration in ``mcp_catalog`` —
     the ``is_dev_only`` and dispatch-refusal assertions fail (the view assertions
@@ -787,24 +853,62 @@ def test_no_mcp_tool_is_in_the_safe_view_in_any_circumstance():
     assert not [d.id for d in registry.list_for_model() if d.id.startswith(MCP_ID_PREFIX)]
 
 
-def test_layer_one_the_model_is_never_offered_an_mcp_tool_even_in_open():
+def test_the_model_is_offered_an_mcp_tool_in_open_and_never_in_safe():
     """``visible_tools(mode)`` is the list sent to the model as its tool
-    definitions, so an id in it is an INVITATION. Phase 2 discovers tools it cannot
-    run; the person seeing them is a different thing from the model being offered
-    them. It is also what keeps phase 2 clear of the plan's §7 trigger — a server's
-    text does not reach a model's context at all until dispatch exists.
+    definitions, so an id in it is an INVITATION — and phase 3 is where Addison
+    starts issuing that invitation, in OPEN only. Phase 2's version of this test
+    asserted the id was absent from BOTH modes; the SAFE half is unchanged and is
+    the half that was ever load-bearing.
 
-    Mutation: drop ``not_callable`` from the registration, or the
-    ``_not_callable`` filter in ``visible_tools`` — this fails."""
+    The schema travels with it: an invitation a model cannot pass an argument to is
+    an invitation to guess.
+
+    Mutation: drop the ``dev_only=True`` registration — the SAFE half fails, which
+    is SAFE invariant 1 and the dev-only decision in one assertion."""
     registry, catalog = ToolRegistry(), McpCatalog()
     registry.register(_NativeSaveFile())
-    _admit(registry, catalog, ["search"])
+    catalog.record_success(
+        registry,
+        server_id="s-1",
+        server_name="Design docs",
+        tools=(DiscoveredTool("search", "", {"type": "object", "properties": {"q": {}}}),),
+        skipped=0,
+        checked_at=1,
+    )
 
-    for mode in (PolicyMode.SAFE, PolicyMode.OPEN):
-        offered = {d.id for d in registry.visible_tools(mode)}
-        assert not [tool_id for tool_id in offered if tool_id.startswith(MCP_ID_PREFIX)]
-    # ...while the tool IS registered, which is what the Tools surface renders.
-    assert registry.has("mcp:Design docs:search")
+    open_ids = {d.id for d in registry.visible_tools(PolicyMode.OPEN)}
+    assert "mcp:Design docs:search" in open_ids
+    (offered,) = [
+        d for d in registry.visible_tools(PolicyMode.OPEN) if d.id.startswith(MCP_ID_PREFIX)
+    ]
+    assert offered.parameters_schema == {"type": "object", "properties": {"q": {}}}
+
+    safe_ids = {d.id for d in registry.visible_tools(PolicyMode.SAFE)}
+    assert not [tool_id for tool_id in safe_ids if tool_id.startswith(MCP_ID_PREFIX)]
+    assert "save_file" in safe_ids
+
+
+def test_the_card_says_where_the_tool_came_from_and_that_addison_cannot_vouch_for_it():
+    """The description is what the permission card shows
+    (``main._on_permission_request``) and what the model is told. Both audiences
+    need a different half of it, and the person's half is the one that must not be
+    lost: this is somebody else's program, and Addison is not in a position to say
+    what it will do.
+
+    ``permission_detail`` is deliberately absent for the same reason — a detail
+    REPLACES the description on the card, and the provenance is the part that may
+    not be replaceable.
+
+    Mutation: drop ``CARD_PROVENANCE`` from the definition — this fails, and the
+    card asks a person to approve a stranger's tool in the stranger's own words."""
+    tool = McpTool("mcp:Design docs:search", "search · from Design docs", "Searches.",
+                   server_name="Design docs")
+    assert "Searches." in tool.definition.description
+    assert "Design docs" in tool.definition.description
+    assert "can't know what it will do" in tool.definition.description
+    assert not hasattr(tool, "permission_detail")
+    for jargon in ("MCP", "registry", "dispatch", "namespace"):
+        assert jargon not in tool.definition.description
 
 
 class _CallsAnMcpTool:
@@ -856,10 +960,12 @@ def _granting_gate() -> PermissionGate:
     return PermissionGate(on_request=lambda tool_id, detail=None: PermissionStatus.GRANTED)
 
 
-def test_layer_two_a_the_orchestrator_refuses_an_mcp_id_named_anyway(tmp_path):
-    """A stale transcript replayed after a refresh, a routine saved before the tool
-    went away, a model that guessed the id. Refused BEFORE the gate and before any
-    network is touched — in OPEN, where the dev-only check does not fire.
+def test_the_orchestrator_refuses_a_not_callable_id_named_anyway(tmp_path):
+    """The ``not_callable`` layer, registered explicitly rather than by the phase
+    gate — which is what it looks like now that phase 3 has flipped the gate, and
+    what it will look like for the next tool discovered before its dispatch exists.
+    Refused BEFORE the gate and before any network is touched, in OPEN, where the
+    dev-only check does not fire.
 
     Mutation: delete the ``refuse_if_not_callable`` branch in
     ``orchestrator._run_tool_calls`` — the spy runs and this fails."""
@@ -879,13 +985,13 @@ def test_layer_two_a_the_orchestrator_refuses_an_mcp_id_named_anyway(tmp_path):
 
     orchestrator.run_turn(conversation, requested_role=ModelRole.PRIMARY, mode=PolicyMode.OPEN)
 
-    assert tool.ran == 0, "an MCP tool executed in phase 2"
+    assert tool.ran == 0, "a not_callable tool executed"
     assert any(
         NOT_CALLABLE_REFUSAL in str(getattr(m, "content", "")) for m in conversation.messages
     )
 
 
-def test_layer_two_b_a_routine_step_refuses_an_mcp_id_too(tmp_path):
+def test_a_routine_step_refuses_a_not_callable_id_too(tmp_path):
     """A boundary only one dispatch path enforces is not a boundary (SAFE invariant
     3's reasoning) — and a routine is the path that runs with nobody watching.
 
@@ -927,13 +1033,18 @@ def test_the_refusal_says_the_same_thing_to_the_person_and_to_the_model():
         assert word not in NOT_CALLABLE_REFUSAL
 
 
-def test_the_innermost_layer_refuses_too():
-    """``McpTool.execute`` refuses on its own, on run_command's belt-and-suspenders
-    precedent — phase 2 ships no dispatch, so a body that "did the call" would be
-    the one part of this step nobody asked for."""
-    result = McpTool("mcp:S:t", "t", "").execute({}, ExecutionContext(conversation_id="c"))
+def test_a_tool_wired_to_no_dispatch_refuses_rather_than_quietly_doing_nothing():
+    """``McpTool``'s two dispatch seams default to None, and a tool wired to nothing
+    must SAY it did nothing. Returning success with no content would be the shape in
+    which a call that never happened reads to a model as a call that found nothing.
+
+    Mutation: return ``ToolResult(success=True, ...)`` from the unwired branch —
+    this fails."""
+    result = McpTool("mcp:S:t", "t", "").execute(
+        {}, ExecutionContext(conversation_id="c", policy_mode=PolicyMode.OPEN)
+    )
     assert result.success is False
-    assert result.content == NOT_CALLABLE_REFUSAL
+    assert result.audit_outcome == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -1277,4 +1388,18 @@ def test_the_client_module_never_imports_a_tool_a_provider_or_a_routine():
         for node in ast.walk(catalog_tree)
         if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("agent_core.")
     }
-    assert imported == {"agent_core.mcp_client", "agent_core.tools.base", "agent_core.tools.registry"}
+    # Phase 3 added exactly two, and both are top-level modules the whole tree may
+    # import: ``policy`` for the mode enum (``tools.base`` imports it too) and
+    # ``redaction``, which is stdlib-only, does no I/O and says in its own docstring
+    # that it is importable from anywhere without touching this rule. What is NOT
+    # here is the point — no store, no RPC layer, no provider: the address a call
+    # goes to and the client that carries it are INJECTED (``McpCatalog``'s two
+    # seams), which is what keeps a module the registry depends on from reaching
+    # into the layers that depend on it.
+    assert imported == {
+        "agent_core.mcp_client",
+        "agent_core.policy",
+        "agent_core.redaction",
+        "agent_core.tools.base",
+        "agent_core.tools.registry",
+    }
