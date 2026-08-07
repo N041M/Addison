@@ -139,6 +139,33 @@ export const Method = {
   McpRemove: "mcp.remove",
   McpRefresh: "mcp.refresh",
 
+  // Automations — the work Addison writes down for YOUR COMPUTER to run on a
+  // schedule (Phase-2 step 8, phase 1 of four). Addison never runs anything by
+  // itself and never sets a timer of its own: the operating system runs the job,
+  // Addison only writes the file it runs from — and only once you arm it, which
+  // is a later phase and asks you to type a short code first.
+  //
+  // Phase 1 has NO add and no arm. Nothing in the app can create an automation
+  // yet, so `automation.list` answers an empty list on every install; writing one
+  // is phase 2 and arming it is phase 3. Both methods here answer in EVERY
+  // profile: a saved automation is configuration, not an ability, so switching to
+  // Simple never hides one and never blocks removing one. What NEEDS the Developer
+  // profile is writing and arming, and that is refused where the ability lives.
+  //
+  // Nothing in these payloads says whether an automation is currently armed. Your
+  // computer owns that answer and is asked for it when the surface loads, so what
+  // you see is what is really installed — after a restore, a reinstall, or a file
+  // deleted by hand alike. Mirrored in protocol.py.
+  //
+  // A row is {id, name, label, command, scheduleKind, schedule, createdInMode,
+  // createdAt}. `scheduleKind` is "interval" | "calendar" and `schedule` holds that
+  // kind's numbers and nothing else — {minutes} or {hour, minute, weekday?} — so a
+  // row can never carry a field of its own onto the screen. `command` is the exact
+  // text that would run, whole and unshortened, because reading it is the point.
+  // `createdInMode` is display-only provenance and decides nothing.
+  AutomationList: "automation.list",
+  AutomationRemove: "automation.remove",
+
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
   // from, the Developer custom order, and whether the person sees the Simple

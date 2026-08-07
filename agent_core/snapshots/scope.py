@@ -35,6 +35,17 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     # configured server grants Addison nothing on this machine, so a restore that
     # brings one back re-instates a setting, not a permission.
     "mcp_servers":     ("id", "name", "url", "transport", "enabled", "created_at"),
+    # Step 8 phase 1. CAPTURED, on the `mcp_servers` terms: the plan's §1 calls an
+    # automation reversible config — snapshotted, revocable, addable by prompting —
+    # and a saved row grants Addison nothing on this machine, so a restore that
+    # brings one back re-instates a DRAFT rather than a permission or a running job.
+    #
+    # Capturing it is safe in the one direction that matters BECAUSE of what the
+    # table does not have: no armed column exists, so nothing a restore writes back
+    # can claim the OS is running something (plan §5.6). Restoring cannot arm, and
+    # cannot un-arm either — what launchd holds is launchd's, and the surface asks it.
+    "automations":     ("id", "name", "label", "command", "schedule_kind",
+                        "schedule_json", "created_in_mode", "created_at", "updated_at"),
 }
 
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of

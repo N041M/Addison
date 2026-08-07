@@ -12,6 +12,58 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-07 (last) — step 8 phase 1: the fence, and a table nothing can fill
+
+The step-8 plan (the per-automation-nonce keyword gate; the owner's syntax decision
+was already on record) was written, and its first phase built the same day: the
+`automations` table with its inert `automation.list`/`remove` surface, and the fence
+that makes the gated path the ONLY path before the gated path exists.
+`docs/step-8-automation-plan.md` owns the decisions; what belongs here is what the
+work found and what a future session would otherwise rediscover.
+
+- **WRITING THE PLAN FOUND A LIVE GAP, and grounding is why.** Reading
+  `workspace_trust_allows` to cite it showed it refused only Addison's own
+  directories — so `~/Library/LaunchAgents` could be trusted through the OS picker
+  and `write_project_file` could plant a plist there behind an ordinary card:
+  login-time automation, armed, no keyword, while the tree's standing claim was
+  "nothing can author or arm automation, so G2 holds trivially". Found while
+  writing the plan's §2, recorded in KNOWN-GAPS, closed by phase 1 in the same PR.
+  The generalisation: a floor's scope is what its predicate reads, not what its
+  doc-comment implies — go read the predicate before citing it.
+- **A fence in two languages needs a lockstep test, not a comment.**
+  `OS_AUTOMATION_DIRS` exists in `policy.py` and again in `exec.rs`, because the
+  shell must derive its own floor rather than take one over IPC. Two hand-synced
+  copies agreed "by eye" on day one;
+  `test_g2_the_fence_list_is_in_lockstep_with_the_shell` now reads the Rust source
+  and compares entry-for-entry, order included — the `protocol.py`/`protocol.ts`
+  lesson applied before it could bite rather than after.
+- **The refusal sentence was FALSE for the new group, and one branch fixed it.**
+  Every trust-floor failure answered "That folder holds Addison's own memory" —
+  wrong for an automation directory, and a false reason teaches people that
+  refusals are boilerplate. `policy.trust_refusal` reports WHICH group refused
+  (the bool is its `is None`); the RPC now has a second frozen sentence, and
+  PROTECTED wins when a path offends both groups, so no previously-refused
+  folder changed its wording between builds.
+- **Deny-after-allow ordering is sufficient exactly when the denied dir is a
+  DIRECT child of the allowed root, and building on that would have been a trap.**
+  The shell agent proved the rename hole needs an intermediate directory
+  (`/var/spool` under a trusted `/var`; `~/Library/LaunchAgents` under `~/Library`
+  has none) — and then deliberately did NOT condition the defence on path depth,
+  because the next list entry would silently decide its own safety by how deep it
+  sits. Trusted roots touching an automation dir are dropped through the same
+  collision predicate the data dirs use; the denies are the second layer.
+- **The INSIDE/CONTAINS asymmetry earned its keep on CI, not in theory.** Asking
+  CONTAINS of the automation roots would refuse `rm -rf ~/*` and `ls ~/Library`
+  wherever the kernel does not confine writes — which includes the ubuntu CI
+  runner, where an existing test (`test_ordinary_developer_commands_are_untouched`)
+  would have caught it. The false positive that gets a guard switched off is a
+  cost on the same ledger as the hole it closes.
+- **The table's most load-bearing column is the one that is not there.** No
+  `armed` flag, structurally: armed truth will live in the OS (plan §5.6), because
+  a G3 restore is one action and a nonce ceremony cannot hide inside one action.
+  The builder pinned it from both sides — a test that the schema has no such
+  column, and a test that no payload claims an automation is running.
+
 ## What shipped 08-07 (later) — a line-by-line review of the same day's four merges
 
 Four PRs merged on 2026-08-07: the model picker as a two-level folder tree (#60),

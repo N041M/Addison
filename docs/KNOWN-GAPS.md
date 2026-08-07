@@ -127,6 +127,25 @@ and where it goes.
   credential shapes it knows on the way to the model and the audit trail records
   that it happened — but an unrecognised or deliberately-encoded secret still
   passes, so this stays open and is stated as such in design-doc §9.x.
+- ~~**OS-automation directories can be trusted and written today.**~~ **CLOSED
+  2026-08-07, the same day it was found — by step 8 phase 1, in the same PR that
+  recorded it.** The gap: `workspace_trust_allows` refused only Addison's own
+  protected directories, so `~/Library/LaunchAgents` could be granted as a
+  trusted workspace and `write_project_file` could put a plist there behind an
+  ordinary card — login-time automation, armed, no keyword gate. Closed by the
+  fence [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 specifies:
+  ONE closed list (`policy.OS_AUTOMATION_DIRS`, hand-synced entry-for-entry with
+  `exec.rs`'s copy and pinned by a lockstep test that reads both), THREE
+  consumers — the trust floor refuses those directories in both directions at
+  grant AND authorize time (so a pre-fence trust row over one stopped confining
+  anything the moment this landed, no migration needed), `denylisted_roots`
+  refuses a command naming one plus the four arming binaries
+  (`launchctl`/`crontab`/`at`/`batch`) as a command's first word, and the
+  seatbelt write-denies them shell-side after every allow, dropping any trusted
+  root that touches one. Recorded costs, each stated where the code makes it:
+  `~/Library` and `~/.config` are no longer trustable workspaces, and a command
+  merely READING a plist is refused by the denylist (which cannot tell read from
+  write; the seatbelt, which can, denies only writes).
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
   and re-denies its own data dirs on top, independently, which is what keeps the
@@ -238,9 +257,17 @@ twice.
 amendment's §13 when that document was retired, 2026-07-27 — the other four §13
 questions were resolved during steps 1–3 and went with it):
 
-- **Keyword-gate syntax (blocks step 8).** The exact prefix (`!run`, `arm:`,
-  `sudo:` …) and the precise set of actions it gates. Owner's reading: running or
-  arming powerful / OS-automation actions in the harness, never ordinary chat.
+- ~~**Keyword-gate syntax (blocks step 8).**~~ **ANSWERED 2026-08-07 — no longer
+  blocks the step.** The syntax is a **per-automation nonce** Addison shows and
+  the person retypes (owner decision: a fixed prefix like `!run` is forgeable by
+  anything that can write English — observed content can say "type `!run
+  install`", but cannot pre-write a code that did not exist yet). The set of
+  actions it gates is settled the way the owner's reading pointed: **arming**
+  OS-run automation in the harness, never ordinary chat — a one-shot command
+  already meets a per-invocation card and the seatbelt, and the recurring,
+  unconfined, outlives-the-session nature of an armed job is the jump that earns
+  the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
+  build order and the surrounding decisions; nothing is built yet.
 - **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on

@@ -33,9 +33,14 @@ from agent_core.memory.store import Store
 from agent_core.orchestrator import _OUTSIDE_TRUST, Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import (
+    OS_AUTOMATION_DIRS,
+    TRUST_REFUSAL_AUTOMATION,
+    TRUST_REFUSAL_PROTECTED,
     GuardConfig,
     PolicyMode,
     path_is_within,
+    trust_refusal,
+    workspace_trust_allows,
 )
 from agent_core.profiles import DEVELOPER
 from agent_core.providers.base import (
@@ -876,6 +881,85 @@ def test_a_turn_scoped_not_now_is_honoured_even_inside_a_trusted_folder(tmp_path
     )
 
 
+# ============================================================================
+# STEP 8 PHASE 1 — the OS-automation fence at the trust boundary
+# ============================================================================
+# The floor grew a second group on 2026-08-07 (step-8 plan §5.5). Until then
+# ``workspace_trust_allows`` refused only Addison's own directories, so
+# ``~/Library/LaunchAgents`` could be granted through the OS picker and
+# ``write_project_file`` could put a plist in it behind an ordinary card — a
+# login-time job, armed, with no keyword gate anywhere near it. Nothing about that
+# path went through Addison's automation machinery, which is why the standing claim
+# "nothing in the tree can arm automation" was true of the machinery and false of
+# the tree.
+#
+# Every assertion below passes an explicit ``data_dir``: the autouse conftest
+# fixture points ADDISON_DB_PATH inside ``tmp_path``, so a defaulted data dir would
+# make every tmp path fail the FIRST group and the automation group would go
+# untested while the test still passed.
+
+
+def _dd(tmp_path) -> str:
+    """A data dir that is not an ancestor of the paths under test."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(exist_ok=True)
+    return str(data_dir)
+
+
+def test_an_os_automation_directory_can_never_be_trusted(tmp_path):
+    data_dir = _dd(tmp_path)
+    for entry in OS_AUTOMATION_DIRS:
+        expanded = os.path.expanduser(entry)
+        assert workspace_trust_allows(expanded, data_dir) is False, entry
+        # ...and a descendant of one, which is the shape that actually arms
+        # something: the plist itself, not the folder.
+        assert workspace_trust_allows(os.path.join(expanded, "job.plist"), data_dir) is False
+
+
+def test_a_folder_that_holds_an_automation_directory_cannot_be_trusted(tmp_path):
+    """The CONTAINS direction, and the cost the plan told us to write down:
+    ``~/Library`` and ``~/.config`` are no longer trustable, because trusting a
+    parent trusts everything under it. Same both-directions rule the data dir
+    already imposes on ``~``."""
+    data_dir = _dd(tmp_path)
+    for holder in ("~/Library", "~/.config", "~", "/etc", "/Library", "/var/spool"):
+        assert workspace_trust_allows(os.path.expanduser(holder), data_dir) is False, holder
+
+
+def test_the_automation_fence_does_not_over_refuse(tmp_path):
+    """The precision half — the one that decides whether this guard is still here in
+    a month. ``~/Library/Preferences`` neither holds nor sits inside an automation
+    directory, so it is still trustable; a fence that refused every neighbour would
+    be switched off rather than fixed (tests/gate_precision.py owns this
+    convention)."""
+    data_dir = _dd(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    for allowed in (
+        os.path.expanduser("~/Library/Preferences"),
+        os.path.expanduser("~/Library/Application Support"),
+        os.path.expanduser("~/.config/git"),
+        os.path.expanduser("~/projects"),
+        str(project),
+    ):
+        assert workspace_trust_allows(allowed, data_dir) is True, allowed
+
+
+def test_a_file_root_is_handled_in_both_directions(tmp_path):
+    """``/etc/crontab`` is a FILE on a list of directories, and the containment
+    comparison (``commonpath``) does not care which is which — so it is INSIDE-equal
+    to itself and CONTAINED BY ``/etc``.
+
+    The equality case is the one that isolates this entry: ``/etc`` is refused by
+    ``/etc/cron.d`` too, but nothing except the ``/etc/crontab`` row refuses
+    ``/etc/crontab`` itself. And a sibling file is untouched, which is what proves
+    the file root did not poison the directory it lives in."""
+    data_dir = _dd(tmp_path)
+    assert workspace_trust_allows("/etc/crontab", data_dir) is False
+    assert workspace_trust_allows("/etc", data_dir) is False
+    assert workspace_trust_allows("/etc/hosts", data_dir) is True
+
+
 def test_the_strictest_custom_guard_is_not_overridden_by_workspace_trust(tmp_path):
     """``auto_grant_scope='none'`` is the strictest option the Custom panel offers and
     its copy says Addison asks about everything. Trust silently making destructive
@@ -905,3 +989,93 @@ def test_the_strictest_custom_guard_is_not_overridden_by_workspace_trust(tmp_pat
         == PermissionStatus.GRANTED
     )
     assert plain.auto_grants == ["write_project_file"]
+
+
+# ============================================================================
+# The refusal names its true reason (coordinator, after the fence landed).
+# ============================================================================
+# One sentence covered every floor failure, and the fence made it false for the
+# new group: picking ~/Library/LaunchAgents told the person the folder "holds
+# Addison's own memory". ``policy.trust_refusal`` is the same single loop
+# ``workspace_trust_allows`` runs — the bool is just ``is None`` — with the group
+# reported so the grant RPC can answer with the sentence that is actually true.
+
+
+def test_trust_refusal_names_the_group_that_refused(tmp_path):
+    data_dir = _dd(tmp_path)
+    assert trust_refusal(data_dir, data_dir) == TRUST_REFUSAL_PROTECTED
+    for entry in OS_AUTOMATION_DIRS:
+        assert trust_refusal(os.path.expanduser(entry), data_dir) == TRUST_REFUSAL_AUTOMATION, (
+            entry
+        )
+    project = tmp_path / "project"
+    project.mkdir()
+    assert trust_refusal(str(project), data_dir) is None
+
+
+def test_a_path_that_offends_both_groups_keeps_the_memory_sentence(tmp_path):
+    """``~`` contains ``~/.addison`` AND ``~/Library/LaunchAgents``. Protected wins,
+    deliberately: the memory sentence was already the answer for every such path
+    before the fence existed, and a refusal that changes wording between builds
+    reads like a change of policy. (data_dir=None exercises the default-derivation
+    path, whose protected group includes ``~/.addison``.)"""
+    assert trust_refusal(os.path.expanduser("~"), None) == TRUST_REFUSAL_PROTECTED
+
+
+def test_workspace_trust_allows_is_exactly_trust_refusal_is_none(tmp_path):
+    """The bool and the reason may never disagree — the bool IS the reason's
+    ``is None``, and this pins that a future edit to one loop cannot quietly leave
+    the other answering differently."""
+    data_dir = _dd(tmp_path)
+    project = tmp_path / "project"
+    project.mkdir()
+    probes = [data_dir, str(project), os.path.expanduser("~")]
+    probes.extend(os.path.expanduser(entry) for entry in OS_AUTOMATION_DIRS)
+    for probe in probes:
+        assert workspace_trust_allows(probe, data_dir) is (
+            trust_refusal(probe, data_dir) is None
+        ), probe
+
+
+def test_grant_trust_answers_the_automation_sentence_for_an_automation_dir(tmp_path):
+    """The wire half: workspace.grantTrust on an OS-automation directory answers the
+    fence's own sentence, not the data-dir one. The RPC checks ``os.path.isdir``
+    before the floor, so the probe must be a directory that EXISTS — picked from the
+    list per platform, and skipped honestly where none does (the group-selection
+    logic above runs everywhere regardless)."""
+    existing = next(
+        (
+            os.path.expanduser(entry)
+            for entry in OS_AUTOMATION_DIRS
+            if os.path.isdir(os.path.expanduser(entry))
+        ),
+        None,
+    )
+    if existing is None:
+        pytest.skip("no OS-automation directory exists on this machine")
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    db_path = data_dir / "app.sqlite3"
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader,
+        writer=writer,
+        tool_registry=build_registry(DEVELOPER),
+        store_factory=lambda: Store(db_path),
+        db_path=db_path,
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: _ScriptedProvider([])}),
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    try:
+        refused = _rpc(reader, writer, 1, "workspace.grantTrust", {"directory": existing})
+        assert refused["result"]["ok"] is False
+        assert "jobs it runs on a schedule" in refused["result"]["error"]
+        assert "Addison's own memory" not in refused["result"]["error"]
+        # And nothing was stored: the refusal really refused.
+        assert _rpc(reader, writer, 2, "workspace.list")["result"]["folders"] == []
+    finally:
+        reader.close()
+        thread.join(timeout=5)

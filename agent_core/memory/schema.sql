@@ -96,6 +96,64 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
     ON mcp_servers(name COLLATE NOCASE);
 
+-- Automation Addison AUTHORS for the OS to run (step 8, phase 1). Addison never
+-- triggers itself — G2 is a floor, and nothing in this step gives the app a timer,
+-- a watcher or a callback of its own. A row here is a DRAFT and nothing else: phase
+-- 1 ships no authoring tool, no arming surface and no plist writer, so nothing in
+-- the tree can add a row and nothing reads one to reach the OS. Authoring is phase
+-- 2, arming is phase 3 (docs/step-8-automation-plan.md, which owns the phase order).
+--
+-- THERE IS NO `armed` / `enabled` COLUMN, and the absence is the design (plan §5.6).
+-- Armed truth lives in the OS: the surface asks launchd what is installed when it
+-- loads, and what launchd says is what the person sees. A stored armed flag is
+-- precisely what GLOBAL FLOOR G3 must never put back — a restore is ONE action, and
+-- the keyword ceremony that arms an automation cannot happen inside one action, so a
+-- restored row claiming "armed" would either be a lie about the OS or an arming
+-- nobody consented to. Without the column, a restore, a reinstall, and somebody
+-- deleting the plist by hand all converge on the same honest answer with no special
+-- case to write.
+--
+-- `command` is a shell command, which is why authoring and arming are Developer-only
+-- (plan §5.3): SAFE invariant 1 has no place for one. That gate lives at the tool
+-- registration and at dispatch, NEVER in this table — the rows are read in every
+-- profile, because hiding somebody's saved configuration when they switch to Simple
+-- is the failure the 2026-08-06 artifact decision reversed, and a removal must never
+-- be the thing a profile switch traps (docs/SAFETY.md owns that rule).
+--
+-- `created_in_mode` is DISPLAY-ONLY provenance, like the same column on `routines`
+-- and `widgets`, and unlike them it is never the thing that decides what a profile
+-- may do with the row. Ask the artifact, never the stamp.
+--
+-- Snapshot-CAPTURED (snapshots/scope.py) on the `mcp_servers` terms: an automation
+-- is reversible config — revocable, snapshotted, addable by prompting. Which also
+-- means whatever lands here is copied into `config_snapshots.state_blob` and the
+-- plaintext sidecars, forever; phase 2's authoring tool checks the stored text for
+-- secret shapes at the door for that reason (the mcp phase-1 precedent).
+--
+-- `label` is the plist filename stem the shell will write when arming exists
+-- (`com.addison.auto.<slug>`), and it is UNIQUE because two rows sharing one would
+-- fight over a single file in ~/Library/LaunchAgents. The prefix itself is enforced
+-- by the SHELL at install time (plan §5.8): the highest-trust process owns that
+-- directory and never takes a caller's word for what may go in it.
+--
+-- The schedule vocabulary is CLOSED (plan §5.4a) — `interval` -> {"minutes": N>=1}
+-- and `calendar` -> {"hour": 0-23, "minute": 0-59, "weekday": 0-6 optional}. Both
+-- render in one plain sentence and both map 1:1 onto launchd's `StartInterval` /
+-- `StartCalendarInterval`. A third kind is a deliberate migration rather than an
+-- insert, which is what the CHECK is for; the FIELDS are projected against the same
+-- closed vocabulary on the way out (agent_core/automations.py).
+CREATE TABLE IF NOT EXISTS automations (
+    id              TEXT PRIMARY KEY,       -- uuid4
+    name            TEXT NOT NULL,          -- plain user-given label, e.g. "Tidy up downloads"
+    label           TEXT NOT NULL UNIQUE,   -- com.addison.auto.<slug>; the plist filename stem
+    command         TEXT NOT NULL,          -- what the OS will run, once armed (phase 3)
+    schedule_kind   TEXT NOT NULL CHECK(schedule_kind IN ('interval','calendar')),
+    schedule_json   TEXT NOT NULL,          -- closed fields per kind, see above
+    created_in_mode TEXT NOT NULL,          -- display-only provenance, never enforcement
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS action_snapshots (
     id                  TEXT PRIMARY KEY,
     tool_call_id        TEXT NOT NULL,

@@ -148,6 +148,41 @@ class Method:
     # refused at admission, so it is absent from both and counted in `skipped` with
     # everything else Addison would not take. A reader can trust that every name in
     # `tools` is a name dispatch would find.
+    # Automation Addison AUTHORS for the OS to run (step 8 phase 1; amendment §9).
+    # Addison never triggers itself — G2 — so nothing on this surface starts, arms or
+    # schedules anything, and no phase ever will: the OS runs the job, Addison writes
+    # the file it runs from (phase 3, through a typed shell surface).
+    #
+    # PHASE 1 HAS NO ADD, AND THAT IS THE POINT. The table exists, these two methods
+    # answer over it, and nothing in the tree can write a row — authoring is phase 2
+    # (a `dev_only` registered tool, gated and audited like every other), arming is
+    # phase 3 (behind a per-automation typed keyword). So `automation.list` answers
+    # `{automations: []}` on every install until then.
+    #
+    # BOTH answer in EVERY profile, deliberately. A saved row is configuration, not a
+    # capability — what an automation's shell command needs is Developer, and that is
+    # enforced where the capability is (the authoring/arming tools' `dev_only`
+    # registration and their dispatch), never by hiding rows. Hiding somebody's saved
+    # configuration on a profile switch is the failure the 2026-08-06 artifact
+    # decision reversed, and a REMOVAL must never be the thing a switch traps
+    # (docs/SAFETY.md owns the rule; docs/step-8-automation-plan.md §4.1 the choice).
+    #
+    # Nothing here carries whether an automation is ARMED, in either direction. That
+    # truth lives in the OS and is asked for when the surface loads (plan §5.6): a
+    # stored flag is what a one-action G3 restore would put back, and a restore can
+    # never perform the keyword ceremony arming requires.
+    AUTOMATION_LIST = "automation.list"      # {} -> {automations: [<row>]}, oldest first
+    AUTOMATION_REMOVE = "automation.remove"  # {id} -> {ok} | {ok:false, error}
+    # <row> = {id, name, label, command, scheduleKind, schedule, createdInMode, createdAt}
+    # `schedule` is the parsed CLOSED-FIELD object for this row's kind — interval:
+    # {minutes}; calendar: {hour, minute, weekday?} — with camelCase keys that are the
+    # stored names exactly, because every one of them is a single word. It is a
+    # PROJECTION (agent_core/automations.py): only that kind's fields survive, only as
+    # numbers, so nothing a hand-edited row put in the column can ride out to a
+    # surface. `command` is the exact text the OS would run, sent whole because the
+    # preview a person reads before arming is the defence the keyword ceremony exists
+    # to make them read. `createdInMode` is DISPLAY-ONLY provenance (as on routines
+    # and widgets) and decides nothing.
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

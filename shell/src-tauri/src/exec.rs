@@ -94,6 +94,72 @@ const MAX_TIMEOUT_MS: u64 = 120_000;
 #[cfg(target_os = "macos")]
 const SCRATCH_DIR: &str = "/private/tmp";
 
+/// The OS's automation directories: every place where writing a file is the same
+/// act as arming a job the operating system will run on its own schedule, at login
+/// or at boot. Step 8 phase 1's fence, shell half.
+///
+/// DERIVED HERE, NEVER RECEIVED OVER IPC. This is the same rule the data-dir denies
+/// follow (`crate::filesystem::addison_data_dirs()` at the `sandbox_invocation`
+/// call site): the core's `writeRoots` is an INPUT to the boundary, never the
+/// boundary. A fence whose posts arrive in the frame is a fence the fenced-in
+/// process holds the gate to — and `writeRoots` is exactly that, "trusted roots
+/// reach the shell as data on every call" (KNOWN-GAPS). Until this existed,
+/// `~/Library/LaunchAgents` could be granted as a trusted workspace and a plist
+/// written into it behind an ordinary permission card: login-time automation,
+/// armed, with no keyword gate anywhere in the story.
+///
+/// **HAND-SYNCED, ENTRY FOR ENTRY, WITH `OS_AUTOMATION_DIRS` IN
+/// `agent_core/policy.py`.** There is no codegen and no runtime handshake — the two
+/// lists are kept in lockstep by hand, and the whole claim of the fence is that its
+/// three consumers (the core's trust-grant refusal, the core's pre-gate denylist,
+/// and this profile's write-denies) refuse the SAME set. Change one, change the
+/// other in the same commit; `the_profile_write_denies_every_os_automation_directory`
+/// pins the count and the macOS-arming entries by name so a half-applied edit is
+/// loud.
+///
+/// Some entries are Linux's (the systemd units, the cron spools) while the seatbelt
+/// is macOS-only, so those lines deny paths nothing on this platform reads. They
+/// stay: a list that matches the core's entry-for-entry can be checked by eye in
+/// one pass, and a set that quietly differs per platform is the shape nobody
+/// notices the day a Landlock profile lands beside this one.
+#[cfg(target_os = "macos")]
+const OS_AUTOMATION_DIRS: &[&str] = &[
+    "~/Library/LaunchAgents",
+    "~/Library/LaunchDaemons",
+    "/Library/LaunchAgents",
+    "/Library/LaunchDaemons",
+    "/etc/cron.d",
+    "/etc/crontab",
+    "/var/spool/cron",
+    "/var/at",
+    "/usr/lib/cron",
+    "/etc/systemd/system",
+    "~/.config/systemd",
+];
+
+/// `OS_AUTOMATION_DIRS` as absolute paths, `~` expanded against the same
+/// `home_dir()` every other path in this file resolves against.
+///
+/// RESOLVED INSIDE THE PROFILE, unlike the data dirs, and the difference is
+/// deliberate. The data dirs are passed in because their live value belongs to the
+/// running store — a test points `ADDISON_DB_PATH` at a fixture, and reading it
+/// inside `seatbelt_profile` made the headline test race any other test that
+/// touched the same variable (see `sandbox_invocation`). This list has nothing to
+/// inject: it is static, its only environment input is `HOME` — which the handler
+/// already depends on for the command's own cwd, and which no test mutates — and
+/// making a floor a parameter invites a caller to pass a shorter one.
+#[cfg(target_os = "macos")]
+fn os_automation_dirs() -> Vec<PathBuf> {
+    let home = home_dir();
+    OS_AUTOMATION_DIRS
+        .iter()
+        .map(|entry| match entry.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(*entry),
+        })
+        .collect()
+}
+
 // shell.runCommand {command, timeoutMs, writeRoots} -> {stdout, stderr, exitCode, sandboxed}
 pub fn run_command(params: &Value) -> Result<Value, RpcError> {
     run_command_with_ceiling(params, MAX_TIMEOUT_MS)
@@ -202,13 +268,17 @@ fn sandbox_invocation(
 ///      is what finally makes workspace trust govern the shell.** Until now trust
 ///      bounded the careful typed file tools while `run_command` roamed all of
 ///      HOME — the boundary applied to the safe tools and not the dangerous one.
-///      A root that collides with a protected dir is DROPPED rather than allowed —
-///      see `write_root_collides_with_protected`, which is what makes item 4's
-///      independence claim true.
+///      A root that collides with EITHER floor — a protected dir or an OS-automation
+///      dir — is DROPPED rather than allowed; see
+///      `write_root_collides_with_protected`, which is what makes items 4 and 5's
+///      independence claims true.
 ///   4. the data-dir denies come LAST, so the floor beats every allow above it.
 ///      This is the shell deciding INDEPENDENTLY, exactly as
 ///      `refuse_addison_data_dir` does: the core's `writeRoots` is an input to the
 ///      boundary, never the boundary.
+///   5. the OS-automation denies come last as well, and are WRITE-ONLY — see
+///      `OS_AUTOMATION_DIRS`, and the comment at the loop for why the read half of
+///      item 4 deliberately does not transfer.
 ///
 /// Seatbelt evaluates the last matching rule, so a later `deny` overrides an
 /// earlier `allow`. If that ever stops being true, item 4's audit log is what
@@ -224,6 +294,33 @@ fn sandbox_invocation(
 /// meant the CORE held a property this file claimed to hold independently, and it
 /// was live in dev/test where `ADDISON_DB_PATH` can put the floor under a
 /// renameable ancestor.
+///
+/// **THE AUTOMATION DIRS ARE DROPPED FOR THE SAME REASON, and that is the choice
+/// item 5 had to make.** Ordering alone was the tempting answer — the denies are
+/// emitted after every allow, so a *direct* write into `~/Library/LaunchAgents`
+/// loses on last-match-wins whatever the core trusted. It is not enough, and the
+/// rename argument above says exactly when: the hole needs an INTERMEDIATE
+/// directory, one that sits under the allowed root, above the denied dir, and
+/// matches no deny of its own. Trust `/var` and `/var/spool` is that directory —
+/// `mv /var/spool /var/spool-x` is allowed (both paths are inside the allow and
+/// neither matches the deny), `/var/spool-x/cron/…` is then writable because no
+/// deny matches it, and `mv` back restores `/var/spool/cron` with the file inside.
+/// Every rule obeyed, a job armed. `~`, `/usr` and `/etc` all have such an
+/// intermediate; `~/Library` and `/Library` do not, being direct parents, so
+/// ordering *would* hold for those two.
+///
+/// Which is precisely why the drop is not conditioned on any of that. A boundary
+/// that holds only when you count path components is a boundary nobody can check by
+/// reading it, and the next entry added to `OS_AUTOMATION_DIRS` would silently
+/// decide its own safety by how deep it happens to sit. So a root that IS, sits
+/// inside, or CONTAINS an automation dir is DROPPED, through the very same
+/// predicate the data dirs use, and the write-denies of item 5 are the second layer
+/// rather than the only one. The consequence is recorded in
+/// `docs/step-8-automation-plan.md` §5.5 and is intended: `~/Library` can no longer
+/// be trusted as a workspace, the same both-directions rule `~` already gets from
+/// the data dir. The core's own fence refuses such a grant at the door as well —
+/// and, exactly as with the data dir, that is precisely why this file must not be
+/// the place that relies on it.
 ///
 /// EVERY NON-FILE CAPABILITY, and why it is here. `(deny default)` means each one
 /// is a deliberate grant, so each needs a reason that survives review. These were
@@ -282,8 +379,15 @@ fn seatbelt_profile(write_roots: &[PathBuf], protected: &[PathBuf]) -> String {
     // dir under /private/tmp would otherwise hand back the rename hole by the back
     // door.
     let scratch = PathBuf::from(SCRATCH_DIR);
+    let automation = os_automation_dirs();
     for root in write_roots.iter().chain(std::iter::once(&scratch)) {
-        if write_root_collides_with_protected(root, protected) {
+        // TWO FLOORS, ONE PREDICATE. Both lists are "may never be written", and a
+        // root colliding with either is dropped for the same rename reason — see the
+        // docstring. Deliberately not merged into one list, because only the data
+        // dirs get the read-deny below.
+        if write_root_collides_with_protected(root, protected)
+            || write_root_collides_with_protected(root, &automation)
+        {
             continue;
         }
         if let Some(rule) = subpath_rule("allow file-write*", root) {
@@ -307,6 +411,36 @@ fn seatbelt_profile(write_roots: &[PathBuf], protected: &[PathBuf]) -> String {
             profile.push_str(&rule);
         }
     }
+    // LAST as well, and for the same reason: writing a file into one of these
+    // directories IS arming a job the OS runs — at login, on a schedule, outside
+    // Addison's sandbox, with Addison possibly not even running. That is the one
+    // effect no permission card in this app is currently strong enough to sell
+    // (step 8's nonce is what will be), so the shell refuses it outright and does
+    // not care what the core trusted.
+    //
+    // WRITE-DENY ONLY. The read-deny in the loop above does NOT transfer, and the
+    // asymmetry is the decision rather than an oversight — somebody reading the two
+    // adjacent loops will otherwise "fix" it. The data dir is read-denied because it
+    // is ADDISON'S OWN MEMORY: nothing legitimate reads it, and `network-outbound` is
+    // granted, so a readable conversation store is one `curl` from gone. A launchd
+    // plist is the PERSON'S configuration, holds no secret of Addison's, and a
+    // harness has honest reasons to look at one ("what is already scheduled here?",
+    // "why does this run at login?"). Denying that read would break real work and
+    // protect nothing, because the danger of an automation directory is entirely in
+    // the writing.
+    //
+    // Two entries can resolve to ONE real path here, and the emitted profile shows
+    // it: on macOS `/usr/lib/cron` is a symlink to `/private/var/at`, so that deny
+    // appears twice *(measured 2026-08-07 · macOS 15 on the owner's machine, by
+    // dumping the profile this function returns)*. Harmless — seatbelt takes the
+    // last matching rule and both matches are the same rule — and deliberately not
+    // deduplicated, because the list's job is to be readable against the core's
+    // entry-for-entry, not to be minimal.
+    for dir in &automation {
+        if let Some(rule) = subpath_rule("deny file-write*", dir) {
+            profile.push_str(&rule);
+        }
+    }
     profile
 }
 
@@ -319,6 +453,11 @@ fn seatbelt_profile(write_roots: &[PathBuf], protected: &[PathBuf]) -> String {
 /// independent floor and the core's grant-time rule cannot drift apart. The
 /// contains case is the one with teeth: see `seatbelt_profile`'s doc-comment for
 /// the rename that defeated ordering.
+///
+/// CALLED ONCE PER FLOOR: Addison's own data dirs, and the OS-automation dirs
+/// (`OS_AUTOMATION_DIRS`). Same rule, same reasoning, two lists — the lists stay
+/// separate only because the data dirs additionally get a read-deny and the
+/// automation dirs deliberately do not.
 #[cfg(target_os = "macos")]
 fn write_root_collides_with_protected(root: &Path, protected: &[PathBuf]) -> bool {
     let root = canonical_lossy(root);
@@ -1175,6 +1314,157 @@ mod tests {
              stderr: {})",
             out.stdout,
             out.stderr
+        );
+    }
+
+    // ===================================================================
+    // STEP 8 PHASE 1 — the shell half of the automation fence.
+    // ===================================================================
+    // A note that belongs on all four, so it is written once here. These are
+    // PROFILE-TEXT tests, not end-to-end ones, and that is forced rather than lazy.
+    // The drop in `seatbelt_profile` means no write root that overlaps an automation
+    // directory ever reaches an `(allow …)` line — so under the shipped profile a
+    // write into `~/Library/LaunchAgents` is refused by `(deny file-write*)`, the
+    // base rule, whether or not the automation deny exists. A runtime test would
+    // therefore go green with the whole feature deleted: the exact false green
+    // `assert_the_sandbox_actually_ran` exists to catch, one level up. The kernel
+    // behaviour of a subpath deny emitted after the allows is already proven, by
+    // `an_approved_command_cannot_delete_the_recovery_floor` and
+    // `a_trusted_root_inside_the_data_dir_is_dropped_too`, through the same
+    // `subpath_rule` in the same position — and that the profile still COMPILES with
+    // these lines in it is proven by every runtime test in this file, since they all
+    // build their profile through `seatbelt_profile` and assert their marker landed.
+    // What is genuinely new, and what these measure, is: the list, the drop, the
+    // ordering, and the read asymmetry.
+
+    #[test]
+    fn the_profile_write_denies_every_os_automation_directory() {
+        let profile = seatbelt_profile(&[PathBuf::from("/tmp/addison-automation-root")], &[]);
+        let dirs = os_automation_dirs();
+
+        // A LOOP OVER THE LIST CANNOT SEE A TRUNCATED LIST — it would pass on an
+        // empty one. So the count is pinned, and the entries that actually arm a job
+        // on this platform are named. The count is also the hand-sync tripwire: it
+        // must equal `OS_AUTOMATION_DIRS` in `agent_core/policy.py`, and changing it
+        // here without changing it there is the failure mode of a list kept in
+        // lockstep by hand.
+        assert_eq!(
+            dirs.len(),
+            11,
+            "the automation list must stay entry-for-entry with OS_AUTOMATION_DIRS \
+             in agent_core/policy.py"
+        );
+        let home = home_dir();
+        for named in [
+            home.join("Library/LaunchAgents"),
+            home.join("Library/LaunchDaemons"),
+            PathBuf::from("/Library/LaunchAgents"),
+            PathBuf::from("/Library/LaunchDaemons"),
+            PathBuf::from("/etc/crontab"),
+        ] {
+            assert!(dirs.contains(&named), "{named:?} must be in the automation list");
+        }
+
+        for dir in &dirs {
+            let rule = subpath_rule("deny file-write*", dir)
+                .unwrap_or_else(|| panic!("{dir:?} must be expressible as a profile rule"));
+            assert!(
+                profile.contains(rule.trim_end()),
+                "the profile must deny writes to {dir:?}; profile was:\n{profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_automation_denies_come_after_every_allow() {
+        // Same property as `the_data_dir_deny_comes_after_every_allow`, asserted
+        // separately because it is a separate emission: seatbelt takes the LAST
+        // matching rule, so an automation deny written before the per-root allows
+        // would be overridden by any allow that overlaps it. (Nothing overlaps one
+        // today — the drop sees to that — which is exactly why an untested brace is
+        // indistinguishable from a missing one the day somebody moves the loop.)
+        let profile = seatbelt_profile(&[PathBuf::from("/tmp/addison-automation-order")], &[]);
+        let last_allow = profile
+            .rfind("(allow file-write*")
+            .expect("this fixture must produce at least one allow, or the test is vacuous");
+        let agents = subpath_rule("deny file-write*", &home_dir().join("Library/LaunchAgents"))
+            .expect("the launchd user-agent dir must be expressible");
+        let deny_at = profile
+            .find(agents.trim_end())
+            .unwrap_or_else(|| panic!("the profile must deny the launchd dir:\n{profile}"));
+        assert!(
+            deny_at > last_allow,
+            "the automation denies must come after every allow:\n{profile}"
+        );
+    }
+
+    #[test]
+    fn a_trusted_root_that_touches_an_automation_dir_is_dropped() {
+        // The three relations `write_root_collides_with_protected` refuses, against
+        // the automation list this time: a root that IS an automation dir, one INSIDE
+        // it, and — the case with teeth — one that CONTAINS it. Neither containing
+        // root is contrived: `~/Library` is an ordinary folder to trust, and HOME is
+        // the one the rename hole actually opens under (`~/Library` is then the
+        // intermediate directory `seatbelt_profile`'s docstring describes, and a
+        // plist reaches `~/Library/LaunchAgents` with every rule obeyed). HOME is
+        // already dropped today for containing `~/.addison` — but only when the data
+        // dirs are passed in, and here they deliberately are not.
+        let home = home_dir();
+        let agents = home.join("Library/LaunchAgents");
+
+        // POSITIVE CONTROL, in the same profile and through the same formatter. A
+        // bare `!profile.contains(…)` is the classic false green — it also passes
+        // when the format string matches nothing anywhere — so an unrelated root has
+        // to show up as an allow beside each refusal.
+        let control = tmp_dir("automation-control");
+        let control_rule =
+            subpath_rule("allow file-write*", &control).expect("the control root must be allowable");
+
+        for root in [agents.clone(), agents.join("nested"), home.join("Library"), home.clone()] {
+            let profile = seatbelt_profile(&[root.clone(), control.clone()], &[]);
+            let rule = subpath_rule("allow file-write*", &root)
+                .unwrap_or_else(|| panic!("{root:?} must be expressible as a rule"));
+            assert!(
+                !profile.contains(rule.trim_end()),
+                "{root:?} touches an automation dir and must never appear as an \
+                 allow:\n{profile}"
+            );
+            assert!(
+                profile.contains(control_rule.trim_end()),
+                "the drop must be surgical — an unrelated root is still \
+                 allowed:\n{profile}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_profile_does_not_read_deny_the_automation_directories() {
+        // THE ASYMMETRY IS THE DECISION. The loop above this one in `seatbelt_profile`
+        // denies reads as well as writes, because the data dir is Addison's own memory
+        // and `network-outbound` is granted. A launchd plist is the person's own
+        // configuration, and a harness looking at what is already scheduled is doing
+        // honest work. Denying that read would break it and protect nothing — the
+        // danger of an automation directory is entirely in the writing. Asserted so
+        // that "make the two loops symmetrical" is a red test rather than a tidy-up.
+        let data_dir = tmp_dir("automation-read-asymmetry");
+        let profile = seatbelt_profile(&[], std::slice::from_ref(&data_dir));
+
+        for dir in os_automation_dirs() {
+            let rule = subpath_rule("deny file-read*", &dir)
+                .unwrap_or_else(|| panic!("{dir:?} must be expressible as a rule"));
+            assert!(
+                !profile.contains(rule.trim_end()),
+                "reads of {dir:?} must stay permitted:\n{profile}"
+            );
+        }
+        // POSITIVE CONTROL: the read-deny machinery is switched on in this very
+        // profile, for the data dir, through the same formatter — so the loop above
+        // measures an asymmetry rather than a rule shape that never appears at all.
+        let data_rule = subpath_rule("deny file-read*", &data_dir)
+            .expect("the data dir must be expressible as a rule");
+        assert!(
+            profile.contains(data_rule.trim_end()),
+            "the data dir's read-deny must still be emitted:\n{profile}"
         );
     }
 

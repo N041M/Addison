@@ -157,6 +157,54 @@ def _protected_dirs(data_dir: str | os.PathLike[str] | None) -> list[str]:
     return protected
 
 
+# Why a trust grant was refused — the two groups of un-trustable directory, so the
+# RPC can answer with the sentence that is actually true. One sentence for both was
+# the first draft, and it told a person picking ~/Library/LaunchAgents that the
+# folder "holds Addison's own memory", which it does not.
+TRUST_REFUSAL_PROTECTED = "protected"    # Addison's own storage (the G3 floor)
+TRUST_REFUSAL_AUTOMATION = "automation"  # an OS-automation directory (the G2 fence)
+
+
+def trust_refusal(
+    path: str | os.PathLike[str], data_dir: str | os.PathLike[str] | None = None
+) -> str | None:
+    """Why ``path`` may not be a trusted workspace — a ``TRUST_REFUSAL_*`` constant —
+    or None when it may. The single loop behind ``workspace_trust_allows``; callers
+    that only need yes/no use that, the grant RPC uses this so its refusal sentence
+    can name the right reason.
+
+    Two groups, for two different reasons:
+
+      * ``_protected_dirs`` — Addison's own storage. Trusting it would put the G3
+        recovery floor inside the card-free zone.
+      * ``OS_AUTOMATION_DIRS`` — the places where writing a file IS arming
+        automation (defined beside ``_CREDENTIAL_DIRS`` below; one list, three
+        consumers, step-8 plan §5.5). Trusting one of these would let
+        ``write_project_file`` install a launchd job behind an ordinary card,
+        which is exactly the arming path G2's keyword gate exists to own.
+
+    PROTECTED WINS when a path offends both (``~`` contains ``~/.addison`` AND
+    ``~/Library/LaunchAgents``): the memory sentence was already the answer for
+    every such path before the fence existed, and a refusal that changes its
+    wording between builds reads like a change of policy. An unresolvable path is
+    refused as protected — fail closed, byte-for-byte the pre-fence behaviour."""
+    candidate = _canonical(path)
+    if candidate is None:
+        return TRUST_REFUSAL_PROTECTED
+    groups = (
+        (TRUST_REFUSAL_PROTECTED, _protected_dirs(data_dir)),
+        (TRUST_REFUSAL_AUTOMATION, [os.path.expanduser(d) for d in OS_AUTOMATION_DIRS]),
+    )
+    for reason, dirs in groups:
+        for protected in dirs:
+            prot = _canonical(protected)
+            if prot is None:
+                continue
+            if _within_or_equal(candidate, prot) or _within_or_equal(prot, candidate):
+                return reason
+    return None
+
+
 def _canonical(path: str | os.PathLike[str]) -> str | None:
     """``realpath`` (resolves symlinks, ``..`` and relative paths against cwd) plus
     a case fold, so comparison is symlink- and case-insensitive-filesystem safe
@@ -194,26 +242,27 @@ def path_is_within(path: str | os.PathLike[str], ancestor: str | os.PathLike[str
 def workspace_trust_allows(
     path: str | os.PathLike[str], data_dir: str | os.PathLike[str] | None = None
 ) -> bool:
-    """Return False when ``path`` is, contains, or is contained by any protected
-    directory (the data dir, its sidecar, ``~/.addison``); True otherwise. This is
-    the floor that keeps Addison's own memory — and the G3 restore storage under it
-    — un-trustable, so ``run_command`` inside a trusted parent can never ``rm -rf``
-    the floor's own files with no card (§6.6; the forward-declared xfail).
+    """Return False when ``path`` is, contains, or is contained by any un-trustable
+    directory (``_untrustable_dirs``: the data dir, its sidecar, ``~/.addison``, and
+    every entry of ``OS_AUTOMATION_DIRS``); True otherwise. This is the floor that
+    keeps Addison's own memory — and the G3 restore storage under it — un-trustable,
+    so ``run_command`` inside a trusted parent can never ``rm -rf`` the floor's own
+    files with no card (§6.6; the forward-declared xfail), AND the floor that keeps
+    launchd/cron/systemd's directories un-trustable, so nothing in the tree can arm
+    automation with an ordinary card (G2; step-8 plan §5.5).
 
     Refuses BOTH directions: a descendant (``~/.addison/x`` — inside it) and an
     ancestor (``~`` — contains it). Both sides are realpath+casefold canonicalised,
     so a symlink into the data dir and a case-folded spelling are both caught. A
-    path that cannot be resolved is refused (fail closed)."""
-    candidate = _canonical(path)
-    if candidate is None:
-        return False
-    for protected in _protected_dirs(data_dir):
-        prot = _canonical(protected)
-        if prot is None:
-            continue
-        if _within_or_equal(candidate, prot) or _within_or_equal(prot, candidate):
-            return False
-    return True
+    path that cannot be resolved is refused (fail closed).
+
+    THE COST, WRITTEN DOWN: ``~/Library`` and ``~/.config`` can no longer be
+    trusted, because each CONTAINS an automation directory — the same both-directions
+    rule the data dir already imposes on ``~``. That is the whole point and it is not
+    a bug report. It is also not a blanket refusal: a sibling that neither holds nor
+    sits inside one (``~/Library/Preferences``) is still trustable, and a fence that
+    over-refuses is one people route around."""
+    return trust_refusal(path, data_dir) is None
 
 
 # ===========================================================================
@@ -256,6 +305,49 @@ _CREDENTIAL_DIRS = ("~/.ssh", "~/.aws", "~/.gnupg")
 # tuple protected the least-used spelling of the four.
 _CREDENTIAL_BASENAMES = (".env",)
 
+# The places where a WRITTEN FILE IS ARMED AUTOMATION (step-8 plan §5.5). launchd
+# reads a plist dropped in a LaunchAgents directory and runs it at login and on a
+# schedule; cron and systemd read theirs the same way. So a file written here is
+# not data — it is a job the OS will run on its own, outside Addison's sandbox,
+# with Addison closed and possibly uninstalled. That is one qualitative jump from
+# everything else a file tool does, and it is why ONE closed list has THREE
+# consumers, each treating it like the group it most resembles:
+#
+#   * ``_untrustable_dirs`` — un-trustable at grant time, exactly like Addison's
+#     own directories (a trusted LaunchAgents folder = arming with no keyword);
+#   * ``denylisted_roots`` — refused pre-gate when a command names one, exactly
+#     like a credential store;
+#   * the seatbelt profile's write-denies (``exec.rs``, the shell's own half).
+#
+# ``/etc/crontab`` is a FILE and belongs on a list of directories anyway: every
+# comparison here is ``commonpath``, which answers "is this equal to or under
+# that" without caring what kind of node either is — so naming the file is INSIDE
+# and naming ``/etc`` CONTAINS it. ``test_a_file_root_is_handled_in_both_directions``
+# pins both.
+#
+# CLOSED, and deliberately not extensible from a setting, a spec or a tool
+# argument: a list that anything else can shorten is not a fence.
+OS_AUTOMATION_DIRS = (
+    "~/Library/LaunchAgents",
+    "~/Library/LaunchDaemons",
+    "/Library/LaunchAgents",
+    "/Library/LaunchDaemons",
+    "/etc/cron.d",
+    "/etc/crontab",
+    "/var/spool/cron",
+    "/var/at",
+    "/usr/lib/cron",
+    "/etc/systemd/system",
+    "~/.config/systemd",
+)
+
+# The programs whose whole job is to ARM automation — hand work to the OS so it
+# runs later, on its own. Refused as a command's first word, on every platform and
+# in every mode: the seatbelt blocks ``launchctl``'s Mach traffic on macOS, and
+# nothing blocks ``crontab`` anywhere else, so this refusal cannot be
+# platform-conditional the way the CONTAINS direction is.
+_ARMING_BINARIES = ("launchctl", "crontab", "at", "batch")
+
 # Shell separators. Splitting on these is NOT parsing — it only widens the set of
 # tokens examined, so a missed separator can only fail open (which the docstring
 # above already concedes), never wrongly refuse.
@@ -265,6 +357,20 @@ _CREDENTIAL_BASENAMES = (".env",)
 # is a hole rather than the extra coverage the other separators buy.
 _TOKEN_SPLIT = re.compile(r"[\s;|&()<>]+")
 
+# Segment boundaries — where a NEW COMMAND starts, which is a narrower question
+# than ``_TOKEN_SPLIT``'s. Two deliberate differences from it:
+#
+#   * no ``\s``: a segment's FIRST word is the program it runs, and splitting on
+#     spaces would make every word a first word — ``man crontab`` and ``echo
+#     launchctl`` would be refused for talking about a program rather than running
+#     one. Newlines DO separate segments (``ls\ncrontab -`` is two commands, #48's
+#     vector), so they are spelled out.
+#   * no ``<`` / ``>``: those are REDIRECTS, and the word after one is a filename,
+#     never a program. Treating them as segment starts refused ``echo x >
+#     ./out/at`` as if it were running ``at``. The path checks still see that
+#     token — ``_TOKEN_SPLIT`` does split on redirects — so nothing is lost.
+_SEGMENT_SPLIT = re.compile(r"[;|&()\n\r]+")
+
 # Characters that make a token an explicit reference to a directory rather than a
 # bare word. Only these (plus the literal ``.``/``..``) are tested for CONTAINING a
 # protected directory, so an ordinary argument is never resolved against the
@@ -272,12 +378,29 @@ _TOKEN_SPLIT = re.compile(r"[\s;|&()<>]+")
 _PATHISH_PREFIXES = ("~", "$HOME", "${HOME}")
 
 
+def _automation_roots() -> list[str]:
+    """``OS_AUTOMATION_DIRS``, home-expanded. Its own function because the CONTAINS
+    direction has to be able to tell this group apart from the rest of
+    ``denylisted_roots`` — see ``command_denied_path``."""
+    return [os.path.expanduser(d) for d in OS_AUTOMATION_DIRS]
+
+
 def denylisted_roots(data_dir: str | os.PathLike[str]) -> list[str]:
     """Every directory a call may never reach into: the protected dirs (the data
-    dir, its snapshot sidecar, ``~/.addison``) plus the user's credential stores.
-    The G3 floor's own files live in the first group; the second is there because
-    ``cat ~/.ssh/id_rsa`` sends a private key to a cloud provider (step 5.5 item 4
-    redacts what still gets through; this stops the direct ask).
+    dir, its snapshot sidecar, ``~/.addison``), the user's credential stores, and
+    the OS-automation directories (``OS_AUTOMATION_DIRS``). The G3 floor's own files
+    live in the first group; the second is there because ``cat ~/.ssh/id_rsa`` sends
+    a private key to a cloud provider (step 5.5 item 4 redacts what still gets
+    through; this stops the direct ask); the third is there because a file written
+    into one of them is armed automation, and Addison must not be able to write one
+    by spelling it as a command (step-8 plan §5.5).
+
+    THE COST OF THE THIRD GROUP, STATED: ``cat ~/Library/LaunchAgents/x.plist`` is
+    now refused, and merely READING a plist is harmless. This string cannot tell a
+    read from a write — that is the whole reason this section calls itself a
+    backstop against the obvious — and the seatbelt, which can, denies only WRITES
+    there. Refusing the read is the price of the coarser layer, and it is the safe
+    direction to be wrong in.
 
     ``data_dir`` IS REQUIRED — no ``None`` default, deliberately. The live data dir
     is the one the running store is open on, and only the server knows it
@@ -288,6 +411,7 @@ def denylisted_roots(data_dir: str | os.PathLike[str]) -> list[str]:
     BUILD-LOG 07-31, finding 1) — the signature is what stops it recurring."""
     roots = list(_protected_dirs(data_dir))
     roots.extend(os.path.expanduser(d) for d in _CREDENTIAL_DIRS)
+    roots.extend(_automation_roots())
     return roots
 
 
@@ -420,8 +544,42 @@ def _names_a_directory(token: str) -> bool:
 #   CONTAINS — the token names a folder that HOLDS a denylisted place (``~``,
 #              ``/``, ``.``). Naming a subfolder works, and saying so turns a
 #              dead end into a one-turn correction.
+#   ARMING   — the command RUNS one of the programs that hands work to the OS
+#              (``crontab``, ``launchctl``…). Not about a path at all, which is
+#              why it is a third value rather than a spelling of INSIDE: the
+#              sentence the person gets has to say that scheduled automation is
+#              not built yet, not that Addison protects its own folders.
 DENIED_INSIDE = "inside"
 DENIED_CONTAINS = "contains"
+DENIED_ARMING = "arming"
+
+
+def command_arms_automation(command: str) -> str | None:
+    """The arming program ``command`` invokes as a segment's FIRST word, or None.
+
+    ``cd /tmp && crontab -`` is refused (``crontab`` opens a segment); ``man
+    crontab`` and ``echo launchctl`` are not, because there the word is an argument
+    and a guard that refuses talking about a program is one people route around.
+    The comparison is on the BASENAME, case-folded and dequoted, so
+    ``/usr/bin/crontab``, ``CRONTAB`` and ``"crontab"`` are the same program.
+
+    A BACKSTOP AGAINST THE OBVIOUS — the same honest scope the rest of this section
+    claims, and not one inch more. Conceded, precisely: any wrapper that puts
+    another word first (``sudo crontab``, ``env X=1 crontab``, ``FOO=1 crontab``,
+    ``xargs crontab``), a wildcard spelling (``cronta*`` — unlike a path, a
+    wildcarded PROGRAM name is not something people type, and matching it would
+    make a leading ``*`` refuse arbitrary commands), and anything the shell computes
+    rather than spells. None of that is the floor: until step 8's gated surface
+    exists there is no supported way to arm automation at all, and
+    ``workspace_trust_allows`` closes the path that needs no shell."""
+    for segment in _SEGMENT_SPLIT.split(command):
+        words = segment.split()
+        if not words:
+            continue
+        program = os.path.basename(_QUOTE_CHARS.sub("", words[0]).rstrip("/")).casefold()
+        if program in _ARMING_BINARIES:
+            return words[0]
+    return None
 
 
 def kernel_confines_writes() -> bool:
@@ -447,10 +605,17 @@ def command_denied_path(
     *,
     kernel_confined: bool | None = None,
 ) -> tuple[str, str] | None:
-    """The first denylisted path ``command`` appears to name and HOW it offends —
-    ``(token, DENIED_INSIDE | DENIED_CONTAINS)`` — or None.
+    """The first thing ``command`` names that it may not, and HOW it offends —
+    ``(token, DENIED_INSIDE | DENIED_CONTAINS | DENIED_ARMING)`` — or None.
 
-    Refuses BOTH directions, the same way ``workspace_trust_allows`` does: a token
+    ARMING IS ANSWERED FIRST, and it is not about a path: a command that RUNS
+    ``crontab``/``launchctl``/``at``/``batch`` is refused whatever its arguments
+    say, on every platform (``command_arms_automation`` owns that question and its
+    concessions). It lives here rather than beside the call sites so all three of
+    them — the live loop, the routine engine, the widget rail — inherit it through
+    the check they already make.
+
+    Refuses BOTH path directions, the same way ``workspace_trust_allows`` does: a token
     INSIDE a denylisted root (``rm ~/.addison/addison.sqlite3``) and a token that
     CONTAINS one (``rm -rf ~``, which takes the floor with it). The second
     direction is why ``ls ~`` is refused as well as ``rm -rf ~`` — read and write
@@ -494,10 +659,22 @@ def command_denied_path(
     section; it is shorter than it was, and it is not empty.
 
     ``data_dir`` is required for the reason ``denylisted_roots`` gives."""
+    arming = command_arms_automation(command)
+    if arming is not None:
+        return (arming, DENIED_ARMING)
     if kernel_confined is None:
         kernel_confined = kernel_confines_writes()
     roots = [_canonical(root) for root in denylisted_roots(data_dir)]
     roots = [root for root in roots if root is not None]
+    # The OS-automation roots are INSIDE-ONLY, and the asymmetry is the point.
+    # CONTAINS exists because naming a folder that HOLDS the recovery floor or a
+    # credential store destroys it; nothing about naming ``~/Library`` arms
+    # anything, and asking CONTAINS of an automation root would refuse ``rm -rf
+    # ~/*`` on every platform the kernel does not confine — an ordinary command,
+    # and exactly the false positive that gets a guard switched off rather than
+    # fixed. What DOES matter about these roots is reaching into one, and that is
+    # INSIDE, which is unconditional.
+    automation = {c for c in (_canonical(r) for r in _automation_roots()) if c is not None}
     for token in _command_tokens(command):
         if _is_credential_basename(os.path.basename(token.rstrip("/"))):
             return (token, DENIED_INSIDE)
@@ -511,8 +688,9 @@ def command_denied_path(
             # is matched component-wise against each root instead. The literal
             # pass below still runs, for a token whose ``[`` is part of a name.
             for root in roots:
+                contains = pathish and root not in automation
                 direction = _glob_offends(token, root)
-                if direction == DENIED_INSIDE or (direction == DENIED_CONTAINS and pathish):
+                if direction == DENIED_INSIDE or (direction == DENIED_CONTAINS and contains):
                     return (token, direction)
         resolved = _resolved_token(token)
         if resolved is None:
@@ -520,6 +698,6 @@ def command_denied_path(
         for root in roots:
             if _within_or_equal(resolved, root):
                 return (token, DENIED_INSIDE)
-            if pathish and _within_or_equal(root, resolved):
+            if pathish and root not in automation and _within_or_equal(root, resolved):
                 return (token, DENIED_CONTAINS)
     return None
