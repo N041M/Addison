@@ -874,10 +874,13 @@ export function App() {
   // inferred — only the core may call a model free.
   const defaultCloudId = resolveCloudModel(models.cloudModels, models.selectedCloudModel)?.id;
   const activeLocalId = models.selectedLocalModel ?? readyLocalModels[0]?.id;
-  // Grouped BY COMPANY, in the order the core sent them — the union builder
-  // already emits a provider's models together, so this preserves that rather
-  // than imposing an order of its own. The old "Model — Provider" suffix is gone:
-  // the heading says it once per group instead of once per row.
+  // Grouped BY COMPANY, which the picker draws as folders — so the old
+  // "Model — Provider" suffix is gone: the folder says it once instead of once
+  // per row. Order WITHIN a company is still the core's, and that is
+  // load-bearing: a model the core has watched a provider refuse comes back sunk
+  // to the end of its company, and the folders narrow that to the end of its own
+  // family — last thing met either way, and struck through when it is met
+  // (types/ui.ts owns why a refused model is marked rather than dropped).
   const modelPopupOptions: ModelPopupOption[] = [
     ...models.cloudModels.map((m) => ({
       key: `primary:${m.id}`,

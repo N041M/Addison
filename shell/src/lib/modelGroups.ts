@@ -1,22 +1,28 @@
-// Grouping + collapse for the model lists, shared by the composer popup and the
-// Settings selector so the two cannot disagree about what a person is looking at.
+// The model lists' folder tree, shared by the composer menu and the Settings
+// popup so the two cannot disagree about what a person is looking at.
 //
-// WHY THIS EXISTS NOW. Both panels were designed for about five models: 270px
-// wide, one row each, every row visible. Then registration started using the
-// provider's real list instead of two hardcoded ids (2026-08-06), and a single
-// connected Google key contributes twenty-two. A panel that shows all of them is
-// not a menu, it is a scroll.
+// WHY THIS EXISTS. Both panels were designed for about five models: one row
+// each, every row visible. Then registration started using the provider's real
+// list instead of two hardcoded ids (2026-08-06), and a single connected Google
+// key contributes twenty-two. A panel that shows all of them is not a menu, it
+// is a scroll.
 //
-// The shape is taken from the brief rather than invented: the sidebar's chat list
-// already solves exactly this — "Group header row: label + mono hint (count, or
-// 'collapse'); click toggles. Collapsed groups show 3 rows + 'N more…' row"
-// (design-brief-dark/README.md §7). Reusing it means no new vocabulary, and a
-// person who has learned one list has learned both.
+// WHAT IT IS — owner decision, 2026-08-07: "a two level folder — company - model
+// family - model. Clicking on a level above should folder everything into said
+// folder. Clicking on google should hide all others." So: a real accordion. One
+// company open at a time, one family open inside it, and a closed folder shows
+// its heading and nothing else.
+//
+// This SUPERSEDES the sidebar's "3 rows + 'N more…'" preview idiom FOR THESE TWO
+// PANELS ONLY — design-brief-dark §4 still owns the sidebar's chat list, where a
+// preview is still the right answer because those rows have no hierarchy to
+// stand for them. Here they did: a preview is a peek into an open drawer, and
+// what was asked for is a drawer that shuts.
 
-/** Anything the panels render: it knows which company heading it sits under. */
+/** Anything the panels render: it knows which company it sits under. */
 export interface GroupedRow {
   group?: string;
-  /** The model id, for deriving its family. Absent = no family row. */
+  /** The model id, for deriving its family. Absent = no family level. */
   id?: string;
 }
 
@@ -61,123 +67,244 @@ export function modelFamily(id: string): string {
   return _titled(parts[0]);
 }
 
-/** How many rows a collapsed group still shows. The brief's number, not a guess. */
-export const COLLAPSED_ROW_COUNT = 3;
+/**
+ * Which folders are open.
+ *
+ * THE ACCORDION IS THIS SHAPE, not a rule the callers have to remember. There is
+ * one company field and one family field, so "opening Google closes Anthropic"
+ * is not something either panel implements — it is the only thing the state can
+ * say. Nothing anywhere can express two open companies.
+ *
+ * `family` belongs to `company`; it means nothing without one, and every
+ * transition below rewrites the pair together.
+ */
+export interface FolderState {
+  /** The one company drawn open, if any. */
+  company?: string;
+  /** The one family drawn open inside that company, if any. */
+  family?: string;
+}
 
 export type ModelListRow<T> =
-  /** The company, and the fold control: `key` is what a caller toggles. */
-  | { kind: "heading"; key: string; total: number; collapsed: boolean }
-  /** A family inside an EXPANDED company - a quiet label, never foldable. */
-  | { kind: "family"; key: string; family: string }
-  | { kind: "option"; option: T; index: number }
-  | { kind: "more"; key: string; hidden: number };
+  /**
+   * A company folder. `key` is both the label and what a caller toggles.
+   * `total` is the models inside — the closed hint, in the brief's idiom.
+   */
+  | { kind: "company"; key: string; level: number; total: number; open: boolean }
+  /** A family folder inside the open company. `key` is the family name. */
+  | { kind: "family"; key: string; company: string; level: number; total: number; open: boolean }
+  /** A model. `index` is its position in the ORIGINAL options array. */
+  | { kind: "option"; option: T; index: number; level: number };
+
+/** Every row this module names itself: the folders, never a caller's model. */
+export type ModelListFurnitureRow = Exclude<ModelListRow<never>, { kind: "option" }>;
 
 /**
- * The rows to draw, in order, for `options` under `collapsed`.
+ * A folder row's identity for React, and the one place it is decided.
  *
- * ORDER IS THE CALLER'S, never this function's. Headings are emitted where the
- * group CHANGES rather than by bucketing, for the same reason the ungrouped
- * version did it that way: the core already emits a provider's models together,
- * and a panel that re-sorted would move the selection out from under a keyboard
- * position its caller is tracking.
+ * Shared rather than spelled out in each panel, because the two ways of getting
+ * this wrong are the same bug and it is not a visible one: duplicate keys made
+ * React reconcile two rows against each other, and a fold left family labels
+ * drawn over nothing (observed 2026-08-07, with a console full of "Encountered
+ * two children with the same key"). Bucketing now makes duplicates impossible —
+ * one row per company, one per family within it — so this is short. It stays
+ * shared so that it cannot stop being true in one panel only.
+ */
+export function rowRenderKey(row: ModelListFurnitureRow): string {
+  return row.kind === "company" ? `c:${row.key}` : `f:${row.company}/${row.key}`;
+}
+
+/** A model with the index it had in the caller's array, which it keeps. */
+interface Placed<T> {
+  option: T;
+  index: number;
+}
+
+/**
+ * Companies in order of FIRST APPEARANCE, each holding all of its models.
  *
- * `index` on an option row is its position in the ORIGINAL array, so a caller
- * holding indices (the selector's `activeIndex`, its `optionId`) keeps meaning
- * them even as rows appear and disappear underneath.
+ * Bucketed, where the flat list read runs and never re-ordered. The old
+ * rationale was that the caller's order is authoritative and re-sorting would
+ * move rows out from under a keyboard position — that argument INVERTS for a
+ * folder tree: a company whose models arrive in two runs would draw as two
+ * folders with the same name, and a family split across them as two folders that
+ * open and close separately. That is not a folder, and no amount of ordering
+ * fidelity is worth a menu that says "Google" twice.
+ *
+ * Order WITHIN a bucket is still the caller's, and `index` still points into the
+ * caller's array, which is the part the keyboard actually depends on.
+ */
+function bucketByCompany<T extends GroupedRow>(
+  options: T[],
+): { company?: string; models: Placed<T>[] }[] {
+  const order: (string | undefined)[] = [];
+  const buckets = new Map<string | undefined, Placed<T>[]>();
+  options.forEach((option, index) => {
+    const company = option.group || undefined;
+    let models = buckets.get(company);
+    if (!models) {
+      models = [];
+      buckets.set(company, models);
+      order.push(company);
+    }
+    models.push({ option, index });
+  });
+  return order.map((company) => ({ company, models: buckets.get(company) ?? [] }));
+}
+
+/**
+ * The family folders inside one company, or `undefined` when that company has no
+ * family level at all.
+ *
+ * FAMILIES ONLY EARN A LEVEL WHEN THEY GROUP SOMETHING. If every family in this
+ * company holds exactly one model, each folder holds one model and says nothing
+ * the model's own name does not — three folders for Opus/Sonnet/Haiku is a
+ * drawer per sock. Google's twenty-two genuinely group; a three-model Anthropic
+ * catalogue genuinely does not.
+ *
+ * When the level DOES apply, every family is a folder, singletons included: a
+ * list mixing folder rows and loose model rows at the same indent asks a reader
+ * to work out which is which on every line.
+ */
+function familyBuckets<T extends GroupedRow>(
+  models: Placed<T>[],
+): { family: string; models: Placed<T>[] }[] | undefined {
+  const order: string[] = [];
+  const buckets = new Map<string, Placed<T>[]>();
+  for (const model of models) {
+    // Nothing to name a folder after. One such model and the company keeps its
+    // models directly, rather than growing a folder called "".
+    if (!model.option.id) return undefined;
+    const family = modelFamily(model.option.id);
+    let inFamily = buckets.get(family);
+    if (!inFamily) {
+      inFamily = [];
+      buckets.set(family, inFamily);
+      order.push(family);
+    }
+    inFamily.push(model);
+  }
+  if (buckets.size >= models.length) return undefined;
+  return order.map((family) => ({ family, models: buckets.get(family) ?? [] }));
+}
+
+/** The family folder an option sits in, or undefined where there is no level. */
+function familyFolderOf<T extends GroupedRow>(options: T[], option: T): string | undefined {
+  if (!option.id || !option.group) return undefined;
+  const models = options
+    .map((o, index) => ({ option: o, index }))
+    .filter((m) => m.option.group === option.group);
+  return familyBuckets(models) ? modelFamily(option.id) : undefined;
+}
+
+/**
+ * The rows to draw, in order, for `options` under `state`.
+ *
+ * A CLOSED FOLDER IS ONE ROW. No preview, no "N more…" — that is the whole of
+ * the 2026-08-07 change, and the reason a caller can reason about this list at
+ * all: what is drawn is the path that is open, and nothing else.
+ *
+ * `index` on a model row is its position in the ORIGINAL array, so a caller
+ * holding indices (the popup's anchor row, App's `onPick` closures) keeps
+ * meaning them however the folders move.
  */
 export function modelListRows<T extends GroupedRow>(
   options: T[],
-  collapsed: ReadonlySet<string>,
+  state: FolderState,
 ): ModelListRow<T>[] {
   const rows: ModelListRow<T>[] = [];
-  let i = 0;
-  while (i < options.length) {
-    const group = options[i].group;
-    // A RUN, not a bucket. The core already emits a provider's models together,
-    // so reading runs preserves the order the caller chose; bucketing would
-    // re-sort the menu out from under a keyboard position it is tracking.
-    let end = i;
-    while (end < options.length && options[end].group === group) end += 1;
-    const run = options.slice(i, end);
-
-    if (!group) {
-      for (let k = 0; k < run.length; k += 1) {
-        rows.push({ kind: "option", option: run[k], index: i + k });
+  for (const bucket of bucketByCompany(options)) {
+    if (!bucket.company) {
+      // A caller that grouped nothing gets exactly what it passed, undecorated —
+      // there is no folder to open, so there is nothing to close either.
+      for (const m of bucket.models) {
+        rows.push({ kind: "option", option: m.option, index: m.index, level: 1 });
       }
-      i = end;
       continue;
     }
 
-    const isCollapsed = collapsed.has(group);
-    rows.push({ kind: "heading", key: group, total: run.length, collapsed: isCollapsed });
+    const open = state.company === bucket.company;
+    rows.push({
+      kind: "company",
+      key: bucket.company,
+      level: 1,
+      total: bucket.models.length,
+      open,
+    });
+    if (!open) continue;
 
-    if (isCollapsed) {
-      // FLAT while folded, and that is the point of folding: a three-row preview
-      // interrupted by family labels would spend its three rows on furniture.
-      const shown = Math.min(COLLAPSED_ROW_COUNT, run.length);
-      for (let k = 0; k < shown; k += 1) rows.push({ kind: "option", option: run[k], index: i + k });
-      if (shown < run.length) rows.push({ kind: "more", key: group, hidden: run.length - shown });
-    } else {
-      // EXPANDED, so the families earn their keep: nineteen Gemini ids in one
-      // column is a wall, and the same nineteen under "Gemini 3.1", "Gemini 2.5",
-      // "Gemma 4" is a list somebody can scan. The families do NOT fold — real
-      // ones hold one to three models, so a fold there would almost never fire
-      // and would cost a heading per model to say so.
-      // FAMILIES ONLY EARN A LABEL WHEN THEY GROUP SOMETHING. If every family in
-      // this company holds exactly one model, each label heads a run of one and
-      // says nothing the model's own name does not — three headings for
-      // Opus/Sonnet/Haiku is the same furniture problem that ruled out folding at
-      // family level, one scale smaller. Google's nineteen genuinely group; a
-      // three-model Anthropic catalogue genuinely does not.
-      const families = new Set(run.map((o) => (o.id ? modelFamily(o.id) : "")));
-      const familiesGroup = families.size < run.length;
-      let lastFamily: string | undefined;
-      for (let k = 0; k < run.length; k += 1) {
-        const option = run[k];
-        const family = familiesGroup && option.id ? modelFamily(option.id) : undefined;
-        if (family && family !== lastFamily) {
-          rows.push({ kind: "family", key: `${group} ${family}`, family });
-          lastFamily = family;
-        }
-        rows.push({ kind: "option", option, index: i + k });
+    const families = familyBuckets(bucket.models);
+    if (!families) {
+      for (const m of bucket.models) {
+        rows.push({ kind: "option", option: m.option, index: m.index, level: 2 });
+      }
+      continue;
+    }
+    for (const family of families) {
+      const familyOpen = state.family === family.family;
+      rows.push({
+        kind: "family",
+        key: family.family,
+        company: bucket.company,
+        level: 2,
+        total: family.models.length,
+        open: familyOpen,
+      });
+      if (!familyOpen) continue;
+      for (const m of family.models) {
+        rows.push({ kind: "option", option: m.option, index: m.index, level: 3 });
       }
     }
-    i = end;
   }
   return rows;
 }
 
-
 /**
- * Which groups start collapsed: the long ones, minus whichever holds the row the
- * person is currently on.
+ * The folders open when a menu opens: the path to the model in effect.
  *
- * That exception is the whole reason this is a function rather than a constant.
- * Collapsing by size alone hides the ACTIVE model whenever it sits fourth or
- * lower in its company — so the menu would open saying nothing about what is in
- * effect, which is the one thing it exists to say.
+ * THE POINT OF THE FUNCTION, and the reason it is not a constant. A menu opening
+ * on a closed tree says nothing about what is on, which is the one thing it
+ * exists to say — so the company holding the selection opens, and its family
+ * with it. Everything else stays shut, which is what the person asked for.
+ *
+ * No selection at all falls back to the first option, matching what the popup's
+ * own positioning does with an empty selection.
  */
-export function initialCollapsedGroups<T extends GroupedRow>(
+export function initialFolderState<T extends GroupedRow>(
   options: T[],
   isSelected: (option: T) => boolean,
-): Set<string> {
-  const counts = new Map<string, number>();
-  const selectedRank = new Map<string, number>();
-  for (const option of options) {
-    if (!option.group) continue;
-    const key = option.group;
-    const seen = counts.get(key) ?? 0;
-    counts.set(key, seen + 1);
-    if (isSelected(option) && !selectedRank.has(key)) selectedRank.set(key, seen);
-  }
-  const collapsed = new Set<string>();
-  for (const [key, total] of counts) {
-    if (total <= COLLAPSED_ROW_COUNT) continue;
-    const rank = selectedRank.get(key);
-    // Already among the visible three? Then folding still shows it, and opening
-    // the whole family costs rows without telling anyone anything.
-    if (rank !== undefined && rank >= COLLAPSED_ROW_COUNT) continue;
-    collapsed.add(key);
-  }
-  return collapsed;
+): FolderState {
+  const at = Math.max(0, options.findIndex(isSelected));
+  const option = options[at];
+  if (!option?.group) return {};
+  return { company: option.group, family: familyFolderOf(options, option) };
+}
+
+/**
+ * Clicking a company folder.
+ *
+ * Opening one closes every other company AND any family that was open inside the
+ * old one — that is the ask, stated as a state transition. A company opened by
+ * HAND starts with its families all closed, unless it happens to hold the model
+ * in effect, in which case that family opens too: opening the company you are
+ * already using should show you where you are, and opening any other should not
+ * pre-empt what you came to look for.
+ */
+export function toggleCompany<T extends GroupedRow>(
+  state: FolderState,
+  company: string,
+  options: T[],
+  isSelected: (option: T) => boolean,
+): FolderState {
+  if (state.company === company) return {};
+  const at = options.findIndex(isSelected);
+  const selected = at >= 0 ? options[at] : undefined;
+  const family =
+    selected && selected.group === company ? familyFolderOf(options, selected) : undefined;
+  return { company, family };
+}
+
+/** Clicking a family folder: the same accordion, one level down. */
+export function toggleFamily(state: FolderState, family: string): FolderState {
+  return { company: state.company, family: state.family === family ? undefined : family };
 }

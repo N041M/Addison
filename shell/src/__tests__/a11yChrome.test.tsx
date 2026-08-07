@@ -254,7 +254,7 @@ function openModelMenu(cloudModels: CloudModel[], onSelectEffort = vi.fn()) {
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: /^Model:/ }));
-  return { list: screen.getByRole("listbox"), onSelectEffort };
+  return { list: screen.getByRole("tree"), onSelectEffort };
 }
 
 describe("the composer's model menu", () => {
@@ -267,7 +267,7 @@ describe("the composer's model menu", () => {
     expect(document.activeElement).toBe(low);
     // Still open — Tab used to dismiss the whole panel here, which is why the
     // Effort buttons were unreachable by keyboard at all.
-    expect(screen.getByRole("listbox")).toBeTruthy();
+    expect(screen.getByRole("tree")).toBeTruthy();
 
     // "high ✓" — the active level carries its tick into the accessible name.
     fireEvent.keyDown(low, { key: "Tab" });
@@ -283,14 +283,14 @@ describe("the composer's model menu", () => {
     const { list } = openModelMenu(CLOUD_WITH_EFFORT);
     fireEvent.keyDown(list, { key: "Tab" }); // focus on an Effort button
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("tree")).toBeNull();
     expect(document.activeElement).toBe(screen.getByRole("button", { name: /^Model:/ }));
   });
 
   it("lets Tab leave when there is no Effort section to reach", () => {
     const { list } = openModelMenu(CLOUD_NO_EFFORT);
     fireEvent.keyDown(list, { key: "Tab" });
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.queryByRole("tree")).toBeNull();
   });
 });
 
