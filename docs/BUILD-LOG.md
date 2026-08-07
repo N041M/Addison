@@ -12,6 +12,80 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-07 — step 7 phase 4: what comes back, said rather than filtered
+
+[step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4 owns what landed and the three
+decisions taken with it, and §7 owns the re-read: `mcp_client.compose_result` (the
+one place a cut happens now), `clean_result_text`, `structuredContent` through the
+same redaction seam as the text, one shared budget across the whole result, and the
+disclosure line for everything Addison will not carry. It completes step 7 for v1.
+
+What building it taught:
+
+- **The dangerous half of "content-type breadth" is the half you don't build.** The
+  work reads as "support images and resources", and the safe answer to most of it is
+  to support none of them: a stranger's base64 has no consumer at this end, so
+  forwarding one would mean deciding, on a server's say-so, that some bytes are an
+  image. What the phase actually owed was HONESTY about the refusal, which costs a
+  counter and one sentence. **The scope question worth asking of an input-handling
+  phase is not "what can we accept?" but "what would consume it?"** — and here the
+  answer was nothing: checked, not assumed (`conversation.load` skips every `tool`
+  row, so a server's words never reach the webview), and now pinned by a source
+  test so the next person to widen that filter finds out what else it was holding.
+- **An embedded resource whose content is text is text, and giving it its own path
+  would have been the bug.** The tempting shape is a second handler with its own
+  size check, and a second handler is where a second set of caps quietly diverges
+  from the first. It joins the text path — same cleaning, same redactor, same budget
+  — and the test that proves it plants a credential inside the resource, because a
+  second path would have been a second way around the seam rather than a second way
+  to format a string.
+- **A cap that can be defeated by a cut is a cap per CHANNEL, not per subsystem.**
+  Phase 3's finding (redact before cutting) transferred intact, but phase 4 added a
+  second channel and therefore a second way to get it wrong, and the ordering test
+  had to grow a second half to say so. The structured cap resolves DIFFERENTLY from
+  the text cap and for a reason worth writing down: an oversized structured answer
+  is dropped whole rather than truncated, because truncated JSON is not smaller JSON
+  — it is a different document claiming to be one, and a model would draw
+  conclusions from a shape the tool never produced. **Two caps in one pipeline can
+  be right for different reasons; assuming they are the same rule is how one of them
+  ends up wrong.**
+- **The cleaning pass earned its place on ORDER, not on tidiness.** Stripping escape
+  sequences and invisible characters from a server's answer looks cosmetic, and as a
+  cosmetic change it would not have been worth the lines. It is worth them because
+  it runs BEFORE the redactor: every rule in `agent_core/redaction.py` matches a
+  contiguous pattern, so a credential with a zero-width space in the middle matches
+  nothing at all, and cleaning afterwards would have handed a model a key the
+  redactor had already declined to see. The mutation is one line (clean after
+  redact) and the test is one invisible character. **A hardening that only reads as
+  hygiene is usually in the wrong position in the pipeline.**
+- **A property test over the empty cases found a defect the eleven example tests
+  missed.** "This function never returns an empty string" is one parametrized test
+  over five shapes of nothing, and the whitespace-only case failed: `if text:` is
+  true for two spaces, so the text was carried, the result was non-empty by the
+  code's own reckoning, and the sentence explaining that the tool answered with
+  nothing was skipped — a model would have read a tool that ran and said nothing.
+  Fixed to `if text.strip()`. **The examples test the paths somebody thought of; a
+  property tests the ones they did not, and "never silence" was the property this
+  whole phase is about.**
+- **A budget stops being a budget the moment there are two of anything.** Phase 3's
+  8000 covered one joined string, so "the cap" and "the result's size" were the same
+  number by accident. With parts and channels, a per-part cap would have left every
+  document truthfully saying "8000" while a server sent ten of them. The fix is
+  arithmetic, not a new constant — the structured answer settles first, the text
+  takes the remainder — and `MAX_STRUCTURED_CHARS` is written as `MAX_RESULT_CHARS
+  // 4` so the two cannot drift. Addison's own lines are deliberately outside the
+  budget: a server must never be able to squeeze out the sentence explaining what
+  it did.
+- **Three phase-3 tests changed, and the ones with a note were the cheap ones.**
+  Two carried "phase 4 owns this" in their own docstrings and were a pleasure to
+  update; the third (the trim marker) did not, because nobody predicted the marker
+  would need totals. Each was changed by making its assertion say MORE — the phase-3
+  sentence is still asserted in every one — which is the only kind of edit to an
+  older phase's test that should be easy to review. **Where an assertion is going to
+  move, the note that says so is worth more than the assertion.**
+
+---
+
 ## What shipped 08-07 — step 7 phase 3: a stranger's tool runs, once a person says so
 
 [step-7-mcp-plan.md](step-7-mcp-plan.md) §4.3 owns what landed and the four

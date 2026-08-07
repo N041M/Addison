@@ -115,7 +115,14 @@ and where it goes.
   server's descriptions, schemas and answers now reach a model's context. Screening
   is still v2 and that is unchanged; what shipped instead is a recorded backstop —
   redaction, caps and a card on every single call — stated at its real strength in
-  [step-7-mcp-plan.md](step-7-mcp-plan.md) §7, which owns that re-read. **Partly
+  [step-7-mcp-plan.md](step-7-mcp-plan.md) §7, which owns that re-read. **Phase 4
+  re-read it again the same day** against the wider surface it opened, reached the
+  same answer, and added ONE thing: a cleaning pass over a server's answer that
+  runs BEFORE the redactor, because a credential with a zero-width space in the
+  middle of it matches no rule and cleaning afterwards would have handed a model a
+  key the redactor had already declined to see. That is a character filter and not
+  a screen — it does not read the text and would not notice the plainest injected
+  instruction — and §7 says so in those words. **Partly
   mitigated 2026-07-31**: output redaction (`agent_core/redaction.py`) strips the
   credential shapes it knows on the way to the model and the audit trail records
   that it happened — but an unrecognised or deliberately-encoded secret still
@@ -342,6 +349,23 @@ against the tree on 2026-07-26:
   (the gate said yes and the call never landed). Both dispatch paths write both.
   The refusal branch itself is now quiet for MCP tools — they are callable — and
   remains the mechanism `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` operates through.
+
+**Opened by step 7 phase 4 (2026-08-07):**
+
+- **A tool server that answers in pictures is a tool server Addison cannot use.**
+  Phase 4 counts and discloses `image` / `audio` / binary-resource parts and
+  forwards none of them ([step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4, decision 1),
+  so a server whose whole output is a chart returns *"nothing Addison can pass on"*
+  plus a count. That is the deliberate answer and it is the right one for v1 —
+  provenance, not capability, is the objection: the machinery to carry an image to a
+  model exists (`read_file` → `_gate_image_result`) and it carries a file **the
+  person picked**, not bytes a program nobody has audited pushed in unasked.
+  Recorded here rather than only in the plan because it is a real limitation
+  somebody will meet, and because the upgrade path is specific rather than
+  hypothetical: route a server's image through the same vision gate, behind the
+  same per-invocation card, once there is a reason to trust the provenance —
+  which is the promoted-allowlist decision wearing a different hat, and is
+  therefore the same later conversation.
 
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 

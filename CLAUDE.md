@@ -193,8 +193,11 @@ capability-declaration lattice was cut in favour of the closed kind list — see
 invariant 4 above and [ROADMAP.md](ROADMAP.md) for status). The one dependency that
 is not obvious from the list is inside 7:
 
-- **7 — MCP client. STARTED; phase 1 of five landed 2026-08-06** (config only,
-  nothing callable). 5.5 shipped the `tool_audit` log, so the spec's promise that
+- **7 — MCP client. DONE FOR v1: phases 1–4 of five landed 2026-08-06 to
+  2026-08-07** — configuration, discovery, dispatch through the ordinary gate with
+  a card per invocation, and the shape of what comes back. Phase 5 (stdio under
+  containment; SAFE admission) is a recorded later option, not a missing piece.
+  5.5 shipped the `tool_audit` log, so the spec's promise that
   MCP tools are "gated, logged, undo-aware" is satisfiable and that half of the
   dependency is discharged. The **SAFE-constraint question** in "Known gaps" is
   **deferred, not blocking**: MCP is dev-only for v1, so a server's self-declared

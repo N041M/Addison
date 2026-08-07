@@ -1,7 +1,7 @@
 """What a tool server offered, how it enters the one tool registry, and what
-happens when one of its tools is actually run (step 7, PHASES 2–3;
+happens when one of its tools is actually run (step 7, PHASES 2–4;
 [docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) §3 owns the admission rules
-this implements and §4.3 the dispatch).
+this implements, §4.3 the dispatch and §4.4 the shape of what comes back).
 
 ``mcp_client.py`` speaks the protocol; this module decides what happens to what it
 brings back. Three things live here and nothing else does:
@@ -36,9 +36,12 @@ they are the whole of what phase 3 added to a call:
     between refuses cleanly; nothing here can call a stale address.
   * **ONE call, ONE session, ONE budget** (decision 3) — the deadline lives here,
     at the call, because that is where the person is waiting.
-  * **The answer crosses the redaction seam and then the cap, in that order**
-    (decisions 1 and 2). The order is ``run_command``'s hard-won lesson: a cut
-    through a credential leaves a head the redactor no longer matches.
+  * **The answer crosses the redaction seam and then the caps, in that order**
+    (decisions 1 and 2, and phase 4's structured channel). The order is
+    ``run_command``'s hard-won lesson: a cut through a credential leaves a head the
+    redactor no longer matches. What gets cut, what is disclosed rather than
+    carried, and what the budget is shared between are all phase 4's, and they live
+    in ``mcp_client.compose_result`` — this module redacts and hands it over.
 
 **Namespaced ids are a safety requirement, not tidiness** (§3). A server can
 declare a tool called ``save_file``; registered bare it would shadow the native
@@ -60,7 +63,7 @@ from agent_core.mcp_client import (
     CallResult,
     DiscoveredTool,
     McpError,
-    trim_result,
+    compose_result,
 )
 from agent_core.policy import PolicyMode
 from agent_core.redaction import redact
@@ -222,10 +225,17 @@ class McpTool:
              address captured at discovery — is a call to wherever that server used
              to be, made on the strength of a row that no longer exists.
 
-        Then the answer: redacted, then capped, in that order (see ``trim_result``).
-        The kinds ride back on the ``ToolResult`` so BOTH dispatch paths can put
-        them in the audit row, which is the only durable record that a credential
-        came back from somebody else's program."""
+        Then the answer: **redacted, then shaped, in that order** — every channel,
+        every time (see ``mcp_client.compose_result``, which does all of the cutting
+        and none of the redacting). Phase 4 added a second channel and the ordering
+        did not change shape, only width: ``structuredContent`` crosses the SAME
+        seam as the text, one call apart, because a secret in a nested field is a
+        secret and a cut through the structured cap defeats the redactor exactly as
+        a cut through the text cap does.
+
+        The kinds from BOTH channels ride back on the ``ToolResult`` so both
+        dispatch paths can put them in the audit row, which is the only durable
+        record that a credential came back from somebody else's program."""
         if not MCP_TOOLS_ARE_CALLABLE:
             return ToolResult(
                 success=False, content=NOT_CALLABLE_REFUSAL, audit_outcome="not_callable"
@@ -251,11 +261,23 @@ class McpTool:
             # the turn continues — a tool that crashes a turn is worse than a tool
             # that fails.
             return ToolResult(success=False, content=CALL_FAILED, audit_outcome="failed")
+        # THE SEAM, both channels, immediately before the only thing that cuts.
+        # Adjacency is the enforcement here: there is nowhere between these lines
+        # for a cap to be added by somebody who has not read why.
         scrubbed = redact(answer.text)
+        structured = redact(answer.structured) if answer.structured else None
         return ToolResult(
             success=not answer.is_error,
-            content=trim_result(scrubbed.text),
-            redacted_kinds=scrubbed.kinds,
+            content=compose_result(
+                text=scrubbed.text,
+                structured=structured.text if structured is not None else None,
+                structured_unreadable=answer.structured_unreadable,
+                images=answer.images,
+                sounds=answer.sounds,
+                files=answer.files,
+                other=answer.other,
+            ),
+            redacted_kinds=scrubbed.kinds + (structured.kinds if structured is not None else ()),
         )
 
 

@@ -408,14 +408,18 @@ Component by component:
   Code-backed / system-capable kinds at the higher tiers remain future work,
   governed by workspace-trust, per-tool `undo()`, the snapshot floor, and the
   keyword gate.
-- **McpClient** *(Phase-2 step 7 — **partly built: phases 1–3 of five**. Phase 1
+- **McpClient** *(Phase-2 step 7 — **built for v1: phases 1–4 of five**. Phase 1
   shipped 2026-08-06 (the `mcp_servers` table and the `mcp.*` RPC namespace in
   `agent_core/rpc/mcp.py`); phase 2 shipped 2026-08-07 — `agent_core/mcp_client.py`
   (the Streamable-HTTP protocol client) and `agent_core/mcp_catalog.py` (admission +
   the in-memory catalog); phase 3 shipped the same day — `tools/call`, a bounded
-  `inputSchema`, `McpTool.execute`, and `tool_audit` on every outcome. Phases 4–5
-  (the rest of output handling; stdio under containment, SAFE admission) are
-  future work.)* — Addison as an MCP **client**, not a server or gateway. It
+  `inputSchema`, `McpTool.execute`, and `tool_audit` on every outcome; phase 4
+  closed output handling — `compose_result` (one shared budget across every part of
+  a result, the structured channel through the same redaction seam, and a plain line
+  naming what Addison will not carry) and `clean_result_text` before the redactor.
+  Phase 5 (stdio under containment, SAFE admission) is a recorded later option
+  rather than a missing piece.)* — Addison as an MCP **client**, not a server or
+  gateway. It
   connects to external MCP servers and surfaces their tools through the **existing
   ToolRegistry and PermissionGate** — never a side channel, so MCP tools are gated,
   logged, and undo-aware like any native tool. **MCP is Developer-only for v1** (owner
