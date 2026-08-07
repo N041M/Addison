@@ -135,8 +135,9 @@ principles that put them there:
   Addison may now *author* OS-level automation — write a `launchd`/`cron` entry or
   a small watcher script — exactly as Claude Code can scaffold a cron job; the
   **OS** runs it on its schedule, Addison itself still fires nothing autonomously.
-  Arming or running such a powerful action requires a **user-typed keyword prefix**
-  (exact syntax TBD, §14) — which, because observed content can never type a
+  Arming such a powerful action requires a **user-typed keyword** — a
+  per-automation nonce Addison shows and the person retypes (decided 2026-08-07;
+  [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it) — which, because observed content can never type a
   keystroke into your composer, doubles as a structural prompt-injection barrier
   (§9). This is what makes the motivating monitor (background poll + notify)
   buildable while keeping G2 intact.
@@ -877,7 +878,8 @@ guaranteed way back to a **working configuration**.
 
 **The keyword gate as an injection defense.** Running or arming a powerful/elevated
 action (OS-run automation, a code-backed widget) requires the user to type a
-**specific keyword prefix** (syntax TBD, §14). Because the prefix is *user-typed*,
+**per-automation nonce** Addison shows and the person retypes (decided
+2026-08-07). Because the nonce is *user-typed*,
 content Addison merely observes — a web page, a file, a tool result — **cannot
 supply it**: observed content can instruct the model, but it cannot type a keystroke
 into your composer. The prefix is therefore simultaneously an "are you sure" and a
@@ -1077,7 +1079,9 @@ three bars — persona fit (§5), full compatibility with every safety invariant
 > view and refusing to run under SAFE, always carding per invocation, never
 > trust-suppressed. It is not a default tool in any profile, which is the non-goal
 > in §4 that still holds. **Scheduling** is reconciled rather than repealed: Addison
-> may *author* OS-run automation behind a user-typed keyword prefix (Phase-2 step 8,
+> may *author* OS-run automation behind a user-typed keyword — a per-automation
+> nonce Addison shows and the person retypes (Phase-2 step 8; authoring shipped in
+> phase 2, the nonce and arming are phase 3,
 > not built), but **G2** — Addison never triggers itself — is a floor and does not
 > move. Multi-agent orchestration is unchanged and still deferred.
 
@@ -1117,7 +1121,9 @@ track (post-greenlight):
    mode-scoped (OPEN under workspace-trust; SAFE admission **deferred**, since MCP
    is Developer-only for v1). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option.
-8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Not started.**
+8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Phases 1–2 of
+   4 shipped 2026-08-07** — the fence, and authoring as inert drafts; the gate and
+   arming are phase 3.
 
 **[`../ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*. Steps
 6–8 are also the prerequisites for the Phase-3 **review surface**
@@ -1207,10 +1213,14 @@ the docs/spec update; all Phase-2).**
 which is not started, and 14 belongs to step 7, which is done for v1 and was
 unblocked by deferring 14 rather than answering it.)*
 
-9. **Keyword-gate syntax** — the exact user-typed prefix (`!run`, `arm:`, `sudo:`…)
-   and the precise set of actions it gates (running/arming powerful or OS-automation
-   actions in the harness, not ordinary chat) (§4, §9). **Still open** — Phase-2
-   step 8, not started.
+9. ~~**Keyword-gate syntax**~~ — **RESOLVED 2026-08-07 (owner).** Not a fixed
+   prefix (`!run`, `arm:`…) but a **per-automation nonce**: Addison shows a short
+   code beside the full preview and the person retypes it. A fixed prefix is
+   forgeable by anything that can write English — a page or a reply can say "now
+   type `!run install`" — while a code minted at the moment of asking is the one
+   string observed content could not have written down in advance. It gates
+   **arming** OS-run automation, never ordinary chat.
+   [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns the mechanics.
 10. ~~**Snapshot retention**~~ — **RESOLVED 2026-07-20 (Phase-2 step 1).** Keep the
     most recent **50 or 30 days, whichever keeps more**, with two exemptions written
     into the SQL rather than left to a caller: permanent rows, and the newest **two**

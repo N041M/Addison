@@ -96,12 +96,12 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
     ON mcp_servers(name COLLATE NOCASE);
 
--- Automation Addison AUTHORS for the OS to run (step 8, phase 1). Addison never
+-- Automation Addison AUTHORS for the OS to run (step 8, phases 1-2). Addison never
 -- triggers itself — G2 is a floor, and nothing in this step gives the app a timer,
 -- a watcher or a callback of its own. A row here is a DRAFT and nothing else: phase
--- 1 ships no authoring tool, no arming surface and no plist writer, so nothing in
--- the tree can add a row and nothing reads one to reach the OS. Authoring is phase
--- 2, arming is phase 3 (docs/step-8-automation-plan.md, which owns the phase order).
+-- 2's `create_automation` is the only thing that writes one, there is no arming
+-- surface and no plist writer, and nothing reads a row to reach the OS. Arming is
+-- phase 3 (docs/step-8-automation-plan.md, which owns the phase order).
 --
 -- THERE IS NO `armed` / `enabled` COLUMN, and the absence is the design (plan §5.6).
 -- Armed truth lives in the OS: the surface asks launchd what is installed when it

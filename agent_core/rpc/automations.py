@@ -1,13 +1,12 @@
 """automation.* handlers — the automation Addison AUTHORS for the OS to run
 (step 8, phase 1). Addison never triggers itself; the OS does.
 
-**PHASE 1 SHIPS THIS DOING NOTHING, AND THAT IS THE POINT.** There is no add, no
-update and no arm here: authoring is phase 2 (a ``dev_only`` registered tool that
-writes a row) and arming is phase 3 (a typed shell surface behind a per-automation
-keyword). Until those land the table stays empty except by hand, so
-``automation.list`` answers ``{"automations": []}`` on every install — the same
-shape the step-7 phase-1 surface had, for the same reason: the fence and the row
-shape are worth landing before anything can create one.
+**THERE IS NO ADD, NO UPDATE AND NO ARM HERE, and that is still the point.**
+Authoring is the ``create_automation`` TOOL (phase 2, registered ``open_only``),
+which writes rows this surface then lists and removes; arming is phase 3 (a typed
+shell surface behind a per-automation keyword) and exists nowhere in the tree. So
+this module reads and deletes, and a row it lists has never been handed to the
+operating system.
 [docs/step-8-automation-plan.md](../../docs/step-8-automation-plan.md) owns the
 phase order, and ``agent_core/automations.py`` owns the row and the closed schedule
 vocabulary.
@@ -20,11 +19,11 @@ does not exist yet and will never be reachable from here. The structural test in
 
 **Both methods answer in EVERY profile.** A saved row is configuration, not a
 capability: what an automation's shell command needs is Developer, and that belongs
-where the capability is — the phase-2/3 tools will register ``dev_only``, absent
-from ``registry.visible_tools(SAFE)`` and refused at dispatch outside OPEN (plan
-§5.3). Nothing in the tree registers one today, which is why this phase can be
-honest that listing is not one of those things. Hiding somebody's saved configuration when
-they switch to Simple is the failure the 2026-08-06 artifact decision reversed
+where the capability is — ``create_automation`` registers ``open_only`` (as the
+phase-3 arming tools will), absent from ``registry.visible_tools(SAFE)`` and refused
+at dispatch outside OPEN (plan §5.3). Listing a saved row is not one of those
+things. Hiding somebody's saved configuration when they switch to
+Simple is the failure the 2026-08-06 artifact decision reversed
 ([docs/SAFETY.md](../../docs/SAFETY.md) owns that rule), and ``automation.remove`` is
 a TIGHTENING — a profile switch must never be the thing that traps configuration
 somebody wants gone. Phase 4 gives Simple a listed-but-disabled treatment for these
@@ -43,7 +42,7 @@ surface phase 3 adds.
 
 from __future__ import annotations
 
-from agent_core.automations import Automation, schedule_fields
+from agent_core.automations import Automation, schedule_fields, schedule_sentence
 from agent_core.rpc.base import ServerContext
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
@@ -74,31 +73,56 @@ class AutomationsMixin(ServerContext):
         surface. A row whose JSON says nothing this vocabulary recognises arrives as
         ``{}`` rather than making the whole list unanswerable.
 
+        ``scheduleSentence`` is that same schedule in ONE plain sentence ("Every 30
+        minutes", "Every Monday at 7:30", or "No schedule saved yet." for a row this
+        vocabulary does not recognise). Two decisions are folded into that one line:
+
+          * **The words come from the CORE, not from each surface.** A frontend that
+            assembled English out of ``schedule`` would be a second renderer of the
+            same fact, and the second one is the one that says "Every day at 7:5" or
+            guesses am/pm — on a row whose whole job is to tell somebody what will run
+            while they are asleep. One wording, said the same way in chat, on the
+            Settings row and (phase 3) above the keyword field they type into.
+          * **It is rendered from the PROJECTION computed here, once** — the very
+            object this row carries as ``schedule`` — never from a second read of the
+            column. That is what makes the sentence and the numbers beside it
+            incapable of disagreeing: a row that answers ``{}`` cannot also claim an
+            hourly schedule, because the sentence was made out of that same ``{}``.
+
         ``command`` rides WHOLE. It is the one field a person must read before arming
         anything, and the keyword ceremony phase 3 adds exists to make them read it —
         a truncated or summarised command would defeat the defence at its one moment.
+
+        WHAT IS NOT HERE, AND STRUCTURALLY CANNOT BE: the plist preview. A schedule
+        rendered as a sentence is a fact ABOUT the row; the plist is a DOCUMENT, and
+        the shell builds its own from typed fields and never accepts one from this
+        process (plan §5.8). So no payload may normalise carrying one, and a test in
+        ``tests/test_automations.py`` pins that this module neither imports the
+        preview builder nor names it.
 
         ``updated_at`` is deliberately not on the wire: nothing can edit a row yet, so
         it equals ``created_at`` on every row that exists, and a field that is always
         a copy of another one teaches a frontend to render a fact nobody has. Phase 2
         adds it with the edit that makes it differ."""
+        schedule = schedule_fields(row.schedule_kind, row.schedule_json)
         return {
             "id": row.id,
             "name": row.name,
             "label": row.label,
             "command": row.command,
             "scheduleKind": row.schedule_kind,
-            "schedule": schedule_fields(row.schedule_kind, row.schedule_json),
+            "schedule": schedule,
+            "scheduleSentence": schedule_sentence(row.schedule_kind, schedule),
             "createdInMode": row.created_in_mode,
             "createdAt": row.created_at,
         }
 
     def _automation_list(self) -> dict:
         """automation.list -> {automations: [{id, name, label, command, scheduleKind,
-        schedule, createdInMode, createdAt}]}, oldest first.
+        schedule, scheduleSentence, createdInMode, createdAt}]}, oldest first.
 
-        Answers in EVERY profile (see the module docstring) and answers ``[]`` on
-        every install today, because nothing in the tree can write a row until phase 2.
+        Answers in EVERY profile (see the module docstring), and lists whatever
+        ``create_automation`` has written — ``[]`` until somebody asks for one.
 
         Reading rows only: no plist is looked for, no ``launchctl`` is asked anything,
         nothing is reconciled. Reconciliation against what the OS actually holds is

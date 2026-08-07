@@ -1,0 +1,43 @@
+{
+  "automations": [
+    {
+      "id": "automation-fixture-0",
+      "name": "Tidy up downloads",
+      "label": "com.addison.auto.tidy-downloads",
+      "command": "/usr/bin/find ~/Downloads -mtime +30 -delete",
+      "scheduleKind": "interval",
+      "schedule": {
+        "minutes": 60
+      },
+      "scheduleSentence": "Every hour",
+      "createdInMode": "open",
+      "createdAt": 4102444800
+    },
+    {
+      "id": "automation-fixture-1",
+      "name": "Back up notes",
+      "label": "com.addison.auto.backup-notes",
+      "command": "/usr/local/bin/backup-notes --to ~/Backups",
+      "scheduleKind": "calendar",
+      "schedule": {
+        "hour": 7,
+        "minute": 30,
+        "weekday": 1
+      },
+      "scheduleSentence": "Every Monday at 7:30",
+      "createdInMode": "open",
+      "createdAt": 4102444801
+    },
+    {
+      "id": "automation-fixture-2",
+      "name": "Something older",
+      "label": "com.addison.auto.something-older",
+      "command": "/usr/bin/say hello",
+      "scheduleKind": "interval",
+      "schedule": {},
+      "scheduleSentence": "No schedule saved yet.",
+      "createdInMode": "open",
+      "createdAt": 4102444802
+    }
+  ]
+}

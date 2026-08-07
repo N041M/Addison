@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  parseAutomations,
   parseCostPlan,
   parseEndpointProposal,
   parseSnapshotList,
@@ -30,6 +31,7 @@ import rolesFixture from "./fixtures/model.availableRoles.json";
 import snapshotListFixture from "./fixtures/snapshot.list.json";
 import workspaceListFixture from "./fixtures/workspace.list.json";
 import mcpListFixture from "./fixtures/mcp.list.json";
+import automationListFixture from "./fixtures/automation.list.json";
 import costPlanFixture from "./fixtures/costPlan.propose.json";
 import endpointProposeFixture from "./fixtures/endpoint.proposeFromConversation.json";
 
@@ -326,6 +328,70 @@ describe("parseMcpServers over the real mcp.list payload", () => {
       for (const tool of (row as { tools?: unknown[] }).tools ?? []) {
         expect(Object.keys(tool as object).sort()).toEqual(["description", "name"]);
       }
+    }
+  });
+});
+
+describe("parseAutomations over the real automation.list payload", () => {
+  it("reads the rows the core actually sends, schedule sentence included", () => {
+    // THE SENTENCE IS THE POINT OF THIS ONE. The core renders a schedule into words
+    // and this side prints them; a fixture generated from the real handler is the
+    // only artifact that can catch the two drifting into two different renderings of
+    // one schedule — which would show up as a person reading, on the row, a time
+    // that is not when their command runs.
+    //
+    // Three rows, one per meaningful state: an interval whose sentence collapses
+    // ("Every hour", not "Every 60 minutes"), a calendar WITH a weekday and a
+    // two-digit minute, and a row whose stored schedule is junk — a real state, made
+    // by a hand edit or an older build — which must arrive as {} and the core's own
+    // "no schedule" line without taking the other two off the list with it.
+    expect(parseAutomations(automationListFixture)).toEqual([
+      {
+        id: "automation-fixture-0",
+        name: "Tidy up downloads",
+        label: "com.addison.auto.tidy-downloads",
+        command: "/usr/bin/find ~/Downloads -mtime +30 -delete",
+        scheduleKind: "interval",
+        schedule: { minutes: 60 },
+        scheduleSentence: "Every hour",
+        createdInMode: "open",
+        createdAt: 4102444800,
+      },
+      {
+        id: "automation-fixture-1",
+        name: "Back up notes",
+        label: "com.addison.auto.backup-notes",
+        command: "/usr/local/bin/backup-notes --to ~/Backups",
+        scheduleKind: "calendar",
+        schedule: { hour: 7, minute: 30, weekday: 1 },
+        scheduleSentence: "Every Monday at 7:30",
+        createdInMode: "open",
+        createdAt: 4102444801,
+      },
+      {
+        id: "automation-fixture-2",
+        name: "Something older",
+        label: "com.addison.auto.something-older",
+        command: "/usr/bin/say hello",
+        scheduleKind: "interval",
+        schedule: {},
+        scheduleSentence: "No schedule saved yet.",
+        createdInMode: "open",
+        createdAt: 4102444802,
+      },
+    ]);
+  });
+
+  it("carries nothing that could be handed to the operating system", () => {
+    // The shell builds the job file itself, from typed fields (plan §5.8) — so no
+    // payload may normalise carrying a document, and no row may claim to be armed.
+    // The core pins this at its own boundary; this is the same line drawn where the
+    // webview would be the one carrying it.
+    for (const row of automationListFixture.automations) {
+      for (const key of Object.keys(row)) {
+        expect(key).not.toMatch(/plist|xml|arm|install|running/i);
+      }
+      expect(JSON.stringify(row)).not.toContain("<?xml");
     }
   });
 });

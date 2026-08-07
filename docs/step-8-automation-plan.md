@@ -1,7 +1,7 @@
 # Step 8 — OS-run automation and the keyword gate
 
-**Status: PHASE 1 OF FOUR IS BUILT (2026-08-07, the day this plan was written).
-Phases 2–4 are not started.** This plan turns the recorded decisions into a build
+**Status: PHASES 1 AND 2 OF FOUR ARE BUILT (2026-08-07, the day this plan was
+written). Phases 3–4 are not started.** This plan turns the recorded decisions into a build
 order and settles the engineering decisions those left open. The principle is the
 scope amendment's §9 sentence, unchanged since 2026-07-20:
 
@@ -179,19 +179,64 @@ the whole truth rather than a summary.
    floor), and `exec.rs`'s four profile tests. Every guard was mutation-proven
    by all four builders — the coordinator's pass re-verified the fence's and
    refusal's mutations independently.
-2. **Authoring. Drafts exist; nothing reaches the OS.**
-   - `create_automation` — an ordinary registered tool, `dev_only`, that writes
+2. **Authoring. Drafts exist; nothing reaches the OS — BUILT 2026-08-07.**
+   - `create_automation` — an ordinary registered tool, dev-only, that writes
      a row. At the door, the same refusals a command faces at dispatch: the
      denylist (Addison must not *author* what it would refuse to run), and a
      secret-shape check on the stored text (the mcp-phase-1 precedent: this
      table is captured, so anything in it is copied into every later snapshot
      payload and plaintext sidecar).
    - Plist text and the plain-words schedule are **pure functions** of the row,
-     testable byte-for-byte, previewed in chat and on the surface. The Settings
-     section (mcp pattern) lists drafts with their previews.
-   - Removal stays the phase-1 RPC. Every row in every profile is honest about
-     state: "not armed — Addison can write this for the OS to run, once you arm
-     it".
+     testable byte-for-byte. The Settings section (mcp pattern) lists drafts.
+   - Removal stays the phase-1 RPC. Every row is honest about state: "not armed
+     — Addison can write this for the OS to run, once you arm it".
+
+   **What shipped, and the five decisions taken while building:**
+
+   - **The plist preview is CHAT-ONLY, and structurally so.** The sketch above
+     originally said "previewed in chat and on the surface", and building it
+     showed the two halves contradict §5.8: a preview on the Settings surface
+     means the built document crossing IPC, and a payload that carries a plist
+     is a payload that normalises the shell taking one. So the preview lives in
+     the authoring tool's own result text (where the person is deciding), the
+     surface shows the name, the plain-words sentence and the exact command
+     (the row's truth, not the document), and a source-level test pins that
+     `rpc/automations.py` cannot even import `plist_text`.
+   - **Registered `open_only`, not `dev_only` — deliberately.** Identical
+     visibility (absent from SAFE, refused at dispatch outside OPEN), but
+     `dev_only` also waives the undo-at-registration check, and this tool is
+     MEDIUM with a REAL `undo()` (delete the row it created). `write_project_file`'s
+     registration shape, for `write_project_file`'s reason: dropping `undo()`
+     must fail registration, not register silently.
+   - **Non-destructive, so no card in OPEN — and that is the honest tier.** A
+     draft can run nothing; the ceremony belongs to arming (§5.2). The tool
+     declares `command_text`, so a forbidden command is refused at every
+     dispatch site ABOVE the gate — including the case where the automation's
+     own command is `crontab`, which is refused as arming: a scheduled job that
+     arms another scheduled job is the ceremony being walked around.
+   - **The label is ASCII-folded** (`Zálohování` → `zalohovani`): it becomes a
+     filename on a filesystem that folds Unicode, so two rows distinct to
+     SQLite's UNIQUE could collide as one plist. Conceded and stated: a name
+     with no Latin letters folds to nothing and is refused with the plain
+     "give it letters or numbers" sentence — the honest v1 answer.
+   - **The scheduling-language prompt gate got a caged exemption, not a hole.**
+     `primary.txt`'s "the app cannot schedule anything" SURVIVED phase 2 —
+     a draft nothing can run keeps it true — but the capability-claims test
+     fires on the word, so `create_automation` is exempted in the OPEN view
+     only, with three guards: the id must exist, must be absent from SAFE, and
+     its description must still state its own limit. Phase 3 is the commit
+     where the sentence genuinely changes (§7).
+
+   Two copy lines now state the not-armed truth — the tool's answer ("arming
+   doesn't exist yet") and the surface row ("once you arm it") — and **both flip
+   in phase 3's commit**; they are registered in §7 below.
+
+   Tests: `tests/test_create_automation.py` (the door, the registration shape,
+   the SAFE boundary, undo, 28 mutations), additions to
+   `tests/test_automations.py` (the wire sentence, the plist pin), the
+   `automation.list` fixture joining the generated-parity machinery, and
+   `shell/src/__tests__/automations.test.tsx` (the section, the parser, the
+   profile gate — 20 tests).
 3. **The keyword gate + arming. The step's claim becomes true.**
    - The shell surface: `automation.install {label, command, schedule}` /
      `automation.remove {label}` / `automation.status {label}` — the shell
@@ -217,6 +262,11 @@ the whole truth rather than a summary.
      checks at startup (the mcp temperament: no action the person did not just
      cause). After a restore or a reinstall the surface says what is actually
      true rather than what the row remembers.
+   - **Owed from phase 2:** the Automations section self-fetches
+     (`RoutineLibrary`-style), so a G3 restore does not re-read its list while
+     Settings is open — every other captured table is re-read by `App.tsx`'s
+     `onRestored` closure. The hook + `onRestored` entry land here, where the
+     same hook also carries the armed-ness reconciliation.
    - Simple lists automations as **disabled rows that say why** — the artifact
      rule. Every automation is dev-made by construction, so the treatment is
      uniform and needs no per-row predicate; note explicitly that this must
@@ -317,7 +367,15 @@ Registered here so the landing diff is a checklist rather than an archaeology
 dig. Each is one sentence today and each currently says "designed, not built"
 in some spelling:
 
-- `CLAUDE.md` — G2's parenthetical "(designed, **not built**)".
+**The list was incomplete until the phase-2 review swept for it (2026-08-07), which
+is worth one line of its own: a checklist that misses files is the archaeology dig
+it was written to prevent.** The sweep also retired the superseded `!run` prefix
+sketch everywhere it survived — `architecture.md`, `addison-engineering-spec.md`
+(×2 plus its own status line), `addison-design-doc.md` (×3, including its open-
+questions entry) — none of which this section had named. The scope amendment keeps
+its prefix wording on purpose: it is a historical record, not law.
+
+- `CLAUDE.md` — G2's parenthetical "(designed, **not built**: step 8 phase 3)".
 - [SAFETY.md](SAFETY.md) — G2's "designed, and **not built**: it is Phase-2
   step 8 and there is no keyword-gate code in the tree", and the §Custom note
   "(the keyword gate is Phase-2 step 8 and does not exist)". The `!run` example
@@ -329,8 +387,28 @@ in some spelling:
   §5.2).
 - `ROADMAP.md` — item 8 moves to Built, and the review-surface plan's
   "blocked on step 8 alone" clause unblocks.
+- The two not-armed copy lines (phase 2): the tool answer's "arming doesn't
+  exist yet" (`create_automation.NOT_ARMED_LINE`) and the Settings row's "once
+  you arm it" — both become true in a new way and must be reworded in the same
+  commit, with their byte-pinning tests.
+- `primary.txt`'s "the app cannot schedule anything" sentence, and the
+  `_AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING` exemption in
+  `tests/test_prompt_capability_claims.py` — the exemption does NOT grow to
+  cover `arm_automation`; the sentence changes instead (the exemption's own
+  comment says so).
+- `docs/architecture.md`, `docs/addison-engineering-spec.md` (the invariants
+  summary §, the §9 blockquote, and its own step-8 status line) and
+  `docs/addison-design-doc.md` (§6's automation note, §9's keyword paragraph,
+  and open question 9) — each carries a G2/keyword sentence of its own. Added
+  after the phase-2 sweep found them missing here.
+- `docs/data-model.md` — the `automations` bullet's "no arming surface exists"
+  and the "no path by which a stored command RUNS" clause.
 - `HANDOFF.md` — rewritten as always.
 
 New load-bearing facts this step creates (the nonce is per-automation and
 single-use; a restore never arms; the shell writes only its own prefix) get
-rows in `tests/doc_claims.py` in the phase that makes each true.
+rows in `tests/doc_claims.py` in the phase that makes each true. **One is
+already true and now has its row** (2026-08-07): *authoring exists and arming
+does not*, which is what the phase-2 review found four documents still
+contradicting — precisely the drift a row exists to catch mechanically rather
+than by re-reading sixteen files.

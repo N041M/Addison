@@ -193,7 +193,9 @@ def trust_refusal(
         return TRUST_REFUSAL_PROTECTED
     groups = (
         (TRUST_REFUSAL_PROTECTED, _protected_dirs(data_dir)),
-        (TRUST_REFUSAL_AUTOMATION, [os.path.expanduser(d) for d in OS_AUTOMATION_DIRS]),
+        # ``_automation_roots()`` rather than the expansion spelled again: the
+        # floor's own list must have ONE spelling in this module (phase-2 review).
+        (TRUST_REFUSAL_AUTOMATION, _automation_roots()),
     )
     for reason, dirs in groups:
         for protected in dirs:
@@ -347,6 +349,17 @@ OS_AUTOMATION_DIRS = (
 # nothing blocks ``crontab`` anywhere else, so this refusal cannot be
 # platform-conditional the way the CONTAINS direction is.
 _ARMING_BINARIES = ("launchctl", "crontab", "at", "batch")
+
+# Words the shell drops before running what follows, so that ``<prefix> crontab -e``
+# runs crontab exactly as the bare spelling does. Stepping over these is the
+# difference between refusing "the obvious" and refusing "the obvious, unless you
+# type one more word" (see ``command_arms_automation``). Deliberately NOT here:
+# ``xargs``, ``sh``, ``find -exec`` and friends, which run a DIFFERENT program that
+# then runs the binary — a distinction this backstop does not chase.
+#
+# ``batch`` is on the ARMING list above for the same reason ``at`` is: it is at(1)'s
+# companion, queuing a job for the system to run when it feels like it.
+_TRANSPARENT_PREFIXES = ("sudo", "doas", "exec", "command", "builtin", "env", "nohup", "time")
 
 # Shell separators. Splitting on these is NOT parsing — it only widens the set of
 # tokens examined, so a missed separator can only fail open (which the docstring
@@ -555,7 +568,7 @@ DENIED_ARMING = "arming"
 
 
 def command_arms_automation(command: str) -> str | None:
-    """The arming program ``command`` invokes as a segment's FIRST word, or None.
+    """The arming program ``command`` invokes as a segment's first word, or None.
 
     ``cd /tmp && crontab -`` is refused (``crontab`` opens a segment); ``man
     crontab`` and ``echo launchctl`` are not, because there the word is an argument
@@ -563,22 +576,63 @@ def command_arms_automation(command: str) -> str | None:
     The comparison is on the BASENAME, case-folded and dequoted, so
     ``/usr/bin/crontab``, ``CRONTAB`` and ``"crontab"`` are the same program.
 
+    TRANSPARENT PREFIXES ARE STEPPED OVER (``_TRANSPARENT_PREFIXES``), because ``exec crontab -`` and ``sudo crontab -e``
+    do not merely resemble arming — the shell drops the prefix and runs the arming
+    binary itself, so they ARE the bare command with a word in front. The earlier
+    version conceded these as "a wrapper that puts another word first", which
+    lumped them in with genuinely different programs (``xargs crontab`` spawns
+    ``xargs``); a reader took that concession to be narrower than it was
+    (phase-2 review). Stepping over a KNOWN prefix cannot widen what is refused to
+    anything else: the next word is still tested against the same four names, so
+    ``sudo ls`` is as allowed as ``ls``.
+
     A BACKSTOP AGAINST THE OBVIOUS — the same honest scope the rest of this section
-    claims, and not one inch more. Conceded, precisely: any wrapper that puts
-    another word first (``sudo crontab``, ``env X=1 crontab``, ``FOO=1 crontab``,
-    ``xargs crontab``), a wildcard spelling (``cronta*`` — unlike a path, a
-    wildcarded PROGRAM name is not something people type, and matching it would
-    make a leading ``*`` refuse arbitrary commands), and anything the shell computes
-    rather than spells. None of that is the floor: until step 8's gated surface
-    exists there is no supported way to arm automation at all, and
-    ``workspace_trust_allows`` closes the path that needs no shell."""
+    claims, and not one inch more. Still conceded, precisely: a wrapper that runs a
+    DIFFERENT program which then runs the binary (``xargs crontab``, ``sh -c
+    'crontab -'``, ``find . -exec crontab``), a transparent prefix carrying its own
+    FLAGS (``sudo -u me crontab -`` — stepping past those means knowing which flags
+    take a value, i.e. the flag-arity parsing that defeated #48 three times, and
+    this section stops exactly there), an environment assignment in front
+    (``X=1 crontab -``, ``env A=1 crontab -`` — see the loop for why buying these
+    cost more than they were worth), shell grouping and keywords
+    (``{ crontab -; }``, ``if true; then crontab -; fi``), a wildcard spelling
+    (``cronta*`` — unlike a path, a wildcarded PROGRAM name is not something people
+    type, and matching it would make a leading ``*`` refuse arbitrary commands), and
+    anything the shell computes rather than spells. None of that is the floor:
+    ``run_command`` still cards per invocation with the exact text, the seatbelt
+    still denies every write into an automation directory, and
+    ``workspace_trust_allows`` closes the path that needs no shell at all.
+
+    THE FALSE POSITIVE THIS SHAPE COSTS, since it is a real one and belongs in the
+    open: every newline starts a new segment (``ls\\ncrontab -`` is two commands —
+    #48's vector), so a line INSIDE a heredoc body is read as a command too. A
+    document whose line begins "at last we fixed it", or a Python heredoc with
+    ``batch = 5``, is refused. ``at`` and ``batch`` are ordinary English words and
+    this is the cost of not writing a shell parser; it is
+    [KNOWN-GAPS.md](../docs/KNOWN-GAPS.md)'s to track, with the negative tests in
+    ``test_step_5_5_containment.py`` recording it as a decision rather than a
+    surprise."""
     for segment in _SEGMENT_SPLIT.split(command):
-        words = segment.split()
-        if not words:
-            continue
-        program = os.path.basename(_QUOTE_CHARS.sub("", words[0]).rstrip("/")).casefold()
-        if program in _ARMING_BINARIES:
-            return words[0]
+        for word in segment.split():
+            bare = _QUOTE_CHARS.sub("", word)
+            program = os.path.basename(bare.rstrip("/")).casefold()
+            if program in _ARMING_BINARIES:
+                return word
+            # Step over a prefix the shell itself drops. Anything else ends this
+            # segment, because the word after it is an ARGUMENT and not a program.
+            #
+            # ONLY EXACT PREFIX WORDS, and the first draft of this loop also stepped
+            # over any word CONTAINING ``=`` (meaning to cover ``X=1 crontab -``).
+            # That chained: it walked past every ``=``-bearing word until it hit a
+            # plain one, so a heredoc line like ``SUMMARY=Nightly batch`` or
+            # ``label=Nightly batch job`` — ordinary .env and .properties content —
+            # was refused as arming. The adversarial pass over the fix round caught
+            # it. Writing config files through a heredoc is everyday Developer work,
+            # and this section's own doctrine is that the false positive is what gets
+            # a guard switched off rather than fixed. So ``env X=1 crontab -`` joins
+            # the conceded list below rather than being bought at that price.
+            if program not in _TRANSPARENT_PREFIXES:
+                break
     return None
 
 

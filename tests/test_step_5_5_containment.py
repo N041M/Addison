@@ -487,6 +487,55 @@ _ARMING_MUST_STILL_BE_ALLOWED = [
     "ls > batch",                                  # a redirect names a FILE
     "echo x > ./out/at",
     "git commit -m 'switch the batch size'",
+    # A transparent prefix in front of something HARMLESS stays harmless — the
+    # step-over added by the phase-2 review widens what is examined, never what is
+    # refused, and these are what keep that honest.
+    "sudo ls",
+    "exec ls",
+    "env NODE_ENV=test npm run build",
+    "time make build",
+    "nohup npm run dev",
+    "command -v crontab",                          # prints a path; runs nothing
+    # CONCEDED, and the concession was BOUGHT BACK deliberately: stepping over
+    # `VAR=value` too made the walk chain through any `=`-bearing word, so a
+    # `label=Nightly batch job` line inside a .properties heredoc was refused as
+    # arming. An everyday false positive is worse than missing one more spelling of
+    # a backstop — KNOWN-GAPS.md owns the entry.
+    "env X=1 crontab -",
+    "X=1 crontab -",
+    # The exact heredoc-config lines the reverted `=`-chain refused. Pinned so the
+    # regression cannot come back wearing a different spelling.
+    "cat > app.properties <<'EOF'\nlabel=Nightly batch job\nEOF",
+    "git commit -F- <<'EOF'\nfix=1 batch writes\nEOF",
+    "make CC=gcc batch",
+    "docker run -e X=1 at",
+]
+
+# Prefixes the SHELL ITSELF drops before running what follows, so each of these IS
+# the bare arming command with a word in front — not a different program. They were
+# conceded as "a wrapper that puts another word first" until the phase-2 review
+# pointed out the concession lumped them in with ``xargs crontab``, which really
+# does run something else.
+_ARMING_THROUGH_A_TRANSPARENT_PREFIX = [
+    "sudo crontab -e",
+    "doas crontab -",
+    "exec crontab -",
+    "command crontab -",
+    "nohup crontab -",
+    "time crontab -",
+    "exec /usr/bin/crontab -",
+    "sudo launchctl load ~/x.plist",
+]
+
+# THE FALSE POSITIVE THE FENCE COSTS, written down as a decision rather than left to
+# be rediscovered. Every newline starts a new segment (``ls\ncrontab -`` is two
+# commands — #48's vector), so a line inside a HEREDOC BODY is read as a command
+# too. ``at`` and ``batch`` are ordinary English words, and this is the price of not
+# writing a shell parser. KNOWN-GAPS.md owns the entry.
+_ARMING_FALSE_POSITIVES_ACCEPTED = [
+    "cat > NOTES.md <<'EOF'\nat last we fixed it\nEOF",
+    "git commit -F- <<'EOF'\nbatch the writes\nEOF",
+    "python3 - <<'EOF'\nbatch = 5\nEOF",
 ]
 
 
@@ -949,3 +998,46 @@ def test_the_tool_reads_every_field_the_shell_returns():
     source = inspect.getsource(module.RunCommandTool.execute)
     for field in ("stdout", "stderr", "exitCode", "sandboxed"):
         assert f'"{field}"' in source, f"execute() never reads {field!r}"
+
+
+def test_a_transparent_prefix_does_not_get_a_command_past_the_arming_fence():
+    """``exec crontab -`` and ``sudo crontab -e`` do not merely RESEMBLE arming: the
+    shell drops the prefix and runs the arming binary itself, so they are the bare
+    command with a word in front. They were conceded, and the concession read wider
+    than it was — it named ``xargs crontab``, which genuinely runs a different
+    program, in the same breath (phase-2 review).
+
+    Stepping over a KNOWN prefix cannot widen what is refused: the next word is
+    tested against the same four names, which is what
+    ``_ARMING_MUST_STILL_BE_ALLOWED``'s new entries hold.
+
+    Mutation: empty ``_TRANSPARENT_PREFIXES``, or drop the ``"=" not in bare``
+    clause (kills the ``X=1`` and ``env X=1`` cases)."""
+    tool = RunCommandTool()
+    data_dir = os.path.expanduser("~/.addison")
+    for command in _ARMING_THROUGH_A_TRANSPARENT_PREFIX:
+        denial = command_denied_path(command, data_dir)
+        assert denial is not None and denial[1] == DENIED_ARMING, command
+        assert call_is_forbidden(tool, {"command": command}, data_dir) == FORBIDDEN_CALL_ARMING
+
+
+def test_a_line_inside_a_heredoc_is_read_as_a_command_and_that_is_the_known_cost():
+    """THE FENCE'S FALSE POSITIVE, asserted so it is a recorded decision rather than
+    a surprise the day somebody hits it. A newline starts a new segment because
+    ``ls\ncrontab -`` is two commands (#48's vector) — and that same rule reads a
+    heredoc's BODY as commands, so a document whose line begins "at last…" is
+    refused as arming.
+
+    This test passing is not a claim that the behaviour is GOOD. It is the cost of
+    refusing to write a shell parser, it is bounded (Developer profile only, and
+    the person can run the command in their own terminal), and
+    [KNOWN-GAPS.md](../docs/KNOWN-GAPS.md) owns the entry. If a later change makes
+    these pass through, delete this test WITH the gap entry — do not weaken it in
+    place."""
+    data_dir = os.path.expanduser("~/.addison")
+    for command in _ARMING_FALSE_POSITIVES_ACCEPTED:
+        denial = command_denied_path(command, data_dir)
+        assert denial is not None and denial[1] == DENIED_ARMING, (
+            f"the recorded false positive no longer fires for {command!r} — if that "
+            "is deliberate, remove this test and the KNOWN-GAPS entry together"
+        )

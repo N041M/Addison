@@ -162,6 +162,23 @@ _CREATES_A_WIDGET = re.compile(
 )
 _READS_AS_SCHEDULING = re.compile(r"\bschedule|\bcron\b|\brecurring\b|\bevery day\b", re.I)
 
+# The ONE tool allowed to say "schedule" in the Developer view, and the exemption is
+# narrow on purpose. Step 8 phase 2 (2026-08-07) added `create_automation`: it WRITES
+# an automation down and can make nothing run, because arming is phase 3 and does not
+# exist in the tree. So `primary.txt`'s sentence is still true — the app cannot
+# schedule anything and nothing runs by itself — and without this the gate would be
+# firing on the WORD rather than on the CLAIM, which is how a gate gets deleted.
+#
+# Two things keep it from becoming a hole. The SAFE view is scanned with no exemption
+# at all (that is the view the Simple prompt is written for, and this tool is
+# `open_only`), and the exempted tool must still state its own limit — a description
+# that stopped saying what it cannot do would fail below.
+#
+# WHEN PHASE 3 LANDS THIS SET DOES NOT GROW. `arm_automation` genuinely makes the
+# sentence false, and the plan (docs/step-8-automation-plan.md §7) already registers
+# `primary.txt` among the things that change in that commit.
+_AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING = {"create_automation"}
+
 
 def test_every_widget_kind_is_accounted_for():
     """The forcing function. A kind added to `WIDGET_KINDS` with no sample here means
@@ -368,6 +385,12 @@ def test_the_prompt_is_right_that_nothing_runs_by_itself():
     it is the claim step 8 will make false — the keyword gate lands with
     author-OS-run automation, and this prompt sentence has to change in that commit.
 
+    Step 8 phase 2 landed and the sentence SURVIVED, which is the distinction worth
+    keeping: `create_automation` writes a draft and nothing can run it, so "the app
+    cannot schedule anything" is still true — see
+    `_AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING` above for the exemption and its guards.
+    Phase 3 is the commit where the sentence really does change.
+
     `tests/test_g2_no_self_trigger.py` owns the floor itself; this owns only the
     sentence, so the two cannot disagree without one of them going red.
     """
@@ -380,15 +403,39 @@ def test_the_prompt_is_right_that_nothing_runs_by_itself():
     )
     registry = build_registry()
     for mode in (PolicyMode.SAFE, PolicyMode.OPEN):
+        # SAFE is scanned with NO exemption: the prompt is written for Simple, and a
+        # tool that reads as scheduling must never reach that view at all.
+        exempt = _AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING if mode is PolicyMode.OPEN else set()
         offenders = [
             d.id
             for d in registry.visible_tools(mode)
-            if _READS_AS_SCHEDULING.search(d.id) or _READS_AS_SCHEDULING.search(d.description)
+            if (_READS_AS_SCHEDULING.search(d.id) or _READS_AS_SCHEDULING.search(d.description))
+            and d.id not in exempt
         ]
         assert not offenders, (
             f"{mode.name} exposes {offenders}, which reads like scheduling, while "
             "primary.txt tells the person the app cannot schedule anything. One of "
             "the two is wrong — and G2 says it is not the prompt."
+        )
+    # The exemption is not allowed to go stale or to grow quietly. Each id must be a
+    # tool that really exists, must be absent from the Simple view, and must say in
+    # its own description what it cannot do — an authoring tool that stopped saying
+    # "nothing runs" would be promising exactly what the prompt denies.
+    open_view = {d.id: d for d in registry.visible_tools(PolicyMode.OPEN)}
+    safe_ids = {d.id for d in registry.visible_tools(PolicyMode.SAFE)}
+    for tool_id in _AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING:
+        assert tool_id in open_view, (
+            f"{tool_id} is exempted here but is not registered — delete the exemption "
+            "rather than leaving a name the gate will never check again"
+        )
+        assert tool_id not in safe_ids, (
+            f"{tool_id} reads as scheduling and is visible in SAFE. The Simple prompt "
+            "denies scheduling to exactly that audience; the exemption does not reach it."
+        )
+        assert _DENIES.search(open_view[tool_id].description), (
+            f"{tool_id}'s description no longer states a limit. It is exempted from the "
+            "scheduling gate BECAUSE it says nothing runs — if that sentence is gone, "
+            "either put it back or the tool now schedules and primary.txt must change."
         )
 
 

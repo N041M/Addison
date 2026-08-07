@@ -332,6 +332,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # both sides share, so add one for every new payload a parser consumes.
         "workspace.list": _workspace_list_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
+        "automation.list": _automation_list_fixture(server),
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
@@ -420,6 +421,80 @@ def _mcp_list_fixture(server: JsonRpcServer) -> dict:
         for server_id, _name, _url in rows:
             server._mcp_catalog.forget(server.tool_registry, server_id)
             server.store.delete_mcp_server(server_id)
+
+
+def _automation_list_fixture(server: JsonRpcServer) -> dict:
+    """An automation.list payload with a row in it (step 8, phase 2).
+
+    Written through the store and read back through the REAL handler, so the two
+    things this payload does at the boundary are pinned rather than assumed: the
+    camelCase rename (``schedule_kind`` -> ``scheduleKind``) and — the field this
+    fixture was added for — ``scheduleSentence``, which the core renders and the
+    frontend prints without touching. A hand-written fixture would let the two
+    drift into two different renderings of one schedule, which is exactly the
+    failure mode the sentence exists to prevent.
+
+    THREE ROWS, one per meaningful state, because the shape is not one shape:
+
+      * an ``interval`` row (its sentence collapses 60 minutes to "Every hour");
+      * a ``calendar`` row WITH a weekday, so the day name and the two-digit minute
+        are in the artifact rather than in somebody's memory of the function;
+      * a row whose ``schedule_json`` is JUNK — which is what a hand edit, an older
+        build or a restored payload can genuinely put in that column. It must arrive
+        as ``{}`` and "No schedule saved yet.", and it must not take the other two
+        off the list with it. A fixture with only well-formed rows would let the
+        frontend's fallback go untested against a real payload and let the core
+        start raising on a bad row without either suite noticing.
+
+    Nothing here is armed and nothing here could be: no field on this payload says
+    so, and the plist a job would be armed from is the shell's to build.
+
+    The rows are deleted afterwards so the snapshot payload fixtures (which capture
+    this table) stay byte-stable."""
+    rows = [
+        (
+            "automation-fixture-0",
+            "Tidy up downloads",
+            "com.addison.auto.tidy-downloads",
+            "/usr/bin/find ~/Downloads -mtime +30 -delete",
+            "interval",
+            json.dumps({"minutes": 60}),
+        ),
+        (
+            "automation-fixture-1",
+            "Back up notes",
+            "com.addison.auto.backup-notes",
+            "/usr/local/bin/backup-notes --to ~/Backups",
+            "calendar",
+            json.dumps({"hour": 7, "minute": 30, "weekday": 1}),
+        ),
+        (
+            "automation-fixture-2",
+            "Something older",
+            "com.addison.auto.something-older",
+            "/usr/bin/say hello",
+            "interval",
+            # Not JSON at all — the column is TEXT, and this is what a hand edit or an
+            # older build's payload can genuinely leave in it.
+            "every now and then",
+        ),
+    ]
+    for index, (row_id, name, label, command, kind, schedule_json) in enumerate(rows):
+        server.store.insert_automation(
+            id=row_id,
+            name=name,
+            label=label,
+            command=command,
+            schedule_kind=kind,
+            schedule_json=schedule_json,
+            created_in_mode="open",
+            created_at=_T0 + index,
+        )
+    try:
+        return server._automation_list()
+    finally:
+        for row_id, *_rest in rows:
+            server.store.delete_automation(row_id)
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:

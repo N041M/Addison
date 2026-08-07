@@ -15,8 +15,8 @@
 // Sections, in the brief's order: Where Addison thinks · Which model answers ·
 // API keys · Run a model on this computer · Routines · Skills · Profile · How
 // careful Addison is (Custom only) · Folders Addison may work in
-// (Developer/Custom only) · Tool servers (Developer/Custom only) · Restore points ·
-// Diagnostics.
+// (Developer/Custom only) · Tool servers (Developer/Custom only) · Automations
+// (Developer/Custom only) · Restore points · Diagnostics.
 //
 // TWO THINGS THAT ARE NOT STYLING, and must survive any future edit here:
 //   * G1 — a key typed into a row goes to the OS keychain through the Rust
@@ -26,10 +26,10 @@
 //     "Advanced…" disclosure and a two-step confirm, with the core's own honest
 //     description in between (Phase-2 step 2).
 
-import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
-import type { ModelRole } from "../types/protocol";
+import { useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import type { Automation, ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
-import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
+import { ipc, type DiagnosticEntry, type ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
@@ -341,6 +341,21 @@ export function SettingsPage({
       {showMcp && mcp && (
         <SurfaceSection label="Tool servers">
           <McpServersPanel connected={connected} mcp={mcp} />
+        </SurfaceSection>
+      )}
+
+      {/* Automations — what Addison has written down for THIS COMPUTER to run on a
+          schedule (Phase-2 step 8, phase 2 of four). Same Developer/Custom gate as
+          the two sections above, for the same reason and one more: an automation's
+          payload is a shell command, which Simple has no place for (plan §5.3), and
+          the tool that writes one is `dev_only` and refused at dispatch outside OPEN
+          independently of this gate. Phase 4 replaces the gate with a
+          listed-but-disabled treatment, so a Simple person sees their saved rows and
+          cannot use them — the artifact rule. Nothing here is armed; nothing here
+          reaches the operating system. */}
+      {developerSurface && (
+        <SurfaceSection label="Automations">
+          <AutomationsSection connected={connected} />
         </SurfaceSection>
       )}
 
@@ -860,6 +875,158 @@ export function ProfileCard({
       {/* Appearance — three choices; "Match this computer" follows the OS
           light/dark preference and tracks it live. */}
       {appearanceRow}
+    </>
+  );
+}
+
+// --- Automations -----------------------------------------------------------
+// The work Addison has written down for THIS COMPUTER to run on a schedule
+// (Phase-2 step 8, phase 2 of four). Rendered on the Developer/Custom surfaces
+// only — the page-level gate above decides that, on the active profile and never
+// the policy mode, exactly as tool servers and trusted folders do.
+//
+// EVERY ROW SAYS IT IS NOT ARMED, AND THAT IS THE FEATURE. A draft is a name, a
+// schedule in plain words and a command that is not running: nothing on this
+// surface has been handed to the operating system, because handing one over is
+// phase 3 and asks the person to type a short code first. The line is per ROW
+// rather than per section on purpose — it is a statement about that automation's
+// state, and phase 4 replaces it with what the OS actually answers. A section-wide
+// banner would have to be rewritten into rows on the day the rows start differing,
+// which is the day the sentence stops being a decoration and starts being a fact.
+//
+// The schedule sentence comes from the CORE and is printed as it arrives. This
+// component has the numbers (`schedule`) and deliberately does not use them: a
+// second renderer of one fact is how a surface ends up saying "Every day at 7:5",
+// on the one line somebody reads before letting a command run while they sleep.
+//
+// Self-fetching, like RoutineLibrary and unlike the tool-server panel — there is no
+// state here for App to own and nothing else in the app reads this list yet. When
+// phase 4 reconciles armed-ness against the OS this becomes a hook, and the fetch
+// moves with it.
+
+/** What a row says about its state, until phase 3 can arm one. Frozen copy — the
+ * frontend test pins it byte-for-byte, because "not armed" is the whole of what
+ * this surface currently promises and a softened version of it would be the app
+ * implying it had scheduled something it has not. */
+const AUTOMATION_NOT_ARMED =
+  "Not armed — Addison can write this for the OS to run, once you arm it.";
+
+/** Said when there are none. It names the way to get one — asking — because there
+ * is deliberately no "New automation" button: an automation is written by talking
+ * to Addison, the same way a routine or a widget is. */
+const AUTOMATIONS_EMPTY = "No automations yet. Ask Addison to set one up.";
+
+/** Before the first answer arrives. A slow fetch must never render as "none yet",
+ * which is a claim about the person's own saved work that this surface cannot make
+ * until it has asked. */
+const AUTOMATIONS_LOADING = "Looking for your automations…";
+
+/** When a removal doesn't land and the core said nothing usable about why. The
+ * core's own sentence is preferred whenever there is one. */
+const AUTOMATION_REMOVE_FAILED = "Addison couldn't remove that automation just now.";
+
+// Exported for the step-8 phase-2 tests (automations.test.tsx). It is still only
+// rendered from within this page.
+export function AutomationsSection({ connected }: { connected: boolean }) {
+  const [automations, setAutomations] = useState<Automation[]>([]);
+  // "not asked yet" vs "asked" — see AUTOMATIONS_LOADING.
+  const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Which row is one press away from being removed. The two-press idiom the skills,
+  // routine and tool-server rows use; never a browser confirm(). A removal takes
+  // away the only copy of the command somebody wrote — the core refuses one it
+  // cannot mint a restore point for, and this is the same care one layer up.
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    ipc
+      .listAutomations()
+      .then((rows) => {
+        setAutomations(rows);
+        setLoaded(true);
+      })
+      .catch(() => {
+        // Keep the last-known list rather than blanking the section; still stop the
+        // looking-for line.
+        setLoaded(true);
+      });
+  }, []);
+
+  useEffect(() => {
+    if (!connected) return;
+    refresh();
+  }, [connected, refresh]);
+
+  async function remove(automation: Automation) {
+    if (confirmingRemove !== automation.id) {
+      setConfirmingRemove(automation.id);
+      return;
+    }
+    setConfirmingRemove(null);
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await ipc.removeAutomation(automation.id);
+      // A refusal is a resolved {ok:false} carrying the core's already-plain
+      // sentence — the row is gone already, or a restore point could not be saved,
+      // in which case nothing was removed and saying so is the whole point.
+      if (!result.ok) setError(result.error ?? AUTOMATION_REMOVE_FAILED);
+    } catch {
+      setError(AUTOMATION_REMOVE_FAILED);
+    } finally {
+      setBusy(false);
+      // Either way: the list on screen is now a guess, and the core holds the truth.
+      refresh();
+    }
+  }
+
+  if (!connected) {
+    return <SurfaceRow wrap name="These settings appear here once Addison's engine is connected." />;
+  }
+
+  if (!loaded) {
+    return <SurfaceRow wrap name={AUTOMATIONS_LOADING} />;
+  }
+
+  return (
+    <>
+      {error && <SurfaceRow wrap name={error} />}
+
+      {automations.length === 0 ? (
+        <SurfaceRow wrap name={AUTOMATIONS_EMPTY} />
+      ) : (
+        automations.map((automation) => (
+          <SurfaceRow
+            key={automation.id}
+            name={automation.name}
+            // The schedule in the machine-fact slot, in the core's words. Mono,
+            // because when a job runs is a fact and not prose.
+            value={automation.scheduleSentence}
+            actions={
+              // Named after its own automation: a column of identical "Remove"
+              // buttons is the shape in which somebody removes the wrong one.
+              <RowAction
+                tone="danger"
+                disabled={busy}
+                ariaLabel={`Remove ${automation.name}`}
+                onClick={() => void remove(automation)}
+              >
+                {confirmingRemove === automation.id ? "Really remove?" : "Remove"}
+              </RowAction>
+            }
+          >
+            {/* The exact text that would run, whole and unshortened — reading it is
+                the point, and phase 3's typed keyword exists to make them read it. */}
+            <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">
+              {automation.command}
+            </p>
+            <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+              {AUTOMATION_NOT_ARMED}
+            </p>
+          </SurfaceRow>
+        ))
+      )}
     </>
   );
 }
