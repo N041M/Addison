@@ -61,8 +61,9 @@ brick"), Simple/SAFE is an all-in-one companion on the same floor, and a new
   buildable in **all** modes; the tier gates the *capability* a widget may use, not
   whether one can be built. SAFE widgets are non-destructive by construction.
 - **Automation model** (§6 note): Addison authors OS-run automation, the OS runs
-  it on its schedule, **Addison never self-triggers**; running/arming a powerful
-  action requires a **user-typed keyword prefix** — which is also a
+  it on its schedule, **Addison never self-triggers**; arming a powerful
+  action requires a **user-typed keyword** — a per-automation nonce Addison shows
+  and the person retypes (decided 2026-08-07) — which is also a
   prompt-injection defence (observed content cannot forge a keystroke).
 - **Free / no-frontier-required models** (§4.11 note): Addison must be useful with
   no paid frontier key; only *legitimate* free/local sources appear in-app.
@@ -1359,8 +1360,10 @@ friend's connection monitor needs background polling + autonomous notification �
 which G2 forbids Addison from doing *itself*. The resolution keeps G2 as a floor
 while enabling the use case:
 
-> **Addison authors; the OS runs; Addison never triggers itself. Powerful/armed
-> actions require a user-typed keyword prefix.**
+> **Addison authors; the OS runs; Addison never triggers itself. Armed
+> actions require a user-typed keyword — a per-automation nonce Addison shows and
+> the person retypes (decided 2026-08-07;
+> [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it).**
 
 - **Author, don't fire.** Addison may **write and set up** OS-level automation — a
   `launchd`/`cron` entry, a small watcher script — exactly as Claude Code can
@@ -1624,7 +1627,9 @@ of that pass); code then follows in **dependency order, safety floor first**:
 7. **MCP client integration** — external tools through the registry + gate,
    mode-scoped (§4.12). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option — [plan](step-7-mcp-plan.md).
-8. **Automation keyword gate** + author-OS-run automation (§6). **Not started.**
+8. **Automation keyword gate** + author-OS-run automation (§6). **Phases 1–2 of 4
+   shipped 2026-08-07** (the fence, the table, authoring as inert drafts); the gate
+   and arming are phase 3. ROADMAP owns status.
 
 **[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
 carried a second copy of the state until that copy went stale. Steps 6–8 are the

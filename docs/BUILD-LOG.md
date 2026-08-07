@@ -12,7 +12,73 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
-## What shipped 08-07 (last) — step 8 phase 2: authoring, and a preview that may not travel
+## What shipped 08-07 (last) — the review of step 8 phases 1–2, and of its own fixes
+
+Four read-only reviewers over disjoint scopes (Python correctness, Rust+frontend,
+cleanup, doc currency), then an adversarial pass over the FIXES. The fix pass is
+the part worth keeping: **it found three regressions the fix round introduced**,
+one of them wider than the defect it was fixing. Green gates caught none of any of
+it — the suite was 1449 green while three of these were live.
+
+- **A SELF-REFERENTIAL ASSERTION HID THE WHOLE OF `plist_text`.** Its only
+  coverage was `assert f"```\n{plist_text(row)}```" in text`, where `text` is the
+  answer built by calling `plist_text` — the function compared against itself,
+  true whatever it emits. Proven by mutation: `minutes * 60` → `* 30`, a misspelt
+  `StartCalendarInterval`, and **dropping the XML escaping entirely** each passed
+  all 1449 tests. The docstring called that escaping "load-bearing" while nothing
+  exercised it. Six real content tests now pin the output.
+- **THE TWO RENDERINGS OF ONE ROW CONTRADICTED EACH OTHER.** `schedule_sentence`
+  checked bounds; `plist_text` checked only presence. So `{"minutes": 0}` and
+  `{"hour": 99}` rendered "No schedule saved yet." in words beside a preview
+  showing a real launchd trigger. For a preview whose whole job is to be what
+  somebody read before arming, whichever one they believed the other disproved.
+  One shared `schedule_is_readable` now answers for both.
+- **THE PREVIEW FENCE WAS CLOSEABLE FROM INSIDE, AND ITS JUSTIFICATION WAS THE
+  TELL.** *"`plist_text` XML-escapes both the command and the label, and no escape
+  sequence it emits contains a backtick"* — true about the escaping, irrelevant to
+  the risk: escaping touches `&`, `<`, `>` and leaves backticks alone. A command
+  carrying ``` closed the block early and wrote prose under Addison's sentence
+  "this is exactly what would be handed to your computer". **When a comment
+  justifies a boundary by a property of the wrong thing, that is the shape to
+  distrust.**
+- **THE FIX FOR IT HARDENED ONE CHANNEL AND LEFT ITS SIBLING** — found only by the
+  adversarial pass. The grown fence is computed from the plist; the NAME is
+  interpolated into the same answer one line above it, so a name carrying a
+  newline plus a fence opened its own block. Closed at the door (a name is one
+  line, no control characters) rather than at the seam, because that kills the
+  vector everywhere the name is rendered rather than in the one place it was found.
+- **A TIGHTENING WIDENED A FALSE POSITIVE FIFTEENFOLD, and the doc said otherwise.**
+  Stepping the arming fence over transparent prefixes (`sudo crontab` IS `crontab`)
+  also stepped over "any word containing `=`" — which CHAINS, so a heredoc line
+  like `label=Nightly batch job` in a `.properties` file was refused as arming.
+  The comment said "leading `VAR=value` assignments"; the code said something much
+  larger. Reverted to exact prefix words; `env X=1 crontab -` is conceded instead,
+  because an everyday false positive is worse than one more missed spelling of a
+  backstop. **A guard's blast radius is what the code does, not what its comment
+  describes** — and the ledger written to record the cost recorded the pre-fix
+  shape, which is how a concession drifts without anyone deciding.
+- **A NEW `doc_claims` ROW CAUGHT ONE OF THE FOUR SENTENCES IT WAS WRITTEN FOR.**
+  The registry mechanises only the SILENCE half (a precision test); firing is
+  proven by hand, and it was not. Measured against the real pre-fix text, the
+  first pattern matched one of four, and its `excused_by` (bare `was|were`, ±240
+  chars) excused ~48% of KNOWN-GAPS and ~55% of HANDOFF — a gate that would almost
+  never fire, which this registry's own docstring calls decoration. Both halves
+  rewritten and re-measured; the widened pattern immediately found a fifth stale
+  line nobody had flagged. **Write a claim pattern against the sentences actually
+  in the tree, and excuse on quotation markers rather than on tense.**
+- **A GUARD UNREACHABLE FROM ITS CALLER IS A GUARD NO MUTATION KILLS.** The fence's
+  closing-newline guarantee could not be exercised through `execute` (the plist
+  always ends in a newline), so its mutation passed. Pinned by testing `_fenced`
+  directly. This is the repo's fifth instance of the same shape.
+
+Also fixed: `permission_detail` sent a secret-shaped NAME to the Activity Panel
+before the door's redaction ran (the call is non-destructive, so the detail is
+emitted on the way in); the stored text had no length bound though the mcp/skills
+precedent it cites carries one; `HOME=""` silently dropped three seatbelt
+write-denies; and six documents plus five source docstrings still described a
+tree where nothing could author automation.
+
+## What shipped 08-07 (second-last) — step 8 phase 2: authoring, and a preview that may not travel
 
 `create_automation` (dev-only) writes a draft row; the Settings surface lists
 drafts; nothing can arm one. The plan's phase-2 entry owns the decisions; what
@@ -54,7 +120,7 @@ belongs here is what building found.
   repo-wide pytest collection and correctly scoped its own runs around it —
   disjoint FILE ownership does not make `pytest tests/` disjoint.
 
-## What shipped 08-07 (second-last) — step 8 phase 1: the fence, and a table nothing can fill
+## What shipped 08-07 — step 8 phase 1: the fence, and a table nothing can fill
 
 The step-8 plan (the per-automation-nonce keyword gate; the owner's syntax decision
 was already on record) was written, and its first phase built the same day: the

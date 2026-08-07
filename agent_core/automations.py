@@ -7,10 +7,12 @@ the app a timer, a watcher, a scheduler or a callback of its own. This module is
 declarative: a dataclass mirroring the ``automations`` table and pure functions over
 a row. It starts nothing and reaches nothing.
 
-**Phase 1 ships this doing nothing, which is the point.** There is no authoring tool
-(phase 2) and no arming surface (phase 3), so the table stays empty except by hand.
-What exists is the row shape, the closed schedule vocabulary, and the
-``automation.list`` / ``automation.remove`` RPC in ``agent_core/rpc/automations.py``.
+**Authoring exists; ARMING does not.** ``create_automation`` (phase 2, Developer
+only) writes a draft row through this module's pure functions; there is no arming
+surface anywhere in the tree, so nothing here has ever been handed to launchd —
+that is phase 3. What this module holds is the row shape, the closed schedule
+vocabulary, the two renderers (``schedule_sentence``, ``plist_text``) and the
+authoring door's validators.
 [docs/step-8-automation-plan.md](../docs/step-8-automation-plan.md) owns the phase
 order.
 
@@ -121,43 +123,77 @@ WEEKDAY_NAMES: tuple[str, ...] = (
 )
 
 
+#: What both renderers say about a row whose schedule this vocabulary cannot read.
+#: Frozen copy — the frontend pins these bytes too (`NO_SCHEDULE_SENTENCE`).
+NO_SCHEDULE = "No schedule saved yet."
+
+
+def schedule_is_readable(schedule_kind: object, fields: dict[str, int]) -> bool:
+    """Whether the two renderers can BOTH express this schedule — one definition of
+    "readable", asked by the sentence and by the plist alike.
+
+    IT EXISTS BECAUSE THE TWO DISAGREED (found by the phase-2 review, 2026-08-07).
+    ``schedule_sentence`` checked bounds and ``plist_text`` checked only PRESENCE, so
+    a stored ``{"minutes": 0}`` — or ``{"hour": 99, "minute": 88}`` — rendered
+    "No schedule saved yet." in words while the preview beside it showed a
+    fully-formed trigger. Two renderings of one row saying different things is the
+    worst possible shape for a preview whose entire job is to be what somebody read
+    before arming (plan §3): whichever one they believed, the other was there to
+    contradict it.
+
+    Bounds live here rather than only at the authoring door because both renderers
+    also draw rows that never passed the door — a hand edit, an older build, a
+    payload restored from a sidecar. ``schedule_problem`` is the door's own,
+    stricter check (it additionally caps an interval at a week, which is a policy
+    about what Addison will WRITE, not about what launchd can express — so a
+    restored 10-day interval still renders honestly here rather than vanishing)."""
+    if schedule_kind == "interval":
+        minutes = fields.get("minutes")
+        return isinstance(minutes, int) and minutes >= 1
+    if schedule_kind == "calendar":
+        hour, minute, weekday = fields.get("hour"), fields.get("minute"), fields.get("weekday")
+        if not isinstance(hour, int) or not isinstance(minute, int):
+            return False
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return False
+        # Absent means every day; present means one day and must be a real one.
+        return weekday is None or (isinstance(weekday, int) and 0 <= weekday <= 6)
+    return False
+
+
 def schedule_sentence(schedule_kind: object, fields: dict[str, int]) -> str:
     """The schedule as ONE plain sentence — "Every 30 minutes", "Every Monday at
-    7:30" — or "No schedule saved yet." for anything this vocabulary does not
-    recognise (junk kind, missing fields, out-of-range values).
+    7:30" — or ``NO_SCHEDULE`` for anything this vocabulary does not recognise
+    (junk kind, missing fields, out-of-range values — ``schedule_is_readable``).
 
     Takes the PROJECTED fields (``schedule_fields``' output), not the raw column,
     so every caller renders the same closed vocabulary the wire carries. Times are
     24-hour ("18:00", "7:30") — an am/pm guess is exactly the ambiguity a
-    scheduled job cannot afford, and the minute is always two digits. Bounds are
-    checked here as well as at the authoring door, because this function also
-    renders rows that predate the door (hand-edits, restores): a sentence claiming
-    "Every day at 99:00" would launder a broken row into confident prose."""
+    scheduled job cannot afford, and the minute is always two digits."""
+    if not schedule_is_readable(schedule_kind, fields):
+        return NO_SCHEDULE
     if schedule_kind == "interval":
-        minutes = fields.get("minutes")
-        if not isinstance(minutes, int) or minutes < 1:
-            return "No schedule saved yet."
+        minutes = fields["minutes"]
         if minutes == 1:
             return "Every minute"
         if minutes == 60:
             return "Every hour"
+        # Days before hours: "Every 168 hours" is what a week used to read as, and
+        # the door accepts exactly that value (MAX_INTERVAL_MINUTES) — so the
+        # longest schedule Addison will write was also the least legible thing it
+        # could say, for personas 54 and 68. Found by the phase-2 review.
+        if minutes % 1440 == 0:
+            days = minutes // 1440
+            return "Every day" if days == 1 else f"Every {days} days"
         if minutes % 60 == 0:
-            return f"Every {minutes // 60} hours"
+            hours = minutes // 60
+            return f"Every {hours} hours"
         return f"Every {minutes} minutes"
-    if schedule_kind == "calendar":
-        hour, minute = fields.get("hour"), fields.get("minute")
-        if not isinstance(hour, int) or not isinstance(minute, int):
-            return "No schedule saved yet."
-        if not (0 <= hour <= 23 and 0 <= minute <= 59):
-            return "No schedule saved yet."
-        time_text = f"{hour}:{minute:02d}"
-        weekday = fields.get("weekday")
-        if weekday is None:
-            return f"Every day at {time_text}"
-        if isinstance(weekday, int) and 0 <= weekday <= 6:
-            return f"Every {WEEKDAY_NAMES[weekday]} at {time_text}"
-        return "No schedule saved yet."
-    return "No schedule saved yet."
+    time_text = f"{fields['hour']}:{fields['minute']:02d}"
+    weekday = fields.get("weekday")
+    if weekday is None:
+        return f"Every day at {time_text}"
+    return f"Every {WEEKDAY_NAMES[weekday]} at {time_text}"
 
 
 def plist_text(automation: Automation) -> str:
@@ -184,12 +220,24 @@ def plist_text(automation: Automation) -> str:
     ``run_command`` gives it everywhere else in Addison — one shell dialect,
     not two."""
     schedule = schedule_fields(automation.schedule_kind, automation.schedule_json)
-    if automation.schedule_kind == "interval" and "minutes" in schedule:
+    if not schedule_is_readable(automation.schedule_kind, schedule):
+        # A row the vocabulary cannot read previews as a plist with NO trigger —
+        # launchd would load it and never fire it. Honest: the preview shows exactly
+        # the nothing that would be armed, and the authoring door
+        # (schedule_problem) exists to keep such a row from being written at all.
+        #
+        # THE PREDICATE IS SHARED WITH THE SENTENCE, and that is the point: this
+        # branch used to test PRESENCE while the sentence tested BOUNDS, so a stored
+        # `{"minutes": 0}` previewed a real trigger under the words "No schedule
+        # saved yet." One row, two renderings, disagreeing (phase-2 review).
+        trigger = ""
+    elif automation.schedule_kind == "interval":
         trigger = (
             "    <key>StartInterval</key>\n"
+            # StartInterval is SECONDS; the stored field is minutes.
             f"    <integer>{schedule['minutes'] * 60}</integer>\n"
         )
-    elif automation.schedule_kind == "calendar" and "hour" in schedule and "minute" in schedule:
+    else:
         entries = [("Hour", schedule["hour"]), ("Minute", schedule["minute"])]
         if "weekday" in schedule:
             entries.append(("Weekday", schedule["weekday"]))
@@ -198,12 +246,6 @@ def plist_text(automation: Automation) -> str:
             for name, value in entries
         )
         trigger = f"    <key>StartCalendarInterval</key>\n    <dict>\n{lines}    </dict>\n"
-    else:
-        # A row the vocabulary does not recognise previews as a plist with no
-        # trigger — launchd would load it and never fire it. Honest: the preview
-        # shows exactly the nothing that would be armed, and the authoring door
-        # (schedule_problem) exists to keep such a row from being written at all.
-        trigger = ""
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
@@ -242,6 +284,21 @@ def plist_text(automation: Automation) -> str:
 #: against the clock, cannot say WHEN it runs, and is what a person means by "every
 #: other week". Refusing it here is cheaper than explaining the drift later.
 MAX_INTERVAL_MINUTES = 7 * 24 * 60
+
+#: How much stored TEXT one automation may carry. The mcp phase-1 precedent this
+#: door cites as transferring "whole" carries `_MAX_NAME_LENGTH = 60`
+#: (`rpc/mcp.py`) and `skills.py` carries 60 / 2000 — only the secret-shape half of
+#: that precedent was actually transferred, and the phase-2 review said so.
+#:
+#: It matters here for the same reason the secret check does: `automations` is
+#: snapshot-CAPTURED, so every byte written lands in every later snapshot payload
+#: and its plaintext sidecar, permanently. Nothing else bounds it — `is_destructive`
+#: is False, so an authoring call is auto-allowed card-free in OPEN, and the
+#: `-2..-99` label suffix bounds rows *per name* rather than text per row.
+#: The command is the generous one because a real command can be long
+#: (`rsync` with several flags and two paths); the name is a label a person reads.
+MAX_NAME_CHARS = 80
+MAX_COMMAND_CHARS = 2000
 
 _NEEDS_A_KIND = (
     "Addison can run something every so many minutes, or at a set time of day. "

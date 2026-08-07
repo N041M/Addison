@@ -65,12 +65,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from agent_core.automations import (
+    MAX_COMMAND_CHARS,
+    MAX_INTERVAL_MINUTES,
+    MAX_NAME_CHARS,
     SCHEDULE_FIELDS,
     SCHEDULE_KINDS,
     Automation,
@@ -104,6 +108,28 @@ _NEEDS_A_NAME = (
     "the name to label what it writes."
 )
 _NEEDS_A_COMMAND = "Say what the automation should actually run."
+# A name is ONE SHORT LINE, and refusing the rest is a safety property rather than
+# tidiness. The tool's answer interpolates the name above the fenced preview, so a
+# name carrying a newline can open a fence of its own — three backticks at the
+# start of a line — and write attacker-chosen prose under Addison's sentence "this
+# is exactly what would be handed to your computer". `_fenced` cannot see that: it
+# is computed from the plist alone. Without a newline the sequence cannot begin a
+# block, so this is where that vector closes. (The adversarial pass over the fix
+# round found it: the first fix hardened the command's channel and left the name's.)
+_NAME_IS_NOT_ONE_LINE = (
+    "Give the automation a name on a single line, without any special characters."
+)
+# The two LENGTH refusals. They live here, with the rest of this door's copy, while
+# the bounds themselves live beside the row in `automations.py` — the numbers are
+# facts about what a row may hold; the sentences are this door's way of saying so.
+_NAME_TOO_LONG = (
+    "That name is too long to sit on a row you can read at a glance. Give it a "
+    "short one — a few words."
+)
+_COMMAND_TOO_LONG = (
+    "That command is far longer than Addison keeps for an automation. Put it in a "
+    "script file on this computer and have the automation run that file instead."
+)
 _NAME_IN_USE = (
     "You already have a lot of automations with that name. Give this one a name of "
     "its own so you can tell them apart."
@@ -166,8 +192,8 @@ class CreateAutomationTool:
                     "type": "integer",
                     "description": (
                         "For 'interval': how many minutes between runs. At least 1, "
-                        "and at most 10080 (seven days) — for anything longer use "
-                        "'calendar'."
+                        f"and at most {MAX_INTERVAL_MINUTES} (seven days) — for "
+                        "anything longer use 'calendar'."
                     ),
                 },
                 "hour": {
@@ -235,7 +261,7 @@ class CreateAutomationTool:
         return command or None
 
     def permission_detail(self, args: dict) -> str | None:
-        """The automation's NAME, and never the command.
+        """The automation's NAME, redacted, and never the command.
 
         This value leaves the core for the webview and is shown on every granted
         call in the Activity Panel (``call_permission_detail`` — read it before
@@ -244,8 +270,19 @@ class CreateAutomationTool:
         leave them unable to tell one automation from another. The command is not
         here for the same reason ``read_web_page`` sends a host and not a URL:
         the name identifies the thing; the command is the part that could carry
-        whatever the model was told to put in it."""
-        name = str(args.get("name", "")).strip()
+        whatever the model was told to put in it.
+
+        REDACTED BECAUSE THE DOOR IS TOO LATE FOR THIS PATH (phase-2 review).
+        ``_refusal`` refuses a secret-shaped name — but it runs inside ``execute``,
+        and this method's value is computed and emitted BEFORE that: the call is
+        non-destructive, so the gate auto-grants and the orchestrator sends the
+        detail on the way in. The row never reaches SQLite, and the Activity Panel
+        has the secret anyway. ``call_permission_detail``'s own contract says a
+        detail "must never contain a secret … it leaves the Agent Core for the
+        webview", so the redactor runs here rather than the field being trusted
+        because a *different* layer would have caught it later. G1 is about where a
+        secret may travel, not about whether it was ultimately stored."""
+        name = redact(str(args.get("name", "")).strip()).text
         return name or None
 
     # --- the door ------------------------------------------------------------
@@ -277,8 +314,23 @@ class CreateAutomationTool:
             # Asked with NO taken labels, so this is the name-is-unusable case
             # rather than the collision case (``derive_label``'s docstring).
             return _NEEDS_A_NAME
+        # One line, no control characters — see ``_NAME_IS_NOT_ONE_LINE``. Checked
+        # on the RAW value, before stripping, because a newline in the middle is
+        # the case that matters and stripping only touches the ends.
+        raw_name = str(args.get("name", ""))
+        if any(ch == "\n" or ch == "\r" or (ord(ch) < 32) for ch in raw_name):
+            return _NAME_IS_NOT_ONE_LINE
         if not self.command_text(args):
             return _NEEDS_A_COMMAND
+        # LENGTH, before anything reads the text closely. The stored strings are
+        # copied into every later snapshot payload and sidecar (the same reason the
+        # secret check below exists), and nothing else in this path bounds them —
+        # the mcp/skills precedent bounds its own (`automations.MAX_*_CHARS` says
+        # why). Measured on the stripped text, which is what is stored.
+        if len(str(args.get("name", "")).strip()) > MAX_NAME_CHARS:
+            return _NAME_TOO_LONG
+        if len(self.command_text(args) or "") > MAX_COMMAND_CHARS:
+            return _COMMAND_TOO_LONG
         problem = schedule_problem(args.get("schedule_kind"), _declared_fields(args))
         if problem is not None:
             return problem
@@ -390,6 +442,35 @@ def _declared_fields(args: dict) -> dict[str, object]:
     return {name: args[name] for name in names if args.get(name) is not None}
 
 
+def _fenced(payload: str) -> str:
+    """The preview, fenced so the block cannot be closed from the inside.
+
+    The fence is grown past the longest run of backticks INSIDE the payload —
+    CommonMark's own rule, and the same one ``mcp_client._fenced`` follows for a
+    tool server's structured answer, for the same reason and with the same honest
+    limit (presentation, not a boundary).
+
+    IT IS NOT DECORATION HERE, and the earlier version of this function said so in
+    exactly the wrong direction: *"the fence is safe unquoted — ``plist_text``
+    XML-escapes both the command and the label, and no escape sequence it emits
+    contains a backtick."* True about the ESCAPING and irrelevant, because XML
+    escaping touches ``&``, ``<`` and ``>`` and leaves a backtick exactly where it
+    was. A command carrying ``\\n```\\n`` therefore closed the block mid-``<string>``
+    and everything after it read as Addison's own words rather than as the
+    preview's contents — so a model relaying "this is exactly what would be handed
+    to your computer" could be made to relay attacker-chosen prose under that
+    sentence. Phase 3's whole ceremony rests on the person having read this block;
+    a block somebody else can write half of is not that (phase-2 review)."""
+    longest = max((len(run) for run in re.findall(r"`+", payload)), default=0)
+    fence = "`" * max(3, longest + 1)
+    # The closing fence must START A LINE or it does not close anything. Today
+    # ``plist_text`` always ends in a newline, so relying on that would work — and
+    # would be an undeclared precondition on a function whose docstring says it
+    # follows ``mcp_client._fenced``'s rule, which guarantees this itself.
+    body = payload if payload.endswith("\n") else f"{payload}\n"
+    return f"{fence}\n{body}{fence}"
+
+
 def _result_text(row: Automation) -> str:
     """What the MODEL is handed, and therefore what it relays.
 
@@ -398,15 +479,12 @@ def _result_text(row: Automation) -> str:
     rather than "available in Settings" because the person is being asked to
     understand a thing that will one day run without them watching, and the phrase
     "the preview you approved" only means something if the preview was in front of
-    them (plan §3).
-
-    The fence is safe unquoted: ``plist_text`` XML-escapes both the command and the
-    label, and no escape sequence it emits contains a backtick."""
+    them (plan §3)."""
     fields = schedule_fields(row.schedule_kind, row.schedule_json)
     return (
         f'Saved "{row.name}" as a draft automation. '
         f"{schedule_sentence(row.schedule_kind, fields)}.\n\n"
         "This is exactly what would be handed to your computer:\n\n"
-        f"```\n{plist_text(row)}```\n\n"
+        f"{_fenced(plist_text(row))}\n\n"
         f"{NOT_ARMED_LINE}"
     )

@@ -367,7 +367,15 @@ Registered here so the landing diff is a checklist rather than an archaeology
 dig. Each is one sentence today and each currently says "designed, not built"
 in some spelling:
 
-- `CLAUDE.md` — G2's parenthetical "(designed, **not built**)".
+**The list was incomplete until the phase-2 review swept for it (2026-08-07), which
+is worth one line of its own: a checklist that misses files is the archaeology dig
+it was written to prevent.** The sweep also retired the superseded `!run` prefix
+sketch everywhere it survived — `architecture.md`, `addison-engineering-spec.md`
+(×2 plus its own status line), `addison-design-doc.md` (×3, including its open-
+questions entry) — none of which this section had named. The scope amendment keeps
+its prefix wording on purpose: it is a historical record, not law.
+
+- `CLAUDE.md` — G2's parenthetical "(designed, **not built**: step 8 phase 3)".
 - [SAFETY.md](SAFETY.md) — G2's "designed, and **not built**: it is Phase-2
   step 8 and there is no keyword-gate code in the tree", and the §Custom note
   "(the keyword gate is Phase-2 step 8 and does not exist)". The `!run` example
@@ -388,8 +396,19 @@ in some spelling:
   `tests/test_prompt_capability_claims.py` — the exemption does NOT grow to
   cover `arm_automation`; the sentence changes instead (the exemption's own
   comment says so).
+- `docs/architecture.md`, `docs/addison-engineering-spec.md` (the invariants
+  summary §, the §9 blockquote, and its own step-8 status line) and
+  `docs/addison-design-doc.md` (§6's automation note, §9's keyword paragraph,
+  and open question 9) — each carries a G2/keyword sentence of its own. Added
+  after the phase-2 sweep found them missing here.
+- `docs/data-model.md` — the `automations` bullet's "no arming surface exists"
+  and the "no path by which a stored command RUNS" clause.
 - `HANDOFF.md` — rewritten as always.
 
 New load-bearing facts this step creates (the nonce is per-automation and
 single-use; a restore never arms; the shell writes only its own prefix) get
-rows in `tests/doc_claims.py` in the phase that makes each true.
+rows in `tests/doc_claims.py` in the phase that makes each true. **One is
+already true and now has its row** (2026-08-07): *authoring exists and arming
+does not*, which is what the phase-2 review found four documents still
+contradicting — precisely the drift a row exists to catch mechanically rather
+than by re-reading sixteen files.

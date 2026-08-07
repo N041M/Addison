@@ -55,8 +55,20 @@ use crate::ipc::{required_str, RpcError};
 /// Where a command starts. HOME, not a trusted root: a command's cwd is a
 /// convenience, never an effect bound (that is what the profile is for), and the
 /// core has always run commands from home.
+///
+/// AN EMPTY `HOME` IS TREATED AS AN ABSENT ONE, and that is a floor concern rather
+/// than tidiness (found by the phase-2 review). `os_automation_dirs` joins `~`
+/// entries onto this value; with `HOME=""` the join yields a RELATIVE path,
+/// `subpath_rule` refuses to emit a rule for it, and the three `~/`-prefixed
+/// automation write-denies would vanish from the profile silently — a floor
+/// quietly shorter than it reads. Falling back to `/` keeps them absolute, and it
+/// also realigns with the Python side, whose `os.path.expanduser` under an empty
+/// `HOME` yields `/Library/...` rather than a relative path.
 fn home_dir() -> PathBuf {
-    std::env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("/"))
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() => PathBuf::from(home),
+        _ => PathBuf::from("/"),
+    }
 }
 
 /// Absolute path, because a sandbox invoked through `PATH` is a sandbox an

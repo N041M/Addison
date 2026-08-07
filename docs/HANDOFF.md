@@ -104,6 +104,15 @@ defects and they were fixed the same day, and then the step-8 plan was written a
 its phase 1 built. `BUILD-LOG.md` owns the findings; these are
 the ones that change how you should read the tree.
 
+- **Phases 1–2 were then reviewed, and the review's own fixes were reviewed
+  again.** Four read-only reviewers over disjoint scopes, then an adversarial pass
+  over the fixes — which found three regressions the fix round had introduced, one
+  wider than the defect it fixed. `BUILD-LOG.md` owns the findings. The two worth
+  knowing before you touch this subsystem: **`plist_text` had no real test at all**
+  (its only assertion compared the function against itself, so dropping its XML
+  escaping passed 1449 tests), and **the arming fence's blast radius is not what a
+  comment says it is** — a step-over meant for `VAR=value` chained through any
+  `=`-bearing word until it was caught and narrowed.
 - **Step 8 has a plan and landed phases 1 and 2** — see "Next up" above for the
   whole shape. What changes how you read the tree: `~/Library`, `~/.config` and
   the eleven OS-automation directories are no longer trustable workspaces,

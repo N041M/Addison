@@ -66,7 +66,10 @@ REASONS: dict[str, str] = {
     "mcp_connect": "Before adding a tool server",       # step 7 phase 1 (rpc/mcp.py)
     "mcp_disconnect": "Before removing a tool server",  # step 7 phase 1 (rpc/mcp.py)
     "automation_remove": "Before removing an automation",  # step 8 phase 1 (rpc/automations.py)
-    "automation_create": "Before saving an automation",    # reserved — step 8 phase 2
+    # Reserved and STILL UNCALLED after phase 2 landed: create_automation carries a
+    # real undo(), and a draft nothing in the tree can run is not a risky change.
+    # Kept so the vocabulary does not churn if arming ever wants a capture here.
+    "automation_create": "Before saving an automation",
     "automation_arm": "Before arming an automation",       # reserved — step 8 phase 3
     "automation_disarm": "Before disarming an automation", # reserved — step 8 phase 3
     "other": "Before a change",

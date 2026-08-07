@@ -1,10 +1,12 @@
 """Automations — step 8, PHASE 1 (docs/step-8-automation-plan.md §4.1).
 
-Phase 1 ships the row and the inert surface: the ``automations`` table, the
+Phase 1 shipped the row and the inert surface: the ``automations`` table, the
 ``automation.list``/``automation.remove`` RPC, the snapshot reason slugs, and
-nothing else. **There is no way to create an automation and no way to arm one.**
-Authoring is phase 2 and arming is phase 3, so on every install today the table is
-empty and the list answers ``[]``.
+nothing else. **This NAMESPACE still has no way to create an automation, and
+NOTHING anywhere can arm one.** Authoring arrived in phase 2 as a registered tool
+(``create_automation`` — ``tests/test_create_automation.py`` owns it), which is
+why the pins below say what they say: rows exist, and no code path here made one.
+Arming is phase 3 and exists nowhere in the tree.
 
 So — the step-7 phase-1 shape — these tests are as much about what CANNOT happen as
 about what does:
@@ -39,10 +41,13 @@ from pathlib import Path
 import pytest
 
 from agent_core.automations import (
+    NO_SCHEDULE,
     SCHEDULE_FIELDS,
     SCHEDULE_KINDS,
+    Automation,
     plist_text,
     schedule_fields,
+    schedule_is_readable,
     schedule_sentence,
 )
 from agent_core.memory.store import Store
@@ -115,6 +120,25 @@ def _server_with(tmp_path, *rows: dict):
 @pytest.fixture
 def store(tmp_path) -> Store:
     return Store(tmp_path / "automations-test.sqlite3")
+
+
+def _docstring_string_ids(tree: ast.Module) -> set[int]:
+    """The ids of every string Constant that is a DOCSTRING, so a scan over string
+    literals can skip them.
+
+    Shared by the two source-pin tests below, which both ask "does this module
+    NAME a thing it must not" and must not trip over their own prose: this file's
+    pins are about what the module DOES, and a docstring explaining why it may not
+    reach a plist is not the module reaching one."""
+    return {
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -195,15 +219,7 @@ def test_the_automation_surface_cannot_reach_a_process_a_shell_or_a_plist():
     # be a gate that punished the explanation. What is checked is every other string
     # literal — a command, a path, a payload field — because one of those would be
     # the first sign somebody was assembling the escape rather than asking the shell.
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef)
-        and node.body
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
-        and isinstance(node.body[0].value.value, str)
-    }
+    docstrings = _docstring_string_ids(tree)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Constant)
@@ -703,15 +719,7 @@ def test_the_rpc_layer_cannot_put_a_plist_on_the_wire():
     # (``getattr(automations, "plist_text")``). Docstrings are excluded for the
     # reason above; every other literal is checked, exactly as the
     # cannot-reach-a-process pin does it.
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef)
-        and node.body
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
-        and isinstance(node.body[0].value.value, str)
-    }
+    docstrings = _docstring_string_ids(tree)
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Constant)
@@ -809,3 +817,237 @@ def test_no_payload_on_this_surface_can_carry_a_secret():
         elif isinstance(node, ast.Name):
             assert node.id not in secret_names
     assert "automations" in _SCHEMA_SRC.read_text(encoding="utf-8")
+
+
+# ===========================================================================
+# The PREVIEW itself — what `plist_text` actually emits (added by the phase-2
+# review, 2026-08-07).
+# ===========================================================================
+# THESE TESTS EXIST BECAUSE THE ONES ABOVE DID NOT COVER THE FUNCTION AT ALL, and
+# the way they failed to is this repo's signature failure mode rather than an
+# oversight worth one line. `plist_text`'s only caller-side assertion was
+#
+#     assert f"```\n{plist_text(row)}```" in text
+#
+# where `text` is the tool answer that BUILDS that block by calling `plist_text`.
+# That compares the function against itself: it holds no matter what the function
+# emits. Three mutations were run against the whole suite and all three passed
+# 1449 tests green — `minutes * 60` -> `* 30` (a job at twice the frequency the
+# person approved), a misspelt `StartCalendarInterval` (a job that never fires),
+# and dropping `_xml_escape` from the command (below). The function's own
+# docstring calls that escaping "load-bearing" while nothing exercised it.
+#
+# WHY THE PREVIEW IS WORTH REAL TESTS, given it arms nothing today: it is what a
+# person READS before arming, and phase 3's whole ceremony is built on their having
+# read it. A preview that misstates the schedule, or that renders a command's
+# characters as document structure, is a preview that describes a different job
+# from the one that would run — which is the defect the ceremony cannot catch,
+# because the ceremony's evidence IS this string. Phase 3 adds a lockstep test
+# against the shell's own builder; these are the assertions that give that
+# comparison a fixed side.
+
+
+def _automation_row(**overrides) -> Automation:
+    """An ``Automation`` for the preview tests, defaulting to the smallest row that
+    renders. Every field the test under it cares about is passed explicitly, so a
+    default changing here can never quietly become the thing an assertion relies
+    on."""
+    fields = {
+        "id": "auto-preview",
+        "name": "Tidy up",
+        "label": "com.addison.auto.tidy",
+        "command": "echo hi",
+        "schedule_kind": "interval",
+        "schedule_json": json.dumps({"minutes": 30}),
+        "created_in_mode": "open",
+        "created_at": 1_700_000_000,
+        "updated_at": 1_700_000_000,
+    }
+    fields.update(overrides)
+    return Automation(**fields)
+
+
+def test_the_preview_states_the_interval_in_seconds_launchd_expects():
+    """`StartInterval` is SECONDS and the stored field is MINUTES, so the ×60 is a
+    real conversion with a real failure mode: a job that runs at some other
+    frequency than the one the person read and approved.
+
+    Mutation: `minutes * 60` -> `* 30` (or `* 1`) in ``plist_text``."""
+    row = _automation_row(schedule_kind="interval", schedule_json='{"minutes": 30}')
+    text = plist_text(row)
+    assert "<key>StartInterval</key>" in text
+    assert "<integer>1800</integer>" in text
+    # ...and the calendar trigger is NOT also emitted: one schedule, one trigger.
+    assert "StartCalendarInterval" not in text
+
+
+def test_the_preview_states_a_calendar_time_the_way_launchd_reads_one():
+    """`StartCalendarInterval` is a dict of Hour/Minute/Weekday integers, and the
+    KEY SPELLINGS are load-bearing: launchd ignores a key it does not recognise, so
+    a typo produces a plist that loads cleanly and never fires — the failure that
+    looks like success until the day somebody notices nothing ran.
+
+    Weekday rides through as the stored number (0 = Sunday, launchd's own
+    convention — ``WEEKDAY_NAMES`` owns why the two agree).
+
+    Mutation: misspell `StartCalendarInterval`, `Hour`, `Minute` or `Weekday`."""
+    row = _automation_row(
+        schedule_kind="calendar", schedule_json='{"hour": 7, "minute": 30, "weekday": 1}'
+    )
+    text = plist_text(row)
+    assert "<key>StartCalendarInterval</key>" in text
+    for key, value in (("Hour", 7), ("Minute", 30), ("Weekday", 1)):
+        assert f"<key>{key}</key>\n        <integer>{value}</integer>" in text
+    assert "StartInterval" not in text.replace("StartCalendarInterval", "")
+
+
+def test_a_daily_preview_carries_no_weekday_at_all():
+    """An omitted weekday means EVERY day, and the way launchd is told that is by
+    the key being absent — a `Weekday` present with any value would pin the job to
+    one day. So the difference between "every day at 7:30" and "every Sunday at
+    7:30" is one key existing, which is worth its own assertion.
+
+    Mutation: emit `Weekday` unconditionally (e.g. defaulting it to 0)."""
+    row = _automation_row(schedule_kind="calendar", schedule_json='{"hour": 7, "minute": 30}')
+    text = plist_text(row)
+    assert "<key>StartCalendarInterval</key>" in text
+    assert "<key>Hour</key>" in text
+    assert "Weekday" not in text
+
+
+def test_a_command_cannot_become_document_structure():
+    """THE ONE THAT MATTERS. A command is text inside a `<string>`; a command that
+    CONTAINS `</string>` must stay text. Unescaped, the payload below closes the
+    element early and the preview grows a `RunAtLoad` key — which is the one key
+    plan §5.7 says is never set, because it would make arming cause an immediate
+    run. The person would then read a preview describing a job that starts the
+    moment it is armed.
+
+    Both fields are attacker-adjacent and both are asserted: the command comes from
+    a model that may be relaying instructions it read somewhere, and the label is
+    derived from a name that arrived the same way.
+
+    Mutation: drop `_xml_escape` from either `automation.command` or
+    `automation.label` in ``plist_text``."""
+    hostile = "echo hi</string><key>RunAtLoad</key><true/><string>"
+    row = _automation_row(command=hostile, label=f"com.addison.auto.x{hostile}")
+    text = plist_text(row)
+    # The structure the payload tried to open never appears as structure...
+    assert "<key>RunAtLoad</key>" not in text
+    assert "<true/>" not in text
+    # ...it appears as the characters it is, twice — once per escaped field.
+    assert text.count("&lt;key&gt;RunAtLoad&lt;/key&gt;") == 2
+    # And the plist still says exactly what it always says about running at load:
+    # nothing at all (plan §5.7 — arming never causes an immediate run).
+    assert "RunAtLoad" not in text.replace("&lt;key&gt;RunAtLoad&lt;/key&gt;", "")
+
+
+def test_the_preview_runs_the_command_through_one_shell_and_names_the_job():
+    """The shape every branch shares: `/bin/sh -c <command>` — the same contract
+    ``run_command`` gives a command everywhere else in Addison, so a person does not
+    have to learn which dialect applies where — and the Label, which is the filename
+    stem the shell will own at arming time (plan §5.8).
+
+    Mutation: change the interpreter, drop `-c`, or drop the Label key."""
+    row = _automation_row(command="echo hi", label="com.addison.auto.tidy")
+    text = plist_text(row)
+    assert "<string>/bin/sh</string>\n        <string>-c</string>" in text
+    assert "<string>echo hi</string>" in text
+    assert "<key>Label</key>\n    <string>com.addison.auto.tidy</string>" in text
+    # A plist is a document before it is a dict: without the declaration and the
+    # DOCTYPE, `plutil` rejects the file and launchd never reads it.
+    assert text.startswith('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC ')
+    assert text.rstrip().endswith("</plist>")
+
+
+def test_a_schedule_nobody_can_read_previews_a_job_that_would_never_fire():
+    """A row whose schedule this vocabulary cannot read (a hand edit, an older
+    build, a restored sidecar) previews with NO trigger — and that is the honest
+    rendering, because a plist with no trigger is exactly what launchd would load
+    and never run. The preview shows the nothing that would be armed rather than
+    inventing a schedule to fill the gap.
+
+    The authoring door is what keeps such a row from being written in the first
+    place (``schedule_problem``); this is the renderer being honest about the rows
+    that got in some other way.
+
+    Mutation: default the trigger to an interval when the fields are unreadable."""
+    row = _automation_row(schedule_kind="interval", schedule_json="every now and then")
+    text = plist_text(row)
+    assert "StartInterval" not in text
+    assert "StartCalendarInterval" not in text
+    # Still a valid, complete document naming the command — it just never fires.
+    assert "<string>echo hi</string>" in text
+    assert text.rstrip().endswith("</plist>")
+    # ...and the sentence beside it says the same thing in words, so the two
+    # renderings of one broken row agree.
+    assert schedule_sentence("interval", schedule_fields("interval", "every now and then")) == (
+        "No schedule saved yet."
+    )
+
+
+# ===========================================================================
+# The two renderings of one row agree (phase-2 review, 2026-08-07).
+# ===========================================================================
+
+
+@pytest.mark.parametrize(
+    "kind,stored",
+    [
+        ("interval", '{"minutes": 0}'),
+        ("interval", '{"minutes": -5}'),
+        ("calendar", '{"hour": 99, "minute": 88}'),
+        ("calendar", '{"hour": 7, "minute": 30, "weekday": 9}'),
+    ],
+)
+def test_a_row_the_words_call_unreadable_previews_no_trigger_either(kind, stored):
+    """THE DEFECT THIS PINS: ``plist_text`` tested the PRESENCE of the schedule
+    fields while ``schedule_sentence`` tested their BOUNDS, so every row below
+    rendered "No schedule saved yet." in words beside a preview showing a
+    fully-formed launchd trigger — ``StartInterval 0``, ``Hour 99``, ``Weekday 9``.
+
+    One row, two renderings, contradicting each other. For a preview whose whole
+    job is to be the thing somebody read before arming (plan §3), whichever one
+    they believed the other was there to disprove. Both now ask
+    ``schedule_is_readable``.
+
+    Mutation: give ``plist_text`` back its own presence test
+    (``"minutes" in schedule``), or drop the ``schedule_is_readable`` call."""
+    row = _automation_row(schedule_kind=kind, schedule_json=stored)
+    fields = schedule_fields(kind, stored)
+    assert schedule_sentence(kind, fields) == NO_SCHEDULE
+    text = plist_text(row)
+    assert "StartInterval" not in text
+    assert "StartCalendarInterval" not in text
+
+
+def test_every_schedule_the_words_can_read_is_a_schedule_the_preview_arms():
+    """The other direction, so the pair cannot be satisfied by refusing everything:
+    a readable schedule must produce BOTH a real sentence and a real trigger."""
+    for kind, stored, expect_key in [
+        ("interval", '{"minutes": 30}', "StartInterval"),
+        ("interval", '{"minutes": 10080}', "StartInterval"),
+        ("calendar", '{"hour": 0, "minute": 0}', "StartCalendarInterval"),
+        ("calendar", '{"hour": 23, "minute": 59, "weekday": 6}', "StartCalendarInterval"),
+    ]:
+        fields = schedule_fields(kind, stored)
+        assert schedule_is_readable(kind, fields) is True, stored
+        assert schedule_sentence(kind, fields) != NO_SCHEDULE, stored
+        assert expect_key in plist_text(_automation_row(schedule_kind=kind, schedule_json=stored))
+
+
+def test_the_longest_gap_addison_will_write_reads_as_days():
+    """"Every 168 hours" was what a week rendered as — and a week is exactly the
+    longest interval the authoring door accepts (``MAX_INTERVAL_MINUTES``), so the
+    least legible sentence in the vocabulary was the one at its own boundary. For
+    personas 54 and 68 that is not a schedule anybody can check at a glance.
+
+    Mutation: remove the ``% 1440`` branch from ``schedule_sentence``."""
+    assert schedule_sentence("interval", {"minutes": 10080}) == "Every 7 days"
+    assert schedule_sentence("interval", {"minutes": 1440}) == "Every day"
+    assert schedule_sentence("interval", {"minutes": 2880}) == "Every 2 days"
+    # ...and the shorter forms are untouched: hours still read as hours, and a gap
+    # that is not a whole number of days or hours still reads in minutes.
+    assert schedule_sentence("interval", {"minutes": 120}) == "Every 2 hours"
+    assert schedule_sentence("interval", {"minutes": 90}) == "Every 90 minutes"
+    assert schedule_sentence("interval", {"minutes": 60}) == "Every hour"

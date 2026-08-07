@@ -1,13 +1,12 @@
 """automation.* handlers — the automation Addison AUTHORS for the OS to run
 (step 8, phase 1). Addison never triggers itself; the OS does.
 
-**PHASE 1 SHIPS THIS DOING NOTHING, AND THAT IS THE POINT.** There is no add, no
-update and no arm here: authoring is phase 2 (a ``dev_only`` registered tool that
-writes a row) and arming is phase 3 (a typed shell surface behind a per-automation
-keyword). Until those land the table stays empty except by hand, so
-``automation.list`` answers ``{"automations": []}`` on every install — the same
-shape the step-7 phase-1 surface had, for the same reason: the fence and the row
-shape are worth landing before anything can create one.
+**THERE IS NO ADD, NO UPDATE AND NO ARM HERE, and that is still the point.**
+Authoring is the ``create_automation`` TOOL (phase 2, registered ``open_only``),
+which writes rows this surface then lists and removes; arming is phase 3 (a typed
+shell surface behind a per-automation keyword) and exists nowhere in the tree. So
+this module reads and deletes, and a row it lists has never been handed to the
+operating system.
 [docs/step-8-automation-plan.md](../../docs/step-8-automation-plan.md) owns the
 phase order, and ``agent_core/automations.py`` owns the row and the closed schedule
 vocabulary.
@@ -20,11 +19,11 @@ does not exist yet and will never be reachable from here. The structural test in
 
 **Both methods answer in EVERY profile.** A saved row is configuration, not a
 capability: what an automation's shell command needs is Developer, and that belongs
-where the capability is — the phase-2/3 tools will register ``dev_only``, absent
-from ``registry.visible_tools(SAFE)`` and refused at dispatch outside OPEN (plan
-§5.3). Nothing in the tree registers one today, which is why this phase can be
-honest that listing is not one of those things. Hiding somebody's saved configuration when
-they switch to Simple is the failure the 2026-08-06 artifact decision reversed
+where the capability is — ``create_automation`` registers ``open_only`` (as the
+phase-3 arming tools will), absent from ``registry.visible_tools(SAFE)`` and refused
+at dispatch outside OPEN (plan §5.3). Listing a saved row is not one of those
+things. Hiding somebody's saved configuration when they switch to
+Simple is the failure the 2026-08-06 artifact decision reversed
 ([docs/SAFETY.md](../../docs/SAFETY.md) owns that rule), and ``automation.remove`` is
 a TIGHTENING — a profile switch must never be the thing that traps configuration
 somebody wants gone. Phase 4 gives Simple a listed-but-disabled treatment for these
@@ -122,8 +121,8 @@ class AutomationsMixin(ServerContext):
         """automation.list -> {automations: [{id, name, label, command, scheduleKind,
         schedule, scheduleSentence, createdInMode, createdAt}]}, oldest first.
 
-        Answers in EVERY profile (see the module docstring) and answers ``[]`` on
-        every install today, because nothing in the tree can write a row until phase 2.
+        Answers in EVERY profile (see the module docstring), and lists whatever
+        ``create_automation`` has written — ``[]`` until somebody asks for one.
 
         Reading rows only: no plist is looked for, no ``launchctl`` is asked anything,
         nothing is reconciled. Reconciliation against what the OS actually holds is

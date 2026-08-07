@@ -305,7 +305,7 @@ Component by component:
   (G1, G2, G3, and the undeletable-anchor rule — **G4** in `CLAUDE.md` and in code; the
   two names are the same rule) are never in that panel. The **keyword gate** for
   powerful or *armed* actions is Phase-2 **step 8 and not built**; when it lands, the
-  prefix will be user-typed, so observed content can never supply it and the gate
+  nonce will be user-typed, so observed content can never supply it and the gate
   doubles as a prompt-injection barrier.
 - **UndoManager** — records an action snapshot per mutating tool call and reverses
   the most recent ones on request, and separately truncates message history for a

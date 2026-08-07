@@ -498,12 +498,12 @@ erDiagram
     and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
     2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
     no-undo one out of it in any case.
-- **automations** *(Phase-2 step 8, phase 1 — **built 2026-08-07**)* — the automation
+- **automations** *(Phase-2 step 8, phases 1–2 — **built 2026-08-07**)* — the automation
   Addison **authors for the OS to run**. Addison never triggers itself (G2): the row
   describes a `command` and a schedule, and only the operating system ever runs one.
-  A row is a **draft** — phase 1 ships no authoring tool and no arming surface, so
-  nothing in the tree can write one and the table is empty on every install; authoring
-  is phase 2 and arming is phase 3.
+  A row is a **draft**: `create_automation` (phase 2, Developer only) is the one thing
+  that writes one, and **no arming surface exists** — phase 3 owns that, so a row
+  here has never been handed to launchd.
   [`step-8-automation-plan.md`](step-8-automation-plan.md) owns the phase order.
   - **There is no `armed` column, and its absence is the design** (plan §5.6). Armed
     truth lives in the OS and is asked for when the surface loads. A stored flag is
@@ -534,10 +534,12 @@ erDiagram
     Simple as well as Developer: a saved row is configuration, not a capability, and
     hiding it on a profile switch is the failure the 2026-08-06 artifact decision
     reversed — while a removal must never be the thing a switch traps. What needs
-    Developer is the shell command's *execution*, which belongs to the phase-2/3
-    tools' `dev_only` registration and to dispatch — neither exists yet, so today
-    there is no execution path to gate. `created_in_mode` is display-only provenance
-    and must never be read as the enforcement.
+    Developer is the shell command's *execution*, which belongs to
+    `create_automation`'s **`open_only`** registration (built — `open_only` rather
+    than `dev_only` deliberately, so its real `undo()` stays enforced at
+    registration) and to the phase-3 arming tools, which do not exist. So there is
+    still no path by which a stored command RUNS. `created_in_mode` is display-only
+    provenance and must never be read as the enforcement.
 
 ## Widgets and usage tables
 

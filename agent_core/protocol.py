@@ -153,11 +153,11 @@ class Method:
     # schedules anything, and no phase ever will: the OS runs the job, Addison writes
     # the file it runs from (phase 3, through a typed shell surface).
     #
-    # PHASE 1 HAS NO ADD, AND THAT IS THE POINT. The table exists, these two methods
-    # answer over it, and nothing in the tree can write a row — authoring is phase 2
-    # (a `dev_only` registered tool, gated and audited like every other), arming is
-    # phase 3 (behind a per-automation typed keyword). So `automation.list` answers
-    # `{automations: []}` on every install until then.
+    # THERE IS NO ADD METHOD, AND THAT IS THE POINT. The table exists and these two
+    # methods answer over it; rows are written by the `create_automation` TOOL (phase
+    # 2, `open_only`, gated and audited like every other), never by this namespace.
+    # Arming is phase 3 (behind a per-automation typed keyword) and exists nowhere,
+    # so a row these methods list has never been handed to the operating system.
     #
     # BOTH answer in EVERY profile, deliberately. A saved row is configuration, not a
     # capability — what an automation's shell command needs is Developer, and that is

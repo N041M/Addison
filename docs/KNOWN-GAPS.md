@@ -140,12 +140,32 @@ and where it goes.
   grant AND authorize time (so a pre-fence trust row over one stopped confining
   anything the moment this landed, no migration needed), `denylisted_roots`
   refuses a command naming one plus the four arming binaries
-  (`launchctl`/`crontab`/`at`/`batch`) as a command's first word, and the
+  (`launchctl`/`crontab`/`at`/`batch`) as a segment's first word — or behind a
+  prefix the shell itself drops (`sudo`, `exec`, `env`…) — and the
   seatbelt write-denies them shell-side after every allow, dropping any trusted
   root that touches one. Recorded costs, each stated where the code makes it:
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
+- **A line inside a heredoc is read as a command, so an ordinary document can be
+  refused as "arming" (step 8 phase 1; recorded 2026-08-07).** `_SEGMENT_SPLIT`
+  treats every newline as the start of a new command — it must, because
+  `ls\ncrontab -` is two commands and that was #48's vector — and the same rule
+  reads a heredoc BODY as commands. Since `at` and `batch` are ordinary English
+  words, `cat > NOTES.md <<'EOF'` followed by a line beginning *"at last we fixed
+  it"* is refused with the arming sentence. Bounded and deliberate: it needs the
+  arming word at the START of a line, it is Developer-profile only, and the person
+  can run the command in their own terminal. **The cost of the alternative is
+  higher** — not splitting on newlines would let `ls\ncrontab -e` past a guard whose
+  whole job is the obvious spelling. `tests/test_step_5_5_containment.py`'s
+  `_ARMING_FALSE_POSITIVES_ACCEPTED` pins the behaviour so a change is a decision;
+  if it is ever fixed, delete that test WITH this entry.
+  **A wider version of this was introduced and reverted the same day**: a fix-round
+  step-over walked past every `=`-bearing word, so `label=Nightly batch job` inside
+  a `.properties` heredoc was refused too. The adversarial pass over the fixes
+  caught it; `env X=1 crontab -` is conceded instead
+  ([step-8-automation-plan.md](step-8-automation-plan.md) has the rest of the
+  fence's concessions).
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
   and re-denies its own data dirs on top, independently, which is what keeps the
@@ -267,7 +287,9 @@ questions were resolved during steps 1–3 and went with it):
   already meets a per-invocation card and the seatbelt, and the recurring,
   unconfined, outlives-the-session nature of an armed job is the jump that earns
   the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
-  build order and the surrounding decisions; nothing is built yet.
+  build order and the surrounding decisions. The gate and arming are phase 3 and
+  are NOT built; phases 1–2 — the fence, the table, and authoring as inert drafts
+  — landed 2026-08-07.
 - **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on

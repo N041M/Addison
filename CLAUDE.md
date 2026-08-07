@@ -78,7 +78,8 @@ used to mean editing thirteen files.
 - **G1** — API keys never reach the frontend/webview or SQLite. Keychain only, read
   at the moment of use. Do not touch this machinery.
 - **G2** — Addison never triggers itself. It may *author* automation the OS runs;
-  arming a powerful action needs a user-typed keyword prefix (designed, **not built**).
+  arming a powerful action needs a user-typed keyword — a per-automation nonce
+  Addison shows and you retype (designed, **not built**: step 8 phase 3).
 - **G3** — Guaranteed rollback. Snapshots (auto before risky changes, plus
   on-command) always allow a one-action restore to the last verified-working config.
   **True in both modes since Phase-2 step 5.5** (2026-07-31) put a seatbelt profile

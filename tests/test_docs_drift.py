@@ -914,6 +914,25 @@ def test_no_document_contradicts_a_registered_claim():
 # than promised. Two rows were TIGHTENED when these samples were first run; both are
 # named in the comments beside their patterns.
 _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
+    "automation-authoring-built-arming-not": {
+        "recounting the claim that WAS true before phase 2, in the past tense": (
+            "Until authoring shipped, nothing in the tree can author automation was "
+            "simply true, and G2 held trivially."
+        ),
+        "BUILD-LOG quoting the retired standing claim to call it false": (
+            "The tree's standing claim was \"nothing can author or arm automation, so "
+            "G2 holds trivially\" — correct about the machinery, false about the "
+            "trusted-folder path."
+        ),
+        "the fact stated at today's polarity, which is the point of the row": (
+            "Addison can author an automation as an inert draft; nothing in the tree "
+            "can ARM one, because the arming surface is phase 3."
+        ),
+        "prose about ARMING being absent, which must never be mistaken for authoring": (
+            "There is no arming surface anywhere in the tree, so a saved automation "
+            "has never been handed to launchd."
+        ),
+    },
     "g3-open-mode-polarity": {
         "recounting the five days it WAS true, in the past tense": (
             "For five days this floor was **overclaimed in OPEN**, and the record of "
