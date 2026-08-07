@@ -41,11 +41,11 @@ quickly.
 
 ## Next
 
-Two things are left — 7 and 8 — and they are independent enough to take in
-any order. **Step 7 is under way**: three of its five phases have landed
-(2026-08-06 saves a server's address, 2026-08-07 checks what it offers, and later
-the same day runs one — with your approval, every time, in the Developer profile
-only). Step 5.5 headed this list until
+**One thing is left — step 8.** Step 7 finished what it is doing for v1 on
+2026-08-07: four of its five phases have landed (saving a server's address,
+checking what it offers, running one with your approval every time in the
+Developer profile only, and passing back what it answered), and the fifth is a
+pair of things v1 deliberately does not include. Step 5.5 headed this list until
 2026-07-31 and step 6 until 2026-08-06; both are finished. Their entries stay
 below, in place, because they are recent enough that people still ask what they
 covered.
@@ -88,11 +88,19 @@ covered.
    describe its own powers, because the list of kinds is closed and hard-coded,
    which is the same gate with nothing to get out of step. Code-backed widgets
    (monitors, scripts) are still Developer-only and still future work.
-7. **MCP client — STARTED. Phases 1, 2 and 3 of five are built (2026-08-06,
-   2026-08-07).** Consume external tools through the registry and the permission
-   gate that already exist. Addison is a client here, never a server. The five
-   phases and what each one covers are in
+7. **MCP client — DONE for v1 2026-08-07. Phases 1, 2, 3 and 4 of five are built
+   (2026-08-06, and three on 2026-08-07); the fifth is a later option, not a piece
+   of v1 that is missing.** Consume external tools through the registry and the
+   permission gate that already exist. Addison is a client here, never a server.
+   The five phases and what each one covers are in
    [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
+
+   **What the fifth phase holds, and why it is not v1:** talking to servers that
+   run as a program rather than at a web address, which needs containment nobody
+   has built (see the transport note below), and letting a tool server's tools be
+   used in the Simple profile, which is a decision the owner deferred rather than
+   answered. Both are written down; neither is started; nothing built so far leans
+   on either.
 
    **Transport is HTTP only for v1** (owner decision 2026-08-06): a saved server
    is a web address, never a program to launch, which is why the client can live
@@ -128,6 +136,19 @@ covered.
    not called at the address it used to have. Nothing about the Simple profile
    changed at any point: a Simple-profile person sees none of this and can run none
    of it.
+
+   **What phase 4 shipped:** the rest of what a tool sends back. A tool can answer
+   with more than words — pictures, sound, files, and a machine-readable version of
+   the same answer — and Addison now says what it got rather than quietly keeping
+   the words and dropping the rest. It passes on the words (including words that
+   arrived wrapped in a file) and the machine-readable part, both with passwords and
+   keys stripped out first; it does not pass on pictures, sound or files, because
+   they come from a program nobody here has checked and nothing on this side needs
+   them. What it left out it says in a line of plain English — *"the tool also
+   returned 2 images and 1 file"* — instead of leaving you to wonder. A long answer
+   is trimmed to a size that fits, once for the whole answer rather than once per
+   piece, and the trim now says how long the answer was and how much of it you are
+   seeing.
 8. **The automation keyword gate.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
    never triggers itself.

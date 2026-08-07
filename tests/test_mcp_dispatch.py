@@ -44,6 +44,7 @@ from agent_core.mcp_catalog import (
     McpTool,
 )
 from agent_core.mcp_client import (
+    DROPPED_PARTS,
     MAX_RESULT_CHARS,
     NEEDS_SIGN_IN,
     NOTHING_TO_SHOW,
@@ -301,8 +302,16 @@ def test_a_server_that_wants_a_sign_in_is_answered_with_the_same_sentence_discov
     "content, expected",
     [
         pytest.param("not a list", mcp_client.NOT_A_TOOL_SERVER, id="content is not a list"),
-        pytest.param([{"type": "text"}], NOTHING_TO_SHOW, id="a text item with no text"),
-        pytest.param([{"type": "text", "text": 7}], NOTHING_TO_SHOW, id="text that is not text"),
+        pytest.param(
+            [{"type": "text"}],
+            NOTHING_TO_SHOW + "\n" + DROPPED_PARTS.format(things="1 other part"),
+            id="a text item with no text",
+        ),
+        pytest.param(
+            [{"type": "text", "text": 7}],
+            NOTHING_TO_SHOW + "\n" + DROPPED_PARTS.format(things="1 other part"),
+            id="text that is not text",
+        ),
     ],
 )
 def test_a_malformed_answer_fails_closed_with_one_sentence(content, expected):
@@ -310,7 +319,13 @@ def test_a_malformed_answer_fails_closed_with_one_sentence(content, expected):
     sentence — which is what makes this a test of the validation rather than of
     whatever happens to raise. ``content`` that is not a list is not a result at
     all; an item whose text is missing or is not text is a well-formed answer
-    carrying nothing, which is a different thing and says so."""
+    carrying nothing, which is a different thing and says so.
+
+    **Phase 4 made the second half say MORE, not less** (2026-08-07): the sentence
+    it said in phase 3 is unchanged and still asserted, and the disclosure line now
+    follows it, because an item that reached Addison and was not carried is a fact
+    the phase-4 decision says out loud rather than swallows. A text item whose text
+    is not text is exactly that item."""
     made = Wiring(FakeToolServer(content=content))
     try:
         assert run_tool(made).content == expected
@@ -388,13 +403,21 @@ def test_a_very_long_answer_is_trimmed_and_says_so():
     uncapped. The marker is plain and it is present — a silent trim is a tool
     answering a different question than the one it was asked.
 
+    **Phase 4 gave the marker the totals** (2026-08-07), which is the one thing
+    changed here: a bare "this was trimmed" sits identically under a nine-character
+    overflow and a nine-megabyte one, and a model that cannot tell those apart
+    cannot decide whether to ask the tool something narrower.
+
     Mutation: return the text uncapped — this fails on the length."""
-    made = Wiring(FakeToolServer(text="a" * (MAX_RESULT_CHARS * 3)))
+    sent = MAX_RESULT_CHARS * 3
+    marker = RESULT_TRIMMED.format(sent=sent, shown=MAX_RESULT_CHARS)
+    made = Wiring(FakeToolServer(text="a" * sent))
     try:
         result = run_tool(made)
-        assert len(result.content) == MAX_RESULT_CHARS + len(RESULT_TRIMMED)
-        assert result.content.endswith(RESULT_TRIMMED)
-        assert "trimmed" in RESULT_TRIMMED
+        assert len(result.content) == MAX_RESULT_CHARS + len(marker)
+        assert result.content.endswith(marker)
+        assert "trimmed" in marker
+        assert str(sent) in marker and str(MAX_RESULT_CHARS) in marker
     finally:
         made.close()
 
@@ -421,7 +444,15 @@ def test_only_text_content_is_carried_and_an_answer_with_none_says_so():
     """Phase 3's scope, stated as behaviour: an image or an embedded resource is
     not half-carried, and an answer with nothing textual in it reaches the model as
     a sentence rather than as an empty string — which reads as a tool that quietly
-    did nothing. Content-type breadth is phase 4's."""
+    did nothing.
+
+    **Phase 4 arrived, as this test's last line said it would** (2026-08-07). The
+    half phase 3 pinned is unchanged — nothing was decoded, nothing was carried,
+    and the empty-answer sentence is still what a model reads. What is new is the
+    second line: the pictures and the file are COUNTED and disclosed, because a
+    tool that returned two charts and a caption must not be indistinguishable from
+    a tool that returned a caption. ``tests/test_mcp_output.py`` owns that
+    behaviour in full; this keeps the phase-3 half honest beside it."""
     made = Wiring(
         FakeToolServer(
             content=[
@@ -431,7 +462,10 @@ def test_only_text_content_is_carried_and_an_answer_with_none_says_so():
         )
     )
     try:
-        assert run_tool(made).content == NOTHING_TO_SHOW
+        result = run_tool(made)
+        assert result.content.startswith(NOTHING_TO_SHOW)
+        assert result.content.endswith(DROPPED_PARTS.format(things="1 image and 1 file"))
+        assert "…" not in result.content, "an image's own bytes never travel"
     finally:
         made.close()
 

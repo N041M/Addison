@@ -1,13 +1,13 @@
-"""A minimal MCP client — Streamable HTTP: connect, list, and call
-(step 7, PHASES 2–3 of five; [docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md)
-owns the phase order).
+"""A minimal MCP client — Streamable HTTP: connect, list, call, and shape the
+answer (step 7, PHASES 2–4 of five;
+[docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) owns the phase order).
 
 **This module speaks the protocol. It never registers, gates or audits
 anything** — ``agent_core/mcp_catalog.py`` owns admission to the registry and the
 tool body that runs a call, and the permission gate + ``tool_audit`` live where
 they always did. What comes out of here is a list of names, descriptions and
-bounded schemas a stranger's server offered, plus the text one of its tools
-answered with, each already cut down to the shape the rest of Addison will hold.
+bounded schemas a stranger's server offered, plus what one of its tools answered
+with, each already cut down to the shape the rest of Addison will hold.
 
 **Top-level on purpose.** ``tools/``, ``providers/`` and ``routines/`` must not
 import from one another (CLAUDE.md's module-boundary rule), and an MCP tool is
@@ -20,7 +20,7 @@ executable outside the seatbelt step 5.5 built. Nothing here may import
 ``subprocess``/``os``/``signal`` — ``tests/test_mcp_discovery.py`` enforces that on
 the import graph, not in a comment.
 
-Three properties do the safety work, and each one is a test:
+Four properties do the safety work, and each one is a test:
 
 1. **EVERYTHING A SERVER SENDS IS UNTRUSTED TEXT.** Not "probably fine" — the
    whole point of an MCP server is that somebody else wrote it. So the caps are at
@@ -40,7 +40,17 @@ Three properties do the safety work, and each one is a test:
    the call (:data:`CALL_BUDGET_SECONDS`) — not each socket, because a per-attempt
    timeout is not a budget.
 
-3. **FAIL CLOSED, IN ONE PLAIN SENTENCE.** Every failure here — unreachable,
+3. **WHAT COMES BACK IS SAID, NOT DROPPED (phase 4).** A tool's answer arrives in
+   pieces of several kinds, and only some of them are text. The pieces that are
+   text — including one that arrived wrapped in an embedded resource — are carried
+   through one shared budget; the pieces that are not are **counted and disclosed
+   in one plain line**, never decoded and never forwarded. Half-carrying an answer
+   is a tool reporting a result it did not produce, and carrying a stranger's bytes
+   is a decision about provenance that v1 declines to make (see ``call_tool``).
+   :func:`compose_result` is where that shape is made, and it may only be handed
+   strings the redactor has already read whole.
+
+4. **FAIL CLOSED, IN ONE PLAIN SENTENCE.** Every failure here — unreachable,
    malformed, a version Addison doesn't speak, a sign-in it can't do — comes back
    as an :class:`McpError` carrying one sentence a person can read (CLAUDE.md:
    personas 54 and 68, no jargon, no stack traces). A server's OWN error text is
@@ -86,7 +96,29 @@ ODD_ADDRESS = "Addison couldn't make sense of that address."
 NOTHING_TO_SHOW = "That tool answered with nothing Addison can pass on."
 # Appended when the answer was longer than one tool result may be. Leads with the
 # ellipsis so it reads as a continuation of the text it follows.
-RESULT_TRIMMED = "\n…Addison trimmed this tool's long answer."
+#
+# PHASE 4 GAVE IT THE TOTALS. A bare "this was trimmed" tells a model that
+# something is missing and nothing about how much, so the same marker sits under a
+# nine-character overflow and under a nine-megabyte one — and a model that cannot
+# tell those apart cannot decide whether to ask the tool something narrower.
+RESULT_TRIMMED = (
+    "\n…Addison trimmed this tool's long answer — it sent {sent} characters, {shown} are shown."
+)
+# Phase 4. What a tool sent that is not text, disclosed rather than dropped in
+# silence: an answer that quietly loses half of itself is a tool reporting a
+# different result than the one it produced. Nothing here is decoded or carried —
+# the count IS the whole of what crosses.
+DROPPED_PARTS = "The tool also returned {things}, which Addison doesn't pass along."
+# Phase 4. The tool's own machine-readable answer, labelled so a model knows whose
+# words these are and that they are data rather than instructions.
+STRUCTURED_LABEL = "The tool's structured answer:"
+# Phase 4. Structured data that would not fit, and structured data that was not
+# data. Both are one plain line and both leave the text alone: the part Addison
+# could not carry never costs the person the part it could.
+STRUCTURED_TOO_BIG = "The tool also sent structured data too big to pass along, so Addison left it out."
+STRUCTURED_UNREADABLE = (
+    "The tool also sent structured data Addison couldn't make sense of, so it left it out."
+)
 
 # The sentences ``net_vetting`` hands back, in this caller's voice. Same mechanism
 # as read_web_page and provider.connect; the words are ours (see its ``Sentences``).
@@ -157,8 +189,30 @@ EMPTY_SCHEMA: dict = {"type": "object", "properties": {}}
 #: that matters; the byte bound on a stranger's answer is ``_MAX_RESPONSE_BYTES``
 #: above, at the wire, and it is the one that stops an endless body. Twice
 #: ``run_command``'s 4000 because a command's output is incidental to what was
-#: asked and a tool's answer IS what was asked. Phase 4 owns refining this.
+#: asked and a tool's answer IS what was asked.
+#:
+#: **PHASE 4 MADE IT THE WHOLE RESULT'S BUDGET, NOT ONE STRING'S.** Phase 3 read
+#: only ``text`` items and joined them, so the cap covered everything there was.
+#: Phase 4 admits a second channel (``structuredContent``) and a second source of
+#: text (an embedded resource that IS text), and a per-part cap would let a server
+#: send ten parts and spend the budget ten times. So this is the ceiling on the
+#: server-authored characters in one result, shared across every part of it.
+#: Addison's OWN lines — the trim marker, the disclosure line, the fence — are
+#: short, bounded and ours, and are deliberately not charged against it: a server
+#: must never be able to squeeze out the sentence that explains what it did.
 MAX_RESULT_CHARS = 8000
+
+#: Of that shared budget, the most a structured answer may take — a QUARTER,
+#: written as the fraction so the two cannot drift apart.
+#:
+#: Why a quarter, and why a sub-bound at all: ``structuredContent`` is a SECOND
+#: rendering of the same answer, shaped for a machine, and the text beside it is
+#: the half somebody wrote to be read. A compact serialization of a real structured
+#: answer — a handful of records, a table of results — fits in 2000 characters with
+#: room to spare, so this bites only on the shapes that were never going to be read
+#: whole, and it guarantees the prose keeps three quarters of the room whatever a
+#: server does with the other channel.
+MAX_STRUCTURED_CHARS = MAX_RESULT_CHARS // 4
 
 #: What a tool name must look like to be admitted. An MCP name becomes half of a
 #: registry id (``mcp:<server>:<tool>``), which is compared, logged and shown, so
@@ -166,6 +220,18 @@ MAX_RESULT_CHARS = 8000
 #: cleaned up — it is refused, and counted. Matches the shape every real MCP
 #: server already uses.
 _PLAUSIBLE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
+
+#: Terminal escape sequences, removed WHOLE (phase 4, from the §7 re-read). Three
+#: alternatives: a CSI sequence (``ESC [`` … final byte — colours, cursor moves), an
+#: OSC string (``ESC ]`` … BEL or ``ESC \`` — window titles, and the one that can
+#: carry a URL), and a lone two-character escape. Dropping only the ESC would leave
+#: ``[31m`` sitting in the text as literal noise a model then has to interpret, and
+#: an OSC's payload would survive as prose.
+_ESCAPE_SEQUENCE = re.compile(
+    r"\x1b\[[0-?]*[ -/]*[@-~]"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b[@-Z\\-_]"
+)
 
 #: Offered on ``initialize``. The server answers with the version it will speak;
 #: an OLDER one from this list is accepted (that is the protocol's own
@@ -197,16 +263,38 @@ class DiscoveredTool:
 
 @dataclass(frozen=True)
 class CallResult:
-    """What one ``tools/call`` came back with: the text, and whether the server
-    called it an error.
+    """What one ``tools/call`` came back with, taken apart but NOT yet shaped for a
+    model.
+
+    **Nothing here has crossed the redactor**, which is why this is a bag of parts
+    rather than a finished string: the caller redacts, and only then does
+    :func:`compose_result` cut anything. A cut can defeat the redactor, so no cap
+    may be applied before that seam — the same rule ``run_command`` learned, now
+    covering two channels instead of one.
 
     ``is_error`` is the server's own ``isError`` flag, which is a different fact
     from the call failing — a tool that ran and reported "no such file" answers
     HTTP 200 with a perfectly good JSON-RPC result. A call that never landed raises
-    :class:`McpError` instead and never reaches this shape."""
+    :class:`McpError` instead and never reaches this shape.
+
+    ``structured`` is ``structuredContent`` already serialized compactly and
+    cleaned, or None when the server sent none; ``structured_unreadable`` says a
+    server sent something under that key that is not an object Addison could
+    serialize, which is a different sentence from sending nothing.
+
+    The four counts are what was NOT carried, per phase 4's first decision:
+    disclosure over silent dropping. They are counts and never content — no image
+    byte, no resource URI and no unknown item's payload is held here, let alone
+    passed on."""
 
     text: str
     is_error: bool
+    structured: str | None = None
+    structured_unreadable: bool = False
+    images: int = 0
+    sounds: int = 0
+    files: int = 0
+    other: int = 0
 
 
 @dataclass(frozen=True)
@@ -239,6 +327,43 @@ def _strip_control(text: str) -> str:
     something else entirely. None of it is repaired — it is removed."""
     kept = [" " if ch in "\t\n\r" else ch for ch in text if ch.isprintable() or ch in "\t\n\r"]
     return " ".join("".join(kept).split())
+
+
+def clean_result_text(text: str) -> str:
+    """A tool's answer with terminal escapes and invisible characters taken out,
+    and its LINES LEFT ALONE (phase 4, adopted from the §7 re-read).
+
+    The sibling of :func:`_strip_control`, which does this to a name or a
+    description; the difference is the one prose needs — a result body is
+    paragraphs, so newlines and tabs survive here where that function flattens
+    them, and a bare carriage return becomes a newline rather than a way to
+    overwrite the line already written.
+
+    What it removes and why it is worth removing:
+
+      * **Escape sequences**, whole (:data:`_ESCAPE_SEQUENCE`). Command-line tools
+        colour their output, and an MCP server wrapping one passes that straight
+        through; the sequences are noise to a model and an OSC string can carry a
+        payload that reads as prose once its ESC is gone.
+      * **Everything non-printable, including the invisible formatting
+        characters** — U+202E and its family (which reverse the rest of a line),
+        the zero-width set, and the byte-order mark. ``str.isprintable`` is False
+        for all of them, which is the same test phase 2 applies to a tool's name
+        and for the same reason.
+
+    **THIS RUNS BEFORE THE REDACTOR, AND THE ORDER IS LOAD-BEARING.** A credential
+    with a zero-width space dropped into the middle of it matches no rule in
+    ``agent_core.redaction`` — every rule is a contiguous pattern — so cleaning
+    afterwards would hand the model a key the redactor had already declined to see.
+    Cleaning first re-joins it, and the redactor then does its job. This is not a
+    screen for injected instructions and does not pretend to be one (plan §7);
+    it removes characters that mean something to a renderer and nothing to a
+    reader."""
+    if not text:
+        return text
+    without_escapes = _ESCAPE_SEQUENCE.sub("", text)
+    normalized = without_escapes.replace("\r\n", "\n").replace("\r", "\n")
+    return "".join(ch for ch in normalized if ch.isprintable() or ch in "\n\t")
 
 
 def _clean_name(value: object) -> str | None:
@@ -321,17 +446,163 @@ def _clean_schema(value: object) -> dict:
     return value
 
 
-def trim_result(text: str) -> str:
-    """One tool's answer, cut to :data:`MAX_RESULT_CHARS` with a plain marker.
+def _structured_answer(value: object) -> tuple[str | None, bool]:
+    """``structuredContent`` serialized compactly, or the fact that it could not be.
+
+    Returns ``(serialized, unreadable)``. **No size decision is taken here** — that
+    belongs after the redactor (:func:`compose_result`), and taking it early is
+    exactly the wrong-order bug this module keeps re-learning.
+
+    Three things are settled here and each is a sentence a person could hear:
+
+      * **Absent, or an empty object, is nothing.** ``{}`` serializes to two
+        characters that say precisely as much as sending no key at all; fencing it
+        would be passing nothing along dressed as something.
+      * **Not an object is UNREADABLE, not ignored.** MCP says this field is an
+        object; a server that puts a string or a number there sent something, and
+        "there was structured data Addison couldn't make sense of" is the honest
+        report of that.
+      * **A document that will not serialize is unreadable too** — including one
+        deep enough that ``json.dumps`` raises ``RecursionError`` rather than a
+        ``ValueError``, which is a refusal like any other and never an exception a
+        person's turn ends on (``_clean_schema``'s own hard-won list).
+
+    ``ensure_ascii=False`` keeps the serialization short in characters, which is
+    the unit the budget is counted in, and the compact separators drop the
+    whitespace a pretty-printer would charge to a stranger's budget. Whatever
+    invisible characters that leaves inside string values are removed by
+    :func:`clean_result_text`, which cannot break the JSON: everything it takes out
+    is either escaped by the serializer already or is not JSON syntax."""
+    if value is None:
+        return None, False
+    if not isinstance(value, dict):
+        return None, True
+    if not value:
+        return None, False
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    except (TypeError, ValueError, RecursionError):
+        return None, True
+    return clean_result_text(encoded), False
+
+
+def trim_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
+    """One piece of a tool's answer, cut to ``limit`` with a marker that says how
+    much there was.
 
     **Never call this on text that has not been redacted yet** (phase-3 decision 2,
     on ``run_command``'s hard-won precedent): every rule in ``agent_core.redaction``
     is anchored on a vendor prefix followed by a minimum body, so a cut through a
     credential leaves a head that matches nothing afterwards and travels intact.
-    The cut can defeat the redactor, so the redactor goes first."""
-    if len(text) <= MAX_RESULT_CHARS:
+    The cut can defeat the redactor, so the redactor goes first.
+
+    ``limit`` is a parameter since phase 4 because the budget is now SHARED: what a
+    structured answer has already spent is not available to the text beside it.
+    :func:`compose_result` is the only caller that does that arithmetic."""
+    room = max(0, limit)
+    if len(text) <= room:
         return text
-    return text[:MAX_RESULT_CHARS] + RESULT_TRIMMED
+    return text[:room] + RESULT_TRIMMED.format(sent=len(text), shown=room)
+
+
+def _fenced(payload: str) -> str:
+    """The structured answer, labelled and fenced so a model can see where a
+    stranger's data starts and stops.
+
+    The fence is grown past the longest run of backticks INSIDE the payload
+    (CommonMark's own rule). A three-backtick fence around content that contains
+    three backticks is a fence a server closes from the inside, and everything it
+    writes after that reads as Addison's own framing rather than as the tool's
+    output. That is presentation rather than a boundary — the boundary is the gate
+    and the caps, and plan §7 says so plainly — but a seam this cheap to close is
+    not worth leaving open."""
+    longest = max((len(run) for run in re.findall(r"`+", payload)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{STRUCTURED_LABEL}\n{fence}json\n{payload}\n{fence}"
+
+
+def _things_dropped(images: int, sounds: int, files: int, other: int) -> str:
+    """"2 images and 1 file", or "" when nothing was left behind.
+
+    Plain counting words, because this sentence is written for a model and then
+    paraphrased to a person by it (CLAUDE.md: personas 54 and 68 — a picture is a
+    picture, never a "content item of type image")."""
+    counted = [
+        (images, "image", "images"),
+        (sounds, "sound", "sounds"),
+        (files, "file", "files"),
+        (other, "other part", "other parts"),
+    ]
+    phrases = [
+        f"{count} {one if count == 1 else many}" for count, one, many in counted if count
+    ]
+    if not phrases:
+        return ""
+    if len(phrases) == 1:
+        return phrases[0]
+    return ", ".join(phrases[:-1]) + " and " + phrases[-1]
+
+
+def compose_result(
+    *,
+    text: str,
+    structured: str | None = None,
+    structured_unreadable: bool = False,
+    images: int = 0,
+    sounds: int = 0,
+    files: int = 0,
+    other: int = 0,
+) -> str:
+    """One tool's answer as a model will read it: the text, the structured answer
+    beside it, and one plain line for everything Addison would not carry.
+
+    **EVERY STRING PASSED IN MUST ALREADY HAVE CROSSED ``redaction.redact``.** This
+    function is where the cuts happen, and a cut can defeat the redactor — see
+    :func:`trim_result`. ``McpTool.execute`` is the one caller and it redacts both
+    channels immediately before calling this; that adjacency is the ordering, and a
+    test plants a credential straddling each of the two caps below.
+
+    The shape, in order:
+
+      1. **The structured answer settles its size first**, because the text is
+         what gets the remainder. Over :data:`MAX_STRUCTURED_CHARS` it is LEFT OUT
+         WHOLE rather than cut: truncated JSON is not smaller JSON, it is a
+         different document that claims to be one, and a model reading it would
+         draw conclusions from a shape the tool never produced. Unserializable is
+         the same answer for the same reason.
+      2. **The text takes what is left of** :data:`MAX_RESULT_CHARS`, cut with a
+         marker naming both totals. One budget across the whole result, so ten
+         parts cannot spend it ten times.
+      3. **The disclosure line**, naming what was not carried and never carrying
+         any of it.
+      4. **If neither channel had anything**, :data:`NOTHING_TO_SHOW` — because ""
+         reaches a model as a tool that silently did nothing, and that is the one
+         reading of an empty answer that is never true."""
+    notes: list[str] = []
+    block = ""
+    spent = 0
+    if structured_unreadable:
+        notes.append(STRUCTURED_UNREADABLE)
+    elif structured:
+        if len(structured) > MAX_STRUCTURED_CHARS:
+            notes.append(STRUCTURED_TOO_BIG)
+        else:
+            block = _fenced(structured)
+            spent = len(structured)
+    # ``text.strip()`` rather than ``text``: a server that answers with two spaces
+    # has answered with nothing, and a truthiness check would carry the spaces,
+    # find the result non-empty, and skip the sentence below — handing a model a
+    # tool that appears to have run and said nothing. ``call_tool`` already strips
+    # what it collects, so this is the contract of THIS function holding on its own
+    # rather than a second defence of the same input.
+    body = trim_result(text, MAX_RESULT_CHARS - spent) if text.strip() else ""
+    things = _things_dropped(images, sounds, files, other)
+    if things:
+        notes.append(DROPPED_PARTS.format(things=things))
+    carried = [piece for piece in (body, block) if piece]
+    if not carried:
+        return "\n".join([NOTHING_TO_SHOW, *notes])
+    return "\n".join([*carried, *notes])
 
 
 def _sse_payload(raw: bytes) -> dict | None:
@@ -595,13 +866,35 @@ class _Session:
         return tuple(admitted), skipped
 
     def call_tool(self, name: str, arguments: dict) -> CallResult:
-        """One ``tools/call``, parsed down to text.
+        """One ``tools/call``, taken apart into the parts a model may read and a
+        count of the parts it may not.
 
-        **Only ``text`` content items are read, and that is phase 3's scope**
-        (phase 4 owns content-type breadth and ``structuredContent``): an image or
-        an embedded resource is silently not carried rather than half-carried, and
-        an answer with nothing textual in it says so in one plain sentence rather
-        than reaching a model as a tool that quietly did nothing.
+        **PHASE 4'S FIRST DECISION LIVES HERE: DISCLOSURE OVER SILENT DROPPING, AND
+        ONLY TEXT IS FORWARDED.** Phase 3 read ``text`` items and ignored the rest
+        without saying so, which made a tool that returned two charts and a caption
+        indistinguishable from a tool that returned a caption. Every item is now
+        accounted for:
+
+          * ``text`` — carried.
+          * an **embedded resource whose content is TEXT** — carried, because it is
+            text. It joins the same path and therefore the same cleaning, the same
+            redaction and the same shared budget; there is no second treatment for
+            a string that arrived inside a wrapper.
+          * ``image``, ``audio``, a resource that is bytes, a ``resource_link``,
+            and anything with a type nobody here has heard of — COUNTED, and the
+            count is all that travels. **Never decoded, never forwarded.**
+
+            Not because Addison cannot carry an image: it can, and does —
+            ``read_file`` answers with ``{"kind": "image", …}`` and the
+            orchestrator's ``_gate_image_result`` checks the model can see it. That
+            path carries a file **the person picked from their own disk**, and this
+            one would carry bytes a program nobody here has audited pushed into a
+            model's context unasked. Provenance is the whole difference, and it is
+            the same difference §3 draws about a server's own risk claim.
+
+        ``structuredContent`` is serialized here and shaped later — see
+        :func:`compose_result` — because nothing may be cut before the redactor has
+        read it whole.
 
         A malformed answer FAILS CLOSED, like every other shape this module reads:
         ``content`` that is not a list is not a result Addison will guess at."""
@@ -609,21 +902,53 @@ class _Session:
         items = result.get("content")
         if not isinstance(items, list):
             raise McpError(NOT_A_TOOL_SERVER)
-        parts = [
-            item["text"]
-            for item in items
-            if isinstance(item, dict)
-            and item.get("type") == "text"
-            and isinstance(item.get("text"), str)
-        ]
-        text = "\n".join(parts).strip()
+        parts: list[str] = []
+        images = sounds = files = other = 0
+        for item in items:
+            if not isinstance(item, dict):
+                other += 1
+                continue
+            kind = item.get("type")
+            if kind == "text":
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                else:
+                    # A text item with no text is a well-formed answer carrying
+                    # nothing, which is a thing that happened and gets counted.
+                    other += 1
+            elif kind == "image":
+                images += 1
+            elif kind == "audio":
+                sounds += 1
+            elif kind == "resource":
+                embedded = item.get("resource")
+                inner = embedded.get("text") if isinstance(embedded, dict) else None
+                if isinstance(inner, str):
+                    parts.append(inner)
+                else:
+                    # A ``blob`` — base64 bytes — or a resource with neither. Both
+                    # are files as far as anything downstream is concerned.
+                    files += 1
+            elif kind == "resource_link":
+                # A URI and a name, and deliberately not carried: handing a model a
+                # stranger's address is handing it somewhere to be sent.
+                files += 1
+            else:
+                other += 1
+        structured, unreadable = _structured_answer(result.get("structuredContent"))
         return CallResult(
-            text=text or NOTHING_TO_SHOW,
+            text=clean_result_text("\n".join(parts)).strip(),
             # The server's own claim about its own call. Believed here because it
             # says nothing about permission or safety — only whether the thing the
             # model asked for worked — and a wrong answer costs one honest-looking
             # failure, not a capability.
             is_error=result.get("isError") is True,
+            structured=structured,
+            structured_unreadable=unreadable,
+            images=images,
+            sounds=sounds,
+            files=files,
+            other=other,
         )
 
 
@@ -675,6 +1000,10 @@ def call_tool(
     """Run ONE tool on one server. Raises :class:`McpError` with one plain sentence
     on any failure — unreachable, too slow, a sign-in Addison can't do, an answer it
     can't make sense of.
+
+    What comes back is a :class:`CallResult` — the answer in PARTS, none of them
+    redacted and none of them cut. The caller redacts and then calls
+    :func:`compose_result`, in that order, because a cut can defeat the redactor.
 
     **ONE CALL, ONE SESSION, ONE BUDGET** (phase-3 decision 3). A fresh
     initialize → initialized → call runs inside a single deadline, and the session

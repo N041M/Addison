@@ -1,15 +1,19 @@
 # Step 7 — MCP client
 
-**Status: STARTED — phases 1, 2 and 3 of five are BUILT (2026-08-06, 2026-08-07,
-2026-08-07).** `ROADMAP.md` owns scheduling. The spec's shape is §4.12; this plan
-turns it into a build order and settles the decisions §4.12's banner admits were
-never made. Where this plan and §4.12 differ, §4.12's *banner* is right that its
-details were never settled — that is what this document settles.
+**Status: phases 1, 2, 3 and 4 of five are BUILT (2026-08-06, and three on
+2026-08-07). THE v1 REMAINDER OF THIS STEP IS COMPLETE** — phase 5 is stdio under
+containment and SAFE admission via a promoted allowlist, and both are recorded
+later options that v1 deliberately does not include (§5, §6). `ROADMAP.md` owns
+scheduling. The spec's shape is §4.12; this plan turns it into a build order and
+settles the decisions §4.12's banner admits were never made. Where this plan and
+§4.12 differ, §4.12's *banner* is right that its details were never settled — that
+is what this document settles.
 
 **Both decisions are now ANSWERED** — see §5. Decision 1 (transport): HTTP only
 for v1. Decision 2 (where a server's tools appear): a section per server on the
 Tools surface, never interleaved with native tools. Phase 2 added three scoping
-decisions of its own (§4.2) and phase 3 four more (§4.3).
+decisions of its own (§4.2), phase 3 four more (§4.3), and phase 4 three (§4.4)
+plus the §7 re-read that phase 3's trigger had made due.
 
 Addison is a **client**: it consumes external MCP servers/tools. Never a server,
 never a gateway (the OmniRoute-style thing, declined and still declined).
@@ -229,9 +233,10 @@ and registration must refuse a collision rather than replace.
      credential-bearing server output in front of a model between two merges, and
      `tool_audit.redacted` already existed expecting it. Every result's text is
      redacted, the kinds ride back on the `ToolResult` so both dispatch paths can
-     record them, and phase 4 keeps the REST of output handling: content-type
+     record them, and phase 4 kept the REST of output handling: content-type
      breadth, structured content, and size/shape policy toward the model beyond
-     this phase's flat cap. §7's trigger came with the seam and was re-read here
+     this phase's flat cap (built the same day — §4.4, which widened the seam to a
+     second channel without moving it). §7's trigger came with the seam and was re-read here
      rather than deferred to phase 4 — server text reaches a model from the moment
      dispatch exists, not from the moment output handling is finished.
    - **A result is capped on its way to the model.** A server can return megabytes.
@@ -257,12 +262,96 @@ and registration must refuse a collision rather than replace.
    moment of use), plus the phase-2 layer tests updated in place per the notes their
    authors left — `tests/test_mcp_discovery.py` now asserts an `mcp:` id IS offered
    to the model in OPEN and still never in SAFE.
-4. **Output handling.** What phase 3 did not pull forward: content-type breadth
-   (images, embedded resources), `structuredContent`, the size and shape policy
-   toward the model beyond phase 3's flat cap, and the §7 re-read below. The
-   redaction seam itself moved to phase 3 — see its decision 1.
+4. **Output handling — BUILT 2026-08-07.** What phase 3 did not pull forward:
+   content-type breadth (images, embedded resources), `structuredContent`, and the
+   size and shape policy toward the model beyond phase 3's flat cap. The redaction
+   seam itself moved to phase 3 — see its decision 1 — and the §7 re-read moved
+   with it, so what phase 4 owed §7 was a SECOND re-read against a wider surface
+   (recorded there, below). The claim this phase makes: **a tool's answer is passed
+   on whole or its gaps are named — no part of it is dropped in silence, nothing
+   foreign is ever decoded, and every cut is made on text the redactor has already
+   read.**
+
+   What shipped:
+   - **`mcp_client.call_tool` takes an answer APART instead of filtering it.** Every
+     `content` item is accounted for: `text` is carried; an **embedded resource whose
+     content is text** is carried, because it is text; `image`, `audio`, a resource
+     that is bytes, a `resource_link` and any type nobody here has heard of are
+     **counted**, and the count is the whole of what travels. `CallResult` grew from
+     "the text and a flag" into the parts, none of them redacted and none of them cut
+     — the shaping happens after the seam, which is the only place it can happen.
+   - **`mcp_client.compose_result`** — the one place a cut is made in this subsystem,
+     and the one place the caps live. Text, then the structured answer fenced beside
+     it, then one plain line for everything not carried, then `NOTHING_TO_SHOW` if
+     neither channel had anything. It may only be handed strings the redactor has
+     already read whole, and `McpTool.execute` redacts both channels on the two lines
+     immediately above the call — adjacency is the enforcement.
+   - **`mcp_client.clean_result_text`** — escape sequences removed whole and every
+     non-printable character (the bidi overrides, the zero-width set, the BOM)
+     dropped, with newlines and tabs kept because a result is prose where a name is a
+     row. The §7 re-read's one adopted hardening; see §7 for why it earns its lines
+     and what it explicitly is not.
+   - **`trim_result(text, limit)`** — the limit is a parameter now, because the budget
+     is shared, and the marker states both totals.
+   - **No protocol change, no frontend change, and nothing new reaching the webview.**
+     A result goes to the MODEL. `conversation.load` keeps user rows and non-empty
+     assistant rows and skips every `tool` row, so a server's words reach a person
+     only as whatever the model says about them, plus the audit row — checked rather
+     than assumed, and pinned by a source test.
+
+   **Three decisions, made 2026-08-07:**
+
+   - **Disclosure over silent dropping, and forward only what is TEXT.** Phase 3 read
+     the text items and ignored the rest without saying so, which made a tool that
+     returned two charts and a caption indistinguishable from a tool that returned a
+     caption. Everything not carried is now counted and disclosed in one plain line
+     — *"The tool also returned 2 images and 1 file, which Addison doesn't pass
+     along."* What is **never** done is decode or forward it.
+
+     Stated at full strength, because the easy version of this sentence is false:
+     Addison **does** have a path for an image tool result — `read_file` returns
+     `{"kind": "image", …}` and the orchestrator's `_gate_image_result` checks the
+     model can see it — and phase 4 deliberately does not reuse it. That path
+     carries a file **the person picked from their own disk through the OS picker**;
+     this would be a program nobody here has audited pushing bytes into a model's
+     context unasked. Provenance is the whole difference, and it is the same
+     difference §3 makes about a server's self-declared risk. So the refusal costs
+     nothing a person could otherwise have seen (a result never reaches the webview
+     — see §7), it costs a model nothing it needs to keep working, and reversing it
+     is a later decision with an obvious place to be made rather than a gap. The one
+     thing that is NOT an
+     exception: an embedded resource whose content is text is text, and it joins the
+     text path — the same cleaning, the same redactor, the same budget. A second
+     treatment for the same bytes is where a second set of caps goes missing.
+   - **`structuredContent` is taken within bounds, and an oversized one is left out
+     WHOLE.** It is serialized compactly, cleaned, redacted through the same seam as
+     the text, and fenced under a label so a model can see whose words these are.
+     `MAX_STRUCTURED_CHARS` is `MAX_RESULT_CHARS // 4` — written as the fraction so
+     the two cannot drift — because the structured channel is a second rendering of
+     the same answer, shaped for a machine, and the prose beside it is the half
+     somebody wrote to be read; a quarter is far past any real structured answer and
+     leaves three quarters for the text whatever a server does. **Over the bound it
+     is dropped, never truncated**: truncated JSON is not smaller JSON, it is a
+     different document claiming to be one, and a model would draw conclusions from a
+     shape the tool never produced. Unserializable, and a `structuredContent` that is
+     not an object at all, get the same treatment and their own plain line — a server
+     that put a string there SENT something, and saying so is more honest than
+     ignoring it.
+   - **One budget, shared across the whole result.** Phase 3's cap covered everything
+     because there was one string; phase 4 reads several parts and two channels, and
+     a per-part cap would let a server send ten parts and spend 8000 characters ten
+     times while every document still said "8000". So `MAX_RESULT_CHARS` is the
+     ceiling on the SERVER-authored characters in one result: the structured answer
+     settles its size first, the text takes the remainder, and the cut says how much
+     there was (*"it sent N characters, M are shown"*) because a bare "this was
+     trimmed" sits identically under a nine-character overflow and a nine-megabyte
+     one. Addison's own lines — the marker, the disclosure, the label and the fence —
+     are short, bounded and ours, and are deliberately NOT charged against that
+     budget: a server must never be able to squeeze out the sentence that explains
+     what it did.
 5. *(Later, separately)* stdio transport under containment (§5 keeps both paths);
-   SAFE admission via a user-promoted allowlist.
+   SAFE admission via a user-promoted allowlist. **Neither is in v1**, and nothing
+   built in phases 1–4 depends on either.
 
 ## 5. Decisions
 
@@ -368,6 +457,58 @@ failure mode this section exists to prevent. What has changed since 2026-08-06 i
 that the deferral is now genuinely load-bearing rather than theoretical: it is on
 the v2 list in CLAUDE.md and [KNOWN-GAPS.md](KNOWN-GAPS.md), with three triggers
 behind it and the third one live.
+
+**PHASE 4 RE-READ THIS AGAINST A WIDER SURFACE (2026-08-07), and the outcome is
+recorded here because the re-read is the deliverable, not the conclusion.**
+Phase 3's re-read asked what changed when a server's text first reached a model.
+Phase 4's asks a narrower question — what changed now that MORE of a server's
+answer reaches one — and the honest answer is: less than it looks. Structured
+content and embedded text are more text, arriving through the same seam, under a
+budget that got *tighter* rather than looser (one shared cap where phase 3 had one
+cap over one string). The parts phase 4 could have started forwarding — images,
+audio, blobs, resource links — are the parts it decided never to forward at all.
+
+**Screening remains v2, unchanged, and this phase does not reopen it.** The
+backstops are the same four, at the same strength, plus one:
+
+- **Redaction, caps, dev-only visibility and the per-invocation card** — as stated
+  above, at their real strength and no higher. Phase 4 changed the caps' shape and
+  not their promise.
+- **A cleaning pass on a server's answer** (`mcp_client.clean_result_text`), which
+  is the one hardening the re-read adopted. It removes terminal escape sequences
+  whole and every non-printable character — U+202E and its family, the zero-width
+  set, the BOM — while leaving newlines and tabs, because a result is prose where
+  a tool NAME is a row (phase 2 applied the same rule to names, for the same
+  reason, on a much smaller surface).
+
+  **It earns its place on one property and it is worth stating precisely: it runs
+  BEFORE the redactor, and that is what makes it a security change rather than a
+  tidiness one.** Every rule in `agent_core/redaction.py` matches a contiguous
+  pattern, so a credential with a zero-width space dropped into the middle of it
+  matches nothing at all. Cleaning re-joins it and the redactor then sees it.
+  Cleaning afterwards would have handed a model a key the redactor had already
+  declined to see — a defeat of the credential backstop that costs an attacker one
+  invisible character. Second, smaller: the structured answer's fence is grown past
+  the longest run of backticks in the payload, so a server cannot close it from the
+  inside and have what follows read as Addison's framing. That is presentation
+  rather than a boundary — the boundary is the gate — but a seam this cheap to
+  close is not worth leaving open.
+
+  **What it is NOT, said plainly so nobody later mistakes it for the deferral being
+  discharged:** it is a character filter. It does not read the text, does not look
+  for instructions, and would not notice the plainest "ignore your previous
+  instructions" written in ASCII. A screen is a v2 owner decision and this is not a
+  down payment on one.
+
+The re-read also confirmed one thing by checking rather than assuming, and it is
+the reason the surface is narrower than it first appears: **a server's answer never
+reaches the webview from this path.** A tool result becomes a `role="tool"`
+message; `conversation.load` keeps user rows and non-empty assistant rows and skips
+every tool row. So the text is read by a model, recorded in the transcript and the
+audit row, and reaches a person only as whatever the model says about it — which is
+why phase 4 never had to consider rendering a stranger's markdown, and why it can
+refuse foreign media outright without costing anything a person could otherwise
+have seen.
 
 **For the record, since it was checked rather than assumed at the time:** phase 2
 did not pull this trigger. A server's names and descriptions were attacker-
