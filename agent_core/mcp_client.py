@@ -1,12 +1,13 @@
-"""A minimal MCP client — Streamable HTTP, connect and list, nothing else
-(step 7, PHASE 2 of five; [docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md)
+"""A minimal MCP client — Streamable HTTP: connect, list, and call
+(step 7, PHASES 2–3 of five; [docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md)
 owns the phase order).
 
-**This module speaks the protocol. It never registers, dispatches or runs
-anything** — ``agent_core/mcp_catalog.py`` owns admission to the registry, and
-dispatch does not exist until phase 3. What comes out of here is a list of names
-and descriptions a stranger's server offered, already cut down to the shape the
-rest of Addison is willing to hold.
+**This module speaks the protocol. It never registers, gates or audits
+anything** — ``agent_core/mcp_catalog.py`` owns admission to the registry and the
+tool body that runs a call, and the permission gate + ``tool_audit`` live where
+they always did. What comes out of here is a list of names, descriptions and
+bounded schemas a stranger's server offered, plus the text one of its tools
+answered with, each already cut down to the shape the rest of Addison will hold.
 
 **Top-level on purpose.** ``tools/``, ``providers/`` and ``routines/`` must not
 import from one another (CLAUDE.md's module-boundary rule), and an MCP tool is
@@ -30,13 +31,14 @@ Three properties do the safety work, and each one is a test:
    SKIPPED AND COUNTED, never silently dropped and never repaired — repairing an
    implausible name would invent an id nobody's server actually offered.
 
-2. **DEADLINES ARE NOT OPTIONAL.** The plan says that of phase 3's per-call
-   deadline and the lesson is the same one ``run_command`` taught when it held the
-   IPC pump for thirty seconds: a refresh runs on the worker thread, so a server
-   that accepts a connection and then says nothing would stall every queued
-   request behind it. One budget covers the WHOLE handshake-plus-pagination walk
-   (:data:`REFRESH_BUDGET_SECONDS`), not each socket — a per-attempt timeout is
-   not a budget.
+2. **DEADLINES ARE NOT OPTIONAL.** The plan says so of phase 3's per-call deadline
+   and the lesson is the same one ``run_command`` taught when it held the IPC pump
+   for thirty seconds: a refresh runs on the worker thread and a call runs inside
+   somebody's turn, so a server that accepts a connection and then says nothing
+   would stall everything behind it. ONE budget covers the WHOLE exchange —
+   handshake plus pagination (:data:`REFRESH_BUDGET_SECONDS`), or handshake plus
+   the call (:data:`CALL_BUDGET_SECONDS`) — not each socket, because a per-attempt
+   timeout is not a budget.
 
 3. **FAIL CLOSED, IN ONE PLAIN SENTENCE.** Every failure here — unreachable,
    malformed, a version Addison doesn't speak, a sign-in it can't do — comes back
@@ -46,8 +48,10 @@ Three properties do the safety work, and each one is a test:
    are the ones a person checks to decide what to trust.
 
 No credential is sent, read or stored. Phase 1 left the keychain door open for
-"when phase 2 needs one"; it does not (see the plan's phase-2 entry), so there is
-no token parameter here to be filled in by accident.
+"when phase 2 needs one"; neither phase 2 nor phase 3 does (see the plan's phase-2
+entry and phase-3 decision 4), so there is no token parameter here to be filled in
+by accident, and a server that asks for a sign-in gets the same plain sentence
+whether it is being listed or being called.
 """
 
 from __future__ import annotations
@@ -56,7 +60,7 @@ import json
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -76,6 +80,13 @@ UNKNOWN_VERSION = "That server speaks a version of the tool-server protocol Addi
 TOO_MUCH_BACK = "That server sent back more than Addison will read from one answer."
 ADDRESS_NOT_ALLOWED = "Addison won't follow that server to a different address."
 ODD_ADDRESS = "Addison couldn't make sense of that address."
+# Phase 3. A call that landed and answered with nothing Addison can pass on —
+# only pictures, only structured data, or an empty answer. Said rather than
+# returned blank, because "" reaches a model as a tool that silently did nothing.
+NOTHING_TO_SHOW = "That tool answered with nothing Addison can pass on."
+# Appended when the answer was longer than one tool result may be. Leads with the
+# ellipsis so it reads as a continuation of the text it follows.
+RESULT_TRIMMED = "\n…Addison trimmed this tool's long answer."
 
 # The sentences ``net_vetting`` hands back, in this caller's voice. Same mechanism
 # as read_web_page and provider.connect; the words are ours (see its ``Sentences``).
@@ -99,6 +110,12 @@ _SENTENCES = net_vetting.Sentences(
 #: The whole refresh — handshake, initialized notification, and every page of
 #: ``tools/list`` — must finish inside this. See property 2 above.
 REFRESH_BUDGET_SECONDS = 10.0
+#: The whole of ONE tool call — handshake, initialized notification, and the call
+#: itself — must finish inside this (phase-3 decision 3: one call, one session, one
+#: budget). Longer than a refresh because a real tool does real work at the far
+#: end; still short enough that a hung server costs a person a wait and never a
+#: turn, which is the thing the plan says is not optional.
+CALL_BUDGET_SECONDS = 15.0
 #: One socket. Bounded well under the budget so a stalled connection loses a
 #: fraction of the walk rather than all of it.
 _SOCKET_TIMEOUT_SECONDS = 5.0
@@ -114,10 +131,34 @@ _MAX_PAGES = 10
 _MAX_RESPONSE_BYTES = 512 * 1024
 #: Long enough for a real tool id, short enough to read in a row.
 MAX_TOOL_NAME_CHARS = 64
-#: A description is prose for a person and (in phase 3) for a model. Truncated
+#: A description is prose for a person and, since phase 3, for a model. Truncated
 #: rather than dropped — length alone is not dishonesty.
 MAX_TOOL_DESCRIPTION_CHARS = 300
 _MAX_URL_CHARS = 2048
+
+# --- Phase-3 bounds: the schema going out, and the answer coming back ---------
+
+#: One tool's ``inputSchema``, serialized. A JSON Schema describes a handful of
+#: arguments; 16 KB is far past any honest one and small enough that a hundred of
+#: them cannot crowd out a person's conversation in a model's context.
+MAX_SCHEMA_BYTES = 16 * 1024
+#: How deep that schema may nest. Depth is the cheap way to make a small document
+#: expensive for everything downstream that walks it — a provider's translator, a
+#: model's tokenizer, this module's own serializer.
+MAX_SCHEMA_DEPTH = 8
+#: What a tool advertises when its own schema was oversized, too deep, or not a
+#: JSON-Schema object at all. THE TOOL IS STILL ADMITTED: a bad schema costs the
+#: model its hints, never the person the tool. Callers copy it — it must not be
+#: handed out as shared mutable state.
+EMPTY_SCHEMA: dict = {"type": "object", "properties": {}}
+
+#: How much of one tool's answer reaches a model. In CHARACTERS rather than bytes
+#: because this bound is about a model's context, where characters are the unit
+#: that matters; the byte bound on a stranger's answer is ``_MAX_RESPONSE_BYTES``
+#: above, at the wire, and it is the one that stops an endless body. Twice
+#: ``run_command``'s 4000 because a command's output is incidental to what was
+#: asked and a tool's answer IS what was asked. Phase 4 owns refining this.
+MAX_RESULT_CHARS = 8000
 
 #: What a tool name must look like to be admitted. An MCP name becomes half of a
 #: registry id (``mcp:<server>:<tool>``), which is compared, logged and shown, so
@@ -142,10 +183,30 @@ class McpError(Exception):
 
 @dataclass(frozen=True)
 class DiscoveredTool:
-    """One tool a server offered, after the boundary cut it down to size."""
+    """One tool a server offered, after the boundary cut it down to size.
+
+    ``schema`` is the server's ``inputSchema`` if it fitted the bounds above and
+    :data:`EMPTY_SCHEMA` if it did not. It defaults to the empty schema so a caller
+    that names only what it cares about (every test in the tree) describes a tool
+    with no arguments rather than a tool with none declared."""
 
     name: str
     description: str
+    schema: dict = field(default_factory=lambda: dict(EMPTY_SCHEMA))
+
+
+@dataclass(frozen=True)
+class CallResult:
+    """What one ``tools/call`` came back with: the text, and whether the server
+    called it an error.
+
+    ``is_error`` is the server's own ``isError`` flag, which is a different fact
+    from the call failing — a tool that ran and reported "no such file" answers
+    HTTP 200 with a perfectly good JSON-RPC result. A call that never landed raises
+    :class:`McpError` instead and never reaches this shape."""
+
+    text: str
+    is_error: bool
 
 
 @dataclass(frozen=True)
@@ -210,6 +271,69 @@ def _clean_description(value: object) -> str:
     return text
 
 
+def _too_deep(value: object, limit: int) -> bool:
+    """Whether ``value`` nests deeper than ``limit``, walked ITERATIVELY.
+
+    A recursive walk over an attacker-supplied document is the bug it is checking
+    for, one level up: the depth that blows a stack is cheaper to send than the
+    depth that costs anything else. The stack here is a list, and the walk stops at
+    the first item past the limit rather than measuring how far past."""
+    pending: list[tuple[object, int]] = [(value, 1)]
+    while pending:
+        node, depth = pending.pop()
+        if isinstance(node, dict):
+            children: list = list(node.values())
+        elif isinstance(node, list):
+            children = list(node)
+        else:
+            continue
+        if children and depth >= limit:
+            return True
+        pending.extend((child, depth + 1) for child in children)
+    return False
+
+
+def _clean_schema(value: object) -> dict:
+    """The server's ``inputSchema``, admitted only within bounds — or the empty
+    schema, with the tool still admitted.
+
+    **A bad schema costs the model its hints, never the person the tool.** That is
+    the whole rule. Since phase 3 this text goes to a model as the tool's argument
+    description, so it is bounded on three axes rather than trusted: it must BE a
+    JSON-Schema object (``type: object`` — what every provider's tool translator
+    requires, and what MCP itself specifies), it must serialize inside
+    :data:`MAX_SCHEMA_BYTES`, and it must not nest past :data:`MAX_SCHEMA_DEPTH`.
+
+    Fail-closed on every axis, including the serializer's own limits:
+    ``json.dumps`` raises ``RecursionError`` (not a ``ValueError``) on a document
+    deep enough, and that is a refusal like any other rather than an exception a
+    person's turn ends on."""
+    if not isinstance(value, dict) or value.get("type") != "object":
+        return dict(EMPTY_SCHEMA)
+    if _too_deep(value, MAX_SCHEMA_DEPTH):
+        return dict(EMPTY_SCHEMA)
+    try:
+        encoded = json.dumps(value)
+    except (TypeError, ValueError, RecursionError):
+        return dict(EMPTY_SCHEMA)
+    if len(encoded.encode("utf-8")) > MAX_SCHEMA_BYTES:
+        return dict(EMPTY_SCHEMA)
+    return value
+
+
+def trim_result(text: str) -> str:
+    """One tool's answer, cut to :data:`MAX_RESULT_CHARS` with a plain marker.
+
+    **Never call this on text that has not been redacted yet** (phase-3 decision 2,
+    on ``run_command``'s hard-won precedent): every rule in ``agent_core.redaction``
+    is anchored on a vendor prefix followed by a minimum body, so a cut through a
+    credential leaves a head that matches nothing afterwards and travels intact.
+    The cut can defeat the redactor, so the redactor goes first."""
+    if len(text) <= MAX_RESULT_CHARS:
+        return text
+    return text[:MAX_RESULT_CHARS] + RESULT_TRIMMED
+
+
 def _sse_payload(raw: bytes) -> dict | None:
     """The one JSON-RPC object out of an ``text/event-stream`` answer.
 
@@ -229,7 +353,10 @@ def _sse_payload(raw: bytes) -> dict | None:
             continue
         try:
             parsed = json.loads(data.decode("utf-8", errors="replace"))
-        except ValueError:
+        except (ValueError, RecursionError):
+            # RecursionError as well as ValueError: json's parser raises it on a
+            # document nested deeply enough, and nesting is the cheapest thing a
+            # server can send. It is malformed input, not a defect here.
             continue
         if isinstance(parsed, dict) and "jsonrpc" in parsed:
             return parsed
@@ -275,7 +402,7 @@ def _read_answer(response: httpx.Response, _logical: str) -> _Answer:
         return _Answer(session_id, payload)
     try:
         payload = json.loads(raw.decode("utf-8", errors="replace"))
-    except ValueError:
+    except (ValueError, RecursionError):
         raise McpError(NOT_A_TOOL_SERVER) from None
     if not isinstance(payload, dict):
         raise McpError(NOT_A_TOOL_SERVER)
@@ -445,7 +572,19 @@ class _Session:
                     skipped += 1
                     continue
                 seen_names.add(name)
-                admitted.append(DiscoveredTool(name, _clean_description(entry.get("description"))))
+                admitted.append(
+                    DiscoveredTool(
+                        name,
+                        _clean_description(entry.get("description")),
+                        # Phase 3 keeps the schema — bounded (see ``_clean_schema``)
+                        # — because a model cannot form a call to a tool whose
+                        # arguments nobody described. Phase 2 deliberately did not,
+                        # for the equal and opposite reason: it called nothing, so
+                        # an unused JSON Schema from a stranger was text held for
+                        # no purpose.
+                        _clean_schema(entry.get("inputSchema")),
+                    )
+                )
             next_cursor = result.get("nextCursor")
             if not isinstance(next_cursor, str) or not next_cursor:
                 break
@@ -454,6 +593,38 @@ class _Session:
             seen_cursors.add(next_cursor)
             cursor = next_cursor
         return tuple(admitted), skipped
+
+    def call_tool(self, name: str, arguments: dict) -> CallResult:
+        """One ``tools/call``, parsed down to text.
+
+        **Only ``text`` content items are read, and that is phase 3's scope**
+        (phase 4 owns content-type breadth and ``structuredContent``): an image or
+        an embedded resource is silently not carried rather than half-carried, and
+        an answer with nothing textual in it says so in one plain sentence rather
+        than reaching a model as a tool that quietly did nothing.
+
+        A malformed answer FAILS CLOSED, like every other shape this module reads:
+        ``content`` that is not a list is not a result Addison will guess at."""
+        result = self._call("tools/call", {"name": name, "arguments": arguments})
+        items = result.get("content")
+        if not isinstance(items, list):
+            raise McpError(NOT_A_TOOL_SERVER)
+        parts = [
+            item["text"]
+            for item in items
+            if isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+        ]
+        text = "\n".join(parts).strip()
+        return CallResult(
+            text=text or NOTHING_TO_SHOW,
+            # The server's own claim about its own call. Believed here because it
+            # says nothing about permission or safety — only whether the thing the
+            # model asked for worked — and a wrong answer costs one honest-looking
+            # failure, not a capability.
+            is_error=result.get("isError") is True,
+        )
 
 
 def discover_tools(
@@ -487,6 +658,49 @@ def discover_tools(
         session.notify("notifications/initialized")
         tools, skipped = session.list_tools()
         return Discovery(tools=tools, skipped=skipped, protocol_version=version)
+    finally:
+        if owned:
+            active.close()
+
+
+def call_tool(
+    url: str,
+    name: str,
+    arguments: dict,
+    budget: float = CALL_BUDGET_SECONDS,
+    *,
+    client: httpx.Client | None = None,
+    resolve: Callable[[str], list[str]] | None = None,
+) -> CallResult:
+    """Run ONE tool on one server. Raises :class:`McpError` with one plain sentence
+    on any failure — unreachable, too slow, a sign-in Addison can't do, an answer it
+    can't make sense of.
+
+    **ONE CALL, ONE SESSION, ONE BUDGET** (phase-3 decision 3). A fresh
+    initialize → initialized → call runs inside a single deadline, and the session
+    ends with the call. No long-lived connection, no background session, nothing
+    reused across calls: a session id is one server's handle on one person's wait,
+    and a pool of them would be state that outlives the turn that authorised it —
+    for a server whose author nobody here has met. A server needing state ACROSS
+    calls is a v2 conversation, not a connection quietly left open.
+
+    The cost is honest and was accepted: every call pays for a handshake. That is
+    two extra round trips against a bounded budget, and it buys a call that cannot
+    inherit anything from a call the person approved earlier.
+
+    ``client``/``resolve`` are the same test seams ``discover_tools`` documents."""
+    owned = client is None
+    active = client or httpx.Client(trust_env=False, follow_redirects=False)
+    try:
+        session = _Session(
+            active,
+            url,
+            resolve=resolve or net_vetting.resolve_host,
+            budget=budget,
+        )
+        session.initialize()
+        session.notify("notifications/initialized")
+        return session.call_tool(name, arguments)
     finally:
         if owned:
             active.close()

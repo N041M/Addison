@@ -1,18 +1,19 @@
 """mcp.* handlers — the external MCP servers Addison consumes as a CLIENT
-(step 7, phases 1–2). Addison is never an MCP server or a gateway.
+(step 7, phases 1–3). Addison is never an MCP server or a gateway.
 
-**Phase 2 can SEE a server's tools and still cannot use one.** Phase 1 stored
-addresses; phase 2 adds ``mcp.refresh``, which connects, lists what the server
-offers, and registers each tool namespaced and dev-only through the ONE registry.
-There is still no dispatch: an ``mcp:`` id is kept out of the tool list the model
-is offered and refused at both dispatch sites, so what shipped is visibility, not
-capability. Dispatch is phase 3 of
-[docs/step-7-mcp-plan.md](../../docs/step-7-mcp-plan.md), which owns the phase
-order; ``agent_core/mcp_catalog.py`` owns the one constant that turns it on.
+Phase 1 stored addresses; phase 2 added ``mcp.refresh``, which connects, lists what
+a server offers, and registers each tool namespaced and dev-only through the ONE
+registry; phase 3 made those tools callable — through the ordinary gate, which
+cards every invocation, in OPEN only.
+[docs/step-7-mcp-plan.md](../../docs/step-7-mcp-plan.md) owns the phase order, and
+``agent_core/mcp_catalog.py`` owns the one constant that turned dispatch on.
 
-**This module still holds no protocol and no registration.** It reads rows, calls
-``agent_core/mcp_client.py`` for the network and ``agent_core/mcp_catalog.py`` for
-admission, and turns the result into a payload. That split is why the phase-1
+**This module still holds no protocol and no registration**, and phase 3 kept it
+that way. It reads rows, calls ``agent_core/mcp_client.py`` for the network and
+``agent_core/mcp_catalog.py`` for admission, and turns the result into a payload.
+Dispatch reaches back into this layer for exactly one thing — ``_mcp_endpoint_for``,
+the address lookup a tool does at the moment of use — because the address lives in
+SQLite and this is the layer that reads rows. That split is why the phase-1
 structural test still passes over this file unchanged: nothing here can start a
 process, cross the shell bridge, or register a tool by itself.
 
@@ -39,11 +40,12 @@ they switch to Simple is the failure the 2026-08-06 artifact decision reversed
 ([docs/SAFETY.md](../../docs/SAFETY.md) owns that rule). ``mcp.remove`` answers in
 every mode too, because a tightening must never be the thing a profile switch traps.
 
-**Secrets: there are none, deliberately, in phase 2 either.** No token column, no
+**Secrets: there are none, deliberately, in any phase so far.** No token column, no
 header field, no keychain write. Phase 1 left that door open "when phase 2 needs
 one"; connecting without credentials covers the local-server case an HTTP-only v1
 already optimises for, so a server that wants a sign-in gets one plain sentence
-instead of a credential surface (scoping decision 2, 2026-08-07). What this module
+instead of a credential surface — the SAME sentence whether it is being checked or
+being called (phase-2 scoping decision 2, re-affirmed as phase-3 decision 4). What this module
 *does* carry is the half of G1 that cannot wait: a URL is refused at the store
 boundary if it carries credential material, because ``mcp_servers`` is
 snapshot-CAPTURED and anything stored here is copied into every later snapshot
@@ -357,6 +359,33 @@ class McpMixin(ServerContext):
         # point keeps BOTH the row and its tools, so the two never disagree.
         self._mcp_catalog.forget(self.tool_registry, server_id)
         return {"ok": True}
+
+    def _mcp_endpoint_for(self, server_id: str, server_name: str) -> str | None:
+        """Where this server lives RIGHT NOW, or None if it no longer does.
+
+        The dispatch seam ``McpCatalog`` hands to every tool it registers (step 7
+        phase 3). It exists because a tool's address must be read at the MOMENT OF
+        USE and never remembered from the check that found it: between that check
+        and the call, the row can be removed, restored away by a snapshot, or saved
+        again under a different name — and a call to where a server used to be, on
+        the strength of a row that no longer exists, is a request the person never
+        authorised going to an address they can no longer see.
+
+        The NAME is checked as well as the id, because the name is half of the tool
+        id (``mcp:<server>:<tool>``) and therefore half of every grant and audit row
+        keyed by it. A row whose name no longer matches is not the server this tool
+        claims to come from, whatever its id says.
+
+        Lives here rather than in ``mcp_catalog`` for the module-boundary reason
+        that put the client at top level: the address is in SQLite, and this layer
+        is the one that reads rows."""
+        if self.store is None:
+            return None
+        row = self.store.get_mcp_server(server_id)
+        if row is None or str(row["name"]) != server_name:
+            return None
+        url = row["url"]
+        return str(url) if url else None
 
     def _resync_mcp_after_restore(self) -> None:
         """Post-restore resync (rpc/snapshots._finish_restore step f), on

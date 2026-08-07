@@ -995,21 +995,29 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "are admitted. That question is deferred: MCP is dev-only for v1."
         ),
     },
+    # Samples for the FALSE side, which is the one active since phase 3 shipped
+    # (2026-08-07). The rule now hunts documents still promising that nothing a tool
+    # server offers can run; what it must not flag is prose recounting the phase
+    # that was true of, or describing the gate that stands in front of a call.
     "mcp-tools-are-not-callable": {
-        "phase 2's own claim, which pairs the ability with its limit": (
-            "Addison can now use a tool server's tools only in the sense of listing "
-            "them — it still can't run any of them, and phase 3 is where that changes."
+        "a recounting that names the phase it is describing": (
+            "Phase 2 shipped a row that read: Addison can see this tool but can't use "
+            "it yet."
         ),
-        "the frozen row copy, quoted": (
-            "Every row says the same thing: Addison can see this tool but can't use it "
-            "yet."
+        "the same recounting, wrapped between the phase and the quote": (
+            "Every row in a section says what protects the person. Until\nphase 3 that "
+            "was \"Addison can see this tool but can't use it yet\" — the sentence the "
+            "core answered with."
+        ),
+        "the gate described honestly, which is a limit and not an absence": (
+            "You can't run any of them without approving the card Addison shows first."
         ),
         "a sentence about the PERSON using a tool server, not about Addison": (
             "You can use a tool server to give Addison abilities it doesn't ship with."
         ),
-        "the phase-3 promise, in the future tense": (
-            "Phase 3 will invoke an MCP tool through the existing gate, with a per-call "
-            "deadline and a `tool_audit` row on every outcome."
+        "the shipped claim, which pairs the ability with the safeguard": (
+            "Addison can now use a tool server's tools in Developer, and it asks you "
+            "before each one."
         ),
         "prose about discovery that never mentions running anything": (
             "A discovered tool registers namespaced `mcp:<server>:<tool>`, dev-only, "

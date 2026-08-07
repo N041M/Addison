@@ -372,6 +372,16 @@ BEGIN SELECT RAISE(ABORT, 'this restore point is permanent'); END;
 -- EXCLUDED from snapshots (snapshots/scope.py) on the `tool_grants` precedent:
 -- an audit log is history, and a restore that rewrote the record of what
 -- happened would be worse than having no record at all.
+--
+-- WIDENING `outcome` IS A MIGRATION, NOT AN EDIT (step 7 phase 3, 2026-08-07).
+-- `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so a
+-- new value added here alone would work on a fresh database and be rejected by
+-- the old CHECK on every upgraded one — where each caller's best-effort `except`
+-- would swallow the failure and the row would simply never appear. That is worse
+-- than no row: an empty log reads as "nothing happened". `Store.
+-- _migrate_tool_audit_outcomes` rebuilds the table, PRESERVING every row, and the
+-- rows here are durable (excluded from snapshots, never pruned) so losing one is
+-- not an option a rebuild may take. Add a value in BOTH places or in neither.
 CREATE TABLE IF NOT EXISTS tool_audit (
     id              TEXT PRIMARY KEY,
     conversation_id TEXT,                    -- NULL for a routine/widget run
@@ -379,14 +389,25 @@ CREATE TABLE IF NOT EXISTS tool_audit (
     detail          TEXT,                    -- call_permission_detail, redacted on write
     mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),
     destructive     INTEGER NOT NULL DEFAULT 0,
-    -- granted      = the gate said yes (auto-allow or the person approved)
+    -- granted      = the gate said yes (auto-allow or the person approved) and the
+    --                tool ran. A tool that ran and reported a failure of its own
+    --                (a command exiting non-zero) is still `granted`: the record is
+    --                of the DECISION, and the decision was yes.
     -- denied       = the person said "not now"
     -- forbidden    = the hardline denylist refused it before the gate (item 3)
     -- confined_out = outside every trusted root (step 5 confinement)
     -- dev_only     = a dev tool named outside OPEN mode
+    -- not_callable = a discovered tool that has no dispatch behind it was named
+    --                anyway (registry.refuse_if_not_callable)
+    -- failed       = the gate said yes and the call never landed. Added for MCP,
+    --                where "approved, and nothing happened" is a different history
+    --                from "approved, and it ran" — a tool server is somebody
+    --                else's program at the far end of a network, and only this row
+    --                can say afterwards which of the two it was.
     outcome         TEXT NOT NULL
                         CHECK(outcome IN ('granted','denied','forbidden',
-                                          'confined_out','dev_only')),
+                                          'confined_out','dev_only',
+                                          'not_callable','failed')),
     -- What the redactor removed from THIS call's output on its way to the model
     -- (kinds only, comma-separated, e.g. "AWS access key"). Empty = nothing
     -- matched. This is the only durable evidence that a leak was caught.

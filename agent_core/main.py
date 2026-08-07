@@ -37,6 +37,7 @@ from uuid import uuid4
 
 from agent_core import live_db_guard
 from agent_core.mcp_catalog import McpCatalog
+from agent_core.mcp_client import call_tool as mcp_call_tool
 from agent_core.mcp_client import discover_tools
 from agent_core.memory.store import Store
 from agent_core.models_catalog import (
@@ -491,6 +492,7 @@ class JsonRpcServer(
         connect_provider=None,
         provider_key_probe=None,
         mcp_discover=None,
+        mcp_call=None,
     ) -> None:
         self._reader = reader
         self._writer = writer
@@ -538,7 +540,7 @@ class JsonRpcServer(
         # client so no real Ollama (or network) is ever touched.
         self._ollama_base_url = ollama_base_url
         self._ollama_client = ollama_client
-        # Step 7 phase 2 (MCP connect + discovery). The catalog holds what each
+        # Step 7 phases 2–3 (MCP discovery, then dispatch). The catalog holds what each
         # configured tool server last offered, IN MEMORY ONLY: a catalog is the
         # server's truth rather than Addison's configuration, and `mcp_servers` is
         # snapshot-captured, so writing a stranger's names and prose there would copy
@@ -546,10 +548,20 @@ class JsonRpcServer(
         # row honestly reads "not checked yet" — which is also why nothing here
         # connects at start-up: discovery is on demand only.
         #
-        # `_mcp_discover` is the network seam, injected the way `_ollama_client` is
-        # so tests drive an httpx.MockTransport instead of a real server. The real
-        # one owns and closes its own client per refresh.
-        self._mcp_catalog = McpCatalog()
+        # `_mcp_discover` and `mcp_call` are the two network seams, injected the way
+        # `_ollama_client` is so tests drive an httpx.MockTransport instead of a real
+        # server. The real ones own and close their own client per refresh and per
+        # call — one call, one session, one budget (phase-3 decision 3).
+        #
+        # `endpoint_for` is the OTHER half of dispatch and is deliberately a lookup
+        # rather than a value: a tool resolves its server's address at the moment of
+        # use, so a server removed or renamed after the check that registered it
+        # refuses cleanly instead of being called at an address the person can no
+        # longer see.
+        self._mcp_catalog = McpCatalog(
+            endpoint_for=self._mcp_endpoint_for,
+            call_tool=mcp_call or mcp_call_tool,
+        )
         self._mcp_discover = mcp_discover or discover_tools
         # §4.6 Setup Assistant handoff: with no PRIMARY key yet, a turn runs on the
         # SETUP_ASSISTANT relay under its onboarding system prompt. ``primary_key_probe``

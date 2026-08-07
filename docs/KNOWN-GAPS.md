@@ -110,7 +110,12 @@ and where it goes.
   injected command and a deliberate exfiltration. The CLAUDE.md deferral for
   screening was written with a trigger ("becomes load-bearing once free/gray-area
   endpoints and MCP tools are in play") — this is a second trigger arriving early,
-  and it needs an explicit owner decision rather than silent expiry. **Partly
+  and it needs an explicit owner decision rather than silent expiry. **The THIRD
+  trigger went live 2026-08-07** when step 7 phase 3 shipped dispatch: a tool
+  server's descriptions, schemas and answers now reach a model's context. Screening
+  is still v2 and that is unchanged; what shipped instead is a recorded backstop —
+  redaction, caps and a card on every single call — stated at its real strength in
+  [step-7-mcp-plan.md](step-7-mcp-plan.md) §7, which owns that re-read. **Partly
   mitigated 2026-07-31**: output redaction (`agent_core/redaction.py`) strips the
   credential shapes it knows on the way to the model and the audit trail records
   that it happened — but an unrecognised or deliberately-encoded secret still
@@ -233,8 +238,9 @@ questions were resolved during steps 1–3 and went with it):
   trust** — see the sharpened note in the spec's MCP section and item 4 of the
   step-5.5 plan. What unblocked the step was the owner's 2026-08-06 decision that
   MCP is **dev-only for v1**: SAFE admission is deferred rather than answered, and
-  no code depends on it (phase 1 landed the same day and registers nothing at
-  all). Promoting a tool into SAFE is a later, separate decision.
+  no code depends on it — phases 2 and 3 register a server's tools and call them,
+  and every one is `open_only`, so the SAFE view has never held one. Promoting a
+  tool into SAFE is a later, separate decision.
   [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the step's phases and its other
   decisions — **transport was the second open question and is now answered: HTTP
   only for v1**, which is why nothing in the step launches a program.
@@ -324,19 +330,18 @@ against the tree on 2026-07-26:
 
 **Opened by step 7 phase 2 (2026-08-07):**
 
-- **A refused MCP tool call leaves no audit row.** Both dispatch paths refuse an
-  `mcp:` id (`registry.refuse_if_not_callable`), and unlike every neighbouring
-  refusal — `dev_only`, `forbidden`, `confined_out` — that branch writes nothing to
-  `tool_audit`. Deliberate, not forgotten: `tool_audit.outcome` is a CHECK-constrained
-  vocabulary, so widening it is a schema migration and not an insert (`schema.sql`
-  says exactly that of the widget kinds), and a `CREATE TABLE IF NOT EXISTS` leaves
-  every existing database on the old CHECK — a new value would work on a fresh DB
-  and be swallowed by `_audit`'s best-effort `except` on an upgraded one, which is
-  worse than no row at all. **Phase 3 owns the fix**: it makes MCP dispatch real and
-  its plan entry already promises `tool_audit` on every MCP outcome, so the
-  migration belongs beside that work. The exposure until then is small — the model
-  is never told an `mcp:` id exists, so reaching this branch means something odd
-  already happened, and the refusal itself holds.
+- ~~**A refused MCP tool call leaves no audit row.**~~ **CLOSED 2026-08-07 by
+  phase 3**, which owned the fix because it owned the migration. `tool_audit.outcome`
+  is a CHECK-constrained vocabulary, so widening it was a schema rebuild and not an
+  insert: `CREATE TABLE IF NOT EXISTS` leaves every existing database on the old
+  CHECK, so a new value would have worked on a fresh DB and been swallowed by
+  `_audit`'s best-effort `except` on an upgraded one — a log that quietly stops
+  logging, which is worse than no row at all. `Store._migrate_tool_audit_outcomes`
+  rebuilds the table by rename-copy-drop, preserving every existing row, and the
+  vocabulary gained `not_callable` (the refusal this entry was about) and `failed`
+  (the gate said yes and the call never landed). Both dispatch paths write both.
+  The refusal branch itself is now quiet for MCP tools — they are callable — and
+  remains the mechanism `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` operates through.
 
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 

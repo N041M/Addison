@@ -118,19 +118,20 @@ MCP_TRANSPORT_HTTP_ONLY = True
 # genuinely decided and built.
 MCP_IS_DEV_ONLY_IN_V1 = True
 
-# MCP dispatch (step 7, phase 2 built 2026-08-07). NOTHING an MCP server offers is
-# callable yet: an `mcp:` id is absent from `visible_tools(mode)` in every mode, and
-# both dispatch paths refuse one that is named anyway. Registered because this is
-# the shape of stale sentence phase 1 already produced once — every document had to
-# say "nothing is callable", and phase 2 changed HALF of that sentence (Addison can
-# now see a server's tools) while leaving the other half exactly as true. A document
-# that rounds "can see" up to "can use" tells the next agent that dispatch exists,
-# and dispatch is the phase where a stranger's code starts running.
+# MCP dispatch (step 7). FALSE since phase 3 shipped on 2026-08-07: an MCP tool IS
+# invoked, through the ordinary gate, with a card on every invocation in OPEN — and
+# `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` was flipped in the same commit, as this
+# comment said it must be. That constant and this one are the same fact, one
+# enforced in code and one in prose.
 #
-# Flip this the day phase 3 ships, IN THE SAME COMMIT as
-# `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` — that constant and this one are the same
-# fact, one enforced in code and one in prose.
-MCP_TOOLS_ARE_NOT_CALLABLE = True
+# It was registered because "nothing is callable" was the shape of stale sentence
+# phase 1 had already produced once: every document had to say it, and phase 2
+# changed HALF of the sentence (Addison could now see a server's tools) while
+# leaving the other half exactly as true. Now the polarity has flipped, and the rule
+# does the opposite job — it hunts the documents that still promise nothing can run,
+# because a stale reassurance about a stranger's code is the more dangerous of the
+# two directions. Both are worth catching, which is why the row is two-sided.
+MCP_TOOLS_ARE_NOT_CALLABLE = False
 
 
 # ---------------------------------------------------------------------------
@@ -519,17 +520,51 @@ CLAIMS: tuple[Claim, ...] = (
             excused_by=r"can't|cannot|not yet|isn't callable|is not callable|phase 3",
             window=200,
         ),
+        # The mirror image, and since 2026-08-07 the ACTIVE side. A document still
+        # promising that nothing a tool server offers can run is the more dangerous
+        # of the two directions now: it is a reassurance about a stranger's code,
+        # and an agent that believes it will not think to check what a call does.
+        #
+        # RECOUNTING THE OLD STATE IS NOT THE OFFENCE — the plan and the build log
+        # both have to say what phase 2 shipped, quoting the row copy it shipped
+        # with. The excuse is therefore "a phase is named nearby": prose that says
+        # which phase it is describing is a record, and prose that asserts the limit
+        # with no phase in sight is a stale promise.
         while_false=Wrong(
             pattern=(
                 r"nothing (?:a|the) (?:tool )?server offers is callable"
                 r"|Addison can see this tool but can't use it yet"
                 r"|no MCP tool is callable"
+                # "it still can't use any of those tools yet" — the panel's and the
+                # roadmap's old phrasing. ANCHORED ON "yet", which is the tell of a
+                # not-yet-shipped promise: without it, "you can't run any of them
+                # without approving the card" is an ordinary true sentence about the
+                # gate, and a rule that flags it is a rule somebody switches off.
+                r"|(?:can't|cannot) (?:use|run|call) any of (?:those|these|it|them)"
+                r"[^.\n]{0,14}\byet\b"
             ),
             fix=(
-                "Phase 3 has shipped — this line still says nothing an MCP server offers "
-                "can run. Amend it, or link to docs/step-7-mcp-plan.md, which owns the "
-                "phase order."
+                "Phase 3 shipped on 2026-08-07 — this line still says nothing an MCP "
+                "server offers can run. Say that Addison asks before each use (which is "
+                "what protects the person now), or name the phase you are recounting, or "
+                "link to docs/step-7-mcp-plan.md §4.3, which owns dispatch. If dispatch "
+                "has genuinely been withdrawn, flip MCP_TOOLS_ARE_NOT_CALLABLE in "
+                "tests/doc_claims.py AND mcp_catalog.MCP_TOOLS_ARE_CALLABLE in the SAME "
+                "commit."
             ),
+            # NAMING A PHASE is the excuse, and nothing weaker. A bare "used to"
+            # was tried first and it forgave a genuine offender out of a sentence
+            # 44 characters away about an unrelated branch warning that "used to
+            # live here" — an excuse loose enough to be satisfied by ordinary prose
+            # is an excuse that switches the rule off wherever the tree is chatty.
+            #
+            # ``\s+`` rather than a literal space: a line wrap between the two words
+            # is otherwise how "until phase 3" stops being an excuse, and a rule
+            # that depends on where a paragraph happened to wrap is unpredictable.
+            # ``phase\s+[12]`` does NOT match this repo's "Phase-2 step 7" (the
+            # hyphenated project phase, a different thing entirely).
+            excused_by=r"phase\s+[12]\b|until\s+phase\s+3|used\s+to\s+(?:say|read|print)",
+            window=200,
         ),
         exempt=FROZEN,
     ),

@@ -32,9 +32,13 @@ discovered tool belongs to a server that can change its mind or be removed:
     ``unregister`` REFUSES anything without it, so no future caller can quietly
     take a native tool out of the registry the safety model is built on.
   * ``not_callable`` — the person may see the tool; the MODEL never does, and
-    dispatch refuses it (``refuse_if_not_callable``). Phase 2 discovers tools
-    without being able to run them, and "we simply won't call it" is not a
-    mechanism — this is.
+    dispatch refuses it (``refuse_if_not_callable``). Step 7 phase 2 discovered
+    tools it could not yet run, and "we simply won't call it" is not a mechanism —
+    this is. **Nothing sets it today**: phase 3 (2026-08-07) made MCP tools
+    callable, so the flag is now the mechanism its own phase constant operates
+    through (``mcp_catalog.MCP_TOOLS_ARE_CALLABLE``) and the shape the next
+    discovered-before-its-dispatch-exists tool inherits. It is not dead code with a
+    test — it is a boundary whose current occupant graduated.
 """
 
 from __future__ import annotations
@@ -48,9 +52,11 @@ from agent_core.tools.base import RiskTier, Tool, ToolDefinition
 DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
 
 # Said when a tool that has been DISCOVERED but not yet wired for dispatch is
-# named anyway (step 7 phase 2's MCP tools). Byte-for-byte what the Tools surface
-# prints under such a row, because they are the same fact told to two audiences:
-# Addison knows this tool exists and cannot run it.
+# named anyway. Written for step 7 phase 2's MCP tools and outlived them: phase 3
+# gave those tools a dispatch, and this stays as the sentence for the next kind
+# that arrives without one. Deliberately says nothing about MCP or about a phase —
+# it is one fact told plainly, and a surface that ever prints it again should print
+# these exact words.
 NOT_CALLABLE_REFUSAL = "Addison can see this tool but can't use it yet."
 
 
@@ -207,10 +213,13 @@ class ToolRegistry:
 
         A ``not_callable`` tool is absent from EVERY mode's view. This is the list
         that is sent to the model as its tool definitions, so an id in it is an
-        invitation; step 7 phase 2 discovers tools it cannot yet run, and the person
-        seeing them on the Tools surface is a different thing from the model being
-        offered them. It also keeps phase 2 clear of the plan's §7 trigger: a
-        server's text does not reach a model's context at all until dispatch exists."""
+        invitation, and a tool with no dispatch behind it must never be invited: the
+        person seeing it on the Tools surface is a different thing from the model
+        being offered it. Step 7 phase 2 was that case and phase 3 ended it — an
+        ``mcp:`` id now appears here in OPEN (never in SAFE, which is ``open_only``'s
+        job), which is also the moment a server's text began reaching a model's
+        context and the plan's §7 deferral became load-bearing rather than
+        theoretical."""
         return [
             tool.definition
             for tool_id, tool in self._tools.items()

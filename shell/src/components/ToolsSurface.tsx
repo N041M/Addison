@@ -15,7 +15,10 @@
 // Trusted folders appear here ONLY on the Developer and Custom surfaces, keyed
 // off the active profile exactly as the Settings panel is (Phase-2 step 5): a
 // Simple-profile person has no workspace-trust surface anywhere, and this page
-// is not a back door to one. Tool servers are gated the same way.
+// is not a back door to one. Tool servers are gated the same way, and that gate
+// is the whole of what a Simple-profile person is told about them: no section is
+// rendered at all, because these tools are Developer-only and a page that named
+// them would be claiming reach the active profile does not have.
 //
 // TOOL SERVERS GET A SECTION EACH, never rows mixed into the lists above
 // (Phase-2 step 7, phase 2 — the plan's Decision 2, answered 2026-08-07).
@@ -40,10 +43,15 @@ import type { ReactNode } from "react";
 const TOOLS_DESCRIPTION =
   "What Addison can reach on this computer. Connect only what you're comfortable with.";
 
-/** Under every discovered tool. Byte-for-byte what the core answers if something
- * names one of these anyway (`NOT_CALLABLE_REFUSAL` in tools/registry.py): one
- * fact, told to the person and to the model in the same words. */
-const NOT_RUNNABLE = "Addison can see this tool but can't use it yet.";
+/** Under every discovered tool, since dispatch shipped (Phase-2 step 7, phase 3).
+ *
+ * It replaced "Addison can see this tool but can't use it yet." — the sentence the
+ * core answered with while there was no dispatch behind these rows — and the
+ * replacement has to carry the same weight the old one did. What a person needs
+ * from this line now is not that the tool works but that NOTHING here runs behind
+ * their back: every call stops and asks, every time, because this is somebody
+ * else's program and Addison cannot know what it will do. */
+const ASKS_FIRST = "Addison asks you before each use.";
 
 export function ToolsSurface({
   connected,
@@ -155,7 +163,7 @@ function McpServerSection({ server }: { server: McpServer }) {
     <SurfaceSection label={`Tool server · ${server.name}`}>
       <SurfaceRow
         wrap
-        name={`From your tool server ${server.name}. Addison can list what it offers; it can't use any of it yet.`}
+        name={`From your tool server ${server.name}. Addison asks before it uses any of these.`}
         value={server.status === "ok" ? `${server.tools.length} found` : undefined}
       />
       {server.status === "never" && (
@@ -174,11 +182,11 @@ function McpServerSection({ server }: { server: McpServer }) {
         // `name` and `description` are the server's own words. Passed as plain
         // children, so React escapes them; nothing on this page renders foreign
         // text as markup.
-        <SurfaceRow key={tool.name} name={tool.name} value="can't be used yet">
+        <SurfaceRow key={tool.name} name={tool.name} value="asks each time">
           {tool.description && (
             <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{tool.description}</p>
           )}
-          <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{NOT_RUNNABLE}</p>
+          <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{ASKS_FIRST}</p>
         </SurfaceRow>
       ))}
       {server.status === "ok" && server.skipped ? (

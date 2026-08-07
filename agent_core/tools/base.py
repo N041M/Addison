@@ -53,6 +53,22 @@ class ToolResult:
     success: bool
     content: Any                              # returned to the model as the tool_result
     snapshot: ActionSnapshot | None = None    # None for read-only tools
+    # What the redactor removed from ``content`` INSIDE the tool, kinds only —
+    # never a value, never a length (agent_core.redaction's rule). Set only by a
+    # tool that scrubs its own output before returning it, which today is MCP
+    # dispatch and is there because that output must be capped and the cap can
+    # defeat the redactor (mcp_client.trim_result). Both dispatch paths put this in
+    # the audit row: re-running the redactor at the dispatch site would find
+    # nothing, because the text arrives already clean, and the row would then say
+    # no credential came back from a call where one did.
+    redacted_kinds: tuple[str, ...] = ()
+    # The audit outcome a tool claims for ITSELF, when its own failure is a fact
+    # the gate's vocabulary cannot express. ``None`` — every native tool — means
+    # the dispatch site decides as it always has, so no existing row changes shape.
+    # MCP dispatch sets 'failed' when the gate said yes and the call never landed
+    # (unreachable, too slow, a server that is no longer saved): "approved, and
+    # nothing happened" is a different history from "approved, and it ran".
+    audit_outcome: str | None = None
 
 
 class ShellBridge(Protocol):

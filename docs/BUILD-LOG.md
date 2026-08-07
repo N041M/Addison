@@ -12,6 +12,71 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-07 — step 7 phase 3: a stranger's tool runs, once a person says so
+
+[step-7-mcp-plan.md](step-7-mcp-plan.md) §4.3 owns what landed and the four
+decisions taken with it: `mcp_client.call_tool`, the bounded `inputSchema`,
+`McpTool.execute`, the `tool_audit` vocabulary migration, and the surface copy that
+changed from "Addison can't use these" to "Addison asks you before each use."
+
+What building it taught:
+
+- **Phase 2's flip-point paid for itself, exactly as designed.** Turning dispatch on
+  was one constant and one method body. The three things that had to be true on the
+  other side of the flip — an `mcp:` id in `visible_tools(OPEN)` and never in SAFE,
+  a card per invocation, a refusal at both dispatch sites — were all already
+  asserted on the REGISTRATION rather than on the view, so the flip broke exactly
+  the six tests whose authors had written down what phase 3 would change, and
+  nothing else. **A phase gate is worth building when the next phase's diff is the
+  thing you want reviewable.**
+- **The cap can defeat the redactor, so the redactor goes first.** This is
+  `run_command`'s 2026-07-31 finding arriving at a second source of output, and it
+  arrived as a design decision rather than as a bug only because that comment
+  existed to be read. Every redaction rule is anchored on a vendor prefix plus a
+  minimum body, so cutting a result at 8000 characters through a credential leaves a
+  head that matches nothing afterwards and travels to the provider intact. The test
+  plants a key straddling the cut, and it is the only test in the tree that would
+  catch the wrong order. **A finding is only reusable if it is written where the
+  second occurrence will look.**
+- **A row that says "granted" when nothing happened is a lie the log cannot
+  correct.** `run_command`'s precedent — a command that ran and exited non-zero is
+  still `granted`, because the row records the DECISION — does not transfer whole to
+  a program at the far end of a network: "approved, and it never reached anything"
+  is the question somebody actually asks afterwards, and no other row can answer it.
+  Hence `failed`, and hence `ToolResult.audit_outcome`, which is empty for every
+  native tool so no existing row changed shape.
+- **The routine engine audited BEFORE it executed, and that cost it two facts.** It
+  had always written its `granted` row above `tool.execute`, where the live loop
+  writes it below — a divergence nobody had needed until a result started carrying
+  something worth recording (what the redactor removed, and whether the call
+  landed). Moved, with both failure shapes already caught above it so the row is
+  written on exactly the runs it was before. **Two dispatch paths that do the same
+  thing in a different order are one bug away from disagreeing about history.**
+- **A tool's address is looked up when it is CALLED.** Capturing the URL at
+  discovery is the obvious shape and it is wrong: between the check and the call a
+  server can be removed, restored away by a snapshot, or saved again under another
+  name, and a call to where it used to be is a request going to an address the
+  person can no longer see. The resolver checks the NAME as well as the id, because
+  the name is half of the tool id and therefore half of every grant and audit row
+  keyed by it.
+- **SQLite cannot ALTER a CHECK, and `CREATE TABLE IF NOT EXISTS` will not tell
+  you.** The migration is rename-copy-drop, and its own test is that three rows of
+  somebody's history survive it — `tool_audit` is excluded from snapshots and never
+  pruned, so those rows are the whole record of what Addison has done. The guard
+  reads the table's own DDL out of `sqlite_master`, which makes it idempotent
+  without a version column to keep in step.
+- **Two spellings of one vocabulary is a bug that only appears on upgraded
+  databases.** `Store._TOOL_AUDIT_OUTCOMES` is the list, schema.sql's CHECK is the
+  other copy, and a test asserts they agree — because the failure mode is a value
+  that is legal on a fresh install and rejected on everybody else's, swallowed by a
+  best-effort `except` on the way through.
+- **A permission `detail` REPLACES the card's description** (`main._on_permission_
+  request`), which is why `McpTool` declares none: the provenance sentence — this
+  came from a tool server you added, Addison can't know what it will do — is the
+  part of that card that may not be replaceable by a stranger's argument text.
+
+---
+
 ## What shipped 08-07 — step 7 phase 2: Addison can see a stranger's tools, and run none of them
 
 [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and records what
@@ -45,7 +110,8 @@ What building it taught:
   a fresh DB and be swallowed by `_audit`'s best-effort `except` on everybody else's.
   A gate that logs on new installs and stays silent on old ones is worse than one
   that admits it logs nothing. Tracked in [KNOWN-GAPS.md](KNOWN-GAPS.md); phase 3
-  owns the migration, because phase 3 is what makes the row worth having.
+  owns the migration, because phase 3 is what makes the row worth having. *(Closed
+  the same day: phase 3 shipped the rebuild — see the entry above.)*
 - **Rolling back must never be a way to ACQUIRE a capability.** `mcp_servers` is
   snapshot-captured; the registry those tools land in is memory a restore does not
   touch. So a restore to a point before a server existed left that server's tools

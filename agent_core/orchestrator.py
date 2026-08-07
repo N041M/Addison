@@ -698,19 +698,23 @@ class Orchestrator:
                     call.id, ToolResult(success=False, content=dev_only_refusal)
                 )
                 continue
-            # DISCOVERED BUT NOT WIRED (step 7 phase 2): an MCP tool is registered so
-            # the person can see it and refused here so nothing can run it. Above the
-            # gate and above the denylist for the reason the dev-only check is —
+            # DISCOVERED BUT NOT WIRED: a tool registered so the person can see it,
+            # with no dispatch behind it, refused here so nothing can run it. Above
+            # the gate and above the denylist for the reason the dev-only check is —
             # nothing about this call should be examined, approved or reached over
-            # the network, because there is no dispatch behind it at all.
+            # the network.
             #
-            # NO AUDIT ROW, and that is a deliberate gap rather than an oversight:
-            # `tool_audit.outcome` is a CHECK-constrained vocabulary, so widening it
-            # is a schema migration (schema.sql says as much of the widget kinds),
-            # and phase 3 — which owns `tool_audit` on every MCP outcome — is where
-            # that migration belongs. Recorded in docs/KNOWN-GAPS.md until then.
+            # QUIET FOR MCP SINCE PHASE 3, and still the mechanism: MCP tools no
+            # longer register `not_callable` (mcp_catalog.MCP_TOOLS_ARE_CALLABLE),
+            # so this branch is what turning that constant back off operates
+            # through, and what the next externally-sourced tool inherits. The audit
+            # row is phase 3's too — the branch used to write nothing, because the
+            # vocabulary had no value for it and widening a CHECK is a migration.
             not_callable_refusal = self.tool_registry.refuse_if_not_callable(call.tool_id)
             if not_callable_refusal is not None:
+                self._audit(
+                    conversation, call.tool_id, None, mode, destructive, "not_callable"
+                )
                 conversation.append_tool_result(
                     call.id, ToolResult(success=False, content=not_callable_refusal)
                 )
@@ -838,12 +842,25 @@ class Orchestrator:
                 # (every CLI turn, every test that does not pass one) this ran a
                 # 9-regex pass over up to _MAX_OUTPUT_CHARS of output and threw the
                 # answer away. The classification is only ever read by the row.
+                #
+                # TWO FIELDS THE RESULT MAY CARRY (step 7 phase 3), both None/empty
+                # for every native tool, so no existing row changes shape:
+                # `redacted_kinds` when a tool scrubbed its OWN output (re-running
+                # the redactor over already-clean text finds nothing, and the row
+                # would then deny that a credential came back), and `audit_outcome`
+                # when the tool's own failure is a fact this vocabulary can express
+                # and the gate's decision cannot — an MCP call the gate approved and
+                # that never reached the server is 'failed', not 'granted'.
                 self._audit(
-                    conversation, call.tool_id, detail, mode, destructive, "granted",
+                    conversation, call.tool_id, detail, mode, destructive,
+                    result.audit_outcome or "granted",
                     redacted=(
-                        redact(_result_as_text(result.content)).kinds
-                        if self.auditing
-                        else None
+                        result.redacted_kinds
+                        or (
+                            redact(_result_as_text(result.content)).kinds
+                            if self.auditing
+                            else None
+                        )
                     ),
                 )
             conversation.append_tool_result(call.id, result)

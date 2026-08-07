@@ -42,9 +42,10 @@ quickly.
 ## Next
 
 Two things are left — 7 and 8 — and they are independent enough to take in
-any order. **Step 7 is under way**: two of its five phases have landed
-(2026-08-06 saves a server's address, 2026-08-07 checks what it offers). Nothing a
-tool server offers is callable yet. Step 5.5 headed this list until
+any order. **Step 7 is under way**: three of its five phases have landed
+(2026-08-06 saves a server's address, 2026-08-07 checks what it offers, and later
+the same day runs one — with your approval, every time, in the Developer profile
+only). Step 5.5 headed this list until
 2026-07-31 and step 6 until 2026-08-06; both are finished. Their entries stay
 below, in place, because they are recent enough that people still ask what they
 covered.
@@ -87,10 +88,10 @@ covered.
    describe its own powers, because the list of kinds is closed and hard-coded,
    which is the same gate with nothing to get out of step. Code-backed widgets
    (monitors, scripts) are still Developer-only and still future work.
-7. **MCP client — STARTED. Phases 1 and 2 of five are built (2026-08-06,
-   2026-08-07); nothing is callable yet.** Consume external tools through the
-   registry and the permission gate that already exist. Addison is a client here,
-   never a server. The five phases and what each one covers are in
+7. **MCP client — STARTED. Phases 1, 2 and 3 of five are built (2026-08-06,
+   2026-08-07).** Consume external tools through the registry and the permission
+   gate that already exist. Addison is a client here, never a server. The five
+   phases and what each one covers are in
    [docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md).
 
    **Transport is HTTP only for v1** (owner decision 2026-08-06): a saved server
@@ -106,17 +107,27 @@ covered.
 
    **What phase 2 shipped:** a "Check now" button. Press it and Addison connects to
    that one server, asks what it offers, and lists it — on the Tools page, in a
-   section of its own headed by the server it came from, with every entry marked
-   *"Addison can see this tool but can't use it yet."* Because that is the whole
-   truth: **nothing a server offers is callable, and two separate mechanisms make
-   sure of it** — Addison never tells a model these tools exist, and if one is
-   named anyway it is refused before anything runs. A server that is switched off,
-   or that wants a sign-in Addison cannot do, says so in one plain sentence on its
-   own row rather than failing quietly. Nothing is checked unless you ask: Addison
-   makes no connection you did not just cause, nothing is checked when the app
-   starts, and what a check found is forgotten when the app closes — so after a
-   restart a server honestly reads "not checked yet". Nothing about the Simple
-   profile changed; a Simple-profile person sees none of this.
+   section of its own headed by the server it came from. Every entry was marked as
+   something Addison could see and not yet use, because at that point that was the
+   whole truth. A server that is switched off, or that wants a sign-in Addison
+   cannot do, says so in one plain sentence on its own row rather than failing
+   quietly. Nothing is checked unless you ask: Addison makes no connection you did
+   not just cause, nothing is checked when the app starts, and what a check found is
+   forgotten when the app closes — so after a restart a server honestly reads "not
+   checked yet".
+
+   **What phase 3 shipped:** those tools can now be used — and **Addison asks you
+   before each one, every time.** Approving a tool once never approves it again,
+   because a tool server is somebody else's program and Addison is not in a position
+   to know what any of it will do; the card says exactly that, and names the server
+   the tool came from. Anything a server sends back has passwords and keys stripped
+   out of it before a model sees it, is trimmed if it is enormous, and leaves a
+   permanent record of what happened — whether you approved it, whether it ran, and
+   whether anything was stripped. A server that goes quiet costs you a wait of a few
+   seconds, never the rest of what you were doing, and one you have since removed is
+   not called at the address it used to have. Nothing about the Simple profile
+   changed at any point: a Simple-profile person sees none of this and can run none
+   of it.
 8. **The automation keyword gate.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
    never triggers itself.

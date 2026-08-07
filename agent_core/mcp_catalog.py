@@ -1,9 +1,10 @@
-"""What a tool server offered, and how it enters the one tool registry
-(step 7, PHASE 2; [docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) §3 owns
-the admission rules this implements).
+"""What a tool server offered, how it enters the one tool registry, and what
+happens when one of its tools is actually run (step 7, PHASES 2–3;
+[docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) §3 owns the admission rules
+this implements and §4.3 the dispatch).
 
 ``mcp_client.py`` speaks the protocol; this module decides what happens to what it
-brings back. Two things live here and nothing else does:
+brings back. Three things live here and nothing else does:
 
 **1. Admission.** Every discovered tool registers through the SAME
 ``ToolRegistry`` the orchestrator and the routine engine share — never a second
@@ -24,35 +25,96 @@ attacker-controlled text into every later snapshot payload and plaintext sidecar
 for no gain, since the only honest way to know what a server offers today is to
 ask it. After a restart a row says it has not been checked yet, which is true.
 
+**3. Dispatch** (phase 3). :class:`McpTool`'s ``execute`` runs the call — through
+the ordinary registry and the ordinary gate, with NO special case anywhere in
+either. HIGH + destructive means the gate cards every single invocation in OPEN,
+and SAFE never sees the tool at all. Three things happen inside ``execute`` and
+they are the whole of what phase 3 added to a call:
+
+  * **The address is resolved at the moment of use**, never remembered from the
+    discovery that registered the tool. A server the person removed or renamed in
+    between refuses cleanly; nothing here can call a stale address.
+  * **ONE call, ONE session, ONE budget** (decision 3) — the deadline lives here,
+    at the call, because that is where the person is waiting.
+  * **The answer crosses the redaction seam and then the cap, in that order**
+    (decisions 1 and 2). The order is ``run_command``'s hard-won lesson: a cut
+    through a credential leaves a head the redactor no longer matches.
+
 **Namespaced ids are a safety requirement, not tidiness** (§3). A server can
 declare a tool called ``save_file``; registered bare it would shadow the native
 one, and every grant, audit row and risk rule keyed by that id would silently
 point at a stranger's code. So ids are ``mcp:<server>:<tool>`` and a collision
 REFUSES that tool — skipped and reported — rather than replacing anything.
 
-**Nothing is callable in phase 2**, and :data:`MCP_TOOLS_ARE_CALLABLE` is the one
-deliberate thing phase 3 flips.
+:data:`MCP_TOOLS_ARE_CALLABLE` is the one constant the phases turn on, and phase 3
+turned it on.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from agent_core.mcp_client import DiscoveredTool
+from agent_core.mcp_client import (
+    CALL_BUDGET_SECONDS,
+    CallResult,
+    DiscoveredTool,
+    McpError,
+    trim_result,
+)
+from agent_core.policy import PolicyMode
+from agent_core.redaction import redact
 from agent_core.tools.base import ExecutionContext, RiskTier, ToolDefinition, ToolResult
-from agent_core.tools.registry import NOT_CALLABLE_REFUSAL, ToolRegistry
+from agent_core.tools.registry import (
+    DEV_ONLY_REFUSAL,
+    NOT_CALLABLE_REFUSAL,
+    ToolRegistry,
+)
 
 #: Every discovered id starts with this. One constant, because the SAFE-view test,
 #: the model-visibility test and the surfaces all ask the same question of it.
 MCP_ID_PREFIX = "mcp:"
 
-#: **The phase gate.** Phase 2 is connect + discovery: the person sees what a
-#: server offers, the model is never told, and both dispatch paths refuse. Phase 3
-#: (dispatch, through the existing gate, with ``tool_audit`` on every outcome and a
-#: per-call deadline) flips this ONE constant and implements ``McpTool.execute`` —
-#: deliberately, in daylight, rather than by an omission somewhere quietly ceasing
-#: to hold.
-MCP_TOOLS_ARE_CALLABLE = False
+#: **The phase gate, ON since phase 3 (2026-08-07).** Phase 2 was connect +
+#: discovery: the person saw what a server offered, the model was never told, and
+#: both dispatch paths refused. Phase 3 turned this ONE constant on and implemented
+#: ``McpTool.execute`` — deliberately, in daylight, rather than by an omission
+#: somewhere quietly ceasing to hold.
+#:
+#: What it still governs, so that turning it back off is a complete answer rather
+#: than half of one: the ``not_callable`` registration flag (which keeps an
+#: ``mcp:`` id out of every mode's ``visible_tools``, so the model is never offered
+#: one), and ``McpTool.execute``'s own innermost refusal. The two dispatch-site
+#: checks (``refuse_if_not_callable``) stay exactly where they are and go quiet for
+#: MCP ids on their own — they are the mechanism this constant operates through,
+#: not a phase-2 leftover, and the next externally-sourced tool inherits them.
+#:
+#: ``tests/doc_claims.py::MCP_TOOLS_ARE_NOT_CALLABLE`` is this same fact enforced
+#: in prose. The two move in one commit.
+MCP_TOOLS_ARE_CALLABLE = True
+
+# --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
+
+#: The card's description, and the model's. Says the two things a person needs
+#: before approving a call to somebody else's program: where the tool came from,
+#: and that Addison is not in a position to vouch for it. "Tool server" rather than
+#: "MCP server" everywhere a person can read it.
+#:
+#: ``{server}`` is a PHRASE rather than a bare name so the sentence stays
+#: grammatical when there is no name to give — a card is not the place to discover
+#: that a value was empty.
+CARD_PROVENANCE = (
+    "This comes from {server}, which you added. Addison can't know what it will do, "
+    "so it asks every time."
+)
+
+#: Said when the server this tool came from is no longer saved under the name its
+#: id carries — removed, or renamed, between the check that found it and now.
+SERVER_GONE = "That tool server isn't saved any more, so Addison didn't call it."
+
+#: The last resort: the call failed for a reason ``mcp_client`` did not name, which
+#: means a defect on Addison's side. It says so rather than blaming the server.
+CALL_FAILED = "Addison couldn't run that tool just now."
 
 #: Statuses a server row can be in. ``never`` is the honest answer after a restart
 #: (nothing is persisted) and the honest answer for a row nobody has checked:
@@ -74,29 +136,66 @@ def mcp_tool_id(server_name: str, tool_name: str) -> str:
 
 
 class McpTool:
-    """One tool a server offered, as the registry sees it.
+    """One tool a server offered, as the registry sees it — and, since phase 3, the
+    thing that actually calls it.
 
-    ``execute`` REFUSES. That is not a placeholder to be forgotten: phase 2 ships
-    no dispatch at all, so a body that "did the call" would be the one part of this
-    step nobody asked for. It is also the innermost of the three layers keeping
-    phase 2 honest (model-invisible, refused at both dispatch sites, refused here),
-    on ``run_command``'s belt-and-suspenders precedent. Phase 3 replaces this body
-    and flips :data:`MCP_TOOLS_ARE_CALLABLE`."""
+    Constructed with the two seams dispatch needs and neither of which this module
+    may reach for itself (the module-boundary rule, and a source test on the import
+    graph): ``endpoint_for`` answers "where does this server live RIGHT NOW", and
+    ``call_tool`` is the network. Both default to None, in which case ``execute``
+    refuses — a tool wired to nothing must say so, never quietly do nothing."""
 
-    def __init__(self, tool_id: str, label: str, description: str) -> None:
+    def __init__(
+        self,
+        tool_id: str,
+        label: str,
+        description: str,
+        *,
+        schema: dict | None = None,
+        server_id: str = "",
+        server_name: str = "",
+        tool_name: str = "",
+        endpoint_for: Callable[[str, str], str | None] | None = None,
+        call_tool: Callable[[str, str, dict, float], CallResult] | None = None,
+    ) -> None:
         self.definition = ToolDefinition(
             id=tool_id,
             label=label,
-            description=description,
+            # The server's own words FIRST, then Addison's. Both audiences read
+            # this string and each needs a different half of it: the model needs to
+            # know what the tool does, and the person approving the card needs to
+            # know who wrote it and that Addison cannot vouch for it. The card
+            # shows exactly this text (main._on_permission_request), which is also
+            # why this tool declares no ``permission_detail`` — a detail REPLACES
+            # the description on the card, and the provenance is the part that must
+            # not be replaceable.
+            description=" ".join(
+                part
+                for part in (
+                    description,
+                    CARD_PROVENANCE.format(
+                        server=(
+                            f"the tool server {server_name}" if server_name else "a tool server"
+                        )
+                    ),
+                )
+                if part
+            ),
             # HIGH and destructive unconditionally (§3). Not a judgement about this
             # particular tool — a judgement about who described it.
             risk_tier=RiskTier.HIGH,
-            # Phase 2 does not call anything, so it does not need the server's
-            # inputSchema and does not keep it: an unused JSON Schema from a
-            # stranger is text held for no reason. Phase 3 adds it WITH its own
-            # bounds, which is a decision that belongs beside dispatch.
-            parameters_schema={"type": "object", "properties": {}},
+            # The server's own inputSchema, bounded at the client boundary
+            # (mcp_client._clean_schema) and copied no further. A model cannot form
+            # a call to a tool whose arguments nobody described; a schema that
+            # failed the bounds is replaced by the empty one, so a bad schema costs
+            # the model its hints rather than costing the person the tool.
+            parameters_schema=schema if schema is not None else {"type": "object", "properties": {}},
         )
+        self._server_id = server_id
+        self._server_name = server_name
+        self._tool_name = tool_name or tool_id
+        self._endpoint_for = endpoint_for
+        self._call_tool = call_tool
 
     def is_destructive(self, args: dict) -> bool:
         """Every call cards, per invocation (§3). A server's own risk claim is
@@ -104,7 +203,60 @@ class McpTool:
         return True
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
-        return ToolResult(success=False, content=NOT_CALLABLE_REFUSAL)
+        """Call the tool and hand back its answer, redacted and capped.
+
+        Four refusals come first, and none of them is the gate's job — the gate has
+        already said yes by the time this runs:
+
+          1. **The phase gate.** With :data:`MCP_TOOLS_ARE_CALLABLE` off this is the
+             innermost of three layers, on ``run_command``'s belt-and-suspenders
+             precedent. Turning the constant off must stop dispatch everywhere, not
+             just where the model can see.
+          2. **Mode.** SAFE never sees an ``mcp:`` id and both dispatch paths refuse
+             one outside OPEN, so reaching here in SAFE means two boundaries were
+             already crossed; this refuses anyway, like ``run_command`` does.
+          3. **Wiring.** No endpoint resolver and no client means a tool registered
+             by something that cannot call it.
+          4. **The address, resolved NOW.** A server removed or renamed since the
+             check that registered this tool refuses cleanly. The alternative — an
+             address captured at discovery — is a call to wherever that server used
+             to be, made on the strength of a row that no longer exists.
+
+        Then the answer: redacted, then capped, in that order (see ``trim_result``).
+        The kinds ride back on the ``ToolResult`` so BOTH dispatch paths can put
+        them in the audit row, which is the only durable record that a credential
+        came back from somebody else's program."""
+        if not MCP_TOOLS_ARE_CALLABLE:
+            return ToolResult(
+                success=False, content=NOT_CALLABLE_REFUSAL, audit_outcome="not_callable"
+            )
+        if context.policy_mode is not PolicyMode.OPEN:
+            return ToolResult(success=False, content=DEV_ONLY_REFUSAL, audit_outcome="dev_only")
+        if self._endpoint_for is None or self._call_tool is None:
+            return ToolResult(success=False, content=CALL_FAILED, audit_outcome="failed")
+        url = self._endpoint_for(self._server_id, self._server_name)
+        if not url:
+            return ToolResult(success=False, content=SERVER_GONE, audit_outcome="failed")
+        try:
+            answer = self._call_tool(url, self._tool_name, dict(args or {}), CALL_BUDGET_SECONDS)
+        except McpError as exc:
+            # Already one plain sentence written for a person, and never the
+            # server's own words. A call that never landed is 'failed' rather than
+            # 'granted': the gate said yes and nothing happened, and those are
+            # different rows to whoever later asks what Addison actually did.
+            return ToolResult(success=False, content=str(exc), audit_outcome="failed")
+        except Exception:
+            # A defect on Addison's side (an argument that will not serialize, a
+            # client that raised something new). One sentence, no stack trace, and
+            # the turn continues — a tool that crashes a turn is worse than a tool
+            # that fails.
+            return ToolResult(success=False, content=CALL_FAILED, audit_outcome="failed")
+        scrubbed = redact(answer.text)
+        return ToolResult(
+            success=not answer.is_error,
+            content=trim_result(scrubbed.text),
+            redacted_kinds=scrubbed.kinds,
+        )
 
 
 @dataclass
@@ -130,10 +282,24 @@ class McpCatalog:
 
     Owns the registry side-effects too, so "what Addison believes a server offers"
     and "what is registered for that server" can never drift apart: both change in
-    the same call or neither does."""
+    the same call or neither does.
+
+    ``endpoint_for`` and ``call_tool`` are the two dispatch seams, handed to every
+    tool this catalog registers. They are INJECTED rather than imported because
+    this module may not reach the store (the address lives in SQLite, and the RPC
+    layer owns that lookup) and because the network has to be substitutable in a
+    test — the same reason ``_mcp_discover`` is a seam one layer up. Left unset,
+    every discovered tool registers and refuses to run, which is the correct
+    behaviour for a catalog nobody wired dispatch into."""
 
     _by_server: dict[str, ServerCatalog] = field(default_factory=dict)
     _ids_by_server: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: (server_id, server_name) -> the server's CURRENT address, or None if it is
+    #: no longer saved under that name. Asked at the moment of use, never cached.
+    endpoint_for: Callable[[str, str], str | None] | None = None
+    #: (url, tool_name, arguments, budget) -> CallResult. ``mcp_client.call_tool``
+    #: in the running app; a MockTransport-backed one in tests.
+    call_tool: Callable[[str, str, dict, float], CallResult] | None = None
 
     def state(self, server_id: str) -> ServerCatalog:
         """This server's state — a never-checked one for anything unseen, which is
@@ -189,7 +355,24 @@ class McpCatalog:
                 refused.append(tool.name)
                 continue
             registry.register(
-                McpTool(tool_id, _label_for(server_name, tool.name), tool.description),
+                McpTool(
+                    tool_id,
+                    _label_for(server_name, tool.name),
+                    tool.description,
+                    schema=tool.schema,
+                    # The server's IDENTITY travels with the tool, not its address:
+                    # the address is looked up again at the moment of use, so a
+                    # server removed or renamed between this check and the call
+                    # refuses instead of being reached.
+                    server_id=server_id,
+                    server_name=server_name,
+                    # The name the SERVER uses, which is not the registry id — the
+                    # id is namespaced, and sending the namespaced form back to the
+                    # server would name a tool it has never heard of.
+                    tool_name=tool.name,
+                    endpoint_for=self.endpoint_for,
+                    call_tool=self.call_tool,
+                ),
                 # open_only + allow_missing_undo. An MCP tool has no undo() and
                 # never will, which is exactly the shape the exemption exists for.
                 dev_only=True,

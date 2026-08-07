@@ -1,17 +1,18 @@
-// Tool servers — the MCP client's surfaces (Phase-2 step 7, phases 1–2 of five).
+// Tool servers — the MCP client's surfaces (Phase-2 step 7, phases 1–3 of five).
 // Five parts:
 //
 //   (a) The fail-closed parsers: a row without a usable id, name or http(s)
 //       address is DROPPED, junk never throws, and every discovery field fails in
 //       the direction that UNDERSTATES what Addison knows.
 //   (b) The panel, rendered for real: the honest standing line byte-for-byte, the
-//       per-server status line, and — load-bearing — no claim that a discovered
-//       tool can be USED. Phase 2 can see a server's tools and run none of them.
+//       per-server status line, and — load-bearing — the safeguard stated on every
+//       surface that mentions these tools. Phase 3 can RUN them, and the sentence
+//       that matters is no longer "it can't" but "it asks you first, every time".
 //   (c) The add form, the two-press remove and "Check now", driven through the
 //       real hook with mocked ipc: a refusal renders as one plain line, and a
 //       check that FAILED lands on the row rather than looking like a mistake.
 //   (d) The Tools surface: one SECTION per server (the plan's Decision 2), with
-//       provenance, the not-runnable sentence on every tool, and a body that says
+//       provenance, the asks-first sentence on every tool, and a body that says
 //       something for every state — unchecked, failed, and answered-with-nothing.
 //   (e) The page-level gate: both surfaces render ONLY on the Developer/Custom
 //       surfaces (keyed off the active profile, never the mode); Simple never
@@ -43,14 +44,19 @@ afterEach(cleanup);
 // --- Frozen copy — byte-for-byte. -------------------------------------------
 const STANDING_LINE =
   "A tool server is a program on the web that offers Addison extra tools. Addison can " +
-  "check what a server offers and list it here — it still can't use any of those tools yet.";
+  "check what a server offers, and it asks you before using any of those tools.";
 const ADD_ACTION = "add a server";
 const SECTION_TITLE = "Tool servers";
 const DEV_ONLY =
   "Tool servers are part of the Developer profile. Switch to Developer in Settings to add one.";
-/** The same sentence the core answers with (`NOT_CALLABLE_REFUSAL`). One fact,
- * told to the person and to the model in identical words. */
-const NOT_RUNNABLE = "Addison can see this tool but can't use it yet.";
+/** Under every discovered tool since dispatch shipped. It replaced the core's
+ * `NOT_CALLABLE_REFUSAL` ("Addison can see this tool but can't use it yet."),
+ * which these surfaces printed byte-for-byte while there was no dispatch behind
+ * the rows. The safeguard is what the line carries now. */
+const ASKS_FIRST = "Addison asks you before each use.";
+/** The sentence that must NOT survive anywhere on these surfaces: it is false
+ * since phase 3, and it is the kind of false that reads as reassuring. */
+const STALE_NOT_RUNNABLE = "Addison can see this tool but can't use it yet.";
 
 const URL = "https://tools.example/mcp";
 
@@ -261,7 +267,7 @@ describe("the tool-servers panel", () => {
     expect(screen.getByText(STANDING_LINE)).toBeTruthy();
   });
 
-  it("never claims a discovered tool can be used", () => {
+  it("says a discovered tool is used only with permission, never that it just runs", () => {
     renderPanel(
       stateWith({
         servers: [
@@ -276,11 +282,13 @@ describe("the tool-servers panel", () => {
       }),
     );
     const text = document.body.textContent ?? "";
-    // A count is now honest — a check produced it. What must never appear is any
-    // suggestion Addison can USE what it found, on the one page a person checks
-    // to see what their assistant is wired into.
+    // A count is honest — a check produced it. What the row must carry alongside
+    // it is the safeguard: these tools CAN run now, and none of them runs without
+    // the person saying so, on the one page they check to see what their assistant
+    // is wired into.
     expect(text).toContain("3 tools found");
-    expect(text).toContain("Addison can't use them yet.");
+    expect(text).toContain("Addison asks before each use.");
+    expect(text).not.toContain(STALE_NOT_RUNNABLE);
     expect(text).not.toMatch(/\b(in use|ready to use|available to Addison)\b/i);
   });
 
@@ -549,7 +557,7 @@ describe("the Tools surface's tool-server sections", () => {
     expect(screen.getByText("Tool server · Local")).toBeTruthy();
   });
 
-  it("says where a tool came from and that it cannot be run", () => {
+  it("says where a tool came from and that nothing runs without being asked", () => {
     renderTools([
       server({
         status: "ok",
@@ -560,7 +568,10 @@ describe("the Tools surface's tool-server sections", () => {
     expect(text).toContain("From your tool server Design docs.");
     expect(screen.getByText("search_docs")).toBeTruthy();
     expect(screen.getByText("Search the team's documentation.")).toBeTruthy();
-    expect(screen.getByText(NOT_RUNNABLE)).toBeTruthy();
+    expect(screen.getByText(ASKS_FIRST)).toBeTruthy();
+    // The line phase 3 falsified must be gone from this page entirely — a stale
+    // reassurance is worse here than no line at all.
+    expect(text).not.toContain(STALE_NOT_RUNNABLE);
   });
 
   it("renders a server's text as text, never as markup", () => {
@@ -602,10 +613,14 @@ describe("the Tools surface's tool-server sections", () => {
 
   it("shows no tool-server section at all on the Simple surface", () => {
     // Same gate as trusted folders, and for the same reason: the Tools page is not
-    // a back door to a surface Settings hides.
+    // a back door to a surface Settings hides. Since these tools can now RUN, the
+    // gate is also the honest answer for a Simple-profile person — the tools are
+    // Developer-only, so the page says nothing about them rather than describing
+    // reach the active profile does not have.
     renderTools([server({ status: "ok", tools: [{ name: "search_docs", description: "" }] })], false);
     expect(screen.queryByText("Tool server · Design docs")).toBeNull();
     expect(screen.queryByText("search_docs")).toBeNull();
+    expect(document.body.textContent ?? "").not.toMatch(/tool server/i);
   });
 });
 

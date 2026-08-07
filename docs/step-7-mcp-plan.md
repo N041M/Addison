@@ -1,15 +1,15 @@
 # Step 7 — MCP client
 
-**Status: STARTED — phases 1 and 2 of five are BUILT (2026-08-06, 2026-08-07).**
-`ROADMAP.md` owns scheduling. The spec's shape is §4.12; this plan turns it into a
-build order and settles the decisions §4.12's banner admits were never made. Where
-this plan and §4.12 differ, §4.12's *banner* is right that its details were never
-settled — that is what this document settles.
+**Status: STARTED — phases 1, 2 and 3 of five are BUILT (2026-08-06, 2026-08-07,
+2026-08-07).** `ROADMAP.md` owns scheduling. The spec's shape is §4.12; this plan
+turns it into a build order and settles the decisions §4.12's banner admits were
+never made. Where this plan and §4.12 differ, §4.12's *banner* is right that its
+details were never settled — that is what this document settles.
 
 **Both decisions are now ANSWERED** — see §5. Decision 1 (transport): HTTP only
 for v1. Decision 2 (where a server's tools appear): a section per server on the
 Tools surface, never interleaved with native tools. Phase 2 added three scoping
-decisions of its own, recorded in §4.2.
+decisions of its own (§4.2) and phase 3 four more (§4.3).
 
 Addison is a **client**: it consumes external MCP servers/tools. Never a server,
 never a gateway (the OmniRoute-style thing, declined and still declined).
@@ -103,9 +103,10 @@ and registration must refuse a collision rather than replace.
    `shell/src/__tests__/mcp.test.tsx`, plus the generated `mcp.list` payload
    fixture both sides share.
 2. **Connect + discovery — BUILT 2026-08-07.** Speak MCP, list tools, register
-   them namespaced and dev-only. Nothing is callable; the tools surface shows what
-   was found. The claim this phase makes, and the only one: **Addison can now SEE
-   what a stranger's server offers and can use none of it.**
+   them namespaced and dev-only; the tools surface shows what was found. The claim
+   this phase made, and the only one: **Addison could now SEE what a stranger's
+   server offers and use none of it.** (Phase 3, later the same day, is what
+   changed the second half — see below.)
 
    What shipped:
    - **`agent_core/mcp_client.py`** — a minimal Streamable HTTP client: POST
@@ -137,13 +138,14 @@ and registration must refuse a collision rather than replace.
    - **Surfaces.** The Settings panel gained a per-row status line and "Check now";
      the Tools surface gained a section per server (Decision 2 below).
 
-   **Nothing is callable, mechanically, in two layers.** (a) `visible_tools(mode)`
-   is the list offered to the model, and an `mcp:` id is absent from it in every
-   mode — which also keeps a server's text out of a model's context entirely, so
-   §7's trigger stays exactly as deferred as the plan expects. (b) If a `tool_use`
-   names one anyway, BOTH dispatch paths refuse before the gate and before any
-   network is touched, in the same shape as `refuse_if_dev_only_outside_open`.
-   `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` is the ONE constant phase 3 flips.
+   **Nothing was callable, mechanically, in two layers** — until phase 3 turned the
+   one constant on (`mcp_catalog.MCP_TOOLS_ARE_CALLABLE`). Both layers remain, and
+   both are what turning it back off operates through: (a) `visible_tools(mode)` is
+   the list offered to the model, and a `not_callable` id is absent from it in every
+   mode; (b) if a `tool_use` names one anyway, BOTH dispatch paths refuse before the
+   gate and before any network is touched, in the same shape as
+   `refuse_if_dev_only_outside_open`. Nothing sets `not_callable` today; it is the
+   shape the next discovered-before-its-dispatch-exists tool inherits.
 
    **Everything a server sends is untrusted text**, and the caps are at the client
    boundary rather than at each surface: a bounded number of tools per server and
@@ -178,12 +180,87 @@ and registration must refuse a collision rather than replace.
      sidecar, forever, to answer a question only the server can answer honestly.
      After a core restart the panel says the server has not been checked yet,
      because it has not.
-3. **Dispatch.** Invoke through the existing gate, with `tool_audit` on every
-   outcome and a per-call deadline. **The deadline is not optional** — a hung
-   server must not stall a turn, which is the same lesson `run_command` taught
-   when it held the IPC pump for thirty seconds.
-4. **Output handling.** MCP results are untrusted text heading for a model, so
-   they cross the same redaction seam as command output.
+3. **Dispatch — BUILT 2026-08-07.** Invoke through the existing gate, with
+   `tool_audit` on every outcome and a per-call deadline. **The deadline is not
+   optional** — a hung server must not stall a turn, which is the same lesson
+   `run_command` taught when it held the IPC pump for thirty seconds. The claim
+   this phase makes: **an MCP tool is invoked through the ordinary gate, its answer
+   is redacted and capped before a model sees it, every outcome leaves a durable
+   row, and a hung server costs a wait rather than a turn.**
+
+   What shipped:
+   - **`mcp_client.call_tool`** — `tools/call` over the same session, vetting and
+     cap machinery discovery uses (same-origin pinning, `Mcp-Session-Id` echo,
+     SSE-or-JSON answers, bounded response body). Only `content` items of type
+     `text` are read; an answer with nothing textual in it becomes one plain
+     sentence rather than an empty string, and a malformed answer fails closed.
+     `isError: true` is believed — it says nothing about permission, only whether
+     the thing the model asked for worked — and produces a failed result whose text
+     still crosses redaction and the cap.
+   - **`DiscoveredTool.schema`** — the server's `inputSchema`, admitted only within
+     bounds (must BE a `type: object` schema, ≤16 KB serialized, ≤8 levels deep,
+     checked iteratively) and replaced by `{"type":"object","properties":{}}`
+     otherwise, **with the tool still admitted**: a bad schema costs the model its
+     hints, never the person the tool.
+   - **`McpTool.execute`** — the call, through the existing registry and gate with
+     no special case at either dispatch site. HIGH + destructive still means a card
+     per invocation in OPEN; SAFE still refuses above the gate. The permission
+     card's description carries the provenance — *"This comes from the tool server
+     X, which you added. Addison can't know what it will do, so it asks every
+     time."* — which is also why the tool declares no `permission_detail`: a detail
+     REPLACES the description on the card, and that sentence may not be replaceable.
+   - **`tool_audit` on every outcome, in BOTH dispatch paths**, and the vocabulary
+     migration that made it possible: `outcome` gained `not_callable` (retiring the
+     KNOWN-GAPS entry phase 2 opened) and `failed` (the gate said yes and the call
+     never landed — a different history from "approved, and it ran", and the only
+     place anyone can learn which it was). SQLite cannot ALTER a CHECK, so
+     `Store._migrate_tool_audit_outcomes` rebuilds the table by rename-copy-drop,
+     preserving every existing row.
+   - **Surfaces.** The per-tool line on the Tools surface and the Settings panel's
+     standing line both changed from *"Addison can't use these"* to what protects
+     the person now that it can: **it asks first, every time.** Simple renders no
+     tool-server section at all, which is unchanged and is the honest answer — the
+     tools are Developer-only.
+
+   **Four decisions, made 2026-08-07:**
+
+   - **Results cross the redaction seam NOW, a deliberate half-pull of phase 4.**
+     The seam was scheduled for phase 4, but shipping dispatch without it would put
+     credential-bearing server output in front of a model between two merges, and
+     `tool_audit.redacted` already existed expecting it. Every result's text is
+     redacted, the kinds ride back on the `ToolResult` so both dispatch paths can
+     record them, and phase 4 keeps the REST of output handling: content-type
+     breadth, structured content, and size/shape policy toward the model beyond
+     this phase's flat cap. §7's trigger came with the seam and was re-read here
+     rather than deferred to phase 4 — server text reaches a model from the moment
+     dispatch exists, not from the moment output handling is finished.
+   - **A result is capped on its way to the model.** A server can return megabytes.
+     `MAX_RESULT_CHARS` (8000 — twice `run_command`'s, because a command's output
+     is incidental to what was asked and a tool's answer IS what was asked) with a
+     plain marker when it bites. **Redaction runs BEFORE the cut**, on
+     `run_command`'s hard-won precedent: every redaction rule is anchored on a
+     vendor prefix plus a minimum body, so a cut through a credential leaves a head
+     that matches nothing afterwards and travels intact.
+   - **One call, one session, one budget.** A fresh initialize → initialized → call
+     inside a single ~15s deadline, with strict socket timeouts inside it. No
+     long-lived connections, no background sessions, no reuse across calls — a
+     session id is one server's handle on one person's wait, and a pool of them
+     would be state outliving the turn that authorised it, held open to a program
+     nobody here has audited. The cost is two extra round trips per call, and it
+     was accepted. A server needing state ACROSS calls is a v2 conversation.
+   - **Auth stays unsupported.** A 401/403 during dispatch answers with the same
+     plain sentence discovery uses. Two sentences for one situation would have a
+     person hunting for a difference that does not exist.
+
+   Tests: `tests/test_mcp_dispatch.py` (the call, the answer, the gate, every audit
+   outcome in both dispatch paths, the migration, and the address resolved at the
+   moment of use), plus the phase-2 layer tests updated in place per the notes their
+   authors left — `tests/test_mcp_discovery.py` now asserts an `mcp:` id IS offered
+   to the model in OPEN and still never in SAFE.
+4. **Output handling.** What phase 3 did not pull forward: content-type breadth
+   (images, embedded resources), `structuredContent`, the size and shape policy
+   toward the model beyond phase 3's flat cap, and the §7 re-read below. The
+   redaction seam itself moved to phase 3 — see its decision 1.
 5. *(Later, separately)* stdio transport under containment (§5 keeps both paths);
    SAFE admission via a user-promoted allowlist.
 
@@ -245,9 +322,12 @@ and registration must refuse a collision rather than replace.
      here it would spread one server going offline across the native list as
      unexplained dead rows, with nowhere to name the server that went away.
 
-   Every row in a section says, in plain words, that Addison can see the tool and
-   cannot use it — the same sentence the core answers with if anything names one.
-   Names and descriptions render as plain text through React's own escaping; a
+   Every row in a section says, in plain words, what protects the person. Until
+   phase 3 that was *"Addison can see this tool but can't use it yet"* — the same
+   sentence the core answered with if anything named one. Since dispatch shipped it
+   is *"Addison asks you before each use."*, which is the sentence that carries the
+   weight now: these tools CAN run, and none of them runs without the person saying
+   so. Names and descriptions render as plain text through React's own escaping; a
    server's prose is never put through the markdown renderer the thread uses.
 
 ## 6. What this step does NOT include
@@ -262,14 +342,37 @@ and registration must refuse a collision rather than replace.
 Untrusted-content screening (design-doc §11, v2) was re-affirmed as deferred on
 2026-08-06 with a dated trigger. **MCP is its third trigger**, after free/gray-area
 endpoints and the sandbox's deliberate outbound network. An MCP tool's output is
-attacker-controlled text arriving in a model's context, and phase 4's redaction
-pass is a credential backstop, not a screen. This does not block step 7 — it is
-the thing to re-read when phase 3 lands.
+attacker-controlled text arriving in a model's context, and redaction is a
+credential backstop, not a screen.
 
-**Phase 2 did not pull it forward, and that was checked rather than assumed.** A
-server's names and descriptions are attacker-controlled text, but they reach a
-*person* and never a model: an `mcp:` id is absent from `visible_tools(mode)` in
-every mode, so no tool definition Addison sends to a provider carries a word a
-server wrote. The bounds phase 2 does apply — the caps, the identifier rule, the
-control-character strip — are there because that text reaches a SCREEN, which is a
-smaller problem with a smaller answer. The trigger is still phase 3.
+**PHASE 3 PULLED THAT TRIGGER, and the re-read happened here (2026-08-07).** A
+server's text now reaches a model in three places it did not before: the tool
+DESCRIPTION and its bounded `inputSchema`, both sent as tool definitions the moment
+an `mcp:` id enters `visible_tools(OPEN)`, and the tool's ANSWER, which is the
+whole point of a call. **Screening remains v2** — that decision is unchanged and
+this phase does not reopen it. What phase 3 records instead is the backstop it
+actually shipped, stated at its real strength and no higher:
+
+- **Redaction** (`agent_core/redaction.py`) removes the credential shapes somebody
+  has enumerated, naming each one in the text and in the audit row. It is a pattern
+  matcher: a secret in a format nobody has listed passes untouched. It reduces
+  exposure and does not eliminate it, and no document may say otherwise.
+- **Caps** bound what a single answer can do to a context: 512 KB at the wire,
+  8000 characters toward the model, 16 KB per schema, 100 tools per server.
+- **The gate** is the layer that actually holds: every call cards, per invocation,
+  in OPEN only. An injected instruction that persuades a model to call a tool
+  server still has to persuade the person reading the card.
+
+None of that screens for a prompt injection, and pretending otherwise is the
+failure mode this section exists to prevent. What has changed since 2026-08-06 is
+that the deferral is now genuinely load-bearing rather than theoretical: it is on
+the v2 list in CLAUDE.md and [KNOWN-GAPS.md](KNOWN-GAPS.md), with three triggers
+behind it and the third one live.
+
+**For the record, since it was checked rather than assumed at the time:** phase 2
+did not pull this trigger. A server's names and descriptions were attacker-
+controlled text that reached a *person* and never a model — an `mcp:` id was absent
+from `visible_tools(mode)` in every mode, so no tool definition Addison sent to a
+provider carried a word a server wrote. The bounds phase 2 applied (the caps, the
+identifier rule, the control-character strip) were there because that text reached
+a SCREEN, which is a smaller problem with a smaller answer.
