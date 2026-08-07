@@ -59,6 +59,12 @@ const GRANT_CONFIRM =
 const DATA_DIR_REFUSAL =
   "That folder holds Addison's own memory, so Addison always asks there. " +
   "Pick a project folder instead.";
+// The step-8 fence's own refusal (rpc/workspace.py `_GRANT_AUTOMATION_DIR_REFUSAL`)
+// — a second frozen sentence, because telling someone who picked
+// ~/Library/LaunchAgents that the folder holds Addison's memory was false.
+const AUTOMATION_DIR_REFUSAL =
+  "That folder is where this computer keeps jobs it runs on a schedule, so " +
+  "Addison never trusts it. Pick a project folder instead.";
 const CARD_TITLE = "Folders Addison may work in";
 
 const DIR = "/Users/me/project";
@@ -219,6 +225,16 @@ describe("the workspace-trust panel", () => {
     expect(text).toContain(DATA_DIR_REFUSAL);
     expect(text).not.toContain("Traceback");
     expect(text).not.toContain("Error:");
+  });
+
+  it("renders the automation-dir refusal as its own plain sentence", () => {
+    // The fence's sentence (step 8 phase 1) — distinct from the data-dir one,
+    // because the reason is different and a false reason teaches people that
+    // refusals are boilerplate. Byte-for-byte with the core's frozen copy.
+    renderPanel(stateWith({ error: AUTOMATION_DIR_REFUSAL }));
+    const text = document.body.textContent ?? "";
+    expect(text).toContain(AUTOMATION_DIR_REFUSAL);
+    expect(text).not.toContain("Addison's own memory");
   });
 
   it("lists trusted roots and revokes one per row", () => {

@@ -127,21 +127,25 @@ and where it goes.
   credential shapes it knows on the way to the model and the audit trail records
   that it happened — but an unrecognised or deliberately-encoded secret still
   passes, so this stays open and is stated as such in design-doc §9.x.
-- **OS-automation directories can be trusted and written today — the one generic
-  path to ARMING that is still open (found 2026-08-07; step 8 phase 1 closes
-  it).** `workspace_trust_allows` refuses only Addison's own protected
-  directories, so `~/Library/LaunchAgents` can be granted as a trusted workspace
-  and `write_project_file` can put a plist there behind an ordinary card — which
-  is login-time automation, armed, with no keyword gate. The seatbelt and the
-  denylist don't cover it either: the seatbelt allows writes inside trusted
-  roots, and `denylisted_roots` names credential stores and the data dir, not
-  launchd's. Until this closes, the standing claim "nothing in the tree can
-  author or arm automation, so G2 holds trivially" is true of Addison's
-  machinery and false of this path — the person must deliberately pick the
-  folder through the OS picker, which is why it is a gap and not an incident.
-  [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 owns the fence
-  (trust-grant refusal + denylist + seatbelt write-denies, one list, three
-  consumers).
+- ~~**OS-automation directories can be trusted and written today.**~~ **CLOSED
+  2026-08-07, the same day it was found — by step 8 phase 1, in the same PR that
+  recorded it.** The gap: `workspace_trust_allows` refused only Addison's own
+  protected directories, so `~/Library/LaunchAgents` could be granted as a
+  trusted workspace and `write_project_file` could put a plist there behind an
+  ordinary card — login-time automation, armed, no keyword gate. Closed by the
+  fence [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 specifies:
+  ONE closed list (`policy.OS_AUTOMATION_DIRS`, hand-synced entry-for-entry with
+  `exec.rs`'s copy and pinned by a lockstep test that reads both), THREE
+  consumers — the trust floor refuses those directories in both directions at
+  grant AND authorize time (so a pre-fence trust row over one stopped confining
+  anything the moment this landed, no migration needed), `denylisted_roots`
+  refuses a command naming one plus the four arming binaries
+  (`launchctl`/`crontab`/`at`/`batch`) as a command's first word, and the
+  seatbelt write-denies them shell-side after every allow, dropping any trusted
+  root that touches one. Recorded costs, each stated where the code makes it:
+  `~/Library` and `~/.config` are no longer trustable workspaces, and a command
+  merely READING a plist is refused by the denylist (which cannot tell read from
+  write; the seatbelt, which can, denies only writes).
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
   and re-denies its own data dirs on top, independently, which is what keeps the

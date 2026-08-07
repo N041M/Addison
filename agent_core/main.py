@@ -86,6 +86,7 @@ from agent_core.rpc.constants import (
     _BYOK_ONBOARDING_MESSAGE as _BYOK_ONBOARDING_MESSAGE,
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
+from agent_core.rpc.automations import AutomationsMixin
 from agent_core.rpc.conversation import ConversationMixin
 from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
@@ -437,6 +438,7 @@ class JsonRpcServer(
     CostPlanMixin,
     WorkspaceMixin,
     McpMixin,
+    AutomationsMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -1088,6 +1090,7 @@ class JsonRpcServer(
             _COSTPLAN_JOBS,
             _WORKSPACE_JOBS,
             _MCP_JOBS,
+            _AUTOMATION_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1243,6 +1246,10 @@ class JsonRpcServer(
                     self._respond(request_id, self._mcp_remove(params))
                 elif kind == "mcp_refresh":
                     self._respond(request_id, self._mcp_refresh(params))
+                elif kind == "automation_list":
+                    self._respond(request_id, self._automation_list())
+                elif kind == "automation_remove":
+                    self._respond(request_id, self._automation_remove(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1857,6 +1864,17 @@ _MCP_JOBS = {
     Method.MCP_ADD: "mcp_add",
     Method.MCP_REMOVE: "mcp_remove",
     Method.MCP_REFRESH: "mcp_refresh",
+}
+
+# automation.* read the `automations` table and `automation.remove` mints an
+# auto-snapshot through the SnapshotManager, so they run on the worker like every
+# other store op (the sqlite3 connection is bound to that thread). Method -> worker
+# job kind, and this table is the ONLY place main.py may name an automation.* method:
+# answering one inline on the read loop would put a store read on the wrong thread
+# and a snapshot capture beside an in-flight turn. Step 8 phase 1.
+_AUTOMATION_JOBS = {
+    Method.AUTOMATION_LIST: "automation_list",
+    Method.AUTOMATION_REMOVE: "automation_remove",
 }
 
 

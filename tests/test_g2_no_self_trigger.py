@@ -38,9 +38,18 @@ explicit escape hatch) and gate arming it behind the user-typed keyword prefix.
 from __future__ import annotations
 
 import ast
+import os
+import re
 from pathlib import Path
 
 import agent_core
+from agent_core.policy import (
+    DENIED_ARMING,
+    OS_AUTOMATION_DIRS,
+    command_denied_path,
+    workspace_trust_allows,
+)
+from agent_core.tools.base import FORBIDDEN_CALL_ARMING, call_is_forbidden
 
 _PACKAGE_ROOT = Path(agent_core.__file__).resolve().parent
 
@@ -228,3 +237,92 @@ def test_every_background_thread_runs_work_someone_else_handed_in() -> None:
                 f"confirmed is driven by inbound work rather than by a clock (G2). "
                 f"{_ADD_TARGET_HINT}"
             )
+
+
+# ===========================================================================
+# THE OTHER HALF OF G2 — Addison may not ARM the OS's clock either
+# ===========================================================================
+# Everything above pins the first half of the floor: no timer, no scheduler, no
+# thread that wakes itself. That is Addison triggering ITSELF. The floor's second
+# half is the escape hatch's own boundary — "Addison may AUTHOR automation; only
+# the OS runs it" is a promise about a gate that does not exist yet, and until step
+# 8 phase 3 builds it the honest position is that NOTHING in the tree may hand the
+# OS a job at all.
+#
+# Two fences make that true, and they close two different doors (step-8 plan §5.5):
+#
+#   1. the TRUST-GRANT refusal — ~/Library/LaunchAgents and friends can never be a
+#      trusted workspace, so `write_project_file` can never drop a plist in one
+#      behind an ordinary card. This is the door that needs no shell, and it was
+#      OPEN until 2026-08-07 (KNOWN-GAPS, "OS-automation directories can be trusted
+#      and written today").
+#   2. the ARMING-BINARY refusal — a command whose program is `crontab`/`launchctl`/
+#      `at`/`batch` is refused before the gate, at every dispatch site.
+#
+# Remove EITHER and "nothing in the tree can arm automation" becomes false again,
+# which is why both are asserted here, next to the floor they belong to, rather
+# than only in the containment file where the mechanism lives.
+
+
+def test_g2_the_os_automation_directories_can_never_be_trusted_for_arming() -> None:
+    """Fence 1. A trusted workspace is the card-free zone; an automation directory
+    inside it would make writing a launchd job a card-free action. Refused in both
+    directions, so trusting the PARENT is not a way round it."""
+    for entry in OS_AUTOMATION_DIRS:
+        expanded = os.path.expanduser(entry)
+        assert workspace_trust_allows(expanded) is False, entry
+        assert workspace_trust_allows(os.path.join(expanded, "job.plist")) is False, entry
+    # The parent, which is how the fence would otherwise be walked around.
+    assert workspace_trust_allows(os.path.expanduser("~/Library")) is False
+    # ...and not vacuous: an unrelated folder is still trustable, so this test
+    # cannot pass by refusing everything.
+    assert workspace_trust_allows(os.path.expanduser("~/addison-g2-not-a-real-folder")) is True
+
+
+def test_g2_arming_the_os_clock_from_a_command_is_refused_before_the_gate() -> None:
+    """Fence 2. `command_denied_path` answers ARMING before it looks at any path, so
+    every dispatch site inherits it through the check it already makes; the
+    per-site proof is in test_step_5_5_containment.py.
+
+    The refusal is not platform-conditional: the seatbelt blocks `launchctl`'s Mach
+    traffic on macOS and nothing blocks `crontab` anywhere else, so a fence that
+    followed `kernel_confines_writes` would be absent exactly where it is needed."""
+
+    class _Command:
+        """run_command's shape, reduced to what the denylist reads."""
+
+        def command_text(self, args: dict) -> str | None:
+            return str(args.get("command", "")) or None
+
+    tool = _Command()
+    data_dir = os.path.expanduser("~/.addison")
+    for command in ("crontab -", "launchctl load ~/x.plist", "at now", "batch",
+                    "cd /tmp && crontab -"):
+        denial = command_denied_path(command, data_dir)
+        assert denial is not None and denial[1] == DENIED_ARMING, command
+        assert call_is_forbidden(tool, {"command": command}, data_dir) == FORBIDDEN_CALL_ARMING
+    # Not vacuous, and not a ban on the subject: talking about the program still
+    # works, which is what keeps the fence from being routed around.
+    assert call_is_forbidden(tool, {"command": "man crontab"}, data_dir) is None
+
+
+def test_g2_the_fence_list_is_in_lockstep_with_the_shell() -> None:
+    """The fence is ONE list with THREE consumers (step-8 plan §5.5), and the third
+    lives in another language: ``exec.rs`` carries its own ``OS_AUTOMATION_DIRS``,
+    derived shell-side on purpose (the profile's floor must not depend on the
+    core's honesty), which leaves hand-sync as the contract — the same deal
+    ``protocol.py`` / ``protocol.ts`` have. A hand-synced contract asserted on one
+    side only is asserted on neither, so this reads the Rust constant out of the
+    source and compares ENTRY FOR ENTRY, order included: the shell file's comment
+    promises readability "against the core's entry-for-entry", and order is what
+    makes that check a glance rather than a diff."""
+    exec_rs = (
+        Path(__file__).resolve().parent.parent / "shell" / "src-tauri" / "src" / "exec.rs"
+    ).read_text(encoding="utf-8")
+    block = re.search(
+        r"const OS_AUTOMATION_DIRS: &\[&str\] = &\[\n(?P<body>(?:\s*\"[^\"]+\",\n)+)\s*\];",
+        exec_rs,
+    )
+    assert block is not None, "exec.rs no longer declares OS_AUTOMATION_DIRS as a &[&str] literal"
+    rust_entries = re.findall(r"\"([^\"]+)\"", block.group("body"))
+    assert rust_entries == list(OS_AUTOMATION_DIRS)

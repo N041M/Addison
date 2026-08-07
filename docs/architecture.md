@@ -169,9 +169,10 @@ exact same registry and gate as the live loop.
 `JsonRpcServer` lives in `main.py` but its handlers do not: it is composed from the
 mixins in `agent_core/rpc/` — one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
-`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, and `mcp` — the external
-tool servers of step 7), each of which is also the sole camelCase mapper at the
-wire boundary for its own namespace.
+`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, `mcp` — the external
+tool servers of step 7 — and `automations`, the rows step 8 authors for the OS to
+run), each of which is also the sole camelCase mapper at the wire boundary for its
+own namespace.
 
 ```mermaid
 flowchart LR

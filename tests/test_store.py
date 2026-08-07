@@ -741,13 +741,26 @@ def _seed_config(store: Store) -> None:
     # Step 7 phase 1: an MCP server row is reversible config, so it is captured
     # like the rest. Seeded here so the round-trip tests below carry one.
     store.insert_mcp_server(id="m1", name="Design docs", url="https://mcp.example/sse", created_at=10)
+    # Step 8 phase 1: an automation row is reversible config too, and carries no armed
+    # state for a restore to resurrect (docs/step-8-automation-plan.md §5.6).
+    store.insert_automation(
+        id="a1",
+        name="Tidy up downloads",
+        label="com.addison.auto.tidy-downloads",
+        command="/usr/bin/true",
+        schedule_kind="interval",
+        schedule_json='{"minutes": 60}',
+        created_in_mode="open",
+        created_at=11,
+    )
 
 
 def test_read_config_state_captures_exactly_the_declared_tables(store: Store):
     _seed_config(store)
     state = store.read_config_state()
     assert set(state) == {
-        "app_settings", "provider_config", "skills", "widgets", "routines", "mcp_servers"
+        "app_settings", "provider_config", "skills", "widgets", "routines", "mcp_servers",
+        "automations",
     }
     assert state["skills"][0]["name"] == "Be brief"
     assert set(state["skills"][0]) == {

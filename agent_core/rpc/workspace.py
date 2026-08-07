@@ -26,7 +26,12 @@ from __future__ import annotations
 import os
 import time
 
-from agent_core.policy import path_is_within, workspace_trust_allows
+from agent_core.policy import (
+    TRUST_REFUSAL_AUTOMATION,
+    path_is_within,
+    trust_refusal,
+    workspace_trust_allows,
+)
 from agent_core.rpc.base import ServerContext
 from agent_core.tools.base import call_is_forbidden
 
@@ -34,6 +39,16 @@ from agent_core.tools.base import call_is_forbidden
 _GRANT_DATA_DIR_REFUSAL = (
     "That folder holds Addison's own memory, so Addison always asks there. "
     "Pick a project folder instead."
+)
+# The step-8 fence's own sentence (plan §5.5). One sentence for both refusals was
+# the first draft, and it told a person picking ~/Library/LaunchAgents that the
+# folder holds Addison's memory — false, and a false reason teaches people that
+# refusals are boilerplate. ``policy.trust_refusal`` says which group refused;
+# ``~`` still gets the memory sentence (protected wins on a path that offends
+# both), so no previously-refused folder changed its wording.
+_GRANT_AUTOMATION_DIR_REFUSAL = (
+    "That folder is where this computer keeps jobs it runs on a schedule, so "
+    "Addison never trusts it. Pick a project folder instead."
 )
 _GRANT_NOT_A_FOLDER = "That folder isn't there, so Addison can't trust it."
 _GRANT_NEEDS_ABSOLUTE = "Addison needs the full path to a folder to trust it."
@@ -135,9 +150,14 @@ class WorkspaceMixin(ServerContext):
         if not os.path.isdir(expanded):
             return {"ok": False, "error": _GRANT_NOT_A_FOLDER}
         root = os.path.realpath(expanded)
-        # The floor: Addison's own data dir can never be trusted (§6.6). Same check
-        # the confinement path applies, so grant and touch agree.
-        if not workspace_trust_allows(root, self._data_dir()):
+        # The floor: neither Addison's own data dir (§6.6) nor an OS-automation
+        # directory (step-8 plan §5.5) can ever be trusted. Same predicate the
+        # confinement path applies, so grant and touch agree — asked here through
+        # ``trust_refusal`` only so the sentence can name the true reason.
+        refusal = trust_refusal(root, self._data_dir())
+        if refusal is not None:
+            if refusal == TRUST_REFUSAL_AUTOMATION:
+                return {"ok": False, "error": _GRANT_AUTOMATION_DIR_REFUSAL}
             return {"ok": False, "error": _GRANT_DATA_DIR_REFUSAL}
         # Risky change -> a restore point first, but trust is trivially re-grantable,
         # so a capture failure warns (sticky) rather than refusing the grant.

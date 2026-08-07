@@ -45,8 +45,28 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**One step remains — 8.** `ROADMAP.md` owns status; trust it over this file.
+**One step remains — 8, and its phase 1 of four is BUILT.** `ROADMAP.md` owns
+status; trust it over this file.
 
+- **8 — the automation keyword gate. The plan exists and phase 1 landed 2026-08-07**
+  ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the phases and the
+  decisions). Syntax was decided by the owner (a per-automation nonce Addison shows
+  and you retype, because a fixed prefix is forgeable by anything that can write
+  English); the plan settles what it gates (ARMING only), what automation IS in v1
+  (launchd user agents, macOS-only arming, typed shell surface that builds its own
+  plist), and what a restore may never do (re-arm — no armed column exists,
+  structurally). **Phase 1 = the fence + the inert table.** The fence closed a live
+  gap found while writing the plan: `~/Library/LaunchAgents` could be TRUSTED as a
+  workspace and a plist written behind an ordinary card. Now: the trust floor
+  refuses all eleven `OS_AUTOMATION_DIRS` both directions at grant and authorize
+  time, the denylist refuses commands naming them plus the four arming binaries as
+  a first word, and the seatbelt write-denies them shell-side (own copy of the
+  list, lockstep-tested against the Python one by reading the Rust source).
+  **Next: phase 2 (authoring — `create_automation` dev-only tool, plist + plain
+  schedule as pure functions, drafts on a Settings surface) then phase 3 (the nonce
+  card + arming through a typed shell surface) then phase 4 (state honesty +
+  Simple's disabled rows).** Read the plan's §5 before phase 2; §5.8's shell
+  contract (typed fields, never XML) is the piece most tempting to shortcut.
 - **7 — MCP client. DONE FOR v1: phases 1–4 of five, 2026-08-06 to 2026-08-07.**
   Transport was decided by the owner on 2026-08-06: **HTTP only for v1**, which is
   what keeps the client in the Agent Core and adds no new highest-trust surface.
@@ -59,10 +79,6 @@ Two things it cannot check, both learned the hard way the same day:
   plan's §4.2 scoping decisions first (no auth, on-demand only, catalog in memory):
   each is a thing the next phase may want and must decide again rather than inherit.
   Plan: [`step-7-mcp-plan.md`](step-7-mcp-plan.md).
-- **8 — the automation keyword gate.** Syntax decided (a per-automation nonce Addison
-  shows and you retype, chosen because a fixed prefix is forgeable by anything that
-  can write English). Nothing built. Until it exists, nothing in the tree can author
-  or arm automation, so G2 holds trivially.
 
 **The keychain thread is half done.** Plan steps 1–2 and §5.2/§5.3 shipped; steps 3–5
 (`Intent`, launch reconciliation, the shipped read counter, the cards) have not.
@@ -79,8 +95,18 @@ contents become the skill's guidance text — editable, previewed, size-limited)
 ## What changed on 2026-08-07, in one paragraph each
 
 Four PRs merged (#60–#63), then a review of all four found about twenty-five real
-defects and they were fixed the same day. `BUILD-LOG.md` owns the findings; these are
+defects and they were fixed the same day, and then the step-8 plan was written and
+its phase 1 built. `BUILD-LOG.md` owns the findings; these are
 the ones that change how you should read the tree.
+
+- **Step 8 has a plan and a landed phase 1** — see "Next up" above for the whole
+  shape. What changes how you read the tree: `~/Library`, `~/.config` and the
+  eleven OS-automation directories are no longer trustable workspaces, commands
+  naming them (or invoking `launchctl`/`crontab`/`at`/`batch` as a first word) are
+  refused pre-gate with their own sentence, `policy.trust_refusal` is the
+  reason-reporting form of `workspace_trust_allows`, and an `automations` table
+  exists that nothing can fill — no add RPC, no tool, no armed column — by design
+  until phases 2 and 3.
 
 - **Step 7 is COMPLETE for v1.** Phases 2, 3 and 4 all landed: a tool server's tools
   are discovered, callable through the ordinary gate, and what one answers is
@@ -128,10 +154,12 @@ committed and pushed; `master` is clean.
   list; `tests/doc_claims.py` is a registry of load-bearing facts, one row each, with
   a test that names the file and line of any document contradicting one.
 
-## Branch and PR state (verified 2026-08-07)
+## Branch and PR state (verified 2026-08-07, end of day)
 
-**No open pull requests. `master` carries everything through #63**, committed and
-pushed — work from it. **Re-read this section immediately after any merge:** it was
+**One PR open when this was written: step 8 phase 1 (branch
+`claude/app-development-16ba87` — the plan doc, the fence, the table; this file
+ships in it). `master` carries everything through #64.** **Re-read this section
+immediately after any merge:** it was
 false for ninety minutes on 2026-07-26 because a merge falsified six passages without
 touching the file that contained them, and no gate catches that.
 

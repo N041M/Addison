@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from agent_core.policy import (
+    DENIED_ARMING,
     DENIED_CONTAINS,
     PolicyMode,
     _derived_data_dir,
@@ -324,21 +325,37 @@ UNRESOLVABLE_PATH = "\x00unresolvable"
 
 
 # What the person (and the model) is told when the denylist refuses a call. Plain
-# language, and both say the thing that matters first: nothing ran. Neither is
+# language, and each says the thing that matters first: nothing ran. None is
 # phrased as a permission problem — there is no card behind it to approve.
 #
-# TWO messages, because the two directions are not equally recoverable. A CONTAINS
-# refusal has an obvious next move and the sentence hands it over, so the model
-# corrects in one turn instead of reporting the whole task as blocked. One shared
-# message made every ``ls ~`` look like a dead end.
+# THREE messages, because the three refusals are not equally recoverable and do not
+# have the same cause. A CONTAINS refusal has an obvious next move and the sentence
+# hands it over, so the model corrects in one turn instead of reporting the whole
+# task as blocked; one shared message made every ``ls ~`` look like a dead end.
+#
+# INSIDE's third clause ("the jobs it runs on a schedule") is not decoration: step 8
+# phase 1 put the OS-automation directories on ``policy.denylisted_roots``, so this
+# sentence is what a person sees for ``cat ~/Library/LaunchAgents/x.plist``, and
+# without the clause it would name two folders that have nothing to do with it.
 FORBIDDEN_CALL_INSIDE = (
     "That reaches into a folder Addison never lets a command touch — its own "
-    "restore points, or where your keys and passwords are kept. Nothing was run."
+    "restore points, where your keys and passwords are kept, or where the "
+    "computer keeps the jobs it runs on a schedule. Nothing was run."
 )
 FORBIDDEN_CALL_CONTAINS = (
     "That names a folder that holds Addison's own restore points, so Addison "
     "won't run a command across the whole of it. Nothing was run. Name the "
     "folder inside it that you actually mean."
+)
+# The third one, and it is not a path refusal at all: the command runs a program
+# that hands work to the OS to repeat later (step-8 plan §5.5). It says the plain
+# truth — this is not built yet — and hands over the one thing that does work
+# today, because a refusal with no next move is a dead end the model reports as a
+# blocked task. No jargon: not "arming", not "launchd", not "denylist".
+FORBIDDEN_CALL_ARMING = (
+    "That command would set something up to run on a schedule of its own, and "
+    "Addison can't do that yet — it's planned. Nothing was run. If you need it "
+    "now, you can run that command yourself in your own terminal."
 )
 
 
@@ -370,6 +387,12 @@ def call_is_forbidden(tool: Any, args: dict, data_dir: str) -> str | None:
     command widget's Run pill — because a boundary that only one of them enforces
     is not a boundary (SAFE invariant 3's reasoning, applied to containment).
 
+    Three refusals, one predicate: a path INSIDE a denylisted root, a path that
+    CONTAINS one, and — since step 8 phase 1 — a command that RUNS one of the
+    programs which hand work to the OS to repeat later. The third arrives through
+    the same ``command_denied_path`` call, so every site inherits it with no new
+    plumbing; only the sentence differs (``FORBIDDEN_CALL_ARMING``).
+
     ONE source, and it is not a parser: a tool that declares the raw text it would
     hand to a shell, via an optional ``command_text(args) -> str | None``.
     ``run_command`` is the only one today, and it is the reason this function
@@ -398,6 +421,8 @@ def call_is_forbidden(tool: Any, args: dict, data_dir: str) -> str | None:
             denial = command_denied_path(str(command), data_dir)
             if denial is not None:
                 _, direction = denial
+                if direction == DENIED_ARMING:
+                    return FORBIDDEN_CALL_ARMING
                 return (
                     FORBIDDEN_CALL_CONTAINS
                     if direction == DENIED_CONTAINS

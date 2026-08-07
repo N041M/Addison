@@ -162,6 +162,17 @@ erDiagram
         INTEGER enabled
         INTEGER created_at
     }
+    automations {
+        TEXT id PK
+        TEXT name
+        TEXT label "unique; plist filename stem"
+        TEXT command "what the OS would run"
+        TEXT schedule_kind "interval or calendar"
+        TEXT schedule_json "closed fields per kind"
+        TEXT created_in_mode "DISPLAY ONLY"
+        INTEGER created_at
+        INTEGER updated_at
+    }
     app_settings {
         TEXT key PK
         TEXT value
@@ -209,8 +220,11 @@ erDiagram
   confinement never governs it and the caller cannot mark the call trusted, which is
   what keeps a command on whatever the gate's own destructive path is (a card per
   invocation by default; [`SAFETY.md`](SAFETY.md) owns the Custom guards that tune
-  it). Addison's own data directory can never be a trusted root — the
-  floor is `policy.workspace_trust_allows`, applied both at grant time and at
+  it). Addison's own data directory can never be a trusted root, and since step 8
+  phase 1 neither can an OS-automation directory (`policy.OS_AUTOMATION_DIRS` —
+  where a written file IS an armed launchd/cron/systemd job) — the
+  floor is `policy.workspace_trust_allows` (whose reason-reporting form is
+  `trust_refusal`), applied both at grant time and at
   authorize time. **Excluded from every snapshot** on the `tool_grants` precedent:
   trust is standing consent, and a restore that reinstated a revoked trust would be a
   privilege grant delivered by the ungated one-action restore button.
@@ -484,6 +498,46 @@ erDiagram
     and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
     2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
     no-undo one out of it in any case.
+- **automations** *(Phase-2 step 8, phase 1 — **built 2026-08-07**)* — the automation
+  Addison **authors for the OS to run**. Addison never triggers itself (G2): the row
+  describes a `command` and a schedule, and only the operating system ever runs one.
+  A row is a **draft** — phase 1 ships no authoring tool and no arming surface, so
+  nothing in the tree can write one and the table is empty on every install; authoring
+  is phase 2 and arming is phase 3.
+  [`step-8-automation-plan.md`](step-8-automation-plan.md) owns the phase order.
+  - **There is no `armed` column, and its absence is the design** (plan §5.6). Armed
+    truth lives in the OS and is asked for when the surface loads. A stored flag is
+    exactly what a **one-action G3 restore** would put back, and a restore can never
+    perform the typed-keyword ceremony that arming requires — so a restored row
+    claiming "armed" would be either a lie about the OS or an arming nobody consented
+    to. Without the column, a restore, a reinstall, and a plist deleted by hand all
+    converge on the same honest answer with no special case.
+  - **`label` is UNIQUE** because it is the plist filename stem
+    (`com.addison.auto.<slug>`) and two rows sharing one would fight over a single
+    file in `~/Library/LaunchAgents`. The prefix itself is enforced by the **shell** at
+    install time (plan §5.8): the highest-trust process owns that directory and never
+    takes a caller's word for what may go in it.
+  - **The schedule vocabulary is CLOSED** (plan §5.4a): `interval` →
+    `{"minutes": N ≥ 1}` and `calendar` → `{"hour", "minute", "weekday"?}`, both
+    mapping 1:1 onto launchd's `StartInterval` / `StartCalendarInterval`. The CHECK on
+    `schedule_kind` makes a third kind a deliberate migration rather than an insert,
+    and the fields are **projected** against the same vocabulary on the way out
+    (`agent_core/automations.py`), so a hand-edited row cannot put a key of its own on
+    a surface.
+  - **Snapshot-CAPTURED** (`snapshots/scope.py`) on the `mcp_servers` terms: an
+    automation is reversible config, and a saved row grants Addison nothing on this
+    machine, so a restore re-instates a draft rather than a permission or a running
+    job. It also means anything stored here is copied into every later snapshot
+    payload and sidecar in plain text, which is why phase 2's authoring tool checks
+    the stored text for secret shapes at the door.
+  - **Read in every profile.** `automation.list` and `automation.remove` answer in
+    Simple as well as Developer: a saved row is configuration, not a capability, and
+    hiding it on a profile switch is the failure the 2026-08-06 artifact decision
+    reversed — while a removal must never be the thing a switch traps. What needs
+    Developer is the shell command's *execution*, which belongs to the phase-2/3
+    tools' `dev_only` registration and to dispatch — neither exists yet, so today
+    there is no execution path to gate. `created_in_mode` is display-only provenance
+    and must never be read as the enforcement.
 
 ## Widgets and usage tables
 

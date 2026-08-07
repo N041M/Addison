@@ -34,11 +34,14 @@ import pathlib
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import (
+    DENIED_ARMING,
     DENIED_CONTAINS,
     kernel_confines_writes,
     DENIED_INSIDE,
+    OS_AUTOMATION_DIRS,
     PolicyMode,
     _derived_data_dir,
+    command_arms_automation,
     command_denied_path,
     denylisted_roots,
 )
@@ -54,6 +57,7 @@ from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ActionSnapshot,
     ExecutionContext,
+    FORBIDDEN_CALL_ARMING,
     FORBIDDEN_CALL_CONTAINS,
     FORBIDDEN_CALL_INSIDE,
     RiskTier,
@@ -420,6 +424,155 @@ def test_a_long_command_is_scanned_in_full():
 
 
 # ===========================================================================
+# STEP 8 PHASE 1 — the same denylist, grown to cover ARMING
+# ===========================================================================
+# Written here rather than in a new file because it is not a new mechanism: the
+# OS-automation directories join `denylisted_roots` exactly as the credential
+# stores did, and the arming binaries ride the same `command_denied_path` call, so
+# all three dispatch sites above inherit both with no new plumbing.
+#
+# WHY IT IS ON THIS LIST AT ALL (step-8 plan §2/§5.5): a file written into
+# ~/Library/LaunchAgents IS a login-time job the OS will run — outside Addison's
+# sandbox, with Addison closed. Until 2026-08-07 that folder could be trusted as a
+# workspace and written with an ordinary card, which is arming with no keyword
+# gate. The trust half is in test_workspace_trust.py; this is the command half.
+
+_MUST_BE_FORBIDDEN_AUTOMATION = [
+    "cp job.plist ~/Library/LaunchAgents/com.evil.plist",
+    "echo hi > ~/Library/LaunchAgents/x.plist",
+    "cat ~/Library/LaunchAgents/x.plist",          # the accepted cost: reads too
+    "ls ~/Library/LaunchAgents",
+    "cp x /Library/LaunchDaemons/y.plist",
+    "cp x /etc/cron.d/mine",
+    "echo '* * * * * x' > /etc/crontab",           # a FILE root, not a directory
+    "cp unit.service ~/.config/systemd/user/u.service",
+    "cp unit.service /etc/systemd/system/u.service",
+    "rm /var/spool/cron/karel",
+    # QUOTING and GLOBBING, the two one-character evasions this module already
+    # closed for the floor. An automation directory gets the same treatment or the
+    # closure is spelling-deep.
+    'cp x ~/Library/Launch"Agents"/y.plist',
+    "cp x ~/Library/'LaunchAgents'/y.plist",
+    "cp x ~/Library/LaunchAgent*/y.plist",
+    "cp x ~/Library/LaunchAgent?/y.plist",
+    "cp x ~/Library/LaunchAgent[s]/y.plist",
+    # Separators, as elsewhere: the second command is scanned too.
+    "ls && cp x ~/Library/LaunchAgents/y.plist",
+    "ls\ncp x ~/Library/LaunchAgents/y.plist",
+]
+
+# The arming programs. Refused for what they RUN, not for what they name — so the
+# refusal has to survive an absolute path, a case change and quotes, and must not
+# fire on a command that merely mentions one.
+_MUST_BE_FORBIDDEN_ARMING = [
+    "crontab -",
+    "crontab -e",
+    "launchctl load ~/x.plist",
+    "at now + 1 minute",
+    "batch",
+    "/usr/bin/crontab -",                          # basename, wherever it lives
+    "CRONTAB -",                                   # case-folded (macOS volume)
+    '"crontab" -',                                 # dequoted, as the shell does
+    "cd /tmp && crontab -",                        # first word of a LATER segment
+    "ls; launchctl list",
+    "ls\nat now",
+    "(crontab -l)",
+    "cat jobs | at now",
+]
+
+_ARMING_MUST_STILL_BE_ALLOWED = [
+    "man crontab",                                 # talking about it, not running it
+    "echo launchctl",
+    "grep -rn crontab docs/",
+    "ls > batch",                                  # a redirect names a FILE
+    "echo x > ./out/at",
+    "git commit -m 'switch the batch size'",
+]
+
+
+def test_an_os_automation_directory_is_refused_like_a_credential_store():
+    """Through the same public entry the rest of the denylist is tested through.
+
+    ``cat ~/Library/LaunchAgents/x.plist`` being refused is a KNOWN AND ACCEPTED
+    cost, asserted here so it is a decision rather than a surprise: this string
+    cannot tell a read from a write, and the seatbelt — which can — denies only
+    writes there."""
+    tool = RunCommandTool()
+    for command in _MUST_BE_FORBIDDEN_AUTOMATION:
+        assert _forbidden(tool, {"command": command}) == FORBIDDEN_CALL_INSIDE, command
+    # ...and the sentence they get has to be TRUE of this group. It named two kinds
+    # of folder (restore points, credential stores) until this list grew a third.
+    assert "on a schedule" in FORBIDDEN_CALL_INSIDE
+
+
+def test_the_denylist_covers_every_os_automation_directory():
+    roots = [os.path.normcase(os.path.realpath(r)) for r in denylisted_roots(DATA_DIR)]
+    for entry in OS_AUTOMATION_DIRS:
+        expected = os.path.normcase(os.path.realpath(os.path.expanduser(entry)))
+        assert expected in roots, entry
+    # The SET, spelled out, because every other assertion in this file iterates
+    # OS_AUTOMATION_DIRS — so deleting a row from the tuple would make them all pass
+    # on a shorter fence. This is the only test that notices. A legitimate ADDITION
+    # fails here too, and should: the list is closed, and growing it is a decision.
+    assert set(OS_AUTOMATION_DIRS) == {
+        "~/Library/LaunchAgents", "~/Library/LaunchDaemons",
+        "/Library/LaunchAgents", "/Library/LaunchDaemons",
+        "/etc/cron.d", "/etc/crontab", "/var/spool/cron", "/var/at",
+        "/usr/lib/cron", "/etc/systemd/system", "~/.config/systemd",
+    }
+
+
+def test_an_automation_root_is_refused_inside_but_never_contains():
+    """The asymmetry, pinned in both directions, because it is the one part of this
+    fence that had to be reasoned about rather than copied.
+
+    CONTAINS exists because naming a folder that HOLDS the recovery floor destroys
+    it. Nothing about naming ``~/Library`` arms anything — so asking CONTAINS of an
+    automation root would refuse ``rm -rf ~/*`` and ``ls ~/Library`` wherever the
+    kernel does not confine writes (which is every platform but macOS, including
+    CI). That is an ordinary command, and a guard that refuses ordinary commands is
+    one people route around."""
+    # kernel_confined=False is the strict platform — if CONTAINS were asked of an
+    # automation root anywhere, it would be asked here.
+    for allowed in ("rm -rf ~/*", "ls ~/Library", "ls ~/Library/Preferences"):
+        assert command_denied_path(allowed, DATA_DIR, kernel_confined=False) is None, allowed
+    # ...while reaching INSIDE one is refused on the permissive platform too.
+    inside = "cp x ~/Library/LaunchAgents/y.plist"
+    assert command_denied_path(inside, DATA_DIR, kernel_confined=True) == (
+        "~/Library/LaunchAgents/y.plist", DENIED_INSIDE,
+    )
+
+
+def test_a_command_that_arms_automation_is_refused_whatever_it_names():
+    tool = RunCommandTool()
+    for command in _MUST_BE_FORBIDDEN_ARMING:
+        assert _forbidden(tool, {"command": command}) == FORBIDDEN_CALL_ARMING, command
+        assert _denied(command)[1] == DENIED_ARMING, command
+
+
+def test_talking_about_an_arming_program_is_not_running_one():
+    """The precision half. A guard that refuses ``man crontab`` teaches the model
+    that the whole subject is blocked, and the first thing a person does with a
+    control they cannot approve past is route around it."""
+    tool = RunCommandTool()
+    for command in _ARMING_MUST_STILL_BE_ALLOWED:
+        assert _forbidden(tool, {"command": command}) is None, command
+        assert command_arms_automation(command) is None, command
+
+
+def test_the_arming_refusal_says_what_to_do_instead():
+    """Plain language, and a next move. The honest answer today is that scheduled
+    automation is not built yet — so the sentence says that, and hands over the one
+    thing that does work, rather than reading as a permission problem with a door
+    somewhere."""
+    assert FORBIDDEN_CALL_ARMING not in (FORBIDDEN_CALL_INSIDE, FORBIDDEN_CALL_CONTAINS)
+    assert "Nothing was run" in FORBIDDEN_CALL_ARMING
+    assert "your own terminal" in FORBIDDEN_CALL_ARMING
+    for jargon in ("arm", "launchd", "denylist", "cron", "plist", "sandbox"):
+        assert jargon not in FORBIDDEN_CALL_ARMING.lower(), jargon
+
+
+# ===========================================================================
 # ITEM 3 — at all three dispatch sites, and BEFORE the gate
 # ===========================================================================
 # "Assert PermissionGate.authorize was not called, not merely that the result
@@ -551,6 +704,19 @@ def test_live_loop_is_not_vacuous_an_allowed_command_still_runs():
     result = _run_one_call(registry, gate, {"command": "ls ~/projects"})
     assert result.content == "ran"
     assert tool.ran == [{"command": "ls ~/projects"}]
+
+
+def test_live_loop_refuses_an_arming_command_before_the_gate():
+    """Step 8 phase 1's arming refusal gets the same proof the path refusals get:
+    the person is never shown a door that should not exist. The routine engine and
+    the widget rail need no test of their own for it — the refusal rides the one
+    ``call_is_forbidden`` all three sites already make, and the tests below pin
+    that they all make it."""
+    tool = _RecordingRunCommand()
+    registry = _registry_with(tool)
+    result = _run_one_call(registry, _ExplodingGate(), {"command": "crontab -"})
+    assert result.content == FORBIDDEN_CALL_ARMING
+    assert tool.ran == []
 
 
 def test_a_routine_step_is_refused_before_the_gate(tmp_path):

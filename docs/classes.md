@@ -172,9 +172,12 @@ the binary — owner decision 2026-07-20; see `data-model.md`).
 **Workspace trust is not a class.** It is a two-column table (`workspace_trust`) plus
 two pure predicates and an RPC namespace, and it is drawn above only as the row shape
 it actually is. `policy.workspace_trust_allows(path, data_dir)` is the *floor* —
-Addison's own data directory and its sidecar can never be, contain, or be contained by
-a trusted root, checked realpath-and-casefold in **both** directions so neither a
-symlink nor an ancestor gets around it. `rpc/workspace.is_trusted(resolved_path,
+Addison's own data directory and its sidecar, and (since step 8 phase 1) every
+OS-automation directory in `policy.OS_AUTOMATION_DIRS`, can never be, contain, or be
+contained by a trusted root, checked realpath-and-casefold in **both** directions so
+neither a symlink nor an ancestor gets around it. The bool delegates to
+`trust_refusal`, which additionally names WHICH group refused so the grant RPC's
+sentence can be true. `rpc/workspace.is_trusted(resolved_path,
 roots, data_dir)` is the *confinement* predicate: match a granted root **then** apply
 the floor, so a root somehow planted over the data dir still confines nothing. Both
 are store-free by construction — the caller supplies the roots — which is what keeps

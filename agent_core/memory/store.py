@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from agent_core.automations import Automation
 from agent_core.redaction import redact
 from agent_core.secret_presence import SecretPresence
 from agent_core.skills import Skill
@@ -1402,6 +1403,101 @@ class Store:
     def delete_mcp_server(self, server_id: str) -> bool:
         """Forget a server. Returns True if a row was removed."""
         cur = self._conn.execute("DELETE FROM mcp_servers WHERE id = ?", (server_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    # --- automations (step 8 phase 1; what the OS will run, once armed) --------
+    # A row is a DRAFT: nothing in the tree authors one (phase 2) and nothing arms one
+    # (phase 3), so the table stays empty except by hand. CAPTURED by snapshots
+    # (snapshots/scope.py) — reversible config on the mcp_servers terms — which is why
+    # whatever lands here is copied into every later snapshot payload in plain text.
+    #
+    # There is no armed/enabled column to read or write, and no method here invents
+    # one: armed truth lives in the OS (docs/step-8-automation-plan.md §5.6). See the
+    # schema comment for why a stored flag is the one thing a G3 restore must not have.
+
+    def insert_automation(
+        self,
+        *,
+        id: str,
+        name: str,
+        label: str,
+        command: str,
+        schedule_kind: str,
+        schedule_json: str,
+        created_in_mode: str,
+        created_at: int,
+        updated_at: int | None = None,
+    ) -> None:
+        """Save an automation row.
+
+        Raises ``sqlite3.IntegrityError`` on a label already in use (the UNIQUE
+        constraint) or a ``schedule_kind`` outside the closed vocabulary (the CHECK) —
+        the database is the authority for both, and the caller that phase 2 adds turns
+        either into a plain sentence.
+
+        ``updated_at`` defaults to ``created_at``: a row that has never been changed
+        was last changed when it was written, and inventing a different number would
+        be the first lie a later 'edited' badge told."""
+        self._conn.execute(
+            "INSERT INTO automations (id, name, label, command, schedule_kind, "
+            "schedule_json, created_in_mode, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                id,
+                name,
+                label,
+                command,
+                schedule_kind,
+                schedule_json,
+                created_in_mode,
+                created_at,
+                created_at if updated_at is None else updated_at,
+            ),
+        )
+        self._conn.commit()
+
+    def list_automations(self) -> list[Automation]:
+        """Every saved automation, oldest first (the order they were written).
+
+        Dataclasses rather than dicts — the repo convention for a table with a
+        1:1 mirror (``Skill``, ``ConfigSnapshot``) — so a column that is renamed or
+        dropped fails at the boundary instead of at whichever caller happened to read
+        the key."""
+        rows = self._conn.execute(
+            "SELECT id, name, label, command, schedule_kind, schedule_json, "
+            "created_in_mode, created_at, updated_at FROM automations "
+            "ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            Automation(
+                id=row["id"],
+                name=row["name"],
+                label=row["label"],
+                command=row["command"],
+                schedule_kind=row["schedule_kind"],
+                schedule_json=row["schedule_json"],
+                created_in_mode=row["created_in_mode"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+    def get_automation(self, automation_id: str) -> Automation | None:
+        """One automation, or None."""
+        for row in self.list_automations():
+            if row.id == automation_id:
+                return row
+        return None
+
+    def delete_automation(self, automation_id: str) -> bool:
+        """Forget an automation. Returns True if a row was removed.
+
+        Deletes the ROW, which is all this layer has: if a plist was ever installed
+        for it, removing it is the shell's job through the typed surface phase 3 adds.
+        Nothing here can reach ~/Library/LaunchAgents, by construction."""
+        cur = self._conn.execute("DELETE FROM automations WHERE id = ?", (automation_id,))
         self._conn.commit()
         return cur.rowcount > 0
 

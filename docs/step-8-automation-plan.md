@@ -1,6 +1,7 @@
 # Step 8 — OS-run automation and the keyword gate
 
-**Status: NOTHING IS BUILT.** This plan turns the recorded decisions into a build
+**Status: PHASE 1 OF FOUR IS BUILT (2026-08-07, the day this plan was written).
+Phases 2–4 are not started.** This plan turns the recorded decisions into a build
 order and settles the engineering decisions those left open. The principle is the
 scope amendment's §9 sentence, unchanged since 2026-07-20:
 
@@ -98,7 +99,7 @@ the whole truth rather than a summary.
 
 ## 4. Build order — each phase lands green and is independently useful
 
-1. **The fence + the table. Nothing authors, nothing arms.**
+1. **The fence + the table. Nothing authors, nothing arms — BUILT 2026-08-07.**
    - Close the generic paths (§5.5): the OS-automation directories join the
      un-trustable set at grant time, `denylisted_roots` grows them so a command
      *naming* one is refused pre-gate, the arming binaries (`launchctl`,
@@ -117,6 +118,67 @@ the whole truth rather than a summary.
      trapped). No add surface yet; the table stays empty except by hand.
    - Independently useful because the fence corrects a live gap whether or not
      the rest of the step ever lands.
+
+   **What shipped, and the six decisions taken while building** (each stated at
+   the code as well; tests named here are the mutation-proven anchors):
+
+   - **The fence, all three consumers.** `policy.OS_AUTOMATION_DIRS` (eleven
+     entries — launchd's four, cron's five, systemd's two; `/etc/crontab` is a
+     FILE and rides the directory logic unchanged, since every comparison is
+     "equal to or under"). Consumed by the trust floor (`workspace_trust_allows`,
+     both directions, grant AND authorize time — so a pre-fence trust row over an
+     automation dir stopped confining anything the moment this landed, and no
+     migration was needed), by `denylisted_roots`, and by the seatbelt
+     (`exec.rs`, which derives its OWN copy of the list rather than receive it
+     over IPC — the floor must not depend on the core's honesty). The two copies
+     are pinned entry-for-entry, order included, by
+     `test_g2_the_fence_list_is_in_lockstep_with_the_shell`, which reads the Rust
+     source.
+   - **The denylist treats automation roots as INSIDE-only.** CONTAINS exists
+     because naming a folder that HOLDS the recovery floor destroys it; nothing
+     about naming `~/Library` arms anything, and asking CONTAINS here would
+     refuse `rm -rf ~/*` on every platform the kernel does not confine — the
+     false positive that gets a guard switched off. Cost accepted the other way:
+     `cat ~/Library/LaunchAgents/x.plist` is refused, because this layer cannot
+     tell read from write; the seatbelt, which can, denies only writes.
+   - **The arming-binary refusal is segment-aware and answered first.**
+     `command_arms_automation` matches the FIRST word of each shell segment
+     (basename, case-folded, dequoted), so `cd /tmp && crontab -` is refused and
+     `man crontab` is not; redirects are not segment starts (`echo x > ./out/at`
+     is not running `at`). It is answered before path offences so the refusal
+     sentence talks about scheduling, not folders. Wrappers (`sudo crontab`,
+     `env X=1 crontab`) are conceded — backstop against the obvious, stated as
+     such; the trust floor is what closes the path that needs no shell.
+   - **The shell extends the collision-drop, not just the deny ordering.**
+     Ordering alone holds only for direct parents (`~/Library`) and fails where
+     an intermediate directory exists (`/var/spool`'s rename hole) — so a trusted
+     root that IS, sits inside, or CONTAINS an automation dir is dropped through
+     the same predicate the data dirs use, and the write-denies are the second
+     layer. A boundary that holds only when you count path components cannot be
+     checked by reading it.
+   - **The trust refusal now names its true reason.** One sentence covered every
+     floor failure, and the fence made it false for the new group — picking
+     `~/Library/LaunchAgents` claimed the folder "holds Addison's own memory".
+     `policy.trust_refusal` is the same single loop with the group reported
+     (`workspace_trust_allows` is its `is None`); the grant RPC answers the
+     fence's own sentence for an automation dir, the memory sentence otherwise,
+     and PROTECTED wins on a path that offends both (`~`), so no
+     previously-refused folder changed its wording. Frozen copy pinned on both
+     sides, core and webview.
+   - **The table has no armed column, structurally.** §5.6 as specified — plus
+     the projection discipline the build added: `schedule_json` reaches the wire
+     only as the closed integer fields of its declared kind
+     (`automations.schedule_fields`), so a hand-edited or restored row cannot
+     push prose or foreign keys onto a surface, and one malformed row costs
+     itself, never the list.
+
+   Tests: `tests/test_automations.py` (the surface, capture, restore, and the
+   structural can't-reach-a-process pins), additions to
+   `tests/test_workspace_trust.py`, `tests/test_step_5_5_containment.py` and
+   `tests/test_g2_no_self_trigger.py` (the fence, both halves, tied to the
+   floor), and `exec.rs`'s four profile tests. Every guard was mutation-proven
+   by all four builders — the coordinator's pass re-verified the fence's and
+   refusal's mutations independently.
 2. **Authoring. Drafts exist; nothing reaches the OS.**
    - `create_automation` — an ordinary registered tool, `dev_only`, that writes
      a row. At the door, the same refusals a command faces at dispatch: the

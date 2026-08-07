@@ -65,6 +65,10 @@ REASONS: dict[str, str] = {
     "workspace_trust": "Before trusting a project folder",  # step 5
     "mcp_connect": "Before adding a tool server",       # step 7 phase 1 (rpc/mcp.py)
     "mcp_disconnect": "Before removing a tool server",  # step 7 phase 1 (rpc/mcp.py)
+    "automation_remove": "Before removing an automation",  # step 8 phase 1 (rpc/automations.py)
+    "automation_create": "Before saving an automation",    # reserved — step 8 phase 2
+    "automation_arm": "Before arming an automation",       # reserved — step 8 phase 3
+    "automation_disarm": "Before disarming an automation", # reserved — step 8 phase 3
     "other": "Before a change",
 }
 

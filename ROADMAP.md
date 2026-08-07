@@ -162,8 +162,19 @@ covered.
    minted fresh for each arming — decided 2026-08-07, and what made a fixed prefix
    the wrong answer is that anything able to write English could tell you to type
    one. The four phases and the decisions around them are in
-   [docs/step-8-automation-plan.md](docs/step-8-automation-plan.md); nothing is
-   built yet.
+   [docs/step-8-automation-plan.md](docs/step-8-automation-plan.md).
+
+   **What phase 1 shipped (2026-08-07):** the fence and the table, with the gate
+   and everything that can arm still to come. Before this, a folder like the one
+   where the Mac keeps its login-time jobs could be trusted like any project
+   folder, and a file written there would have been a job armed with no keyword —
+   found and closed the same day. Addison now refuses to trust those folders, to
+   run commands that reach into them, and to run the four programs whose job is
+   handing work to the OS clock — and the refusal says what is actually going on
+   rather than borrowing the wrong sentence. The table that will hold automations
+   exists and is covered by restore points, deliberately with no way to add a row
+   and no memory of "armed": what is armed is the OS's truth, so a restore can
+   never re-arm anything by putting a database row back.
 
 After that comes Phase 3: packaging, signing, notarisation, the auto updater, going
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
