@@ -106,11 +106,16 @@ class Method:
     WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
     WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
     WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
-    # External MCP servers Addison consumes as a CLIENT (step 7 phases 1–2; spec
-    # §4.12). Phase 2 can SEE what a server offers and still cannot use it: a
-    # discovered tool is registered namespaced (`mcp:<server>:<tool>`) and dev-only,
-    # kept OUT of the tool list the model is offered, and refused at both dispatch
-    # sites. Transport is HTTP ONLY for v1 (owner decision 2026-08-06), so `url` is
+    # External MCP servers Addison consumes as a CLIENT (step 7 phases 1–4; spec
+    # §4.12). A discovered tool is registered namespaced (`mcp:<server>:<tool>`) and
+    # dev-only, so it is absent from the SAFE view and refused outside OPEN at both
+    # dispatch sites; in OPEN it is offered to the model and invoked through the
+    # ordinary gate, reaching it HIGH and destructive — the strongest thing a tool
+    # can arrive as, because a server's own claim about its risk is exactly what
+    # v1 refuses to trust. How often that produces a card is the gate's answer and
+    # the Custom profile can tune it (docs/SAFETY.md owns the guards), so nothing
+    # here promises a frequency (phase 3, 2026-08-07).
+    # Transport is HTTP ONLY for v1 (owner decision 2026-08-06), so `url` is
     # the whole of a server's address and there is NEVER a command: stdio would mean
     # the Agent Core launching an executable outside the seatbelt. No credential
     # rides these payloads and none is stored — a server that wants a sign-in gets
@@ -119,23 +124,30 @@ class Method:
     # configuration is not a capability and a tightening must not be trapped by a
     # profile switch. See docs/step-7-mcp-plan.md.
     #
-    # A row's `status` is one of "never" | "ok" | "failed". The frontend's own type
-    # also carries "checking" for the moment a refresh is in flight; the CORE never
-    # emits it, because `mcp.list` and `mcp.refresh` run on the same worker thread —
-    # a list request queues behind the refresh and could not observe it. Inventing a
-    # core-side value nothing can read would be machinery defending nothing.
+    # A row's `status` is one of "never" | "ok" | "failed", and the frontend's own
+    # type is that vocabulary exactly. A check IN FLIGHT is deliberately not one of
+    # them, on either side: `mcp.list` and `mcp.refresh` run on the same worker
+    # thread, so a list request queues behind the refresh and could not observe it.
+    # The frontend tracks the row it is waiting on itself, which is a fact about its
+    # own request rather than a state in a payload the core owns.
     MCP_LIST = "mcp.list"        # {} -> {servers: [<row>]}, oldest first
     MCP_ADD = "mcp.add"          # {name, url} -> {ok, server} | {ok:false, error}
     MCP_REMOVE = "mcp.remove"    # {id} -> {ok} | {ok:false, error}
     # {id} -> {ok, server: <row>} | {ok:false, error}. `ok:false` means the check did
-    # not RUN (wrong profile, or a server that is no longer saved); a check that ran
-    # and failed is `ok:true` with status "failed" and one plain sentence in `error`.
+    # not RUN (wrong profile, a server that is no longer saved, or one whose row is
+    # switched off); a check that ran and failed is `ok:true` with status "failed"
+    # and one plain sentence in `error`.
     MCP_REFRESH = "mcp.refresh"
     # <row> = {id, name, url, enabled, addedAt, status,
     #          checkedAt?, toolCount?, tools?: [{name, description}], skipped?, error?}
     # Optional fields are OMITTED, never null: a checkedAt on an unchecked row is a
     # number the app made up. `tools` carries names and descriptions only — cleaned
     # and capped at the mcp_client boundary — and never a server's input schema.
+    # `tools` and `toolCount` describe what is REGISTERED and therefore callable,
+    # not what the server offered: a tool whose namespaced id was already taken is
+    # refused at admission, so it is absent from both and counted in `skipped` with
+    # everything else Addison would not take. A reader can trust that every name in
+    # `tools` is a name dispatch would find.
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

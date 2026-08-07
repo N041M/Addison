@@ -29,7 +29,7 @@ import { Surface, SurfaceRow, SurfaceSection } from "../components/Surface";
 import { PermissionCard } from "../components/PermissionCard";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { ProviderInfo } from "../ipc/client";
-import type { RoleOption, Snapshot, WorkspaceRoot } from "../types/ui";
+import type { McpServer, RoleOption, Snapshot, WorkspaceRoot } from "../types/ui";
 
 afterEach(cleanup);
 
@@ -44,6 +44,14 @@ const LOCAL_ROLE: RoleOption[] = [
   { role: "local", label: "On this computer", configured: true, models: [{ id: "llama", label: "Balanced" }] },
 ];
 const ROOTS: WorkspaceRoot[] = [{ directory: "/Users/someone/project", grantedAt: 1_700_000_000 }];
+const SERVER: McpServer = {
+  id: "m1",
+  name: "Notes",
+  url: "https://notes.example",
+  enabled: true,
+  status: "ok",
+  tools: [{ name: "search_notes", description: "Find a note." }],
+};
 
 function renderTools(over: Partial<Parameters<typeof ToolsSurface>[0]> = {}) {
   const onStopTrusting = vi.fn();
@@ -97,6 +105,17 @@ describe("the Tools surface", () => {
     cleanup();
     renderTools({ trustedRoots: ROOTS, showTrustedFolders: true });
     expect(screen.getByText("/Users/someone/project")).toBeTruthy();
+  });
+
+  it("counts a tool server among the things it can reach", () => {
+    // "Connected" is a claim about the whole page, and a Developer who had added
+    // a server before any provider key read "Nothing yet" directly above that
+    // server's own discovered tools.
+    renderTools({ providers: [], showTrustedFolders: true, mcpServers: [SERVER] });
+    expect(
+      screen.queryByText("Nothing yet — Addison can only reach what you connect below."),
+    ).toBeNull();
+    expect(screen.getByText("search_notes")).toBeTruthy();
   });
 
   it("revokes the folder it names", () => {
@@ -237,7 +256,9 @@ describe("the model popup", () => {
     render(
       <ModelPopup anchor={{ x: 900, y: 400 }} options={POPUP_OPTIONS} onClose={vi.fn()} />,
     );
-    const panel = screen.getByRole("tree");
+    // The tree holds the rows; the panel around it holds the position, the
+    // scrollport and the footer line.
+    const panel = screen.getByRole("tree").parentElement as HTMLElement;
     // x = right − 250, still closed-form. The vertical placement is not: it is
     // the click point less the selected row's MEASURED centre inside the panel,
     // because headings and folded rows sit between the two. jsdom lays nothing
@@ -259,7 +280,7 @@ describe("the model popup", () => {
         onClose={vi.fn()}
       />,
     );
-    const panel = screen.getByRole("tree");
+    const panel = screen.getByRole("tree").parentElement as HTMLElement;
     expect(panel.style.left).toBe("12px");
     expect(panel.style.top).toBe("12px");
   });

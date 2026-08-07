@@ -40,7 +40,7 @@ from agent_core.tools.base import (
     call_permission_detail,
     default_forbidden_check,
 )
-from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
 
 # Confinement refusal (step 5, D3). A path-bounded tool whose resolved path is not
 # inside a currently-trusted root is hard-refused BEFORE execute — permission-to-
@@ -677,7 +677,29 @@ class Orchestrator:
                 )
                 continue
             calls_made += 1
-            tool = self.tool_registry.get(call.tool_id)
+            # AN ID NOTHING IS REGISTERED UNDER, refused rather than raised. A
+            # tool_use can name a tool that existed when the model last saw the
+            # list: every `mcp:` id leaves the registry on a refresh, a removal, a
+            # failed check or a snapshot restore, and the transcript it was used in
+            # survives all four. Crashing here is the one failure this whole path is
+            # built to avoid — a tool_use with no tool_result, which the provider
+            # rejects on every later request of the session (see the granted branch
+            # below) — so an unknown id takes the same shape as every other refusal.
+            #
+            # `detail` is None and `destructive` False because there is no tool to
+            # ask either question of: nothing about this call was examined and
+            # nothing ran. The outcome is `not_callable`, the vocabulary's value for
+            # "named a tool with no dispatch behind it", which an id belonging to
+            # nothing also is.
+            tool = self.tool_registry.find(call.tool_id)
+            if tool is None:
+                self._audit(
+                    conversation, call.tool_id, None, mode, False, "not_callable"
+                )
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=UNKNOWN_TOOL_REFUSAL)
+                )
+                continue
             # SAFE-1 at dispatch: visible_tools hides dev-only tools from the model,
             # but a tool_use naming a hidden id still reaches here, and the gate does
             # not check dev-ness. Refuse BEFORE the gate and before execute, so the

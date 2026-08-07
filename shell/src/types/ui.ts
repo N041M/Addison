@@ -135,9 +135,14 @@ export interface CloudModel {
   provider?: string;
   providerLabel?: string;
   /**
-   * Set when the CORE has watched this provider refuse this model — a
-   * `model_gone` row in `provider_attempts`, i.e. observed rather than guessed.
-   * The picker dims the row and sinks it to the end of its company; it stays
+   * The provider's own reason, set when the CORE has watched it refuse this
+   * model — a `model_gone` row in `provider_attempts`, i.e. observed rather than
+   * guessed. The picker dims the row, strikes the name through and prints this
+   * sentence under it, because "unavailable" on its own tells a person nothing
+   * they can act on.
+   *
+   * The core sinks the row to the end of its COMPANY; inside the folder tree
+   * that lands it at the end of its FAMILY — last thing met either way. It stays
    * PICKABLE, because a refusal could have been a bad afternoon and a model that
    * quietly vanished would be a worse mystery than one visibly out of order.
    */
@@ -574,17 +579,22 @@ export interface WorkspaceRoot {
 // ---------------------------------------------------------------------------
 
 /**
- * Where a server stands.
+ * Where a server stands, as the CORE reports it — the whole vocabulary, with no
+ * frontend member.
  *
  * - `never` — nobody has checked it. The honest state for a new row AND after a
  *   restart: the discovered catalog lives in the core's memory and is never
  *   persisted, because a catalog is the server's truth, not Addison's config.
- * - `checking` — a refresh is in flight. **Set by the frontend, never by the
- *   core**: `mcp.list` and `mcp.refresh` answer on the same worker thread, so a
- *   list request queues behind the refresh and could not observe it.
  * - `ok` / `failed` — the last check landed, or didn't (`error` says why).
+ *
+ * A check IN FLIGHT is deliberately not a status: `mcp.list` and `mcp.refresh`
+ * answer on the same worker thread, so a list request queues behind a refresh
+ * and could never observe one. The row that is waiting is the row we asked
+ * about, so the frontend holds that as a set of ids of its own
+ * (`useMcpServers`'s `checking`) rather than writing a state into a payload the
+ * core owns.
  */
-export type McpServerStatus = "never" | "checking" | "ok" | "failed";
+export type McpServerStatus = "never" | "ok" | "failed";
 
 /** One tool a server offered. Name and description only, both already cleaned
  * and length-capped in the core — and both are still a STRANGER'S TEXT, so they
@@ -601,7 +611,13 @@ export interface McpServer {
   name: string;
   /** Its http(s) address. Never a command; nothing here starts a program. */
   url: string;
-  /** Whether Addison would consume it once there is something to consume. */
+  /**
+   * Whether Addison consumes this server at all. Read by the core on both paths
+   * that could reach one — a check, and resolving a tool's address at call time —
+   * and written by nothing: no surface can switch a server off yet, so every row
+   * arrives true. It is carried here so the day a switch exists, the thing it
+   * switches is already honoured rather than newly invented.
+   */
   enabled: boolean;
   /** Unix seconds when it was added, when the core reports it. */
   addedAt?: number;
@@ -609,9 +625,13 @@ export interface McpServer {
   status: McpServerStatus;
   /** Unix seconds of the last check. Absent until there has been one. */
   checkedAt?: number;
-  /** How many tools that check found. Absent unless the check succeeded. */
+  /** How many tools that check REGISTERED — not how many the server offered. A
+   * tool refused at admission (its namespaced id was already taken) is in no
+   * registry and would answer nothing, so it is not counted here and not listed
+   * below; it is in `skipped` instead. Absent unless the check succeeded. */
   toolCount?: number;
-  /** What it found. Empty for every state but `ok`. */
+  /** What it registered. Every name here is one a call would find. Empty for every
+   * state but `ok`. */
   tools: McpDiscoveredTool[];
   /** How many the server offered that Addison would not take — an odd name, a
    * name already in use, or past its cap. A count, never the names. */

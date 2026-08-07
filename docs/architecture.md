@@ -169,8 +169,8 @@ exact same registry and gate as the live loop.
 `JsonRpcServer` lives in `main.py` but its handlers do not: it is composed from the
 mixins in `agent_core/rpc/` — one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
-`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, and `mcp` — step 7's
-configuration-only phase 1), each of which is also the sole camelCase mapper at the
+`snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, and `mcp` — the external
+tool servers of step 7), each of which is also the sole camelCase mapper at the
 wire boundary for its own namespace.
 
 ```mermaid
@@ -196,7 +196,7 @@ flowchart LR
         direction TB
         TR["ToolRegistry<br/>undo check at registration"]
         TR --> Tool["typed tools:<br/>calculator, read_file, save_file, …"]
-        TR --> MCP["McpClient<br/>step 7, not built<br/>(phase 1 shipped config only)"]
+        TR --> MCP["McpTool per discovered tool<br/>step 7 — mcp_catalog registers them,<br/>mcp_client speaks the protocol"]
     end
 
     subgraph providers["providers/"]

@@ -16,18 +16,14 @@
       "addedAt": 4102444801,
       "status": "ok",
       "checkedAt": 4102444800,
-      "toolCount": 2,
+      "toolCount": 1,
       "tools": [
         {
           "name": "search_docs",
           "description": "Search the team's documentation."
-        },
-        {
-          "name": "open_ticket",
-          "description": "Open a support ticket."
         }
       ],
-      "skipped": 1
+      "skipped": 2
     },
     {
       "id": "mcp-fixture-2",

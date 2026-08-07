@@ -12,8 +12,10 @@ room. Saving a server still connects to nothing; only ``mcp.refresh`` does.
 
 So the tests here are as much about what CANNOT happen as about what does:
 
-  (1) a saved server is INERT — nothing new is callable, and the module that owns
-      the surface cannot reach a process, a shell or the tool registry at all;
+  (1) a saved server is INERT — adding one registers nothing, and the module that
+      owns the surface can neither start a process nor IMPORT the tool registry: it
+      is handed the one shared registry and passes it along, and registration lives
+      in ``mcp_catalog``;
   (2) TRANSPORT IS HTTP ONLY (owner decision 2026-08-06) — the database itself
       refuses any other transport, which is why there is no launch command to store;
   (3) the URL is validated where it is STORED, reusing rpc/providers' rules, with
@@ -22,7 +24,9 @@ So the tests here are as much about what CANNOT happen as about what does:
       back (spec §4.12: reversible config);
   (5) the surface is Developer-only — ``mcp.add`` is refused in Simple, while
       ``list`` and ``remove`` stay reachable so a profile switch never traps
-      configuration.
+      configuration;
+  (6) every ``mcp.*`` method is answered ON THE WORKER THREAD, which is what makes
+      runtime registration safe in a registry that takes no lock.
 
 Every test here was mutation-proven: the line it guards was broken and this test
 watched to fail. The mutations are named in the docstrings.
@@ -50,6 +54,7 @@ from tests.conftest import IPC_DB_NAME, _shutdown, build_server
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _MCP_SRC = _REPO_ROOT / "agent_core" / "rpc" / "mcp.py"
+_MAIN_SRC = _REPO_ROOT / "agent_core" / "main.py"
 _SCHEMA_SRC = _REPO_ROOT / "agent_core" / "memory" / "schema.sql"
 
 
@@ -106,8 +111,16 @@ def test_the_mcp_surface_cannot_reach_a_process_a_shell_or_the_registry():
     would put an arbitrary executable outside the seatbelt — so the import graph is
     where that decision is enforced, not a comment.
 
+    The registry half is narrower than "cannot reach it", and says what it means:
+    ``rpc/mcp.py`` is HANDED the one shared registry and passes it to the catalog on
+    four lines, which is the sanctioned shape — what it may not do is import the
+    registry module or take a tool in or out itself. Admission and unregistration
+    belong to ``mcp_catalog``, in one place, where the collision rule is.
+
     Mutation: add ``import subprocess`` (or an ``agent_core.tools.registry`` import)
-    to rpc/mcp.py — this fails, naming the module."""
+    to rpc/mcp.py — this fails, naming the module. Or call
+    ``self.tool_registry.unregister(...)`` from ``_mcp_remove`` instead of going
+    through the catalog — the attribute check fails."""
     tree = ast.parse(_MCP_SRC.read_text(encoding="utf-8"))
     forbidden_roots = {
         "subprocess", "os", "shutil", "socket", "asyncio", "threading", "signal", "httpx",
@@ -128,7 +141,9 @@ def test_the_mcp_surface_cannot_reach_a_process_a_shell_or_the_registry():
                 "crosses the shell bridge"
             )
         elif isinstance(node, ast.Attribute):
-            assert node.attr not in {"Popen", "run_command", "system", "spawn", "register"}
+            assert node.attr not in {
+                "Popen", "run_command", "system", "spawn", "register", "unregister",
+            }
 
 
 def test_a_server_row_has_no_column_that_could_hold_a_command(store: Store):
@@ -181,6 +196,10 @@ def test_a_stored_row_defaults_to_http_and_enabled(store: Store):
         "http://127.0.0.1:9000",
         "http://[::1]:9000",
         "http://myserver.localhost:9000",
+        # IPv4-MAPPED: a way of writing 127.0.0.1, not an address of its own. It is
+        # the one form unwrapped before the loopback check, and it belongs here so
+        # that removing the unwrap costs a test rather than being invisible.
+        "http://[::ffff:127.0.0.1]:9000",
     ],
 )
 def test_addresses_that_are_fine(url: str):
@@ -195,6 +214,13 @@ def test_addresses_that_are_fine(url: str):
         ("http://tools.example/mcp", _NEEDS_HTTPS),
         ("http://192.168.1.5:9000", _NEEDS_HTTPS),      # LAN is not loopback
         ("http://notlocalhost.example", _NEEDS_HTTPS),
+        # 6to4 (2002::/16) is a globally-routed prefix, whatever IPv4 address it
+        # encodes — the first of these decodes to 127.0.0.1 and the second to a
+        # public address, and NEITHER is this computer. Unwrapping them here would
+        # be the same line ``net_vetting`` uses to make its check stricter, doing
+        # the opposite job: widening the one exception that permits plaintext.
+        ("http://[2002:7f00:1::1]:9000/mcp", _NEEDS_HTTPS),
+        ("http://[2002:c000:204::1]:9000", _NEEDS_HTTPS),
         # ...and everything rpc/providers already refuses, inherited whole (G1):
         ("https://user:sk-live-abc@tools.example/mcp", _CREDENTIAL_IN_URL),
         ("https://tools.example/mcp?token=abc", _EXTRA_IN_URL),
@@ -350,8 +376,11 @@ def test_switching_back_to_simple_never_hides_or_traps_what_was_saved(tmp_path):
     configuration when they switch profile is what that decision reversed, and a
     tightening (removal) must never be the thing a profile switch traps.
 
-    These rows are inert, so listing them grants nothing — the enforcement that
-    matters is ``add`` above, plus the fact that nothing is callable at all."""
+    A listed row grants nothing by being listed: it is an address and a name. The
+    enforcement is ``add`` above, and — since phase 3 made a discovered tool
+    genuinely callable — the registration itself, which is ``dev_only`` and so
+    absent from the SAFE view and refused at dispatch outside OPEN
+    (tests/test_mcp_discovery.py section 4 owns that half)."""
     h = build_server(tmp_path, register_tool=False)
     try:
         _developer(h)
@@ -364,6 +393,65 @@ def test_switching_back_to_simple_never_hides_or_traps_what_was_saved(tmp_path):
         assert _call(h, "mcp.list", {}, 5)["servers"] == []
     finally:
         _shutdown(h.reader, h.thread)
+
+
+# ---------------------------------------------------------------------------
+# (6) Every mcp.* method is answered on the worker thread
+# ---------------------------------------------------------------------------
+
+
+def test_no_mcp_method_may_be_answered_inline_on_the_read_loop():
+    """THE INVARIANT UNDER RUNTIME REGISTRATION. ``mcp.refresh`` registers and
+    unregisters tools while the app is running, and ``ToolRegistry`` takes no lock —
+    what makes that safe is that every mutator and every reader is on the ONE
+    ``turn-worker`` thread: turns, routine steps, widget runs and snapshot restores
+    are worker jobs, so a refresh can never interleave with a dispatch that is
+    walking the registry.
+
+    ``main.py`` already answers some methods INLINE on the read loop
+    (``permission.respond``, ``model.setRoleForNextMessage``), which is exactly how
+    a later ``mcp.setEnabled`` would get there by imitation — and it would break the
+    confinement silently, in a way no behavioural test of that handler would show.
+    So the rule is structural: ``main.py`` may name an ``mcp.*`` method in ONE place,
+    the ``_MCP_JOBS`` table that routes it to the queue.
+
+    Mutation: add ``Method.MCP_LIST: self._handle_something`` to the inline table in
+    ``_build_dispatch_table`` — this fails, naming the method."""
+    from agent_core import main as main_module
+    from agent_core.protocol import Method
+
+    named = {
+        name
+        for name, value in vars(Method).items()
+        if isinstance(value, str) and value.startswith("mcp.")
+    }
+    assert named, "no mcp.* methods found in protocol.py — did they move?"
+    # Every one of them is routed to the worker...
+    assert {getattr(Method, name) for name in named} == set(main_module._MCP_JOBS)
+
+    # ...and the source mentions them nowhere else, so none can be re-bound to an
+    # inline handler after the routing loop has run.
+    tree = ast.parse(_MAIN_SRC.read_text(encoding="utf-8"))
+    jobs_table = next(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(getattr(t, "id", None) == "_MCP_JOBS" for t in node.targets)
+    )
+    allowed = {id(node) for node in ast.walk(jobs_table)}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "Method"
+            and node.attr in named
+            and id(node) not in allowed
+        ):
+            raise AssertionError(
+                f"main.py names Method.{node.attr} at line {node.lineno}, outside "
+                "_MCP_JOBS: an mcp.* method answered anywhere but the worker queue "
+                "breaks the tool registry's thread confinement (tools/registry.py)"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -15,8 +15,8 @@
 > workspace-trust half of **flow 12** (step 5). Two are still unbuilt and are marked
 > where they appear: the **keyword gate** in flow 12 (step 8), and — inside the now
 > mostly-shipped **flow 13** — the code-backed widget branch. **Flow 15** (MCP, step 7)
-> is unbuilt in its entirety: step 7's phase 1 (2026-08-06) shipped configuration only
-> and touches no part of that flow. The `reason` slugs quoted throughout are entries of the
+> is real code as of 2026-08-07, when phases 1–4 of five landed; the names in it are
+> the ones in the modules. The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
 > around them is not.
 
@@ -616,37 +616,57 @@ sequenceDiagram
 
 ## 15. MCP tool call through the existing gate
 
-**Phase-2 step 7 — this flow is not built.** Phase 1 of five shipped 2026-08-06 and is
-CONFIGURATION ONLY (the `mcp_servers` table and `agent_core/rpc/mcp.py`); no module
-implements an MCP client, so every name below is the target shape, not code.
+**Phase-2 step 7 — BUILT for v1 (phases 1–4 of five, 2026-08-06 to 2026-08-07).** The
+names below are the ones in the modules.
 
 Addison is an MCP **client**, not a server/gateway (amendment §8.5). External MCP tools are
 surfaced through the **existing registry and permission gate** — never a side channel — so
 they are gated, logged, and undo-aware like any tool. **MCP is Developer-only for v1**
-(owner decision 2026-08-06): they run in OPEN under workspace-trust, and **no MCP tool
+(owner decision 2026-08-06): a discovered tool registers `dev_only=True`, so **no MCP tool
 enters the SAFE view at all** — what SAFE would ever admit is deferred rather than
 answered, and invariant 2 keeps a mutating, un-undoable MCP tool out of that view
 automatically whatever is decided ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns this).
 Connecting the server is reversible config (flow 11 plumbing).
+
+The registration is HIGH and **destructive unconditionally**, because a server declares
+its own risk and that is exactly what v1 refuses to trust. That is a claim about what
+reaches the gate, never about how often a person is interrupted: what the gate does with
+a destructive call is the gate's, and the Custom profile's guards can tune it
+([SAFETY.md](SAFETY.md) owns those two guards). On the defaults it is a card per
+invocation, showing which server the tool came from.
 
 ```mermaid
 sequenceDiagram
     participant ORC as Orchestrator
     participant REG as ToolRegistry
     participant PG as PermissionGate
-    participant MC as McpClient
+    participant MT as McpTool
+    participant RPC as McpMixin (rpc/mcp.py)
+    participant MC as mcp_client
     participant SRV as External MCP server
-    participant UM as UndoManager
+    participant ST as Store
 
-    Note over REG: MCP tools registered as ordinary registry entries<br/>dev-only for v1 — never in visible_tools(SAFE)
-    ORC->>REG: resolve(tool_id) for an MCP-backed tool
-    REG-->>ORC: Tool wrapper (mode-filtered)
-    ORC->>PG: authorize(tool_id, mode, destructive, detail)
-    Note over PG: SAFE prompts — OPEN auto-allows non-destructive,<br/>per-invocation card for destructive / powerful (keyword gate)
+    Note over REG: mcp_catalog registers one McpTool per discovered tool,<br/>id mcp:server:tool, dev_only — never in visible_tools(SAFE)
+    ORC->>REG: find(tool_id)
+    REG-->>ORC: McpTool, or None (refused, never raised)
+    ORC->>PG: authorize(tool_id, mode, destructive=True, detail)
     PG-->>ORC: GRANTED
-    ORC->>MC: call(tool_id, args)
-    MC->>SRV: MCP tools/call
-    SRV-->>MC: result
-    MC-->>ORC: ToolResult (with snapshot when it mutated state)
-    ORC->>UM: record(snapshot) when applicable
+    ORC->>MT: execute(args, context)
+    MT->>RPC: address for this server, resolved NOW
+    Note over RPC: a server removed, renamed or switched off<br/>resolves to nothing, and the call never leaves
+    RPC-->>MT: url
+    MT->>MC: call_tool(url, name, args, budget)
+    Note over MC: one call = one session = one budget:<br/>initialize, initialized, tools/call, then the session ends
+    MC->>SRV: tools/call
+    SRV-->>MC: result (text, structuredContent, other parts counted)
+    MC-->>MT: CallResult — nothing cut, text not yet redacted
+    Note over MT: redact, THEN compose_result cuts —<br/>a cut through a credential defeats the redactor
+    MT-->>ORC: ToolResult + redacted_kinds
+    ORC->>ST: tool_audit row (granted / failed / refused, and what was redacted)
 ```
+
+**No `UndoManager` step, and that is not an omission.** An MCP tool registers
+`allow_missing_undo`: it has no `undo()`, which is why it can never be LOW and can never
+reach SAFE. The durable record of what happened is the `tool_audit` row, which is written
+on every outcome including the refusals — a call that was forbidden, one the gate said yes
+to that never landed, and one naming a tool nothing is registered under.

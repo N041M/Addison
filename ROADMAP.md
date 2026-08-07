@@ -1,6 +1,6 @@
 # Roadmap
 
-Where Addison actually is, as of 2026-08-06.
+Where Addison actually is, as of 2026-08-07.
 
 This file holds status only, and it is the **only** place that does. The reasoning
 behind any of it lives in [CLAUDE.md](CLAUDE.md), [docs/SAFETY.md](docs/SAFETY.md)
@@ -37,7 +37,9 @@ Then five of the eight steps from the July 2026 scope change:
 
 Also built, outside that sequence: the thread renders as a window of about thirty
 messages instead of the whole conversation, which is what makes a long chat open
-quickly.
+quickly; and the two model pickers are a folder tree — company, then family, then
+model, with one folder open at a time — which is what keeps them a menu now that a
+single connected provider can contribute twenty-two models.
 
 ## Next
 
@@ -124,12 +126,17 @@ covered.
    forgotten when the app closes — so after a restart a server honestly reads "not
    checked yet".
 
-   **What phase 3 shipped:** those tools can now be used — and **Addison asks you
-   before each one, every time.** Approving a tool once never approves it again,
+   **What phase 3 shipped:** those tools can now be used — and **every call is
+   treated as one that cannot be undone**, which in the Developer profile means
+   Addison asks you before each one. Approving a tool once never approves it again,
    because a tool server is somebody else's program and Addison is not in a position
    to know what any of it will do; the card says exactly that, and names the server
-   the tool came from. Anything a server sends back has passwords and keys stripped
-   out of it before a model sees it, is trimmed if it is enormous, and leaves a
+   the tool came from. (The Custom profile's "ask me less often" settings are the one
+   thing that changes how often you see that card, and they change nothing about how
+   a tool server's tool is treated — [docs/SAFETY.md](docs/SAFETY.md) owns those
+   settings.) Anything a server sends back has the passwords and keys Addison
+   recognises stripped out of it before a model sees it, is trimmed if it is
+   enormous, and leaves a
    permanent record of what happened — whether you approved it, whether it ran, and
    whether anything was stripped. A server that goes quiet costs you a wait of a few
    seconds, never the rest of what you were doing, and one you have since removed is
@@ -141,8 +148,8 @@ covered.
    with more than words — pictures, sound, files, and a machine-readable version of
    the same answer — and Addison now says what it got rather than quietly keeping
    the words and dropping the rest. It passes on the words (including words that
-   arrived wrapped in a file) and the machine-readable part, both with passwords and
-   keys stripped out first; it does not pass on pictures, sound or files, because
+   arrived wrapped in a file) and the machine-readable part, both through the same
+   stripping first; it does not pass on pictures, sound or files, because
    they come from a program nobody here has checked and nothing on this side needs
    them. What it left out it says in a line of plain English — *"the tool also
    returned 2 images and 1 file"* — instead of leaving you to wonder. A long answer
@@ -157,7 +164,7 @@ After that comes Phase 3: packaging, signing, notarisation, the auto updater, go
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
 line stub today. There is also an approved plan for a Developer review surface in
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md), which is
-blocked on steps 6, 7 and 8 and has not been started.
+blocked on step 8 alone now that 6 and 7 have landed, and has not been started.
 
 ## Deliberately not being built
 

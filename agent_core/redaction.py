@@ -48,8 +48,22 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 
+#: The longest body a private-key BLOCK rule will span. A 16384-bit RSA key — the
+#: largest anything in ordinary use generates — is under 17 KB once PEM-encoded, so
+#: this is far past any real key and still small enough that scanning one is
+#: bounded work. It is a ceiling on COST, not a judgement about the key: a body
+#: longer than this falls to the truncated-key rule below, which still refuses to
+#: let the bytes through.
+_MAX_PEM_BODY_CHARS = 32768
+
 # Each rule is (name shown in the marker, compiled pattern). Order matters only
 # for overlapping matches, and the patterns are written not to overlap.
+#
+# EVERY PATTERN HERE IS SCANNED OVER TEXT A STRANGER CHOSE, so the cost of a rule
+# on its worst input is part of the rule. `redact` runs on the worker thread — for
+# an MCP answer, after that call's deadline has already passed — so a rule that
+# backtracks quadratically is everything behind it waiting. Each one below either
+# has no way to backtrack or says in its own comment why it cannot.
 #
 # ANCHORING, and why it is not optional: an unanchored `[A-Za-z0-9]{20,}` would
 # eat base64 blobs, git SHAs, minified JS and UUIDs out of ordinary tool output,
@@ -117,17 +131,68 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("bearer token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")),
     # A private key BLOCK, not just its header: matching only the header would
     # leave the key bytes in place, which is worse than not matching at all —
-    # it would look redacted while leaking everything. Non-greedy to the footer,
-    # and DOTALL because the body is multi-line by definition.
+    # it would look redacted while leaking everything. So the rule spans header to
+    # footer, and the body is multi-line by definition.
+    #
+    # THE BODY IS SPELLED OUT RATHER THAN `.*?`, AND THAT IS THE WHOLE POINT OF
+    # THESE LINES. A lazy `.*?` under DOTALL has to scan to the end of the input
+    # from EVERY header that has no footer after it, which is quadratic in the
+    # number of headers — and headers are three dozen characters a server can
+    # repeat. 128 KB of them took 2.42 seconds *(measured 2026-08-07 · one
+    # ``redact`` call over 127980 characters of repeated BEGIN markers, python
+    # 3.12 in agent_core/.venv on the owner's machine)*.
+    #
+    # A PEM body cannot contain `-----`: that run of five dashes is what opens and
+    # closes an armour line, and base64 has no dash in its alphabet. So the body is
+    # "anything that does not start a run of five dashes", which stops the scan
+    # dead at the next marker instead of at the end of the input. A hyphen INSIDE a
+    # line is ordinary body text either way, which is what keeps the `Proc-Type:`
+    # and `DEK-Info:` armour headers of an encrypted key inside the match.
+    #
+    # POSSESSIVE, because a shorter body can never rescue a failed footer — the
+    # footer opens with the five dashes the body just refused to cross — so the
+    # retries a greedy count would make are all provably useless, and making them
+    # is how the cost comes back.
+    #
+    # THE FOOTER COUNTS FIVE-OR-MORE DASHES, AND THAT IS WHAT MAKES THIS RULE
+    # SURVIVE A DIFF. `git diff` prefixes a deleted line with `-`, so a key removed
+    # from a file arrives with SIX dashes on its armour lines — and deleting a
+    # committed key, then reading the diff, is the likeliest way one ever reaches
+    # this function. The body stops dead at that six-dash run, so a footer
+    # demanding exactly five could not start where the body ended: the whole match
+    # failed and dropped through to the truncated rule below, which emitted a
+    # redaction marker followed by the entire key — the "looks redacted while
+    # leaking everything" outcome the paragraph above exists to forbid.
+    #
+    # The HEADER stays a fixed literal, because it is the part tried at every
+    # position in the text and must fail in constant time. A run-counting header
+    # rescans the whole run from each offset inside it, which turns 128 KB of bare
+    # dashes — three keystrokes for a hostile server — into five seconds. The
+    # footer is only ever reached after a header has already matched, so counting
+    # there costs nothing. A diff's leading dash simply sits outside the match.
     (
         "private key",
         re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-            re.DOTALL,
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----"
+            rf"(?:[^-]|-(?!----)){{0,{_MAX_PEM_BODY_CHARS}}}+"
+            r"-{5,}+END [A-Z ]*PRIVATE KEY-{5,}+"
         ),
     ),
-    # A private key that was truncated before its footer still must not pass.
-    ("private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[^-]*")),
+    # A private key that was truncated before its footer still must not pass — and
+    # since the rule above refuses to cross a `-----`, this is also what catches a
+    # key whose body ran past :data:`_MAX_PEM_BODY_CHARS`.
+    #
+    # It spans the same body the block rule does, rather than `[^-]*`, because a
+    # single `-` is ordinary inside a key that has no footer: it opens every line
+    # of a diff, and it sits inside the `Proc-Type:`/`DEK-Info:` armour of an
+    # encrypted one. Stopping at the first hyphen left the marker sitting directly
+    # in front of the bytes it claimed to have removed. Possessive and last in the
+    # rule list: it is greedy with nothing after it to fail against, so it cannot
+    # backtrack, and it stops at the next armour line or at the end of the text.
+    (
+        "private key",
+        re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[^-]|-(?!----))*+"),
+    ),
 )
 
 

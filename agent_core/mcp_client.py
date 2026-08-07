@@ -69,12 +69,14 @@ from __future__ import annotations
 import json
 import re
 import time
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import httpx
 
 from agent_core import net_vetting
+from agent_core.redaction import redact
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
 #
@@ -151,8 +153,10 @@ CALL_BUDGET_SECONDS = 15.0
 #: One socket. Bounded well under the budget so a stalled connection loses a
 #: fraction of the walk rather than all of it.
 _SOCKET_TIMEOUT_SECONDS = 5.0
-#: A tool server is one endpoint the person typed. A same-origin hop (``/mcp`` ->
-#: ``/mcp/``) is ordinary; anything further is refused by ``same_origin_only``.
+#: A tool server is one endpoint the person typed. ``same_origin_only`` refuses a
+#: hop that LEAVES that origin; this is the separate ceiling on how many hops are
+#: followed at all, so a server that redirects ``/mcp`` -> ``/mcp/`` -> ``/mcp//``
+#: for ever runs out of rope here rather than at the budget.
 _MAX_REDIRECTS = 2
 #: Beyond this, a server is not offering a toolbox, it is filling one.
 MAX_TOOLS_PER_SERVER = 100
@@ -161,6 +165,10 @@ MAX_TOOLS_PER_SERVER = 100
 _MAX_PAGES = 10
 #: One JSON-RPC answer. 512 KB is far past any honest tools/list page.
 _MAX_RESPONSE_BYTES = 512 * 1024
+#: How many events of an SSE answer are walked looking for the response. A server
+#: may legitimately send progress or logging notifications ahead of it; a server
+#: may also send nothing else, for as long as the body cap allows.
+_MAX_SSE_EVENTS = 64
 #: Long enough for a real tool id, short enough to read in a row.
 MAX_TOOL_NAME_CHARS = 64
 #: A description is prose for a person and, since phase 3, for a model. Truncated
@@ -180,9 +188,21 @@ MAX_SCHEMA_BYTES = 16 * 1024
 MAX_SCHEMA_DEPTH = 8
 #: What a tool advertises when its own schema was oversized, too deep, or not a
 #: JSON-Schema object at all. THE TOOL IS STILL ADMITTED: a bad schema costs the
-#: model its hints, never the person the tool. Callers copy it — it must not be
-#: handed out as shared mutable state.
+#: model its hints, never the person the tool.
+#:
+#: **Read it, compare against it, never hand it out.** :func:`empty_schema` is
+#: where copies come from, because ``dict(EMPTY_SCHEMA)`` is SHALLOW — every
+#: "copy" made that way shares this one ``properties`` dict, so a caller that
+#: filled in its own arguments would be filling in everybody's.
 EMPTY_SCHEMA: dict = {"type": "object", "properties": {}}
+
+
+def empty_schema() -> dict:
+    """A fresh empty schema, nested dict and all. See :data:`EMPTY_SCHEMA`."""
+    return {"type": "object", "properties": {}}
+
+
+# --- What one result may cost a model's context ------------------------------
 
 #: How much of one tool's answer reaches a model. In CHARACTERS rather than bytes
 #: because this bound is about a model's context, where characters are the unit
@@ -225,12 +245,58 @@ _PLAUSIBLE_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.\-]*")
 #: alternatives: a CSI sequence (``ESC [`` … final byte — colours, cursor moves), an
 #: OSC string (``ESC ]`` … BEL or ``ESC \`` — window titles, and the one that can
 #: carry a URL), and a lone two-character escape. Dropping only the ESC would leave
-#: ``[31m`` sitting in the text as literal noise a model then has to interpret, and
-#: an OSC's payload would survive as prose.
+#: ``[31m`` sitting in the text as literal noise a model then has to interpret.
+#:
+#: **THE OSC TERMINATOR IS OPTIONAL, WHICH IS WHAT MAKES "WHOLE" TRUE.** A server
+#: that opens an OSC string and never closes it is the cheap way to have the
+#: payload survive as prose — exactly the thing this rule exists to stop — so an
+#: unterminated one is taken to the next ESC or BEL, or to the end of the text. It
+#: over-removes a stranger's characters and under-removes none, which is the only
+#: direction this trade may go.
 _ESCAPE_SEQUENCE = re.compile(
     r"\x1b\[[0-?]*[ -/]*[@-~]"
-    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"
     r"|\x1b[@-Z\\-_]"
+)
+
+#: The characters that can sit inside a credential without a reader seeing them.
+#: Every one is invisible or zero-advance where it lands, and none of them is a
+#: character that carries meaning in prose:
+#:
+#:   * everything ``str.isprintable`` refuses — the C0/C1 controls, the format
+#:     characters (U+200B..U+200F, the bidi overrides, the byte-order mark),
+#:     surrogates, unassigned code points, and the exotic spaces;
+#:   * the COMBINING marks (categories Mn and Me), which render on top of the
+#:     character before them and advance the cursor not at all — U+0301 and the
+#:     variation selectors, U+FE0F among them;
+#:   * the code points that are letters or symbols by category and blank by
+#:     appearance: the Hangul fillers, the halfwidth Hangul filler, and the blank
+#:     Braille pattern.
+#:
+#: Written as escapes rather than as the characters themselves, because a source
+#: line nobody can see the contents of is the same problem one directory over.
+_BLANK_CODEPOINTS = frozenset(
+    "\u115f"    # HANGUL CHOSEONG FILLER
+    "\u1160"    # HANGUL JUNGSEONG FILLER
+    "\u3164"    # HANGUL FILLER
+    "\uffa0"    # HALFWIDTH HANGUL FILLER
+    "\u2800"    # BRAILLE PATTERN BLANK
+    "\u180e"    # MONGOLIAN VOWEL SEPARATOR
+)
+
+#: U+200D, the zero-width joiner, which is the one invisible character that is
+#: sometimes load-bearing: it is what makes a family emoji one family rather than
+#: three people. See :func:`clean_result_text` for the rule that keeps both
+#: promises.
+_ZERO_WIDTH_JOINER = "\u200d"
+
+#: What a credential is made of, and therefore what a character has to sit BETWEEN
+#: to be worth removing. ASCII on purpose: every shape ``agent_core.redaction``
+#: knows is ASCII, so restricting the rule to ASCII neighbours is what keeps it off
+#: ordinary Devanagari, Arabic and Hebrew text, where a combining mark between two
+#: letters is the writing system rather than an attack.
+_CREDENTIAL_ALPHABET = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-./+=:"
 )
 
 #: Offered on ``initialize``. The server answers with the version it will speak;
@@ -258,7 +324,7 @@ class DiscoveredTool:
 
     name: str
     description: str
-    schema: dict = field(default_factory=lambda: dict(EMPTY_SCHEMA))
+    schema: dict = field(default_factory=empty_schema)
 
 
 @dataclass(frozen=True)
@@ -266,21 +332,31 @@ class CallResult:
     """What one ``tools/call`` came back with, taken apart but NOT yet shaped for a
     model.
 
-    **Nothing here has crossed the redactor**, which is why this is a bag of parts
+    **``text`` HAS NOT CROSSED THE REDACTOR**, which is why this is a bag of parts
     rather than a finished string: the caller redacts, and only then does
     :func:`compose_result` cut anything. A cut can defeat the redactor, so no cap
-    may be applied before that seam — the same rule ``run_command`` learned, now
-    covering two channels instead of one.
+    may be applied before that seam — the rule ``run_command`` learned.
 
     ``is_error`` is the server's own ``isError`` flag, which is a different fact
     from the call failing — a tool that ran and reported "no such file" answers
     HTTP 200 with a perfectly good JSON-RPC result. A call that never landed raises
     :class:`McpError` instead and never reaches this shape.
 
-    ``structured`` is ``structuredContent`` already serialized compactly and
-    cleaned, or None when the server sent none; ``structured_unreadable`` says a
-    server sent something under that key that is not an object Addison could
-    serialize, which is a different sentence from sending nothing.
+    ``structured`` is ``structuredContent`` already cleaned, REDACTED and serialized
+    compactly, or None when the server sent none; ``structured_kinds`` is what the
+    redactor named while doing it, and ``structured_unreadable`` says a server sent
+    something under that key that is not an object Addison could serialize, which is
+    a different sentence from sending nothing.
+
+    **The two channels cross the redactor in two different places, and that is not
+    an inconsistency.** Text is one string, so redacting it is the caller's line.
+    ``structuredContent`` is a document, and by the time it is one string it has
+    been through a serializer that escapes a NUL into six visible characters and a
+    newline into two — which is enough for every contiguous rule in
+    ``agent_core.redaction`` to miss a credential the text channel catches. So the
+    document's strings are scrubbed where they are still strings
+    (:func:`_structured_answer`), and NO SIZE DECISION is taken there either: the
+    caps still all live after the seam, in :func:`compose_result`.
 
     The four counts are what was NOT carried, per phase 4's first decision:
     disclosure over silent dropping. They are counts and never content — no image
@@ -291,6 +367,7 @@ class CallResult:
     is_error: bool
     structured: str | None = None
     structured_unreadable: bool = False
+    structured_kinds: tuple[str, ...] = ()
     images: int = 0
     sounds: int = 0
     files: int = 0
@@ -301,11 +378,16 @@ class CallResult:
 class Discovery:
     """What one refresh found. ``skipped`` is not decoration: it is how a person
     learns that a server offered something Addison would not hold, without that
-    something reaching a screen."""
+    something reaching a screen.
+
+    The negotiated protocol version is deliberately NOT here. It is settled inside
+    the handshake — an unsupported one fails the refresh closed and a supported one
+    rides on every later request's header — so carrying it out to a caller that has
+    no decision to make with it was a field produced every refresh and read by
+    nothing."""
 
     tools: tuple[DiscoveredTool, ...]
     skipped: int
-    protocol_version: str
 
 
 @dataclass
@@ -329,6 +411,23 @@ def _strip_control(text: str) -> str:
     return " ".join("".join(kept).split())
 
 
+def _is_zero_advance(ch: str) -> bool:
+    """Whether ``ch`` occupies no visible width of its own.
+
+    ``\\n`` and ``\\t`` are excluded deliberately — they are the whitespace an
+    answer's shape is made of, and this function is asked about characters that a
+    reader would not know were there."""
+    if ch in "\n\t":
+        return False
+    if not ch.isprintable():
+        return True
+    if ch.isascii():
+        # No ASCII character is a combining mark or a filler, and the check below
+        # is a table lookup per character over text that can be half a megabyte.
+        return False
+    return ch in _BLANK_CODEPOINTS or unicodedata.category(ch) in ("Mn", "Me")
+
+
 def clean_result_text(text: str) -> str:
     """A tool's answer with terminal escapes and invisible characters taken out,
     and its LINES LEFT ALONE (phase 4, adopted from the §7 re-read).
@@ -350,6 +449,10 @@ def clean_result_text(text: str) -> str:
         the zero-width set, and the byte-order mark. ``str.isprintable`` is False
         for all of them, which is the same test phase 2 applies to a tool's name
         and for the same reason.
+      * **Zero-advance characters that ARE printable**, but only where they are
+        splitting something up: the combining marks (U+0301 and the variation
+        selectors among them) and the blank code points that are letters by
+        category — the Hangul fillers, the Braille blank. See the rule below.
 
     **THIS RUNS BEFORE THE REDACTOR, AND THE ORDER IS LOAD-BEARING.** A credential
     with a zero-width space dropped into the middle of it matches no rule in
@@ -358,12 +461,52 @@ def clean_result_text(text: str) -> str:
     Cleaning first re-joins it, and the redactor then does its job. This is not a
     screen for injected instructions and does not pretend to be one (plan §7);
     it removes characters that mean something to a renderer and nothing to a
-    reader."""
+    reader.
+
+    **THE CONTEXT RULE, AND WHY TWO CHARACTERS NEEDED ONE.** A combining acute is
+    how ``café`` is spelled in decomposed form and also how a key is cut in half;
+    U+200D is how three people become one family emoji and also how a key is cut in
+    half. Removing either everywhere costs a person their own language and their
+    own emoji; keeping either everywhere leaves the redactor blind. So these two
+    classes — the printable zero-advance ones, plus U+200D — are removed ONLY when
+    the nearest visible character on each side is in :data:`_CREDENTIAL_ALPHABET`,
+    which is ASCII by construction. A mark between two Devanagari letters stays, a
+    joiner between two emoji stays, and a mark between ``AKIA`` and the rest of an
+    access key goes. What it costs, stated rather than hidden: a decomposed accent
+    inside an ASCII word (``café`` written as ``cafe``+U+0301, then an ``s``) is
+    removed with the word left readable — the trade this rule is, in the one
+    direction it can fail.
+
+    "The nearest visible character", not "the character next door": two invisible
+    characters in a row would otherwise shield each other, which is one keystroke
+    for a server to arrange."""
     if not text:
         return text
     without_escapes = _ESCAPE_SEQUENCE.sub("", text)
     normalized = without_escapes.replace("\r\n", "\n").replace("\r", "\n")
-    return "".join(ch for ch in normalized if ch.isprintable() or ch in "\n\t")
+    # The nearest visible character AFTER each position, computed once from the
+    # right. Looking it up per character instead would make a run of marks cost
+    # the square of its length, and the run is a stranger's to make as long as it
+    # likes (up to :data:`_MAX_RESPONSE_BYTES`).
+    following: list[str] = [""] * len(normalized)
+    carried = ""
+    for index in range(len(normalized) - 1, -1, -1):
+        following[index] = carried
+        if not _is_zero_advance(normalized[index]):
+            carried = normalized[index]
+    kept: list[str] = []
+    previous = ""
+    for index, ch in enumerate(normalized):
+        if not _is_zero_advance(ch):
+            kept.append(ch)
+            previous = ch
+        elif ch.isprintable() or ch == _ZERO_WIDTH_JOINER:
+            if not (previous in _CREDENTIAL_ALPHABET and following[index] in _CREDENTIAL_ALPHABET):
+                kept.append(ch)
+        # Anything left is neither printable nor the joiner, and goes wherever it
+        # sits — unchanged behaviour, and what the right-to-left override falls
+        # under.
+    return "".join(kept)
 
 
 def _clean_name(value: object) -> str | None:
@@ -434,24 +577,48 @@ def _clean_schema(value: object) -> dict:
     deep enough, and that is a refusal like any other rather than an exception a
     person's turn ends on."""
     if not isinstance(value, dict) or value.get("type") != "object":
-        return dict(EMPTY_SCHEMA)
+        return empty_schema()
     if _too_deep(value, MAX_SCHEMA_DEPTH):
-        return dict(EMPTY_SCHEMA)
+        return empty_schema()
     try:
         encoded = json.dumps(value)
     except (TypeError, ValueError, RecursionError):
-        return dict(EMPTY_SCHEMA)
+        return empty_schema()
     if len(encoded.encode("utf-8")) > MAX_SCHEMA_BYTES:
-        return dict(EMPTY_SCHEMA)
+        return empty_schema()
     return value
 
 
-def _structured_answer(value: object) -> tuple[str | None, bool]:
-    """``structuredContent`` serialized compactly, or the fact that it could not be.
+def _scrub_strings(value: object, kinds: list[str]) -> object:
+    """``value`` with every string in it cleaned and then redacted, in place of the
+    original. Appends what the redactor named to ``kinds``.
 
-    Returns ``(serialized, unreadable)``. **No size decision is taken here** — that
-    belongs after the redactor (:func:`compose_result`), and taking it early is
-    exactly the wrong-order bug this module keeps re-learning.
+    Walks KEYS as well as values: a server chooses its own field names, so
+    ``{"sk-ant-…": true}`` is a credential in a document exactly as
+    ``{"key": "sk-ant-…"}`` is. Two keys that clean down to one string collapse into
+    one entry, which is the correct answer — they were the same key wearing
+    different invisible characters."""
+    if isinstance(value, str):
+        result = redact(clean_result_text(value))
+        kinds.extend(result.kinds)
+        return result.text
+    if isinstance(value, dict):
+        return {
+            _scrub_strings(key, kinds): _scrub_strings(item, kinds)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_strings(item, kinds) for item in value]
+    return value
+
+
+def _structured_answer(value: object) -> tuple[str | None, bool, tuple[str, ...]]:
+    """``structuredContent`` cleaned, redacted and serialized compactly — or the
+    fact that it could not be.
+
+    Returns ``(serialized, unreadable, redacted_kinds)``. **No size decision is
+    taken here** — that belongs after the redactor (:func:`compose_result`), and
+    taking it early is exactly the wrong-order bug this module keeps re-learning.
 
     Three things are settled here and each is a sentence a person could hear:
 
@@ -467,27 +634,39 @@ def _structured_answer(value: object) -> tuple[str | None, bool]:
         ``ValueError``, which is a refusal like any other and never an exception a
         person's turn ends on (``_clean_schema``'s own hard-won list).
 
+    **THE SEAM IS INSIDE THE DOCUMENT, NOT AROUND ITS SERIALIZATION, AND THAT IS
+    THE WHOLE OF WHY THIS FUNCTION REDACTS AT ALL.** Cleaning and redacting the
+    serialized string is what phase 4 did, and it does not work: ``json.dumps``
+    turns a NUL inside a value into the six visible characters ``\\u0000``, so
+    :func:`clean_result_text` — which removes a NUL — never sees one, the key stays
+    split, every contiguous rule in ``agent_core.redaction`` misses it, and the
+    audit row then reports that nothing was redacted. Scrubbing each string BEFORE
+    it is escaped is what makes this channel behave the same way as the text beside
+    it, which is what the two of them being one answer requires.
+
     ``ensure_ascii=False`` keeps the serialization short in characters, which is
     the unit the budget is counted in, and the compact separators drop the
-    whitespace a pretty-printer would charge to a stranger's budget. Whatever
-    invisible characters that leaves inside string values are removed by
-    :func:`clean_result_text`, which cannot break the JSON: everything it takes out
-    is either escaped by the serializer already or is not JSON syntax."""
+    whitespace a pretty-printer would charge to a stranger's budget."""
     if value is None:
-        return None, False
+        return None, False, ()
     if not isinstance(value, dict):
-        return None, True
+        return None, True, ()
     if not value:
-        return None, False
+        return None, False, ()
+    kinds: list[str] = []
     try:
-        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        scrubbed = _scrub_strings(value, kinds)
+        encoded = json.dumps(scrubbed, ensure_ascii=False, separators=(",", ":"))
     except (TypeError, ValueError, RecursionError):
-        return None, True
-    return clean_result_text(encoded), False
+        # Including anything the walk itself hit on a document deep enough. A
+        # refusal like any other; the kinds go with it, because a payload nobody
+        # can serialize is a payload nobody is carrying.
+        return None, True, ()
+    return encoded, False, tuple(kinds)
 
 
-def trim_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
-    """One piece of a tool's answer, cut to ``limit`` with a marker that says how
+def trim_result(text: str, room: int, *, elsewhere_sent: int = 0, elsewhere_shown: int = 0) -> str:
+    """One piece of a tool's answer, cut to ``room`` with a marker that says how
     much there was.
 
     **Never call this on text that has not been redacted yet** (phase-3 decision 2,
@@ -496,13 +675,24 @@ def trim_result(text: str, limit: int = MAX_RESULT_CHARS) -> str:
     credential leaves a head that matches nothing afterwards and travels intact.
     The cut can defeat the redactor, so the redactor goes first.
 
-    ``limit`` is a parameter since phase 4 because the budget is now SHARED: what a
+    ``room`` is a parameter since phase 4 because the budget is now SHARED: what a
     structured answer has already spent is not available to the text beside it.
-    :func:`compose_result` is the only caller that does that arithmetic."""
-    room = max(0, limit)
+    :func:`compose_result` is the only caller that does that arithmetic, which is
+    why there is no default — a default here would read as a supported way in and
+    would silently hand back the whole budget to a second channel's caller.
+
+    ``elsewhere_sent``/``elsewhere_shown`` are the OTHER channel's characters, and
+    they exist because :data:`RESULT_TRIMMED` says "this tool's long answer": the
+    numbers in a sentence about the whole answer have to be the whole answer's, or
+    a model reading "it sent 8000, 8000 are shown" concludes nothing is missing
+    while a structured payload sits in the sentence below it, left out."""
+    room = max(0, room)
     if len(text) <= room:
         return text
-    return text[:room] + RESULT_TRIMMED.format(sent=len(text), shown=room)
+    return text[:room] + RESULT_TRIMMED.format(
+        sent=len(text) + elsewhere_sent,
+        shown=room + elsewhere_shown,
+    )
 
 
 def _fenced(payload: str) -> str:
@@ -558,8 +748,10 @@ def compose_result(
 
     **EVERY STRING PASSED IN MUST ALREADY HAVE CROSSED ``redaction.redact``.** This
     function is where the cuts happen, and a cut can defeat the redactor — see
-    :func:`trim_result`. ``McpTool.execute`` is the one caller and it redacts both
-    channels immediately before calling this; that adjacency is the ordering, and a
+    :func:`trim_result`. ``McpTool.execute`` is the one caller; it redacts the text
+    immediately before calling this, and the structured channel crossed the same
+    redactor inside :func:`_structured_answer`, one string value at a time, because
+    a serializer's escaping hides a split credential from every contiguous rule. A
     test plants a credential straddling each of the two caps below.
 
     The shape, in order:
@@ -577,25 +769,42 @@ def compose_result(
          any of it.
       4. **If neither channel had anything**, :data:`NOTHING_TO_SHOW` — because ""
          reaches a model as a tool that silently did nothing, and that is the one
-         reading of an empty answer that is never true."""
+         reading of an empty answer that is never true.
+
+    Each note is decided on its OWN input rather than in a chain of ``elif``: a
+    caller that passed both a payload and the unreadable flag would otherwise have
+    one of the two dropped in silence, and this function's standard is that its
+    promises hold whatever it is handed — see the ``text.strip()`` note below,
+    which is the same rule applied to the same argument twice over."""
     notes: list[str] = []
     block = ""
     spent = 0
+    offered = 0
     if structured_unreadable:
         notes.append(STRUCTURED_UNREADABLE)
-    elif structured:
-        if len(structured) > MAX_STRUCTURED_CHARS:
+    if structured:
+        offered = len(structured)
+        if offered > MAX_STRUCTURED_CHARS:
             notes.append(STRUCTURED_TOO_BIG)
         else:
             block = _fenced(structured)
-            spent = len(structured)
+            spent = offered
     # ``text.strip()`` rather than ``text``: a server that answers with two spaces
     # has answered with nothing, and a truthiness check would carry the spaces,
     # find the result non-empty, and skip the sentence below — handing a model a
     # tool that appears to have run and said nothing. ``call_tool`` already strips
     # what it collects, so this is the contract of THIS function holding on its own
     # rather than a second defence of the same input.
-    body = trim_result(text, MAX_RESULT_CHARS - spent) if text.strip() else ""
+    body = (
+        trim_result(
+            text,
+            MAX_RESULT_CHARS - spent,
+            elsewhere_sent=offered,
+            elsewhere_shown=spent,
+        )
+        if text.strip()
+        else ""
+    )
     things = _things_dropped(images, sounds, files, other)
     if things:
         notes.append(DROPPED_PARTS.format(things=things))
@@ -606,21 +815,35 @@ def compose_result(
 
 
 def _sse_payload(raw: bytes) -> dict | None:
-    """The one JSON-RPC object out of an ``text/event-stream`` answer.
+    """The RESPONSE out of a ``text/event-stream`` answer, or None.
 
-    A MINIMAL PARSER, NOT A SUBSCRIPTION. Streamable HTTP lets a server answer a
-    POST with SSE instead of JSON; for ``initialize`` and ``tools/list`` that
-    stream carries the single response event and then ends. Everything else in it
-    — comments, event names, retry hints, any later event — is ignored, because
-    subscribing to a server's stream is a capability phase 2 does not have and
-    must not grow by accident."""
-    for block in raw.split(b"\n\n"):
-        data = b"".join(
-            line.split(b":", 1)[1].strip() if b":" in line else b""
+    A MINIMAL PARSER, NOT A SUBSCRIPTION. Streamable HTTP lets a server answer any
+    POST with SSE instead of JSON — ``initialize``, ``tools/list`` and, since phase
+    3, ``tools/call``. Comments, event names and retry hints are ignored, because
+    subscribing to a server's stream is a capability this step does not have and
+    must not grow by accident.
+
+    **A NOTIFICATION IS NOT AN ANSWER, AND SKIPPING PAST ONE IS THE WHOLE JOB.**
+    The protocol lets a server send ``notifications/progress`` or a logging
+    notification on the same stream before the response — a long ``tools/call`` is
+    the case it exists for — so taking the first object that says ``jsonrpc`` meant
+    handing back a progress note, failing the exchange, and telling the person to
+    check an address that was perfectly correct. Events are walked IN ORDER and the
+    first one shaped like a response is returned: it carries an ``id`` and either a
+    ``result`` or an ``error``. Whether that id is the right one is
+    ``_Session._call``'s question, asked in one place for both answer shapes.
+
+    Bounded at :data:`_MAX_SSE_EVENTS`, because "walk until you find a response" is
+    otherwise a server's invitation to send notifications for as long as the body
+    cap allows."""
+    events = raw.replace(b"\r\n", b"\n").split(b"\n\n")
+    for block in events[:_MAX_SSE_EVENTS]:
+        data = b"\n".join(
+            line.split(b":", 1)[1].strip()
             for line in block.splitlines()
             if line.startswith(b"data:")
         )
-        if not data:
+        if not data.strip():
             continue
         try:
             parsed = json.loads(data.decode("utf-8", errors="replace"))
@@ -629,18 +852,33 @@ def _sse_payload(raw: bytes) -> dict | None:
             # document nested deeply enough, and nesting is the cheapest thing a
             # server can send. It is malformed input, not a defect here.
             continue
-        if isinstance(parsed, dict) and "jsonrpc" in parsed:
+        if not isinstance(parsed, dict) or "jsonrpc" not in parsed:
+            continue
+        if parsed.get("id") is None:
+            # A notification. Also what a server's own REQUEST to Addison is not:
+            # that has an id but no result, and falls out on the next line.
+            continue
+        if "result" in parsed or "error" in parsed:
             return parsed
     return None
 
 
-def _read_answer(response: httpx.Response, _logical: str) -> _Answer:
+def _read_answer(response: httpx.Response, _logical: str, *, deadline: float) -> _Answer:
     """Turn one HTTP response into an ``_Answer``, or raise the plain sentence.
 
     Runs INSIDE ``net_vetting``'s stream context, which is why the body is pulled
     chunk by chunk against a cap rather than with ``response.read()``: a server
     that answers with an endless body would otherwise be bounded only by the clock
-    and by memory."""
+    and by memory.
+
+    **THE DEADLINE IS CHECKED PER CHUNK, AND THAT IS WHERE ONE BUDGET STOPS BEING A
+    CLAIM.** Every other bound in this exchange is sampled before a request goes
+    out; a server that ACCEPTS the connection and then dribbles bytes is answering
+    inside every one of them, one byte at a time, resetting the socket timeout with
+    each. A byte every four seconds under a five-second socket timeout is a
+    connection that never times out and never ends. So the budget — the number the
+    module docstring says covers the whole exchange — is enforced here too, on the
+    only loop that can run for hours."""
     status = response.status_code
     if status in (401, 403):
         # Phase 2 carries no credential and has nowhere to put one (see the module
@@ -650,6 +888,8 @@ def _read_answer(response: httpx.Response, _logical: str) -> _Answer:
     chunks: list[bytes] = []
     total = 0
     for chunk in response.iter_bytes():
+        if time.monotonic() >= deadline:
+            raise McpError(TOOK_TOO_LONG)
         total += len(chunk)
         if total > _MAX_RESPONSE_BYTES:
             raise McpError(TOO_MUCH_BACK)
@@ -727,14 +967,20 @@ class _Session:
         return headers
 
     def _post(self, body: dict) -> _Answer:
-        """One JSON-RPC POST through the shared pinned, vetted path."""
+        """One JSON-RPC POST through the shared pinned, vetted path.
+
+        The reader is bound to THIS session's deadline rather than handed a fresh
+        one: the budget belongs to the exchange, and a body read is the last place
+        in it where a server still has the clock."""
         content = json.dumps(body).encode("utf-8")
         try:
             answer = net_vetting.open_vetted(
                 self._client,
                 self._url,
                 resolve=self._resolve,
-                on_final=_read_answer,
+                on_final=lambda response, logical: _read_answer(
+                    response, logical, deadline=self._deadline
+                ),
                 sentences=_SENTENCES,
                 base_headers=self._headers(),
                 # The endpoint policy (rpc/providers' custom-server case): an MCP
@@ -817,13 +1063,22 @@ class _Session:
         Returns the admitted tools and how many were refused at this boundary. The
         cursor walk stops on a repeat as well as on the page ceiling: ``nextCursor``
         is the server's string, so a server that returns the same one forever is a
-        loop Addison has to end itself."""
+        loop Addison has to end itself.
+
+        **A WALK THAT STOPS EARLY COUNTS ITSELF INTO ``skipped``.** That count is
+        what the panel renders as "this server offers more than you see here", and
+        a truncated walk is exactly that case: dropping the remaining pages while
+        reporting 0 would have the surface say "10 tools" about a server offering a
+        hundred, which is the silent dropping every other line in this module
+        refuses. The count becomes a FLOOR rather than a total when it happens —
+        "and at least one more" is the only honest thing a page that was never
+        fetched can be counted as."""
         admitted: list[DiscoveredTool] = []
         seen_names: set[str] = set()
         seen_cursors: set[str] = set()
         skipped = 0
         cursor: str | None = None
-        for _ in range(_MAX_PAGES):
+        for page in range(_MAX_PAGES):
             result = self._call("tools/list", {"cursor": cursor} if cursor else {})
             entries = result.get("tools")
             if not isinstance(entries, list):
@@ -859,7 +1114,13 @@ class _Session:
             next_cursor = result.get("nextCursor")
             if not isinstance(next_cursor, str) or not next_cursor:
                 break
-            if next_cursor in seen_cursors or len(admitted) >= MAX_TOOLS_PER_SERVER:
+            if next_cursor in seen_cursors:
+                # The server is handing back a cursor it has already given. There
+                # is no further page behind it, so nothing was left unseen and
+                # nothing is counted.
+                break
+            if len(admitted) >= MAX_TOOLS_PER_SERVER or page == _MAX_PAGES - 1:
+                skipped += 1
                 break
             seen_cursors.add(next_cursor)
             cursor = next_cursor
@@ -935,7 +1196,7 @@ class _Session:
                 files += 1
             else:
                 other += 1
-        structured, unreadable = _structured_answer(result.get("structuredContent"))
+        structured, unreadable, kinds = _structured_answer(result.get("structuredContent"))
         return CallResult(
             text=clean_result_text("\n".join(parts)).strip(),
             # The server's own claim about its own call. Believed here because it
@@ -945,6 +1206,7 @@ class _Session:
             is_error=result.get("isError") is True,
             structured=structured,
             structured_unreadable=unreadable,
+            structured_kinds=kinds,
             images=images,
             sounds=sounds,
             files=files,
@@ -977,12 +1239,12 @@ def discover_tools(
             resolve=resolve or net_vetting.resolve_host,
             budget=budget,
         )
-        version = session.initialize()
+        session.initialize()
         # Order matters and the protocol says so: a server may reject work that
         # arrives before it has been told the client is ready.
         session.notify("notifications/initialized")
         tools, skipped = session.list_tools()
-        return Discovery(tools=tools, skipped=skipped, protocol_version=version)
+        return Discovery(tools=tools, skipped=skipped)
     finally:
         if owned:
             active.close()

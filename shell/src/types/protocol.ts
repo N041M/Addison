@@ -116,10 +116,13 @@ export const Method = {
   WorkspacePickDirectory: "workspace.pickDirectory",
 
   // MCP servers — the external tool servers Addison consumes as a client (Phase-2
-  // step 7, phases 1–2 of five). Addison can now SEE what a saved server offers and
-  // still cannot use it: `refresh` connects, lists the server's tools, and registers
-  // each one namespaced and Developer-only, but they are kept out of the tool list
-  // the model is offered and refused at every dispatch path. The address is HTTP(S)
+  // step 7, phases 1–4 of five). `refresh` connects, lists the server's tools, and
+  // registers each one namespaced and Developer-only: absent from the SAFE view and
+  // refused outside OPEN at both dispatch sites, and in OPEN offered to the model
+  // and invoked through the ordinary gate, reaching it HIGH and destructive because
+  // a server's own claim about its risk is the thing v1 refuses to trust. How often
+  // that produces a card is the gate's answer, which the Custom profile can tune, so
+  // nothing here promises a frequency. The address is HTTP(S)
   // (`https://`, or `http://` only for a server on this computer); there is never a
   // command to run, so nothing here starts a program. No key or token rides these
   // payloads and none is stored — a server that wants a sign-in gets one plain
@@ -127,10 +130,10 @@ export const Method = {
   // `list` and `remove` answer in every profile, so saved configuration never
   // disappears and can always be removed. Mirrored in protocol.py.
   //
-  // A row's `status` is "never" | "ok" | "failed" from the core. `McpServer.status`
-  // adds "checking" for the moment a refresh is in flight — that one is OURS, set
-  // while the request is out, because the core answers `list` and `refresh` on the
-  // same worker thread and a list could never observe it.
+  // A row's `status` is "never" | "ok" | "failed", and `McpServer.status` is that
+  // vocabulary exactly. A check in flight is NOT one of them: the core answers
+  // `list` and `refresh` on the same worker thread, so a list could never observe
+  // one — the frontend tracks the row it is waiting on itself (useMcpServers).
   McpList: "mcp.list",
   McpAdd: "mcp.add",
   McpRemove: "mcp.remove",

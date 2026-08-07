@@ -630,7 +630,7 @@ class RoutingStrategy(str, Enum):
 **MCP-server config (§4.12).** An MCP server connection is **reversible config,
 like a provider** — non-secret metadata persisted, secrets (if any) in the
 keychain per G1, snapshotted, addable by prompting, revocable. **The concrete
-table shape landed with step 7 phase 1 on 2026-08-06** — `mcp_servers`, DDL in
+table shape landed with step 7 on 2026-08-06** — `mcp_servers`, DDL in
 `agent_core/memory/schema.sql` and described in
 [data-model.md](data-model.md), which owns it. The SAFE constraint (and how MCP
 tool metadata declares undo-ability) is still open and is deferred rather than
@@ -1159,18 +1159,22 @@ quota-sharing, MCP/A2A-as-a-*gateway*, and 11-engine token compression.
 
 ### 4.12 Amendment 2026-07-20: MCP client (Addison consumes external tools)
 
-> **PARTLY BUILT (2026-08-06): phase 1 of five.** What exists in the tree is
-> CONFIGURATION ONLY — the `mcp_servers` table, the `mcp.*` RPC namespace and a
-> Developer-only Settings section. There is still **no MCP client, no discovery, no
-> registration and no dispatch**, so nothing here is callable by a model yet.
-> [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order and the step's two
-> decisions — **transport is HTTP only for v1** (answered 2026-08-06; a server row
-> stores a URL, never a command), and MCP is **dev-only for v1**, which defers
-> amendment §13 Q6 (the exact SAFE constraint, and how MCP tool metadata declares
-> undo-ability) rather than answering it. Do not treat the rest of the shape below
-> as settled. The one part that already holds mechanically is invariant 2, which
-> will keep a mutating, no-undo MCP tool out of the SAFE view whatever else is
-> decided.
+> **BUILT FOR v1: phases 1–4 of five (2026-08-06 to 2026-08-07).** The tree has the
+> `mcp_servers` table, the `mcp.*` RPC namespace and a Developer-only Settings
+> section (phase 1); a Streamable-HTTP protocol client and admission into the ONE
+> registry, namespaced and dev-only (phase 2); dispatch through the ordinary gate as
+> HIGH and destructive, with `tool_audit` on every outcome and a per-call deadline
+> (phase 3); and output handling — one shared budget, redaction before every cut, and
+> a plain line naming what Addison will not carry (phase 4). **Phase 5 is a recorded
+> later option, not a missing piece:** stdio under containment, and SAFE admission via
+> a promoted allowlist. [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order
+> and the step's two decisions — **transport is HTTP only for v1** (answered
+> 2026-08-06; a server row stores a URL, never a command), and MCP is **dev-only for
+> v1**, which defers amendment §13 Q6 (the exact SAFE constraint, and how MCP tool
+> metadata declares undo-ability) rather than answering it. Where the shape below and
+> the plan differ, the plan is what was built. Invariant 2 holds mechanically
+> underneath all of it: a mutating, no-undo MCP tool cannot be LOW and so cannot
+> reach the SAFE view whatever else is decided.
 
 Addison works with MCP as a **client** — it *consumes* external MCP servers/tools
 — **not** as an MCP server or gateway (the OmniRoute-style thing still declined).
@@ -1618,8 +1622,8 @@ of that pass); code then follows in **dependency order, safety floor first**:
    gating was CUT rather than built:** a widget's kind *is* its tier, from a closed
    hard-coded list (§3 note, §4.10 head note).
 7. **MCP client integration** — external tools through the registry + gate,
-   mode-scoped (§4.12). **STARTED — phase 1 of five shipped 2026-08-06**
-   (configuration only; nothing is callable) — [plan](step-7-mcp-plan.md).
+   mode-scoped (§4.12). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
+   2026-08-07**; phase 5 is a recorded later option — [plan](step-7-mcp-plan.md).
 8. **Automation keyword gate** + author-OS-run automation (§6). **Not started.**
 
 **[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
@@ -1658,9 +1662,9 @@ zero new model capability** — it is a flow and trust layer — but it carries 
 cost the plan states plainly: Monaco requires widening the webview CSP with
 `style-src 'unsafe-inline'`, globally, for one window.
 
-It is **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is one
-phase of five in, and 8 is not started. Read the plan before starting either Phase-3
-track.
+It is **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is done
+for v1 as of 2026-08-07, and 8 is not started. Read the plan before starting either
+Phase-3 track.
 
 Note that **restoring a previous app binary remains a Phase-3 updater item and is
 not implemented** (owner decision 2026-07-20, §4.9): `shell/src-tauri/src/updater.rs`

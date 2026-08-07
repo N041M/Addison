@@ -988,6 +988,173 @@ def test_the_migration_is_idempotent_and_leaves_a_fresh_database_alone(tmp_path)
     assert [r["outcome"] for r in fresh.list_tool_audit()] == ["not_callable"]
 
 
+def _audit_tables(path) -> dict[str, int]:
+    """Every ``tool_audit*`` table on disk and how many rows it holds."""
+    conn = sqlite3.connect(path)
+    try:
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name LIKE 'tool_audit%'"
+            )
+        ]
+        return {name: conn.execute(f"SELECT count(*) FROM {name}").fetchone()[0] for name in names}
+    finally:
+        conn.close()
+
+
+def _index_is_on(path) -> str | None:
+    """The table ``idx_tool_audit_created`` is bound to, or None if it is gone.
+
+    An index belongs to its table, so a rename takes it along and a drop takes it
+    away — which is why "the rows survived" is only half of what a rebuild has to
+    be asked. The other half is whether ``list_tool_audit``'s ``ORDER BY
+    created_at DESC`` still has anything to walk, or full-scans for ever."""
+    conn = sqlite3.connect(path)
+    try:
+        row = conn.execute(
+            "SELECT tbl_name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_tool_audit_created'"
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
+
+
+def test_a_rebuild_that_is_interrupted_leaves_the_rows_exactly_where_they_were(tmp_path):
+    """THE PROPERTY THE WHOLE REBUILD RESTS ON, and the one it did not have.
+
+    ``executescript`` commits what is pending and then runs its statements in
+    AUTOCOMMIT, so ``ALTER TABLE tool_audit RENAME TO tool_audit_old`` was durable
+    the instant it ran. Anything that failed after it — a full disk, a lock outliving
+    ``busy_timeout``, the power — left the rows in ``tool_audit_old`` with no
+    ``tool_audit`` beside them. On the next open the migration saw no ``tool_audit``,
+    returned early, and schema.sql created an empty one; the rows were stranded for
+    good and the index stayed bound to the orphan.
+
+    The interruption here is a real statement failing mid-sequence rather than a
+    simulated one: the copy is asked for a column the new table does not have, which
+    is what any schema disagreement between the two halves would look like.
+
+    Mutation: swap the explicit ``BEGIN IMMEDIATE`` / ``COMMIT`` back for an
+    ``executescript`` — the rebuilt table survives the failure and this fails on
+    every assertion below."""
+    path = tmp_path / "old.sqlite3"
+    _database_on_the_old_check(path)
+
+    original = Store._TOOL_AUDIT_COLUMNS
+    Store._TOOL_AUDIT_COLUMNS = original + ("no_such_column",)
+    try:
+        with pytest.raises(sqlite3.OperationalError):
+            Store(path)
+    finally:
+        Store._TOOL_AUDIT_COLUMNS = original
+
+    assert _audit_tables(path) == {"tool_audit": 3}, "a half-rebuilt database was left on disk"
+    assert _index_is_on(path) == "tool_audit"
+    # ...and the next open, with nothing sabotaged, completes the migration it
+    # rolled back. A refusal that cannot be retried is a different kind of loss.
+    store = Store(path)
+    assert {r["id"] for r in store.list_tool_audit()} == {"a", "b", "c"}
+    store.close()
+
+
+def test_a_database_stranded_by_an_earlier_rebuild_recovers_its_rows(tmp_path):
+    """SELF-HEALING, for the databases the defect above already reached. A
+    ``tool_audit_old`` on disk is the signature of an interrupted rebuild and
+    nothing else creates one, so it is a source to copy FROM rather than a table to
+    step around — and the migration runs for its sake even when today's
+    ``tool_audit`` already carries the current CHECK.
+
+    Both rows survive and land once each: the stranded copy holds what was written
+    before the interruption and the live table what has been written since, the id
+    is the primary key, and ``INSERT OR IGNORE`` is what makes a row that exists in
+    both arrive once rather than fail the recovery of every row beside it.
+
+    Mutation: return early when ``tool_audit`` already has the current CHECK — the
+    stranded rows stay stranded and this fails on the ids."""
+    path = tmp_path / "stranded.sqlite3"
+    _database_on_the_old_check(path)
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE tool_audit RENAME TO tool_audit_old")
+    conn.commit()
+    conn.close()
+
+    # The open that used to strand them: no ``tool_audit``, so schema.sql makes an
+    # empty one and the three rows sit in the orphan beside it.
+    first = Store(path)
+    first.insert_tool_audit(
+        id="since", conversation_id=None, tool_id=TOOL_ID, detail=None, mode="open",
+        destructive=True, outcome="failed", redacted=None, created_at=40,
+    )
+    assert {r["id"] for r in first.list_tool_audit()} == {"a", "b", "c", "since"}
+    first.close()
+
+    assert _audit_tables(path) == {"tool_audit": 4}
+    assert _index_is_on(path) == "tool_audit"
+
+    second = Store(path)
+    assert {r["id"] for r in second.list_tool_audit()} == {"a", "b", "c", "since"}
+    second.close()
+    assert _audit_tables(path) == {"tool_audit": 4}, "the recovery ran a second time"
+
+
+def test_a_leftover_scratch_table_is_cleared_rather_than_refused(tmp_path):
+    """THE SCRATCH NAME GETS THE SAME MERCY AS THE STRANDED ONE.
+
+    The rebuild builds under `tool_audit_rebuilt` and renames it into place, so a
+    process killed between the CREATE and the rename can leave that name behind.
+    Meeting it with a bare CREATE raises out of ``Store.__init__`` — the core then
+    cannot open the database AT ALL, which is a worse failure than the row loss
+    this whole method exists to prevent, and one no restore point reaches because
+    nothing is running to offer one.
+
+    Mutation: drop the ``DROP TABLE IF EXISTS`` — this raises OperationalError."""
+    path = tmp_path / "scratch.sqlite3"
+    _database_on_the_old_check(path)
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE tool_audit_rebuilt (id TEXT PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+
+    store = Store(path)
+    assert {r["id"] for r in store.list_tool_audit()} == {"a", "b", "c"}
+    store.close()
+    assert _audit_tables(path) == {"tool_audit": 3}
+    assert _index_is_on(path) == "tool_audit"
+
+
+def test_the_rebuild_re_creates_the_index_itself(tmp_path):
+    """The index used to be left to schema.sql's ``CREATE INDEX IF NOT EXISTS``, in
+    the ``executescript`` that runs moments later — which is a SECOND step, and a
+    crash can land between two steps. It is created inside the same transaction as
+    everything else now, so the table and its index arrive together or neither does.
+
+    Asserted with schema.sql DELIBERATELY OUT OF THE WAY — the migration is run on
+    a bare connection, so the only thing that could have made the index is the
+    rebuild. Through ``Store(path)`` the script would create it a moment later and
+    this test would pass with the line deleted.
+
+    Mutation: delete the ``CREATE INDEX`` from the rebuild — this fails."""
+    path = tmp_path / "index.sqlite3"
+    _database_on_the_old_check(path)
+
+    bare = Store.__new__(Store)
+    bare._conn = sqlite3.connect(path)
+    bare._conn.row_factory = sqlite3.Row
+    bare._migrate_tool_audit_outcomes()
+    indexes = {
+        row["name"]
+        for row in bare._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='tool_audit'"
+        )
+    }
+    bare._conn.close()
+
+    assert "idx_tool_audit_created" in indexes
+
+
 def test_the_schema_and_the_migration_agree_on_the_vocabulary():
     """Two spellings of one vocabulary is how a value ends up legal in one place and
     rejected in the other — on an upgraded database only, which is the half nobody
@@ -1041,15 +1208,20 @@ class _ResolverOnly(McpMixin):
     Calling it through the running server instead is not an option: the store
     belongs to the worker thread, and sqlite says so."""
 
-    def __init__(self, store: Store) -> None:
-        self._db = store
+    def __init__(self, store: Store | None) -> None:
+        # ``_store`` is the NULLABLE field, exactly as on the real server: it is
+        # None until the worker builds one, and it is what code meaning "has the
+        # store been built?" reads. The resolver runs from a tool's execute, so it
+        # is the field it has to ask.
+        self._store = store
 
     @property
     def store(self) -> Store:
         # A property rather than an attribute, matching ``ServerContext``'s own
-        # declaration: the real server exposes ``store`` the same way, and its
-        # ``_store`` is the nullable one this must not be mistaken for.
-        return self._db
+        # declaration: the real server exposes ``store`` this way and ASSERTS, which
+        # is why nothing that must answer None may go through it.
+        assert self._store is not None
+        return self._store
 
 
 def test_the_live_resolver_reads_the_saved_row_and_stops_when_it_is_gone(tmp_path):
@@ -1069,6 +1241,40 @@ def test_the_live_resolver_reads_the_saved_row_and_stops_when_it_is_gone(tmp_pat
 
     store.delete_mcp_server(SERVER_ID)
     assert resolver._mcp_endpoint_for(SERVER_ID, SERVER_NAME) is None
+
+
+def test_a_server_that_is_switched_off_has_no_address_at_all(tmp_path):
+    """The dispatch half of ``enabled``. The column is stored, snapshot-captured and
+    restored, so a resolver that ignored it would leave a setting the recovery path
+    faithfully puts back and nothing obeys — and the hole it leaves is the worst
+    kind, because the tools of a server somebody switched off stay registered until
+    the next check and would keep reaching it.
+
+    Nothing sets the column today (no toggle RPC, none added here), which is why the
+    row is written straight into the table.
+
+    Mutation: drop the ``not row["enabled"]`` check — the address resolves and this
+    fails."""
+    store = Store(tmp_path / "servers.sqlite3")
+    resolver = _ResolverOnly(store)
+    store.insert_mcp_server(id=SERVER_ID, name=SERVER_NAME, url=SERVER_URL, created_at=1)
+    assert resolver._mcp_endpoint_for(SERVER_ID, SERVER_NAME) == SERVER_URL
+
+    store._conn.execute("UPDATE mcp_servers SET enabled = 0 WHERE id = ?", (SERVER_ID,))
+    store._conn.commit()
+
+    assert resolver._mcp_endpoint_for(SERVER_ID, SERVER_NAME) is None
+
+
+def test_a_resolver_with_no_store_yet_answers_nothing_rather_than_raising():
+    """``self.store`` asserts, so the "has it been built?" question has to be asked
+    of the private field — main.py's own rule for this code. It matters here because
+    this resolver runs from inside a tool's ``execute``, where an AssertionError is
+    a crashed turn rather than a refused call.
+
+    Mutation: read ``self.store`` in ``_mcp_endpoint_for`` — this raises instead of
+    answering None."""
+    assert _ResolverOnly(None)._mcp_endpoint_for(SERVER_ID, SERVER_NAME) is None
 
 
 def test_the_running_server_wires_dispatch_to_the_catalog(tmp_path):

@@ -122,6 +122,28 @@ class Store:
         "failed",
     )
 
+    #: Every column ``tool_audit`` holds, in ONE list. The rebuild below creates
+    #: this shape and copies BY NAME, and a column spelled in one half and not the
+    #: other is a row that silently does not survive.
+    _TOOL_AUDIT_COLUMNS: tuple[str, ...] = (
+        "id",
+        "conversation_id",
+        "tool_id",
+        "detail",
+        "mode",
+        "destructive",
+        "outcome",
+        "redacted",
+        "created_at",
+    )
+
+    #: The index behind ``list_tool_audit``'s ``ORDER BY created_at DESC``. Named
+    #: here as well as in schema.sql because the rebuild has to re-create it
+    #: ITSELF: an index belongs to its table, so dropping the old table drops it,
+    #: and ``CREATE INDEX IF NOT EXISTS`` in a script that runs afterwards is not a
+    #: guarantee — it is a second step that a crash can land between.
+    _TOOL_AUDIT_INDEX = "idx_tool_audit_created"
+
     def _migrate_tool_audit_outcomes(self) -> None:
         """Widen ``tool_audit.outcome``'s CHECK, keeping every row (step 7 phase 3).
 
@@ -134,52 +156,114 @@ class Store:
         prevent, and it is why the fix is a migration rather than an edit to
         schema.sql.
 
-        **EVERY EXISTING ROW SURVIVES.** These rows are durable by design —
-        excluded from snapshots, never pruned — so a rebuild that dropped them would
-        destroy the only record of what Addison has done. Rename, copy, drop: the
-        old table is renamed (its index travels with it), the new shape is created
-        from this method's own DDL, every column is copied across by name, and only
-        then is the old table dropped, taking its index with it. schema.sql's
-        ``CREATE INDEX IF NOT EXISTS`` re-creates the index moments later, in the
-        ``executescript`` this runs before.
+        **EVERY EXISTING ROW SURVIVES, INCLUDING ACROSS A CRASH.** These rows are
+        durable by design — excluded from snapshots, never pruned — so a rebuild
+        that dropped them would destroy the only record of what Addison has done,
+        and "a rebuild that usually keeps them" is not the same promise. So the
+        whole of it — create the new shape, copy every column by name, drop the old
+        tables, rename into place, re-create the index — runs inside ONE explicit
+        transaction. SQLite's DDL is transactional, so an interruption anywhere in
+        that sequence (a full disk, a lock this connection's ``busy_timeout`` did
+        not outlast, the power) leaves the database in the state it started in and
+        never in a half-rebuilt one.
+
+        **THE TRANSACTION IS EXPLICIT BECAUSE ``executescript`` DEFEATS AN IMPLICIT
+        ONE.** It commits whatever is pending and then runs its statements in
+        autocommit, so the rename used to be durable the instant it ran: a failure
+        one statement later left the rows in ``tool_audit_old`` with no
+        ``tool_audit`` beside them, and on the NEXT open this method saw no
+        ``tool_audit``, returned early, and let schema.sql create an empty one. The
+        rows were then stranded for good, and the index — which travels with a
+        rename — stayed bound to the orphan, so every audit read full-scanned.
+
+        **A DATABASE ALREADY IN THAT STATE HEALS ITSELF HERE.** ``tool_audit_old``
+        existing at all is the signature of an interrupted rebuild, so it is a
+        source to copy from rather than something to step around, and this method
+        runs whenever it is present — even when today's ``tool_audit`` already
+        carries the current CHECK. Both tables are read into the new one with
+        ``INSERT OR IGNORE``, oldest source first: the id is the primary key, so a
+        row that survived in both places lands once, and a row whose ``outcome``
+        this build does not know is skipped rather than failing the whole recovery
+        of every row beside it.
 
         schema.sql's "never drop this table" warning is about ``config_snapshots``
         and applies to that table alone: a snapshot's rows are the recovery floor
         itself, so no rebuild of THAT table is ever acceptable. An audit rebuild
         that preserves its rows is a different act entirely.
 
-        IDEMPOTENT in all three states: a fresh database has no table yet (the
-        script that follows creates today's shape), an already-widened one is
-        recognised from its own DDL, and an old one is rebuilt exactly once."""
-        row = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tool_audit'"
-        ).fetchone()
-        if row is None:
-            return
-        existing = row["sql"] or ""
-        if all(f"'{outcome}'" in existing for outcome in self._TOOL_AUDIT_OUTCOMES):
+        IDEMPOTENT in all four states: a fresh database has no table yet (the script
+        that follows creates today's shape), an already-widened one is recognised
+        from its own DDL and left alone, an old one is rebuilt exactly once, and one
+        stranded by an older build is recovered exactly once."""
+        tables = {
+            row["name"]: row["sql"] or ""
+            for row in self._conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='table' "
+                "AND name IN ('tool_audit', 'tool_audit_old')"
+            ).fetchall()
+        }
+        live = tables.get("tool_audit")
+        widened = live is not None and all(
+            f"'{outcome}'" in live for outcome in self._TOOL_AUDIT_OUTCOMES
+        )
+        if "tool_audit_old" not in tables and (live is None or widened):
             return
         allowed = ",".join(f"'{outcome}'" for outcome in self._TOOL_AUDIT_OUTCOMES)
-        self._conn.executescript(
-            "ALTER TABLE tool_audit RENAME TO tool_audit_old;\n"
-            "CREATE TABLE tool_audit (\n"
-            "    id              TEXT PRIMARY KEY,\n"
-            "    conversation_id TEXT,\n"
-            "    tool_id         TEXT NOT NULL,\n"
-            "    detail          TEXT,\n"
-            "    mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),\n"
-            "    destructive     INTEGER NOT NULL DEFAULT 0,\n"
-            f"    outcome         TEXT NOT NULL CHECK(outcome IN ({allowed})),\n"
-            "    redacted        TEXT,\n"
-            "    created_at      INTEGER NOT NULL\n"
-            ");\n"
-            "INSERT INTO tool_audit\n"
-            "    (id, conversation_id, tool_id, detail, mode, destructive, outcome,\n"
-            "     redacted, created_at)\n"
-            "SELECT id, conversation_id, tool_id, detail, mode, destructive, outcome,\n"
-            "       redacted, created_at FROM tool_audit_old;\n"
-            "DROP TABLE tool_audit_old;\n"
-        )
+        columns = ", ".join(self._TOOL_AUDIT_COLUMNS)
+        # Oldest first, so the rows land in the order they were written and a
+        # duplicate id resolves to the copy that was made before the interruption.
+        sources = [name for name in ("tool_audit_old", "tool_audit") if name in tables]
+        # Nothing else may be mid-write when a rebuild starts: BEGIN IMMEDIATE takes
+        # the write lock now (inside busy_timeout) rather than discovering halfway
+        # through that it cannot have it.
+        self._conn.commit()
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Built under a THIRD name and renamed into place at the end. Renaming
+            # the live table out of the way first is what made the old sequence
+            # destructive: from that moment until the copy finished there was no
+            # `tool_audit`, and that window is precisely where a crash stranded the
+            # rows. Here the live table is not touched until its rows are already
+            # in the replacement.
+            # The scratch name gets the same treatment as `tool_audit_old` below:
+            # one left behind by a rebuild that died before its rollback landed is
+            # a leftover to clear, not a reason to refuse. Without this, that table
+            # existing makes the CREATE raise straight out of the constructor and
+            # the core cannot open the database at all — a stronger failure than
+            # the one this whole method exists to prevent.
+            self._conn.execute("DROP TABLE IF EXISTS tool_audit_rebuilt")
+            self._conn.execute(
+                "CREATE TABLE tool_audit_rebuilt ("
+                "    id              TEXT PRIMARY KEY,"
+                "    conversation_id TEXT,"
+                "    tool_id         TEXT NOT NULL,"
+                "    detail          TEXT,"
+                "    mode            TEXT NOT NULL CHECK(mode IN ('safe','open')),"
+                "    destructive     INTEGER NOT NULL DEFAULT 0,"
+                f"    outcome         TEXT NOT NULL CHECK(outcome IN ({allowed})),"
+                "    redacted        TEXT,"
+                "    created_at      INTEGER NOT NULL"
+                ")"
+            )
+            for source in sources:
+                self._conn.execute(
+                    f"INSERT OR IGNORE INTO tool_audit_rebuilt ({columns}) "
+                    f"SELECT {columns} FROM {source}"
+                )
+            for source in sources:
+                self._conn.execute(f"DROP TABLE {source}")
+            self._conn.execute("ALTER TABLE tool_audit_rebuilt RENAME TO tool_audit")
+            self._conn.execute(
+                f"CREATE INDEX IF NOT EXISTS {self._TOOL_AUDIT_INDEX} "
+                "ON tool_audit(created_at)"
+            )
+        except BaseException:
+            # The rows are the thing being protected, so the rollback happens here
+            # rather than being left to the next open: whatever went wrong, the
+            # database goes back to the state it was already in and the caller hears
+            # about it.
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
     # --- action snapshots (UndoManager) -----------------------------------

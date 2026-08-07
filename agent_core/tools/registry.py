@@ -24,6 +24,21 @@ them and one new tool needs them apart:
 dropping it must fail registration). ``dev_only=True`` stays as a convenience alias
 that sets BOTH — the exact shape ``run_command`` needs.
 
+**THREAD CONFINEMENT IS AN INVARIANT HERE, and nothing in this file locks.** Until
+the MCP client arrived, every registration happened once at startup
+(``main.build_registry``) and these dicts were read-only for the life of the
+process. ``mcp.refresh`` mutates them while the app is running. What makes that
+safe is that every mutator AND every reader is on ONE thread: ``main.py`` routes
+``mcp.*`` onto the ``turn-worker`` queue, and turns, routine steps, widget runs and
+snapshot restores are worker jobs too, so a refresh can never interleave with a
+dispatch that is walking ``_tools``. The thing that would break it is answering an
+``mcp.*`` method — or any later method that registers or unregisters — INLINE on
+the read loop, the way ``permission.respond`` and ``model.setRoleForNextMessage``
+are answered: a registration landing mid-``visible_tools`` is a mutated-during-
+iteration error inside somebody's turn, and a half-applied refresh is a registry
+that disagrees with the catalog about what exists. ``tests/test_mcp_servers.py``
+pins the routing so that a new handler cannot quietly take the inline path.
+
 Two further dimensions arrived with the MCP client (step 7 phase 2), and BOTH are
 about tools that came from OUTSIDE this codebase. Every native tool is registered
 once at startup by ``build_registry`` and stays for the life of the process; a
@@ -58,6 +73,19 @@ DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
 # it is one fact told plainly, and a surface that ever prints it again should print
 # these exact words.
 NOT_CALLABLE_REFUSAL = "Addison can see this tool but can't use it yet."
+
+# Said when a dispatch path is handed an id NOTHING is registered under. Both ways
+# that happens are ordinary rather than exceptional: a model naming a tool from
+# earlier in a transcript after a refresh, a removal, a failed check or a snapshot
+# restore took that id out; and a saved routine step naming a discovered tool in a
+# session that has not gone looking for it yet (a tool server's catalog lives in
+# memory and is rebuilt on demand, so nothing is registered after a restart until
+# somebody presses Check now).
+#
+# The id itself is deliberately NOT in the sentence: `mcp:Design docs:search` is
+# Addison's internal spelling of somebody else's tool, and it answers no question
+# a person reading a routine's step log has.
+UNKNOWN_TOOL_REFUSAL = "That tool isn't available any more, so Addison didn't run it."
 
 
 class ToolRegistry:
@@ -132,6 +160,22 @@ class ToolRegistry:
             return self._tools[tool_id]
         except KeyError:
             raise KeyError(f"No tool registered with id '{tool_id}'.") from None
+
+    def find(self, tool_id: str) -> Tool | None:
+        """The tool, or None when nothing is registered under this id.
+
+        ``get`` RAISES, which is right for a caller that has already established the
+        id exists. A DISPATCH path has not: the ids it is handed come from a model's
+        transcript and from routine steps saved in an earlier session, and both
+        outlive the registration they were written against — every ``mcp:`` id
+        leaves the registry on a refresh, a removal, a failed check or a snapshot
+        restore, and after a restart none of them is back until somebody asks for a
+        check. So both paths resolve through this and turn a miss into
+        :data:`UNKNOWN_TOOL_REFUSAL`, the shape every other failure on those paths
+        already takes. Raising there costs a turn its tool_result (which the
+        provider then rejects for the rest of the session) or leaves a routine run
+        recorded as 'running' forever, because neither path's cleanup runs."""
+        return self._tools.get(tool_id)
 
     def has(self, tool_id: str) -> bool:
         """Whether this id is taken — asked BEFORE registering a discovered tool.

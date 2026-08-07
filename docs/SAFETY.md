@@ -372,7 +372,11 @@ relaxes exactly these four, and only as spelled out above.
    Step 5's `read_project_file` / `write_project_file` are `open_only` too: also
    absent from the SAFE view, also refused at dispatch outside OPEN. They are
    typed path-bounded functions, not a shell, so this invariant is unaffected —
-   and the SAFE file tools keep design-doc §9's picker scoping unchanged.)
+   and the SAFE file tools keep design-doc §9's picker scoping unchanged. Step 7's
+   discovered tool-server tools register the same way and are therefore in the same
+   position: `open_only`, so `visible_tools(SAFE)` has never held one, and refused
+   at both dispatch sites outside OPEN. Addison calls a tool server over HTTP and
+   never launches one, so nothing in that step starts a process either.)
 2. **Every `risk_tier != LOW` tool must have a real `undo()`**, enforced at
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()` — a tool that genuinely can't be undone stays LOW and

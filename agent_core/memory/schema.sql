@@ -83,9 +83,13 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
     url         TEXT NOT NULL,           -- streamable-HTTP endpoint. NEVER a command.
     transport   TEXT NOT NULL DEFAULT 'http'
                     CHECK(transport IN ('http')),
-    -- Rows are created enabled. There is no toggle RPC in phase 1 because there is
-    -- nothing yet to disable; the column exists so phase 2 can stop consuming a
-    -- server without the person losing its configuration.
+    -- Rows are created enabled, and nothing SETS this column: there is no toggle
+    -- RPC and no surface for one. It is READ where it decides something, though —
+    -- rpc/mcp.py refuses to check a switched-off server and resolves no address for
+    -- one, so a 0 here means no connection and no call. The column is captured and
+    -- restored with the rest of the row, which is why the reads came first: the
+    -- phase that adds the toggle adds a control over behaviour that already exists,
+    -- rather than discovering that a disabled server was consumed like any other.
     enabled     INTEGER NOT NULL DEFAULT 1,
     created_at  INTEGER NOT NULL
 );
@@ -397,8 +401,15 @@ CREATE TABLE IF NOT EXISTS tool_audit (
     -- forbidden    = the hardline denylist refused it before the gate (item 3)
     -- confined_out = outside every trusted root (step 5 confinement)
     -- dev_only     = a dev tool named outside OPEN mode
-    -- not_callable = a discovered tool that has no dispatch behind it was named
-    --                anyway (registry.refuse_if_not_callable)
+    -- not_callable = a tool with no dispatch behind it was named anyway. Two ways
+    --                in: one registered `not_callable`
+    --                (registry.refuse_if_not_callable), and an id NOTHING is
+    --                registered under (registry.find answering None) — a stale
+    --                transcript or a saved routine step naming a tool server's
+    --                tool that this session has not rediscovered. One value for
+    --                both, because the fact the row records is the same: the
+    --                request named something that could not run, and nothing about
+    --                it was examined, approved or reached.
     -- failed       = the gate said yes and the call never landed. Added for MCP,
     --                where "approved, and nothing happened" is a different history
     --                from "approved, and it ran" — a tool server is somebody

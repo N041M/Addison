@@ -189,6 +189,17 @@ export function App() {
   // The two pieces of floating chrome (see the file header for why they live
   // here): the anchored model popup's click point, and the Restore points modal.
   const [modelAnchor, setModelAnchor] = useState<PopupAnchor | null>(null);
+  // The control that opened the popup, so focus can go back to it. A ref rather
+  // than state: it is read at close time and nothing renders differently for it.
+  const modelTrigger = useRef<HTMLElement | null>(null);
+  const openModelPopup = useCallback((at: PopupAnchor, trigger: HTMLElement) => {
+    modelTrigger.current = trigger;
+    setModelAnchor(at);
+  }, []);
+  // Both memoised: the popup binds document listeners keyed on `onClose`, and a
+  // fresh identity every render re-bound them behind every streamed chunk.
+  const closeModelPopup = useCallback(() => setModelAnchor(null), []);
+  const returnFocusToModelTrigger = useCallback(() => modelTrigger.current?.focus(), []);
   // The last place the model popup opened, kept after `modelAnchor` clears so it
   // can fade out where it was instead of disappearing on a frame.
   const [lastModelAnchor, setLastModelAnchor] = useState<PopupAnchor | null>(null);
@@ -217,8 +228,13 @@ export function App() {
   // round — a restore replaces the profile, the services and the saved items
   // wholesale, so everything this file cached from before it is now describing a
   // configuration that no longer exists.
-  // HAZARD: `refreshProfile` is a forward reference; this closure only ever runs
-  // at event time, after a restore has landed.
+  // EVERY snapshot-captured table is re-read here. A row missed from this list
+  // does not go stale quietly: the surface goes on offering controls for a thing
+  // the core has already put back, and "Addison has forgotten X" comes back for
+  // a server it no longer had.
+  // HAZARD: `refreshProfile`, `guardsState`, `routingState` and `mcpState` are
+  // forward references; this closure only ever runs at event time, after a
+  // restore has landed.
   const snapshotsState = useSnapshots({
     connected,
     onRestored: () => {
@@ -230,6 +246,7 @@ export function App() {
       skillsState.refreshSkills();
       guardsState.refreshGuards();
       routingState.refreshRouting();
+      mcpState.refreshServers();
     },
   });
   // The Custom-profile guards (Phase-2 step 2). A weakening save mints a permanent
@@ -888,7 +905,9 @@ export function App() {
       label: m.label,
       group: m.providerLabel ?? "Cloud",
       note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
-      unavailable: Boolean(m.unavailable),
+      // The core's own sentence, forwarded whole: the row prints it under the
+      // model's name, because "unavailable" alone is a dead end.
+      unavailable: m.unavailable,
       selected: models.selectedRole !== "local" && m.id === defaultCloudId,
       onPick: () => {
         models.handleChangeDefaultCloudModel(m.id);
@@ -1187,7 +1206,7 @@ export function App() {
                 onClearDiagnostics={clearDiagnostics}
                 theme={themeChoice}
                 onSetTheme={setThemeChoice}
-                onOpenModelPopup={setModelAnchor}
+                onOpenModelPopup={openModelPopup}
                 onOpenRestorePoints={() => setRestorePointsOpen(true)}
                 scrollTarget={settingsScrollTarget}
                 onScrolled={clearSettingsScrollTarget}
@@ -1336,7 +1355,8 @@ export function App() {
           anchor={lastModelAnchor}
           open={Boolean(modelAnchor)}
           options={modelPopupOptions}
-          onClose={() => setModelAnchor(null)}
+          onClose={closeModelPopup}
+          returnFocus={returnFocusToModelTrigger}
         />
       )}
       {restorePointsOpen && (

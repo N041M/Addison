@@ -126,7 +126,9 @@ Two more hold wherever they can be enforced:
 - Every tool that changes something has a real undo. Any tool above the lowest risk
   tier has to implement one, and the registry refuses to register it otherwise. A
   tool that genuinely can't be undone stays read only. The Developer command tool is
-  the exception, which is why it asks you every single time.
+  the exception, and so is a tool from an outside tool server, which is why both are
+  treated as things that cannot be taken back — a card before each one, unless you
+  have chosen on the Custom profile to be asked less often.
 - A routine can't do more than you allowed while you were sitting there. The routine
   engine uses the same registry, permission gate and undo manager as a live
   conversation, so saving something as a routine is not a way around a question you
@@ -162,6 +164,13 @@ is the authoritative version of all of this.
   inside folders you trusted and nowhere else. A path outside those folders is
   refused before the tool runs at all. Trusting a folder stops the questions for
   those file tools only. Commands always ask.
+- Outside tool servers on the Developer profile. Save the web address of an MCP
+  server, press Check now to see what it offers, and its tools appear in a section
+  of their own headed by the server they came from. Addison asks before each use and
+  says which server the tool came from. What a server sends back has the passwords
+  and keys Addison recognises taken out before a model sees it, is trimmed if it is
+  enormous, and anything Addison won't pass on — pictures, sound, files — is named
+  rather than dropped in silence. Nothing is contacted until you ask.
 - Routing you can explain. Prefer quality or prefer free on Simple, and a full
   strategy picker on Developer. If a model is busy Addison falls back to the next
   one and tells you it did. If a free model answered, it says so.

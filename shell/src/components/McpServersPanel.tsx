@@ -32,8 +32,10 @@ import { RowAction, SurfaceRow } from "./Surface";
 /** The panel's standing line. Says what a saved server does and what protects the
  * person while it does it. The second half is not decoration and must not be
  * dropped as the feature matures: these tools belong to somebody else's program,
- * Addison cannot know what one will do, and "it asks first, every time" is the
- * entire reason adding a server is a safe thing to do. */
+ * Addison cannot know what one will do, and every call arriving at the gate as
+ * destructive is the entire reason adding a server is a safe thing to do. How
+ * often that becomes a card is the gate's answer and the Custom profile can tune
+ * it, so nothing here promises a frequency (docs/SAFETY.md owns the guards). */
 const STANDING_LINE =
   "A tool server is a program on the web that offers Addison extra tools. Addison can " +
   "check what a server offers, and it asks you before using any of those tools.";

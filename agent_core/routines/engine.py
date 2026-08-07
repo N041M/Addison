@@ -31,7 +31,7 @@ from agent_core.tools.base import (
     call_permission_detail,
     default_forbidden_check,
 )
-from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
 
 # Confinement refusal for a routine step (step 5, D3), kept identical to the live
 # loop's so the same message shows wherever a path-bounded tool runs outside trust.
@@ -263,7 +263,34 @@ class RoutineEngine:
             except ValueError as exc:
                 return self._finish(run_id, "failed", step_results, str(exc), step_log)
 
-            tool = self.tool_registry.get(tool_id)
+            # AN ID NOTHING IS REGISTERED UNDER — the live loop's twin, and the case
+            # a saved routine meets most often. A step keeps the tool id it was
+            # written with, and an `mcp:` id is registered only for as long as this
+            # session's last check says a server offers it: a restart, a removal, a
+            # failed check or a snapshot restore all leave a step naming nothing.
+            # Raising here would skip `_finish` and leave this run recorded as
+            # 'running' with no completed_at, forever — the exact failure the
+            # execute branch below documents — so it is a FAILED STEP like every
+            # other refusal, and `on_failure` still decides what happens next.
+            # `detail` is None and `destructive` False: with no tool there is
+            # nothing to ask either question of.
+            tool = self.tool_registry.find(tool_id)
+            if tool is None:
+                self._audit(routine, tool_id, None, mode, False, "not_callable")
+                result = ToolResult(success=False, content=UNKNOWN_TOOL_REFUSAL)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, UNKNOWN_TOOL_REFUSAL))
+                if step.on_failure == "abort":
+                    return self._finish(
+                        run_id, "failed", step_results, UNKNOWN_TOOL_REFUSAL, step_log
+                    )
+                if step.on_failure == "ask_user" and not self._on_ask_user(
+                    step, run_id, UNKNOWN_TOOL_REFUSAL
+                ):
+                    return self._finish(
+                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                    )
+                continue
             # SAFE-1 at dispatch, before the gate: a routine step naming a dev-only
             # tool cannot run outside OPEN, whoever wrote that tool. Refusing here
             # rather than inside execute also means the person is never asked to

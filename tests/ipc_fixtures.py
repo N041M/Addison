@@ -351,23 +351,31 @@ def _workspace_list_fixture(server: JsonRpcServer) -> dict:
 
 
 def _mcp_list_fixture(server: JsonRpcServer) -> dict:
-    """An mcp.list payload with a row in it (step 7 phases 1–2) — an empty list would
+    """An mcp.list payload with a row in it (step 7) — an empty list would
     parse the same whichever key the frontend read, which is exactly how the
     `roots`/`folders` mismatch above survived both suites. Written through the store
     and read back through the real handler, so the camelCase mapping (`created_at`
     -> `addedAt`) is pinned rather than assumed. The address is a fixed literal.
 
-    THREE rows, one per discovery state, because phase 2's shape is not one shape:
+    THREE rows, one per discovery state, because the shape is not one shape:
     an unchecked row carries no `checkedAt` at all, a checked one carries its tools
     and counts, and a failed one carries a plain sentence and no tool list. A fixture
     with only the happy row would let the parser drop `error`, or invent a `toolCount`
     for a server that answered nothing, and both suites would stay green.
 
     The discovered row is produced through the REAL catalog and the REAL registry, so
-    the wire shape is what a genuine refresh emits — including a tool refused for an
-    id collision, which is what `skipped` counts. Everything is torn down afterwards
-    so the rest of the fixtures (snapshot payloads capture this table) stay
-    byte-stable and no fixture tool is left in the registry."""
+    the wire shape is what a genuine refresh emits — **including a tool REFUSED for an
+    id collision**, which is why the ghost registration below exists. The collision is
+    arranged rather than described: an id is taken first, by a catalog entry with no
+    `mcp_servers` row behind it (so it appears in no payload), and the checked server
+    then offers a tool that composes to the same id. What that pins is the property a
+    hand-fed count cannot — `toolCount` and `tools` describe what was REGISTERED, the
+    refused name is in neither, and `skipped` carries both what the client turned away
+    and what admission did. A fixture where `skipped` is simply a number passed in
+    tests the parser against arithmetic nobody performed.
+
+    Everything is torn down afterwards so the rest of the fixtures (snapshot payloads
+    capture this table) stay byte-stable and no fixture tool is left in the registry."""
     from agent_core.mcp_client import DiscoveredTool
 
     rows = [
@@ -377,6 +385,17 @@ def _mcp_list_fixture(server: JsonRpcServer) -> dict:
     ]
     for index, (server_id, name, url) in enumerate(rows):
         server.store.insert_mcp_server(id=server_id, name=name, url=url, created_at=_T0 + index)
+    # The id `mcp:Checked server:open_ticket`, taken before the checked server is
+    # admitted. Registered under a server id that has no row in `mcp_servers`, so it
+    # is in the registry and in NO payload — the whole of its job is to be in the way.
+    server._mcp_catalog.record_success(
+        server.tool_registry,
+        server_id="mcp-fixture-ghost",
+        server_name="Checked server",
+        tools=(DiscoveredTool("open_ticket", "Open a support ticket."),),
+        skipped=0,
+        checked_at=_T0,
+    )
     server._mcp_catalog.record_success(
         server.tool_registry,
         server_id="mcp-fixture-1",
@@ -397,6 +416,7 @@ def _mcp_list_fixture(server: JsonRpcServer) -> dict:
     try:
         return server._mcp_list()
     finally:
+        server._mcp_catalog.forget(server.tool_registry, "mcp-fixture-ghost")
         for server_id, _name, _url in rows:
             server._mcp_catalog.forget(server.tool_registry, server_id)
             server.store.delete_mcp_server(server_id)

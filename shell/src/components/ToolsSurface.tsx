@@ -88,8 +88,15 @@ export function ToolsSurface({
   const folders = showTrustedFolders ? trustedRoots : [];
   const servers = showTrustedFolders ? mcpServers : [];
 
+  // Tool servers count. They get their own sections below rather than rows in
+  // this list, but "Nothing yet" is a claim about the whole page — and it sat
+  // directly above a server's discovered tools for a Developer who had added one
+  // before any provider key.
   const hasConnected =
-    connectedProviders.length > 0 || localModels.length > 0 || folders.length > 0;
+    connectedProviders.length > 0 ||
+    localModels.length > 0 ||
+    folders.length > 0 ||
+    servers.length > 0;
 
   return (
     <Surface title="Tools" description={TOOLS_DESCRIPTION} pinned={pinned}>

@@ -100,7 +100,9 @@ interface Props {
   /** Opens the anchored model popup at the click point (App owns the floating
    * chrome — a `position: fixed` panel inside this surface would be trapped by
    * the section's fadeRise transform). */
-  onOpenModelPopup?: (anchor: PopupAnchor) => void;
+  /** The point the panel opens at, and the button it opens FROM — which is where
+   * focus goes back to when the panel is done with (App wires the return). */
+  onOpenModelPopup?: (anchor: PopupAnchor, trigger: HTMLElement) => void;
   /** Opens the Restore points modal ("All restore points" → "open"). */
   onOpenRestorePoints?: () => void;
   /**
@@ -380,7 +382,9 @@ function WhereAddisonThinks({
   defaultRole: ModelRole;
   defaultCloudModel?: string;
   onChangeDefaultRole: (role: ModelRole) => void;
-  onOpenModelPopup?: (anchor: PopupAnchor) => void;
+  /** The point the panel opens at, and the button it opens FROM — which is where
+   * focus goes back to when the panel is done with (App wires the return). */
+  onOpenModelPopup?: (anchor: PopupAnchor, trigger: HTMLElement) => void;
   onGoToApiKeys: () => void;
   onGoToLocalModels: () => void;
 }) {
@@ -440,8 +444,9 @@ function WhereAddisonThinks({
         onAction={
           canChangeModel && onOpenModelPopup
             ? (event: MouseEvent<HTMLButtonElement>) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                onOpenModelPopup({ x: rect.right, y: rect.top + rect.height / 2 });
+                const trigger = event.currentTarget;
+                const rect = trigger.getBoundingClientRect();
+                onOpenModelPopup({ x: rect.right, y: rect.top + rect.height / 2 }, trigger);
               }
             : undefined
         }

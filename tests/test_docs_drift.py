@@ -1024,6 +1024,33 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "HIGH and destructive unconditionally."
         ),
     },
+    "redaction-is-a-backstop": {
+        "the honest form the tree already writes, with the limit in the same breath": (
+            "Redaction strips the credential shapes it knows on the way to the model "
+            "and the audit trail records that it happened — but an unrecognised or "
+            "deliberately-encoded secret still passes."
+        ),
+        "the plain-language form, which quantifies over what Addison RECOGNISES": (
+            "Anything a server sends back has the passwords and keys Addison "
+            "recognises stripped out of it before a model sees it."
+        ),
+        "G1, which is a floor about Addison's OWN keys and not about this at all": (
+            "API keys never reach the frontend/webview or SQLite. Keychain only, read "
+            "at the moment of use."
+        ),
+        "the rule stated as a rule, which must not trip the rule": (
+            "It reduces exposure; it does not eliminate it, and no doc may describe "
+            "it as elimination."
+        ),
+        "an ordinary sentence about where redaction runs": (
+            "Every result's text is redacted, and the kinds ride back on the "
+            "ToolResult so both dispatch paths can record them."
+        ),
+        "the audit column, which lists kinds rather than promising completeness": (
+            "`redacted` lists the KINDS the redactor stripped on the way to the "
+            "model, never the values."
+        ),
+    },
     "retired-amendment-has-no-precedence": {
         "the retired rule quoted as a quotation": (
             "It kept a \"where we differ, the amendment wins\" rule long after its "

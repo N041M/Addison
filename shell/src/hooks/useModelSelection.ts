@@ -258,6 +258,30 @@ function loadDefaultRole(): ModelRole {
   return "primary";
 }
 
+/**
+ * The core's refusal REASON, as a sentence a person can read.
+ *
+ * The wire carries a slug — `model_gone` is a row in `provider_attempts`, not
+ * English — and a slug is exactly the kind of string that must never reach a
+ * picker (CLAUDE.md: plain language, no jargon, and the readers are 54 and 68).
+ * Translating at the parse boundary rather than in the two panels means neither
+ * of them can render one by forgetting to.
+ *
+ * An unrecognised slug becomes NOTHING rather than itself: a row Addison cannot
+ * explain still dims and still says "unavailable" beside its name, which is the
+ * part that is true whatever the reason was. Printing a word the core invented
+ * would be worse than saying less.
+ */
+function refusalSentence(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  switch (value) {
+    case "model_gone":
+      return "This provider answered “no such model” the last time Addison tried it.";
+    default:
+      return undefined;
+  }
+}
+
 function saveDefaultRole(role: ModelRole): void {
   try {
     localStorage.setItem(DEFAULT_ROLE_KEY, role);
@@ -386,7 +410,7 @@ export function normalizeCloudModels(result: unknown): CloudModel[] {
       // Present only when the CORE has seen this provider refuse this model
       // (a `model_gone` row). Never inferred here — the frontend has no way to
       // know, and guessing would dim a model that works.
-      unavailable: typeof obj.unavailable === "string" ? obj.unavailable : undefined,
+      unavailable: refusalSentence(obj.unavailable),
     });
   }
   return out;

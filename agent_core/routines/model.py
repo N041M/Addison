@@ -23,7 +23,12 @@ from dataclasses import dataclass, field
 @dataclass
 class RoutineStep:
     step_id: str                       # local id within the routine, e.g. "step_1"
-    tool_id: str                       # must reference a registered tool
+    # The id this step was WRITTEN with. It can outlive the registration behind it —
+    # an `mcp:` id leaves the registry on a refresh, a removal, a failed check, a
+    # snapshot restore and every restart — so the engine resolves it with
+    # `ToolRegistry.find` and refuses the step when nothing answers, rather than
+    # assuming a saved plan still describes the tools this session has.
+    tool_id: str
     args_template: dict                # values may contain {{variable}} / {{step_id.result}} placeholders
     depends_on: list[str] = field(default_factory=list)   # step_ids that must complete first
     on_failure: str = "abort"          # "abort" | "skip" | "ask_user"

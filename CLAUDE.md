@@ -91,7 +91,8 @@ used to mean editing thirteen files.
 **Four SAFE-mode invariants (Simple profile — hold byte-for-byte):**
 
 1. **No arbitrary code/shell execution.** No `eval`, no Lua sandbox, no raw-code
-   field. OPEN's `run_command` and the two `open_only` file tools are absent from
+   field. OPEN's `run_command`, the two `open_only` file tools and every tool
+   discovered from an outside tool server are absent from
    `registry.visible_tools(SAFE)` and refused at dispatch outside OPEN.
 2. **Every `risk_tier != LOW` tool has a real `undo()`**, enforced at registration
    in `tools/registry.py`, which raises otherwise. Never satisfy this with a no-op:
@@ -188,14 +189,14 @@ which is genuinely outstanding Phase-3 work, not a leftover. Nothing in the v1
 sequence is marked: that sequence records the order the system was built in, not
 work still to do.
 
-Two steps remain — 7 and 8. Step 6 landed on 2026-08-06 (both halves; the
+One step remains — 8. Step 6 landed on 2026-08-06 (both halves; the
 capability-declaration lattice was cut in favour of the closed kind list — see
-invariant 4 above and [ROADMAP.md](ROADMAP.md) for status). The one dependency that
-is not obvious from the list is inside 7:
+invariant 4 above and [ROADMAP.md](ROADMAP.md) for status) and step 7 on 2026-08-07.
+The one dependency that is not obvious from the list was inside 7:
 
 - **7 — MCP client. DONE FOR v1: phases 1–4 of five landed 2026-08-06 to
-  2026-08-07** — configuration, discovery, dispatch through the ordinary gate with
-  a card per invocation, and the shape of what comes back. Phase 5 (stdio under
+  2026-08-07** — configuration, discovery, dispatch through the ordinary gate as
+  HIGH and destructive, and the shape of what comes back. Phase 5 (stdio under
   containment; SAFE admission) is a recorded later option, not a missing piece.
   5.5 shipped the `tool_audit` log, so the spec's promise that
   MCP tools are "gated, logged, undo-aware" is satisfiable and that half of the

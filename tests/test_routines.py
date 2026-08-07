@@ -9,6 +9,8 @@ carries over and a Routine can never out-permission the user.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from urllib.parse import urlsplit
@@ -31,7 +33,7 @@ from agent_core.tools.base import (
     ToolDefinition,
     ToolResult,
 )
-from agent_core.tools.registry import ToolRegistry
+from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
 
 
 class _Result:
@@ -401,6 +403,60 @@ def test_raising_tool_is_a_failed_step_not_a_crashed_run(tmp_path):
     # The run log was finalised, not abandoned mid-run.
     row = store._conn.execute("SELECT status FROM routine_runs").fetchone()
     assert row["status"] == "failed"
+
+
+def test_a_step_naming_a_tool_that_is_gone_is_a_failed_step_not_a_crashed_run(tmp_path):
+    """A saved step keeps the tool id it was written with, and an ``mcp:`` id is
+    registered only for as long as THIS session's last check says a tool server
+    offers it — a catalog lives in memory and discovery is on demand, so after a
+    restart nothing is registered until somebody presses "Check now". Pressing Run
+    on a routine built from a tool-server call therefore lands here, with no model
+    misbehaving and nothing else wrong.
+
+    Same requirement as the raising tool above, for the same reason: the run has to
+    FINISH. An exception out of ``run()`` skips ``_finish``, and nothing else ever
+    writes that row — so the log would say 'running', with no completed_at, for the
+    life of the database.
+
+    Mutation: change ``tool_registry.find`` back to ``get`` in the engine — this
+    fails with a KeyError, and the row is left stuck."""
+    engine, tool, gate, store = _engine(tmp_path)
+    gate.grant("mcp:Design docs:search")
+    result = engine.run(
+        _routine([RoutineStep("s1", "mcp:Design docs:search", {}, on_failure="abort")]), {}
+    )
+
+    assert result.status == "failed"
+    assert result.detail == UNKNOWN_TOOL_REFUSAL
+    assert tool.executed == []
+    # Plain language, and never the internal spelling of somebody else's tool.
+    assert "mcp:" not in result.detail
+    row = store._conn.execute(
+        "SELECT status, completed_at, step_log_json FROM routine_runs"
+    ).fetchone()
+    assert row["status"] == "failed"
+    assert row["completed_at"] is not None
+    # ...and the log names the step that could not run, which is the whole of what
+    # "show me what that routine did" has to answer here.
+    (logged,) = json.loads(row["step_log_json"])
+    assert logged["tool_id"] == "mcp:Design docs:search"
+    assert logged["result_summary"] == UNKNOWN_TOOL_REFUSAL
+
+
+def test_a_step_naming_a_missing_tool_can_be_skipped_like_any_other_failure(tmp_path):
+    """The refusal is a failed STEP, not a failed run, so ``on_failure`` still
+    decides — the property every other refusal branch in the engine has."""
+    engine, tool, gate, _ = _engine(tmp_path)
+    gate.grant("flaky")
+    result = engine.run(
+        _routine([
+            RoutineStep("s1", "mcp:Design docs:search", {}, on_failure="skip"),
+            RoutineStep("s2", "flaky", {"n": 2}, depends_on=["s1"]),
+        ]),
+        {},
+    )
+    assert result.status == "completed"
+    assert tool.executed == [{"n": 2}]
 
 
 def test_raising_tool_with_skip_continues_to_next_step(tmp_path):

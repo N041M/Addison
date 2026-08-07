@@ -102,6 +102,15 @@ and registration must refuse a collision rather than replace.
      is the failure the 2026-08-06 artifact decision reversed
      ([SAFETY.md](SAFETY.md) owns that rule). A tightening must never be trapped
      either, so removal always works.
+   - **`enabled` is READ, and nothing writes it.** There is no toggle RPC and no
+     surface for one, so no row is ever 0 today. The reads went in anyway:
+     `mcp.refresh` refuses a switched-off server with its own plain sentence and
+     `_mcp_endpoint_for` resolves no address for one, so a 0 in that column already
+     means no connection and no call. The column is snapshot-captured and restored
+     like the rest of the row, and a setting the recovery path faithfully puts back
+     while dispatch ignores it is the worse half of the two — so the phase that adds
+     a toggle adds a control over behaviour that already exists, rather than
+     discovering that a disabled server was consumed like any other.
    `test_capture_scope_covers_every_schema_table` forced the capture decision to
    be explicit, as designed. Tests: `tests/test_mcp_servers.py`,
    `shell/src/__tests__/mcp.test.tsx`, plus the generated `mcp.list` payload
@@ -117,8 +126,12 @@ and registration must refuse a collision rather than replace.
      `initialize` (offering a current protocolVersion, accepting the server's if
      older), echo the `Mcp-Session-Id` back on every later request, send
      `notifications/initialized`, then walk `tools/list` through `nextCursor`. An
-     SSE answer is parsed for its single JSON-RPC event — a minimal parser, never a
-     subscription. It reuses `net_vetting`'s resolve → vet → **pin** path rather
+     SSE answer is walked event by event for the RESPONSE — a minimal parser, never
+     a subscription: the protocol lets a server send progress or logging
+     notifications ahead of the answer, so the first object carrying an id and a
+     `result` or an `error` is the one taken, and the walk is bounded so that
+     "notifications until you find one" is not an invitation. It reuses
+     `net_vetting`'s resolve → vet → **pin** path rather
      than growing a weaker copy; that module gained `method`/`content` (MCP speaks
      POST) and `same_origin_only` (a hop off the endpoint's origin is refused, not
      followed). It is top-level for `net_vetting`'s own reason: an MCP tool is
@@ -138,7 +151,12 @@ and registration must refuse a collision rather than replace.
      `provider.connect` pattern, because a stranger's server must never hold the
      IPC pump the way `run_command` once did. `mcp.list` rows gained `status`,
      `checkedAt`, `toolCount`, `tools` and `error`; optional fields are omitted
-     rather than sent as null.
+     rather than sent as null. **`toolCount` and `tools` describe what was
+     REGISTERED, not what the server offered** — a tool refused at admission for an
+     id collision is in no registry, so dispatch would never find it and a surface
+     listing it would advertise a tool that answers nothing. It is absent from both
+     and counted once in `skipped`, with everything else Addison would not take;
+     every name in `tools` is a name dispatch would find.
    - **Surfaces.** The Settings panel gained a per-row status line and "Check now";
      the Tools surface gained a section per server (Decision 2 below).
 
@@ -158,6 +176,14 @@ and registration must refuse a collision rather than replace.
    server never offered), control characters stripped from every string, and a
    truncated description. A server's own error text is never shown; every failure
    is one of `mcp_client`'s plain sentences.
+
+   **`skipped` is a FLOOR, not a total, whenever a bound bit.** The count is what a
+   surface renders as "this server offers more than you see here", and a walk that
+   stopped at the page ceiling or the per-server cap is exactly that case — so it
+   counts itself in rather than reporting 0 about pages it never fetched. "And at
+   least one more" is the only honest thing an unfetched page can be counted as; a
+   repeated cursor is not one of these cases, because there is no further page
+   behind a cursor the server has already given.
 
    Tests: `tests/test_mcp_discovery.py` (the protocol against
    `httpx.MockTransport`, admission, both not-callable layers, the RPC surface, and
@@ -207,24 +233,38 @@ and registration must refuse a collision rather than replace.
      otherwise, **with the tool still admitted**: a bad schema costs the model its
      hints, never the person the tool.
    - **`McpTool.execute`** — the call, through the existing registry and gate with
-     no special case at either dispatch site. HIGH + destructive still means a card
-     per invocation in OPEN; SAFE still refuses above the gate. The permission
+     no special case at either dispatch site. HIGH + destructive is the strongest
+     thing a tool can declare itself to be, so every call arrives at the gate as a
+     destructive one and SAFE still refuses above the gate. What the gate then DOES
+     with a destructive call is the gate's own business and the Custom profile's
+     guards can tune it ([SAFETY.md](SAFETY.md) owns those two guards) — this tool
+     guarantees the INPUT to that decision and never a frequency. The permission
      card's description carries the provenance — *"This comes from the tool server
-     X, which you added. Addison can't know what it will do, so it asks every
-     time."* — which is also why the tool declares no `permission_detail`: a detail
-     REPLACES the description on the card, and that sentence may not be replaceable.
+     X, which you added. Addison can't know what it will do, so it treats every call
+     as one it can't undo."* — which is also why the tool declares no
+     `permission_detail`: a detail REPLACES the description on the card, and that
+     sentence may not be replaceable. **The card used to end "so it asks every
+     time"**, which is a frequency the guards can override, and a card is not the
+     place to argue with a setting the owner designed. The server's own words are
+     appended after Addison's, attributed and in quotation marks Addison writes and
+     the server cannot close — position is the boundary, because a string appended
+     to the end of another cannot reach in front of it.
    - **`tool_audit` on every outcome, in BOTH dispatch paths**, and the vocabulary
      migration that made it possible: `outcome` gained `not_callable` (retiring the
      KNOWN-GAPS entry phase 2 opened) and `failed` (the gate said yes and the call
      never landed — a different history from "approved, and it ran", and the only
      place anyone can learn which it was). SQLite cannot ALTER a CHECK, so
-     `Store._migrate_tool_audit_outcomes` rebuilds the table by rename-copy-drop,
-     preserving every existing row.
+     `Store._migrate_tool_audit_outcomes` rebuilds the table, preserving every
+     existing row — **inside one explicit transaction, with the replacement built
+     under a third name**, so the live table is never renamed out of the way and an
+     interruption leaves the database exactly as it started. (It shipped as a bare
+     rename-copy-drop, which lost the rows for good if anything went wrong halfway;
+     [BUILD-LOG.md](BUILD-LOG.md) owns that finding.)
    - **Surfaces.** The per-tool line on the Tools surface and the Settings panel's
      standing line both changed from *"Addison can't use these"* to what protects
-     the person now that it can: **it asks first, every time.** Simple renders no
-     tool-server section at all, which is unchanged and is the honest answer — the
-     tools are Developer-only.
+     the person now that it can: **"Addison asks you before each use."** Simple
+     renders no tool-server section at all, which is unchanged and is the honest
+     answer — the tools are Developer-only.
 
    **Four decisions, made 2026-08-07:**
 
@@ -247,7 +287,12 @@ and registration must refuse a collision rather than replace.
      vendor prefix plus a minimum body, so a cut through a credential leaves a head
      that matches nothing afterwards and travels intact.
    - **One call, one session, one budget.** A fresh initialize → initialized → call
-     inside a single ~15s deadline, with strict socket timeouts inside it. No
+     inside a single ~15s deadline, with strict socket timeouts inside it. **The
+     deadline covers the body read as well as the request**, checked per chunk,
+     because that loop is the one place a server still holds the clock: a socket
+     timeout is reset by every byte, so one byte every four seconds under a
+     five-second socket timeout is a connection that never times out and never ends.
+     Every other bound in the exchange is sampled before a request goes out. No
      long-lived connections, no background sessions, no reuse across calls — a
      session id is one server's handle on one person's wait, and a pool of them
      would be state outliving the turn that authorised it, held open to a program
@@ -278,21 +323,37 @@ and registration must refuse a collision rather than replace.
      content is text** is carried, because it is text; `image`, `audio`, a resource
      that is bytes, a `resource_link` and any type nobody here has heard of are
      **counted**, and the count is the whole of what travels. `CallResult` grew from
-     "the text and a flag" into the parts, none of them redacted and none of them cut
-     — the shaping happens after the seam, which is the only place it can happen.
+     "the text and a flag" into the parts, **none of them cut** — the shaping happens
+     after the seam, which is the only place it can happen. The text has not crossed
+     the redactor when it arrives; the structured channel has, because it could only
+     be done there (decision 2), and it carries back what the redactor named so the
+     audit row is the same row either channel leaked into.
    - **`mcp_client.compose_result`** — the one place a cut is made in this subsystem,
      and the one place the caps live. Text, then the structured answer fenced beside
      it, then one plain line for everything not carried, then `NOTHING_TO_SHOW` if
      neither channel had anything. It may only be handed strings the redactor has
-     already read whole, and `McpTool.execute` redacts both channels on the two lines
-     immediately above the call — adjacency is the enforcement.
-   - **`mcp_client.clean_result_text`** — escape sequences removed whole and every
-     non-printable character (the bidi overrides, the zero-width set, the BOM)
-     dropped, with newlines and tabs kept because a result is prose where a name is a
-     row. The §7 re-read's one adopted hardening; see §7 for why it earns its lines
+     already read whole. `McpTool.execute` redacts the TEXT on the line immediately
+     above the call — adjacency is the enforcement there — and the structured
+     channel crossed the same redactor earlier, inside `_structured_answer`, one
+     string value at a time (see decision 2).
+   - **`mcp_client.clean_result_text`** — escape sequences removed whole (including
+     an OSC string a server opened and never closed, whose terminator is optional and
+     whose payload would otherwise survive as prose) and every non-printable
+     character (the bidi overrides, the zero-width set, the BOM) dropped, with
+     newlines and tabs kept because a result is prose where a name is a row. The
+     characters that are PRINTABLE and still occupy no width — the combining marks,
+     the variation selectors, the Hangul fillers, the Braille blank, and the
+     zero-width joiner — are removed only where the nearest visible character on each
+     side is one a credential is made of, so a mark between two Devanagari letters
+     stays, a joiner between two emoji stays, and a mark cutting an access key in half
+     goes. The §7 re-read's one adopted hardening; see §7 for why it earns its lines
      and what it explicitly is not.
-   - **`trim_result(text, limit)`** — the limit is a parameter now, because the budget
-     is shared, and the marker states both totals.
+   - **`trim_result(text, room)`** — the room left is a parameter now, because the
+     budget is shared, and it has no default: a default would read as a supported way
+     in and would hand the whole budget back to a second channel's caller. The marker
+     states the WHOLE answer's totals, not one channel's, because it is a sentence
+     about the whole answer — otherwise a model reads "it sent 8000, 8000 are shown"
+     with a structured payload sitting left out in the line below.
    - **No protocol change, no frontend change, and nothing new reaching the webview.**
      A result goes to the MODEL. `conversation.load` keeps user rows and non-empty
      assistant rows and skips every `tool` row, so a server's words reach a person
@@ -324,8 +385,20 @@ and registration must refuse a collision rather than replace.
      text path — the same cleaning, the same redactor, the same budget. A second
      treatment for the same bytes is where a second set of caps goes missing.
    - **`structuredContent` is taken within bounds, and an oversized one is left out
-     WHOLE.** It is serialized compactly, cleaned, redacted through the same seam as
-     the text, and fenced under a label so a model can see whose words these are.
+     WHOLE.** Its strings — keys as well as values, because a server names its own
+     fields — are cleaned and redacted while they are still strings, and only then
+     serialized compactly and fenced under a label so a model can see whose words
+     these are. **The order is clean → redact → serialize, and it is not the order
+     phase 4 shipped.** Cleaning and redacting the serialized form does not work:
+     `json.dumps` escapes a NUL into six visible characters (a backslash, a `u` and
+     four zeroes) and a newline into two, so the cleaner never sees a control
+     character to remove, the credential stays split, every contiguous rule in
+     `agent_core/redaction.py` misses it, and the audit row then reports that nothing
+     was redacted — the row denying the one thing it exists to record. Scrubbing
+     inside the document is what makes this channel behave the same way as the text
+     beside it, which is what the two of them being one answer requires. **No size
+     decision is taken there**; the caps still all live after the seam, in
+     `compose_result`.
      `MAX_STRUCTURED_CHARS` is `MAX_RESULT_CHARS // 4` — written as the fraction so
      the two cannot drift — because the structured channel is a second rendering of
      the same answer, shaped for a machine, and the prose beside it is the half
@@ -445,12 +518,23 @@ actually shipped, stated at its real strength and no higher:
 - **Redaction** (`agent_core/redaction.py`) removes the credential shapes somebody
   has enumerated, naming each one in the text and in the audit row. It is a pattern
   matcher: a secret in a format nobody has listed passes untouched. It reduces
-  exposure and does not eliminate it, and no document may say otherwise.
+  exposure and does not eliminate it, and no document may say otherwise. **Two
+  shapes that a listed credential can still take are known and written down** — a
+  key split by a newline, tab, quote or backslash, and a fullwidth or homoglyph
+  one — each with what it costs and why closing it is not a wider character class;
+  [KNOWN-GAPS.md](KNOWN-GAPS.md) owns both.
 - **Caps** bound what a single answer can do to a context: 512 KB at the wire,
   8000 characters toward the model, 16 KB per schema, 100 tools per server.
-- **The gate** is the layer that actually holds: every call cards, per invocation,
-  in OPEN only. An injected instruction that persuades a model to call a tool
-  server still has to persuade the person reading the card.
+- **The gate** is the layer that actually holds, and the honest statement of it is
+  about what arrives there rather than about how often it interrupts: every call to
+  a stranger's tool reaches the gate as HIGH and destructive, in OPEN only, and no
+  claim a server makes about itself can lower that. What the gate does next is the
+  gate's — under the Custom profile's guards it can be one card for the session or
+  none at all, which is a setting the owner designed and [SAFETY.md](SAFETY.md)
+  owns. On the defaults — which is what Developer runs, and Simple never sees one of
+  these tools at all — it is a card per invocation: an injected instruction that
+  persuades a model to call a tool server still has to persuade the person reading
+  that card.
 
 None of that screens for a prompt injection, and pretending otherwise is the
 failure mode this section exists to prevent. What has changed since 2026-08-06 is
@@ -479,7 +563,9 @@ backstops are the same four, at the same strength, plus one:
   whole and every non-printable character — U+202E and its family, the zero-width
   set, the BOM — while leaving newlines and tabs, because a result is prose where
   a tool NAME is a row (phase 2 applied the same rule to names, for the same
-  reason, on a much smaller surface).
+  reason, on a much smaller surface). §4.4 above states the widening the review
+  added: the printable characters that occupy no width, removed only between two
+  characters a credential is made of.
 
   **It earns its place on one property and it is worth stating precisely: it runs
   BEFORE the redactor, and that is what makes it a security change rather than a

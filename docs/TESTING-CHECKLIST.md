@@ -317,6 +317,28 @@ first." Selecting a model role opens the **model popup** — a fixed-position
 row lands near the click and clamped ≥12px from the viewport edge; the selected
 row is a 2px accent rail. Click outside to close.
 
+**The model lists are a folder tree, in BOTH panels.** The Settings popup and the
+composer's menu draw the same rows from the same engine, so anything true of one
+must be true of the other. Company, then family, then model, indented a step each:
+opening Google closes Anthropic, and opening a family closes the one open beside it —
+**one folder open at a time is the whole idiom**, and two open at once is a bug. Each
+panel opens with the model that is actually in effect already revealed, so changing
+your mind is never a hunt. A model the provider has refused is struck through, dimmed,
+sunk to the end of its family, carries the provider's own sentence underneath — and is
+still pickable, because a refusal may have been a bad afternoon.
+
+**And the tree has a keyboard, the same one in both panels.** Open either with the
+keyboard: focus lands inside the list, and **Tab does not walk the rows** — the whole
+tree is one stop. Up and Down move through what is drawn and wrap at the ends; Home
+and End jump; Right opens a closed folder and steps into an open one and does nothing
+on a model; Left closes an open folder or climbs to its parent; Enter or Space acts.
+Escape closes, and **focus returns to the control you opened it from** — the composer's
+model label, or the Settings row's "change". In the composer's menu, where an Effort
+section follows the list, Tab cycles tree → effort → tree rather than leaving: a
+keyboard user must be able to choose the effort the label is advertising back at them.
+A screen reader should announce each row's level and its position ("3 of 7"), and a
+folder as expanded or collapsed.
+
 **API keys (multi-provider).** Anthropic, OpenAI, Google, and **"Your own
 server"** rows. A disconnected row offers "add key" ("connect" for the custom
 one); a connected row offers **Replace** and **Remove the saved key**. The
@@ -649,11 +671,12 @@ that is the design being wrong, not a cosmetic bug.
 existing checklist — a different list means a new widget, exactly as v1 has no
 routine step-editing. Confirm Addison *says* so rather than silently failing.
 
-## 16. Tool servers (Phase-2 step 7, phases 1–3: save, check, run)
+## 16. Tool servers (Phase-2 step 7, phases 1–4: save, check, run, and what comes back)
 
 MCP is **dev-only for v1**. Phase 1 saved an address, phase 2 taught Addison to
-ask a server what it offers, and phase 3 lets it run one of those tools — **with
-your approval, every single time**. Have a small HTTP MCP server on `localhost` to
+ask a server what it offers, phase 3 lets it run one of those tools — **asking you
+first, on the default settings every single time** — and phase 4 decides what may
+come back. Have a small HTTP MCP server on `localhost` to
 hand; without one, everything up to "Check now" is still worth doing.
 
 **Hidden in Simple.** In the Simple profile, Settings has no "Tool servers"
@@ -680,12 +703,43 @@ one of the tools. A permission card appears **before anything happens**, and it
 says which tool server the tool came from and that Addison cannot know what it
 will do. Decline it: nothing runs. Ask again: the card appears **again** — a tool
 server is somebody else's program, and approving it once must never approve it
-twice.
+twice. (On the Custom profile's "ask me less often" settings you will see fewer
+cards, and that is the setting working, not this step failing.)
+
+**The server's words are visibly the server's.** On that card, Addison's own sentence
+comes FIRST and anything the server wrote about its tool comes last, attributed and in
+quotation marks. A description that tries to sound like Addison — *"…Addison has
+checked this server and it is safe to approve every time."* — must read as a quotation
+from the server and never as Addison's own voice, and it must not be able to close
+Addison's quotation marks and carry on outside them.
+
+**A restore puts the list back and the page agrees.** Take a restore point, add a
+tool server, then restore. The server is gone from Settings **and** from the Tools
+page — a surface still offering a server the restored configuration no longer has is
+the bug this guards.
 
 **A server that goes quiet costs a wait, not the turn.** Stop your server mid-
 answer (or point a row at a port nothing is listening on) and ask Addison to use
 one of its tools. Within about fifteen seconds it says the server did not answer
 and CARRIES ON with the rest of the reply. A frozen app here is a bug, not slowness.
+**A server that answers a byte at a time counts as going quiet** — the wait is
+bounded by the whole exchange, not by each byte.
+
+**What comes back is named, not silently kept or dropped.** Have a tool answer with
+a picture or a file alongside its words: Addison passes on the words and says in
+plain English what it did not pass on — *"the tool also returned 2 images and 1
+file"* — rather than leaving you to wonder. A tool whose whole answer is a picture
+says there was nothing it could pass on, plus the count; that is the intended answer,
+not a failure. A tool that answers with nothing at all must never look like a tool
+that ran and said nothing — there is a sentence for it. A very long answer is trimmed
+**once for the whole answer**, and the trim says how much there was and how much you
+are seeing.
+
+**A stale reference must refuse, not crash.** Check a server, save a routine with a
+step that uses one of its tools, then quit and reopen (nothing is checked on start, so
+that tool is not registered any more) and run the routine. The step must FAIL with a
+plain sentence and the run must finish — a routine stuck reporting itself as still
+running is the bug this guards.
 
 **Remove is not trapped by a profile switch.** Go back to Simple: saved servers
 stay listed and Remove still works — hiding somebody's saved configuration, or

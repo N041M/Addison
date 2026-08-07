@@ -16,6 +16,12 @@
 // described a layout that is no longer drawn — and the panel, which never
 // unmounts, has to re-derive and re-measure rather than trust what it worked out
 // the first time it opened.
+//
+// In between is the KEYBOARD, which this panel announced and did not have: a
+// role="tree" with no key handling at all, every model row its own tab stop, and
+// no way in or out. It is the composer menu's keyboard now, deliberately the
+// same one — so the tests read like that menu's, and where they differ the panel
+// differs.
 
 import { describe, it, expect, afterEach, beforeAll, afterAll, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
@@ -26,6 +32,10 @@ afterEach(cleanup);
 function option(label: string, group: string, selected = false): ModelPopupOption {
   return { key: `${group}:${label}`, id: label, label, group, note: "quality", selected, onPick: vi.fn() };
 }
+
+/** The fixed panel: the tree's own box carries the rows, and the panel around it
+ * carries the position, the scrollport and the footer line. */
+const panel = () => screen.getByRole("tree").parentElement as HTMLElement;
 
 const GOOGLE_IDS = [
   "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
@@ -178,6 +188,162 @@ describe("the accordion", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The keyboard this panel announced and did not have
+// ---------------------------------------------------------------------------
+// It called itself a role="tree" with role="treeitem" rows and shipped none of
+// the contract: no key handling, no aria-activedescendant, a tab stop per model
+// row (twenty-two of them, inside something a screen reader announces as a
+// tree), no focus on open and no focus back on close. What it has now is the
+// composer menu's keyboard, deliberately the same one — a person who has learnt
+// one has learnt the other.
+describe("the popup's keyboard", () => {
+  const deep: ModelPopupOption[] = [
+    option("claude-opus-4-8", "Anthropic", true),
+    ...GOOGLE_IDS.map((id) => option(id, "Google")),
+    option("llama3", "On this computer"),
+  ];
+
+  /** Where the cursor says it is — resolved THROUGH THE DOCUMENT, which is the
+   * only way to catch `aria-activedescendant` naming a row that is not drawn. */
+  const cursorRow = (tree: HTMLElement) =>
+    document.getElementById(tree.getAttribute("aria-activedescendant") ?? "");
+
+  /** The panel with the control that opened it, wired the way App wires them. */
+  function openPopup(options: ModelPopupOption[] = deep) {
+    const onClose = vi.fn();
+    render(
+      <>
+        <button type="button">change</button>
+        <ModelPopup
+          anchor={{ x: 400, y: 300 }}
+          options={options}
+          onClose={onClose}
+          returnFocus={() => screen.getByRole("button", { name: "change" }).focus()}
+        />
+      </>,
+    );
+    return { tree: screen.getByRole("tree"), onClose };
+  }
+
+  it("is ONE tab stop, and moves focus into itself when it opens", () => {
+    const { tree } = openPopup();
+    expect(document.activeElement).toBe(tree);
+    expect(tree.getAttribute("tabindex")).toBe("0");
+    // Not one stop per row. A 22-model catalogue was 20+ sequential tabs, and
+    // the rows are reached with the arrows instead.
+    for (const row of screen.getAllByRole("treeitem")) {
+      expect(row.getAttribute("tabindex")).not.toBe("0");
+    }
+  });
+
+  it("opens with the cursor on the model in effect", () => {
+    const { tree } = openPopup();
+    expect(cursorRow(tree)?.textContent).toContain("claude-opus-4-8");
+  });
+
+  it("walks the rows that are drawn, and only those", () => {
+    const { tree } = openPopup();
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    // Google's eight models are folded away, so the next row is its folder.
+    expect(cursorRow(tree)?.textContent).toContain("Google");
+    fireEvent.keyDown(tree, { key: "End" });
+    expect(cursorRow(tree)?.textContent).toContain("On this computer");
+    fireEvent.keyDown(tree, { key: "Home" });
+    expect(cursorRow(tree)?.textContent).toContain("Anthropic");
+    fireEvent.keyDown(tree, { key: "ArrowUp" });
+    expect(cursorRow(tree)?.textContent).toContain("On this computer");
+  });
+
+  it("opens a folder with Right, closes it with Left, and climbs", () => {
+    const { tree } = openPopup();
+    fireEvent.keyDown(tree, { key: "ArrowDown" }); // Google's folder
+
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+    expect(screen.getByText("Gemini 2.5")).toBeTruthy();
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // an OPEN folder steps inside
+    expect(cursorRow(tree)?.textContent).toContain("Gemini 2.5");
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // …and opens that one
+    expect(modelRows()).toHaveLength(3);
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    expect(cursorRow(tree)?.textContent).toContain("gemini-2.5-pro");
+    // On a model there is nothing to open: Right stops where the tree ends.
+    fireEvent.keyDown(tree, { key: "ArrowRight" });
+    expect(cursorRow(tree)?.textContent).toContain("gemini-2.5-pro");
+
+    fireEvent.keyDown(tree, { key: "ArrowLeft" }); // climbs to its family
+    expect(cursorRow(tree)?.textContent).toContain("Gemini 2.5");
+    expect(modelRows()).toHaveLength(3); // climbing closes nothing
+    fireEvent.keyDown(tree, { key: "ArrowLeft" }); // now it closes
+    expect(modelRows()).toHaveLength(0);
+  });
+
+  it("picks a model with Enter, toggles a folder with Space", () => {
+    const { tree } = openPopup();
+    fireEvent.keyDown(tree, { key: "ArrowDown" }); // Google's folder
+    fireEvent.keyDown(tree, { key: " " });
+    expect(screen.getByText("Gemini 2.5")).toBeTruthy();
+    expect(deep[0].onPick).not.toHaveBeenCalled();
+
+    // Opening Google shut Anthropic, which is the accordion doing its job.
+    fireEvent.keyDown(tree, { key: "Home" }); // back to Anthropic
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // open it again
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    expect(cursorRow(tree)?.textContent).toContain("claude-opus-4-8");
+    fireEvent.keyDown(tree, { key: "Enter" });
+    expect(deep[0].onPick).toHaveBeenCalledTimes(1);
+  });
+
+  it("never names a row that is not drawn", () => {
+    // An accordion closes over the cursor from three directions: its own folder,
+    // a parent, or a sibling company opening under the mouse. Telling a screen
+    // reader the cursor is on nothing is the classic failure of this pattern.
+    const { tree } = openPopup();
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // Google open
+    fireEvent.keyDown(tree, { key: "ArrowDown" });
+    fireEvent.keyDown(tree, { key: "ArrowRight" }); // Gemini 2.5 open
+    fireEvent.keyDown(tree, { key: "ArrowDown" }); // onto a model
+
+    fireEvent.click(screen.getByText("Anthropic")); // the whole path shuts
+    expect(cursorRow(tree), "the cursor must still name a rendered row").toBeTruthy();
+    expect(cursorRow(tree)?.textContent).toContain("Anthropic");
+  });
+
+  it("hands focus back to the control that opened it", () => {
+    // Escape closed the panel and left focus on <body> — a keyboard user was
+    // returned to the top of the Settings page for having changed their mind.
+    const { tree, onClose } = openPopup();
+    expect(document.activeElement).toBe(tree);
+
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(onClose).toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "change" }));
+  });
+
+  it("hands focus back when a model is picked", () => {
+    const options = [option("claude-opus-4-8", "Anthropic", true)];
+    openPopup(options);
+    fireEvent.click(screen.getByRole("treeitem", { selected: true }));
+    expect(options[0].onPick).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "change" }));
+  });
+
+  it("leaves focus where an outside click put it", () => {
+    // A click that landed on another control has already said where focus
+    // belongs; taking it back would fight the person.
+    const { onClose } = openPopup();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    elsewhere.focus();
+    fireEvent.mouseDown(elsewhere);
+
+    expect(onClose).toHaveBeenCalled();
+    expect(document.activeElement).toBe(elsewhere);
+    elsewhere.remove();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // A model the provider has actually refused
 // ---------------------------------------------------------------------------
 // Core-observed, never inferred: a `model_gone` row in `provider_attempts`, from
@@ -187,11 +353,15 @@ describe("the accordion", () => {
 // would be a worse mystery than one visibly struck through. So it is still a row
 // you can pick, inside its folder like any other.
 describe("a refused model", () => {
+  const REASON = "no longer available to new users";
   const refused = (label: string, selected = false): ModelPopupOption => ({
     ...option(label, "Google", selected),
     note: "unavailable",
-    unavailable: true,
+    unavailable: REASON,
   });
+  /** The note at the right of a row — the word, not the reason under it. */
+  const noteOf = (row: HTMLElement) =>
+    Array.from(row.querySelectorAll("span")).find((s) => s.textContent === "unavailable");
 
   it("is dimmed and struck through, and still picks", () => {
     const options = [option("gemini-2.5-pro", "Google", true), refused("gemini-2.5-flash")];
@@ -206,9 +376,26 @@ describe("a refused model", () => {
     expect(options[1].onPick).toHaveBeenCalledTimes(1);
   });
 
-  it("never wears the accent rail, even as the model in effect", () => {
-    // The rail means "this is what answers". A row that is struck through
-    // because the provider refused it is the one row that must not claim it.
+  it("says WHY, in the provider's own words, in the row itself", () => {
+    // "unavailable" alone is a dead end: the person learns that a row is struck
+    // through and nothing they can act on. In the row rather than a `title`, so
+    // it is not hover-only and rides into the row's accessible name.
+    const options = [option("gemini-2.5-pro", "Google", true), refused("gemini-2.5-flash")];
+    render(<ModelPopup anchor={{ x: 400, y: 300 }} options={options} onClose={vi.fn()} />);
+
+    const row = screen.getByRole("treeitem", { name: /gemini-2\.5-flash/ });
+    expect(row.textContent).toContain(REASON);
+    expect(screen.getByRole("treeitem", { name: new RegExp(REASON) })).toBe(row);
+    // And a working row says nothing of the kind.
+    const ok = screen.getByRole("treeitem", { name: /gemini-2\.5-pro/ });
+    expect(ok.textContent).not.toContain(REASON);
+  });
+
+  it("never wears the accent, rail or note, even as the model in effect", () => {
+    // The accent is for actions, selection rails and live state (CLAUDE.md). A
+    // row that is struck through because the provider refused it is the one row
+    // that must not claim any of the three — the rail was already suppressed
+    // while the note went on printing "unavailable ✓" in violet.
     const options = [option("gemini-2.5-pro", "Google"), refused("gemini-2.5-flash", true)];
     render(<ModelPopup anchor={{ x: 400, y: 300 }} options={options} onClose={vi.fn()} />);
 
@@ -216,6 +403,23 @@ describe("a refused model", () => {
     expect(row.textContent).toContain("gemini-2.5-flash");
     expect(row.className).toContain("border-l-transparent");
     expect(row.className).not.toContain("border-l-accent");
+    expect(noteOf(row)?.className).not.toContain("text-accent");
+    expect(noteOf(row)?.className).toContain("text-disabled");
+  });
+
+  it("leaves the accent on a working row that IS in effect", () => {
+    // The other half of the rule: the accent moved off refusals, not off
+    // selection, and a test that only watched the refused row would pass with
+    // the note drawn grey everywhere.
+    render(
+      <ModelPopup
+        anchor={{ x: 400, y: 300 }}
+        options={[option("gemini-2.5-pro", "Google", true)]}
+        onClose={vi.fn()}
+      />,
+    );
+    const row = screen.getByRole("treeitem", { selected: true });
+    expect(row.querySelector(".text-accent")?.textContent).toBe("quality");
   });
 });
 
@@ -380,7 +584,11 @@ describe("the popup's position, over a real layout", () => {
     Object.defineProperty(target, name, { configurable: true, ...descriptor });
   }
 
-  const isPanel = (el: Element) => el.getAttribute("role") === "tree";
+  // The panel is the box the tree sits in: it holds the position, the
+  // scrollport and the footer line, while the tree holds the rows.
+  const isPanel = (el: Element) => el.firstElementChild?.getAttribute("role") === "tree";
+  /** What the panel is as tall as: every row drawn, plus the footer. */
+  const panelRows = (el: Element) => el.querySelectorAll('[role="treeitem"]').length + 1;
 
   beforeAll(() => {
     stub(HTMLElement.prototype, "offsetTop", {
@@ -391,12 +599,12 @@ describe("the popup's position, over a real layout", () => {
     });
     stub(HTMLElement.prototype, "offsetHeight", {
       get(this: HTMLElement) {
-        return isPanel(this) ? this.children.length * ROW_H : ROW_H;
+        return isPanel(this) ? panelRows(this) * ROW_H : ROW_H;
       },
     });
     stub(Element.prototype, "scrollHeight", {
       get(this: Element) {
-        return isPanel(this) ? this.children.length * ROW_H : ROW_H;
+        return isPanel(this) ? panelRows(this) * ROW_H : ROW_H;
       },
     });
     stub(Element.prototype, "clientHeight", {
@@ -445,7 +653,7 @@ describe("the popup's position, over a real layout", () => {
     // with its two models — the selected row is the seventh child, centre 260.
     // The old arithmetic (14 + index × 29, with the row at index 7) said 217,
     // which is a row it never sits on.
-    expect(screen.getByRole("tree").style.top).toBe("440px");
+    expect(panel().style.top).toBe("440px");
   });
 
   it("does not slide out from under the hand when a folder opens", () => {
@@ -458,12 +666,11 @@ describe("the popup's position, over a real layout", () => {
       option("llama3", "On this computer", true),
     ];
     render(<ModelPopup anchor={{ x: 400, y: 700 }} options={options} onClose={vi.fn()} />);
-    const panel = screen.getByRole("tree");
-    const before = panel.style.top;
+    const before = panel().style.top;
 
     fireEvent.click(screen.getByText("Google"));
     expect(screen.getByText("Gemini 2.5")).toBeTruthy();
-    expect(panel.style.top).toBe(before);
+    expect(panel().style.top).toBe(before);
   });
 
   it("re-clamps to the bottom edge as opening folders makes it taller", () => {
@@ -476,14 +683,13 @@ describe("the popup's position, over a real layout", () => {
       ...GOOGLE_IDS.map((id) => option(id, "Google")),
     ];
     render(<ModelPopup anchor={{ x: 400, y: 300 }} options={options} onClose={vi.fn()} />);
-    const panel = screen.getByRole("tree");
     // Four rows drawn (160px), so nothing is clamped yet.
-    expect(panel.style.top).toBe("240px");
+    expect(panel().style.top).toBe("240px");
 
     fireEvent.click(screen.getByText("Google")); // seven rows: still room
-    expect(panel.style.top).toBe("240px");
+    expect(panel().style.top).toBe("240px");
     fireEvent.click(screen.getByText("Gemini 2.5")); // ten rows: the clamp bites
-    expect(panel.style.top).toBe("188px");
+    expect(panel().style.top).toBe("188px");
   });
 
   // A panel pinned to the margin and scrolling inside itself is only half an
@@ -495,12 +701,12 @@ describe("the popup's position, over a real layout", () => {
     scrollportHeight = 200; // five rows of a nine-row panel
     render(<ModelPopup anchor={{ x: 400, y: 400 }} options={deepInGoogle} onClose={vi.fn()} />);
 
-    const panel = screen.getByRole("tree");
+    const box = panel();
     const row = screen.getByRole("treeitem", { selected: true });
     const centre = row.offsetTop + row.offsetHeight / 2;
-    expect(panel.scrollTop).toBeGreaterThan(0);
-    expect(centre).toBeGreaterThanOrEqual(panel.scrollTop);
-    expect(centre).toBeLessThanOrEqual(panel.scrollTop + panel.clientHeight);
+    expect(box.scrollTop).toBeGreaterThan(0);
+    expect(centre).toBeGreaterThanOrEqual(box.scrollTop);
+    expect(centre).toBeLessThanOrEqual(box.scrollTop + box.clientHeight);
   });
 
   it("leaves the scroll alone when the whole list fits", () => {
@@ -508,6 +714,6 @@ describe("the popup's position, over a real layout", () => {
     // its own first rows for no reason.
     viewportHeight(2000);
     render(<ModelPopup anchor={{ x: 400, y: 400 }} options={deepInGoogle} onClose={vi.fn()} />);
-    expect(screen.getByRole("tree").scrollTop).toBe(0);
+    expect(panel().scrollTop).toBe(0);
   });
 });
