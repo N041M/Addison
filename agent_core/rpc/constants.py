@@ -76,21 +76,30 @@ _WIDGET_DEV_ABILITIES_MESSAGE = (
 )
 
 
-def _unavailable_marker(mode: PolicyMode, created_in_mode, message: str) -> dict | None:
+def _unavailable_marker(mode: PolicyMode, needs_dev: bool, message: str) -> dict | None:
     """The DISPLAY-ONLY unavailability marker for one list row, or None.
 
     **This is not the enforcement, and must never become it.** What actually stops
-    a dev-created artifact in SAFE is dispatch: ``routine.run``'s refusal
-    (``rpc/routines.py``), the routine engine's per-step ``dev_only`` check, and
-    ``widget.run``'s SAFE refusal (``rpc/widgets.py``). This function only decides
-    what a list SAYS. If the two ever disagree — a row listed without a marker,
-    say — **dispatch wins**: the absence of a marker is not a permission, and a
-    stale or hand-edited frontend gets the same refusal as an honest one.
+    an artifact that needs developer abilities in SAFE is dispatch:
+    ``routine.run``'s refusal (``rpc/routines.py``), the routine engine's per-step
+    ``dev_only`` check, and ``widget.run``'s SAFE refusal (``rpc/widgets.py``).
+    This function only decides what a list SAYS. If the two ever disagree — a row
+    listed without a marker, say — **dispatch wins**: the absence of a marker is
+    not a permission, and a stale or hand-edited frontend gets the same refusal as
+    an honest one.
+
+    ``needs_dev`` is a DECIDED BOOLEAN, and taking it rather than the row's
+    ``created_in_mode`` is the point. The stamp records where an artifact was
+    born; the question here is what it ASKS FOR, and the two part company for
+    every artifact that is perfectly usable in Simple but happened to be made
+    while Developer was active. Callers derive it from the artifact itself —
+    ``widgets.widget_uses_dev_abilities`` — so a wrong answer has to be written
+    somewhere it can be read, rather than inherited from a stamp.
 
     Returns ``{"reason": <slug>, "message": <plain sentence>}``; callers omit the
     key entirely when this is None, so an available row's shape is unchanged.
     """
-    if mode is not PolicyMode.SAFE or created_in_mode != PolicyMode.OPEN.value:
+    if mode is not PolicyMode.SAFE or not needs_dev:
         return None
     return {"reason": _UNAVAILABLE_DEV_ABILITIES, "message": message}
 

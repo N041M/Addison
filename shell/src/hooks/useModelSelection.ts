@@ -383,6 +383,10 @@ export function normalizeCloudModels(result: unknown): CloudModel[] {
       providerLabel: typeof obj.providerLabel === "string" ? obj.providerLabel : undefined,
       // Fails closed: only an explicit `true` from the core makes a model free.
       free: obj.free === true,
+      // Present only when the CORE has seen this provider refuse this model
+      // (a `model_gone` row). Never inferred here — the frontend has no way to
+      // know, and guessing would dim a model that works.
+      unavailable: typeof obj.unavailable === "string" ? obj.unavailable : undefined,
     });
   }
   return out;

@@ -72,6 +72,14 @@ class Store:
         # with the ONLY safe default. 'unknown' — never 'absent' — because a row
         # written before this column says nothing about whether a key is saved, and
         # a stored "no key" is what routes a turn to the external relay.
+        # `provider_attempts` shipped without `server_detail` and gained it hours
+        # later. `CREATE TABLE IF NOT EXISTS` does nothing to a table that already
+        # exists, so without this line the column simply never appears on any
+        # database that saw the first version — and `insert_provider_attempt`
+        # raises "no such column" into the orchestrator's best-effort `except`,
+        # which drops the row in silence. A log that quietly stops logging is worse
+        # than no log: the empty table reads as "nothing went wrong".
+        self._add_column_if_missing("provider_attempts", "server_detail", "TEXT")
         self._add_column_if_missing(
             "provider_config",
             "secret_presence",
@@ -766,6 +774,82 @@ class Store:
             (int(limit),),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def insert_provider_attempt(
+        self,
+        *,
+        id: str,
+        conversation_id: str | None,
+        provider: str,
+        model: str,
+        outcome: str,
+        status_code: int | None,
+        detail: str | None,
+        server_detail: str | None,
+        created_at: int,
+    ) -> None:
+        """Record one provider call that FAILED (2026-08-07).
+
+        The `tool_audit` sibling, for the other decision Addison makes without
+        being asked: which model answers. `usage_log` holds only successes, so a
+        provider that never succeeded left nothing behind at all — which is how a
+        Google key spent an evening returning 404 while the Connections panel said
+        "connected" and the only evidence was an activity line that scrolled away.
+
+        ``status_code`` is the point of the row. The exception CLASS already says
+        whether the chain walked; the number says what the server actually replied,
+        and that is the difference between "rate-limited, wait" and "that model
+        does not exist, stop offering it". NULL means the request never reached a
+        server (a timeout), which is not the same as a server saying nothing.
+
+        ``detail`` is the plain sentence the person was shown, redacted on write on
+        the ``tool_audit`` precedent — these are provider-authored strings and this
+        row is durable and unpruned, so a message that ever echoes a key back must
+        not be what makes it permanent.
+
+        Best-effort by design, like the audit trail: a failure to record a failure
+        must never itself end the turn."""
+        self._conn.execute(
+            "INSERT INTO provider_attempts "
+            "(id, conversation_id, provider, model, outcome, status_code, detail, "
+            " server_detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                id,
+                conversation_id,
+                provider,
+                model,
+                outcome,
+                None if status_code is None else int(status_code),
+                redact(detail).text if detail else detail,
+                redact(server_detail).text if server_detail else server_detail,
+                created_at,
+            ),
+        )
+        self._conn.commit()
+
+    def list_provider_attempts(self, limit: int = 100) -> list[dict[str, Any]]:
+        """The newest provider failures, newest first — the query that answers
+        "why isn't Gemini working?" in one line instead of an evening."""
+        rows = self._conn.execute(
+            "SELECT id, conversation_id, provider, model, outcome, status_code, "
+            "       detail, server_detail, created_at "
+            "FROM provider_attempts ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def refused_model_ids(self) -> set[str]:
+        """Model ids a provider has answered 404 for (`model_gone`).
+
+        The picker reads this to dim and sink a model that is listed but will not
+        answer — the only filter in the app built on what HAPPENED rather than on
+        what a model looks like. Ids only: the reason is in the row, and the
+        picker deliberately shows one sentence for the class rather than repeating
+        a provider's own wording thirty times in plain sight."""
+        rows = self._conn.execute(
+            "SELECT DISTINCT model FROM provider_attempts WHERE outcome = 'model_gone'"
+        ).fetchall()
+        return {row["model"] for row in rows if row["model"]}
 
     def prune_usage_log(self, cutoff: int) -> None:
         """Retention for the §4.8 usage substrate: delete every usage row strictly

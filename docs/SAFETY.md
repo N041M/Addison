@@ -66,11 +66,25 @@ session-grant model in both modes — per-invocation is specific to destructive 
 actions.
 
 **Artifact disabling** *(renamed from "artifact hiding"; owner decision
-2026-08-06).* Routines/widgets created in OPEN mode (`created_in_mode` column)
-are **listed but disabled in SAFE mode** — shown, never runnable — and return
-**untouched** when Developer mode is active again. Switching modes is always
-allowed. **Snapshots are the one exception and it is not negotiable — see
-"Snapshots are never hidden by mode" below.**
+2026-08-06).* Routines/widgets that **need** developer abilities are **listed but
+disabled in SAFE mode** — shown, never runnable — and return **untouched** when
+Developer mode is active again. Switching modes is always allowed. **Snapshots
+are the one exception and it is not negotiable — see "Snapshots are never hidden
+by mode" below.**
+
+*"Needs developer abilities" is asked of the ARTIFACT, never of the
+`created_in_mode` stamp* — **widgets, since 2026-08-06;
+[KNOWN-GAPS.md](KNOWN-GAPS.md) holds the routine half, which still reads the
+stamp.** The stamp records where a thing was born, and the two answers part
+company for everything that is perfectly usable in Simple but happened to be made
+while Developer was active. Read off the stamp, a shopping-list widget arrived in
+Simple disabled, announcing that it "uses developer abilities" — about a widget
+that invokes no tool at all — with its boxes frozen. Both halves of that were
+false, and the person had no way to tell that from a real refusal. The widget
+answer is derived from the validator (`widgets.widget_uses_dev_abilities`: OPEN
+accepts it and SAFE does not) plus a look-through for what a launcher POINTS AT,
+so a future OPEN-only kind is covered on the day it is added rather than the day
+someone remembers this paragraph.
 
 *They used to be hidden: filtered out of `routine.list` and `widget.list`
 entirely.* The refusal was never the problem — losing sight of the work was.

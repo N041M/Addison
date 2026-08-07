@@ -105,8 +105,30 @@ class ProviderUnavailable(RuntimeError):
 
 
 class ProviderRequestRejected(RuntimeError):
-    """A 4xx other than 401/403/429 — the request itself is bad, so the next
+    """A 4xx other than 401/403/404/429 — the request itself is bad, so the next
     provider would reject it identically. The turn fails immediately (D4)."""
+
+
+class ProviderModelGone(ProviderUnavailable):
+    """HTTP 404 — the MODEL is not there, though the request was fine.
+
+    Split out of ``ProviderRequestRejected`` on 2026-08-07, from a real failure
+    this codebase could not previously express. Google's listing endpoint returned
+    ``gemini-2.5-flash``, advertising ``generateContent``; the generate endpoint
+    answered 404 with *"This model models/gemini-2.5-flash is no longer available
+    to new users."* — a model retired for accounts created after some cutoff, and
+    still in the catalogue.
+
+    D4's rule for a rejected request is "do not walk, the next provider gets the
+    same bad request". That is TRUE of a malformed body and FALSE here: nothing is
+    wrong with the request, one model is gone, and every other candidate would
+    answer it. Under the old class the chain gave up on the whole provider and
+    jumped to a different vendor's model.
+
+    A ``ProviderUnavailable`` subclass, so the existing walk applies with no new
+    branch — but the orchestrator cools the MODEL rather than the provider, because
+    "this one model is retired" says nothing about its siblings, and cooling all of
+    Google for a dead Gemini 2.5 would take out Gemini 3 with it."""
 
 
 class ProviderAuthFailed(RuntimeError):
@@ -131,20 +153,104 @@ class ProviderKeyRejected(ProviderAuthFailed):
     tell somebody to replace a key that works."""
 
 
-def exception_for_http_status(status_code: int, message: str) -> RuntimeError:
+def exception_for_http_status(
+    status_code: int, message: str, server_detail: str | None = None
+) -> RuntimeError:
     """Classify a >=400 status into the hierarchy, carrying the caller's own plain
     message unchanged. 401/403 -> the key was rejected; 429 or 5xx -> unavailable;
     every other 4xx -> rejected. The order matters: auth is checked before the
     429/5xx band.
 
     This function is the single choke point every provider's ``send`` funnels an
-    error status through, which is why §5.2 needs no per-provider edit — and why the
-    401/403 line is the one to mutate when checking that these tests can fail."""
+    error status through, which is why §5.2 needs no per-provider edit — and why
+    the 401/403 line is the one to mutate when checking that these tests can fail.
+
+    The status is ATTACHED to the exception as well as classified by it. The class
+    answers "may the loop try the next candidate?"; the number answers "what did
+    the server actually say?", and only the second one is any use to somebody
+    asking why a provider stopped working. Losing it is what made a real 404
+    indistinguishable from a rate limit in the provider-attempt log."""
+    exc: RuntimeError
     if status_code in (401, 403):
-        return ProviderKeyRejected(message)
-    if status_code == 429 or status_code >= 500:
-        return ProviderUnavailable(message)
-    return ProviderRequestRejected(message)
+        exc = ProviderKeyRejected(message)
+    elif status_code == 404:
+        # Checked BEFORE the 429/5xx band and after auth, on the same reasoning as
+        # the rest of this ladder: 404 is about the MODEL, not the request and not
+        # the provider's health.
+        exc = ProviderModelGone(message)
+    elif status_code == 429 or status_code >= 500:
+        exc = ProviderUnavailable(message)
+    else:
+        exc = ProviderRequestRejected(message)
+    exc.status_code = status_code  # type: ignore[attr-defined]
+    # The provider's own words, for the log only — never for the screen, which
+    # keeps the plain sentence ``message`` already carries.
+    exc.server_detail = server_detail  # type: ignore[attr-defined]
+    return exc
+
+
+def status_code_of(exc: BaseException) -> int | None:
+    """The HTTP status behind a provider failure, or None when there wasn't one.
+
+    None is the honest answer for a connect/read timeout or a DNS failure — those
+    never reached a server, and recording a 0 or a 500 for them would invent a
+    reply nobody sent."""
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+# What a provider's error body is allowed to contribute to the log. Long enough
+# for the sentence that names the cause, short enough that a server which answers
+# an error with a page of HTML cannot fill the table.
+_MAX_SERVER_DETAIL = 400
+
+
+def server_detail_of(exc: BaseException) -> str | None:
+    """What the SERVER said, as opposed to what Addison told the person.
+
+    These are different sentences and only one of them is diagnostic. Addison
+    shows "The request to Google failed (status 404). Please try again." — plain
+    language, no jargon, the house rule and the right thing on screen. Google said
+    which model and which API version, and that is the sentence that ends an
+    investigation. Recording only ours meant the log faithfully preserved our own
+    guess about a failure we did not understand."""
+    detail = getattr(exc, "server_detail", None)
+    if not isinstance(detail, str):
+        return None
+    detail = detail.strip()
+    return detail[:_MAX_SERVER_DETAIL] or None
+
+
+def error_message_from_body(response: httpx.Response) -> str | None:
+    """The provider's own explanation, dug out of an error response.
+
+    Anthropic, OpenAI and Google all wrap it as ``{"error": {"message": ...}}``,
+    so one reader serves every provider rather than three that drift. Anything
+    unreadable — HTML from a proxy, an empty body, a truncated stream — yields
+    None, because a failure to explain a failure must never become a failure.
+
+    ``read()`` first, and that is not belt-and-braces: on the STREAMING path the
+    response arrives with its body deliberately unread (``open_stream`` returns as
+    soon as the status line lands), so ``.json()`` alone raises ``ResponseNotRead``
+    and every streamed failure — which is every failure a chat turn produces —
+    would explain nothing. Reading an ERROR response costs nothing; it is small by
+    construction and the stream is being abandoned either way."""
+    try:
+        if hasattr(response, "read"):
+            response.read()
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    error = body.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    if isinstance(error, str) and error.strip():
+        return error.strip()
+    return None
 
 
 # --- streaming primitives (shared by every streaming provider) --------------

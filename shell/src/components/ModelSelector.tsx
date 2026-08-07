@@ -30,10 +30,18 @@
 // When there is no Effort section there is nothing to cycle to, so Tab keeps its
 // old behaviour and leaves.
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import { isMotionEnabled } from "../lib/scramble";
 import type { ModelRole } from "../types/protocol";
 import type { CloudModel, RoleOption } from "../types/ui";
+import { initialCollapsedGroups, modelListRows } from "../lib/modelGroups";
 
 interface Props {
   roles: RoleOption[];
@@ -89,12 +97,16 @@ function defaultCloud(models: CloudModel[]): CloudModel | undefined {
 interface Option {
   role: ModelRole;
   id: string;
-  /** Row label (may carry a provider suffix when several providers connected). */
+  /** Row label — the model's own name, never provider-suffixed (see `group`). */
   label: string;
+  /** The company heading this row sits under ("Google", "On this computer"). */
+  group: string;
   /** Compact label for the composer's own label (never provider-suffixed). */
   pillLabel: string;
   /** The mono note at the right of the row: "local" | "free" | "quality". */
   note: string;
+  /** The provider has refused this model before — dimmed, and sunk by the core. */
+  unavailable?: boolean;
   current: boolean;
 }
 
@@ -146,27 +158,27 @@ export function ModelSelector({
     ? selectedEffort
     : middleEffort;
 
-  // Attribute each model to its provider ("GPT-4.1 — OpenAI") only when more than
-  // one provider is connected — with a single provider the suffix is just noise.
-  const providerCount = new Set(cloud.map((m) => m.provider).filter((p): p is string => Boolean(p)))
-    .size;
-  const cloudRowLabel = (m: CloudModel) =>
-    providerCount > 1 && m.providerLabel ? `${m.label} — ${m.providerLabel}` : m.label;
-
+  // Attribution moved from a per-row suffix ("GPT-4.1 — OpenAI") to a heading per
+  // company, so it is said once per group instead of once per row — and the row
+  // keeps its full width for the model's own name. The core already emits a
+  // provider's models together, so grouping is preserved here, never imposed.
   const options: Option[] = [
     ...cloud.map((m) => ({
       role: "primary" as ModelRole,
       id: m.id,
-      label: cloudRowLabel(m),
+      label: m.label,
+      group: m.providerLabel ?? "Cloud",
       pillLabel: m.label,
       // Only the core may call a model free (see the file header).
-      note: m.free ? "free" : "quality",
+      note: m.unavailable ? "unavailable" : m.free ? "free" : "quality",
+      unavailable: Boolean(m.unavailable),
       current: !onLocal && m.id === activeCloud?.id,
     })),
     ...locals.map((m) => ({
       role: "local" as ModelRole,
       id: m.id,
       label: m.label,
+      group: "On this computer",
       pillLabel: m.label,
       note: "local",
       current: onLocal && m.id === activeLocalId,
@@ -210,6 +222,36 @@ export function ModelSelector({
   // focus stranded on <body>. Asking for it a render later cost exactly that.
   const menuPresent = open || exiting;
   const [activeIndex, setActiveIndex] = useState(currentIndex);
+  // Folded companies. Re-seeded every time the menu OPENS (below) rather than
+  // held across openings: the menu is a glance surface, and yesterday's expansion
+  // is a stale answer to "what is on right now?".
+  const [collapsed, setCollapsed] = useState<Set<string>>(() =>
+    initialCollapsedGroups(options, (o) => o.current),
+  );
+  const toggleGroup = (group: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(group)) next.add(group);
+      return next;
+    });
+  const rows = modelListRows(options, collapsed);
+  // ARROW KEYS WALK WHAT IS ON SCREEN, not what is in `options`. Collapsing hides
+  // rows without removing them, so navigating the full array would step onto rows
+  // nobody can see — `aria-activedescendant` would name an element that is not
+  // rendered, and the list would appear to freeze for a keyboard user.
+  //
+  // `activeIndex` still indexes `options`, so identity survives a fold/unfold;
+  // only the ORDER of travel comes from here.
+  const visible = rows.flatMap((r) => (r.kind === "option" ? [r.index] : []));
+  const stepActive = (delta: number) =>
+    setActiveIndex((i) => {
+      if (visible.length === 0) return i;
+      const at = visible.indexOf(i);
+      // Not visible (its group was just folded): re-enter at the nearest end
+      // rather than jumping to an arbitrary row.
+      if (at === -1) return delta > 0 ? visible[0] : visible[visible.length - 1];
+      return visible[(at + delta + visible.length) % visible.length];
+    });
   const rootRef = useRef<HTMLDivElement | null>(null);
   const labelRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -222,6 +264,7 @@ export function ModelSelector({
   useLayoutEffect(() => {
     if (open) {
       setActiveIndex(currentIndex);
+      setCollapsed(initialCollapsedGroups(options, (o) => o.current));
       listRef.current?.focus();
     }
     // Only re-run when the menu toggles.
@@ -266,19 +309,38 @@ export function ModelSelector({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        setActiveIndex((i) => (i + 1) % options.length);
+        stepActive(1);
         break;
       case "ArrowUp":
         e.preventDefault();
-        setActiveIndex((i) => (i - 1 + options.length) % options.length);
+        stepActive(-1);
         break;
+      case "ArrowRight":
+      case "ArrowLeft": {
+        // Fold and unfold the active row's company. This is how a keyboard
+        // reaches an expansion at all: the headings are buttons for the mouse,
+        // but putting them in the tab order would break the panel's Tab
+        // contract (list -> effort -> list), so the listbox grows the
+        // left/right idiom instead of the menu growing tab stops.
+        e.preventDefault();
+        const group = options[activeIndex]?.group;
+        if (!group) break;
+        const wantOpen = e.key === "ArrowRight";
+        setCollapsed((prev) => {
+          const next = new Set(prev);
+          if (wantOpen) next.delete(group);
+          else next.add(group);
+          return next;
+        });
+        break;
+      }
       case "Home":
         e.preventDefault();
-        setActiveIndex(0);
+        if (visible.length) setActiveIndex(visible[0]);
         break;
       case "End":
         e.preventDefault();
-        setActiveIndex(options.length - 1);
+        if (visible.length) setActiveIndex(visible[visible.length - 1]);
         break;
       case "Enter":
       case " ":
@@ -394,38 +456,98 @@ export function ModelSelector({
             onKeyDown={onListKeyDown}
             className="no-scrollbar max-h-[40vh] overflow-y-auto outline-none"
           >
-            {options.map((o, i) => (
-              <div
-                key={`${o.role}:${o.id}`}
-                id={optionId(i)}
-                role="option"
-                aria-selected={o.current}
-                onClick={() => pickModel(o)}
-                onMouseEnter={() => setActiveIndex(i)}
-                className={
-                  "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
-                  (i === activeIndex ? "bg-line" : "")
-                }
-              >
-                <span
+            {rows.map((row) => {
+              if (row.kind === "family") {
+                // Plain, and deliberately not foldable — see ModelPopup.
+                return (
+                  <div
+                    key={`f:${row.key}`}
+                    role="presentation"
+                    className="px-2.5 pb-0.5 pt-3 font-mono text-[10px] uppercase tracking-wider text-disabled"
+                  >
+                    {row.family}
+                  </div>
+                );
+              }
+              if (row.kind === "heading") {
+                return (
+                  <button
+                    key={`h:${row.key}`}
+                    type="button"
+                    // A real button because it acts, but OUT of the tab order
+                    // (tabIndex -1): Tab cycles list -> effort -> list in this
+                    // panel, and adding a stop per company would rewrite that
+                    // contract for anyone who already knows it. Keyboard users
+                    // fold with Left/Right on the row itself instead.
+                    tabIndex={-1}
+                    aria-expanded={!row.collapsed}
+                    onClick={() => toggleGroup(row.key)}
+                    className={
+                      "flex w-full items-baseline gap-2 px-2.5 pb-0.5 pt-1 text-left font-mono " +
+                      "text-[10px] text-disabled transition-colors hover:text-muted"
+                    }
+                  >
+                    <span className="min-w-0 truncate">{row.key}</span>
+                    <span className="flex-1" />
+                    <span className="shrink-0">
+                      {row.collapsed ? row.total : "collapse"}
+                    </span>
+                  </button>
+                );
+              }
+              if (row.kind === "more") {
+                return (
+                  <button
+                    key={`m:${row.key}`}
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => toggleGroup(row.key)}
+                    className={
+                      "flex w-full cursor-pointer items-baseline rounded-[4px] px-2.5 py-[7px] " +
+                      "text-left font-mono text-[10px] text-disabled transition-colors " +
+                      "hover:bg-line hover:text-muted"
+                    }
+                  >
+                    {row.hidden} more…
+                  </button>
+                );
+              }
+              const o = row.option;
+              const i = row.index;
+              return (
+                <div
+                  key={`${o.role}:${o.id}`}
+                  id={optionId(i)}
+                  role="option"
+                  aria-selected={o.current}
+                  onClick={() => pickModel(o)}
+                  onMouseEnter={() => setActiveIndex(i)}
                   className={
-                    "min-w-0 truncate font-mono text-[10.5px] " +
-                    (o.current ? "text-ink" : "text-muted")
+                    "flex cursor-pointer items-baseline gap-2.5 rounded-[4px] px-2.5 py-[7px] " +
+                    (i === activeIndex ? "bg-line" : "")
                   }
                 >
-                  {o.label}
-                </span>
-                <span className="flex-1" />
-                <span
-                  className={
-                    "shrink-0 font-mono text-[10px] " +
-                    (o.current ? "text-accent" : "text-disabled")
-                  }
-                >
-                  {o.current ? `${o.note} ✓` : o.note}
-                </span>
-              </div>
-            ))}
+                  <span
+                    className={
+                      "min-w-0 truncate font-mono text-[10.5px] " +
+                      (o.unavailable ? "text-disabled line-through" :
+                        o.current ? "text-ink" : "text-muted")
+                    }
+                  >
+                    {o.label}
+                  </span>
+                  <span className="flex-1" />
+                  <span
+                    className={
+                      "shrink-0 font-mono text-[10px] " +
+                      (o.current ? "text-accent" : "text-disabled")
+                    }
+                  >
+                    {o.current ? `${o.note} ✓` : o.note}
+                  </span>
+                </div>
+              );
+            })}
           </div>
 
           {effortLevels.length > 0 && (
@@ -471,6 +593,7 @@ export function ModelSelector({
 
           <div className="mt-1.5 border-t border-line px-2.5 pb-1 pt-2 font-mono text-[10px] text-disabled">
             picked per message · default in Settings
+            <div className="pt-1">not every model works with every key</div>
           </div>
         </div>
       )}

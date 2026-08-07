@@ -36,6 +36,7 @@ from agent_core.widgets import (
     validate_widget_spec,
     validate_widget_state,
     widget_summary,
+    widget_uses_dev_abilities,
 )
 
 # What the person has to have typed for the core to draft one of the three
@@ -90,32 +91,39 @@ class WidgetsMixin(ServerContext):
         states = self.store.widget_states()
         widgets: list[dict] = []
         for row in self.store.list_widgets():
-            # Dev-created widgets are LISTED while the Simple profile is active,
-            # visibly disabled, instead of vanishing (owner decision 2026-08-06;
-            # docs/SAFETY.md owns the rule). They return untouched in Developer.
+            try:
+                spec = json.loads(row["spec_json"])
+            except ValueError:
+                continue
+            # Widgets that NEED developer abilities are LISTED while the Simple
+            # profile is active, visibly disabled, instead of vanishing (owner
+            # decision 2026-08-06; docs/SAFETY.md owns the rule). They return
+            # untouched in Developer.
+            #
+            # Decided from the SPEC, never from ``created_in_mode``. The stamp
+            # answers "where was this born", and a checklist born in Developer
+            # needs nothing developer about it — under the stamp it arrived here
+            # disabled, claiming abilities it does not use, with its boxes frozen.
             #
             # DISPLAY ONLY — this marker is not what stops the widget running.
             # _handle_widget_run refuses in SAFE before it touches the registry,
             # with this very sentence, and the gate re-checks underneath that. If
             # the flag and dispatch ever disagree, DISPATCH WINS.
+            needs_dev = self._widget_needs_dev(spec)
             unavailable = _unavailable_marker(
-                mode, row.get("created_in_mode"), _WIDGET_DEV_ABILITIES_MESSAGE
+                mode, needs_dev, _WIDGET_DEV_ABILITIES_MESSAGE
             )
-            try:
-                spec = json.loads(row["spec_json"])
-            except ValueError:
-                continue
             # Render-time validation, against the mode this widget would actually
-            # run in: a dev-created row is judged by OPEN's vocabulary, because
-            # that is the profile it is waiting for. A spec that is broken THERE
-            # too is still dropped — a disabled card is for work that is merely
-            # waiting, never for a row nothing can read.
+            # run in: a row that needs developer abilities is judged by OPEN's
+            # vocabulary, because that is the profile it is waiting for. A spec
+            # that is broken THERE too is still dropped — a disabled card is for
+            # work that is merely waiting, never for a row nothing can read.
             #
-            # A row whose spec needs developer abilities but is NOT stamped 'open'
-            # (a restored config, an older build, a hand-edited database) keeps
-            # failing SAFE validation here and stays hidden: what a row IS still
-            # decides what Simple may see, never what its stamp claims.
-            spec_mode = PolicyMode.OPEN if unavailable is not None else mode
+            # ``needs_dev`` is what a row IS, so a command spec behind a 'safe'
+            # stamp (a restored config, an older build, a hand-edited database)
+            # is caught here exactly like an honest one, and is listed-disabled
+            # rather than hidden — the stamp cannot buy a row anything.
+            spec_mode = PolicyMode.OPEN if needs_dev else mode
             if validate_widget_spec(spec, spec_mode) is not None:
                 continue
             widget = {
@@ -141,6 +149,40 @@ class WidgetsMixin(ServerContext):
                 widget["state"] = state
             widgets.append(widget)
         return {"widgets": widgets}
+
+    def _widget_needs_dev(self, spec) -> bool:
+        """Does this widget need the Developer profile? Asked of the SPEC, and of
+        whatever the spec POINTS AT — never of the row's ``created_in_mode``.
+
+        Two ways to need it, and the second is why this lives here rather than in
+        ``widgets.py``:
+
+          * the spec itself is OPEN-only (``widget_uses_dev_abilities`` — today
+            that is a ``command`` widget, tomorrow whatever else validates in OPEN
+            alone);
+          * the spec is a launcher for a routine that needs it. A
+            ``{"kind": "routine"}`` spec is SAFE-legal by SHAPE whatever it points
+            at, so without this look-through a dev routine's Run pill would sit
+            live in the Simple rail and fail on every press — ``routine.run``
+            refuses it, which is enforcement doing its job and a rail promising
+            something it cannot deliver. The frontend already draws the pair this
+            way (``WidgetRail``'s dev flag reads the routine's own provenance);
+            this is the core agreeing rather than the two disagreeing quietly.
+
+        The routine half still reads the routine's STAMP, because routines have not
+        been converted yet — their availability is provenance-based end to end
+        (``rpc/routines.py``), and answering this question a second, better way on
+        the widget side would put the rail and the library in disagreement about
+        the same routine. When routines convert, this line follows them, and it is
+        the only line that has to."""
+        if widget_uses_dev_abilities(spec):
+            return True
+        if not isinstance(spec, dict) or spec.get("kind") != "routine":
+            return False
+        routine_id = spec.get("routineId")
+        if not isinstance(routine_id, str):
+            return False
+        return self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
 
     @staticmethod
     def _valid_widget_state(spec: dict, state_json: str | None) -> dict | None:
@@ -172,9 +214,13 @@ class WidgetsMixin(ServerContext):
 
         What IS checked, in this order:
           * the widget exists;
-          * the ACTIVE profile can use it — a dev-created widget is listed in
-            Simple but disabled, and dispatch is the enforcement, never the
-            display marker (the widget.run rule, owner decision 2026-08-06);
+          * the ACTIVE profile can use it — a widget that NEEDS developer
+            abilities is listed in Simple but disabled, and dispatch is the
+            enforcement, never the display marker (the widget.run rule, owner
+            decision 2026-08-06). Asked of the spec, so the three stateful kinds
+            are never caught by it: a checklist cannot be a command widget, and
+            ticking a box you made on Tuesday must not depend on which profile
+            was active when you made it;
           * its spec is still valid in this mode (the render-time check, so a
             spec the rail would refuse to draw cannot be written to either);
           * the state fits the SPEC — per kind, server-side, against the same
@@ -191,15 +237,15 @@ class WidgetsMixin(ServerContext):
         if row is None:
             return {"ok": False, "error": "That widget isn't here any more."}
         mode = self._mode()
-        unavailable = _unavailable_marker(
-            mode, row.get("created_in_mode"), _WIDGET_DEV_ABILITIES_MESSAGE
-        )
-        if unavailable is not None:
-            return {"ok": False, "error": unavailable["message"]}
         try:
             spec = json.loads(row["spec_json"])
         except ValueError:
             return {"ok": False, "error": "That widget can't be changed."}
+        unavailable = _unavailable_marker(
+            mode, self._widget_needs_dev(spec), _WIDGET_DEV_ABILITIES_MESSAGE
+        )
+        if unavailable is not None:
+            return {"ok": False, "error": unavailable["message"]}
         if validate_widget_spec(spec, mode) is not None:
             return {"ok": False, "error": "That widget can't be changed."}
         state = params.get("state")

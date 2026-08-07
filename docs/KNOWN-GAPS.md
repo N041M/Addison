@@ -247,6 +247,29 @@ questions were resolved during steps 1–3 and went with it):
   `registry.visible_tools(mode)` and never a second risk model. Code-backed widgets
   are still Developer-only and still unbuilt; when they land they are listed by the
   same `widget.list`, disabled in Simple like every other dev-made artifact.
+- **A routine's availability is still decided by its STAMP, not by what it needs.**
+  The widget half of this was fixed on 2026-08-06 (`widget_uses_dev_abilities`,
+  [SAFETY.md](SAFETY.md)); routines have the identical bug and it is **worse there,
+  because it reaches dispatch.** `builder.save` stamps `created_in_mode=mode.value`
+  unconditionally, so a routine of nothing but `web_search` steps, saved while
+  Developer was active, is stamped `open` — then listed disabled in Simple
+  (`rpc/routines.py`) *and refused outright* by `_handle_routine_run`, which tests
+  `created_in_mode(routine_id) == 'open'`. `routine_uses_dev_abilities` already
+  exists and is the right question; it is used only for the **save-time** refusal
+  in `builder.py`, never for availability.
+  Two things make this an owner call rather than a follow-on commit. **It loosens a
+  dispatch refusal in SAFE**, which is invariant-adjacent: the argument that it is
+  safe is that the engine's per-step `dev_only` check is the real enforcement and a
+  command-free routine replays through `visible_tools(SAFE)` with the gate carding
+  per invocation (invariant 3) — sound, but it should be *decided*, not inherited
+  from a widget fix. And **the correct test is not `routine_uses_dev_abilities`
+  alone**: that only looks for `step.command`, so a step naming an `open_only` tool
+  (`read_project_file` / `write_project_file`) needs Developer and would not be
+  caught. The real test needs the registry as well as the plan, so it belongs in
+  the RPC layer — the module boundary rule keeps `routines/` from importing
+  `tools/`. Until it lands, `rpc/widgets.py::_widget_needs_dev` deliberately reads
+  the routine's stamp for its look-through, so the rail and the library cannot
+  disagree about the same routine; that is the one line that follows this fix.
 - **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
   shipped in step 3: escalate/degrade on unavailable, rate-limit or network
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain
@@ -275,11 +298,18 @@ against the tree on 2026-07-26:
   and calls `is_running()`, which can block frame delivery up to 5s.
   `availableRoles` was moved off the read loop for exactly this reason; same shape
   as `shell.pickDirectory` blocking the worker on a modal.
-- **Three stale-docstring flags, still UNVERIFIED**: `ModelRouter.register`
-  (`providers/router.py`), a claim in `openai_provider.py`, and the
-  `PermissionRequest` dataclass (`permissions/gate.py` — checked 2026-07-31: it
-  has no docstring at all, so there is nothing there to be stale; the flag itself
-  looks like the stale thing). Re-verify or delete the line. The fourth,
+- ~~**Three stale-docstring flags, still UNVERIFIED.**~~ **All three resolved
+  2026-08-06 — one was real, two were the stale thing.** `openai_provider.py` was
+  REAL and is fixed: its module docstring said the custom base URL is "validated
+  http(s):// at connect time (main.py)", and that validation is
+  `rpc/providers.py::_valid_http_url` — the RPC split moved it and the reference
+  did not follow. `ModelRouter.register` (`providers/router.py`) is **accurate**:
+  it names `DirectAPIProvider`, which exists (`providers/direct_api_provider.py`),
+  and `register` really is additive per role. The `PermissionRequest` dataclass
+  (`permissions/gate.py`) **has no docstring at all**, so there was never anything
+  there to be stale. Both flags deleted rather than re-verified again — a flag that
+  survives two checks against a thing that does not exist is itself the defect. The
+  fourth,
   **`default_cloud_model([])`, was real and is CLOSED 2026-08-01**: its docstring
   called `catalog[0]` "a safe fallback" while an empty catalog raised
   `IndexError`. It now raises `ValueError` naming the cause. No caller can reach

@@ -24,6 +24,7 @@ The wire shape (``to_wire``) is the contract the frontend renders against — se
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
@@ -70,6 +71,11 @@ class CloudModel:
     # free model" disclaimer (D5) — custom-endpoint models are excluded there by the
     # candidate builder, never by this flag.
     free: bool = False
+    # Set when this provider has actually REFUSED this model — a `model_gone`
+    # row in `provider_attempts`, i.e. observed, not inferred. Holds the reason
+    # slug; the picker dims the row and the sentence explaining the class lives
+    # once under the list rather than thirty times inside it.
+    unavailable: str | None = None
 
     @property
     def supported_effort(self) -> tuple[str, ...]:
@@ -95,6 +101,9 @@ class CloudModel:
             "default": self.default,
             "provider": self.provider,
             "providerLabel": provider_label(self.provider),
+            # Absent when the model is fine, so an older frontend sees exactly the
+            # payload it always saw — the `unavailable` widget idiom.
+            **({"unavailable": self.unavailable} if self.unavailable else {}),
         }
 
 
@@ -200,6 +209,176 @@ def static_catalog_for(provider_id: str) -> list[CloudModel]:
     if provider_id == "google":
         return [replace(m) for m in GOOGLE_CLOUD_MODELS]
     return []
+
+
+# Quality rank for a live model the curated table has never heard of. LOWER is
+# better everywhere in this file, so this sits below every hand-ranked entry
+# (Anthropic 10-60, OpenAI 15-70, Google 20-50): a model nobody has assessed is
+# reachable by name and by an explicit custom chain, and is the last thing
+# quality-first routing reaches for on its own.
+_UNRANKED_QUALITY_RANK = 80
+# Below even an unassessed model: a provider has refused this one, so automatic
+# routing must exhaust everything else before trying it again.
+_REFUSED_QUALITY_RANK = 99
+
+# Model families a provider lists that cannot hold a conversation. Google's
+# listing says which methods a model supports and is filtered on that; OpenAI's
+# has no capability field at all, so without this a picker of chat models fills
+# up with transcription, embedding and image endpoints.
+#
+# A DENYLIST, deliberately not an allowlist. An unrecognised id shows up and can
+# be tried; an allowlist would hide the model that shipped this morning. Failing
+# open costs one confusing row, failing closed costs the model somebody connected
+# the key for — and being wrong in that direction is what this whole function
+# exists to stop.
+_NON_CHAT_PREFIXES: tuple[str, ...] = (
+    "text-embedding", "text-moderation", "omni-moderation", "text-similarity",
+    "whisper", "tts", "dall-e", "gpt-image", "sora", "babbage", "davinci", "ada",
+    "curie", "embedding", "aqa", "imagen", "veo", "learnlm-embedding",
+    # Google families that DECLARE generateContent and cannot hold a conversation.
+    # Checked against a real key's listing on 2026-08-06, where 18 of 42 models
+    # advertising the method were image, music, robotics or research endpoints:
+    # ``supportedGenerationMethods`` says which METHOD a model answers, never what
+    # the method is FOR, so it cannot be the only filter.
+    "lyria", "nano-banana", "deep-research", "antigravity",
+)
+_NON_CHAT_SUBSTRINGS: tuple[str, ...] = (
+    "-audio", "-realtime", "-transcribe", "-tts",
+    # Same listing: `gemini-3-pro-image`, `gemini-2.5-computer-use-…`,
+    # `gemini-robotics-er-…`. Substrings because the family sits mid-id.
+    "-image", "computer-use", "robotics",
+)
+
+
+def is_chat_model_id(model_id: str) -> bool:
+    """Could this listed model id hold a conversation? See ``_NON_CHAT_PREFIXES``
+    for why this is a denylist and why that direction is the safe one."""
+    lowered = model_id.lower()
+    if lowered.startswith(_NON_CHAT_PREFIXES):
+        return False
+    return not any(part in lowered for part in _NON_CHAT_SUBSTRINGS)
+
+
+# A pinned snapshot (`-001`) or a preview, when the thing it is a snapshot OR
+# preview OF is also on the list. Both suffixes mean "another name for a model you
+# can already see", and a picker that shows a model twice is asking somebody to
+# choose between two identical things.
+_PINNED_SNAPSHOT = re.compile(r"^(?P<base>.+)-\d{3}$")
+_PREVIEW_OF = re.compile(r"^(?P<base>.+)-preview$")
+
+
+def _is_redundant_alias(model_id: str, available: set[str]) -> bool:
+    """Is this id just another name for one already in ``available``?
+
+    STRUCTURAL, not curated — the rule reads the list against itself, so it needs
+    no table anybody has to maintain and it keeps working the day Google renames
+    everything. That distinction is why this exists at all: the non-chat filter
+    beside it IS a maintained denylist, and it is one only because no field in the
+    API says what a model is for.
+
+    A suffix ALONE is never enough. `gemini-3-pro-preview` is the only Gemini 3
+    Pro there is, so dropping it for looking provisional would remove the model
+    rather than a duplicate of it — which is why the base has to be present before
+    anything is dropped."""
+    for pattern in (_PINNED_SNAPSHOT, _PREVIEW_OF):
+        match = pattern.match(model_id)
+        if match and match.group("base") in available:
+            return True
+    return False
+
+
+def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
+    """The picker's entries for a provider, built from THE IDS IT ACTUALLY SERVES.
+
+    This is the fix for a bug that made a whole provider unusable while reporting
+    itself connected (2026-08-06). Registration used to call the provider's list
+    endpoint purely to validate the key, DISCARD the reply, and register the
+    hardcoded ids in the curated table above. `provider.connect` therefore proved
+    only that listing works — never that the ids it was about to register exist —
+    so when Google's real ids drifted from ``gemini-2.5-pro``/``gemini-2.5-flash``,
+    the picker offered two models, the Connections panel said "connected", and
+    every single message came back ``404``. The authoritative list was fetched and
+    thrown away one line earlier.
+
+    So the live list decides WHICH models exist, and the curated table is demoted
+    to what it is genuinely good for: a display name and a hand-assigned
+    ``quality_rank`` for the ids it recognises. Curation can no longer outvote the
+    provider about what is real.
+
+    Order is curated-first (hand-ranked, best first) and then everything else the
+    provider serves, so a familiar list stays familiar and new models land at the
+    end rather than shuffling it. An id the provider does not list is simply
+    absent — including a curated one, which is exactly the case that used to 404.
+    """
+    chat = [i for i in ids if isinstance(i, str) and i and is_chat_model_id(i)]
+    # Deduped against the CHAT set, not the raw one: a base that was itself
+    # filtered out (an image model, say) must not silently take its alias with it.
+    chat_ids = set(chat)
+    live = [i for i in chat if not _is_redundant_alias(i, chat_ids)]
+    live_ids = set(live)
+    out: list[CloudModel] = []
+    seen: set[str] = set()
+    for entry in static_catalog_for(provider_id):
+        if entry.id in live_ids:
+            out.append(entry)
+            seen.add(entry.id)
+    for model_id in live:
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        # Raw id as the label: this file's rule is real names, never invented
+        # copy, and a prettifier would be inventing one.
+        out.append(
+            CloudModel(
+                id=model_id,
+                label=model_id,
+                description="",
+                provider=provider_id,
+                quality_rank=_UNRANKED_QUALITY_RANK,
+            )
+        )
+    return out
+
+
+def mark_refused(models: list[CloudModel], refused: set[str]) -> list[CloudModel]:
+    """Mark the models this provider has actually refused, and sink them.
+
+    EVIDENCE, NOT INFERENCE — `refused` comes from `provider_attempts`, where a
+    `model_gone` row means the provider answered 404 for that exact id. Every other
+    filter in this file reasons about what a model probably is; this one reports
+    what happened. Google listed `gemini-2.5-flash` advertising the right method
+    and then refused it as "no longer available to new users", and nothing on the
+    row could have shown that until the log existed.
+
+    MARKED, NEVER REMOVED. A refusal could have been a bad afternoon, and a model
+    that quietly vanished from the picker would be a worse mystery than one that
+    is visibly out of order. It stays pickable — the person may know something the
+    log does not.
+
+    Sunk to the END OF ITS OWN PROVIDER RUN rather than the end of the list, so the
+    picker's grouping survives; the fold then hides it by default, which is the
+    whole reason marking and sinking are one change and not two. Its quality rank
+    goes to last-resort in the same move: leaving a known-refused model where
+    automatic routing can reach for it is how an evening gets spent."""
+    if not refused:
+        return models
+    out: list[CloudModel] = []
+    i = 0
+    while i < len(models):
+        provider = models[i].provider
+        end = i
+        while end < len(models) and models[end].provider == provider:
+            end += 1
+        run = models[i:end]
+        ok = [m for m in run if m.id not in refused]
+        bad = [
+            replace(m, unavailable="model_gone", quality_rank=_REFUSED_QUALITY_RANK)
+            for m in run
+            if m.id in refused
+        ]
+        out.extend(ok + bad)
+        i = end
+    return out
 
 
 def merge_catalogs(catalogs: list[list[CloudModel]]) -> list[CloudModel]:

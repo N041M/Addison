@@ -27,6 +27,7 @@ from agent_core.providers.base import (
     ProviderUnavailable,
     ToolCallRequest,
     Usage,
+    exception_for_http_status,
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.snapshots.undo_manager import UndoManager
@@ -119,7 +120,7 @@ def _cand(model_id, provider_id, *, role=ModelRole.PRIMARY, free=False, local=Fa
 
 
 def _build(providers: dict, chain, *, on_usage=None, on_answered=None, on_activity=None,
-           model_name=None):
+           model_name=None, on_provider_attempt=None):
     """Orchestrator whose router resolves each candidate to its fake provider, with a
     fixed chain and spy callbacks. Returns (orchestrator, conversation)."""
     registry = ToolRegistry()
@@ -140,6 +141,7 @@ def _build(providers: dict, chain, *, on_usage=None, on_answered=None, on_activi
         on_activity=on_activity or (lambda *a, **k: None),
         routing_chain=lambda role, name: list(chain),
         model_label=lambda mid: mid.upper(),
+        on_provider_attempt=on_provider_attempt,
     )
     conv = Conversation(id="c")
     conv.messages.append(Message(role="user", content="hi"))
@@ -334,3 +336,143 @@ def test_a_cooled_head_still_gets_the_fallback_note():
     assert [n for n in notes if n[0] == "routing"] == [
         ("routing", "A was busy, so Addison used B.")
     ]
+
+
+# --- The provider-attempt log (2026-08-07) ----------------------------------
+# `usage_log` records the calls that WORKED, so a provider that never once
+# succeeded left no trace anywhere. A Google key answered 404 for an evening while
+# the Connections panel said "connected"; the only evidence was an activity line
+# that scrolled away, and it said "busy". These pin the two halves that were
+# missing: that every failure class leaves a row, and that the row carries the
+# STATUS CODE — the thing that distinguishes "wait a moment" from "that model does
+# not exist" and that was being discarded where the failure was classified.
+
+
+def test_every_failure_class_leaves_a_row_with_the_status_the_server_sent():
+    """One row per failed attempt, whatever the class — including `rejected`, which
+    ends the turn and therefore never reaches the fallback note. That one is the
+    reason this exists: it used to raise straight past every recording site."""
+    rows: list[dict] = []
+    a = _Provider([exception_for_http_status(400, "The request to Google failed (status 400).")])
+    b = _Provider([_answer("should not run")])
+    orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    with pytest.raises(ProviderRequestRejected):
+        orch.run_turn(conv)
+
+    assert len(rows) == 1
+    assert rows[0]["provider"] == "pa"
+    assert rows[0]["model"] == "a"
+    assert rows[0]["outcome"] == "rejected"
+    # THE POINT OF THE ROW. Without this the log says a provider failed and leaves
+    # you exactly where the activity line did.
+    assert rows[0]["status_code"] == 400
+    assert "400" in rows[0]["detail"]
+
+
+def test_a_transient_failure_is_recorded_even_though_the_turn_succeeds():
+    """The degrade path answers fine, so nothing else marks it — which is precisely
+    how a provider can be broken for days while every turn looks healthy."""
+    rows: list[dict] = []
+    a = _Provider([exception_for_http_status(429, "A busy")])
+    b = _Provider([_answer("done")])
+    orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert [m.content for m in conv.messages if m.role == "assistant"][-1] == "done"
+    assert [(r["outcome"], r["status_code"]) for r in rows] == [("unavailable", 429)]
+
+
+def test_a_failure_that_never_reached_a_server_records_no_status():
+    """NULL is the honest answer for a timeout. Inventing a 0 or a 500 would claim
+    a reply nobody sent, and this row's whole value is that it does not guess."""
+    rows: list[dict] = []
+    a = _Provider([ProviderUnavailable("Couldn't reach Google.")])
+    b = _Provider([_answer("done")])
+    orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert rows[0]["status_code"] is None
+
+
+def test_a_throwing_attempt_sink_never_breaks_the_turn():
+    """Recording a failure must not be able to cause one. Every caller of this is
+    already handling a bad day; a raise here would replace a provider problem the
+    person can act on with a crash they cannot."""
+    def explode(_row):
+        raise RuntimeError("audit store is down")
+
+    a = _Provider([exception_for_http_status(429, "A busy")])
+    b = _Provider([_answer("done")])
+    orch, conv = _build({"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=explode)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert [m.content for m in conv.messages if m.role == "assistant"][-1] == "done"
+
+
+def test_the_log_keeps_what_the_SERVER_said_not_only_what_addison_said():
+    """Two different sentences, and only one of them ends an investigation.
+
+    Addison shows "The request to Google failed (status 404). Please try again."
+    — plain language, the house rule, and the right thing on screen. The server
+    said WHICH model and WHICH API version. Recording only ours meant the log
+    faithfully preserved Addison's own guess about a failure nobody understood,
+    which is how a real 404 survived four rounds of theorising."""
+    rows: list[dict] = []
+    exc = exception_for_http_status(
+        404,
+        "The request to Google failed (status 404). Please try again.",
+        "This model models/gemini-2.5-flash is no longer available to new users.",
+    )
+    orch, conv = _build({"a": _Provider([exc]), "b": _Provider([_answer("x")])},
+                        [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert rows[0]["detail"].startswith("The request to Google failed")
+    assert "no longer available to new users" in rows[0]["server_detail"]
+
+
+def test_an_unreadable_error_body_records_no_server_detail():
+    """A failure to explain a failure must never become a failure. A proxy's HTML,
+    an empty body, a truncated stream — all yield None rather than raising."""
+    rows: list[dict] = []
+    exc = exception_for_http_status(500, "The service had a problem.", None)
+    orch, conv = _build({"a": _Provider([exc]), "b": _Provider([_answer("done")])},
+                        [_cand("a", "pa"), _cand("b", "pb")],
+                        on_provider_attempt=rows.append)
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+    assert rows[0]["server_detail"] is None
+
+
+def test_a_retired_model_falls_forward_to_its_SIBLING_not_to_another_vendor():
+    """The failure this class was split out for, reported from a running app.
+
+    Google's listing returned `gemini-2.5-flash` advertising `generateContent`;
+    the generate endpoint answered 404 — "no longer available to new users". As a
+    `ProviderRequestRejected` that ended the turn without walking, so a dead Gemini
+    2.5 handed the conversation to Claude while a perfectly good Gemini 3 sat next
+    in the chain. D4's "the next provider gets the same bad request" is true of a
+    malformed body and false of a retired model.
+
+    Both Google candidates share `provider_id`, so this ALSO pins the cooldown
+    split: cooling the provider would have taken the sibling out with it and the
+    turn would have reached Claude anyway — passing the assertion above for the
+    wrong reason."""
+    dead = _Provider([exception_for_http_status(404, "gone", "no longer available")])
+    sibling = _Provider([_answer("gemini 3 answered")])
+    claude = _Provider([_answer("should not be needed")])
+    orch, conv = _build(
+        {"dead": dead, "sibling": sibling, "claude": claude},
+        [_cand("dead", "google"), _cand("sibling", "google"), _cand("claude", "anthropic")],
+    )
+    orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
+
+    assert [m.content for m in conv.messages if m.role == "assistant"][-1] == "gemini 3 answered"
+    assert claude.sends == 0, "a retired model must not hand the turn to another vendor"
+    # The MODEL is stood down; its provider is untouched.
+    assert orch._is_model_cooled("dead")
+    assert not orch._is_cooled("google")

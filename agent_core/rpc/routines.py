@@ -71,8 +71,21 @@ class RoutinesMixin(ServerContext):
             # _handle_routine_run refuses it below with this very sentence, and the
             # engine refuses a dev_only step underneath that. If the flag and
             # dispatch ever disagree, DISPATCH WINS.
+            # STILL PROVENANCE-BASED, and that is a known wrong answer kept
+            # deliberately rather than by oversight. Widgets were converted to ask
+            # what an artifact NEEDS (``rpc/widgets.py::_widget_needs_dev``);
+            # routines have the identical bug — a search-only routine saved while
+            # Developer was active is stamped 'open', listed disabled in Simple,
+            # and REFUSED by _handle_routine_run below — but fixing it here means
+            # loosening a dispatch refusal in SAFE, which is an owner call and not
+            # a drive-by. Registered in docs/KNOWN-GAPS.md. The correct test needs
+            # the registry as well as the plan (a step naming an ``open_only``
+            # tool needs Developer just as a command step does), so it belongs in
+            # this layer, where both are in reach.
             unavailable = _unavailable_marker(
-                mode, entry.get("createdInMode"), _ROUTINE_DEV_ABILITIES_MESSAGE
+                mode,
+                entry.get("createdInMode") == PolicyMode.OPEN.value,
+                _ROUTINE_DEV_ABILITIES_MESSAGE,
             )
             routine = entry["routine"]
             row = {

@@ -514,6 +514,17 @@ erDiagram
         TEXT redacted "kinds the redactor removed, never values"
         INTEGER created_at
     }
+    provider_attempts {
+        TEXT id PK
+        TEXT conversation_id "NULL for a routine or widget turn"
+        TEXT provider "anthropic openai google ollama custom"
+        TEXT model "the raw model id that was called"
+        TEXT outcome "unavailable model_gone key_rejected auth_failed rejected"
+        INTEGER status_code "NULL when it never reached a server"
+        TEXT detail "the plain sentence the person saw; redacted on write"
+        TEXT server_detail "what the SERVER said; the diagnostic one"
+        INTEGER created_at
+    }
 ```
 
 - **usage_log** — the §4.8 usage substrate. One row per provider call that reported
@@ -535,6 +546,21 @@ erDiagram
   the redactor (`agent_core/redaction.py`) stripped on the way to the model, never
   the values. **Excluded from snapshots** on the `tool_grants` precedent: a restore
   that rewrote the record of what happened would be worse than no record.
+- **provider_attempts** — the model-routing counterpart of `tool_audit` (2026-08-07).
+  One row per provider call that **failed**, written by the same orchestrator
+  machinery as `on_usage` and never by a registry tool. It exists because
+  `usage_log` records only the calls that SUCCEEDED, so a provider that never once
+  succeeded left no trace anywhere: a Google key answered `404` for an evening while
+  the Connections panel said "connected", and the only evidence was an activity line
+  that scrolled away — one that said "busy", because the status code was discarded at
+  the point the failure was classified. `status_code` is what the row is for; the
+  `outcome` says whether the chain walked on, the number says what the server
+  actually replied, and `NULL` means the request never reached one (a timeout, not a
+  silent server). `detail` is the plain sentence the person was shown, redacted on
+  write on the `tool_audit` precedent. Successes are not duplicated here — that is
+  what `usage_log` is. **Excluded from snapshots**, same reasoning as `tool_audit`:
+  the likeliest reason to restore after a provider misbehaves is the provider
+  misbehaving, and a restore must not erase the evidence.
 - **widgets** — user-owned rail widgets. `spec_json` is a **declarative** widget spec
   (`agent_core/widgets.py`), validated at save *and* at render (an invalid stored spec
   is hidden, never run). The launchers are `{kind:"routine", routineId, title}` and
