@@ -170,20 +170,26 @@ committed and pushed; `master` is clean.
 
 ## Branch and PR state (verified 2026-08-07, end of day)
 
-**Two stacked PRs open when this was written: step 8 phase 1 (#65, branch
-`claude/app-development-16ba87` — the plan doc, the fence, the table) and step 8
-phase 2 (branch `claude/step-8-phase-2-authoring`, based on the phase-1 branch —
-authoring; this file ships in it). Merge #65 first; the phase-2 PR retargets to
-`master` when the phase-1 branch is deleted. `master` carries everything through
-#64.** **Re-read this section
+**No open pull requests. `master` carries everything through #66** — step 8's plan,
+phase 1 (the fence and the table), phase 2 (authoring), and the review of both,
+merged 2026-08-07 with CI green on the merge commit. Work from `master`.
+**Re-read this section
 immediately after any merge:** it was
 false for ninety minutes on 2026-07-26 because a merge falsified six passages without
 touching the file that contained them, and no gate catches that.
 
-- Every `claude/*` branch in the clone is fully contained in `master` and safe to
-  delete: `bespoke-widgets-feasibility-72d532`, `mcp-phase-2-connect-discovery`,
-  `mcp-phase-3-dispatch`, `mcp-phase-4-output-handling` and
-  `model-switching-menu-ui-7f1c9c` (#60–#63).
+**A stacked PR does NOT auto-retarget when you delete its base branch — it
+CLOSES.** #66 was based on #65's branch; deleting that branch after #65 merged
+closed #66 outright, and recovering it meant pushing the branch back at its old
+commit, reopening, retargeting, and merging. Nothing was lost, and the order that
+avoids the whole detour is: **retarget the child to `master` first, merge it, then
+delete branches.** (GitHub's auto-retarget only fires while the base still exists.)
+
+- Every `claude/*` branch left in the clone is fully contained in `master` and safe
+  to delete: `bespoke-widgets-feasibility-72d532`, `mcp-phase-2-connect-discovery`,
+  `mcp-phase-3-dispatch`, `mcp-phase-4-output-handling`,
+  `model-switching-menu-ui-7f1c9c` (#60–#63) and `review-fixes-2026-08-07` (#64).
+  Step 8's two branches were deleted when they merged.
 - `archive/thread-window-wip` and `archive/icon-gen-wip` are parked worktree
   experiments, kept only so the attempts are recoverable. Neither is for merge.
 
