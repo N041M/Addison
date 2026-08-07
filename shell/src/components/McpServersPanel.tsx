@@ -1,15 +1,21 @@
-// Tool servers — the Settings face of the MCP client's configuration (Phase-2
-// step 7, phase 1 of five), in the dark direction's row idiom. It is shown ONLY on
-// the Developer and Custom surfaces (keyed off the active profile, never the policy
-// mode); Simple never sees it, and the core independently refuses `mcp.add` outside
-// Developer.
+// Tool servers — the Settings face of the MCP client (Phase-2 step 7, phases 1–2
+// of five), in the dark direction's row idiom. It is shown ONLY on the Developer
+// and Custom surfaces (keyed off the active profile, never the policy mode);
+// Simple never sees it, and the core independently refuses `mcp.add` and
+// `mcp.refresh` outside Developer.
 //
-// THE HONEST LINE IS THE FEATURE HERE. This phase ships configuration and nothing
-// else: no connection is made, no tools are discovered, and Addison cannot call
-// anything on a saved server. So the standing line says exactly that, and no row
-// ever shows a status, a tool count, or a live/offline light — the app has no way
-// to know any of that yet, and inventing it on the one page a person checks to see
-// what Addison can reach would be the lie Surface.tsx's standing rule 1 forbids.
+// THE HONEST LINE IS STILL THE FEATURE HERE, and phase 2 changed exactly half of
+// it. Addison can now look at a saved server and list what it offers; it still
+// cannot use any of it. So the standing line says both halves in one breath, and
+// a row never shows anything the app has not been told: a server nobody has
+// checked says so, a check that failed shows the core's own plain sentence, and a
+// tool count appears only after a check that actually landed. Inventing a status
+// on the one page a person opens to see what Addison can reach is the lie
+// Surface.tsx's standing rule 1 forbids — a stale one would be the same lie with
+// a timestamp.
+//
+// Checking is ALWAYS a press. Nothing here checks on mount, on a timer, or after
+// an add: Addison makes no network request the person did not just cause.
 //
 // Removing takes something away, so it is a two-press confirm on the row itself
 // (the SkillsSection idiom) rather than the full inline consequence block — there
@@ -17,16 +23,18 @@
 
 import { useState } from "react";
 import type { McpServersCardState } from "../hooks/useMcpServers";
+import type { McpServer } from "../types/ui";
 import { RowAction, SurfaceRow } from "./Surface";
 
 // --- Frozen plain-language copy ---------------------------------------------
 
-/** The panel's standing line. Says what a saved server does today — nothing —
- * because the alternative is a person believing Addison has gained an ability it
- * has not. Do NOT soften this into "Addison will use these": it won't, yet. */
+/** The panel's standing line. Says what a saved server does today and what it
+ * still does not, because the alternative is a person believing Addison has
+ * gained an ability it has not. Do NOT soften the second half into "Addison will
+ * use these": it can see them, and that is all. */
 const STANDING_LINE =
-  "A tool server is a program on the web that offers Addison extra tools. Saving one " +
-  "here stores its address only — Addison doesn't connect to it or use its tools yet.";
+  "A tool server is a program on the web that offers Addison extra tools. Addison can " +
+  "check what a server offers and list it here — it still can't use any of those tools yet.";
 
 /** Under the address field. Names the one case where a plain http:// address is
  * accepted, so a refusal is never a surprise. */
@@ -34,6 +42,37 @@ const ADDRESS_HINT =
   "Its web address, starting with https:// — or http:// if the server runs on this computer.";
 
 const ADD_ACTION = "add a server";
+const CHECK_ACTION = "Check now";
+const CHECKING_ACTION = "Checking…";
+
+/** What a row says about itself, under its address. One sentence, and never a
+ * word Addison has not earned: "not checked yet" is the honest state for a new
+ * server AND after a restart, because what a check found is remembered only for
+ * as long as the app is running. */
+function statusLine(server: McpServer, isChecking: boolean): string {
+  if (isChecking) return "Checking what this server offers…";
+  switch (server.status) {
+    case "ok": {
+      const count = server.toolCount ?? server.tools.length;
+      const found =
+        count === 0
+          ? "No tools offered"
+          : count === 1
+            ? "1 tool found"
+            : `${count} tools found`;
+      const when = formatWhen(server.checkedAt);
+      const skipped =
+        server.skipped && server.skipped > 0
+          ? ` ${server.skipped} more Addison won't take.`
+          : "";
+      return `${found}${when ? `, checked ${when}` : ""}. Addison can't use them yet.${skipped}`;
+    }
+    case "failed":
+      return server.error ?? "That check didn't work. Try again in a moment.";
+    default:
+      return "Not checked yet.";
+  }
+}
 
 function formatWhen(addedAt?: number): string {
   if (!addedAt) return "";
@@ -54,7 +93,17 @@ export function McpServersPanel({
   connected: boolean;
   mcp: McpServersCardState;
 }) {
-  const { servers, serversLoaded, busy, error, notice, handleAdd, handleRemove } = state;
+  const {
+    servers,
+    serversLoaded,
+    busy,
+    checking,
+    error,
+    notice,
+    handleAdd,
+    handleRemove,
+    handleCheck,
+  } = state;
 
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
@@ -122,20 +171,44 @@ export function McpServersPanel({
           />
         )
       ) : (
-        servers.map((server) => (
-          <SurfaceRow
-            key={server.id}
-            name={server.name}
-            value={server.addedAt ? `added ${formatWhen(server.addedAt)}` : undefined}
-            action={confirmingRemove === server.id ? "Really remove?" : "Remove"}
-            actionAriaLabel={`Remove ${server.name}`}
-            actionTone="danger"
-            actionDisabled={busy}
-            onAction={() => remove(server)}
-          >
-            <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">{server.url}</p>
-          </SurfaceRow>
-        ))
+        servers.map((server) => {
+          const isChecking = checking.has(server.id);
+          return (
+            <SurfaceRow
+              key={server.id}
+              name={server.name}
+              value={server.addedAt ? `added ${formatWhen(server.addedAt)}` : undefined}
+              // Two controls, so the row composes them itself: checking is the
+              // ordinary action and removing is the destructive one, and a single
+              // action slot would have made a person choose which of the two the
+              // row is for.
+              actions={
+                <>
+                  <RowAction
+                    onClick={() => void handleCheck(server.id)}
+                    disabled={isChecking || busy}
+                    ariaLabel={`Check ${server.name} now`}
+                  >
+                    {isChecking ? CHECKING_ACTION : CHECK_ACTION}
+                  </RowAction>
+                  <RowAction
+                    tone="danger"
+                    onClick={() => remove(server)}
+                    disabled={busy}
+                    ariaLabel={`Remove ${server.name}`}
+                  >
+                    {confirmingRemove === server.id ? "Really remove?" : "Remove"}
+                  </RowAction>
+                </>
+              }
+            >
+              <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">{server.url}</p>
+              <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+                {statusLine(server, isChecking)}
+              </p>
+            </SurfaceRow>
+          );
+        })
       )}
 
       {adding ? (

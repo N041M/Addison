@@ -116,16 +116,25 @@ export const Method = {
   WorkspacePickDirectory: "workspace.pickDirectory",
 
   // MCP servers — the external tool servers Addison consumes as a client (Phase-2
-  // step 7, phase 1 of five). CONFIGURATION ONLY: adding one saves an address and
-  // nothing else happens — no connection, no tools, nothing Addison can call. The
-  // address is HTTP(S) (`https://`, or `http://` only for a server on this
-  // computer); there is never a command to run, so nothing here starts a program.
-  // No key or token rides these payloads. `add` is refused outside the Developer
-  // profile; `list` and `remove` answer in every profile, so saved configuration
-  // never disappears and can always be removed. Mirrored in protocol.py.
+  // step 7, phases 1–2 of five). Addison can now SEE what a saved server offers and
+  // still cannot use it: `refresh` connects, lists the server's tools, and registers
+  // each one namespaced and Developer-only, but they are kept out of the tool list
+  // the model is offered and refused at every dispatch path. The address is HTTP(S)
+  // (`https://`, or `http://` only for a server on this computer); there is never a
+  // command to run, so nothing here starts a program. No key or token rides these
+  // payloads and none is stored — a server that wants a sign-in gets one plain
+  // sentence back. `add` and `refresh` are refused outside the Developer profile;
+  // `list` and `remove` answer in every profile, so saved configuration never
+  // disappears and can always be removed. Mirrored in protocol.py.
+  //
+  // A row's `status` is "never" | "ok" | "failed" from the core. `McpServer.status`
+  // adds "checking" for the moment a refresh is in flight — that one is OURS, set
+  // while the request is out, because the core answers `list` and `refresh` on the
+  // same worker thread and a list could never observe it.
   McpList: "mcp.list",
   McpAdd: "mcp.add",
   McpRemove: "mcp.remove",
+  McpRefresh: "mcp.refresh",
 
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick

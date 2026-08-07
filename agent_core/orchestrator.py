@@ -698,6 +698,23 @@ class Orchestrator:
                     call.id, ToolResult(success=False, content=dev_only_refusal)
                 )
                 continue
+            # DISCOVERED BUT NOT WIRED (step 7 phase 2): an MCP tool is registered so
+            # the person can see it and refused here so nothing can run it. Above the
+            # gate and above the denylist for the reason the dev-only check is —
+            # nothing about this call should be examined, approved or reached over
+            # the network, because there is no dispatch behind it at all.
+            #
+            # NO AUDIT ROW, and that is a deliberate gap rather than an oversight:
+            # `tool_audit.outcome` is a CHECK-constrained vocabulary, so widening it
+            # is a schema migration (schema.sql says as much of the widget kinds),
+            # and phase 3 — which owns `tool_audit` on every MCP outcome — is where
+            # that migration belongs. Recorded in docs/KNOWN-GAPS.md until then.
+            not_callable_refusal = self.tool_registry.refuse_if_not_callable(call.tool_id)
+            if not_callable_refusal is not None:
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=not_callable_refusal)
+                )
+                continue
             # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate and above
             # confinement: a call naming Addison's own restore storage or the user's
             # credential stores does not happen, and is not offered as a card. It is

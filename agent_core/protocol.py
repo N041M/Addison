@@ -106,19 +106,36 @@ class Method:
     WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
     WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
     WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
-    # External MCP servers Addison consumes as a CLIENT (step 7 phase 1; spec §4.12).
-    # CONFIGURATION ONLY — nothing here connects to a server, discovers a tool, or
-    # makes anything callable by the model; a row is inert until phase 2.
-    # Transport is HTTP ONLY for v1 (owner decision 2026-08-06), so `url` is the
-    # whole of a server's address and there is NEVER a command: stdio would mean the
-    # Agent Core launching an executable outside the seatbelt. No credential rides
-    # these payloads — phase 1 needs none, and a token will live in the OS keychain
-    # (G1) when phase 2 does. `add` is Developer-only (refused in SAFE); `list` and
-    # `remove` answer in every mode, because inert rows are not a capability and a
-    # tightening must not be trapped by a profile switch. See docs/step-7-mcp-plan.md.
-    MCP_LIST = "mcp.list"      # {} -> {servers: [{id, name, url, enabled, addedAt}]}
-    MCP_ADD = "mcp.add"        # {name, url} -> {ok, server} | {ok:false, error}
-    MCP_REMOVE = "mcp.remove"  # {id} -> {ok} | {ok:false, error}
+    # External MCP servers Addison consumes as a CLIENT (step 7 phases 1–2; spec
+    # §4.12). Phase 2 can SEE what a server offers and still cannot use it: a
+    # discovered tool is registered namespaced (`mcp:<server>:<tool>`) and dev-only,
+    # kept OUT of the tool list the model is offered, and refused at both dispatch
+    # sites. Transport is HTTP ONLY for v1 (owner decision 2026-08-06), so `url` is
+    # the whole of a server's address and there is NEVER a command: stdio would mean
+    # the Agent Core launching an executable outside the seatbelt. No credential
+    # rides these payloads and none is stored — a server that wants a sign-in gets
+    # one plain sentence back (2026-08-07). `add` and `refresh` are Developer-only
+    # (refused in SAFE); `list` and `remove` answer in every mode, because saved
+    # configuration is not a capability and a tightening must not be trapped by a
+    # profile switch. See docs/step-7-mcp-plan.md.
+    #
+    # A row's `status` is one of "never" | "ok" | "failed". The frontend's own type
+    # also carries "checking" for the moment a refresh is in flight; the CORE never
+    # emits it, because `mcp.list` and `mcp.refresh` run on the same worker thread —
+    # a list request queues behind the refresh and could not observe it. Inventing a
+    # core-side value nothing can read would be machinery defending nothing.
+    MCP_LIST = "mcp.list"        # {} -> {servers: [<row>]}, oldest first
+    MCP_ADD = "mcp.add"          # {name, url} -> {ok, server} | {ok:false, error}
+    MCP_REMOVE = "mcp.remove"    # {id} -> {ok} | {ok:false, error}
+    # {id} -> {ok, server: <row>} | {ok:false, error}. `ok:false` means the check did
+    # not RUN (wrong profile, or a server that is no longer saved); a check that ran
+    # and failed is `ok:true` with status "failed" and one plain sentence in `error`.
+    MCP_REFRESH = "mcp.refresh"
+    # <row> = {id, name, url, enabled, addedAt, status,
+    #          checkedAt?, toolCount?, tools?: [{name, description}], skipped?, error?}
+    # Optional fields are OMITTED, never null: a checkedAt on an unchecked row is a
+    # number the app made up. `tools` carries names and descriptions only — cleaned
+    # and capped at the mcp_client boundary — and never a server's input schema.
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

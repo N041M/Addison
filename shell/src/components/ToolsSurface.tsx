@@ -15,15 +15,35 @@
 // Trusted folders appear here ONLY on the Developer and Custom surfaces, keyed
 // off the active profile exactly as the Settings panel is (Phase-2 step 5): a
 // Simple-profile person has no workspace-trust surface anywhere, and this page
-// is not a back door to one.
+// is not a back door to one. Tool servers are gated the same way.
+//
+// TOOL SERVERS GET A SECTION EACH, never rows mixed into the lists above
+// (Phase-2 step 7, phase 2 — the plan's Decision 2, answered 2026-08-07).
+// Namespacing exists in the core because a foreign tool must never be mistaken
+// for a native one, and this page has to draw the same line the registry draws.
+// A section per server is where that line is visible: it carries the provenance
+// ("from your tool server X") and the server-level state — never checked,
+// unreachable, N tools found — in ONE place. Step 6's disabled-card treatment
+// answers a different sentence ("a thing you made that your profile can't use");
+// borrowed here it would scatter one server's outage across the native list as
+// unexplained dead rows, with nowhere to say which server went away.
+//
+// Everything a server sent is a STRANGER'S TEXT. Names and descriptions render as
+// plain children, through React's own escaping — never `dangerouslySetInnerHTML`,
+// and never through the markdown renderer the chat thread uses.
 
 import { Surface, SurfaceRow, SurfaceSection } from "./Surface";
 import type { ProviderInfo } from "../ipc/client";
-import type { RoleOption, WorkspaceRoot } from "../types/ui";
+import type { McpServer, RoleOption, WorkspaceRoot } from "../types/ui";
 import type { ReactNode } from "react";
 
 const TOOLS_DESCRIPTION =
   "What Addison can reach on this computer. Connect only what you're comfortable with.";
+
+/** Under every discovered tool. Byte-for-byte what the core answers if something
+ * names one of these anyway (`NOT_CALLABLE_REFUSAL` in tools/registry.py): one
+ * fact, told to the person and to the model in the same words. */
+const NOT_RUNNABLE = "Addison can see this tool but can't use it yet.";
 
 export function ToolsSurface({
   connected,
@@ -31,6 +51,7 @@ export function ToolsSurface({
   roles,
   trustedRoots,
   showTrustedFolders,
+  mcpServers = [],
   onAddKey,
   onStopTrusting,
   workspaceBusy = false,
@@ -40,8 +61,13 @@ export function ToolsSurface({
   providers: ProviderInfo[];
   roles: RoleOption[];
   trustedRoots: WorkspaceRoot[];
-  /** Developer/Custom only — the same gate the Settings panel uses. */
+  /** Developer/Custom only — the same gate the Settings panel uses. Covers the
+   * tool-server sections too: both answer "what may Addison reach", and both are
+   * Developer surfaces. */
   showTrustedFolders: boolean;
+  /** The configured tool servers with whatever the last check found. Empty on the
+   * Simple surface, which is the gate rather than a rendering choice. */
+  mcpServers?: McpServer[];
   /** Opens Settings at the API-keys section. */
   onAddKey: () => void;
   onStopTrusting: (directory: string) => void;
@@ -52,6 +78,7 @@ export function ToolsSurface({
   const availableProviders = providers.filter((p) => !p.connected);
   const localModels = roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
   const folders = showTrustedFolders ? trustedRoots : [];
+  const servers = showTrustedFolders ? mcpServers : [];
 
   const hasConnected =
     connectedProviders.length > 0 || localModels.length > 0 || folders.length > 0;
@@ -105,7 +132,62 @@ export function ToolsSurface({
           ))}
         </SurfaceSection>
       )}
+
+      {/* One section per tool server — the whole of Decision 2, rendered. Each is
+          a direct child of <Surface> so the enter/leave stagger still walks them
+          (Surface.tsx's first convention). */}
+      {servers.map((server) => (
+        <McpServerSection key={server.id} server={server} />
+      ))}
     </Surface>
+  );
+}
+
+/** One tool server: who it is, where it stands, and what it offered.
+ *
+ * The section body always says SOMETHING. A server nobody has checked, one that
+ * could not be reached, and one that answered with nothing are three different
+ * facts, and a silent empty section would make all three look like the fourth
+ * (a server with no tools) — on the page where being wrong about reach matters
+ * most. */
+function McpServerSection({ server }: { server: McpServer }) {
+  return (
+    <SurfaceSection label={`Tool server · ${server.name}`}>
+      <SurfaceRow
+        wrap
+        name={`From your tool server ${server.name}. Addison can list what it offers; it can't use any of it yet.`}
+        value={server.status === "ok" ? `${server.tools.length} found` : undefined}
+      />
+      {server.status === "never" && (
+        <SurfaceRow wrap name="Not checked yet — check it in Settings to see what it offers." />
+      )}
+      {server.status === "failed" && (
+        <SurfaceRow
+          wrap
+          name={server.error ?? "Addison couldn't reach this server when it last checked."}
+        />
+      )}
+      {server.status === "ok" && server.tools.length === 0 && (
+        <SurfaceRow wrap name="This server answered, and offered no tools." />
+      )}
+      {server.tools.map((tool) => (
+        // `name` and `description` are the server's own words. Passed as plain
+        // children, so React escapes them; nothing on this page renders foreign
+        // text as markup.
+        <SurfaceRow key={tool.name} name={tool.name} value="can't be used yet">
+          {tool.description && (
+            <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{tool.description}</p>
+          )}
+          <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{NOT_RUNNABLE}</p>
+        </SurfaceRow>
+      ))}
+      {server.status === "ok" && server.skipped ? (
+        <SurfaceRow
+          wrap
+          name={`This server offered ${server.skipped} more Addison wouldn't take — an odd name, a name already in use, or too many.`}
+        />
+      ) : null}
+    </SurfaceSection>
   );
 }
 

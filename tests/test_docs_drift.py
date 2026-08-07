@@ -995,6 +995,27 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "are admitted. That question is deferred: MCP is dev-only for v1."
         ),
     },
+    "mcp-tools-are-not-callable": {
+        "phase 2's own claim, which pairs the ability with its limit": (
+            "Addison can now use a tool server's tools only in the sense of listing "
+            "them — it still can't run any of them, and phase 3 is where that changes."
+        ),
+        "the frozen row copy, quoted": (
+            "Every row says the same thing: Addison can see this tool but can't use it "
+            "yet."
+        ),
+        "a sentence about the PERSON using a tool server, not about Addison": (
+            "You can use a tool server to give Addison abilities it doesn't ship with."
+        ),
+        "the phase-3 promise, in the future tense": (
+            "Phase 3 will invoke an MCP tool through the existing gate, with a per-call "
+            "deadline and a `tool_audit` row on every outcome."
+        ),
+        "prose about discovery that never mentions running anything": (
+            "A discovered tool registers namespaced `mcp:<server>:<tool>`, dev-only, "
+            "HIGH and destructive unconditionally."
+        ),
+    },
     "retired-amendment-has-no-precedence": {
         "the retired rule quoted as a quotation": (
             "It kept a \"where we differ, the amendment wins\" rule long after its "

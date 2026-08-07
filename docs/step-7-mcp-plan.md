@@ -1,13 +1,15 @@
 # Step 7 — MCP client
 
-**Status: STARTED — phase 1 of five is BUILT (2026-08-06).** `ROADMAP.md` owns
-scheduling. The spec's shape is §4.12; this plan turns it into a build order and
-settles the decisions §4.12's banner admits were never made. Where this plan and
-§4.12 differ, §4.12's *banner* is right that its details were never settled — that
-is what this document settles.
+**Status: STARTED — phases 1 and 2 of five are BUILT (2026-08-06, 2026-08-07).**
+`ROADMAP.md` owns scheduling. The spec's shape is §4.12; this plan turns it into a
+build order and settles the decisions §4.12's banner admits were never made. Where
+this plan and §4.12 differ, §4.12's *banner* is right that its details were never
+settled — that is what this document settles.
 
-**Decision 1 (transport) is ANSWERED: HTTP only for v1** — see §5. Decision 2
-(where a server's tools appear) is untouched and belongs to phase 2.
+**Both decisions are now ANSWERED** — see §5. Decision 1 (transport): HTTP only
+for v1. Decision 2 (where a server's tools appear): a section per server on the
+Tools surface, never interleaved with native tools. Phase 2 added three scoping
+decisions of its own, recorded in §4.2.
 
 Addison is a **client**: it consumes external MCP servers/tools. Never a server,
 never a gateway (the OmniRoute-style thing, declined and still declined).
@@ -100,9 +102,82 @@ and registration must refuse a collision rather than replace.
    be explicit, as designed. Tests: `tests/test_mcp_servers.py`,
    `shell/src/__tests__/mcp.test.tsx`, plus the generated `mcp.list` payload
    fixture both sides share.
-2. **Connect + discovery.** Speak MCP, list tools, register them namespaced and
-   dev-only. Nothing is callable yet; the picker and the tools surface show what
-   was found.
+2. **Connect + discovery — BUILT 2026-08-07.** Speak MCP, list tools, register
+   them namespaced and dev-only. Nothing is callable; the tools surface shows what
+   was found. The claim this phase makes, and the only one: **Addison can now SEE
+   what a stranger's server offers and can use none of it.**
+
+   What shipped:
+   - **`agent_core/mcp_client.py`** — a minimal Streamable HTTP client: POST
+     `initialize` (offering a current protocolVersion, accepting the server's if
+     older), echo the `Mcp-Session-Id` back on every later request, send
+     `notifications/initialized`, then walk `tools/list` through `nextCursor`. An
+     SSE answer is parsed for its single JSON-RPC event — a minimal parser, never a
+     subscription. It reuses `net_vetting`'s resolve → vet → **pin** path rather
+     than growing a weaker copy; that module gained `method`/`content` (MCP speaks
+     POST) and `same_origin_only` (a hop off the endpoint's origin is refused, not
+     followed). It is top-level for `net_vetting`'s own reason: an MCP tool is
+     eventually consumed by all three of `tools/`, `providers/` and `routines/`, so
+     the client may not live in one of them.
+   - **`agent_core/mcp_catalog.py`** — admission and the in-memory catalog. Ids are
+     `mcp:<server>:<tool>`, registration is `dev_only=True`, tier HIGH and
+     destructive unconditionally (§3), and a collision **refuses** that tool and
+     reports it.
+   - **Two new registry dimensions**, both off by default so every native
+     registration is unchanged: `removable` (only a discovered tool may ever be
+     `unregister`ed — this is the first way anything has left the registry, and an
+     unconditional version would be a supported route to deleting `save_file`'s
+     undo-enforced registration at runtime) and `not_callable` (absent from
+     `visible_tools` in EVERY mode, and refused at dispatch).
+   - **`mcp.refresh {id}`**, Developer-only, on the worker thread — the
+     `provider.connect` pattern, because a stranger's server must never hold the
+     IPC pump the way `run_command` once did. `mcp.list` rows gained `status`,
+     `checkedAt`, `toolCount`, `tools` and `error`; optional fields are omitted
+     rather than sent as null.
+   - **Surfaces.** The Settings panel gained a per-row status line and "Check now";
+     the Tools surface gained a section per server (Decision 2 below).
+
+   **Nothing is callable, mechanically, in two layers.** (a) `visible_tools(mode)`
+   is the list offered to the model, and an `mcp:` id is absent from it in every
+   mode — which also keeps a server's text out of a model's context entirely, so
+   §7's trigger stays exactly as deferred as the plan expects. (b) If a `tool_use`
+   names one anyway, BOTH dispatch paths refuse before the gate and before any
+   network is touched, in the same shape as `refuse_if_dev_only_outside_open`.
+   `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` is the ONE constant phase 3 flips.
+
+   **Everything a server sends is untrusted text**, and the caps are at the client
+   boundary rather than at each surface: a bounded number of tools per server and
+   pages per walk, a bounded response body, a name that must already look like an
+   identifier (skipped **and counted** otherwise — a repaired name is an id the
+   server never offered), control characters stripped from every string, and a
+   truncated description. A server's own error text is never shown; every failure
+   is one of `mcp_client`'s plain sentences.
+
+   Tests: `tests/test_mcp_discovery.py` (the protocol against
+   `httpx.MockTransport`, admission, both not-callable layers, the RPC surface, and
+   the import-graph guard), `shell/src/__tests__/mcp.test.tsx`, plus the shared
+   `mcp.list` fixture, now carrying one row per discovery state.
+
+   **Three scoping decisions, made 2026-08-07:**
+
+   - **No tokens or auth in this phase.** Phase 1 left the keychain door open "when
+     phase 2 needs one"; phase 2 as built does not. Connecting without credentials
+     covers the local-server case an HTTP-only v1 already optimises for, so a 401
+     or 403 gets one plain sentence — *"This server asks for a sign-in Addison
+     doesn't support yet."* — and there is no token column, no header field and no
+     keychain write. G1's surface is untouched, and the door stays documented for
+     the moment a consumer exists.
+   - **Discovery is ON DEMAND only.** No auto-connect at core start, no background
+     refresh, no timer: a saved row stays inert until somebody asks ("Check now" /
+     `mcp.refresh`). Addison makes no network request the person did not just
+     cause — the same temperament as reversible config.
+   - **The discovered catalog is held IN MEMORY, never persisted.** A server's
+     catalog is the server's truth, not Addison's configuration, and `mcp_servers`
+     is snapshot-CAPTURED — writing a stranger's names and prose there would copy
+     attacker-controlled text into every later snapshot payload and plaintext
+     sidecar, forever, to answer a question only the server can answer honestly.
+     After a core restart the panel says the server has not been checked yet,
+     because it has not.
 3. **Dispatch.** Invoke through the existing gate, with `tool_audit` on every
    outcome and a per-call deadline. **The deadline is not optional** — a hung
    server must not stall a turn, which is the same lesson `run_command` taught
@@ -151,11 +226,29 @@ and registration must refuse a collision rather than replace.
    That is a different proposal, it is rejected, and `ROADMAP.md` records why
    (a side-effecting command would run twice, and outbound network is granted).
    Containment here isolates code; it never predicts what code will do.
-2. **Where a server's tools appear in Developer — STILL OPEN, phase 2's to
-   answer.** The tools surface lists native
-   tools today; MCP tools are the first that arrive from outside and can vanish
-   when a server goes away. Same disabled-card treatment as step 6's artifacts,
-   or a separate section?
+2. **Where a server's tools appear in Developer — ANSWERED 2026-08-07: a SEPARATE
+   SECTION PER SERVER on the Tools surface, never interleaved with native tools.**
+
+   The reasoning, because it is what the surface has to keep true:
+
+   - **Namespacing exists because a foreign tool must never be mistaken for a
+     native one** (§3), and the UI has to draw the same line the registry draws. A
+     section per server is where that line is visible; a row in the native list is
+     where it disappears.
+   - **A section carries provenance and server-level state in ONE place** — "from
+     your tool server X", plus never checked / unreachable / N tools found. Those
+     are facts about the *server*, and there is nowhere to put them if its tools
+     are scattered.
+   - **Step 6's disabled-card treatment answers a different sentence.** It says
+     "a thing you made that your profile can't use". An MCP tool is "a stranger's
+     tool your server offered", which is not the same thing at all — and borrowed
+     here it would spread one server going offline across the native list as
+     unexplained dead rows, with nowhere to name the server that went away.
+
+   Every row in a section says, in plain words, that Addison can see the tool and
+   cannot use it — the same sentence the core answers with if anything names one.
+   Names and descriptions render as plain text through React's own escaping; a
+   server's prose is never put through the markdown renderer the thread uses.
 
 ## 6. What this step does NOT include
 
@@ -172,3 +265,11 @@ endpoints and the sandbox's deliberate outbound network. An MCP tool's output is
 attacker-controlled text arriving in a model's context, and phase 4's redaction
 pass is a credential backstop, not a screen. This does not block step 7 — it is
 the thing to re-read when phase 3 lands.
+
+**Phase 2 did not pull it forward, and that was checked rather than assumed.** A
+server's names and descriptions are attacker-controlled text, but they reach a
+*person* and never a model: an `mcp:` id is absent from `visible_tools(mode)` in
+every mode, so no tool definition Addison sends to a provider carries a word a
+server wrote. The bounds phase 2 does apply — the caps, the identifier rule, the
+control-character strip — are there because that text reaches a SCREEN, which is a
+smaller problem with a smaller answer. The trigger is still phase 3.

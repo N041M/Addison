@@ -19,8 +19,8 @@ This is a top-level ``agent_core`` module, not under ``tools/``/``providers/``/
 ``routines/``, so both ``tools.read_web_page`` and ``providers.openai_provider``
 may import it without crossing the module-boundary rule (spec §2).
 
-TWO POLICIES, ONE MECHANISM. The pinning + redirect re-vet loop is identical for
-both callers; only the vetting DECISION differs, and it is a parameter:
+THREE POLICIES, ONE MECHANISM. The pinning + redirect re-vet loop is identical for
+every caller; only the vetting DECISION differs, and it is a parameter:
 
   * ``read_web_page`` (the public web): ``allow_private=False`` +
     ``require_default_port=True`` — a page lives on a public host on the standard
@@ -33,6 +33,16 @@ both callers; only the vetting DECISION differs, and it is a parameter:
     redirects closes the redirect re-vet gap, and the endpoint card DISCLOSES a
     LAN target to the user (rpc/providers.py, D5) — the three together cover the
     LAN case without blocking it.
+  * ``mcp_client`` (step 7 phase 2, an MCP tool server): the endpoint policy
+    above, plus ``same_origin_only`` — an MCP endpoint is one address the person
+    typed, and a hop off its origin is a server redirecting Addison somewhere the
+    person never named, so it is refused rather than followed.
+
+``method``/``content`` exist for that third caller and default to today's GET with
+no body, so the two older callers are unchanged. MCP speaks JSON-RPC over POST,
+and a POST that re-derived resolution, vetting and pinning beside this module
+would be the weaker copy this file exists to prevent — the request VERB was the
+only thing genuinely missing.
 
 The plain-language sentences a caller shows on each failure are ALSO a parameter
 (``Sentences``): the page tool says "public web pages only", the connect path says
@@ -312,22 +322,29 @@ def _request_once(
     sentences: Sentences,
     timeout: float,
     max_url_chars: int,
+    method: str = "GET",
+    content: bytes | None = None,
 ) -> Any:
-    """One GET, pinned to ``address``, with ``logical``'s name in Host + SNI.
+    """One request, pinned to ``address``, with ``logical``'s name in Host + SNI.
 
     A 3xx returns a ``_Redirect`` for the driver to re-vet; any other status is
     handed to ``on_final`` INSIDE the stream context (so a streaming reader can
     still pull the body). ``on_final`` owns everything response-specific — content
     type, byte caps, status-to-message mapping — because that differs per caller;
     the pin, the Host header, the SNI extension and ``follow_redirects=False`` do
-    not, and they live here."""
+    not, and they live here.
+
+    ``method``/``content`` default to a bodyless GET. A body is re-sent verbatim on
+    a redirect hop, which is safe here only because the driver above re-vets and
+    re-pins every hop and a body-carrying caller passes ``same_origin_only``."""
     parts = urlsplit(logical)
     headers = dict(base_headers)
     headers["Host"] = host_header(parts)
     with client.stream(
-        "GET",
+        method,
         pinned_url(parts, address),
         headers=headers,
+        content=content,
         # Read by httpcore as the TLS server_hostname, so the certificate is
         # checked against the site's name even though the connection is by IP.
         extensions={"sni_hostname": parts.hostname or ""},
@@ -356,6 +373,8 @@ def _one_hop(
     timeout: float,
     max_url_chars: int,
     deadline: float | None = None,
+    method: str = "GET",
+    content: bytes | None = None,
 ) -> Any:
     """One hop: try the vetted addresses in turn, translate httpx failures to plain
     words. ``on_final``'s own exceptions (a caller's refusal) are NOT httpx errors,
@@ -385,6 +404,8 @@ def _one_hop(
                 sentences=sentences,
                 timeout=attempt_timeout,
                 max_url_chars=max_url_chars,
+                method=method,
+                content=content,
             )
         except (httpx.ConnectError, httpx.ConnectTimeout):
             # This address didn't answer; a name commonly has one reachable and
@@ -421,6 +442,9 @@ def open_vetted(
     max_redirects: int,
     timeout: float,
     total_timeout: float | None = None,
+    method: str = "GET",
+    content: bytes | None = None,
+    same_origin_only: bool = False,
 ) -> Any:
     """Vet, fetch, and follow redirects by hand, pinning every hop. Returns
     whatever ``on_final`` returns; raises ``VettingError`` (plain sentence) on any
@@ -445,6 +469,19 @@ def open_vetted(
     itself. A SEPARATE PARAMETER rather than a "strip anything called authorization"
     rule, because the next caller to put a secret in a header must inherit the
     protection by construction, not by naming their header correctly.
+
+    ``same_origin_only`` REFUSES a hop that leaves the origin the caller aimed at,
+    instead of dropping the credentials and following it. The two are different
+    promises: dropping a credential protects the SECRET, while a caller whose
+    destination is one specific endpoint the person typed (an MCP tool server) is
+    also protected by never being walked somewhere they did not name — a redirect
+    is the server's choice, not theirs. Same-origin hops are still followed, so an
+    endpoint that only redirects ``/mcp`` to ``/mcp/`` keeps working.
+
+    ``method``/``content`` carry a request body (MCP's JSON-RPC POST). The body is
+    re-sent on every hop, which is why a body-carrying caller should also pass
+    ``same_origin_only`` — a foreign host must not be handed the request Addison
+    composed for the endpoint the person configured.
 
     ``timeout`` bounds ONE socket; ``total_timeout`` bounds the WHOLE walk. They
     are different numbers because this loop multiplies: up to
@@ -488,6 +525,8 @@ def open_vetted(
             timeout=hop_timeout,
             max_url_chars=max_url_chars,
             deadline=deadline,
+            method=method,
+            content=content,
         )
         if not isinstance(outcome, _Redirect):
             return outcome
@@ -497,6 +536,10 @@ def open_vetted(
             # body of that last hop can be rewritten by anyone on the path.
             raise VettingError(sentences.dropped_secure_link)
         next_origin = _origin(next_url)
+        if same_origin_only and (
+            next_origin is None or origin is None or next_origin != origin
+        ):
+            raise VettingError(sentences.not_allowed)
         if secrets and (next_origin is None or origin is None or next_origin != origin):
             # Leaving the origin the credential was issued for: drop it, and never
             # pick it up again even if a later hop returns to that origin (a chain

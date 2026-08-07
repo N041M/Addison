@@ -2,8 +2,15 @@
 
 Phase 1 ships configuration and nothing else: the ``mcp_servers`` table, the
 ``mcp.list``/``add``/``remove`` RPC, and the store-boundary URL check. **No protocol
-client, no tool discovery, no registry entry, no dispatch.** So the tests here are as
-much about what CANNOT happen as about what does:
+client, no tool discovery, no registry entry, no dispatch.**
+
+**Still true after phase 2, and that is deliberate.** Connect + discovery landed
+2026-08-07 in ``agent_core/mcp_client.py`` and ``agent_core/mcp_catalog.py``, with
+its own suite in ``tests/test_mcp_discovery.py`` — split that way precisely so this
+file's structural claims about ``rpc/mcp.py`` did not have to be weakened to make
+room. Saving a server still connects to nothing; only ``mcp.refresh`` does.
+
+So the tests here are as much about what CANNOT happen as about what does:
 
   (1) a saved server is INERT — nothing new is callable, and the module that owns
       the surface cannot reach a process, a shell or the tool registry at all;
@@ -423,18 +430,24 @@ def test_the_wire_shape_is_the_one_the_frontend_parses(tmp_path):
     """camelCase at the boundary (``created_at`` -> ``addedAt``), and NOTHING else on
     the row — no token, no header, no transport field the person never set. The
     generated fixture (tests/ipc_fixtures.py -> shell/src/__tests__/fixtures/mcp.list.json)
-    is what keeps the frontend parser honest about this same shape."""
+    is what keeps the frontend parser honest about this same shape.
+
+    A listed row gained ``status`` in phase 2, and nothing else until somebody
+    checks the server: the discovery fields are OMITTED rather than sent as null,
+    so an unchecked row still says only what phase 1 knew plus "never checked".
+    ``mcp.add``'s answer is unchanged — saving is not checking."""
     h = build_server(tmp_path, register_tool=False)
     try:
         _developer(h)
         added = _call(h, "mcp.add", {"name": "Docs", "url": "https://a.example/mcp"}, 1)
         assert set(added["server"]) == {"id", "name", "url", "enabled", "addedAt"}
         (row,) = _call(h, "mcp.list", {}, 2)["servers"]
-        assert set(row) == {"id", "name", "url", "enabled", "addedAt"}
+        assert set(row) == {"id", "name", "url", "enabled", "addedAt", "status"}
         assert row["name"] == "Docs"
         assert row["url"] == "https://a.example/mcp"
         assert row["enabled"] is True
         assert isinstance(row["addedAt"], int)
+        assert row["status"] == "never"
     finally:
         _shutdown(h.reader, h.thread)
 

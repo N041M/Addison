@@ -240,6 +240,12 @@ describe("parseMcpServers over the real mcp.list payload", () => {
     // `addedAt` is the core's `created_at` renamed at the wire boundary — the same
     // class of mapping the roots/folders mismatch hid in. Pinning it against the
     // generated fixture is what makes a rename on either side a red build.
+    //
+    // Three rows, one per discovery state (step 7 phase 2), because the shape is
+    // not one shape: an unchecked row carries no `checkedAt`, a checked one carries
+    // its tools and counts, a failed one carries a sentence and no tools. A fixture
+    // with only the happy row would let the parser drop `error` or invent a
+    // `toolCount` and stay green on both sides.
     expect(parseMcpServers(mcpListFixture)).toEqual([
       {
         id: "mcp-fixture-0",
@@ -247,8 +253,55 @@ describe("parseMcpServers over the real mcp.list payload", () => {
         url: "https://tools.example/mcp",
         enabled: true,
         addedAt: 4102444800,
+        status: "never",
+        checkedAt: undefined,
+        toolCount: undefined,
+        tools: [],
+        skipped: undefined,
+        error: undefined,
+      },
+      {
+        id: "mcp-fixture-1",
+        name: "Checked server",
+        url: "https://checked.example/mcp",
+        enabled: true,
+        addedAt: 4102444801,
+        status: "ok",
+        checkedAt: 4102444800,
+        toolCount: 2,
+        tools: [
+          { name: "search_docs", description: "Search the team's documentation." },
+          { name: "open_ticket", description: "Open a support ticket." },
+        ],
+        skipped: 1,
+        error: undefined,
+      },
+      {
+        id: "mcp-fixture-2",
+        name: "Unreachable server",
+        url: "https://offline.example/mcp",
+        enabled: true,
+        addedAt: 4102444802,
+        status: "failed",
+        checkedAt: 4102444800,
+        toolCount: undefined,
+        tools: [],
+        skipped: undefined,
+        error:
+          "Addison couldn't reach that server. Check the address, and that the server is running.",
       },
     ]);
+  });
+
+  it("carries no server-authored field the surfaces would have to trust", () => {
+    // The core sends names and descriptions and NOTHING else a server wrote — no
+    // input schema, no annotations, no URL of its own. This is what keeps "a
+    // stranger's text" a bounded problem on the two pages that render it.
+    for (const row of mcpListFixture.servers) {
+      for (const tool of (row as { tools?: unknown[] }).tools ?? []) {
+        expect(Object.keys(tool as object).sort()).toEqual(["description", "name"]);
+      }
+    }
   });
 });
 
