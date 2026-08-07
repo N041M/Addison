@@ -175,6 +175,17 @@ async fn handle_line(app: &AppHandle, stdin_state: &CoreStdin, line: String) {
 /// whether the frame is awaited on the pump or taken off it.
 const RUN_COMMAND: &str = "shell.runCommand";
 
+/// Arming (step 8 phase 3, automation.rs). All three run `launchctl`, which is a
+/// subprocess: it blocks, so it goes off the pump for exactly the reason
+/// `shell.runCommand` does. `shell.listArmed` needs no subprocess today (it reads a
+/// directory), and it is here anyway — it is answered by the same module against the
+/// same filesystem, and splitting the three across two dispatch routes would make
+/// "which of these can block?" a question somebody has to re-derive the day one of
+/// them grows a `launchctl list`.
+const ARM_AUTOMATION: &str = "shell.armAutomation";
+const DISARM_AUTOMATION: &str = "shell.disarmAutomation";
+const LIST_ARMED: &str = "shell.listArmed";
+
 /// Claim the frames that must NOT be awaited on the core's stdout pump, and answer
 /// them on their own tasks. Returns true when the frame was claimed.
 ///
@@ -224,6 +235,33 @@ fn dispatch_off_loop(stdin_state: &CoreStdin, frame: &Value) -> bool {
             id,
             move || crate::exec::run_command(&params),
             "Addison couldn't run that command.",
+        );
+        return true;
+    }
+    if method == ARM_AUTOMATION {
+        spawn_request(
+            stdin_state,
+            id,
+            move || crate::automation::arm(&params),
+            "Addison couldn't set that up to run on a schedule.",
+        );
+        return true;
+    }
+    if method == DISARM_AUTOMATION {
+        spawn_request(
+            stdin_state,
+            id,
+            move || crate::automation::disarm(&params),
+            "Addison couldn't remove that schedule.",
+        );
+        return true;
+    }
+    if method == LIST_ARMED {
+        spawn_request(
+            stdin_state,
+            id,
+            move || crate::automation::list_armed(&params),
+            "Addison couldn't check what's set to run on a schedule.",
         );
         return true;
     }
@@ -463,6 +501,14 @@ mod tests {
         // before any OS access, so a `cargo test` run still raises no password dialog.
         assert!(dispatch_off_loop(&channel, &frame("keychain.getProviderKey")));
         assert!(dispatch_off_loop(&channel, &frame("keychain.signRelayRequest")));
+        // Arming, all three (step 8 phase 3): every one of them can run `launchctl`,
+        // so none may be awaited on the pump. Params-less on purpose here as well —
+        // a frame with no label is refused by `automation`'s own label check before
+        // anything is written or any subprocess is spawned, so this test installs
+        // nothing on the machine running it.
+        assert!(dispatch_off_loop(&channel, &frame("shell.armAutomation")));
+        assert!(dispatch_off_loop(&channel, &frame("shell.disarmAutomation")));
+        assert!(dispatch_off_loop(&channel, &frame("shell.listArmed")));
         // A picker or a file write is fast and needs the AppHandle, so it stays on
         // the pump where its ordering is trivially the core's own.
         assert!(!dispatch_off_loop(&channel, &frame("shell.writeWorkspaceFile")));

@@ -35,18 +35,22 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from agent_core.automations import (
+    LABEL_PREFIX,
+    MAX_SLUG_CHARS,
     NO_SCHEDULE,
     SCHEDULE_FIELDS,
     SCHEDULE_KINDS,
     Automation,
     plist_text,
     schedule_fields,
+    derive_label,
     schedule_is_readable,
     schedule_sentence,
 )
@@ -161,7 +165,12 @@ def test_the_surface_has_no_way_to_create_an_automation(tmp_path):
         for value in vars(Method).values()
         if isinstance(value, str) and value.startswith("automation.")
     }
-    assert named == {"automation.list", "automation.remove"}
+    # Phase 3 added `automation.status` — a READ, and one that asks the operating
+    # system rather than the store (plan §5.6). Still no add and still no arm:
+    # writing a row is the `create_automation` TOOL and switching one on is the
+    # `arm_automation` TOOL, both gated and audited, neither reachable from this
+    # namespace.
+    assert named == {"automation.list", "automation.remove", "automation.status"}
 
     h = _server_with(tmp_path)
     try:
@@ -1051,3 +1060,264 @@ def test_the_longest_gap_addison_will_write_reads_as_days():
     assert schedule_sentence("interval", {"minutes": 120}) == "Every 2 hours"
     assert schedule_sentence("interval", {"minutes": 90}) == "Every 90 minutes"
     assert schedule_sentence("interval", {"minutes": 60}) == "Every hour"
+
+
+# ===========================================================================
+# The two plist builders agree, across the language boundary (step 8 phase 3).
+# ===========================================================================
+# THE PROMISE THIS KEEPS is the one the whole keyword gate rests on: "the preview
+# you approved". The person reads `automations.plist_text`'s output on the arming
+# card; the SHELL then builds its own document from typed fields and hands THAT to
+# launchd (plan §5.8 — the core never sends markup, so the two are separate
+# implementations by design). If they can differ, the ceremony is theatre: somebody
+# would be reading one job and arming another.
+#
+# There is no codegen and no runtime handshake, so this is the same deal
+# `protocol.py`/`protocol.ts` and `OS_AUTOMATION_DIRS` have — a hand-synced contract
+# asserted on ONE side is asserted on neither. The Rust tests pin their side with
+# byte-exact `concat!` literals; this reads those literals out of the source and
+# compares them against what Python emits for the same row.
+
+
+def _rust_expected_plists() -> list[str]:
+    """Every byte-exact plist literal the Rust tests pin, reassembled from the
+    `concat!("…", "…")` blocks in ``shell/src-tauri/src/automation.rs``."""
+    source = (
+        _REPO_ROOT / "shell" / "src-tauri" / "src" / "automation.rs"
+    ).read_text(encoding="utf-8")
+    blocks = re.findall(r"concat!\(\s*\n(.*?)\n\s*\)", source, re.S)
+    plists: list[str] = []
+    for block in blocks:
+        # Each line is `    "…",` with Rust escapes. Only blocks that are a whole
+        # document interest us — the builder's own `concat!`s are fragments.
+        pieces = re.findall(r'"((?:[^"\\]|\\.)*)"', block)
+        if not pieces:
+            continue
+        text = "".join(
+            piece.replace('\\"', '"').replace("\\n", "\n").replace("\\\\", "\\")
+            for piece in pieces
+        )
+        # WHOLE documents only. The builder itself uses `concat!` for the header
+        # fragment, which also starts with `<?xml` — comparing that against a
+        # complete plist would fail for a reason that is not drift.
+        if text.startswith("<?xml") and text.rstrip().endswith("</plist>"):
+            plists.append(text)
+    return plists
+
+
+def test_the_shell_builds_the_same_plist_the_person_was_shown():
+    """The lockstep. Each document the Rust side pins must be exactly what
+    ``plist_text`` produces for the row it describes — same declaration, DOCTYPE,
+    key order, indentation and escaping, to the byte.
+
+    The rows below are the ones the Rust tests use, so a change on either side
+    lands here as a diff rather than as two builders quietly drifting.
+
+    Mutation: change any of ``plist_text``'s literals — the indentation, a key
+    name, the `/bin/sh -c` pair, the ×60 — or the matching line in the Rust
+    builder. Either direction fails this."""
+    rust = _rust_expected_plists()
+    assert len(rust) >= 3, (
+        "automation.rs no longer pins whole plists as concat! literals — the "
+        "lockstep has lost its fixed side; re-anchor this reader before trusting it"
+    )
+    rows = [
+        _automation_row(schedule_kind="interval", schedule_json='{"minutes": 30}'),
+        _automation_row(
+            schedule_kind="calendar", schedule_json='{"hour": 7, "minute": 30, "weekday": 1}'
+        ),
+        _automation_row(schedule_kind="calendar", schedule_json='{"hour": 7, "minute": 5}'),
+    ]
+    python = {plist_text(row) for row in rows}
+    unmatched = [text for text in rust if text not in python]
+    assert not unmatched, (
+        "the shell pins a plist the core's preview does not produce — somebody "
+        "would read one job and arm another:\n\n" + "\n---\n".join(unmatched)
+    )
+    # ...and the pairing is real rather than vacuous: every row we built is pinned
+    # on the Rust side too, so this cannot pass by the Rust side pinning nothing.
+    assert python <= set(rust), (
+        "the core previews a plist the shell does not pin — add the case to "
+        "automation.rs's tests so both sides stay fixed"
+    )
+
+
+def test_neither_builder_will_ever_set_run_at_load():
+    """Arming must never cause an immediate run (plan §5.7): the first execution
+    happens on the OS's own schedule, which is what keeps "Addison never triggers
+    itself" clean even at the moment of installation. Pinned on BOTH sides here,
+    because a key absent from one document and present in the other is exactly the
+    divergence the lockstep above exists to catch — and this one would run a
+    stranger's command the instant somebody typed the code."""
+    for row in (
+        _automation_row(schedule_kind="interval", schedule_json='{"minutes": 30}'),
+        _automation_row(schedule_kind="calendar", schedule_json='{"hour": 0, "minute": 0}'),
+    ):
+        assert "RunAtLoad" not in plist_text(row)
+    for text in _rust_expected_plists():
+        assert "RunAtLoad" not in text
+
+
+# ===========================================================================
+# Removing an armed automation switches it off first (adversarial review, phase 3).
+# ===========================================================================
+# THE DEFECT: `automation.remove` deleted the row and left the job running. After
+# that, `disarm_automation` answered "that automation isn't saved any more, so there
+# was nothing to turn off" while the computer ran it every hour, and the Automations
+# surface renders armed-ness PER ROW — so with no row there was nothing to render.
+# A running job nobody could see and nobody could stop, produced by pressing Remove.
+#
+# The order was specified in phase 1's own docstring ("the OS first, the record
+# second, so a failure can never leave a job running with nothing on screen that
+# names it") and phase 3 shipped without honouring it.
+
+
+class _ArmedBridge:
+    """A shell that reports one armed label and records what it was asked to do."""
+
+    def __init__(self, armed: list[str], *, supported: bool = True, fail: bool = False):
+        self._armed = list(armed)
+        self._supported = supported
+        self._fail = fail
+        self.disarmed: list[str] = []
+
+    def list_armed(self) -> dict:
+        return {"armed": list(self._armed), "supported": self._supported}
+
+    def disarm_automation(self, label: str) -> dict:
+        self.disarmed.append(label)
+        if self._fail:
+            return {"ok": False, "error": "the scheduler didn't answer"}
+        self._armed = [a for a in self._armed if a != label]
+        return {"ok": True}
+
+
+def _remover(bridge) -> type:
+    """A bare AutomationsMixin with just enough server around it to call the two
+    methods under test — the disarm-before-remove rule is about ORDER, and a live
+    IPC server would only make the order harder to see."""
+    from agent_core.rpc.automations import AutomationsMixin
+
+    class _Server(AutomationsMixin):
+        def __init__(self, store, shell_bridge):
+            self._store = store
+            self._shell_bridge = shell_bridge
+            self.captured: list[str] = []
+
+        @property
+        def store(self):
+            return self._store
+
+        def _ensure_built(self) -> None:
+            return None
+
+        def _snapshot_auto(self, reason: str) -> bool:
+            self.captured.append(reason)
+            return True
+
+    return _Server
+
+
+def test_removing_an_armed_automation_switches_it_off_before_forgetting_it(store: Store):
+    """The row is what makes a running job nameable and its Disarm button reachable,
+    so the job goes off BEFORE the row goes away.
+
+    Mutation: delete the ``_disarm_before_forgetting`` call from
+    ``_automation_remove`` — the job stays armed with no row naming it."""
+    store.insert_automation(**_INTERVAL)
+    bridge = _ArmedBridge([_INTERVAL["label"]])
+    server = _remover(bridge)(store, bridge)
+
+    assert server._automation_remove({"id": _INTERVAL["id"]}) == {"ok": True}
+    # Switched off first, then forgotten — and the snapshot still happened.
+    assert bridge.disarmed == [_INTERVAL["label"]]
+    assert bridge.list_armed()["armed"] == []
+    assert store.list_automations() == []
+    assert server.captured == ["automation_remove"]
+
+
+def test_a_removal_that_cannot_switch_the_job_off_is_refused_and_keeps_the_row(store: Store):
+    """"I could not switch it off" and "there was nothing to switch off" are the two
+    answers that must never be collapsed. Refusing keeps the row — which is the only
+    thing that can name the job on a surface or reach it with a Disarm.
+
+    Mutation: return True from ``_disarm_before_forgetting``'s failure branch."""
+    store.insert_automation(**_INTERVAL)
+    bridge = _ArmedBridge([_INTERVAL["label"]], fail=True)
+    server = _remover(bridge)(store, bridge)
+
+    answer = server._automation_remove({"id": _INTERVAL["id"]})
+    assert answer["ok"] is False
+    assert "still running it" in answer["error"]
+    # The row survives, so the person can still see it and press Disarm.
+    assert [row.id for row in store.list_automations()] == [_INTERVAL["id"]]
+    # ...and no restore point was minted for a change that did not happen.
+    assert server.captured == []
+
+
+def test_a_row_the_os_is_not_holding_is_removed_without_ceremony(store: Store):
+    """The common case must not grow a round-trip's worth of new ways to fail: a
+    draft that was never armed is removed exactly as it was before, and nothing is
+    asked to disarm."""
+    store.insert_automation(**_INTERVAL)
+    bridge = _ArmedBridge([])
+    server = _remover(bridge)(store, bridge)
+
+    assert server._automation_remove({"id": _INTERVAL["id"]}) == {"ok": True}
+    assert bridge.disarmed == []
+    assert store.list_automations() == []
+
+
+def test_where_arming_does_not_exist_removal_is_untouched(store: Store):
+    """Off macOS the shell says arming is unsupported, so there is nothing to hold
+    and nothing to switch off. That is the honest reading of "nothing is armed
+    here" — not a bypass, and the one case where a `False` from the bridge is a
+    legitimate green light."""
+    store.insert_automation(**_INTERVAL)
+    bridge = _ArmedBridge([_INTERVAL["label"]], supported=False)
+    server = _remover(bridge)(store, bridge)
+
+    assert server._automation_remove({"id": _INTERVAL["id"]}) == {"ok": True}
+    assert bridge.disarmed == []
+
+
+def test_every_label_the_core_can_mint_is_one_the_shell_accepts():
+    """THE SECOND HALF OF THE LOCKSTEP, and the one the plist comparison could not
+    see: the two sides must agree about LABELS as well as documents.
+
+    They did not (adversarial review, 2026-08-07). `_slug` caps the stem at
+    `MAX_SLUG_CHARS`; `derive_label` then appended "-2" ON TOP, producing 41-43
+    characters, and the shell — which validates the label itself and caps at the
+    same 40, deliberately not trusting the core — refused it. A second automation
+    with a long name authored fine, previewed fine, showed its code, and failed the
+    instant the person typed it, with a sentence blaming Addison's own naming.
+
+    The rule is read out of `automation.rs` rather than restated, so a change to
+    either cap lands here.
+
+    Mutation: drop the stem trim from ``derive_label``'s suffix loop."""
+    source = (
+        _REPO_ROOT / "shell" / "src-tauri" / "src" / "automation.rs"
+    ).read_text(encoding="utf-8")
+    cap = re.search(r"const MAX_STEM_CHARS: usize = (\d+);", source)
+    prefix = re.search(r'const LABEL_PREFIX: &str = "([^"]+)";', source)
+    assert cap and prefix, "automation.rs no longer states its label rule as constants"
+    max_stem, shell_prefix = int(cap.group(1)), prefix.group(1)
+    assert shell_prefix == LABEL_PREFIX, "the two sides disagree about the prefix itself"
+
+    # The worst case the core can produce: a name that slugs to exactly the cap,
+    # then every suffix on top of it.
+    name = "n" * (MAX_SLUG_CHARS + 20)
+    taken: list[str] = []
+    for _ in range(12):
+        label = derive_label(name, taken)
+        assert label is not None
+        taken.append(label)
+    assert len(set(taken)) == len(taken), "the trim made two names collide"
+    for label in taken:
+        assert label.startswith(LABEL_PREFIX)
+        stem = label[len(LABEL_PREFIX) :]
+        assert 0 < len(stem) <= max_stem, f"{label} has a {len(stem)}-character stem"
+        # ...and the stem is in the shell's alphabet, which is the other half of
+        # what `validated_label` checks.
+        assert re.fullmatch(r"[a-z0-9][a-z0-9-]*", stem), label

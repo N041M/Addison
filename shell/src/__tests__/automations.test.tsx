@@ -1,22 +1,29 @@
-// Automations — the drafts Addison writes down for THIS COMPUTER to run (Phase-2
-// step 8, phase 2 of four: authoring). Four parts:
+// Automations — the work Addison writes down for THIS COMPUTER to run (Phase-2
+// step 8, phases 2 and 3: authoring, then arming). Five parts:
 //
 //   (a) The fail-closed parser: a row without a usable id, name or COMMAND is
 //       dropped, junk never throws, and a missing schedule sentence falls back to
 //       the core's own "No schedule saved yet." rather than to anything this side
-//       assembled out of the numbers.
+//       assembled out of the numbers. Plus `automation.status`, which fails closed
+//       toward "arming isn't available here" — the direction that cannot invent a
+//       capability this computer does not have.
 //   (b) The section, rendered for real: the core's schedule sentence printed as it
-//       arrives, the whole command, and the standing "not armed" line byte-for-byte
-//       on every row. Nothing here has been handed to the operating system, and the
-//       rows are what say so.
+//       arrives, the whole command, and one armed/not-armed line per row.
 //   (c) Remove: two presses, named after its own automation, the right id on the
 //       wire, and the list re-read afterwards — because the core mints a restore
 //       point and can refuse, so what is on screen after a press is a guess until
 //       it has asked again.
 //   (d) The page-level gate: the section renders on the Developer/Custom surfaces
 //       only (keyed off the active profile, never the mode). Simple never sees it,
-//       which is phase 2's honest position — an automation's payload is a shell
+//       which is phase 3's honest position — an automation's payload is a shell
 //       command, and phase 4 replaces the gate with a listed-but-disabled treatment.
+//   (e) ARMED-NESS COMES FROM THE OPERATING SYSTEM (plan §5.6). Asked once when the
+//       section loads, never stored and never polled; a row that was never answered
+//       for says NOTHING about armed-ness rather than the comfortable half. Arm is
+//       offered only where arming exists, Disarm only for what the OS says is armed,
+//       and neither one calls anything: they write a sentence into the composer,
+//       because the ceremony belongs on the card and a settings button that installs
+//       a recurring job is the reflex the ceremony exists to break.
 //
 // The generated fixture (fixtures/automation.list.json, produced by
 // tests/ipc_fixtures.py from the real handler) is consumed by
@@ -25,21 +32,34 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
-import { parseAutomations } from "../ipc/client";
+import { parseAutomations, parseAutomationStatus } from "../ipc/client";
 import { AutomationsSection, SettingsPage } from "../components/SettingsPage";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
-import type { Automation } from "../types/protocol";
+import type { Automation, AutomationStatus } from "../types/protocol";
 import type { ProfileState } from "../types/ui";
 
 afterEach(cleanup);
 
 // --- Frozen copy — byte-for-byte. -------------------------------------------
-/** The whole of what this surface currently promises. A softened version would be
- * the app implying it had scheduled something it has not. */
-const NOT_ARMED = "Not armed — Addison can write this for the OS to run, once you arm it.";
+/** What a row says when the OS is not running it. Phase 2 said "…once you arm it"
+ * while arming did not exist; the sentence flips in the commit that makes arming
+ * real (plan §7) and still promises nothing. */
+const NOT_ARMED = "Not armed — nothing runs until you arm it.";
+/** What a row says when the OS IS running it — the same truth, in the same words,
+ * as the arming card's own warning. */
+const ARMED =
+  "Armed — your computer runs this on its own schedule, even when Addison is closed.";
+/** Off macOS: one plain sentence, and no Arm action anywhere. */
+const UNSUPPORTED =
+  "Arming isn't available on this computer, so these stay written down and never run.";
+/** When the OS could not be asked at all. */
+const STATUS_UNKNOWN = "Addison couldn't check which of these your computer is running.";
+/** What the Arm / Disarm actions write into the composer for the person to send. */
+const ARM_ASK = 'Arm the automation "Tidy up downloads".';
+const DISARM_ASK = 'Disarm the automation "Tidy up downloads".';
 const EMPTY = "No automations yet. Ask Addison to set one up.";
 const LOADING = "Looking for your automations…";
 const SECTION_TITLE = "Automations";
@@ -76,6 +96,7 @@ vi.mock("../ipc/client", async (importOriginal) => {
       ...actual.ipc,
       listAutomations: vi.fn(async () => [] as Automation[]),
       removeAutomation: vi.fn(async () => ({ ok: true })),
+      getAutomationStatus: vi.fn(async () => ({ armed: [], supported: true }) as AutomationStatus),
     },
   };
 });
@@ -213,18 +234,70 @@ describe("parseAutomations", () => {
   });
 });
 
+describe("parseAutomationStatus", () => {
+  it("round-trips what the operating system answered", () => {
+    expect(
+      parseAutomationStatus({
+        armed: ["com.addison.auto.tidy-downloads", "com.addison.auto.backup-notes"],
+        supported: true,
+      }),
+    ).toEqual({
+      armed: ["com.addison.auto.tidy-downloads", "com.addison.auto.backup-notes"],
+      supported: true,
+    });
+  });
+
+  it("keeps the core's own sentence when there is one", () => {
+    expect(parseAutomationStatus({ armed: [], supported: false, error: "Not on this Mac." })).toEqual(
+      { armed: [], supported: false, error: "Not on this Mac." },
+    );
+    // An empty string is not a sentence — the surface's own line is better than a
+    // blank row where an explanation should be.
+    expect(parseAutomationStatus({ armed: [], supported: false, error: "" }).error).toBeUndefined();
+  });
+
+  it("fails closed toward 'arming isn't available here'", () => {
+    // The direction matters: `supported` decides whether an Arm control exists at
+    // all, so anything that is not exactly `true` must read as "no". A truthy string
+    // is the shape that would otherwise conjure a capability out of a typo.
+    for (const junk of [null, undefined, 42, "nope", [], {}, { supported: "true" }, { armed: 1 }]) {
+      expect(parseAutomationStatus(junk)).toEqual({ armed: [], supported: false });
+    }
+  });
+
+  it("keeps only labels it could match a row against", () => {
+    expect(
+      parseAutomationStatus({ armed: ["ok", "", 7, null, { label: "x" }], supported: true }).armed,
+    ).toEqual(["ok"]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // (b)+(c) the section, driven through the real component with mocked ipc
 // ---------------------------------------------------------------------------
 describe("the Automations section", () => {
+  /** App's `seedAsk`: writes a sentence into the composer and returns to chat. */
+  const onAsk = vi.fn();
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  async function renderSection(rows: Automation[]) {
+  /** The section with a list and an OS answer behind it. The default answer is
+   * "arming works here, nothing is armed" — the ordinary Developer machine. */
+  async function renderSection(
+    rows: Automation[],
+    status: AutomationStatus | "unreachable" = { armed: [], supported: true },
+  ) {
     const { ipc } = await import("../ipc/client");
     (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
-    render(<AutomationsSection connected={true} />);
+    const statusMock = ipc.getAutomationStatus as ReturnType<typeof vi.fn>;
+    if (status === "unreachable") {
+      statusMock.mockRejectedValue(new Error("engine went away"));
+    } else {
+      statusMock.mockResolvedValue(status);
+    }
+    render(<AutomationsSection connected={true} onAsk={onAsk} />);
     if (rows.length > 0) {
       await screen.findByText(rows[0].name);
     } else {
@@ -286,6 +359,9 @@ describe("the Automations section", () => {
     render(<AutomationsSection connected={false} />);
     expect(screen.getByText(/once Addison.s engine is connected/i)).toBeTruthy();
     expect(ipc.listAutomations).not.toHaveBeenCalled();
+    // Including the operating system: an unreachable engine is not a reason to go
+    // asking launchd what it holds.
+    expect(ipc.getAutomationStatus).not.toHaveBeenCalled();
     expect(screen.queryByText(EMPTY)).toBeNull();
   });
 
@@ -353,6 +429,157 @@ describe("the Automations section", () => {
     expect(screen.getByText("<img src=x onerror=alert(1)> && echo **bold**")).toBeTruthy();
     expect(document.querySelector("img")).toBeNull();
     expect(document.querySelector("strong")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) armed-ness — the OPERATING SYSTEM's answer, and the arm/disarm affordance
+// ---------------------------------------------------------------------------
+describe("what the Automations section says is armed", () => {
+  const onAsk = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function renderSection(
+    rows: Automation[],
+    status: AutomationStatus | "unreachable" = { armed: [], supported: true },
+  ) {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    const statusMock = ipc.getAutomationStatus as ReturnType<typeof vi.fn>;
+    if (status === "unreachable") {
+      statusMock.mockRejectedValue(new Error("engine went away"));
+    } else {
+      statusMock.mockResolvedValue(status);
+    }
+    render(<AutomationsSection connected={true} onAsk={onAsk} />);
+    await screen.findByText(rows[0].name);
+    return ipc;
+  }
+
+  const TIDY = automation();
+  const BACKUP = automation({
+    id: "b",
+    name: "Back up notes",
+    label: "com.addison.auto.backup-notes",
+    command: "/usr/local/bin/backup-notes",
+  });
+
+  it("asks the operating system once, when the section loads", async () => {
+    // Never stored, never polled, never checked at startup (plan §5.6): a G3 restore
+    // can put a ROW back and can never put a JOB back, so the OS is asked on arrival
+    // and then left alone.
+    const ipc = await renderSection([TIDY]);
+    expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(1);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a row is armed when the OS is holding it, and not armed when it isn't", async () => {
+    // The row does not know. Its LABEL is what the OS answers about, which is why a
+    // restore, a reinstall or somebody deleting the plist by hand all land here
+    // honestly with no special case.
+    await renderSection([TIDY, BACKUP], {
+      armed: ["com.addison.auto.backup-notes"],
+      supported: true,
+    });
+    expect(screen.getByText(ARMED)).toBeTruthy();
+    expect(screen.getByText(NOT_ARMED)).toBeTruthy();
+    expect(screen.getAllByText(ARMED)).toHaveLength(1);
+  });
+
+  it("offers Arm on a row nothing is running, named after its own automation", async () => {
+    await renderSection([TIDY, BACKUP], { armed: [], supported: true });
+    expect(screen.getByRole("button", { name: "Arm Tidy up downloads" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Arm Back up notes" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Disarm / })).toBeNull();
+  });
+
+  it("offers Disarm ONLY for what the OS says is armed", async () => {
+    await renderSection([TIDY, BACKUP], {
+      armed: ["com.addison.auto.tidy-downloads"],
+      supported: true,
+    });
+    expect(screen.getByRole("button", { name: "Disarm Tidy up downloads" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Arm Tidy up downloads" })).toBeNull();
+    // …and the other row is untouched by its neighbour's state.
+    expect(screen.getByRole("button", { name: "Arm Back up notes" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Disarm Back up notes" })).toBeNull();
+  });
+
+  it("arms by ASKING, never by calling: the sentence goes to the composer", async () => {
+    // There is no `automation.arm` on the Frontend→Core surface and deliberately
+    // never was one. Arming is a tool the gate cards with a typed code; a settings
+    // button that installed a recurring job would be exactly the reflex the ceremony
+    // exists to break.
+    await renderSection([TIDY], { armed: [], supported: true });
+    fireEvent.click(screen.getByRole("button", { name: "Arm Tidy up downloads" }));
+    expect(onAsk).toHaveBeenCalledWith(ARM_ASK);
+  });
+
+  it("disarms by asking too", async () => {
+    await renderSection([TIDY], { armed: ["com.addison.auto.tidy-downloads"], supported: true });
+    fireEvent.click(screen.getByRole("button", { name: "Disarm Tidy up downloads" }));
+    expect(onAsk).toHaveBeenCalledWith(DISARM_ASK);
+  });
+
+  it("says arming isn't available on this computer, and offers no Arm", async () => {
+    // Off macOS. One plain sentence, the seatbelt's temperament — and no control that
+    // would only ever refuse.
+    await renderSection([TIDY], { armed: [], supported: false });
+    expect(screen.getByText(UNSUPPORTED)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Disarm / })).toBeNull();
+    // The row is still honest about its own state, and still removable.
+    expect(screen.getByText(NOT_ARMED)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Remove Tidy up downloads" })).toBeTruthy();
+  });
+
+  it("treats a core sentence as the answer, and an ERROR as no answer at all", async () => {
+    // The core keeps three outcomes apart on purpose: this computer cannot arm, the
+    // OS answered, and Addison could not find out. The third arrives as an empty
+    // list WITH a sentence beside it, and reading that as "nothing is armed" would
+    // tell somebody their automation was off while it was running.
+    await renderSection([TIDY], {
+      armed: [],
+      supported: false,
+      error: "Addison couldn't ask this computer just now.",
+    });
+    expect(screen.getByText("Addison couldn't ask this computer just now.")).toBeTruthy();
+    expect(screen.queryByText(UNSUPPORTED)).toBeNull();
+    const text = document.body.textContent ?? "";
+    expect(text).not.toContain(NOT_ARMED);
+    expect(text).not.toContain(ARMED);
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+  });
+
+  it("claims nothing about a row when the OS could not be asked", async () => {
+    // The comfortable half of an answer nobody got is the failure this section cannot
+    // afford: a surface quietly reading "not armed" over a job that is running.
+    await renderSection([TIDY], "unreachable");
+    expect(screen.getByText(STATUS_UNKNOWN)).toBeTruthy();
+    const text = document.body.textContent ?? "";
+    expect(text).not.toContain(NOT_ARMED);
+    expect(text).not.toContain(ARMED);
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Disarm / })).toBeNull();
+  });
+
+  it("offers no arming affordance at all when there is nowhere for it to lead", async () => {
+    // A partial caller (no `onAsk`) still renders the list and the truth about it;
+    // what it does not render is a button that goes nowhere.
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([TIDY]);
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      armed: [],
+      supported: true,
+    });
+    render(<AutomationsSection connected={true} />);
+    await screen.findByText(TIDY.name);
+    expect(screen.getByText(NOT_ARMED)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
   });
 });
 

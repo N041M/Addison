@@ -18,6 +18,14 @@ authorize a different (or even the same) one later. The card carries the actual
 command text so the user knows exactly what they are approving each time.
 Destructiveness is decided per call by the caller
 (``tools.base.call_is_destructive``) and passed in.
+
+THE ARMING PATH (step 8 phase 3, GLOBAL FLOOR G2) is the one card this gate does
+not let any setting soften. When ``authorize`` is handed an ``arming`` preview it
+takes ``_request_arming`` and nothing else: no auto-grant, no session grant, no
+trust suppression, no guard. The card carries a short code the person retypes
+(``agent_core/automation_nonce.py``), which the CALLER mints, holds and compares —
+this module never sees a nonce, and neither does any tool. See
+``docs/step-8-automation-plan.md`` §3 and §5.9 (the nonce ships non-tunable).
 """
 
 from __future__ import annotations
@@ -42,6 +50,77 @@ class PermissionRequest:
     status: PermissionStatus
 
 
+def call_arming_refusal(tool: object, args: dict) -> str | None:
+    """The arming DOOR, asked at the dispatch site BEFORE this gate (step 8 phase 3).
+
+    A tool may implement ``arming_refusal(args) -> str | None``; anything that does
+    not (every tool but the two arming ones) answers None and is unaffected.
+
+    It lives beside the gate rather than in ``tools/base.py`` because it is the one
+    check whose entire purpose is *what must be true before a card may be raised*.
+    A refused call is not a card anybody may approve — the same rule the hardline
+    denylist follows one line above it at every dispatch site — and here it is the
+    difference between "type this code to switch on Nightly backup" and asking
+    somebody to perform a ceremony for a row that no longer exists, a schedule
+    nothing can run, or a computer with no launchd on it.
+
+    Never raises: a tool whose door itself fails is refused, not escalated."""
+    provider = getattr(tool, "arming_refusal", None)
+    if not callable(provider):
+        return None
+    try:
+        value = provider(args)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
+def tool_requires_arming(tool: object) -> bool:
+    """Does this tool's consent REQUIRE the keyword ceremony? Asked of the tool, not
+    of the payload — which is the whole point.
+
+    ``arm_automation`` declares ``arming_card``; nothing else does. Declaring it is
+    the tool saying *"an ordinary card is not enough consent for me"*, and that is a
+    property of the TOOL, permanent and independent of whether a particular preview
+    could be assembled.
+
+    THE FAIL-OPEN THIS CLOSES (adversarial review, 2026-08-07). The gate used to
+    take the arming path iff a preview ARRIVED, so a preview that could not be built
+    — ``arming_card`` returns None whenever the row cannot be read, and ``_row``
+    swallows every store error — silently downgraded the call to an ordinary
+    destructive card. Under the Custom profile's ``auto_grant_scope='everything'``
+    it downgraded to NO CARD AT ALL, which is verbatim the failure ``authorize``'s
+    own docstring says the arming branch's ordering exists to prevent. A transient
+    SQLite error was enough. **A door that fails must not be a door that opens**, so
+    the requirement now lives on the tool and a missing preview is a refusal."""
+    return callable(getattr(tool, "arming_card", None))
+
+
+def call_arming_card(tool: object, args: dict) -> dict | None:
+    """The arming PREVIEW this call would put on its card, or None.
+
+    A tool may implement ``arming_card(args) -> dict | None`` returning the fields
+    ``PermissionRequest.arming`` declares minus the two the caller owns: the name,
+    the schedule in plain words, the exact command, where the file goes, and the
+    frozen warnings. Returning None — which is what every tool but ``arm_automation``
+    does, ``disarm_automation`` INCLUDED — means an ordinary card.
+
+    That distinction is the whole of §5.10's "no ceremony on a tightening": switching
+    something OFF must never be the thing a code traps somebody out of.
+
+    Never raises, and a non-dict answer is treated as no preview: a card that
+    silently lost its preview would be a code with nothing above it to read, which
+    is the ceremony reduced to a captcha."""
+    provider = getattr(tool, "arming_card", None)
+    if not callable(provider):
+        return None
+    try:
+        value = provider(args)
+    except Exception:
+        return None
+    return value if isinstance(value, dict) and value else None
+
+
 class PermissionGate:
     def __init__(
         self,
@@ -53,6 +132,10 @@ class PermissionGate:
         # Called as on_request(tool_id) on the SAFE path; the destructive-in-OPEN
         # per-invocation path calls on_request(tool_id, detail) so the card can show
         # exactly what is being approved — a real handler accepts (tool_id, detail=None).
+        # The ARMING path (step 8 phase 3) calls on_request(tool_id, detail, arming)
+        # with the keyword card's preview; a handler that supports it accepts
+        # (tool_id, detail=None, arming=None). The third argument is passed ONLY on
+        # that path, so every existing two-argument handler is untouched.
         self._on_request = on_request
         # on_auto_grant fires when OPEN mode auto-allows a non-destructive call, so
         # the server can surface it in the activity log. None in CLI/tests.
@@ -79,6 +162,8 @@ class PermissionGate:
         detail: str | None = None,
         guards: GuardConfig | None = None,
         trusted: bool = False,
+        arming: dict | None = None,
+        requires_arming: bool = False,
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
@@ -129,7 +214,42 @@ class PermissionGate:
         stored/replayable surfaces — routine command steps and command widgets pass
         ``trusted=False`` unconditionally (D5), so a persisted one-click spec can
         never skip a card. ``trusted=False`` ≡ today byte-for-byte (the freeze), and
-        SAFE ignores ``trusted`` entirely (F7)."""
+        SAFE ignores ``trusted`` entirely (F7).
+
+        ``arming`` (step 8 phase 3) is the preview for the keyword card. When it is
+        not None this method does ONE thing — ``_request_arming`` — and every branch
+        below is skipped, in every mode. That ordering is the floor rather than a
+        convenience, and each thing it steps over is a real way the ceremony would
+        otherwise have been lost:
+
+          * ``auto_grant_scope='everything'`` would have armed a recurring,
+            unconfined job with NO CARD AT ALL, because that scope auto-grants
+            destructive calls too;
+          * ``destructive_card='session'`` would have armed the SECOND automation of
+            a session on the strength of a code typed for the FIRST;
+          * ``trusted`` skips the card for a confined edit. Arming has no
+            ``affected_path``, so no caller can set it — stepping over it anyway
+            costs nothing and removes the question;
+          * SAFE would have run the coarse remembered-grant flow. Dispatch already
+            refuses these tools outside OPEN and that is the enforcement; this is
+            the belt, and a belt on this particular floor is cheap.
+
+        ``requires_arming`` is asked of the TOOL (``tool_requires_arming``) and is
+        what makes the ceremony non-optional: when it is true and no preview
+        arrived, this DENIES rather than falling through to an ordinary card. The
+        preview can only go missing because the row could not be read, and a call
+        that cannot describe what it would arm is not a call anybody can consent to.
+        See ``tool_requires_arming`` for the fail-open this closes.
+
+        ``arming=None`` with ``requires_arming=False`` ≡ every previous call
+        byte-for-byte, which is the freeze."""
+        if requires_arming and arming is None:
+            # Refused, never downgraded. Nothing is recorded: there is no grant to
+            # remember and no denial to nag about — the call simply could not be
+            # put in front of anybody.
+            return PermissionStatus.DENIED
+        if arming is not None:
+            return self._request_arming(tool_id, detail, arming)
         if mode is PolicyMode.OPEN:
             effective = guards if guards is not None else GuardConfig()
             if effective.auto_grant_scope == "everything":
@@ -198,6 +318,43 @@ class PermissionGate:
         if self._on_request is None:
             raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
         status = self._on_request(tool_id, detail)
+        if status == PermissionStatus.DENIED:
+            self._denied.add(tool_id)
+        return status
+
+    def _request_arming(
+        self, tool_id: str, detail: str | None, arming: dict
+    ) -> PermissionStatus:
+        """The keyword card (step 8 phase 3, G2): ALWAYS asked, never remembered.
+
+        Structurally the per-invocation card with two differences, and both are
+        deliberate:
+
+          * the ``arming`` preview rides along to the handler, which is what makes
+            this a keyword card rather than a button — the handler mints the code,
+            shows it above the preview, and compares what comes back
+            (``agent_core/automation_nonce.py``). **This module never sees a
+            nonce.** It cannot log one, cannot cache one, and cannot be edited into
+            comparing one loosely, because it has none to compare;
+          * no guard reaches here at all (see ``authorize``).
+
+        A GRANT IS NEVER RECORDED — not in ``_grants``, not in
+        ``_destructive_session_grants``. Arming twice means typing twice, forever.
+        A denial is turn-scoped exactly like every other card's: "not now" means not
+        now, and it must not become a way to nag somebody into arming.
+
+        The handler is invoked with THREE arguments here and two everywhere else, so
+        every existing ``on_request(tool_id, detail=None)`` keeps working untouched
+        and only a handler that has opted into arming is ever asked about it. A
+        handler that has not is a handler that cannot show the code — and raising a
+        plain card in its place would be the ceremony silently downgraded, which is
+        the one failure this path may not have, so it surfaces as the wiring error
+        it is."""
+        if tool_id in self._denied:
+            return PermissionStatus.DENIED
+        if self._on_request is None:
+            raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
+        status = self._on_request(tool_id, detail, arming)
         if status == PermissionStatus.DENIED:
             self._denied.add(tool_id)
         return status

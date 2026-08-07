@@ -208,12 +208,14 @@ The one dependency that is not obvious from the list was inside 7:
   server row holds a URL and never a command.
   [`docs/step-7-mcp-plan.md`](docs/step-7-mcp-plan.md) owns the phases and both
   decisions.
-- **8 — the automation keyword gate** + author-OS-run automation. Phases 1–2 of
+- **8 — the automation keyword gate** + author-OS-run automation. Phases 1–3 of
   four are built (2026-08-07): the fence that makes the gated path the only path,
-  and authoring as inert drafts (`create_automation`, dev-only — a row and a
-  preview, no armed state anywhere). **Nothing in the tree can ARM automation** —
-  the gate and the arming surface are phase 3, so G2 holds: by the fence for the
-  generic paths, and by absence for the rest.
+  authoring as inert drafts (`create_automation`), and **the gate and arming
+  themselves** — `arm_automation` installs a launchd job through the shell, behind
+  the ordinary card PLUS a per-automation code the person retypes
+  (`agent_core/automation_nonce.py`). **G2 is unchanged and still holds**: the OS
+  runs the job, Addison never fires it, and `RunAtLoad` is never set so arming
+  causes no run. Phase 4 (state honesty + Simple's disabled rows) is next.
   [`docs/step-8-automation-plan.md`](docs/step-8-automation-plan.md) owns the
   phases and decisions.
 

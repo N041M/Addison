@@ -45,10 +45,10 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**One step remains — 8, and phases 1–2 of four are BUILT.** `ROADMAP.md` owns
+**One step remains — 8, and phases 1–3 of four are BUILT. Only phase 4 is left.** `ROADMAP.md` owns
 status; trust it over this file.
 
-- **8 — the automation keyword gate. The plan exists; phases 1 and 2 landed
+- **8 — the automation keyword gate. The plan exists; phases 1, 2 and 3 landed
   2026-08-07** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the
   phases and the decisions). Syntax was decided by the owner (a per-automation
   nonce Addison shows and you retype, because a fixed prefix is forgeable by
@@ -64,14 +64,24 @@ status; trust it over this file.
   refused as arming), secret shapes via the redactor, ASCII-folded unique labels
   — a chat-only plist preview (`plist_text` may never cross IPC; a source test
   pins the rpc layer cannot import it), `scheduleSentence` on the wire, and the
-  Developer-only Settings drafts section. **Next: phase 3 — the nonce card +
-  arming through a typed shell surface (`automation.install/remove/status`,
-  shell builds its own XML, label prefix enforced, `RunAtLoad` never set), then
-  phase 4 (state honesty + Simple's disabled rows + the restore-refresh hook
-  phase 2 left owed, listed in the plan's phase-4 entry).** Read the plan's §3
-  (nonce mechanics) and §7 (everything that flips in phase 3's commit — G2
-  wording, flow 12, two not-armed copy lines, `primary.txt`'s scheduling
-  sentence) before starting phase 3.
+  Developer-only Settings drafts section. **Phase 3 = the gate and arming
+  themselves**: `automation_nonce.py` (six characters, lookalikes removed,
+  constant-time compare, three attempts), the shell's `automation.rs` (the only
+  writer of `~/Library/LaunchAgents` — it builds the plist itself from typed fields
+  and never takes a document), `arm_automation` (HIGH, real `undo()` = disarm) and
+  `disarm_automation` (a tightening: ordinary card, no code, no undo). **Next and
+  last: phase 4** — state honesty, Simple's disabled rows, and the `onRestored`
+  refresh hook phase 2 left owed.
+
+  **Three things to know before touching this subsystem**, all found by the phase-3
+  review rather than by its build: the ceremony's requirement lives on the TOOL
+  (`gate.tool_requires_arming`), never on whether a preview arrived — keyed off the
+  payload it failed OPEN, downgrading to an ordinary card or, under Custom's
+  "never ask", to none; `automation.remove` disarms BEFORE it forgets, because a
+  removed row leaves a running job nobody can name or stop; and the core and the
+  shell are two implementations of one contract, now pinned in
+  `tests/test_automations.py` for BOTH the plist bytes and the label rules — the
+  label half was missing and had already drifted.
 - **7 — MCP client. DONE FOR v1: phases 1–4 of five, 2026-08-06 to 2026-08-07.**
   Transport was decided by the owner on 2026-08-06: **HTTP only for v1**, which is
   what keeps the client in the Agent Core and adds no new highest-trust surface.
@@ -170,7 +180,8 @@ committed and pushed; `master` is clean.
 
 ## Branch and PR state (verified 2026-08-07, end of day)
 
-**No open pull requests. `master` carries everything through #66** — step 8's plan,
+**One PR open: step 8 phase 3 (branch `claude/step-8-phase-3-arming` — the keyword
+gate and arming; this file ships in it). `master` carries everything through #67** — step 8's plan,
 phase 1 (the fence and the table), phase 2 (authoring), and the review of both,
 merged 2026-08-07 with CI green on the merge commit. Work from `master`.
 **Re-read this section

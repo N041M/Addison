@@ -914,23 +914,26 @@ def test_no_document_contradicts_a_registered_claim():
 # than promised. Two rows were TIGHTENED when these samples were first run; both are
 # named in the comments beside their patterns.
 _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
-    "automation-authoring-built-arming-not": {
-        "recounting the claim that WAS true before phase 2, in the past tense": (
-            "Until authoring shipped, nothing in the tree can author automation was "
-            "simply true, and G2 held trivially."
+    "automation-arming-built": {
+        "recounting the phase where arming genuinely did not exist": (
+            "Through phase 2 there was no arming surface at all, and G2 held by "
+            "absence as much as by the fence."
         ),
-        "BUILD-LOG quoting the retired standing claim to call it false": (
-            "The tree's standing claim was \"nothing can author or arm automation, so "
-            "G2 holds trivially\" — correct about the machinery, false about the "
-            "trusted-folder path."
+        "the plan describing what phase 3 was going to add, in the past tense": (
+            "Until phase 3, arming does not exist in the tree — the standing claim "
+            "was that nothing could hand a job to the OS."
         ),
         "the fact stated at today's polarity, which is the point of the row": (
-            "Addison can author an automation as an inert draft; nothing in the tree "
-            "can ARM one, because the arming surface is phase 3."
+            "Addison can arm an automation behind a code the person retypes; the OS "
+            "runs it from then on, and Addison never fires it."
         ),
-        "prose about ARMING being absent, which must never be mistaken for authoring": (
-            "There is no arming surface anywhere in the tree, so a saved automation "
-            "has never been handed to launchd."
+        "prose about the CEREMONY, which must not read as absence": (
+            "Arming needs a per-automation code Addison shows and the person types "
+            "back, on top of the ordinary permission card."
+        ),
+        "G2 restated at its true strength, which survives arming existing": (
+            "Addison never triggers itself: it writes the file, and the operating "
+            "system is what runs the job on its own schedule."
         ),
     },
     "g3-open-mode-polarity": {

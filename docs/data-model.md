@@ -502,8 +502,10 @@ erDiagram
   Addison **authors for the OS to run**. Addison never triggers itself (G2): the row
   describes a `command` and a schedule, and only the operating system ever runs one.
   A row is a **draft**: `create_automation` (phase 2, Developer only) is the one thing
-  that writes one, and **no arming surface exists** — phase 3 owns that, so a row
-  here has never been handed to launchd.
+  that writes one, and `arm_automation` (phase 3) is the only thing that hands it
+  to launchd — through the shell, behind a typed per-automation code. A row is
+  still only a record: **no column here says whether it is armed** (see below).
+
   [`step-8-automation-plan.md`](step-8-automation-plan.md) owns the phase order.
   - **There is no `armed` column, and its absence is the design** (plan §5.6). Armed
     truth lives in the OS and is asked for when the surface loads. A stored flag is

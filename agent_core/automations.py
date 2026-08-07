@@ -430,8 +430,20 @@ def derive_label(name: object, taken_labels: Iterable[str] = ()) -> str | None:
     base = f"{LABEL_PREFIX}{slug}"
     if base not in taken:
         return base
+    # THE SUFFIX MUST FIT INSIDE THE SAME CAP, and it did not (adversarial review,
+    # 2026-08-07). ``_slug`` caps the stem at ``MAX_SLUG_CHARS``; appending "-2"
+    # then produced a 41-43 character stem, which the SHELL refuses — it validates
+    # the label itself and caps at the same 40, deliberately not trusting the core.
+    # So a second automation with a long name authored fine, previewed fine, showed
+    # its code — and then answered "Addison can only set up and remove automations
+    # it named itself" the moment the person typed it. Fail-closed, at the app's
+    # single highest-ceremony moment, with a sentence that blamed the wrong thing.
+    # Trimming the stem to make room keeps every label the core mints inside the
+    # set the shell accepts, which is the property the cross-language tests pin.
     for suffix in range(2, MAX_LABEL_SUFFIX + 1):
-        candidate = f"{base}-{suffix}"
+        tail = f"-{suffix}"
+        stem = f"{slug[: MAX_SLUG_CHARS - len(tail)]}{tail}".strip("-")
+        candidate = f"{LABEL_PREFIX}{stem}"
         if candidate not in taken:
             return candidate
     return None

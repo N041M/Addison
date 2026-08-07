@@ -564,10 +564,25 @@ def test_the_answer_carries_the_schedule_the_preview_and_the_not_armed_line(tool
 
 def test_the_not_armed_line_says_it_plainly(tool):
     """It is the sentence a person reads to learn that nothing happened yet, so it
-    must survive every later rewording with its meaning intact and its jargon out."""
-    assert "isn't armed" in NOT_ARMED_LINE
-    for jargon in ("launchd", "plist", "phase", "gate", "nonce", "keyword"):
-        assert jargon not in NOT_ARMED_LINE.lower(), jargon
+    must survive every later rewording with its meaning intact and its jargon out.
+
+    PHASE 3 FLIPPED IT, as plan §7 said it would: the sentence used to end "arming
+    doesn't exist yet", which stopped being true the moment `arm_automation`
+    shipped. What it must still do is (a) say plainly that nothing is running, and
+    (b) name the next step honestly — including that a code will be asked for,
+    because a person about to meet a ceremony should hear about it here rather than
+    be surprised by a card.
+
+    Mutation: drop the "not running" half, or the "ask Addison to arm it" half."""
+    lowered = NOT_ARMED_LINE.lower()
+    assert "isn't running yet" in lowered
+    assert "arm it" in lowered
+    # The ceremony is disclosed, in the person's words rather than the system's.
+    assert "code" in lowered
+    # ...and it still names no machinery. "arm" is the person's verb now; the
+    # implementation words stay out.
+    for jargon in ("launchd", "plist", "phase", "gate", "nonce", "keyword", "launchctl"):
+        assert jargon not in lowered, jargon
 
 
 def test_undo_deletes_the_row_it_created_and_only_that_row(tool, store: Store):
@@ -832,3 +847,39 @@ def test_the_preview_block_always_closes_on_a_line_of_its_own():
     assert _fenced("a `````` b").startswith("```````\n")
     # A payload that already ends in a newline is not given a second one.
     assert _fenced("ends already\n") == "```\nends already\n```"
+
+
+@pytest.mark.parametrize(
+    "char,name", [("\x00", "NUL"), ("\x0b", "vertical tab"), ("\x7f", "DEL"), ("\x85", "NEL")]
+)
+def test_a_command_your_scheduler_cannot_accept_is_refused_before_the_ceremony(
+    tool: CreateAutomationTool, store: Store, char, name
+):
+    """THE CEREMONY MUST NOT BE SPENT ON A JOB THAT CANNOT INSTALL (phase-3 review).
+
+    The name was character-screened from phase 2; the command was not. So a command
+    carrying a control character authored fine, rendered into the preview, and
+    raised the code card — and the SHELL refused it, because a control character
+    cannot go in a plist. The person read the preview, typed the six characters, and
+    got a refusal at the one moment the whole design is asking them to concentrate.
+
+    Refusing here costs nothing real: no command needs a NUL, and a tab between
+    arguments is a space.
+
+    Mutation: drop the command character check from ``_refusal``."""
+    result = tool.execute(_args(command=f"echo {char}hi"), _ctx())
+    assert result.success is False
+    assert "scheduler won't accept" in result.content
+    assert store.list_automations() == []
+
+
+def test_an_ordinary_command_with_punctuation_is_untouched(
+    tool: CreateAutomationTool, store: Store
+):
+    """The precision half — a screen that refused real commands would be worse than
+    the gap it closed."""
+    assert tool.execute(
+        _args(command="/usr/bin/rsync -a --delete ~/Notes ~/Backups/Notes && echo 'done!'"),
+        _ctx(),
+    ).success is True
+    assert len(store.list_automations()) == 1

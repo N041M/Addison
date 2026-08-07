@@ -176,6 +176,20 @@ covered.
    and no memory of "armed": what is armed is the OS's truth, so a restore can
    never re-arm anything by putting a database row back.
 
+   **What phase 3 shipped (2026-08-07, same day) — the part the step is named
+   for.** You can now switch an automation on, and doing it takes more than a
+   click: Addison shows you exactly what will run, where it will be saved, and two
+   plain sentences about what you are agreeing to — that it runs on its own
+   schedule even when Addison is closed, and that it runs outside Addison's
+   sandbox — and then shows a short code you type back to confirm. The code is
+   different every time and Addison itself cannot supply it, which is what stops a
+   web page or a message from talking you through arming something. Three wrong
+   tries and it stops and asks you to start over. Switching one back off is an
+   ordinary confirmation with no code, because turning something off should never
+   be the hard part. **Addison still never triggers itself**: it writes a file the
+   operating system reads, the OS does the running, and arming deliberately does
+   not cause a first run. Off a Mac it says so plainly and does nothing.
+
    **What phase 2 shipped (2026-08-07, same day):** asking Addison for an
    automation now writes one down — in the Developer profile only. Addison saves
    what to run and when, shows the schedule as one plain sentence ("Every Monday

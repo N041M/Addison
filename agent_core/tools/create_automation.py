@@ -67,6 +67,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -116,6 +117,10 @@ _NEEDS_A_COMMAND = "Say what the automation should actually run."
 # is computed from the plist alone. Without a newline the sequence cannot begin a
 # block, so this is where that vector closes. (The adversarial pass over the fix
 # round found it: the first fix hardened the command's channel and left the name's.)
+_COMMAND_HAS_ODD_CHARACTERS = (
+    "That command has characters in it that your computer's scheduler won't accept. "
+    "Write it as plain text on one line, or put it in a script file and run that."
+)
 _NAME_IS_NOT_ONE_LINE = (
     "Give the automation a name on a single line, without any special characters."
 )
@@ -146,11 +151,14 @@ _COULDNT_SAVE = "Addison couldn't save that automation just now. Try again in a 
 _UNDO_NOT_READY = "Can't undo that automation just now — try again in a moment."
 
 # THE STANDING TRUTH, on every successful answer. It is one sentence and it is the
-# whole of what a draft is: written, not armed. Phase 3 is the commit that may
-# change it, and it changes here — this string is the only copy in the core.
+# whole of what a draft is: written, not armed. **Phase 3 flipped it** (plan §7
+# registered this string as one of that commit's edits): arming exists now, so the
+# sentence stops saying "not built" and starts saying what the person does next —
+# and it names the ceremony rather than hiding it, because a person who is going to
+# be asked to retype a code should hear that here rather than discover it on a card.
 NOT_ARMED_LINE = (
-    "It isn't armed — Addison can write this for the OS to run, but arming doesn't "
-    "exist yet."
+    "It isn't running yet. To switch it on, ask Addison to arm it — you'll see "
+    "exactly what it will run and type a short code to confirm."
 )
 
 
@@ -320,6 +328,24 @@ class CreateAutomationTool:
         raw_name = str(args.get("name", ""))
         if any(ch == "\n" or ch == "\r" or (ord(ch) < 32) for ch in raw_name):
             return _NAME_IS_NOT_ONE_LINE
+        # THE COMMAND GETS THE SAME CHARACTER SCREEN, and it did not until the
+        # phase-3 review: a command carrying a NUL or a vertical tab authored fine,
+        # rendered into the preview, and raised the code card — and the SHELL then
+        # refused it, because a control character cannot go into a plist. The person
+        # performed the whole ceremony for a job that could never install. Refusing
+        # here costs nothing (no real command needs one) and spends the ceremony only
+        # on automations that can actually run.
+        # MIRRORS THE SHELL'S RULE EXACTLY (`automation.rs::command_from`): every
+        # control character except tab, newline and carriage return. Matching rather
+        # than inventing is the point — a core stricter than the shell refuses
+        # commands that would have worked (a multi-line command is ordinary), and a
+        # core looser than the shell is the gap this closes. `unicodedata.category`
+        # "Cc" is Rust's `char::is_control`.
+        command = self.command_text(args) or ""
+        if any(
+            unicodedata.category(ch) == "Cc" and ch not in "\t\n\r" for ch in command
+        ):
+            return _COMMAND_HAS_ODD_CHARACTERS
         if not self.command_text(args):
             return _NEEDS_A_COMMAND
         # LENGTH, before anything reads the text closely. The stored strings are

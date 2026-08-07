@@ -171,6 +171,7 @@ export const Method = {
   // written by the Rust shell from those fields, so no payload carries a document.
   AutomationList: "automation.list",
   AutomationRemove: "automation.remove",
+  AutomationStatus: "automation.status",
 
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick
@@ -204,6 +205,11 @@ export const Method = {
   ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
   ShellPickDirectory: "shell.pickDirectory",
   ShellRunCommand: "shell.runCommand",
+  // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
+  // from typed fields and never accepts a document (plan §5.8).
+  ShellArmAutomation: "shell.armAutomation",
+  ShellDisarmAutomation: "shell.disarmAutomation",
+  ShellListArmed: "shell.listArmed",
   ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
@@ -242,6 +248,42 @@ export interface PermissionRequest {
   label: string;
   description: string;
   riskTier: RiskTier;
+  /**
+   * ARMING ONLY (step 8 phase 3). Present when this card is the keyword gate: the
+   * person must retype `nonce` before the approval counts, and the fields beside it
+   * are what they are being asked to read first — the exact command, where the file
+   * goes, and the two sentences that make the stakes plain.
+   *
+   * The code is compared IN THE CORE (`agent_core/automation_nonce.py`) and travels
+   * back on `permission.respond` as `typed`. It is never stored, never logged, and
+   * never put in a model's context — a nonce a model can read is one it can type,
+   * which is the whole thing the gate exists to prevent. The webview's job is to
+   * SHOW it and to send back what was typed, never to decide whether it matched.
+   */
+  arming?: {
+    nonce: string;
+    automationName: string;
+    scheduleSentence: string;
+    command: string;
+    /** Where the OS will read the job from, e.g. ~/Library/LaunchAgents/<label>.plist */
+    installPath: string;
+    /** Frozen copy the core owns; the webview renders it verbatim. */
+    warnings: string[];
+    /** How many wrong answers remain before this request denies outright. */
+    attemptsLeft: number;
+  };
+}
+
+/**
+ * `automation.status` — what the OPERATING SYSTEM currently holds, asked on demand.
+ * Never stored and never polled: a G3 restore can put a database row back and can
+ * never put a running job back, so the honest answer always comes from launchd
+ * (plan §5.6). `supported` is false off macOS, where arming does not exist.
+ */
+export interface AutomationStatus {
+  armed: string[];
+  supported: boolean;
+  error?: string;
 }
 
 /**

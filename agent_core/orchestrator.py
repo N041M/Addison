@@ -15,7 +15,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.permissions.gate import (
+    PermissionGate,
+    PermissionStatus,
+    call_arming_card,
+    call_arming_refusal,
+    tool_requires_arming,
+)
 from agent_core.policy import PolicyMode
 from agent_core.providers.base import (
     Message,
@@ -760,6 +766,28 @@ class Orchestrator:
                     call.id, ToolResult(success=False, content=forbidden)
                 )
                 continue
+            # THE ARMING DOOR (step 8 phase 3, G2), above the gate for the denylist's
+            # reason and one of its own. A call that cannot succeed — no launchd on
+            # this computer, a row that is not saved any more, a schedule nothing
+            # could run — must never be shown to somebody as a thing they might
+            # approve, and here that "thing" is a ceremony: reading a preview and
+            # retyping a code. Answering None for every tool but the two arming ones
+            # (`permissions.gate.call_arming_refusal`), so nothing else changes.
+            #
+            # The audit outcome is `forbidden`: the vocabulary's value for "refused
+            # before the gate, with no card behind it", which is exactly what this
+            # is. (`schema.sql` owns that vocabulary; widening it is a migration.)
+            arming_refusal = call_arming_refusal(tool, call.args)
+            if arming_refusal is not None:
+                self._audit(
+                    conversation, call.tool_id,
+                    call_permission_detail(tool, call.args), mode, destructive,
+                    "forbidden",
+                )
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=arming_refusal)
+                )
+                continue
             # CONFINEMENT (step 5, D3): a path-bounded tool (non-None affected_path)
             # may only ever run INSIDE a currently-trusted root. Resolve the path
             # ONCE here; hard-refuse before the gate and before execute if it is not
@@ -794,6 +822,11 @@ class Orchestrator:
             # permission_detail a second time could describe a different one if it ever
             # stops being a pure read of args.
             detail = call_permission_detail(tool, call.args)
+            # THE KEYWORD CARD'S PREVIEW (step 8 phase 3). None for every tool but
+            # `arm_automation` — including `disarm_automation`, whose card is
+            # ordinary because a tightening must never be something a code can trap
+            # somebody out of. Non-None makes the gate take the arming path and
+            # nothing else (gate.authorize), whatever the guards say.
             status = self.permission_gate.authorize(
                 call.tool_id,
                 mode=mode,
@@ -801,6 +834,10 @@ class Orchestrator:
                 detail=detail,
                 guards=guards,
                 trusted=trusted,
+                arming=call_arming_card(tool, call.args),
+                # Asked of the TOOL, so a preview that could not be built refuses
+                # instead of quietly becoming an ordinary card (gate.py owns why).
+                requires_arming=tool_requires_arming(tool),
             )  # may block for UI
             if status == PermissionStatus.DENIED:
                 self._audit(

@@ -147,6 +147,20 @@ and where it goes.
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
+- **An armed automation may launch Addison itself, and nothing refuses it — an
+  OWNER QUESTION, not a defect (raised by the phase-3 review, 2026-08-07).**
+  `policy._ARMING_BINARIES` refuses `launchctl`/`crontab`/`at`/`batch` as a
+  command's program, but an automation whose command is `open -a Addison` on a
+  one-minute interval passes the door, the fence and the keyword card. **My read is
+  that this is within G2's letter**: the OS runs it, at the person's explicit
+  typed-code consent, exactly like a login item they made themselves, and Addison
+  still has no timer, watcher or callback of its own. But it is the one shape that
+  produces an Addison-relaunch loop, and the plan's §6 ("no Addison-side scheduler
+  … in any phase, ever") never contemplated a job that starts the app rather than
+  being started by it. **What it needs is a sentence from the owner** — either "that
+  is a person's prerogative" or a denylist entry — rather than a code change made
+  quietly on the strength of one reviewer's reading. Recorded here because a
+  judgement call that lives only in a review report is one nobody makes.
 - **A line inside a heredoc is read as a command, so an ordinary document can be
   refused as "arming" (step 8 phase 1; recorded 2026-08-07).** `_SEGMENT_SPLIT`
   treats every newline as the start of a new command — it must, because

@@ -38,6 +38,7 @@ flowchart LR
         Keychain["keychain.rs: provider keys, device keypair"]
         Filesystem["filesystem.rs: pickers, scoped handles, save and delete"]
         AppBuild["app_build.rs: the build reference a G4 anchor records"]
+        Automation["automation.rs: the ONLY writer of ~/Library/LaunchAgents"]
     end
 
     subgraph core["Agent Core in Python — no OS permissions of its own"]
@@ -63,9 +64,13 @@ flowchart LR
 ```
 
 `shell/src-tauri/src/main.rs` registers exactly those three webview commands and
-spawns the core. Beside it sit six working modules — `agent_process`, `app_build`,
-`exec` (the step-5.5 seatbelt: the sandboxed executor every approved `run_command`
-runs through), `filesystem`, `ipc` and `keychain`. There is a seventh, `updater.rs`,
+spawns the core. Beside it sit seven working modules — `agent_process`, `app_build`,
+`automation` (step 8 phase 3: the only code in the app that writes
+`~/Library/LaunchAgents`, and it builds the plist ITSELF from typed fields — the
+core never sends a document, so this surface cannot be talked into installing
+arbitrary XML), `exec` (the step-5.5 seatbelt: the sandboxed executor every approved
+`run_command` runs through), `filesystem`, `ipc` and `keychain`. There is an eighth,
+`updater.rs`,
 but it is a **nine-line comment stub with no code**: `tauri-plugin-updater` is not
 wired up, and auto-update is a **Phase-3** item (see G4 below, where this matters).
 

@@ -135,9 +135,20 @@ class ShellBridgeStubs:
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
         raise NotImplementedError
 
-    # The two the SERVER binds, rather than the tools (see ServerShellBridge).
+    def arm_automation(
+        self, label: str, command: str, schedule_kind: str, schedule: dict
+    ) -> dict:
+        raise NotImplementedError
+
+    def disarm_automation(self, label: str) -> dict:
+        raise NotImplementedError
+
+    # The three the SERVER calls, rather than the tools (see ServerShellBridge).
     def bind_sender(self, send) -> None:
         pass
+
+    def list_armed(self) -> dict:
+        raise NotImplementedError
 
     def get_app_build_ref(self) -> dict:
         return {"version": "test", "identifier": "test"}

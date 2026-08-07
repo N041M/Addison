@@ -33,6 +33,7 @@ import type { DisplayMessage, LocalSetupState, ProfileState, View } from "./type
 import {
   ipc,
   isEngineConnected,
+  parseArming,
   subscribe,
   subscribeStatus,
   subscribeCoreState,
@@ -627,11 +628,15 @@ export function App() {
     setDiagnostics([]);
   }
 
-  function handleRespondPermission(allow: boolean) {
+  // `typed` arrives only from the ARMING card's code box (step 8 phase 3) and is
+  // relayed exactly as typed. Nothing here compares it to anything — the core mints
+  // the code, the core compares it, and this side never sees the verdict except as
+  // the next thing the core does.
+  function handleRespondPermission(allow: boolean, typed?: string) {
     const p = turn.permission;
     turn.setPermission(null);
     if (!p) return;
-    ipc.respondToPermission(p.toolId, allow).catch(() => {
+    ipc.respondToPermission(p.toolId, allow, typed).catch(() => {
       setStatusBanner("I couldn't send that answer. Please try again.");
     });
   }
@@ -732,12 +737,24 @@ export function App() {
     changeView("widgets");
   }
 
+  // A surface asking Addison for something: write the sentence into the composer
+  // and go back to chat. THE PERSON STILL PRESSES SEND — a Settings button never
+  // starts a turn behind their back, and the sentence it seeded is on screen to be
+  // read or edited first. Used by "use this idea" on the widgets surface and by the
+  // Automations section's Arm / Disarm actions, which is the only route from a
+  // surface to the arming ceremony: arming is a TOOL the model calls and the gate
+  // cards, not an RPC this webview can invoke (there is no `automation.arm` on the
+  // Frontend→Core surface, deliberately).
+  function seedAsk(text: string) {
+    setComposerSeed(text);
+    changeView("chat");
+  }
+
   // "use" on an idea: write the sentence into the composer and go back to chat.
   // The person still presses Send, and the propose → card → confirm flow is
   // unchanged.
   function seedWidgetIdea(prompt: string) {
-    setComposerSeed(`Build me a widget: ${prompt}`);
-    changeView("chat");
+    seedAsk(`Build me a widget: ${prompt}`);
   }
 
   // Window-level shortcuts: Escape returns from any surface to chat; Cmd/Ctrl+N
@@ -1207,6 +1224,7 @@ export function App() {
                 theme={themeChoice}
                 onSetTheme={setThemeChoice}
                 onOpenModelPopup={openModelPopup}
+                onAskAddison={seedAsk}
                 onOpenRestorePoints={() => setRestorePointsOpen(true)}
                 scrollTarget={settingsScrollTarget}
                 onScrolled={clearSettingsScrollTarget}
@@ -1465,6 +1483,11 @@ function saveBool(key: string, value: boolean): void {
 function normalizePermission(p: Record<string, unknown>): PermissionRequest {
   const req = asRecord(p.request) ?? p;
   const riskTier = req.riskTier;
+  // The arming half (step 8 phase 3) when the core sent one — the code to retype
+  // and the preview it exists to make somebody read. Absent on every other card,
+  // and the property is omitted rather than set to undefined so `request.arming`
+  // is the whole of the question the card asks itself.
+  const arming = parseArming(req.arming);
   return {
     toolId: typeof req.toolId === "string" ? req.toolId : "",
     label: typeof req.label === "string" ? req.label : "Addison would like to do something",
@@ -1473,6 +1496,7 @@ function normalizePermission(p: Record<string, unknown>): PermissionRequest {
         ? req.description
         : "Addison is asking for your permission to continue.",
     riskTier: riskTier === "medium" || riskTier === "high" ? riskTier : "low",
+    ...(arming ? { arming } : {}),
   };
 }
 

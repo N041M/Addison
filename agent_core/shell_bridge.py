@@ -30,8 +30,9 @@ from agent_core.tools.base import ShellBridge
 
 
 class ServerShellBridge(ShellBridge, Protocol):
-    """What the SERVER needs from a bridge: every tool-facing method, plus the two
-    it binds itself.
+    """What the SERVER needs from a bridge: every tool-facing method, plus the ones
+    it calls itself (``bind_sender``, ``get_app_build_ref``, ``list_armed``,
+    ``resolve_response``).
 
     ``ShellBridge`` (tools/base.py) is the TOOL-facing contract and deliberately
     stops there — a tool has no business binding the server's writer. But the
@@ -47,6 +48,8 @@ class ServerShellBridge(ShellBridge, Protocol):
     def bind_sender(self, send) -> None: ...
 
     def get_app_build_ref(self) -> dict: ...
+
+    def list_armed(self) -> dict: ...
 
     def resolve_response(self, req_id, result, error) -> bool: ...
 
@@ -289,6 +292,64 @@ class IpcShellBridge:
             {"command": command, "timeoutMs": timeout_ms, "writeRoots": list(write_roots)},
             timeout=(timeout_ms + _EXEC_SLACK_MS) / 1000.0,
         )
+
+    # --- arming (step 8 phase 3) ------------------------------------------
+    # THE NARROWNESS IS THE CONTRACT (plan §5.8). These three carry TYPED FIELDS
+    # and never a document: the shell owns ``~/Library/LaunchAgents`` entirely —
+    # it validates the ``com.addison.auto.`` label prefix, BUILDS the plist itself
+    # from what is sent below, writes only ``<label>.plist`` in that one directory,
+    # and refuses everything else. A method here that took XML (or a path, or a
+    # directory) would be ``run_command`` with extra steps, and the core would have
+    # gained the ability to write an arbitrary file into the one place where writing
+    # a file IS arming.
+    #
+    # Nothing on this seam is a fallback for anything: there is no "install this
+    # text", no "run launchctl", no second spelling. Three verbs, four fields, one
+    # directory.
+
+    def arm_automation(
+        self, label: str, command: str, schedule_kind: str, schedule: dict
+    ) -> dict:
+        """Hand ONE job to launchd. Returns ``{"ok": bool, "error"?: str}``.
+
+        ``schedule`` is the closed numeric field set of ``schedule_kind``
+        (``automations.schedule_fields`` — ``{"minutes": n}`` or ``{"hour", "minute",
+        "weekday"?}``), which is the same projection the person read on the card. The
+        shell turns those numbers into ``StartInterval`` / ``StartCalendarInterval``
+        and never sets ``RunAtLoad``, so arming can never cause an immediate run
+        (plan §5.7) — the first execution happens on the OS's own schedule, which is
+        what keeps "Addison never triggers itself" clean at the moment of
+        installation."""
+        return self._call(
+            Method.SHELL_ARM_AUTOMATION,
+            {
+                "label": label,
+                "command": command,
+                "scheduleKind": schedule_kind,
+                "schedule": dict(schedule),
+            },
+        )
+
+    def disarm_automation(self, label: str) -> dict:
+        """Take one job back out. Returns ``{"ok": bool, "error"?: str}``.
+
+        IDEMPOTENT by contract: a label that is not installed is already in the
+        state this asks for, so it answers ``ok`` rather than an error. Both callers
+        depend on that — ``disarm_automation``'s tool (the person may have removed
+        the file by hand) and ``arm_automation.undo`` (the person may have switched
+        it off from the surface first)."""
+        return self._call(Method.SHELL_DISARM_AUTOMATION, {"label": label})
+
+    def list_armed(self) -> dict:
+        """What launchd currently holds: ``{"armed": [label], "supported": bool}``.
+
+        Reads; installs nothing. Asked on demand when a surface loads, never polled
+        and never at startup (plan §5.6): armed truth lives in the OS, so a G3
+        restore can put a ROW back and can never put a JOB back — and after a
+        restore, a reinstall, or somebody deleting the file by hand, this is what
+        makes the surface say what is actually true rather than what a row
+        remembers."""
+        return self._call(Method.SHELL_LIST_ARMED, {})
 
     # --- key fetch (§5) ---------------------------------------------------
     def get_provider_key(self, provider: str = "anthropic", fresh: bool = False) -> str:
