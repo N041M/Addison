@@ -627,6 +627,23 @@ are here because somebody will meet them, and because anything built on top of
   split above, and the hard-link merge below. Rows are never migrated (the payload is TEXT
   holding JSON and a migration would be inventing a fact about the past), so this ages out
   as those rows are reverted or retained away rather than being fixed.
+- **The file identity behind all of this is an inode number, and inode numbers are
+  REUSED on ext4 — just not on what Addison ships (found by CI, 2026-08-08).**
+  `file_revert.revert_key` answers `file:{st_dev}:{st_ino}`, and the whole
+  hard-link/case-collision repair rests on two names being the same file iff that pair
+  matches. On APFS the assumption holds outright: inode numbers come from a monotonic
+  counter, and a hunt measured 4000 create/delete cycles with 4000 distinct numbers and
+  no reuse. On ext4 the freed number is handed straight back, so a file deleted and a
+  different one created can carry the identity Addison recorded for the first — which
+  would let `another_file_stands_there` accept a file it never wrote, and could join two
+  unrelated chains. **Not reachable on the shipping platform** (macOS only: launchd, the
+  seatbelt, a Tauri macOS build), and the join is `name OR identity`, so a wrong identity
+  match still needs the row's own name to be involved. It surfaced because the Linux CI
+  runner made a test's own fixture stop proving anything — the test now renames a
+  replacement over the name instead, which allocates the new inode while the old file is
+  alive and cannot collide anywhere. Recorded rather than fixed: the fix is a
+  cheaper-than-it-sounds `st_ctime`/`st_size` tiebreak, and it belongs with any decision
+  to support a second platform, not before it.
 - **A revert refuses where the file at that name was REPLACED since Addison last wrote
   it** (opened 2026-08-08, deliberately — the cost of closing the two above).
   `file_revert.another_file_stands_there` lets a chain go back onto a file it actually
