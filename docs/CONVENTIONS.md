@@ -41,15 +41,17 @@ acts on it. So a load-bearing fact gets registered in
 [`tests/doc_claims.py`](../tests/doc_claims.py) rather than merely written down, and
 a run names the file and line that disagree.
 
-**A gate has two halves, and the second is the one that keeps it alive.** Mutating a
-gate proves it *can* fail. Nothing in that proves it stays quiet on prose the next
-honest edit would produce — and quiet is what decides whether it is still here in a
-month, because a gate that cries wolf gets deleted by the next agent and takes its
-real coverage with it. So a documentation gate ships with a precision test beside it,
-feeding the same scanner content it must not flag.
-[`tests/gate_precision.py`](../tests/gate_precision.py) owns that convention, its
-helper, and the reason a false positive costs more here than a missed one. Do not
-restate it — link.
+**A gate has two halves, and BOTH are asserted rather than remembered.** Mutating a
+gate by hand proves it *can* fail — but that is a property of whoever last ran the
+mutation, not of the suite, and a scanner whose pattern has drifted off the tree's
+phrasing finds nothing while "found nothing" is also what a clean tree looks like. Nor
+does mutating prove the gate stays quiet on prose the next honest edit would produce,
+and quiet is what decides whether it is still here in a month: a gate that cries wolf
+gets deleted by the next agent and takes its real coverage with it. So a documentation
+gate ships with both halves beside it, feeding the same scanner content it must not
+flag and content it must. [`tests/gate_precision.py`](../tests/gate_precision.py) owns
+that convention, its two helpers, and the reason a false positive costs more here than
+a missed one. Do not restate it — link.
 
 ## Writing a claim that will not go stale quietly
 
