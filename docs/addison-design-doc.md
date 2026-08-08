@@ -387,6 +387,22 @@ spacing), obvious navigation, no decorative motion. Personality comes from plain
 language (§7.4, §9's no-jargon rule) — not from visual AI tropes. This direction
 is profile-independent: Developer mode adds surfaces, never a different skin.
 
+**That last sentence is honored by the Phase-3 code screen — said here so it reads
+as deliberate (noted 2026-08-08).** The Developer review surface
+(`docs/phase-3-review-surface-plan.md`) is the largest Developer-only screen the app
+has planned, and a code viewer is exactly the place a second look normally leaks
+in — every editor arrives with somebody's theme already attached. It does not here.
+The screen is the v4 dark direction throughout (hairline rows, the 2px accent rail
+wherever a row can carry one, floating chrome only where the direction already
+allows it), and the
+viewer is themed **from the palette the app already has**: the highlight.js token
+variables in `shell/src/styles.css`, converted for Monaco, so the repo carries one
+code palette rather than a second one only Developers ever see. Diff tinting is an
+alpha ladder over the same `--hl-addition` / `--hl-deletion` foregrounds, and
+`--hl-deletion` is byte-identical to `--c-danger` in both themes — so not one new hue
+enters the app for this screen. Developer gains a surface; the skin is unchanged.
+`docs/design-brief-dark/IMPLEMENTATION.md` owns the mapping.
+
 ### 7.2 Agent Core
 
 The orchestration loop is the "easy" part referenced in the earlier conversation:
@@ -1005,8 +1021,11 @@ Installer signing/notarization for macOS/Windows, auto-update pipeline, a real l
 > size; its one real cost, stated plainly in the plan, is that Monaco requires
 > widening the webview CSP with `style-src 'unsafe-inline'` globally.
 >
-> It is sequenced **after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is done
-> for v1 as of 2026-08-07, and 8 is not started.
+> It was sequenced **after Phase-2 steps 6, 7 and 8**, and all three have landed —
+> 6 on 2026-08-06, and on 2026-08-07 both 7 (done for v1) and 8 (complete, all four
+> phases) — so the surface is now **unblocked and unstarted**. The plan's own three
+> prerequisites, each a correctness problem the surface would have made worse rather
+> than one it introduced, closed on 2026-08-08.
 > Note also that **restoring a previous app binary stays a Phase-3 updater item and
 > is not implemented** — `shell/src-tauri/src/updater.rs` is an unwired stub.
 
@@ -1081,10 +1100,11 @@ three bars — persona fit (§5), full compatibility with every safety invariant
 > trust-suppressed. It is not a default tool in any profile, which is the non-goal
 > in §4 that still holds. **Scheduling** is reconciled rather than repealed: Addison
 > may *author* OS-run automation behind a user-typed keyword — a per-automation
-> nonce Addison shows and the person retypes (Phase-2 step 8; authoring shipped in
-> phase 2, the nonce and arming are phase 3,
-> not built), but **G2** — Addison never triggers itself — is a floor and does not
-> move. Multi-agent orchestration is unchanged and still deferred.
+> nonce Addison shows and the person retypes (Phase-2 step 8, **COMPLETE 2026-08-07**
+> — all four phases: the fence, authoring as inert drafts, the gate and arming, and
+> state honesty), but **G2** — Addison never triggers itself — is a floor and does not
+> move: the OS runs the job and `RunAtLoad` is never set, so arming itself causes no
+> run. Multi-agent orchestration is unchanged and still deferred.
 
 **Amended 2026-07-20 — the butler wave (docs first, then code).** The scope
 amendment sequences its own work as *authoritative docs updated before any code*,
@@ -1122,9 +1142,9 @@ track (post-greenlight):
    mode-scoped (OPEN under workspace-trust; SAFE admission **deferred**, since MCP
    is Developer-only for v1). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option.
-8. **Automation keyword gate** + author-OS-run automation (§4, §9). **Phases 1–2 of
-   4 shipped 2026-08-07** — the fence, and authoring as inert drafts; the gate and
-   arming are phase 3.
+8. **Automation keyword gate** + author-OS-run automation (§4, §9). **COMPLETE — all
+   four phases shipped 2026-08-07**: the fence, authoring as inert drafts, the gate
+   and arming, and state honesty + Simple's disabled rows.
 
 **[`../ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*. Steps
 6–8 are also the prerequisites for the Phase-3 **review surface**

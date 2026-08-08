@@ -74,6 +74,25 @@ arbitrary XML), `exec` (the step-5.5 seatbelt: the sandboxed executor every appr
 but it is a **nine-line comment stub with no code**: `tauri-plugin-updater` is not
 wired up, and auto-update is a **Phase-3** item (see G4 below, where this matters).
 
+> **Amended 2026-07-25 — Phase 3 is no longer packaging-only, and this file scoped
+> it that way.** Both Phase-3 mentions here — the unwired updater above and
+> previous-binary restore under G4 below — are packaging work and are both still
+> true. What they no longer describe is the *whole* phase.
+> [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) (approved
+> 2026-07-25, **not started**; its three prerequisites all closed 2026-08-08) adds a
+> second track to it: a Developer/OPEN **review surface** — a file tree over the
+> trusted roots, a read-only viewer, a real diff of every edit Addison has made that
+> is still live on disk, and per-file revert. It belongs in *this* document because
+> it crosses the boundaries drawn here: read-only bridge methods added to
+> `shell/src-tauri/src/filesystem.rs` beside the step-5 block, driven from
+> `agent_core/rpc/workspace.py` and deliberately **not** from the tool registry — a
+> person clicking a folder open is not the model acting, and a registry route would
+> hand the model a directory-listing capability as a side effect and put a
+> permission card in front of a click the person just made. The three-process trust
+> model below is unchanged and no floor moves; the one cost the plan states plainly
+> is a widened webview CSP (`style-src 'unsafe-inline'`, globally, for one window).
+> [`../ROADMAP.md`](../ROADMAP.md) owns status.
+
 What each process may and may not do:
 
 - **React webview (lowest trust).** It renders state and turns clicks into typed IPC

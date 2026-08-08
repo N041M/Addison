@@ -344,3 +344,68 @@ mapping against a stale picture. None of them change the design language.
   **wrap**, because that is what a menu does. **This supersedes the sidebar's "3 rows
   + N more…" preview idiom for these two panels only**; §4's chat list keeps it, where
   a preview is still right because those rows have no hierarchy to stand for them.
+
+## The code surface (Phase 3) — the mapping, written before the build
+
+The Developer **review surface** — file tree, read-only viewer, a diff of every edit
+Addison has made that is still live on disk, per-file revert — is approved and
+unstarted; [`../phase-3-review-surface-plan.md`](../phase-3-review-surface-plan.md)
+owns the build and everything about it that is not design. This section is the
+**design mapping**, and it is written first for the reason the rest of this file
+exists: the brief above has **no vocabulary for code**. Nothing in the prototype is a
+document surface, and a code editor is the one component that arrives with somebody
+else's theme already attached — the place a second look leaks into an app that has
+exactly one.
+
+**One palette, zero new tokens.** `shell/src/styles.css` already carries a full
+highlight.js token theme for both themes — `--hl-comment` / `keyword` / `string` /
+`number` / `title` / `attr` / `builtin` / `type` / `name` / `link` / `addition` /
+`deletion` — tuned toward the violet accent when markdown code blocks were restyled.
+The viewer reads **those exact variables** and converts them for the editor, so the
+repo carries one code palette rather than two that drift apart. Chrome maps onto the
+existing tokens with nothing added: editor background → `panel` (what
+`.markdown-body pre` already uses, so code keeps looking the way code looks here),
+line numbers → `faint`, current line → `line` (the hairline value — the nearest thing
+this direction has to a raised row), selection → `accent` at low alpha, whitespace →
+`ghost`, cursor → `accent`. Two of those are shape decisions, not colour ones:
+**no current-line border**, because a box around the caret line is chrome this
+direction does not own; and selection is a *tint* only here, the single place the
+2px accent rail cannot be used, because an editor has no row to hang it on.
+**Weights stay 400.** The app is on system stacks now, so a bold token would resolve
+to a real face rather than a synthetic one — but the direction's mono is a machine
+voice at one weight, and this palette deliberately carries emphasis in hue alone.
+
+**The diff alpha ladder — the one genuinely new concept, and still no new
+variables.** `--hl-addition` and `--hl-deletion` exist as *foregrounds* only, and a
+diff needs backgrounds. They are derived as an alpha ladder over those same
+foregrounds: whole changed line ≈ .10 light / .16 dark, the changed characters
+*within* a line ≈ .22 / .30, the overview ruler ≈ .70. The ladder belongs with the
+theme converter and **not** in `styles.css` — putting it in the token file would
+create the second palette this whole approach exists to avoid. What keeps it inside
+the "one accent plus danger" rule is worth writing down: `--hl-deletion` is
+`180 84 78` light and `226 166 166` dark, **byte-identical to `--c-danger` in both
+themes**. The deletion tint is literally the danger colour at low alpha, so no third
+hue enters the app for this screen.
+
+**Re-theme on the appearance flip, and properly.** The values are baked at the moment
+an editor theme is *defined*, so Light / Dark / Match-this-computer must redefine it,
+not merely re-select it. `MermaidDiagram.tsx` reads the dark class once per session;
+that is tolerable for a diagram already drawn and wrong for a persistent document
+somebody is reading when they change Appearance. The resolved theme is a fact the app
+already computes each time it applies one — pass it down, rather than adding an
+observer as a second source of truth for it.
+
+**The tension, recorded rather than settled: mono at 12px for a document surface.**
+The type scale above puts mono at **10–10.5px, and calls it meta** — machine facts,
+never prose — and by that definition a code viewer is machine facts. It is also a
+*whole file*, read continuously, by personas aged 54 and 68, whose legibility the
+design doc treats as a constraint and not a preference. The mapping ships **12px with
+a 19px line-height**, and records that this does not settle the question: an editor
+zoom control belongs on the follow-up list rather than folded in as though 12px were
+the answer. One correction was made to the plan while writing this down, and it is
+worth carrying here too: the plan justified 12px as *"matching `.markdown-body pre
+code`'s existing 12px"*, and that rule is **11.5px** in the tree. So 12px is a
+deliberate step **up** from the nearest precedent rather than a match to it — which
+is defensible for a surface read as a document instead of as an excerpt inside a
+message, and still better than inventing a size token. The reasoning survived the
+correction; the number did not.

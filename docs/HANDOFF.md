@@ -66,6 +66,17 @@ Panel and the boundary cannot name three different files. Basename-only is uncha
 wiring below. [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns
 all three and what each cost.
 
+**And the plan's docs-first phase landed the same day, so the next change on that
+track is code.** Amendment §14 asks for authoritative docs before any surface, and
+that is now discharged: the Phase-3 redefinition is stated in every document that
+defines the phase (`architecture.md` had never received it and `ROADMAP.md` had grown
+its own packaging-only definition since), the two sentences this wave strains are
+answered where they live, the design mapping for a code surface is the last section of
+`design-brief-dark/IMPLEMENTATION.md`, and the manual pass is TESTING-CHECKLIST
+**§13c**. A `phase-3-includes-the-review-surface` row in `tests/doc_claims.py` now
+fails the suite on the sixth document to define Phase 3 as packaging alone. Start at
+the plan's **Build §1** (the read paths, RPC and never a registry tool).
+
 Found while fixing it, and fixed with it: **`call_affected_path`'s except tuple did
 not name `RuntimeError`**, which is what `Path.expanduser()` raises for a `~someone`
 the OS cannot look up. That is the same crash the NUL case was fixed for in step 5 —

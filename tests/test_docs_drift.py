@@ -1101,6 +1101,31 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "new app to the keychain."
         ),
     },
+    "phase-3-includes-the-review-surface": {
+        "packaging named as ONE item routed to the phase, not as the phase": (
+            "Re-installing a prior build belongs to the Tauri updater and is tracked "
+            "as a **Phase-3** item. Packaging/signing/updater = Phase 3."
+        ),
+        "a Phase-3 packaging sentence with no definition in it": (
+            "The $99 Apple Developer Program is for distribution — signing, "
+            "notarisation, shipping to other people's machines. It is a Phase-3 "
+            "packaging concern and buying it now would not fix this."
+        ),
+        "the definition given in full, naming both tracks": (
+            "What comes next is Phase 3: packaging, signing, notarisation, the auto "
+            "updater, Secure Enclave identity — and the Developer review surface."
+        ),
+        "the old definition recounted in the past tense — what the plan and the "
+        "build log both have to be able to say": (
+            "Before this plan, Phase 3 meant packaging / signing / notarisation / "
+            "auto-updater / binary restore / Secure-Enclave identity. This plan adds "
+            "a Developer surface to that phase."
+        ),
+        "another phase entirely, in a document that counts phases of its own": (
+            "Phase 3 is the commit where dispatch turned on; phase 4 decided what may "
+            "come back."
+        ),
+    },
     "gate-list-owner": {
         "a fenced block that points at the script": (
             "Run every gate exactly as CI runs them:\n\n"

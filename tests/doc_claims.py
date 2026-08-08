@@ -152,6 +152,25 @@ AUTOMATION_ARMING_BUILT = True
 # a reader has no way to check.
 REDACTION_IS_A_BACKSTOP = True
 
+# Phase 3's scope (owner decision 2026-07-25). It is TWO tracks, not one: the
+# packaging track it has always been — signing, notarisation, the auto-updater,
+# previous-binary restore, Secure-Enclave identity — AND the Developer review surface
+# (`docs/phase-3-review-surface-plan.md`: a file tree over the trusted roots, a
+# read-only viewer, a diff of Addison's still-live edits, per-file revert).
+#
+# Registered because this drift is not hypothetical — the repo has already shipped it
+# twice. The commit that added the plan said the redefinition "was written back into
+# the four documents that had scoped Phase 3 the old way" and wrote it into two of
+# them; a later pass added a third; `docs/architecture.md` never received it at all;
+# and `ROADMAP.md` then acquired a FIFTH packaging-only definition afterwards. Every
+# one of those sentences was correct when written and falsified by a change that never
+# touched its file, which is the shape this registry exists for. The cost of believing
+# the stale version is specific: an agent starting Phase 3 builds the updater and
+# never learns there is an approved, unblocked plan sitting beside it.
+#
+# Flip this the day the review surface is genuinely dropped from the phase.
+PHASE_3_INCLUDES_THE_REVIEW_SURFACE = True
+
 # MCP dispatch (step 7). FALSE since phase 3 shipped on 2026-08-07: an MCP tool IS
 # invoked, through the ordinary gate, with a card on every invocation in OPEN — and
 # `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` was flipped in the same commit, as this
@@ -803,6 +822,69 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "Arming does not exist in this tree. Remove the claim, or flip "
                 "AUTOMATION_ARMING_BUILT in tests/doc_claims.py if it shipped again."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- Phase 3: packaging AND the Developer review surface ----------------
+    Claim(
+        id="phase-3-includes-the-review-surface",
+        owner="docs/phase-3-review-surface-plan.md",
+        holds=PHASE_3_INCLUDES_THE_REVIEW_SURFACE,
+        true_state=(
+            "Phase 3 has been TWO tracks since 2026-07-25: packaging / signing / "
+            "notarisation / the updater / binary restore / Secure-Enclave identity, AND "
+            "the Developer review surface. A definition that stops at packaging is the "
+            "drift this repo has already shipped twice."
+        ),
+        false_state=(
+            "The review surface is no longer part of Phase 3, so packaging is the whole "
+            "phase again."
+        ),
+        # Anchored on a DEFINITION of the phase — `Phase 3`, a separator, then the
+        # packaging list — and never on packaging being named as one item inside it.
+        # "It is a Phase-3 packaging concern" and "Packaging/signing/updater = Phase 3"
+        # are both true sentences about a single item, both already in the tree, and
+        # both stay silent: that distinction is what decides whether this row survives
+        # its first month. Single-line by construction (`[^.\n]`), because the shapes
+        # that wrap a line — HANDOFF's "**Phase 3**\n(packaging, signing, …)" — always
+        # name the second track in the same breath anyway.
+        #
+        # PRESENT TENSE ONLY, the same rule the G3 and artifact rows follow: the plan
+        # and the build log both have to say what the phase MEANT before 2026-07-25,
+        # and rewriting those recounts would delete the reasoning. So `means` is in the
+        # verb list and `meant` is deliberately not — a tense is a cheaper and more
+        # honest discriminator here than an excuse phrase, which is what the MCP rows
+        # learned when a loose excuse switched a rule off wherever the tree got chatty.
+        while_true=Wrong(
+            pattern=(
+                r"Phase[ -]3\b[^.\n]{0,40}?"
+                r"(?:—|–|:|=|\bis\b|\bmeans?\b|\bas\b)"
+                r"\s*[^.\n]{0,30}?packaging"
+            ),
+            fix=(
+                "Phase 3 stopped being packaging-only on 2026-07-25 — it also carries the "
+                "Developer review surface (file tree, read-only viewer, a diff of "
+                "Addison's still-live edits, per-file revert). Name the second track, or "
+                "link to docs/phase-3-review-surface-plan.md, which owns the "
+                "redefinition. If the surface has genuinely been dropped from the phase, "
+                "flip PHASE_3_INCLUDES_THE_REVIEW_SURFACE in tests/doc_claims.py in the "
+                "SAME commit."
+            ),
+            # Prose that names the second track, or points at the plan, is the correct
+            # shape — and it is how every honest passage in the tree already reads.
+            excused_by=r"review surface|review-surface|phase-3-review-surface-plan",
+            window=500,
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"Phase[ -]3[^.\n]{0,60}review surface"
+                r"|review surface[^.\n]{0,60}Phase[ -]3"
+            ),
+            fix=(
+                "The review surface is no longer part of Phase 3 — this line still puts "
+                "it there. Amend it, or link to docs/phase-3-review-surface-plan.md, "
+                "which owns what the phase contains."
             ),
         ),
         exempt=FROZEN,
