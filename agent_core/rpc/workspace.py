@@ -35,7 +35,7 @@ from agent_core.policy import (
     workspace_trust_allows,
 )
 from agent_core.rpc.base import ServerContext
-from agent_core.snapshots.file_revert import FileEdit
+from agent_core.snapshots.file_revert import FileEdit, replaced_by_a_link
 from agent_core.tools.base import call_is_forbidden
 
 # Frozen plain-language copy (D6, F2). The frontend asserts these bytes.
@@ -80,6 +80,14 @@ _BROWSE_NO_SHELL = "Addison can't look at your files just now. Please try again.
 # you trusted and simply be a file Addison has not changed — or one whose change has
 # already been put back.
 _NO_EDIT_TO_SHOW = "Addison hasn't made a change to that file that's still in place."
+# The diff's half of the planted-shortcut refusal (``file_revert.replaced_by_a_link``
+# owns the predicate and the reasoning, and words the revert's half beside the write it
+# refuses). This one names no mechanism either: what is true is that the file is not
+# there any more and something pointing elsewhere is.
+_LINK_STANDS_THERE = (
+    "That file has been replaced by a shortcut to somewhere else, so Addison won't "
+    "open it."
+)
 
 
 def _relative_to(path: str, root: str | None) -> str:
@@ -93,6 +101,24 @@ def _relative_to(path: str, root: str | None) -> str:
     except ValueError:
         # Different drives on Windows. The absolute path is always sayable.
         return path
+
+
+def _root_for(resolved_path: str, roots: list[str]) -> str | None:
+    """Which of ``roots`` a RESOLVED path sits under — the longest match, so a root
+    nested inside another names the nearer one. DISPLAY ONLY: the surface renders a path
+    relative to it. Nothing is permitted by it, and ``None`` (a path whose root was
+    revoked between two calls) is a rendering answer, never an authorization.
+
+    ROOTS IN, so a caller with a list to render reads the trust rows ONCE and answers
+    every row from that one read — ``_browse_entries``'s rule, which it states for 500
+    entries and which the edits list broke for 200: one store round trip per row, on the
+    worker thread, behind a single click, every one of them asking the identical
+    question. Pure, so both callers can share it without either owning a store."""
+    best: str | None = None
+    for root in roots:
+        if path_is_within(resolved_path, root) and (best is None or len(root) > len(best)):
+            best = root
+    return best
 
 
 def _diff_payload(edit: FileEdit, *, after: str, truncated: bool) -> dict:
@@ -278,27 +304,66 @@ class WorkspaceMixin(ServerContext):
         does not raise it — ``Path.expanduser`` does, for that same ``~someone``, and
         that was a live turn-ending crash on the tool path until 2026-08-08. Naming it
         here costs nothing and means switching this line to ``Path`` cannot reintroduce
-        it. A browse is a click, and a click must not be able to end a turn."""
+        it. A browse is a click, and a click must not be able to end a turn.
+
+        ``strip()`` DECIDES ONLY WHETHER THERE IS ANYTHING HERE — the path itself is
+        passed through untouched. Stripping it resolved ``report.txt `` (a legal
+        filename, on every filesystem Addison runs on) to ``report.txt``, and the viewer
+        then showed one file's bytes under the other one's name. A leading space is the
+        mirror of that and lands where it should: `` /p/a.txt`` is not an absolute path,
+        so it is refused rather than quietly turned into one."""
         if not isinstance(raw, str) or not raw.strip():
             return None
         try:
-            expanded = os.path.expanduser(raw.strip())
+            expanded = os.path.expanduser(raw)
             if not os.path.isabs(expanded):
                 return None
             return os.path.realpath(expanded)
         except (OSError, ValueError, RuntimeError):
             return None
 
+    def _edit_resolve(self, raw) -> str | None:
+        """Step 2 for the two MEMBERSHIP handlers: ``_browse_resolve``'s contract —
+        expanduser, absolute-only, never raises — resolving the FOLDERS a path names
+        and leaving its last component alone.
+
+        A SIBLING rather than a flag on ``_browse_resolve``, because the two answer
+        different questions. A browse asks "which file on disk is this", and following
+        the last component is the whole of it. These two ask "which RECORDED EDIT is
+        this", and a recorded edit is a NAME — one whose last component was not a
+        shortcut when Addison wrote it (``affected_path`` resolves before the write).
+
+        They have to ask it the same way ``revert_key`` asks it of the rows, or the two
+        stop agreeing exactly when it matters: with a shortcut standing at a written
+        path, a fully-resolved parameter keys off the shortcut's TARGET while the row
+        keys off the name — so the click would find no edit at all and the person would
+        be told Addison has no change in that file, which is false, and the guard that
+        should have answered them would never be reached. Resolving the folders is what
+        makes an alias of the project (or ``~``) still land on the row.
+
+        The cost, stated: a parameter that reaches a written file THROUGH a shortcut no
+        longer finds its row. Nothing produces one — the surface hands back the ``path``
+        it was given — and the answer is a plain refusal rather than anything worse."""
+        if not isinstance(raw, str) or not raw.strip():
+            return None
+        try:
+            expanded = os.path.expanduser(raw)
+            if not os.path.isabs(expanded):
+                return None
+            parent, name = os.path.split(expanded)
+            if not name:
+                # A path naming a folder ("/a/b/"). There is no last component to keep,
+                # and it matches no edit either way.
+                return os.path.realpath(expanded)
+            return os.path.join(os.path.realpath(parent), name)
+        except (OSError, ValueError, RuntimeError):
+            return None
+
     def _trusted_root_for(self, resolved_path: str) -> str | None:
-        """Which trusted root a RESOLVED path sits under — the longest match, so a root
-        nested inside another names the nearer one. DISPLAY ONLY: the surface renders a
-        path relative to it. Nothing is permitted by it, and ``None`` (a path whose root
-        was revoked between two calls) is a rendering answer, never an authorization."""
-        best: str | None = None
-        for root in self._trusted_roots():
-            if path_is_within(resolved_path, root) and (best is None or len(root) > len(best)):
-                best = root
-        return best
+        """``_root_for`` against a fresh read of the trust rows — for the callers that
+        answer about ONE path. A caller rendering a LIST reads the rows once itself and
+        calls ``_root_for`` directly (see ``_workspace_list_edits``)."""
+        return _root_for(resolved_path, self._trusted_roots())
 
     def _browse_entries(self, directory: str, rows) -> list[dict]:
         """The shell's rows, plus ``escapes`` — computed HERE and never in Rust.
@@ -431,7 +496,9 @@ class WorkspaceMixin(ServerContext):
     # CONFINEMENT IS THE SAME FOUR STEPS, with step 3 substituted and the substitution
     # stated rather than assumed:
     #   1. the mode gate — unchanged, and load-bearing for ``listDirectory``'s reason;
-    #   2. resolve ONCE, through the same ``_browse_resolve``;
+    #   2. resolve ONCE, through ``_edit_resolve`` — ``_browse_resolve``'s contract with
+    #      the last component left alone, so the question this asks of a parameter is
+    #      the question ``revert_key`` asks of a row (that sibling's docstring owns why);
     #   3. MEMBERSHIP, not live trust: the resolved path must be one Addison itself
     #      wrote and has not yet put back. That is a CLOSED SET this process produced,
     #      which is a narrower thing than "somewhere under a folder you trusted" — the
@@ -441,7 +508,16 @@ class WorkspaceMixin(ServerContext):
     #      revertable: the shell's undo path has never asked about trust either (its
     #      ledger is session, not trust), so asking here would produce a surface that
     #      shows a change, offers to put it back, and refuses to show you what it is.
-    #   4. pass ONLY the resolved value — the group key, never ``params``.
+    #   4. pass ONLY THE RECORDED PATH — ``undo_payload["path"]``, carried by
+    #      ``FileEdit.path``; never ``params`` and never a fresh resolution of the
+    #      stored value. Membership is the whole confinement here, so what crosses has
+    #      to be the value that was confined and not one derived from it afterwards:
+    #      re-resolving at read time meant a shortcut appearing at a written path moved
+    #      every later call off the approved value, which put a file outside every
+    #      trusted folder into the diff's AFTER pane. The GROUPING key may be derived
+    #      (``file_revert.revert_key`` asks the filesystem, and must); what is handed to
+    #      the shell may not. Then, because the shell follows what it is given, the
+    #      diff asks ``replaced_by_a_link`` before it reads at all.
     # Two batch questions, two SIBLINGS rather than one shared helper taking the method
     # and the key — the reason ``filesystem.rs`` gives for keeping its two oversize
     # refusals apart: a function whose entire body is the arguments its callers pass in
@@ -490,20 +566,30 @@ class WorkspaceMixin(ServerContext):
         paths = [edit.path for edit in pending.edits]
         restorable = self._restorable_map(paths)
         digests = self._digest_map(paths)
+        # THE TRUST ROWS ONCE, for the whole list — the third of the three per-row
+        # round trips this method used to make and the only one that was not already
+        # batched. ``_browse_entries`` reads them once for 500 entries and its comment
+        # forbids exactly what this did for 200.
+        roots = self._trusted_roots()
         return {
             "edits": [
-                self._edit_payload(edit, restorable.get(edit.path), digests.get(edit.path))
+                self._edit_payload(
+                    edit, restorable.get(edit.path), digests.get(edit.path), roots
+                )
                 for edit in pending.edits
             ],
             "truncated": pending.truncated,
         }
 
-    def _edit_payload(self, edit: FileEdit, restorable, digest) -> dict:
+    def _edit_payload(self, edit: FileEdit, restorable, digest, roots: list[str]) -> dict:
         """One ``Edit`` on the wire. ``relativePath`` is what the UI renders by default;
         with no root to be relative to (trust revoked between the write and now) it is
         the whole path, because a bare basename would name a file the person cannot
-        place."""
-        root = self._trusted_root_for(edit.path)
+        place.
+
+        ``roots`` is passed IN rather than read here: this runs once per edit, and the
+        caller has already read them once for the whole list."""
+        root = _root_for(edit.path, roots)
         return {
             "path": edit.path,
             "root": root,
@@ -546,7 +632,7 @@ class WorkspaceMixin(ServerContext):
         self._ensure_built()
         if self._mode() is not PolicyMode.OPEN:
             return {"ok": False, "error": _BROWSE_NEEDS_DEVELOPER}
-        resolved = self._browse_resolve(params.get("path"))
+        resolved = self._edit_resolve(params.get("path"))
         if resolved is None:
             return {"ok": False, "error": _BROWSE_NEEDS_A_FILE}
         edit = self.file_revert_manager.chain_for(resolved)
@@ -555,10 +641,19 @@ class WorkspaceMixin(ServerContext):
         bridge = self._shell_bridge
         if bridge is None:
             return {"ok": False, "error": _BROWSE_NO_SHELL}
+        # AND THEN THE DESTINATION, not only the value. ``edit.path`` is the path
+        # confinement approved, recorded at write time — but a confined VALUE is not a
+        # confined DESTINATION: ``shell.readWorkspaceFileForView`` opens the path, and
+        # the OS follows a shortcut planted there since. That is how a diff becomes a
+        # read of a private key, and it is why this asks even though step 3 already
+        # matched a row. ``replaced_by_a_link`` owns why it has no false positive.
+        if replaced_by_a_link(edit.path):
+            return {"ok": False, "error": _LINK_STANDS_THERE}
         try:
-            # The group key, never the parameter — and the viewer's read, not the
-            # tool's: this feeds a person's eyes, so an oversize file is truncated on a
-            # character boundary and said so, never refused.
+            # The RECORDED path, never the parameter and never a re-resolution of
+            # either — and the viewer's read, not the tool's: this feeds a person's
+            # eyes, so an oversize file is truncated on a character boundary and said
+            # so, never refused.
             answer = bridge.read_workspace_file_for_view(edit.path)
         except RuntimeError as exc:
             if self._digest_map([edit.path]).get(edit.path, {}).get("missing"):
@@ -581,7 +676,7 @@ class WorkspaceMixin(ServerContext):
         self._ensure_built()
         if self._mode() is not PolicyMode.OPEN:
             return {"ok": False, "error": _BROWSE_NEEDS_DEVELOPER}
-        resolved = self._browse_resolve(params.get("path"))
+        resolved = self._edit_resolve(params.get("path"))
         if resolved is None:
             return {"ok": False, "error": _BROWSE_NEEDS_A_FILE}
         result = self.file_revert_manager.revert_path(resolved)
