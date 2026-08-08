@@ -508,6 +508,31 @@ with the exact stored path as the tiebreak when there is nothing at that name to
 about. The residual that tiebreak leaves is in [`KNOWN-GAPS.md`](KNOWN-GAPS.md). It is a
 GROUPING key only; the next correction owns what crosses to the shell.
 
+**CORRECTED AGAIN, 2026-08-08 — the key is asked WHEN THE WRITE HAPPENS, not when the
+list is read.** Asking the filesystem is right; asking it *afterwards* is not, because
+"which file is this name" is a question about the disk as it is NOW and the answer moves
+under the rows. Two ways, both reachable without an attacker:
+
+* `rm a.txt; ln b.txt a.txt` — a hard link, which `replaced_by_a_link` does not see, since
+  it is not a symlink. The two names then answered one key, so two files' chains became
+  one: b's edit left the surface, reverting a.txt wrote A's prior bytes into b.txt, and
+  b's rows were marked reverted so B's own prior was unreachable.
+* Deleting the file. There was then nothing left to ask about, the key fell back to the
+  stored spelling, and a chain held under two spellings SPLIT — leaving a row whose BEFORE
+  is a state Addison wrote, offered as "the way it was before Addison changed it", which
+  the next "Undo last action" writes back. The S1/S2 resurrection §3 exists to prevent,
+  entered from the other end.
+
+So `write_project_file` now records `wrote_ident` — `revert_key` of the resolved path, at
+write time — beside `wrote_sha256`, and a chain is the set of rows joined by either
+RECORDED fact: the same name, or the same file. Both are facts about the past, so nothing
+done to the filesystem afterwards can join two chains or take one apart. Rows written
+before the key fall back to asking at read time, which is what they always did; KNOWN-GAPS
+holds that residual. The same recorded fact gives the write a standing check —
+`another_file_stands_there`, the hard-link sibling of `replaced_by_a_link`: a chain goes
+back onto a file it actually wrote, or onto a name with nothing at it, and onto nothing
+else.
+
 **CORRECTED 2026-08-08 — what crosses to the shell is the RECORDED path.** The membership
 bullet above is right that only a path matching a row ever reaches the filesystem, but the
 code took that path from a fresh `realpath` of the stored value at READ time. A shortcut

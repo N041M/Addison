@@ -30,6 +30,13 @@ the digest of what Addison put on disk, so the review surface can tell "the file
 Addison left it" from "the file as somebody has edited it since". Without it, a diff
 would attribute a person's own later work to Addison and Revert would throw it away
 with no warning. See ``snapshots/file_revert.py``, which reads it.
+
+And ``wrote_ident`` beside it (2026-08-08): WHICH FILE the write landed on. Two writes
+belong to one revert chain when they share a name or a file, and both have to be facts
+recorded HERE — asked afterwards, "which file is this" answers about the disk as it is
+now, so ``rm a.txt; ln b.txt a.txt`` made two files' chains one and a revert wrote one
+file's prior bytes into the other. ``file_revert`` owns that reasoning; this module owns
+recording the fact while it is still true.
 """
 
 from __future__ import annotations
@@ -39,6 +46,18 @@ import time
 import uuid
 from pathlib import Path
 
+# The identity this tool RECORDS and the question the reverting side later ASKS are one
+# function, imported rather than reimplemented: an identity minted by one spelling of
+# "which file is this" and checked by another is an identity that drifts, and the drift
+# would be silent in the direction that writes bytes. (A pure metadata question, not an
+# effect — every effect still crosses the shell, §1.3 — and no module-boundary edge:
+# ``snapshots`` is not one of the three packages that may not import each other.)
+from agent_core.snapshots.file_revert import (
+    ANOTHER_FILE_STANDS_THERE_WRITE,
+    IDENTITY_KEY,
+    another_file_stands_there,
+    revert_key,
+)
 from agent_core.tools.base import (
     UNRESOLVABLE_PATH,
     ActionSnapshot,
@@ -52,6 +71,11 @@ from agent_core.tools.base import (
 _NO_SHELL_MESSAGE = "Editing project files needs the desktop shell; not available in this mode."
 _NO_RESOLVED_PATH = "Addison couldn't work out which file that is."
 _UNDO_NO_SHELL = "Can't undo that file change — the desktop shell isn't available."
+#: The review surface's refusal, IMPORTED rather than re-worded: it is the same fact
+#: refused for the same reason, and ``file_revert`` owns the sentence. Raised rather than
+#: returned — ``undo()`` has no result type, and ``UndoManager`` puts the exception's text
+#: into ``UndoResult.detail``, which is why it has to be a sentence and not a diagnostic.
+_UNDO_ANOTHER_FILE = ANOTHER_FILE_STANDS_THERE_WRITE
 
 
 class WriteProjectFileTool:
@@ -153,6 +177,13 @@ class WriteProjectFileTool:
                 # exactly as it did before this key existed. This is evidence for a
                 # person deciding, not a precondition for putting a file back.
                 "wrote_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                # WHICH FILE those bytes went to, asked while the answer is still the
+                # truth about this write. Read only by the reverting side, and only ever
+                # to compare — never to decide where to write, which stays ``path``
+                # above. A row without it (every row written before today) makes the
+                # comparison unavailable rather than wrong, and ``file_revert`` says what
+                # that costs.
+                IDENTITY_KEY: revert_key(resolved),
             },
             created_at=int(time.time()),
         )
@@ -166,11 +197,24 @@ class WriteProjectFileTool:
         overwrote an existing file, or delete the file if the write created it. The
         shell only ever touches a path THIS tool wrote this session (its ledger), so
         undo can never write or delete an arbitrary path — and it still works if the
-        workspace's trust was revoked between the write and the undo."""
+        workspace's trust was revoked between the write and the undo.
+
+        THE LEDGER HOLDS THE NAME, NOT THE FILE, which is the gap the identity closes.
+        A name Addison wrote can be made to reach a different file afterwards — ``rm
+        a.txt; ln b.txt a.txt`` — and the ledger still says yes, so the prior bytes would
+        land in a file this row never touched. The review surface's Revert refuses that
+        (``file_revert.another_file_stands_there``); this button reaches the same shell
+        method from one click, so it asks the same question. Nothing else changes: a file
+        that is simply GONE still reverts, and a row from before the identity existed
+        cannot trigger the check at all."""
         if self._undo_bridge is None:
             raise RuntimeError(_UNDO_NO_SHELL)
         payload = snapshot.undo_payload
         path = payload["path"]
+        identity = payload.get(IDENTITY_KEY)
+        known = frozenset({identity}) if isinstance(identity, str) and identity else frozenset()
+        if another_file_stands_there(path, known):
+            raise RuntimeError(_UNDO_ANOTHER_FILE)
         if payload.get("existed"):
             self._undo_bridge.restore_workspace_file(path, payload.get("prior") or "")
         else:

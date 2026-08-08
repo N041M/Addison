@@ -35,7 +35,11 @@ from agent_core.policy import (
     workspace_trust_allows,
 )
 from agent_core.rpc.base import ServerContext
-from agent_core.snapshots.file_revert import FileEdit, replaced_by_a_link
+from agent_core.snapshots.file_revert import (
+    FileEdit,
+    another_file_stands_there,
+    replaced_by_a_link,
+)
 from agent_core.tools.base import call_is_forbidden
 
 # Frozen plain-language copy (D6, F2). The frontend asserts these bytes.
@@ -87,6 +91,14 @@ _NO_EDIT_TO_SHOW = "Addison hasn't made a change to that file that's still in pl
 _LINK_STANDS_THERE = (
     "That file has been replaced by a shortcut to somewhere else, so Addison won't "
     "open it."
+)
+# The same refusal for the swap a symlink check cannot see — a hard link, or any other
+# way the name came to reach a different file since Addison wrote it
+# (``file_revert.another_file_stands_there``). Worded for the VIEWER, like the sentence
+# above it: what a person needs told is that this is not the file they think they are
+# looking at.
+_ANOTHER_FILE_STANDS_THERE = (
+    "A different file is at that name now, so this isn't the change Addison made."
 )
 
 
@@ -649,6 +661,13 @@ class WorkspaceMixin(ServerContext):
         # matched a row. ``replaced_by_a_link`` owns why it has no false positive.
         if replaced_by_a_link(edit.path):
             return {"ok": False, "error": _LINK_STANDS_THERE}
+        # AND THE SWAP A SYMLINK CHECK CANNOT SEE. A hard link planted at a written path
+        # makes the name reach a file this edit never wrote, and the pane would render
+        # that file's text as "what is there now" under this edit's BEFORE — a diff of two
+        # unrelated files. Same question the revert asks before it writes, asked here
+        # before anything is read, for ``replaced_by_a_link``'s reason.
+        if another_file_stands_there(edit.path, edit.identities):
+            return {"ok": False, "error": _ANOTHER_FILE_STANDS_THERE}
         try:
             # The RECORDED path, never the parameter and never a re-resolution of
             # either — and the viewer's read, not the tool's: this feeds a person's

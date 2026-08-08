@@ -23,6 +23,25 @@ Reverting S1 and S2 together to v0 cannot produce that, and the diff's BEFORE pa
 that same oldest prior, so what Revert produces is exactly what the person is looking
 at.
 
+**What makes two writes ONE chain is recorded WHEN THEY HAPPEN, never asked afterwards**
+(2026-08-08). ``write_project_file`` stores the identity of the file each write landed
+on (``IDENTITY_KEY``, minted by ``revert_key``) beside the path it wrote, and a chain is
+the set of rows joined by either recorded fact: the same NAME, or the same FILE. Both
+are facts about the past, so nothing done to the filesystem afterwards can merge two
+chains that were never one — which asking the disk at READ time could, and did:
+
+    Addison edits a.txt and b.txt. Somebody runs ``rm a.txt; ln b.txt a.txt``, and the
+    two names now share an inode. Keyed off that, the two chains became one: b's edit
+    left the surface, reverting "a.txt" wrote A's prior bytes into b.txt, and b's rows
+    were marked reverted, so B's own prior was unreachable. ``replaced_by_a_link`` did
+    not catch it, because a hard link is not a symlink.
+
+The same recorded fact is what keeps a chain WHOLE when the file is deleted: two
+spellings of one file stay one chain afterwards, where a live question had nothing left
+to ask and split them back into two rows — one of which then offered a state ADDISON
+wrote as "the way it was before Addison changed it". Rows written before the key existed
+fall back to the live question and to what that leaves; docs/KNOWN-GAPS.md records it.
+
 **No hunk-level or partial revert, ever.** Not an omission — a decision. Putting back
 some of a file's lines would require writing a byte combination that never existed on
 disk, which is precisely what "lands somewhere that actually ran" forbids. A person
@@ -47,6 +66,23 @@ from agent_core.tools.base import ActionSnapshot
 #: widening this to "any undoable tool" would be a second undo manager with a worse
 #: interface, not a feature.
 WRITE_TOOL_ID = "write_project_file"
+
+#: WHERE THE WRITE LANDED, minted by ``revert_key`` at write time and stored in the undo
+#: payload beside the path. It is what lets "are these two rows the same file?" be a
+#: question about two recorded facts rather than about the disk as it is now — see the
+#: module docstring for the harm the second one does.
+#:
+#: No migration and no dataclass change, exactly as ``wrote_sha256`` before it: the
+#: column is TEXT holding JSON, so a row written before this key simply lacks it and the
+#: reader falls back to asking the disk, which is what those rows always did.
+IDENTITY_KEY = "wrote_ident"
+
+#: The prefix ``revert_key`` puts on an identity the OS could actually answer for.
+#: Without it the value is the fallback — "there is nothing at that name" — and the two
+#: are not interchangeable: ``another_file_stands_there`` must refuse a name that reaches
+#: the WRONG file and must wave through one that reaches no file at all, or a file
+#: Addison created and the person deleted could never be put back.
+_ON_DISK = "file:"
 
 #: How many unreverted write rows one read of the table may carry — the bound
 #: prerequisite 3 deferred to this build (plan Build §2). Retention deletes REVERTED
@@ -84,6 +120,19 @@ _MARKED_NOTHING = (
 _LINK_STANDS_THERE_WRITE = (
     "That file has been replaced by a shortcut to somewhere else, so Addison won't "
     "put it back. Nothing was changed."
+)
+#: A DIFFERENT FILE is at the name now — the hard-link sibling of the refusal above, and
+#: worded apart from it because what a person needs told is not "a shortcut" but that the
+#: file they are looking at is no longer the one Addison changed. It carries the same
+#: "nothing was changed" for the same reason ``_LINK_STANDS_THERE_WRITE`` does.
+#:
+#: PUBLIC, where its symlink sibling is private, because TWO mechanisms refuse this and
+#: they must not drift: this module's Revert, and ``WriteProjectFileTool.undo()``, which
+#: reaches the same shell method from the chat header. One sentence with one owner —
+#: a second copy would be a second thing to correct.
+ANOTHER_FILE_STANDS_THERE_WRITE = (
+    "A different file is at that name now, so Addison won't put the old text there. "
+    "Nothing was changed."
 )
 
 
@@ -125,6 +174,17 @@ class FileEdit:
     #: before that key existed, which is why "has the file changed since" is a
     #: three-valued question rather than a two-valued one.
     wrote_sha256: str | None
+    #: Every FILE this chain's writes landed on (``IDENTITY_KEY``). EVIDENCE, never
+    #: display and never on the wire: ``another_file_stands_there`` compares what is at
+    #: the name now against this set, so a chain can be put back onto a file it actually
+    #: wrote and onto no other.
+    #:
+    #: Usually one. More than one when the file at a name was REPLACED between two writes
+    #: — an editor that saves by rename, ``git checkout`` — which is a new file at the
+    #: same name and still one chain, because the name is the other thing that joins
+    #: rows. A legacy row contributes the identity read while this list was being built,
+    #: which is why the check cannot fire for one.
+    identities: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -150,10 +210,18 @@ class FileRevertResult:
 
 
 def revert_key(raw: object) -> str | None:
-    """The identity two writes to the same file share — **asked of the filesystem,
-    never inferred from the spelling**. ``file:{st_dev}:{st_ino}`` when the OS can
-    still find something at that name, ``path:{normpath(realpath(...))}`` when it
-    cannot. GROUPING ONLY: this value never crosses to the shell (see ``FileEdit.path``).
+    """WHICH FILE this name reaches — **asked of the filesystem, never inferred from the
+    spelling**. ``file:{st_dev}:{st_ino}`` when the OS can still find something at that
+    name, ``path:{normpath(realpath(...))}`` when it cannot. Never crosses to the shell
+    (see ``FileEdit.path``).
+
+    ONE FUNCTION, THREE CALLERS, and they are three uses of the same question rather than
+    three questions. ``write_project_file`` calls it to MINT the identity it records
+    (``IDENTITY_KEY``); this module calls it to ask what a name reaches NOW
+    (``another_file_stands_there``); and ``_read`` calls it for rows that recorded no
+    identity, which is what those rows always did. An identity minted by one spelling of
+    the question and checked by another is an identity that drifts, and the drift would
+    be silent in the direction that writes bytes.
 
     That is ``os.path.samefile`` semantics, one path at a time so the answer can be a
     dict key — and it is the only answer that is right on both kinds of volume, because
@@ -172,9 +240,14 @@ def revert_key(raw: object) -> str | None:
         two files, and merging them would write one file's prior bytes into the other.
         KNOWN-GAPS flags that casefold; this is the call site where it would do harm.
 
-    Asking the OS is right in both: one inode reached twice collapses, two inodes stay
-    apart, and hard links to one file collapse for the same reason they should — writing
-    either name changes the same bytes.
+    Asking the OS is right in both: one inode reached twice is one answer, two inodes are
+    two. Where two names reach one file TODAY — a hard link — that is what this reports,
+    which is the true answer to the question asked and NOT on its own a reason to put two
+    chains together. Whether they were one file WHEN ADDISON WROTE THEM is a different
+    question, and ``_read`` answers it from ``IDENTITY_KEY``. This function used to be the
+    whole of the grouping, and the endorsement that stood in this paragraph — hard links
+    collapse "for the same reason they should" — was sound only while the two names were
+    already one file at write time, which nothing checked (module docstring).
 
     ``lstat``, never ``stat``: the question is which directory entry this NAME reaches,
     and following a symlink that appeared after the write would move the identity onto a
@@ -183,11 +256,17 @@ def revert_key(raw: object) -> str | None:
 
     WHEN THERE IS NOTHING TO ASK ABOUT — a file Addison created and the person deleted,
     the ordinary case, and the reason this cannot simply be "stat or nothing" — the
-    stored path is the tiebreak and it is compared EXACTLY. Not casefolded: a wrong
-    merge writes bytes into a file nobody named, while a wrong split only leaves two
-    rows where one would do, and both are then reverted to real earlier states. The
-    residual (two spellings of a file that is no longer there stay two chains on a
-    case-insensitive volume) is recorded in docs/KNOWN-GAPS.md.
+    stored path is the answer and it is compared EXACTLY. Not casefolded: a wrong merge
+    writes bytes into a file nobody named.
+
+    A wrong SPLIT is not free either, and this docstring used to say it was ("only two
+    rows where one would do — and both are then reverted to real earlier states"). It is
+    the S1/S2 resurrection arrived at from the other end: a split leaves a row behind
+    whose prior is an intermediate state ADDISON wrote, the surface offers it as "the way
+    it was before Addison changed it", and the next "Undo last action" writes it back.
+    That is why deleting a file no longer splits its chain — rows carrying
+    ``IDENTITY_KEY`` are grouped on what they recorded, and this fallback is reached only
+    for rows written before it existed. docs/KNOWN-GAPS.md records that residual.
 
     Never raises, with ``call_affected_path``'s exception tuple and for its reason: a
     single unreadable row must not take a listing down with it. ``None`` means "no
@@ -202,7 +281,7 @@ def revert_key(raw: object) -> str | None:
         # BOTH numbers. An inode number is unique only within its device, so a path on
         # a mounted volume could otherwise collide with an unrelated file on the boot
         # disk — and this key decides which bytes a revert writes.
-        return f"file:{entry.st_dev}:{entry.st_ino}"
+        return f"{_ON_DISK}{entry.st_dev}:{entry.st_ino}"
     try:
         # A prefix apiece, so a fallback key can never collide with a stat'd one.
         return f"path:{os.path.normpath(os.path.realpath(raw))}"
@@ -235,6 +314,94 @@ def replaced_by_a_link(path: str) -> bool:
     return os.path.islink(path)
 
 
+def another_file_stands_there(path: str, identities: frozenset[str]) -> bool:
+    """Does this NAME reach a file OTHER than one this chain wrote? Then no write of ours
+    may land on it.
+
+    THE HARD-LINK SIBLING of ``replaced_by_a_link``, and the reason that check alone was
+    not enough: ``os.path.islink`` is False for a hard link, so ``rm a.txt; ln b.txt
+    a.txt`` left a written name reaching a different file with nothing refusing, and a
+    revert wrote one file's prior bytes into the other. A link and a hard link are the
+    same act — something else now stands where Addison wrote — and only one of them was
+    being asked about.
+
+    THREE ANSWERS, and the middle one is the one to get right:
+
+      * NOTHING is at the name (``revert_key`` fell back to the stored spelling): allow.
+        A file Addison created and the person deleted must still revert, and the revert
+        is what puts it back — the same case ``replaced_by_a_link`` waves through.
+      * The name reaches a file this chain WROTE: allow. More than one identity is
+        ordinary rather than suspicious — an editor that saves by rename, or ``git
+        checkout``, replaces the file at a name between two writes — and putting a chain
+        back onto the file it most recently wrote is exactly the ask.
+      * Anything else: refuse, and write nothing.
+
+    THE COST, STATED. A file REPLACED since the last write and never written again — the
+    person checked out another branch, then pressed Revert — is refused rather than
+    overwritten. That is a tightening: the surface's "somebody has changed this since"
+    warning covered the same ground with a warning, and this makes the one case where the
+    file itself is gone a refusal. The BEFORE pane still holds the text to copy, which is
+    the answer this module already gives for every partial revert.
+
+    LEGACY ROWS CANNOT TRIGGER IT. A row from before ``IDENTITY_KEY`` contributes the
+    identity read while the list was being built, so this compares that reading against
+    itself. That is the honest answer for a row that never recorded where it landed —
+    there is no write-time fact to hold it to — and docs/KNOWN-GAPS.md records what it
+    leaves open."""
+    if not identities:
+        return False
+    standing = revert_key(path)
+    if standing is None or not standing.startswith(_ON_DISK):
+        return False
+    return standing not in identities
+
+
+@dataclass(frozen=True)
+class _Reading:
+    """ONE read of the window: the chains it holds, and the two ways a name finds its own.
+
+    Frozen and internal. It exists because grouping stopped being a dict comprehension
+    over one key the moment the key became two recorded facts (name, identity) that have
+    to be joined — and because the three public methods must all see the SAME reading, or
+    the list, the diff and the revert would disagree about where a chain begins."""
+
+    #: Newest-first within each chain, and the chains themselves in the order their newest
+    #: row arrived — the order the table answered in, which is what the surface renders.
+    chains: tuple[tuple[ActionSnapshot, ...], ...]
+    #: Per chain, every identity its writes landed on. Same index as ``chains``.
+    identities: tuple[frozenset[str], ...]
+    #: Recorded path -> chain. One chain per name, and that is the JOIN's guarantee rather
+    #: than an assumption: every row naming a path joins that name's component, so two
+    #: chains cannot both hold it.
+    by_path: dict[str, int]
+    #: Recorded identity -> chain, unique for the same reason, and here for a caller whose
+    #: spelling is not one of the recorded ones — an alias of the project folder, ``~``, a
+    #: second name for one file.
+    by_identity: dict[str, int]
+    truncated: bool
+
+    def index_for(self, path: str) -> int | None:
+        """Which chain this NAME belongs to.
+
+        THE RECORDED SPELLING FIRST, and the order is load-bearing. Asking the disk first
+        would send a name whose file has been hard-linked onto another chain's file to
+        THAT chain — which is the merge this whole design refuses, re-entered through the
+        lookup. Matching the recorded string lands on the rows that name it, and
+        ``another_file_stands_there`` then refuses the write rather than misdirecting it.
+
+        The disk is asked only when no row recorded that spelling: the surface hands back
+        the ``path`` it was given, but ``_edit_resolve`` resolves the folders a parameter
+        names, so an alias of the project (or ``~``) arrives spelled differently and must
+        still find its edit."""
+        index = self.by_path.get(path)
+        if index is not None:
+            return index
+        identity = revert_key(path)
+        if identity is None:
+            return None
+        return self.by_identity.get(identity)
+
+
 class FileRevertManager:
     """Reads unreverted ``write_project_file`` snapshots; puts one file back.
 
@@ -261,10 +428,13 @@ class FileRevertManager:
         file's contents. What is on disk now is the shell's answer, and the RPC layer
         asks for it.
         """
-        groups, truncated = self._grouped(limit)
+        reading = self._read(limit)
         return PendingEdits(
-            edits=tuple(self._edit(chain) for chain in groups.values()),
-            truncated=truncated,
+            edits=tuple(
+                self._edit(chain, identities)
+                for chain, identities in zip(reading.chains, reading.identities)
+            ),
+            truncated=reading.truncated,
         )
 
     def chain_for(self, path: str) -> FileEdit | None:
@@ -272,12 +442,11 @@ class FileRevertManager:
         to it. The diff's read — and it goes through exactly the same window and the
         same grouping as ``pending_edits``, so what the diff shows and what the list
         promised cannot come apart."""
-        key = revert_key(path)
-        if key is None:
+        reading = self._read(_MAX_EDITS)
+        index = reading.index_for(path)
+        if index is None:
             return None
-        groups, _truncated = self._grouped(_MAX_EDITS)
-        chain = groups.get(key)
-        return self._edit(chain) if chain else None
+        return self._edit(reading.chains[index], reading.identities[index])
 
     # --- the write ---------------------------------------------------------
     def revert_path(self, path: str) -> FileRevertResult:
@@ -303,22 +472,29 @@ class FileRevertManager:
         THE PATH WRITTEN IS THE PATH RECORDED, never the argument and never a fresh
         resolution of either: the row that supplies the bytes supplies the name they go
         back to, which is precisely the pairing ``write_project_file.undo()`` uses."""
-        key = revert_key(path)
-        if key is None:
+        reading = self._read(_MAX_EDITS)
+        index = reading.index_for(path)
+        if index is None:
             return FileRevertResult(ok=False, path=str(path), detail=_NOTHING_TO_PUT_BACK)
-        groups, _truncated = self._grouped(_MAX_EDITS)
-        chain = groups.get(key)
-        if not chain:
-            return FileRevertResult(ok=False, path=str(path), detail=_NOTHING_TO_PUT_BACK)
+        chain = reading.chains[index]
         if self._shell_bridge is None:
             return FileRevertResult(ok=False, path=str(path), detail=_NO_SHELL)
 
         oldest = chain[-1]
-        # The CONFINED value — see ``FileEdit.path``. ``_grouped`` admits no row whose
+        # The CONFINED value — see ``FileEdit.path``. ``_read`` admits no row whose
         # payload path is not a string, so this is one.
         target = oldest.undo_payload["path"]
         if replaced_by_a_link(target):
             return FileRevertResult(ok=False, path=target, detail=_LINK_STANDS_THERE_WRITE)
+        # AND THE SAME QUESTION FOR THE OTHER KIND OF SWAP. A hard link is not a symlink,
+        # so the check above answers False for it while the name reaches a different
+        # file — and the shell's ledger holds the NAME, so it would let the write
+        # through. Asked HERE rather than in the shell because the fact it compares
+        # against is a row this process wrote.
+        if another_file_stands_there(target, reading.identities[index]):
+            return FileRevertResult(
+                ok=False, path=target, detail=ANOTHER_FILE_STANDS_THERE_WRITE
+            )
         existed = bool(oldest.undo_payload.get("existed"))
         # ``None`` means "there was nothing there", which the shell turns into a
         # delete — the same contract ``write_project_file.undo()`` uses, because it is
@@ -355,36 +531,97 @@ class FileRevertManager:
         )
 
     # --- internals ---------------------------------------------------------
-    def _grouped(self, limit: int) -> tuple[dict[str, list[ActionSnapshot]], bool]:
-        """One read of the window, grouped by ``revert_key``, each chain newest-first.
+    def _read(self, limit: int) -> _Reading:
+        """One read of the window, joined into chains, each chain newest-first.
 
         ``limit + 1`` rows are asked for so "there are more" is a fact rather than a
         guess: a window that comes back exactly full is indistinguishable from a table
-        that ends there, and the difference is what ``truncated`` reports."""
+        that ends there, and the difference is what ``truncated`` reports.
+
+        TWO ROWS ARE ONE CHAIN WHEN THEY SHARE A RECORDED FACT — the NAME they were
+        written to, or the FILE they landed on (``IDENTITY_KEY``) — and "share" is
+        transitive, which is why this is a join rather than a dict comprehension over one
+        key. Both facts are about the past, so no later change to the filesystem can put
+        two chains together (the hard link in the module docstring) or take one apart (a
+        deleted file, whose two spellings had nothing left to ask about and split).
+
+        A ROW THAT RECORDED NO IDENTITY asks the disk, exactly as every row did before the
+        key existed, and the memo below keeps 200 rows of one much-written file to a
+        single syscall — but its real job is that a file deleted between two lookups of
+        the SAME string would otherwise answer differently for two rows of one chain and
+        split it.
+
+        TWO PASSES, and the order matters twice. The joining has to finish before any row
+        is asked which chain it is in, because a later row can merge two components that
+        were separate when an earlier one was placed. And the placing pass walks the rows
+        in table order, so the chains come out ordered by their NEWEST row — the order the
+        surface renders and the order ``pending_edits`` promises."""
         rows = self._store.unreverted_snapshots_for_tool(WRITE_TOOL_ID, limit + 1)
         truncated = len(rows) > limit
-        groups: dict[str, list[ActionSnapshot]] = {}
-        # ONE key per distinct spelling per read, and the memo is doing two jobs. It
-        # keeps 200 rows of one much-written file to a single syscall — but the reason
-        # it is not merely an optimisation is that ``revert_key`` asks the filesystem,
-        # and a file deleted between two lookups of the SAME string would otherwise
-        # answer differently for two rows of one chain and split it. A split chain
-        # leaves a row behind, which is the resurrection this module exists to prevent.
-        keys: dict[str, str | None] = {}
+
+        # A union-find over LABELS: "name:<recorded path>" and "same file:<identity>". Two
+        # namespaces, because a path and an identity are different kinds of fact and a
+        # value of one must never be read as a value of the other.
+        parent: dict[str, str] = {}
+
+        def root(label: str) -> str:
+            parent.setdefault(label, label)
+            while parent[label] != label:
+                parent[label] = parent[parent[label]]
+                label = parent[label]
+            return label
+
+        def join(one: str, other: str) -> None:
+            first, second = root(one), root(other)
+            if first != second:
+                parent[first] = second
+
+        asked: dict[str, str | None] = {}
+        usable: list[tuple[ActionSnapshot, str, str]] = []
         for row in rows[:limit]:
             raw = row.undo_payload.get("path")
             if not isinstance(raw, str):
                 continue
-            if raw not in keys:
-                keys[raw] = revert_key(raw)
-            key = keys[raw]
-            if key is None:
-                continue
-            groups.setdefault(key, []).append(row)
-        return groups, truncated
+            identity = row.undo_payload.get(IDENTITY_KEY)
+            if not isinstance(identity, str) or not identity:
+                if raw not in asked:
+                    asked[raw] = revert_key(raw)
+                identity = asked[raw]
+                if identity is None:
+                    continue
+            join(f"name:{raw}", f"same file:{identity}")
+            usable.append((row, raw, identity))
+
+        chains: list[list[ActionSnapshot]] = []
+        identities: list[set[str]] = []
+        at: dict[str, int] = {}
+        by_path: dict[str, int] = {}
+        by_identity: dict[str, int] = {}
+        for row, raw, identity in usable:
+            component = root(f"name:{raw}")
+            index = at.get(component)
+            if index is None:
+                index = at[component] = len(chains)
+                chains.append([])
+                identities.append(set())
+            chains[index].append(row)
+            identities[index].add(identity)
+            # ``setdefault`` states what the join already guarantees — one chain per name
+            # and per identity — instead of assuming it. Should that ever stop being true,
+            # this keeps the FIRST answer, and rows arrive newest-first.
+            by_path.setdefault(raw, index)
+            by_identity.setdefault(identity, index)
+
+        return _Reading(
+            chains=tuple(tuple(chain) for chain in chains),
+            identities=tuple(frozenset(found) for found in identities),
+            by_path=by_path,
+            by_identity=by_identity,
+            truncated=truncated,
+        )
 
     @staticmethod
-    def _edit(chain: list[ActionSnapshot]) -> FileEdit:
+    def _edit(chain: tuple[ActionSnapshot, ...], identities: frozenset[str]) -> FileEdit:
         """N writes to one file collapse into ONE edit: the BEFORE is the oldest
         unreverted prior (where a revert lands) and the digest is the NEWEST write's
         (what should be on disk now if nobody else has touched it). Taking either from
@@ -407,6 +644,7 @@ class FileRevertManager:
             last_written_at=int(newest.created_at),
             before=(oldest.undo_payload.get("prior") or "") if existed else "",
             wrote_sha256=digest if isinstance(digest, str) and digest else None,
+            identities=identities,
         )
 
 

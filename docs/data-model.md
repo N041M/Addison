@@ -218,7 +218,13 @@ erDiagram
   **`wrote_sha256`** in `undo_payload`: the digest of what Addison put on disk, so the
   surface can tell a file as Addison left it from one edited since. No migration and no
   dataclass change — the column is TEXT holding JSON — so a row written before it simply
-  lacks the key and the surface answers "can't tell" rather than guessing. A per-file
+  lacks the key and the surface answers "can't tell" rather than guessing. **`wrote_ident`**
+  arrived the same way *(2026-08-08)*: `st_dev`+`st_ino` of the file the write actually
+  landed on, taken while that is still the truth about it. Two rows are one revert chain
+  when they share a recorded name or a recorded identity, so nothing done to the filesystem
+  afterwards can join two chains (a hard link at a written path) or split one (deleting the
+  file); a row without the key falls back to asking at read time, which is what those rows
+  always did. A per-file
   revert (`agent_core/snapshots/file_revert.py`) settles a whole path's chain of these
   rows in one UPDATE; it is a third mechanism beside `UndoManager` and `SnapshotManager`
   and calls neither.

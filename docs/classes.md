@@ -275,6 +275,7 @@ classDiagram
         +last_written_at
         +before
         +wrote_sha256
+        +identities
     }
     class FileRevertResult {
         +ok
@@ -333,10 +334,18 @@ and a shell bridge and **nothing else** — no registry, no `UndoManager`, no po
 so "never touch the redo stack" is structural rather than remembered, and confinement
 and the mode gate stay where every other filesystem path has them, at the RPC layer
 (`rpc/workspace.py`; [`flows.md`](flows.md) flow 16 draws the round trip).
-`revert_key` is a module function, not a member: `normpath(realpath(path))`, and
-deliberately **not** `policy._canonical`, whose unconditional casefold would merge
-two spellings of one name — differing only in case, and genuinely two different files
-on a case-sensitive volume — into a single revert target. This path writes bytes.
+`revert_key` is a module function, not a member, and it asks the OS which file a name
+reaches (`st_dev`+`st_ino` from an `lstat`, the stored spelling when there is nothing to
+ask about) — deliberately **not** `policy._canonical`, whose unconditional casefold would
+merge two spellings that are genuinely two files on a case-sensitive volume, and equally
+not the resolved spelling, which splits ONE file into two chains on the case-insensitive
+volume macOS ships with. This path writes bytes. What GROUPS two rows is not that answer
+taken now, though: each write records it (`wrote_ident`), and a chain is the rows joined by
+the same recorded name or the same recorded file, so a hard link planted at a written path
+cannot join two chains and deleting a file cannot split one. `revert_key` taken now answers
+a different question — what stands at that name today — which
+`another_file_stands_there` compares against `FileEdit.identities` before the diff reads or
+the revert writes.
 
 `SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the

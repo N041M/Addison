@@ -607,17 +607,48 @@ are here because somebody will meet them, and because anything built on top of
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
-- **Two spellings of a file that is NO LONGER THERE keep one revert chain each**
-  (opened 2026-08-08, deliberately). `file_revert.revert_key` asks the filesystem
-  which file two paths are — `st_dev`+`st_ino` from an `lstat` of the name — so
-  `Notes.md` and `notes.md` collapse into one chain on the case-insensitive volume
-  macOS ships with, and stay two on a case-sensitive one. A path with nothing at it
-  can no longer be asked, and then the stored path is the tiebreak and is compared
-  EXACTLY. That is the safe direction of a choice with no right answer: a wrong MERGE
-  writes one file's prior bytes into another, while a wrong SPLIT only leaves two rows
-  where one would do — and each still reverts to a state that actually existed on
-  disk. The state-corrupting half (two chains for a file that IS there, which let a
-  revert resurrect content the person had just reverted away from) is fixed.
+- ~~**Two spellings of a file that is NO LONGER THERE keep one revert chain each.**~~
+  **CLOSED 2026-08-08 for every row written from now on, and the claim this entry made
+  while it was open was wrong.** It said a wrong SPLIT "only leaves two rows where one
+  would do — and each still reverts to a state that actually existed on disk". It does
+  not. On the case-insensitive volume macOS ships with, `Notes.md` and `notes.md` are one
+  file and one chain; delete the file and the chain split into two rows, one of which
+  offered `before='v1'` — a state ADDISON wrote — under "the way it was before Addison
+  changed it", and reverting the v0 row recreated the file so the other row was no longer
+  pointing at nothing: the next "Undo last action" wrote v1 back. That is the S1/S2
+  resurrection `file_revert`'s chain collapse exists to make impossible, reached from the
+  other end.
+  **What closed it:** the grouping no longer asks the disk at read time. Every write
+  records the file it landed on (`wrote_ident`, minted by `revert_key`), and a chain is
+  the rows joined by the same recorded NAME or the same recorded FILE — facts about the
+  past, which deleting a file cannot change.
+  **What is still open, and it is narrower:** a row written BEFORE 2026-08-08 carries no
+  identity, so it falls back to asking at read time and both hazards remain for it — the
+  split above, and the hard-link merge below. Rows are never migrated (the payload is TEXT
+  holding JSON and a migration would be inventing a fact about the past), so this ages out
+  as those rows are reverted or retained away rather than being fixed.
+- **A revert refuses where the file at that name was REPLACED since Addison last wrote
+  it** (opened 2026-08-08, deliberately — the cost of closing the two above).
+  `file_revert.another_file_stands_there` lets a chain go back onto a file it actually
+  wrote, or onto a name with nothing at it, and refuses anything else — which is what
+  stops a hard link planted at a written path from taking one file's prior bytes into
+  another. The same rule catches a case nobody planted: `git checkout` and editors that
+  save by rename put a NEW file at the name, so a chain whose newest write predates such a
+  swap is refused rather than overwritten (*"A different file is at that name now…"*).
+  A swap BETWEEN two of Addison's own writes is not affected — those rows are one chain
+  and it goes back onto the newer file. The BEFORE pane still holds the text to copy,
+  which is the answer this module already gives for a partial revert; the alternative was
+  to keep overwriting whatever now stands there, which is the harm. **If this proves
+  annoying in practice**, the honest widening is a confirm that names the file, never a
+  silent overwrite.
+- **A refused undo says less than it knows.** `WriteProjectFileTool.undo()` raises a plain
+  sentence for the case above; `rpc/undo.py::_undo_last_action` replaces every failure with
+  *"Couldn't undo the last action. You may need to reverse it yourself."* — as it already
+  did for the no-shell refusal. The review surface's Revert shows the real sentence. Redo
+  already surfaces `result.detail`; undo cannot simply copy that, because an undo failure
+  can also be a bug's exception text and no stack trace may reach a person (CLAUDE.md).
+  The fix is a refusal that is typed rather than stringly (a flag on `UndoResult`), which
+  is a change to a shared mechanism and is written down here rather than made in passing.
 - **The shell follows a shortcut planted at a path it once wrote** (2026-08-08).
   `restore_workspace_path` checks its session ledger against the NAME and then
   `fs::write`s that name; `read_workspace_view` opens it. Neither asks whether a
@@ -626,12 +657,15 @@ are here because somebody will meet them, and because anything built on top of
   moving a config file into a dotfiles folder and linking it back. The review surface
   refuses first, core-side: `file_revert.replaced_by_a_link` guards the diff's read and
   the revert's write, and what crosses is the RECORDED path rather than a re-resolution
-  of it. What is still open is everything that does not go through that surface — the
-  chat header's Undo (`WriteProjectFileTool.undo()`) still writes its prior bytes
-  through such a link. The complete fix belongs in `filesystem.rs`, which already makes
-  `symlink_metadata` the rule for listing and would need the same refusal on both these
-  methods; it is a shell change, so it is recorded here rather than half-done from the
-  core. **Cosmetic consequence of the same swap, not a second gap:** a row whose
+  of it. **The chat header's Undo stopped writing through such a link on 2026-08-08**:
+  `WriteProjectFileTool.undo()` now asks `another_file_stands_there` first, and a shortcut
+  standing at a written path reaches a different file by that question too, so nothing is
+  written (it used to put its prior bytes into whatever the link pointed at — a private
+  key, in the test that plants one). What is still open is the SHELL's own half: nothing in
+  `filesystem.rs` refuses a symlink on these methods, so any future caller that has not
+  asked core-side is unguarded, and a row written before `wrote_ident` existed cannot ask.
+  The complete fix belongs in `filesystem.rs`, which already makes `symlink_metadata` the
+  rule for listing and would need the same refusal on both these methods. **Cosmetic consequence of the same swap, not a second gap:** a row whose
   recorded path is now a shortcut lists with `root: null` and its whole path, because
   the display comparator (`policy.path_is_within`) resolves both sides. `root` permits
   nothing — it decides only what the row renders as.
