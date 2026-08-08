@@ -213,12 +213,19 @@ class _FakeRunCommand:
 # --- helpers ---------------------------------------------------------------
 
 
-def _run_single_tool_call(registry, gate, bridge, trust_check, tool_id, args, mode=PolicyMode.OPEN):
+def _run_single_tool_call(
+    registry, gate, bridge, trust_check, tool_id, args, mode=PolicyMode.OPEN, on_activity=None
+):
     provider = _ScriptedProvider([
         ModelResponse(text=None, tool_calls=[ToolCallRequest(id="c1", tool_id=tool_id, args=args)]),
         ModelResponse(text="done", tool_calls=[]),
     ])
     store = _FakeStore()
+    # ``on_activity`` is optional and defaulted here rather than always passed: it is
+    # the string that LEAVES the core for the webview (tool.activityUpdate), so a test
+    # that cares what the person is told wires it, and every other test keeps the
+    # orchestrator's own default.
+    extra = {} if on_activity is None else {"on_activity": on_activity}
     orch = Orchestrator(
         model_router=ModelRouter(configured={ModelRole.PRIMARY: provider}),
         tool_registry=registry,
@@ -226,6 +233,7 @@ def _run_single_tool_call(registry, gate, bridge, trust_check, tool_id, args, mo
         undo_manager=UndoManager(store=store, tool_registry=registry),
         shell_bridge=bridge,
         trust_check=trust_check,
+        **extra,
     )
     conv = Conversation(id="c")
     conv.messages.append(Message(role="user", content="go"))
@@ -816,7 +824,16 @@ def test_a_path_the_os_cannot_resolve_is_refused_not_crashed(tmp_path):
 
     Refused, and refused as OUTSIDE TRUST rather than skipped: an unresolvable path
     must not collapse onto ``None``, which means "not a path tool" and bypasses
-    confinement altogether."""
+    confinement altogether.
+
+    ``~addison_no_such_user_42/x.txt`` is the fourth shape and it was added on
+    2026-08-08: ``Path.expanduser()`` raises **RuntimeError** — which the guard's
+    ``(OSError, ValueError, TypeError)`` did not name — for a ``~someone`` the OS
+    cannot look up, and ``~`` is what a path argument is likeliest to contain. It
+    crashed the turn exactly as the NUL did before it. (``~nobody`` resolves fine on
+    macOS, so this really is the unknown-user case and not "tilde is refused".)
+
+    Mutation: drop RuntimeError from ``call_affected_path``'s except tuple."""
     root = tmp_path / "project"
     root.mkdir()
     root_real = str(root.resolve())
@@ -828,7 +845,7 @@ def test_a_path_the_os_cannot_resolve_is_refused_not_crashed(tmp_path):
     gate = PermissionGate(on_request=lambda *a, **k: pytest.fail("must never reach the gate"))
     # The REAL predicate, with a real trusted root — a trust_check that says yes to
     # everything would be the very assumption under test.
-    for bad in ["/tmp/a\x00b", "", None, 42, {"not": "a path"}]:
+    for bad in ["/tmp/a\x00b", "~addison_no_such_user_42/x.txt", "", None, 42, {"not": "a path"}]:
         _, tool_result, _ = _run_single_tool_call(
             registry, gate, bridge,
             lambda p: is_trusted(p, [root_real], data_dir),
@@ -887,6 +904,101 @@ def test_a_turn_scoped_not_now_is_honoured_even_inside_a_trusted_folder(tmp_path
         gate.authorize("write_project_file", mode=PolicyMode.OPEN, destructive=True, trusted=True)
         == PermissionStatus.GRANTED
     )
+
+
+# ============================================================================
+# THE NAME A PERSON READS IS THE FILE THAT WAS TOUCHED (2026-08-08)
+# ============================================================================
+# Review-surface prerequisite 1 (docs/phase-3-review-surface-plan.md,
+# "Prerequisites"). ``permission_detail`` read the RAW argument while
+# ``affected_path`` resolved, so the two named different files whenever a symlink
+# sat between them. Confinement cannot catch it — the link and its target are both
+# inside the trusted root, which is the ordinary case, not an exotic one — so the
+# displayed name was the only thing standing there, and it named the decoy. The
+# review surface makes the disagreement visible (it renders the RESOLVED path), but
+# the defect is here, in what the person was told at the moment of the edit.
+
+
+def test_the_displayed_name_is_the_symlinks_target_not_the_link(tmp_path):
+    """A symlink INSIDE a trusted root pointing at another file INSIDE it — the case
+    ``test_symlink_inside_a_trusted_root_pointing_out_is_refused`` deliberately does
+    not cover, because nothing is refused here: the call is legitimate, it runs, and
+    the only question is whether the person was told the truth about it.
+
+    All three surfaces are asserted, because they are three separate strings and the
+    bug was that two of them disagreed: ``permission_detail`` (the card + the audit
+    row), the Activity Panel string that actually leaves the core for the webview,
+    and the "Wrote …" sentence the model repeats back in chat.
+
+    Mutation: restore ``Path(args["path"]).name`` in either tool — every assertion
+    below then reads ``notes.txt``, the name of a file Addison did not touch."""
+    root = tmp_path / "project"
+    root.mkdir()
+    secret = root / "secrets.env"
+    secret.write_text("KEY=1", encoding="utf-8")
+    link = root / "notes.txt"
+    link.symlink_to(secret)
+    root_real = str(root.resolve())
+    resolved = str(secret.resolve())
+
+    read_tool = ReadProjectFileTool()
+    write_tool = WriteProjectFileTool()
+    for tool in (read_tool, write_tool):
+        detail = tool.permission_detail({"path": str(link)})
+        assert detail is not None
+        assert detail == "secrets.env", tool.definition.id
+        assert detail != "notes.txt", tool.definition.id
+        # Still the NAME only — a full path leaving for the webview can carry the
+        # person's account name, and resolving is exactly what turns a bare argument
+        # into a full path.
+        assert "/" not in detail
+
+    # End to end, on the write half: the panel names the resolved file, and the write
+    # lands on that same file. One assertion pair, because the whole point is that
+    # these two can no longer be different files.
+    announced: list[tuple[str, str | None]] = []
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    gate = PermissionGate()
+    _, tool_result, _ = _run_single_tool_call(
+        registry, gate, bridge,
+        lambda p: path_is_within(p, root_real),
+        "write_project_file", {"path": str(link), "content": "KEY=2"},
+        on_activity=lambda tool_id, label, detail=None: announced.append((tool_id, detail)),
+    )
+    assert announced == [("write_project_file", "secrets.env")]
+    assert bridge.writes == [resolved]
+    assert secret.read_text(encoding="utf-8") == "KEY=2"
+    assert tool_result.content == "Wrote secrets.env."
+
+
+def test_a_name_that_cannot_be_resolved_is_no_name_rather_than_a_wrong_one(tmp_path):
+    """Resolving to display it means the display path can now fail, and it is reached
+    on REFUSAL branches that sit outside the orchestrator's per-call error handling
+    (the ``confined_out`` audit row calls ``permission_detail``) — so raising here
+    would end the turn over a string nobody needed.
+
+    ``None`` is the answer, never the sentinel: ``UNRESOLVABLE_PATH`` is a NUL-bearing
+    string, and it would be rendered in the Activity Panel and written into
+    ``tool_audit`` as if it were a file name. The surface degrades to the tool's own
+    label, which is honest — Addison genuinely does not know which file that is, and
+    confinement is about to refuse the call for the same reason.
+
+    Mutation: resolve without the guard (raises on the first two), or return the
+    sentinel/raw basename instead of None."""
+    for tool in (ReadProjectFileTool(), WriteProjectFileTool()):
+        for bad in [
+            "/tmp/a\x00b",                      # ValueError out of resolve()
+            "~addison_no_such_user_42/x.txt",   # RuntimeError out of expanduser()
+            "", None, 42, {"not": "a path"},
+        ]:
+            detail = tool.permission_detail({"path": bad})
+            assert detail is None, (tool.definition.id, bad)
+
+    # Not vacuous: the same call with a usable path still produces a name.
+    target = tmp_path / "project" / "f.txt"
+    target.parent.mkdir()
+    assert ReadProjectFileTool().permission_detail({"path": str(target)}) == "f.txt"
 
 
 # ============================================================================

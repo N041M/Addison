@@ -40,6 +40,7 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
+    call_affected_path,
 )
 
 _NO_SHELL_MESSAGE = "Editing project files needs the desktop shell; not available in this mode."
@@ -97,12 +98,17 @@ class WriteProjectFileTool:
         return str(Path(raw).expanduser().resolve())
 
     def permission_detail(self, args: dict) -> str | None:
-        """The file name only (see ``read_project_file`` — no full path to the
-        webview). Shown on the destructive card and the Activity Panel."""
-        raw = args.get("path")
-        if not raw or not isinstance(raw, str):
+        """The RESOLVED file's name only (see ``read_project_file`` — no full path to
+        the webview, and read its docstring for why resolving is the point). Shown on
+        the destructive card and the Activity Panel.
+
+        This half is the one that matters more, exactly as it is for the resolve-once
+        rule this file already carries: a decoy name on a READ mislabels what Addison
+        saw, a decoy name on a WRITE mislabels what Addison destroyed."""
+        resolved = call_affected_path(self, args)
+        if not resolved or resolved == UNRESOLVABLE_PATH:
             return None
-        return Path(raw).name or None
+        return Path(resolved).name or None
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         if context.shell_bridge is None:
@@ -131,6 +137,9 @@ class WriteProjectFileTool:
             },
             created_at=int(time.time()),
         )
+        # The RESOLVED name, for ``permission_detail``'s reason: every name this tool
+        # puts in front of a person must be the file that actually changed, and this
+        # sentence is the one the model then repeats back in chat.
         return ToolResult(success=True, content=f"Wrote {Path(resolved).name}.", snapshot=snapshot)
 
     def undo(self, snapshot: ActionSnapshot) -> None:

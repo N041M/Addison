@@ -52,6 +52,28 @@ Secure Enclave identity), plus the **Developer review surface**, whose plan is
 approved and, since step 8 landed, **unblocked and unstarted**.
 `ROADMAP.md` owns status; trust it over this file.
 
+**The review surface's first prerequisite is now done (2026-08-08).** The two file
+tools' `permission_detail` read the RAW `path` argument while `affected_path`
+resolved, so the name a person was shown and the file Addison touched were two
+different answers whenever a symlink sat between them — and inside a trusted root
+(`notes.txt` → `secrets.env`, both in trust) nothing refuses that, so the displayed
+name was the only thing standing there and it named the decoy. Both now ask
+`call_affected_path`, the same function confinement asks, so the card, the Activity
+Panel and the boundary cannot name three different files. Basename-only is unchanged
+— resolving is what turns a bare argument INTO a full path, so this had to keep the
+`.name`. The plan's other two prerequisites are untouched and still owed: the missing
+read ceiling in `filesystem.rs` (its own PR — it tightens a shipped tool) and
+`UndoManager.prune()`'s zero call sites (needs an owner call, not a build decision).
+[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns all three.
+
+Found while fixing it, and fixed with it: **`call_affected_path`'s except tuple did
+not name `RuntimeError`**, which is what `Path.expanduser()` raises for a `~someone`
+the OS cannot look up. That is the same crash the NUL case was fixed for in step 5 —
+these call sites sit outside the per-call error handling, so the turn died instead of
+the step, and a routine run was left recorded `running` forever — reachable by one
+model-authored `read_project_file{path:"~someone-unknown/x"}`, and missed because the
+tuple listed the three exceptions `resolve()` raises and none of `expanduser()`'s.
+
 - **8 — the automation keyword gate. COMPLETE: all four phases landed
   2026-08-07** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the
   phases and the decisions). Syntax was decided by the owner (a per-automation

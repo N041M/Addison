@@ -28,6 +28,7 @@ from agent_core.tools.base import (
     RiskTier,
     ToolDefinition,
     ToolResult,
+    call_affected_path,
 )
 
 _NO_SHELL_MESSAGE = "Reading project files needs the desktop shell; not available in this mode."
@@ -72,13 +73,37 @@ class ReadProjectFileTool:
         return str(Path(raw).expanduser().resolve())
 
     def permission_detail(self, args: dict) -> str | None:
-        """The file name only — never the full path (the Activity Panel leaves the
-        Agent Core for the webview; a full path can carry the user's account name).
-        ``call_permission_detail`` caps length again at the one construction point."""
-        raw = args.get("path")
-        if not raw or not isinstance(raw, str):
+        """The RESOLVED file's name only — never the full path (the Activity Panel
+        leaves the Agent Core for the webview; a full path can carry the user's
+        account name). ``call_permission_detail`` caps length again at the one
+        construction point.
+
+        RESOLVED is the whole point, and it is a fix (2026-08-08). This read the RAW
+        argument — ``Path(args["path"]).name`` — while ``affected_path`` resolved, so
+        the two disagreed about which file the call was about. Inside a trusted root,
+        ``path="notes.txt"`` symlinked to ``secrets.env`` announced *notes.txt* and
+        read ``secrets.env``. Confinement cannot catch that (both files are inside
+        trust), so the name the person reads was the only thing standing there — and
+        it named the decoy.
+
+        So ask the very function the boundary asks. ``call_affected_path`` also
+        swallows the resolve errors a display string must never raise on, which is
+        load-bearing: this is called on refusal paths that sit OUTSIDE the
+        orchestrator's per-call error handling, where an exception ends the turn
+        instead of the step.
+
+        The honest residual: this is a SECOND realpath, so a symlink swapped between
+        it and confinement's could still show a stale name. The EFFECT always lands
+        on the path confinement checked (R6) — closing the display window too would
+        mean threading the resolved path through ``call_permission_detail`` and its
+        other callers, which is a signature change, not a fix to this tool."""
+        resolved = call_affected_path(self, args)
+        if not resolved or resolved == UNRESOLVABLE_PATH:
+            # No name at all rather than a wrong one. A path the OS cannot resolve is
+            # refused by confinement anyway, and the sentinel is a NUL-bearing string
+            # that has no business on somebody's screen or in an audit row.
             return None
-        return Path(raw).name or None
+        return Path(resolved).name or None
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         if context.shell_bridge is None:
