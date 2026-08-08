@@ -12,6 +12,60 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-08 — the review-surface wave, prerequisites to Monaco in one day
+
+Nine merges (PRs #70–#78): the post-#69 review fixes, the plan's three prerequisites,
+the docs-first wave, and Build §§1–5 — read paths as RPC, the diff and per-file chain
+revert, the Code screen and its skin, and the CSP change the plan spent a section on.
+Built by five Opus agents in sequence, each independently reviewed (gates re-run,
+mutations re-applied) before its merge; the plan
+([phase-3-review-surface-plan.md](phase-3-review-surface-plan.md)) owns what each
+section is, and its per-section "what shipped" blocks own the decisions. What belongs
+HERE is what the rigor passes found:
+
+- **EVERY agent that re-derived the plan against the tree found it stale somewhere.**
+  The docs wave found the redefinition "already written into four documents" true for
+  two of them, with a FIFTH stale definition grown since; §1 found the plan's
+  `screen` state never existed (`view`, five members); §4/5 found the Monaco import
+  path outdated, the api entry registering no grammars, and both "adjacent drifts"
+  already fixed with two live ones in their place. None of these were plan failures a
+  reader could see — each was correct when written. **A plan is a claim about the
+  tree at writing time; re-derive it at build time, and budget for what you find.**
+- **The one-resolution seam is a HOOK SHAPE, not a discipline.** The name-race fix
+  works because `permission_detail_for_path(resolved)` never receives `args` — a
+  path tool structurally cannot resolve a second time, rather than being trusted not
+  to. The general lesson: where two call sites must agree on a derived value, hand
+  one the other's answer instead of the recipe.
+- **Generated fixtures caught a live wire defect before any test did** (§2/3): a
+  non-`RuntimeError` from the bridge put raw exception text on the wire
+  (`"'_FixtureEditBridge' object has no attribute …"`). The fixture generator runs
+  the REAL handler, which is the point — a hand-written fixture would have encoded
+  the intended shape and hidden the defect.
+- **The spoofing mitigation inverted the plan's own prediction.** The plan warned
+  that widening `style-src` would change how mermaid diagrams look (their `<style>`
+  was silently CSP-blocked). Stripping styles from the injected SVG closes the
+  model-influenced injection path AND keeps diagrams byte-identical — the widening
+  now changes nothing visible, and §13c records "a diagram that looks different" as
+  a finding. **When a mitigation can preserve shipped behaviour exactly, prefer it
+  to one that asks a reviewer to accept a described change.**
+- **The chain-revert semantics remove a hazard by construction, not by care**: revert
+  the whole unreverted chain to its oldest prior and zero rows remain for the undo
+  button to resurrect content from. The write-first-mark-second asymmetry is the
+  same idea one layer down — every failure mode leaves the truth on the side where
+  re-trying converges.
+- **"Keep the age arm" had two readings and the cheap one was wrong** (prerequisite
+  3): an age arm still spanning unreverted rows would delete every old live edit —
+  more deletion than the unwired prune it replaced. The builder surfaced the fork,
+  implemented the reading consistent with the decision's motivation, and recorded
+  the cost (the unreverted subset is now bounded only where it is read). **When an
+  owner decision is ambiguous, the harm statement that motivated it is the tie-break
+  — and the fork belongs in the PR, not in a comment.**
+- Two small review catches after agents reported green: a load-bearing comment
+  pointing at a test file that does not exist (`sanitizeSvg.ts`), and ROADMAP still
+  calling the surface "unstarted" in the very merge that started it. Both are the
+  same shape: **the sentence nearest the code is the one a green suite never
+  checks.**
+
 ## What shipped 08-07 (sixth, last) — step 8 phase 4: state honesty, and the end of step 8
 
 The last phase of the last step. Armed-ness is read from the OS when a surface
