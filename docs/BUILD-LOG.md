@@ -76,8 +76,10 @@ What is worth keeping from it is smaller than phase 3's list, and one item is a
 near-miss rather than a defect:
 
 - **THE STAMP TRAP WAS AVOIDED BY REMOVING THE QUESTION, NOT BY ANSWERING IT
-  CAREFULLY.** Routines decide availability from `created_in_mode` — the tracked
-  bug in KNOWN-GAPS, where a checklist made in Developer arrives in Simple
+  CAREFULLY.** Routines then decided availability from `created_in_mode` — the
+  bug KNOWN-GAPS tracked until it was closed on 2026-08-08 (availability is now
+  derived from the plan and the registry, `rpc/routines.py::_routine_needs_dev`) —
+  where a checklist made in Developer arrived in Simple
   disabled and announcing it "uses developer abilities" about a widget that
   invokes no tool. The temptation here was identical, and the escape was that
   every automation runs a command, so the answer is `True` for all of them: the
