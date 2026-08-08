@@ -12,9 +12,9 @@
 > so most of those flows are now real code and the names in them are the ones in the
 > modules: **flow 9** (snapshots, step 1), **flow 10** ("make it cheaper", step 4),
 > **flow 11** (add an endpoint, step 4), **flow 14** (routing, step 3), and the
-> workspace-trust half of **flow 12** (step 5). Two are still unbuilt and are marked
-> where they appear: the **keyword gate** in flow 12 (step 8), and — inside the now
-> mostly-shipped **flow 13** — the code-backed widget branch. **Flow 15** (MCP, step 7)
+> workspace-trust half of **flow 12** (step 5), whose **keyword gate half landed in step
+> 8 phase 3** (2026-08-07). One thing is still unbuilt and is marked where it appears:
+> inside the now mostly-shipped **flow 13**, the code-backed widget branch. **Flow 15** (MCP, step 7)
 > is real code as of 2026-08-07, when phases 1–4 of five landed; the names in it are
 > the ones in the modules. The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
@@ -473,8 +473,8 @@ sequenceDiagram
 ## 12. Workspace-trust grant and a keyword-gated powerful action
 
 The harness (Developer/OPEN) reconciles the agentic loop with the per-invocation card
-(amendment §8.2, §9). Workspace trust shipped in Phase-2 step 5; the keyword gate is step
-8 and is **not built**. The essential correction to the amendment's framing: trust is
+(amendment §8.2, §9). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
+step 8 phase 3 (2026-08-07). The essential correction to the amendment's framing: trust is
 **two** predicates, not one.
 
 - **Confinement — permission to *touch*.** A path-bounded tool (`read_project_file`,
@@ -520,10 +520,15 @@ sequenceDiagram
     PG-->>ORC: GRANTED or DENIED
 ```
 
-*Not built (step 8):* the **keyword gate** — a user-typed prefix (e.g. `!run …`; exact
-syntax open, §13) required to run or arm a powerful action. Because a prefix is a
-keystroke from the human, observed content can never forge it, so it doubles as an
-injection barrier. Nothing in `agent_core/` implements it today.
+*The keyword gate (step 8 phase 3, BUILT 2026-08-07):* arming an automation needs the
+ordinary card PLUS a **per-automation code Addison mints and the person retypes**
+(`agent_core/automation_nonce.py`; the earlier sketch was a fixed `!run` prefix, which
+was rejected because anything that can write English can tell somebody to type one).
+Because the code is a keystroke from the human and did not exist when any observed
+content was written, it cannot be forged or pre-scripted — so it doubles as an
+injection barrier. `arm_automation` raises it; the shell's `automation.rs` is what
+installs the job. It gates ARMING only; ordinary chat and one-shot commands are
+unaffected.
 
 ## 13. Build a widget — SAFE safe-vocabulary vs. higher-tier code-backed
 

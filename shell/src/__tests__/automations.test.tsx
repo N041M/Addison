@@ -1,5 +1,6 @@
 // Automations — the work Addison writes down for THIS COMPUTER to run (Phase-2
-// step 8, phases 2 and 3: authoring, then arming). Five parts:
+// step 8, phases 2, 3 and 4: authoring, arming, then state honesty + Simple).
+// Eight parts:
 //
 //   (a) The fail-closed parser: a row without a usable id, name or COMMAND is
 //       dropped, junk never throws, and a missing schedule sentence falls back to
@@ -13,10 +14,11 @@
 //       wire, and the list re-read afterwards — because the core mints a restore
 //       point and can refuse, so what is on screen after a press is a guess until
 //       it has asked again.
-//   (d) The page-level gate: the section renders on the Developer/Custom surfaces
-//       only (keyed off the active profile, never the mode). Simple never sees it,
-//       which is phase 3's honest position — an automation's payload is a shell
-//       command, and phase 4 replaces the gate with a listed-but-disabled treatment.
+//   (d) The page: the section renders in EVERY profile now. Phase 3 hid it outside
+//       Developer/Custom; phase 4 replaced the gate with the listed-but-disabled
+//       treatment the 2026-08-06 artifact decision requires, so what the profile
+//       decides is what a row may DO, never whether somebody's saved work is on
+//       screen at all.
 //   (e) ARMED-NESS COMES FROM THE OPERATING SYSTEM (plan §5.6). Asked once when the
 //       section loads, never stored and never polled; a row that was never answered
 //       for says NOTHING about armed-ness rather than the comfortable half. Arm is
@@ -24,16 +26,30 @@
 //       and neither one calls anything: they write a sentence into the composer,
 //       because the ceremony belongs on the card and a settings button that installs
 //       a recurring job is the reflex the ceremony exists to break.
+//   (f) SIMPLE: rows LISTED and visibly inert, carrying the core's own sentence
+//       verbatim — no Arm, no Disarm, and no command text (the developer vocabulary
+//       SAFETY.md keeps off that surface), but Remove kept, because a tightening
+//       must never be trapped by a profile switch, and the armed line kept, because
+//       a job armed in Developer keeps running after the switch.
+//   (g) THE HOOK: `useAutomations` reads the ROWS when App mounts it and asks the
+//       operating system nothing — "when the surface loads" must not become "every
+//       time Addison opens" (plan §5.6).
+//   (h) THE RESTORE PATH: `automations` is a snapshot-captured table, so App's
+//       `onRestored` closure re-reads it with every other captured table — and does
+//       NOT re-ask the OS, which a restore cannot have changed.
 //
 // The generated fixture (fixtures/automation.list.json, produced by
 // tests/ipc_fixtures.py from the real handler) is consumed by
 // parsers.fixtures.test.ts — that is where this parser meets a payload nobody on
 // this side wrote.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { parseAutomations, parseAutomationStatus } from "../ipc/client";
 import { AutomationsSection, SettingsPage } from "../components/SettingsPage";
+import { useAutomations, type AutomationsCardState } from "../hooks/useAutomations";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
@@ -70,6 +86,14 @@ const NO_SCHEDULE = "No schedule saved yet.";
 
 const COMMAND = "/usr/bin/find ~/Downloads -mtime +30 -delete";
 
+/** The marker the core puts on a row the active profile can't use — in Simple,
+ * every row, because an automation runs a command. THE CORE OWNS THESE WORDS; what
+ * is pinned on this side is that the sentence is rendered exactly as it arrived and
+ * that this surface writes none of its own. */
+const WAITING_REASON = "developer_abilities";
+const WAITING_MESSAGE =
+  "That automation runs a command, so it's waiting in Developer profile.";
+
 /** A row in the shape the parser produces, so a test can vary one field. */
 function automation(over: Partial<Automation> = {}): Automation {
   return {
@@ -84,6 +108,30 @@ function automation(over: Partial<Automation> = {}): Automation {
     createdAt: 1700000000,
     ...over,
   };
+}
+
+/** The section wired to its REAL hook — the shape App renders, and the shape the
+ * phase-2/3 tests below still drive through their ipc mocks. `developerSurface`
+ * defaults to true because that is the surface those tests were written against;
+ * part (f) flips it to false and asserts the Simple treatment. */
+function Section({
+  connected = true,
+  developerSurface = true,
+  onAsk,
+}: {
+  connected?: boolean;
+  developerSurface?: boolean;
+  onAsk?: (text: string) => void;
+}) {
+  const automations = useAutomations({ connected });
+  return (
+    <AutomationsSection
+      connected={connected}
+      automations={automations}
+      developerSurface={developerSurface}
+      onAsk={onAsk}
+    />
+  );
 }
 
 vi.mock("../ipc/client", async (importOriginal) => {
@@ -227,6 +275,64 @@ describe("parseAutomations", () => {
     expect(row.scheduleSentence).toBe("Every hour");
   });
 
+  it("keeps the core's unavailable marker, unknown reasons included", () => {
+    // The row is LISTED and disabled, not hidden (owner decision 2026-08-06), and
+    // `reason` is an open slug vocabulary the core owns — a cause this build has
+    // never heard of must not be read as "the row is fine".
+    const rows = parseAutomations({
+      automations: [
+        {
+          id: "a",
+          name: "A",
+          command: COMMAND,
+          unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE },
+        },
+        {
+          id: "b",
+          name: "B",
+          command: COMMAND,
+          unavailable: { reason: "a_reason_from_2027", message: WAITING_MESSAGE },
+        },
+      ],
+    });
+    expect(rows[0].unavailable).toEqual({ reason: WAITING_REASON, message: WAITING_MESSAGE });
+    expect(rows[1].unavailable).toEqual({
+      reason: "a_reason_from_2027",
+      message: WAITING_MESSAGE,
+    });
+  });
+
+  it("treats a marker that cannot say WHY as absent, never as a disabled row", () => {
+    // Fail-closed in the direction that cannot leave somebody staring at their own
+    // saved work sitting inert with no explanation — the "where did my stuff go?"
+    // bug wearing a different hat. The row stays usable-looking; what actually
+    // refuses is dispatch, which never consults this field.
+    const rows = parseAutomations({
+      automations: [
+        { id: "a", name: "A", command: COMMAND, unavailable: { reason: WAITING_REASON } },
+        { id: "b", name: "B", command: COMMAND, unavailable: { message: "" } },
+        { id: "c", name: "C", command: COMMAND, unavailable: { message: "   " } },
+        { id: "d", name: "D", command: COMMAND, unavailable: { message: 42 } },
+        { id: "e", name: "E", command: COMMAND, unavailable: "waiting" },
+        { id: "f", name: "F", command: COMMAND, unavailable: 7 },
+        { id: "g", name: "G", command: COMMAND, unavailable: null },
+      ],
+    });
+    expect(rows).toHaveLength(7);
+    for (const row of rows) expect(row.unavailable).toBeUndefined();
+  });
+
+  it("never invents a marker for a row that did not carry one", () => {
+    // The absence of the field is the shape of every usable row and of every payload
+    // from an older core. This side must not decide that a row is unavailable — only
+    // render that the core said so.
+    const [row] = parseAutomations({
+      automations: [{ id: "a", name: "A", command: COMMAND, createdInMode: "open" }],
+    });
+    expect(row.unavailable).toBeUndefined();
+    expect("unavailable" in row).toBe(false);
+  });
+
   it("degrades on junk instead of throwing", () => {
     for (const junk of [null, undefined, 42, "nope", [], {}, { automations: "lots" }]) {
       expect(parseAutomations(junk)).toEqual([]);
@@ -297,7 +403,7 @@ describe("the Automations section", () => {
     } else {
       statusMock.mockResolvedValue(status);
     }
-    render(<AutomationsSection connected={true} onAsk={onAsk} />);
+    render(<Section onAsk={onAsk} />);
     if (rows.length > 0) {
       await screen.findByText(rows[0].name);
     } else {
@@ -349,14 +455,14 @@ describe("the Automations section", () => {
     // A fetch that never settles — a slow first answer must read as "looking", not
     // as a claim about the person's own saved work.
     (ipc.listAutomations as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
-    render(<AutomationsSection connected={true} />);
+    render(<Section />);
     expect(screen.getByText(LOADING)).toBeTruthy();
     expect(screen.queryByText(EMPTY)).toBeNull();
   });
 
   it("asks nothing at all while the engine is down, and says so", async () => {
     const { ipc } = await import("../ipc/client");
-    render(<AutomationsSection connected={false} />);
+    render(<Section connected={false} />);
     expect(screen.getByText(/once Addison.s engine is connected/i)).toBeTruthy();
     expect(ipc.listAutomations).not.toHaveBeenCalled();
     // Including the operating system: an unreachable engine is not a reason to go
@@ -454,7 +560,7 @@ describe("what the Automations section says is armed", () => {
     } else {
       statusMock.mockResolvedValue(status);
     }
-    render(<AutomationsSection connected={true} onAsk={onAsk} />);
+    render(<Section onAsk={onAsk} />);
     await screen.findByText(rows[0].name);
     return ipc;
   }
@@ -576,7 +682,7 @@ describe("what the Automations section says is armed", () => {
       armed: [],
       supported: true,
     });
-    render(<AutomationsSection connected={true} />);
+    render(<Section />);
     await screen.findByText(TIDY.name);
     expect(screen.getByText(NOT_ARMED)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
@@ -584,7 +690,7 @@ describe("what the Automations section says is armed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (d) the page-level gate
+// (d) the page — every profile, and what each one may do with a row
 // ---------------------------------------------------------------------------
 const PROFILE: ProfileState = {
   activeProfile: "developer",
@@ -602,7 +708,24 @@ const PROFILE: ProfileState = {
   },
 };
 
-function renderSettings(profile: ProfileState) {
+/** A fabricated `useAutomations` bundle — the page tests are about what the PAGE
+ * hands the section, so they never run the hook. */
+function automationsState(over: Partial<AutomationsCardState> = {}): AutomationsCardState {
+  return {
+    automations: [],
+    automationsLoaded: true,
+    status: null,
+    statusFailed: false,
+    busy: false,
+    error: null,
+    refreshAutomations: vi.fn(),
+    refreshArmedState: vi.fn(),
+    handleRemove: vi.fn(async () => {}),
+    ...over,
+  };
+}
+
+function renderSettings(profile: ProfileState, automations = automationsState()) {
   const noop = vi.fn();
   const models = {
     roles: [],
@@ -652,22 +775,34 @@ function renderSettings(profile: ProfileState) {
   };
   render(
     <SettingsPage
-      connected={false}
+      connected={true}
       models={models as unknown as ModelSelection}
       skills={skills as unknown as SkillsState}
       snapshots={snapshots as unknown as SnapshotsState}
       guards={guards}
+      automations={automations}
       profile={profile}
       onSetProfile={noop}
       diagnostics={[]}
       onClearDiagnostics={noop}
       theme="light"
       onSetTheme={noop}
+      // App's `seedAsk`. Without it the Arm / Disarm actions are not offered at all
+      // (there is nowhere for them to lead), so a page test about which surface
+      // offers them has to provide one.
+      onAskAddison={noop}
     />,
   );
 }
 
-describe("the Automations section gate", () => {
+/** One saved row and an OS that says it is running it — the state a profile switch
+ * has to stay honest about. */
+const ARMED_STATE = automationsState({
+  automations: [automation({ unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE } })],
+  status: { armed: ["com.addison.auto.tidy-downloads"], supported: true },
+});
+
+describe("the Automations section on every surface", () => {
   it("renders on the Developer surface", () => {
     renderSettings({ ...PROFILE, activeProfile: "developer", mode: "open" });
     expect(screen.getByText(SECTION_TITLE)).toBeTruthy();
@@ -680,14 +815,367 @@ describe("the Automations section gate", () => {
     expect(screen.getByText(SECTION_TITLE)).toBeTruthy();
   });
 
-  it("does NOT render on the Simple surface", () => {
-    // Phase 2's honest position: an automation's payload is a shell command, which
-    // SAFE has no place for (plan §5.3), and the tool that writes one is dev-only
-    // and refused at dispatch outside OPEN whatever this page draws. Phase 4 turns
-    // this into a listed-but-disabled treatment — the artifact rule — which is a
-    // change to what Simple SHOWS, never to what it may do.
-    renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" });
-    expect(screen.queryByText(SECTION_TITLE)).toBeNull();
-    expect(document.body.textContent ?? "").not.toContain(NOT_ARMED);
+  it("renders on the Simple surface too, listing the row and saying why it waits", () => {
+    // Phase 3 hid this section outside Developer/Custom. That is the failure the
+    // 2026-08-06 artifact decision reversed: switching profile emptied a page of
+    // somebody's own saved work, and the only honest reading available to them was
+    // that Addison had deleted it. The row is listed, inert, and says why — in the
+    // core's own sentence.
+    renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" }, ARMED_STATE);
+    expect(screen.getByText(SECTION_TITLE)).toBeTruthy();
+    expect(screen.getByText("Tidy up downloads")).toBeTruthy();
+    expect(screen.getByText(WAITING_MESSAGE)).toBeTruthy();
+  });
+
+  it("says nothing to Simple that invites the capability Simple cannot have", () => {
+    // BOTH SENTENCES WERE NEW TO SIMPLE IN PHASE 4, and both invited arming: the
+    // empty state said "Ask Addison to set one up" (for a tool that is `open_only`
+    // and can only answer with a refusal), and a listed row said "nothing runs until
+    // you arm it" — a second-person instruction directly under the line explaining
+    // that this profile cannot. SAFETY.md names the shape: "a vocabulary that
+    // teaches one, an affordance that invites one" (phase-4 review).
+    //
+    // Mutation: render AUTOMATIONS_EMPTY or AUTOMATION_NOT_ARMED unconditionally.
+    const simple = { ...PROFILE, activeProfile: "simple" as const, mode: "safe" as const };
+
+    renderSettings(simple, automationsState({ automations: [] }));
+    expect(screen.getByText("No automations saved.")).toBeTruthy();
+    expect(screen.queryByText(/Ask Addison to set one up/)).toBeNull();
+    cleanup();
+
+    renderSettings(
+      simple,
+      automationsState({
+        automations: [
+          automation({ unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE } }),
+        ],
+        status: { armed: [], supported: true },
+      }),
+    );
+    expect(screen.getByText("Not running.")).toBeTruthy();
+    expect(screen.queryByText(/until you arm it/)).toBeNull();
+  });
+
+  it("keeps both of those sentences on the Developer surface, where they are true", () => {
+    // The precision half: the fix must not blunt the copy for the profile that CAN
+    // act on it. "Ask Addison to set one up" is exactly the right instruction there.
+    renderSettings(PROFILE, automationsState({ automations: [] }));
+    expect(screen.getByText(/Ask Addison to set one up/)).toBeTruthy();
+    cleanup();
+
+    renderSettings(
+      PROFILE,
+      automationsState({
+        automations: [automation()],
+        status: { armed: [], supported: true },
+      }),
+    );
+    expect(screen.getByText(/until you arm it/)).toBeTruthy();
+  });
+
+  it("never reads a row's created_in_mode stamp to decide what it may offer", () => {
+    // THE CLAIM THE COMMENT BELOW USED TO MAKE WITH NOTHING BEHIND IT (phase-4
+    // review). Every automation fixture in this file is stamped "open", so the
+    // mutation `usable = … && automation.createdInMode === "open"` was true for
+    // every row in every rendering test and survived the whole suite — the exact
+    // shape the Python side guards with its `_SAFE_STAMPED` row and an AST scan.
+    //
+    // A row STAMPED "safe" cannot be written by any tool, but a hand edit or a
+    // restore can produce one. On the Developer surface it must be fully usable:
+    // the stamp says where a thing was born, never what it needs.
+    const stamped = automation({ createdInMode: "safe" });
+    renderSettings(
+      { ...PROFILE, activeProfile: "developer", mode: "open" },
+      automationsState({ automations: [stamped], status: { armed: [], supported: true } }),
+    );
+
+    // Fully usable on the Developer surface, stamp notwithstanding.
+    expect(screen.getByText(stamped.command)).toBeTruthy();
+    expect(screen.getByRole("button", { name: new RegExp(`^Arm ${stamped.name}`) })).toBeTruthy();
+    expect(screen.queryByText(WAITING_MESSAGE)).toBeNull();
+  });
+
+  it("hands Simple no arming controls and no command text, from the PAGE", () => {
+    // The page is what answers "which profile is this" — the section never asks, and
+    // never reads a row's `created_in_mode` stamp (the routines gap in KNOWN-GAPS is
+    // the cautionary entry: the stamp says where a thing was born, not what it needs).
+    renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" }, ARMED_STATE);
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Disarm / })).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain(COMMAND);
+    // …and the two things Simple keeps: the way out, and the truth.
+    expect(screen.getByRole("button", { name: "Remove Tidy up downloads" })).toBeTruthy();
+    expect(screen.getByText(ARMED)).toBeTruthy();
+  });
+
+  it("gives the SAME row its command and its arming control on the Developer surface", () => {
+    // The regression guard for the profile prop: one state object, two surfaces, and
+    // the difference is exactly what the profile decides.
+    renderSettings(
+      { ...PROFILE, activeProfile: "developer", mode: "open" },
+      automationsState({
+        automations: [automation()],
+        status: { armed: [], supported: true },
+      }),
+    );
+    expect(screen.getByText(COMMAND)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Arm Tidy up downloads" })).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) Simple — listed, inert, and saying why (the artifact rule)
+// ---------------------------------------------------------------------------
+describe("the Automations section in Simple", () => {
+  const onAsk = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Simple's surface: `developerSurface` false, and rows carrying the core's
+   * marker — which is what the core sends in Simple, on every row, because an
+   * automation runs a command. */
+  async function renderSimple(
+    rows: Automation[],
+    status: AutomationStatus = { armed: [], supported: true },
+  ) {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue(status);
+    render(<Section developerSurface={false} onAsk={onAsk} />);
+    await screen.findByText(rows[0].name);
+    return ipc;
+  }
+
+  const WAITING = automation({
+    unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE },
+  });
+
+  it("lists the row and prints the core's reason verbatim", async () => {
+    await renderSimple([WAITING]);
+    expect(screen.getByText("Tidy up downloads")).toBeTruthy();
+    expect(screen.getByText("Every hour")).toBeTruthy();
+    // Byte for byte, as it arrived. This side never rewrites the sentence and never
+    // writes one of its own: the surface and the refusal must tell one story.
+    expect(screen.getByText(WAITING_MESSAGE)).toBeTruthy();
+    // Visibly inert, in the routine library's own annotation.
+    expect(screen.getByText("Waiting")).toBeTruthy();
+  });
+
+  it("never prints the command on the Simple surface", async () => {
+    // SAFETY.md's own line about what a disabled row may show: "a command widget's
+    // command text is not printed in the Simple rail". An automation's command is
+    // the same vocabulary, and the reason it IS printed in Developer — the typed
+    // code exists to make somebody read it before arming — has no counterpart on a
+    // surface that cannot arm.
+    await renderSimple([WAITING]);
+    expect(document.body.textContent ?? "").not.toContain(COMMAND);
+    expect(screen.queryByText(COMMAND)).toBeNull();
+  });
+
+  it("offers no way to arm or disarm — for a row the OS is running or one it isn't", async () => {
+    // BOTH branches, in one test on purpose: the Disarm control only exists for an
+    // armed row and the Arm control only for an idle one, so a single row can only
+    // ever prove half of this, and the half it does not prove is a live control on
+    // the Simple surface.
+    await renderSimple(
+      [
+        WAITING,
+        automation({
+          id: "b",
+          name: "Back up notes",
+          label: "com.addison.auto.backup-notes",
+          unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE },
+        }),
+      ],
+      { armed: ["com.addison.auto.tidy-downloads"], supported: true },
+    );
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Disarm / })).toBeNull();
+    expect(onAsk).not.toHaveBeenCalled();
+  });
+
+  it("keeps Remove, because a profile switch must never trap what somebody wants gone", async () => {
+    // Removing is a TIGHTENING and answers in every profile (plan §1, phase 1) — and
+    // it is the one way a Simple person can stop a job their computer is running,
+    // because the core disarms a row before it forgets it.
+    const ipc = await renderSimple([WAITING]);
+    fireEvent.click(screen.getByRole("button", { name: "Remove Tidy up downloads" }));
+    expect(ipc.removeAutomation).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Remove Tidy up downloads" }));
+    await waitFor(() => expect(ipc.removeAutomation).toHaveBeenCalledWith("a"));
+  });
+
+  it("still says what the computer is running", async () => {
+    // A job armed in Developer keeps running after the switch, and this is the
+    // surface that would otherwise say nothing about it. Same sentence, unchanged.
+    await renderSimple([WAITING], {
+      armed: ["com.addison.auto.tidy-downloads"],
+      supported: true,
+    });
+    expect(screen.getByText(ARMED)).toBeTruthy();
+  });
+
+  it("asks the operating system in Simple as well", async () => {
+    // Asking is what makes the line above possible. The alternative — not asking
+    // outside Developer — would leave Simple silent about a job that is running,
+    // which is the one thing this section may not be.
+    const ipc = await renderSimple([WAITING]);
+    expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("never invents a reason for a row the core did not mark", async () => {
+    // The marker is the CORE's. An unmarked row is rendered as one, with no sentence
+    // and no Waiting tag — and still with nothing to arm it with, because the
+    // profile answers that question independently of the marker.
+    await renderSimple([automation()]);
+    expect(screen.queryByText("Waiting")).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain(WAITING_MESSAGE);
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain(COMMAND);
+  });
+
+  it("disables a MARKED row on the Developer surface too", async () => {
+    // Either answer alone is enough to make a row inert. The marker's vocabulary is
+    // open — a later cause needs no new field — so a reason this build has never
+    // heard of must still disable the row rather than be shrugged off.
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([
+      automation({ unavailable: { reason: "some_future_reason", message: WAITING_MESSAGE } }),
+    ]);
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      armed: [],
+      supported: true,
+    });
+    render(<Section onAsk={onAsk} />);
+    await screen.findByText("Tidy up downloads");
+    expect(screen.getByText(WAITING_MESSAGE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
+    expect(screen.getByRole("button", { name: "Remove Tidy up downloads" })).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (g) the hook — App owns this state, and mounting it checks nothing
+// ---------------------------------------------------------------------------
+describe("useAutomations", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("reads the saved rows when App mounts it", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([automation()]);
+    const { result } = renderHook(() => useAutomations({ connected: true }));
+    await waitFor(() => expect(result.current.automations).toHaveLength(1));
+    expect(result.current.automationsLoaded).toBe(true);
+  });
+
+  it("asks the operating system NOTHING on mount — nothing checks at startup", async () => {
+    // The hook is mounted by App at launch. Asking launchd here would quietly turn
+    // "asked when the surface loads" (plan §5.6) into "asked every time Addison
+    // opens", which is the mcp temperament's own rule broken by a refactor.
+    const { ipc } = await import("../ipc/client");
+    renderHook(() => useAutomations({ connected: true }));
+    await waitFor(() => expect(ipc.listAutomations).toHaveBeenCalled());
+    expect(ipc.getAutomationStatus).not.toHaveBeenCalled();
+  });
+
+  it("asks the operating system when the SECTION loads, and once", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([automation()]);
+    render(<Section />);
+    await screen.findByText("Tidy up downloads");
+    expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads nothing at all while the engine is down", async () => {
+    const { ipc } = await import("../ipc/client");
+    renderHook(() => useAutomations({ connected: false }));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(ipc.listAutomations).not.toHaveBeenCalled();
+    expect(ipc.getAutomationStatus).not.toHaveBeenCalled();
+  });
+
+  it("re-reads the list after a removal instead of trusting what it had", async () => {
+    const { ipc } = await import("../ipc/client");
+    const { result } = renderHook(() => useAutomations({ connected: true }));
+    await waitFor(() => expect(ipc.listAutomations).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await result.current.handleRemove("a");
+    });
+    expect(ipc.removeAutomation).toHaveBeenCalledWith("a");
+    expect(ipc.listAutomations).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the core's own refusal sentence rather than one of its own", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.removeAutomation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: "That automation isn't saved any more.",
+    });
+    const { result } = renderHook(() => useAutomations({ connected: true }));
+    await act(async () => {
+      await result.current.handleRemove("a");
+    });
+    expect(result.current.error).toBe("That automation isn't saved any more.");
+  });
+
+  it("keeps 'could not find out' apart from 'nothing is armed'", async () => {
+    // A failed ask leaves `status` null, which the section reads as "say nothing
+    // about armed-ness" — never as the comfortable half of an answer nobody got.
+    const { ipc } = await import("../ipc/client");
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("engine went away"),
+    );
+    const { result } = renderHook(() => useAutomations({ connected: true }));
+    await act(async () => {
+      result.current.refreshArmedState();
+    });
+    await waitFor(() => expect(result.current.statusFailed).toBe(true));
+    expect(result.current.status).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (h) a restore puts this list back with everything else
+// ---------------------------------------------------------------------------
+// `automations` IS a snapshot-captured table, so restoring a snapshot taken before
+// one was written deletes that row core-side — and a restore taken while one
+// existed puts it back. App re-reads every other captured table on `onRestored`;
+// this one was self-fetching and was not re-read, so Settings went on offering
+// Remove for a row the core had already forgotten (the tool-server bug, one table
+// along).
+//
+// The subject is the WIRING, which has no unit to render: the closure lives in App
+// and every call inside it is a different hook's. So this reads the file, the same
+// way mcp.test.tsx pins its own entry.
+describe("the restore path", () => {
+  // Read as TEXT and off the cwd, not `import.meta.url`: under vitest's transform
+  // that resolves to a virtual URL, and the app's own module is not what is being
+  // checked — the line in it is.
+  const APP = readFileSync(join(process.cwd(), "src", "App.tsx"), "utf8");
+
+  function restoreBody(): string {
+    const restore = /onRestored:\s*\(\)\s*=>\s*\{([\s\S]*?)\n\s*\},/.exec(APP);
+    expect(restore, "App no longer has an onRestored closure to check").toBeTruthy();
+    return restore![1];
+  }
+
+  it("re-reads the saved automations along with every other restored table", () => {
+    const body = restoreBody();
+    // The company it must keep.
+    for (const call of ["refreshProfile", "refreshWidgets", "refreshServers"]) {
+      expect(body, `a restore must re-read ${call}`).toContain(call);
+    }
+    expect(body, "a restore must re-read the automations").toContain("refreshAutomations");
+  });
+
+  it("does NOT re-ask the operating system, because a restore cannot have armed anything", () => {
+    // There is no armed column to restore and a one-action restore cannot perform
+    // the keyword ceremony (plan §5.6), so what launchd holds is what it held a
+    // moment ago. Asking again here would be a check nobody caused.
+    expect(restoreBody()).not.toContain("refreshArmedState");
   });
 });

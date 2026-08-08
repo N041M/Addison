@@ -16,7 +16,8 @@
 // API keys · Run a model on this computer · Routines · Skills · Profile · How
 // careful Addison is (Custom only) · Folders Addison may work in
 // (Developer/Custom only) · Tool servers (Developer/Custom only) · Automations
-// (Developer/Custom only) · Restore points · Diagnostics.
+// (EVERY profile — Simple lists them disabled, saying why) · Restore points ·
+// Diagnostics.
 //
 // TWO THINGS THAT ARE NOT STYLING, and must survive any future edit here:
 //   * G1 — a key typed into a row goes to the OS keychain through the Rust
@@ -26,10 +27,10 @@
 //     "Advanced…" disclosure and a two-step confirm, with the core's own honest
 //     description in between (Phase-2 step 2).
 
-import { useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
-import type { Automation, AutomationStatus, ModelRole } from "../types/protocol";
+import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
+import type { Automation, ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
-import { ipc, type DiagnosticEntry, type ProviderInfo } from "../ipc/client";
+import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
@@ -37,6 +38,7 @@ import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
 import type { WorkspaceCardState } from "../hooks/useWorkspace";
 import type { McpServersCardState } from "../hooks/useMcpServers";
+import type { AutomationsCardState } from "../hooks/useAutomations";
 import type { ThemeChoice } from "../lib/theme";
 import type { PopupAnchor } from "./ModelPopup";
 import {
@@ -91,6 +93,15 @@ interface Props {
    * active profile, never the mode); Simple never sees it, and the core refuses
    * `mcp.add` outside Developer independently of this gate. */
   mcp?: McpServersCardState;
+  /**
+   * The automations bundle (useAutomations; Phase-2 step 8 phase 4). Optional so a
+   * partial caller (older tests) still renders — the section is simply omitted
+   * then. UNLIKE the two above it has NO profile gate: a saved automation is
+   * configuration, so Simple lists it, disabled and saying why (the 2026-08-06
+   * artifact decision). App owns the state because `automations` is a
+   * snapshot-captured table and a restore must re-read it.
+   */
+  automations?: AutomationsCardState;
   profile: ProfileState | null;
   onSetProfile: (profileId: string) => void;
   diagnostics: DiagnosticEntry[];
@@ -230,6 +241,7 @@ export function SettingsPage({
   routing,
   workspace,
   mcp,
+  automations,
   profile,
   onSetProfile,
   diagnostics,
@@ -355,17 +367,24 @@ export function SettingsPage({
       )}
 
       {/* Automations — what Addison has written down for THIS COMPUTER to run on a
-          schedule (Phase-2 step 8, phase 2 of four). Same Developer/Custom gate as
-          the two sections above, for the same reason and one more: an automation's
-          payload is a shell command, which Simple has no place for (plan §5.3), and
-          the tool that writes one is `dev_only` and refused at dispatch outside OPEN
-          independently of this gate. Phase 4 replaces the gate with a
-          listed-but-disabled treatment, so a Simple person sees their saved rows and
-          cannot use them — the artifact rule. What is armed here is what the
-          OPERATING SYSTEM says is armed, asked when the section loads. */}
-      {developerSurface && (
+          schedule (Phase-2 step 8, phase 4 of four). UNLIKE the two sections above
+          it renders in EVERY profile, and that is the phase-4 correction: a saved
+          automation is configuration, not an ability, so Simple LISTS it — visibly
+          inert, saying why, in the core's own sentence — instead of hiding it. A
+          profile switch that empties a page of somebody's own saved work reads as
+          Addison having deleted it, which is the failure the 2026-08-06 artifact
+          decision reversed (docs/SAFETY.md owns that rule). What Simple does not
+          get is any way to USE one: the arming controls and the command text are
+          keyed off the Developer surface below, and the tools that author and arm
+          are refused at dispatch outside OPEN whatever this page draws. */}
+      {automations && (
         <SurfaceSection label="Automations">
-          <AutomationsSection connected={connected} onAsk={onAskAddison} />
+          <AutomationsSection
+            connected={connected}
+            automations={automations}
+            developerSurface={developerSurface}
+            onAsk={onAskAddison}
+          />
         </SurfaceSection>
       )}
 
@@ -891,9 +910,38 @@ export function ProfileCard({
 
 // --- Automations -----------------------------------------------------------
 // The work Addison has written down for THIS COMPUTER to run on a schedule
-// (Phase-2 step 8, phase 3 of four). Rendered on the Developer/Custom surfaces
-// only — the page-level gate above decides that, on the active profile and never
-// the policy mode, exactly as tool servers and trusted folders do.
+// (Phase-2 step 8, phase 4 of four). Rendered in EVERY profile since phase 4; what
+// the profile decides is what a row may DO, not whether it is on screen.
+//
+// SIMPLE GETS LISTED, DISABLED ROWS THAT SAY WHY — the artifact rule
+// (docs/SAFETY.md, "Artifact disabling"). Three decisions make that concrete, and
+// each one is the sentence beside it in that document:
+//
+//   * THE ROW'S REASON IS THE CORE'S OWN, rendered verbatim from `unavailable`.
+//     This side never writes that sentence and never decides that a row is
+//     unavailable — the marker is display only, and dispatch is what refuses. Nor
+//     is it read off `created_in_mode`: the stamp says where a thing was born, not
+//     what it needs (the routines gap in KNOWN-GAPS is the cautionary entry).
+//   * NO ARMING CONTROL OUTSIDE THE DEVELOPER SURFACE. Arm and Disarm are the
+//     capability, and a control that could only ever come back refused is worse
+//     than none. Remove STAYS in every profile: removing is a tightening, a profile
+//     switch must never trap configuration somebody wants gone (plan §1, phase 1),
+//     and it is the one way a Simple person can stop a job their computer is
+//     running — `automation.remove` disarms first, core-side, and refuses the whole
+//     removal if it cannot.
+//   * THE COMMAND TEXT IS NOT PRINTED IN SIMPLE. It is printed in Developer
+//     because the keyword ceremony exists to make somebody read it before arming;
+//     in Simple there is no arming to read for, and a shell command is precisely
+//     the developer vocabulary SAFETY.md keeps off the Simple surface ("a command
+//     widget's command text is not printed in the Simple rail"). What is left is
+//     what the person themselves wrote down: the name, the schedule in plain
+//     words, and the truth about whether it is running.
+//
+// ARMED-NESS IS STILL ASKED IN SIMPLE, and that is the honest choice rather than
+// the tidy one: a job armed in Developer keeps running after the profile switch,
+// and this is the surface that would otherwise say nothing about it. The line is a
+// statement about the person's own computer, not an affordance — it teaches no
+// capability and offers no control.
 //
 // EVERY ROW SAYS WHETHER IT IS ARMED, AND THE OPERATING SYSTEM IS WHAT SAYS SO.
 // `automation.status` is asked once when the section loads and never again: not
@@ -919,10 +967,13 @@ export function ProfileCard({
 // second renderer of one fact is how a surface ends up saying "Every day at 7:5",
 // on the one line somebody reads before letting a command run while they sleep.
 //
-// Self-fetching, like RoutineLibrary and unlike the tool-server panel — there is no
-// state here for App to own and nothing else in the app reads this list yet. Phase
-// 4 moves the fetch into a hook so a G3 restore can re-read it while Settings is
-// open; the armed-ness ask moves with it.
+// STATE COMES FROM `useAutomations`, which App owns — the tool-server pattern, and
+// no longer the self-fetching one. `automations` is a snapshot-captured table, so a
+// G3 restore can add or remove rows underneath this page, and every other captured
+// table is re-read by App's `onRestored` closure. The ask for what the OS is
+// RUNNING stays here, in this section's own effect: the hook is mounted at launch,
+// and "asked when the surface loads" would quietly become "asked every time Addison
+// opens" if it moved into the hook's mount (plan §5.6, and the hook says so too).
 
 /** What a row says when the OS is not running it. Frozen copy — the frontend test
  * pins it byte-for-byte. Phase 2 said "…once you arm it" while arming did not
@@ -959,75 +1010,82 @@ const DISARM_REQUEST = (name: string) => `Disarm the automation "${name}".`;
  * is deliberately no "New automation" button: an automation is written by talking
  * to Addison, the same way a routine or a widget is. */
 const AUTOMATIONS_EMPTY = "No automations yet. Ask Addison to set one up.";
+// THE SIMPLE VARIANTS. Both of the Developer sentences invite the capability this
+// profile refuses — "Ask Addison to set one up" asks for a tool that is `open_only`
+// and can only come back refused, and "nothing runs until you arm it" is a
+// second-person instruction to do what the row above it says you cannot. SAFETY.md
+// names exactly this shape: "a vocabulary that teaches one, an affordance that
+// invites one". Withholding the command text and the controls and then leaving the
+// prose was the gap (phase-4 review).
+const AUTOMATIONS_EMPTY_SIMPLE = "No automations saved.";
+const AUTOMATION_NOT_ARMED_SIMPLE = "Not running.";
 
 /** Before the first answer arrives. A slow fetch must never render as "none yet",
  * which is a claim about the person's own saved work that this surface cannot make
  * until it has asked. */
 const AUTOMATIONS_LOADING = "Looking for your automations…";
 
-/** When a removal doesn't land and the core said nothing usable about why. The
- * core's own sentence is preferred whenever there is one. */
-const AUTOMATION_REMOVE_FAILED = "Addison couldn't remove that automation just now.";
+/** The blocky annotation a row wears while another profile is what it needs. The
+ * routine library's `WaitingTag`, to the class: one look for "listed, yours, not
+ * usable here", so somebody who has met a waiting routine reads a waiting
+ * automation without being taught twice. Muted rail, never the violet accent —
+ * the accent means an action or live state, and this row has neither. */
+function WaitingTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-rail pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-muted">
+      Waiting
+    </span>
+  );
+}
 
 // Exported for the step-8 tests (automations.test.tsx). It is still only rendered
 // from within this page.
 export function AutomationsSection({
   connected,
+  automations,
+  developerSurface,
   onAsk,
 }: {
   connected: boolean;
+  /** The saved rows, what the OS last said, and the removal handler (useAutomations,
+   * owned by App so a G3 restore can re-read the list while this page is open). */
+  automations: AutomationsCardState;
+  /** Whether the ACTIVE PROFILE is Developer or Custom — never the policy mode, and
+   * never a row's `created_in_mode` stamp. It decides only what a row may DO here:
+   * the arming actions and the command text. Every row is listed in every profile. */
+  developerSurface: boolean;
   /** Writes a sentence into the composer and returns to chat (App's `seedAsk`).
    * Absent for a partial caller — the Arm / Disarm actions are then simply not
    * offered, which is honest: there is nowhere for them to lead. */
   onAsk?: (text: string) => void;
 }) {
-  const [automations, setAutomations] = useState<Automation[]>([]);
-  // What the OPERATING SYSTEM said when this section loaded. `null` is "no answer" —
-  // never "nothing armed", which is the guess that would let a running job render as
-  // a quiet draft.
-  const [status, setStatus] = useState<AutomationStatus | null>(null);
-  const [statusFailed, setStatusFailed] = useState(false);
-  // "not asked yet" vs "asked" — see AUTOMATIONS_LOADING.
-  const [loaded, setLoaded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    automations: rows,
+    automationsLoaded: loaded,
+    status,
+    statusFailed,
+    busy,
+    error,
+    refreshArmedState,
+    handleRemove,
+  } = automations;
   // Which row is one press away from being removed. The two-press idiom the skills,
   // routine and tool-server rows use; never a browser confirm(). A removal takes
   // away the only copy of the command somebody wrote — the core refuses one it
-  // cannot mint a restore point for, and this is the same care one layer up.
+  // cannot mint a restore point for, and this is the same care one layer up. It
+  // stays in the SECTION, like the tool-server panel's, because it is a fact about
+  // this screen and not about the configuration.
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
-
-  const refresh = useCallback(() => {
-    ipc
-      .listAutomations()
-      .then((rows) => {
-        setAutomations(rows);
-        setLoaded(true);
-      })
-      .catch(() => {
-        // Keep the last-known list rather than blanking the section; still stop the
-        // looking-for line.
-        setLoaded(true);
-      });
-  }, []);
 
   useEffect(() => {
     if (!connected) return;
-    refresh();
-    // ONCE, when the section loads. Not on every list refresh and never on a timer:
-    // removing a row does not change what launchd holds, and a surface that keeps
-    // asking is a surface taking an action nobody just caused (the MCP temperament).
-    ipc
-      .getAutomationStatus()
-      .then((next) => {
-        setStatus(next);
-        setStatusFailed(false);
-      })
-      .catch(() => {
-        setStatus(null);
-        setStatusFailed(true);
-      });
-  }, [connected, refresh]);
+    // ONCE, when the section loads — not on every list refresh, never on a timer and
+    // never at startup: removing a row does not change what launchd holds, and a
+    // surface that keeps asking is a surface taking an action nobody just caused
+    // (the MCP temperament). The hook owns the ANSWER; the ask belongs to the moment
+    // somebody opened the page.
+    refreshArmedState();
+  }, [connected, refreshArmedState]);
 
   async function remove(automation: Automation) {
     if (confirmingRemove !== automation.id) {
@@ -1035,21 +1093,7 @@ export function AutomationsSection({
       return;
     }
     setConfirmingRemove(null);
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await ipc.removeAutomation(automation.id);
-      // A refusal is a resolved {ok:false} carrying the core's already-plain
-      // sentence — the row is gone already, or a restore point could not be saved,
-      // in which case nothing was removed and saying so is the whole point.
-      if (!result.ok) setError(result.error ?? AUTOMATION_REMOVE_FAILED);
-    } catch {
-      setError(AUTOMATION_REMOVE_FAILED);
-    } finally {
-      setBusy(false);
-      // Either way: the list on screen is now a guess, and the core holds the truth.
-      refresh();
-    }
+    await handleRemove(automation.id);
   }
 
   if (!connected) {
@@ -1072,10 +1116,10 @@ export function AutomationsSection({
       )}
       {statusFailed && <SurfaceRow wrap name={AUTOMATION_STATUS_UNKNOWN} />}
 
-      {automations.length === 0 ? (
-        <SurfaceRow wrap name={AUTOMATIONS_EMPTY} />
+      {rows.length === 0 ? (
+        <SurfaceRow wrap name={developerSurface ? AUTOMATIONS_EMPTY : AUTOMATIONS_EMPTY_SIMPLE} />
       ) : (
-        automations.map((automation) => {
+        rows.map((automation) => {
           // The OS's answer, or nothing at all. `null` is a third state and not a
           // falsy "not armed": it is the difference between knowing a job is idle
           // and never having asked.
@@ -1086,9 +1130,20 @@ export function AutomationsSection({
           // (an `error` beside an empty list). Reading that third one as "nothing is
           // armed" would tell somebody their automation was off while it ran.
           const armed = status && !status.error ? status.armed.includes(automation.label) : null;
+          // Can this profile use the row at all? TWO independent answers, and both
+          // must say yes — the core's display marker (what the surface SAYS) and the
+          // active profile (what this page may OFFER). Either alone would be enough
+          // on a matched build; together, a core that forgot to mark a row and a
+          // page that has not heard of a future reason both fail toward the inert
+          // row rather than toward a control that could only come back refused.
+          const usable = !automation.unavailable && developerSurface;
           return (
             <SurfaceRow
               key={automation.id}
+              // The routine library's own annotation for a row that is merely
+              // waiting for another profile — same words, same weight, so a person
+              // who has seen one recognises the other.
+              tag={automation.unavailable ? <WaitingTag /> : undefined}
               name={automation.name}
               // The schedule in the machine-fact slot, in the core's words. Mono,
               // because when a job runs is a fact and not prose.
@@ -1097,7 +1152,7 @@ export function AutomationsSection({
                 // Every control here is named after its own automation: a column of
                 // identical buttons is the shape in which somebody arms the wrong one.
                 <>
-                  {onAsk && armed === true && (
+                  {usable && onAsk && armed === true && (
                     <RowAction
                       tone="muted"
                       ariaLabel={`Disarm ${automation.name}`}
@@ -1106,7 +1161,7 @@ export function AutomationsSection({
                       Disarm…
                     </RowAction>
                   )}
-                  {onAsk && armed === false && status?.supported && (
+                  {usable && onAsk && armed === false && status?.supported && (
                     <RowAction
                       ariaLabel={`Arm ${automation.name}`}
                       onClick={() => onAsk(ARM_REQUEST(automation.name))}
@@ -1114,6 +1169,11 @@ export function AutomationsSection({
                       Arm…
                     </RowAction>
                   )}
+                  {/* Remove stays in EVERY profile. It only ever takes something
+                      away, a profile switch must never trap configuration somebody
+                      wants gone, and the core disarms a running job before it
+                      forgets the row — so this is also how a Simple person switches
+                      one off. */}
                   <RowAction
                     tone="danger"
                     disabled={busy}
@@ -1126,13 +1186,32 @@ export function AutomationsSection({
               }
             >
               {/* The exact text that would run, whole and unshortened — reading it is
-                  the point, and the typed code exists to make them read it. */}
-              <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">
-                {automation.command}
-              </p>
+                  the point, and the typed code exists to make them read it. NOT on a
+                  surface that cannot arm: the reading is FOR the ceremony, and a
+                  shell command is the developer vocabulary SAFETY.md keeps out of
+                  Simple (the command widget's text is withheld there for the same
+                  reason). The name and the plain-words schedule stay — they are what
+                  the person wrote down. */}
+              {usable && (
+                <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">
+                  {automation.command}
+                </p>
+              )}
+              {/* THE CORE'S OWN SENTENCE, rendered verbatim — never one written here,
+                  and never a row disabled with nothing to show for it (the parser
+                  drops a marker that cannot say why). */}
+              {automation.unavailable && (
+                <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+                  {automation.unavailable.message}
+                </p>
+              )}
               {armed !== null && (
                 <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
-                  {armed ? AUTOMATION_ARMED : AUTOMATION_NOT_ARMED}
+                  {armed
+                    ? AUTOMATION_ARMED
+                    : usable
+                      ? AUTOMATION_NOT_ARMED
+                      : AUTOMATION_NOT_ARMED_SIMPLE}
                 </p>
               )}
             </SurfaceRow>

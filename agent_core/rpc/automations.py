@@ -1,21 +1,29 @@
 """automation.* handlers — the automation Addison AUTHORS for the OS to run
-(step 8, phase 1). Addison never triggers itself; the OS does.
+(step 8). Addison never triggers itself; the OS does.
 
 **THERE IS NO ADD, NO UPDATE AND NO ARM HERE, and that is still the point.**
-Authoring is the ``create_automation`` TOOL (phase 2, registered ``open_only``),
-which writes rows this surface then lists and removes; arming is phase 3 (a typed
-shell surface behind a per-automation keyword) and exists nowhere in the tree. So
-this module reads and deletes, and a row it lists has never been handed to the
-operating system.
+Authoring is the ``create_automation`` TOOL (phase 2, registered ``open_only``) and
+arming is the ``arm_automation`` TOOL (phase 3, behind the ordinary card plus a
+typed per-automation code). Both go through the registry, the gate and the audit
+like every other tool. This namespace only lists, reports and removes what they
+made — no payload here installs, starts or schedules anything.
 [docs/step-8-automation-plan.md](../../docs/step-8-automation-plan.md) owns the
 phase order, and ``agent_core/automations.py`` owns the row and the closed schedule
 vocabulary.
 
-**This module can start nothing.** It reads rows, deletes rows, and turns a row into
-a payload. It cannot spawn a process, cross the shell bridge, write a plist or reach
-``launchctl`` — arming needs a surface in the highest-trust process (plan §2), which
-does not exist yet and will never be reachable from here. The structural test in
-``tests/test_automations.py`` is what keeps that true rather than merely intended.
+**This module can start nothing.** It reads rows, deletes rows, reports what the OS
+holds, and turns a row into a payload. It cannot spawn a process, write a plist or
+reach ``launchctl``: those live in the highest-trust process (plan §2), behind a
+typed shell surface that builds the document itself.
+
+**It DOES cross the shell bridge, in exactly one direction** — ``list_armed`` and
+``disarm_automation``, and only from ``_disarm_before_forgetting`` (phase 3's
+review fix). That
+is a TIGHTENING and the reason is below: a removal that forgot an armed row would
+leave a job running with nothing on screen to name it. It can ask the OS to stop
+something and to say what it holds; it has no way to ask it to start anything, and
+the structural test in ``tests/test_automations.py`` is what keeps that true rather
+than merely intended.
 
 **Both methods answer in EVERY profile.** A saved row is configuration, not a
 capability: what an automation's shell command needs is Developer, and that belongs
@@ -26,10 +34,19 @@ things. Hiding somebody's saved configuration when they switch to
 Simple is the failure the 2026-08-06 artifact decision reversed
 ([docs/SAFETY.md](../../docs/SAFETY.md) owns that rule), and ``automation.remove`` is
 a TIGHTENING — a profile switch must never be the thing that traps configuration
-somebody wants gone. Phase 4 gives Simple a listed-but-disabled treatment for these
-rows; that is a display decision on top of a payload that was always answered, and it
-must never be implemented by reading ``created_in_mode`` (the routines gap in
-[docs/KNOWN-GAPS.md](../../docs/KNOWN-GAPS.md) is the cautionary entry).
+somebody wants gone.
+
+**Phase 4 gives Simple the listed-but-disabled treatment, and it asks NOTHING of the
+row.** Every automation's payload is a shell command, so every one of them is waiting
+for Developer — there is no such thing as one Simple could arm — and the marker is
+therefore handed a decided ``True`` rather than a question. That uniformity is the
+whole defence: with no per-row question there is no ``created_in_mode`` to be tempted
+into reading, which is the mistake ``rpc/routines.py`` still makes (the routines gap
+in [docs/KNOWN-GAPS.md](../../docs/KNOWN-GAPS.md) is the cautionary entry, and a
+source-level test in ``tests/test_automations.py`` keeps this module out of it). The
+marker is DISPLAY ONLY, as everywhere: what refuses arming is ``arm_automation``'s
+registration and its dispatch, and if the two ever disagree, dispatch
+wins.
 
 **Nothing here says whether an automation is ARMED, in either direction.** No column
 stores it, no payload carries it, and no handler infers it. Armed truth lives in the
@@ -43,7 +60,12 @@ surface phase 3 adds.
 from __future__ import annotations
 
 from agent_core.automations import Automation, schedule_fields, schedule_sentence
+from agent_core.policy import PolicyMode
 from agent_core.rpc.base import ServerContext
+from agent_core.rpc.constants import (
+    _AUTOMATION_DEV_ABILITIES_MESSAGE,
+    _unavailable_marker,
+)
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
 
@@ -69,7 +91,7 @@ _COULDNT_DISARM_TO_REMOVE = (
 
 
 class AutomationsMixin(ServerContext):
-    def _automation_wire_row(self, row: Automation) -> dict:
+    def _automation_wire_row(self, row: Automation, mode: PolicyMode) -> dict:
         """One automation as the frontend parses it — camelCase at the boundary
         (``created_at`` -> ``createdAt``), and nothing on it the person did not set.
 
@@ -107,12 +129,17 @@ class AutomationsMixin(ServerContext):
         ``tests/test_automations.py`` pins that this module neither imports the
         preview builder nor names it.
 
+        ``unavailable`` is the phase-4 half, and it is the ONLY field on this row that
+        depends on the profile: ``{reason, message}`` while Simple is active, and the
+        key ABSENT — never present-and-null — in Developer and Custom, so an available
+        row's shape is byte-for-byte what every existing parser already reads.
+
         ``updated_at`` is deliberately not on the wire: nothing can edit a row yet, so
         it equals ``created_at`` on every row that exists, and a field that is always
         a copy of another one teaches a frontend to render a fact nobody has. Phase 2
         adds it with the edit that makes it differ."""
         schedule = schedule_fields(row.schedule_kind, row.schedule_json)
-        return {
+        wire: dict = {
             "id": row.id,
             "name": row.name,
             "label": row.label,
@@ -123,23 +150,56 @@ class AutomationsMixin(ServerContext):
             "createdInMode": row.created_in_mode,
             "createdAt": row.created_at,
         }
+        # THE DECIDED BOOLEAN IS A LITERAL ``True``, and that is the point. An
+        # automation's payload is a shell command, so every row is waiting for
+        # Developer; there is no such thing as one Simple could arm, so there is
+        # nothing to ask this row — and a decision that asks a row nothing can never
+        # drift into asking it the WRONG thing. ``createdInMode`` above is display
+        # provenance for a badge; it is not consulted here, and a source-level test
+        # in tests/test_automations.py keeps it that way (rpc/routines.py reads that
+        # stamp for availability and is wrong to, docs/KNOWN-GAPS.md).
+        #
+        # DISPLAY ONLY — this marker is not what stops an automation being armed.
+        # ``arm_automation`` is registered ``open_only`` — NOT ``dev_only``, which
+        # would take the undo waiver from a HIGH tool that has a real ``undo()``
+        # (``main.py`` explains the pair). It is absent from
+        # ``registry.visible_tools(SAFE)`` and is refused at dispatch outside OPEN.
+        # If the marker and dispatch ever disagree, DISPATCH WINS: the absence of a
+        # marker is not a permission (docs/SAFETY.md owns the rule).
+        unavailable = _unavailable_marker(mode, True, _AUTOMATION_DEV_ABILITIES_MESSAGE)
+        # Absent entirely when the profile can use the row, exactly as the routine
+        # and widget lists do it — an available row keeps the shape it always had.
+        if unavailable is not None:
+            wire["unavailable"] = unavailable
+        return wire
 
     def _automation_list(self) -> dict:
         """automation.list -> {automations: [{id, name, label, command, scheduleKind,
-        schedule, scheduleSentence, createdInMode, createdAt}]}, oldest first.
+        schedule, scheduleSentence, createdInMode, createdAt, unavailable?}]}, oldest
+        first.
 
         Answers in EVERY profile (see the module docstring), and lists whatever
-        ``create_automation`` has written — ``[]`` until somebody asks for one.
+        ``create_automation`` has written — ``[]`` until somebody asks for one. In
+        Simple every row it returns carries ``unavailable``; it returns the same rows
+        either way, because a disabled row is the artifact decision and a hidden one
+        was the failure it reversed.
+
+        The live mode is read ONCE for the whole answer (the ``widget.list`` /
+        ``routine.list`` shape) so every row in one payload describes the same
+        profile. ``_mode()`` derives it fresh from the active profile rather than from
+        anything cached, which is what makes a ``profile.set`` visible on the very
+        next list with no restart.
 
         Reading rows only: no plist is looked for, no ``launchctl`` is asked anything,
         nothing is reconciled. Reconciliation against what the OS actually holds is
-        phase 4's, on the mcp temperament — no action the person did not just cause —
-        and it will arrive as a separate answer rather than a field this payload
-        guesses at."""
+        ``automation.status`` (phase 3), on the mcp temperament — no action the person
+        did not just cause — and it is a separate answer rather than a field this
+        payload guesses at."""
         self._ensure_built()
+        mode = self._mode()
         return {
             "automations": [
-                self._automation_wire_row(row) for row in self.store.list_automations()
+                self._automation_wire_row(row, mode) for row in self.store.list_automations()
             ]
         }
 
@@ -179,10 +239,18 @@ class AutomationsMixin(ServerContext):
         row = self.store.get_automation(automation_id)
         if row is None:
             return {"ok": False, "error": _NO_SUCH_AUTOMATION}
-        if not self._disarm_before_forgetting(row.label):
-            return {"ok": False, "error": _COULDNT_DISARM_TO_REMOVE}
+        # THE RESTORE POINT IS MINTED FIRST, and the order is the whole of it. It ran
+        # the other way until the phase-4 review: the OS was told to stop the job, the
+        # capture then failed, and the frozen sentence told the person "it didn't
+        # remove anything" — while their automation had in fact been switched off,
+        # with no snapshot, no `tool_audit` row (this is an RPC, not a tool) and no
+        # undo. Minting first costs a restore point on a removal that then refuses,
+        # which is the cheap direction: an extra way back, versus a message that is
+        # false about the one thing the person was watching.
         if not self._snapshot_auto("automation_remove"):
             return {"ok": False, "error": _NO_SNAPSHOT_ON_REMOVE}
+        if not self._disarm_before_forgetting(row.label):
+            return {"ok": False, "error": _COULDNT_DISARM_TO_REMOVE}
         self.store.delete_automation(automation_id)
         return {"ok": True}
 

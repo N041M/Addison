@@ -32,6 +32,10 @@ import snapshotListFixture from "./fixtures/snapshot.list.json";
 import workspaceListFixture from "./fixtures/workspace.list.json";
 import mcpListFixture from "./fixtures/mcp.list.json";
 import automationListFixture from "./fixtures/automation.list.json";
+// The same method answered while SIMPLE is active — the only fixture whose name is
+// not a method name, because the payload has two shapes and no one call can show
+// both (tests/ipc_fixtures.py says why at the generator).
+import automationListSimpleFixture from "./fixtures/automation.list.simple.json";
 import costPlanFixture from "./fixtures/costPlan.propose.json";
 import endpointProposeFixture from "./fixtures/endpoint.proposeFromConversation.json";
 
@@ -393,6 +397,30 @@ describe("parseAutomations over the real automation.list payload", () => {
       }
       expect(JSON.stringify(row)).not.toContain("<?xml");
     }
+  });
+
+  it("keeps the marker the core puts on every row while Simple is active", () => {
+    // THE OTHER SHAPE OF THE SAME PAYLOAD (step 8 phase 4). `unavailable` is on every
+    // row or on none — an automation's payload is a shell command, so Simple can use
+    // none of them — which is why the core generates a second file rather than a
+    // second row. What this pins is that the sentence a Simple person reads on their
+    // own saved work travelled from the core untouched: the surface renders this
+    // string and never writes one of its own, so the row and the refusal cannot drift
+    // into telling two stories.
+    const rows = parseAutomations(automationListSimpleFixture);
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row.unavailable).toEqual({
+        reason: "developer_abilities",
+        message: "That automation runs a command, so it's waiting in Developer profile.",
+      });
+    }
+    // Everything else about a row is unchanged by the profile — the same ids, the
+    // same commands, the same sentences. A profile decides what may be DONE with a
+    // row, never what the row is.
+    expect(rows.map(({ unavailable: _unavailable, ...rest }) => rest)).toEqual(
+      parseAutomations(automationListFixture),
+    );
   });
 });
 

@@ -1,7 +1,7 @@
 # Step 8 — OS-run automation and the keyword gate
 
-**Status: PHASES 1, 2 AND 3 OF FOUR ARE BUILT (2026-08-07, the day this plan was
-written). Phase 4 — state honesty and the Simple profile — is not started.** This plan turns the recorded decisions into a build
+**Status: COMPLETE. All four phases built 2026-08-07**, the day this plan was
+written. With it, step 8 is done and the Phase-2 sequence closes. This plan turns the recorded decisions into a build
 order and settles the engineering decisions those left open. The principle is the
 scope amendment's §9 sentence, unchanged since 2026-07-20:
 
@@ -256,7 +256,7 @@ the whole truth rather than a summary.
    - macOS only, and honest about it: elsewhere the tool answers with one plain
      sentence, the same temperament as the seatbelt's non-mac disclosure.
    - This phase flips the documents in §7 and closes the KNOWN-GAPS question.
-4. **State honesty + the Simple profile.**
+4. **State honesty + the Simple profile — BUILT 2026-08-07. STEP 8 COMPLETE.**
    - Armed-ness is reconciled on demand from `automation.status` when the
      surface loads — the OS owns that truth (§5.6); nothing polls, nothing
      checks at startup (the mcp temperament: no action the person did not just
@@ -274,6 +274,31 @@ the whole truth rather than a summary.
      KNOWN-GAPS is the cautionary entry).
    - The Developer review surface (`phase-3-review-surface-plan.md`) records
      itself unblocked.
+
+   **What shipped, and the four decisions taken while building:**
+
+   - **The marker is decided from what an automation IS, not from its stamp.** The
+     caller passes a literal `True` to `_unavailable_marker`, because every
+     automation's payload is a shell command and there is no such thing as one
+     Simple could arm. That uniformity is the safety property: with no per-row
+     question, there is no `created_in_mode` to be tempted into reading — which is
+     exactly the bug the routines half still carries
+     ([KNOWN-GAPS.md](KNOWN-GAPS.md)). A test scans this module's branches for the
+     stamp, so the temptation cannot return quietly.
+   - **Simple keeps Remove, and only Remove.** Arm and Disarm are the capability
+     and both are dev-only, so offering them could only produce a refusal. Remove
+     stays because removal is a tightening a profile switch must never trap — and
+     because phase 4's own `_disarm_before_forgetting` makes it the one way a
+     Simple person can stop a job their computer is running.
+   - **The command text is not printed in Simple**, matching the command widget's
+     treatment in the rail. In Developer the command is on screen because the code
+     ceremony exists to make somebody read it; on a surface that cannot arm, that
+     reason is absent and the text is only a developer affordance.
+   - **A restore re-reads the ROWS and does not re-ask the OS.** A restore can put
+     a row back and can never arm or disarm anything, so the cached armed set stays
+     true; re-asking would be a check nobody caused (§5.6's temperament). The OS ask
+     lives in the SECTION's effect rather than the hook's mount, so "asked when the
+     surface loads" does not quietly become "asked every time Addison opens".
 
 ## 5. Decisions
 

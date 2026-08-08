@@ -765,6 +765,11 @@ CLAIMS: tuple[Claim, ...] = (
                 r"nothing (?:\w+ ){0,3}can (?:arm|run) (?:an? )?automation"
                 r"|no arming surface"
                 r"|arming (?:is|remains) (?:phase 3 and )?not built"
+                # `(designed, **not built**: step 8 phase 3)` — the markdown bold
+                # split the phrase, so the alternative above walked straight past
+                # CLAUDE.md's G2 floor for a whole phase. Match the parenthetical
+                # shape too, punctuation and emphasis included.
+                r"|not built\*{0,2}:?\s*(?:it is )?(?:phase-?2 )?step 8"
                 r"|(?:keyword gate|nonce)[^\n]{0,40}(?:does not exist|is not built)"
                 r"|there is no keyword-gate code"
                 r"|arming (?:does not exist|doesn't exist)"
@@ -773,6 +778,11 @@ CLAIMS: tuple[Claim, ...] = (
             excused_by=(
                 r"used to|until phase 3|before phase 3|through phase [12]|no longer|"
                 r"superseded|historical|standing claim|at the time|by absence|"
+                # A RECOUNT quoting the retired sentence — `floor said`, `it said`.
+                # Bare \bsaid\b was measured at 3.2% of the corpus and excused
+                # unrelated prose ("what the SERVER said"); anchoring it to the
+                # subject doing the quoting costs about a third of that.
+                r"floor said|wording said|it said|used to say|it now says|"
                 # `it said "…"` / `used to say` — a document QUOTING the retired
                 # sentence in order to record that it changed.
                 r"it said|used to say|it now says"

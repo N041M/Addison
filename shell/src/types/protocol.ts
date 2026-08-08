@@ -1,3 +1,5 @@
+import type { ArtifactUnavailable } from "./ui";
+
 // Frontend mirror of agent_core/protocol.py — engineering-spec §7.
 // HAND-SYNCED for v1. A golden-file drift test (§9) compares this against the
 // Python side; codegen from the dataclasses is a Phase 3 improvement, not a v1
@@ -274,6 +276,7 @@ export interface PermissionRequest {
   };
 }
 
+
 /**
  * `automation.status` — what the OPERATING SYSTEM currently holds, asked on demand.
  * Never stored and never polled: a G3 restore can put a database row back and can
@@ -327,6 +330,18 @@ export interface Automation {
   createdInMode?: "safe" | "open";
   /** Unix seconds when it was saved, when the core reports it. */
   createdAt?: number;
+  /**
+   * Present when the ACTIVE PROFILE cannot use this row — in Simple, always, since
+   * an automation runs a command; absent otherwise. **The same marker routines and
+   * widgets carry, and deliberately the same TYPE** (`ArtifactUnavailable`, the
+   * shape `normalizeUnavailable` returns): one marker must not grow two readings of
+   * what counts as one.
+   *
+   * DISPLAY ONLY. What refuses is the arming tools' registration and their dispatch;
+   * a row WITHOUT this marker is not thereby permitted, and if the two ever
+   * disagree, dispatch wins.
+   */
+  unavailable?: ArtifactUnavailable;
 }
 
 export interface ActivityUpdate {

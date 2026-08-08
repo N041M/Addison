@@ -16,7 +16,7 @@
 // progress) into React state, and Frontend → Core actions back out through the
 // typed `ipc`. The big state clusters live in dedicated hooks: useModelSelection,
 // useWidgets, useTurn, useConversations, useSnapshots, useGuards, useRouting,
-// useWorkspace, useMcpServers, useOffers.
+// useWorkspace, useMcpServers, useAutomations, useOffers.
 //
 // Theme is class-driven and persisted in localStorage ("addison.theme") as one of
 // "light" | "dark" | "system"; the default is now "system" (Match this computer).
@@ -78,6 +78,7 @@ import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useMcpServers } from "./hooks/useMcpServers";
+import { useAutomations } from "./hooks/useAutomations";
 import { useOffers } from "./hooks/useOffers";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
@@ -233,9 +234,9 @@ export function App() {
   // does not go stale quietly: the surface goes on offering controls for a thing
   // the core has already put back, and "Addison has forgotten X" comes back for
   // a server it no longer had.
-  // HAZARD: `refreshProfile`, `guardsState`, `routingState` and `mcpState` are
-  // forward references; this closure only ever runs at event time, after a
-  // restore has landed.
+  // HAZARD: `refreshProfile`, `guardsState`, `routingState`, `mcpState` and
+  // `automationsState` are forward references; this closure only ever runs at
+  // event time, after a restore has landed.
   const snapshotsState = useSnapshots({
     connected,
     onRestored: () => {
@@ -248,6 +249,13 @@ export function App() {
       guardsState.refreshGuards();
       routingState.refreshRouting();
       mcpState.refreshServers();
+      // The saved automations. The ROWS only: a restore can put a row back and
+      // can never put a JOB back — there is no armed column to restore and a
+      // one-action restore cannot perform the keyword ceremony (plan §5.6) — so
+      // what the OS is running is unchanged, and re-asking it here would be a
+      // check nobody caused. Armed-ness is matched to a row by its label on
+      // every render, so the answer already in hand stays true.
+      automationsState.refreshAutomations();
     },
   });
   // The Custom-profile guards (Phase-2 step 2). A weakening save mints a permanent
@@ -272,6 +280,14 @@ export function App() {
   // Developer/Custom gate as workspace trust, applied in SettingsPage. Adding one
   // saves an address and nothing else — there is no MCP client yet.
   const mcpState = useMcpServers({ connected });
+  // The saved automations — what Addison has written down for the OS to run
+  // (Phase-2 step 8, phase 4 of four). Owned here rather than by the
+  // Settings section because `automations` is a SNAPSHOT-CAPTURED table: a G3
+  // restore can add or remove rows underneath an open Settings page, and every
+  // other captured table is re-read above. Reading the list on mount is a local
+  // read; what the OPERATING SYSTEM is running is asked by the section when it
+  // loads, never here — nothing checks at startup (plan §5.6).
+  const automationsState = useAutomations({ connected });
   // The two step-4 conversational offers — "add my own model server" and "make it
   // cheaper" (useOffers). Same propose -> card -> explicit confirm mechanism as the
   // widget flow above; nothing is applied until the person presses the card's
@@ -1217,6 +1233,7 @@ export function App() {
                 routing={routingState}
                 workspace={workspaceState}
                 mcp={mcpState}
+                automations={automationsState}
                 profile={profile}
                 onSetProfile={handleSetProfile}
                 diagnostics={diagnostics}

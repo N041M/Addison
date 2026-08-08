@@ -1534,6 +1534,19 @@ function parseAutomationRow(value: unknown): Automation | null {
   if (!row || typeof row.id !== "string" || !row.id) return null;
   if (typeof row.name !== "string" || !row.name) return null;
   if (typeof row.command !== "string" || !row.command) return null;
+  // Why the active profile can't use this row, when the core says so — in Simple,
+  // every row, because an automation runs a command. The SAME parser the routine
+  // and widget rows use (lib/parse), because it is the same marker said in each
+  // layer's own vocabulary, and one shape must not grow two readings of what
+  // counts as one.
+  //
+  // Fail-closed here means ABSENT, not disabled: a marker that cannot say WHY in a
+  // sentence a person can read is dropped, so a malformed payload can never leave
+  // somebody looking at their own saved work sitting inert with no explanation.
+  // The other direction is never invented — this side does not decide that a row
+  // is unavailable, it only renders that the core said so, and the absence of a
+  // marker is not a permission either (dispatch is what refuses).
+  const unavailable = normalizeUnavailable(row.unavailable);
   return {
     id: row.id,
     name: row.name,
@@ -1559,6 +1572,7 @@ function parseAutomationRow(value: unknown): Automation | null {
       typeof row.createdAt === "number" && Number.isFinite(row.createdAt)
         ? row.createdAt
         : undefined,
+    ...(unavailable ? { unavailable } : {}),
   };
 }
 

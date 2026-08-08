@@ -32,6 +32,7 @@ import httpx
 from agent_core.main import JsonRpcServer
 from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel, EffortLevel
+from agent_core.profiles import SIMPLE
 from agent_core.providers.base import ModelResponse, ModelRole, ProviderCapabilities
 from agent_core.providers.router import ModelRouter
 from agent_core.secret_presence import SecretPresence
@@ -333,6 +334,11 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "workspace.list": _workspace_list_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
         "automation.list": _automation_list_fixture(server),
+        # The same method in the OTHER profile. Not a method name — the only fixture
+        # key that is not one — because the payload genuinely has two shapes and the
+        # frontend has to render both: a marked row is what Simple gets for every
+        # automation it holds (step 8 phase 4), and no single call can show both.
+        "automation.list.simple": _automation_list_simple_fixture(server),
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
@@ -449,6 +455,11 @@ def _automation_list_fixture(server: JsonRpcServer) -> dict:
     Nothing here is armed and nothing here could be: no field on this payload says
     so, and the plist a job would be armed from is the shell's to build.
 
+    This is the DEVELOPER shape — the whole fixture store runs the Developer profile
+    (see ``_seeded_store``), so no row here carries ``unavailable``. That key exists
+    only while Simple is active and then on EVERY row, so the two shapes cannot share
+    one payload; ``automation.list.simple`` below is the other one.
+
     The rows are deleted afterwards so the snapshot payload fixtures (which capture
     this table) stay byte-stable."""
     rows = [
@@ -495,6 +506,29 @@ def _automation_list_fixture(server: JsonRpcServer) -> dict:
     finally:
         for row_id, *_rest in rows:
             server.store.delete_automation(row_id)
+
+
+def _automation_list_simple_fixture(server: JsonRpcServer) -> dict:
+    """The SAME three rows, answered while the Simple profile is active (step 8,
+    phase 4) — the one shape the payload above cannot carry.
+
+    A SECOND file rather than a different one, because ``unavailable`` is present on
+    every row or on none: an automation's payload is a shell command, so Simple can
+    use none of them. Regenerating ``automation.list`` in Simple would have bought the
+    disabled shape by giving up the available shape that every existing parser reads,
+    and a fixture is only worth what both sides can be pinned against.
+
+    Answered through the REAL handler with the REAL profile swapped underneath it,
+    not by adding the key to a copied dict: the marker's sentence, its slug and the
+    fact that it is ABSENT rather than null on an available row all come from the
+    shipping code path, which is the whole point of generating these files. The
+    profile is restored afterwards so every fixture after this one is unaffected."""
+    previous = server._active_profile
+    server._active_profile = SIMPLE
+    try:
+        return _automation_list_fixture(server)
+    finally:
+        server._active_profile = previous
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:
