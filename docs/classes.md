@@ -565,7 +565,6 @@ classDiagram
     class RoutineLibrary {
         +list()
         +get(routine_id) Routine
-        +created_in_mode(routine_id) str
         +update_metadata()
         +record_run(routine_id)
         +delete(routine_id)

@@ -598,8 +598,9 @@ class WidgetCapability(str, Enum):
 #   SAFE  -> DISPLAY_SAFE only (buildable, non-destructive)
 #   OPEN/Custom -> DISPLAY_SAFE + SYSTEM (code-backed monitors/scripts; run/arm via keyword gate §6)
 # A widget MUST NOT exceed its mode's capability tier; a SAFE-tier widget MUST be
-# non-destructive. created_in_mode still applies — SAFE lists OPEN-built artifacts as
-# disabled rows (owner decision 2026-08-06; docs/SAFETY.md owns it), never runnable.
+# non-destructive. SAFE lists artifacts that NEED developer abilities as disabled
+# rows (owner decision 2026-08-06; docs/SAFETY.md owns it), never runnable — asked of
+# the artifact, never of created_in_mode (widgets 2026-08-06, routines 2026-08-08).
 ```
 
 **Routing config (§4.11).** The active routing strategy is non-secret app config,

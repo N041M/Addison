@@ -169,12 +169,15 @@ class WidgetsMixin(ServerContext):
             way (``WidgetRail``'s dev flag reads the routine's own provenance);
             this is the core agreeing rather than the two disagreeing quietly.
 
-        The routine half still reads the routine's STAMP, because routines have not
-        been converted yet — their availability is provenance-based end to end
-        (``rpc/routines.py``), and answering this question a second, better way on
-        the widget side would put the rail and the library in disagreement about
-        the same routine. When routines convert, this line follows them, and it is
-        the only line that has to."""
+        The routine half asks ``rpc/routines.py``'s ``_routine_needs_dev`` (through
+        ``_routine_id_needs_dev``), which is the ONE place that question is answered.
+        It read the routine's STAMP until 2026-08-08, deliberately: routines were
+        provenance-based end to end, and answering this a second, better way on the
+        widget side would have put the rail and the library in disagreement about the
+        same routine. Routines converted (owner decision 2026-08-08, KNOWN-GAPS), so
+        this line followed them — it was the only line that had to, and the property
+        it was protecting is unchanged: the rail and the library still cannot
+        disagree, because there is still only one answer."""
         if widget_uses_dev_abilities(spec):
             return True
         if not isinstance(spec, dict) or spec.get("kind") != "routine":
@@ -182,7 +185,7 @@ class WidgetsMixin(ServerContext):
         routine_id = spec.get("routineId")
         if not isinstance(routine_id, str):
             return False
-        return self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
+        return self._routine_id_needs_dev(routine_id)
 
     @staticmethod
     def _valid_widget_state(spec: dict, state_json: str | None) -> dict | None:

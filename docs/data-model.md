@@ -99,11 +99,14 @@ erDiagram
 - **routines** — saved declarative plans. `plan_json` holds the ordered, DAG-shaped
   step plan; by construction it never contains code. `run_count` and `last_run_at`
   track usage. `created_in_mode` (`safe` | `open`) records the policy mode the routine
-  was saved under: a routine created in OPEN is **listed but disabled** in
-  `routine.list` (the row carries a display-only `unavailable` reason) and refused
-  by `routine.run` while the Simple profile is active, and returns untouched in
-  Developer. It was hidden outright until 2026-08-06 — see
-  [SAFETY.md](SAFETY.md), which owns the rule.
+  was saved under, **for display only**: a routine that NEEDS developer abilities — a
+  command step in `plan_json`, or a step naming a tool outside `visible_tools(SAFE)` —
+  is **listed but disabled** in `routine.list` (the row carries a display-only
+  `unavailable` reason) and refused by `routine.run` while the Simple profile is
+  active, and returns untouched in Developer. That question is asked of the plan, not
+  of this column (`rpc/routines.py::_routine_needs_dev`); reading the column was the
+  KNOWN-GAPS bug closed 2026-08-08. Artifacts were hidden outright until 2026-08-06 —
+  see [SAFETY.md](SAFETY.md), which owns the rule.
 - **routine_runs** — the run log behind "show what you just did", one row per run with
   a `status` constrained to `running`, `completed`, `failed`, or `cancelled` and a
   JSON step log.

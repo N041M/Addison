@@ -271,7 +271,8 @@ the whole truth rather than a summary.
      rule. Every automation is dev-made by construction, so the treatment is
      uniform and needs no per-row predicate; note explicitly that this must
      *not* be implemented by reading `created_in_mode` (the routines gap in
-     KNOWN-GAPS is the cautionary entry).
+     KNOWN-GAPS was the cautionary entry — closed 2026-08-08, by asking the
+     routine what it needs).
    - The Developer review surface (`phase-3-review-surface-plan.md`) records
      itself unblocked.
 
@@ -281,8 +282,8 @@ the whole truth rather than a summary.
      caller passes a literal `True` to `_unavailable_marker`, because every
      automation's payload is a shell command and there is no such thing as one
      Simple could arm. That uniformity is the safety property: with no per-row
-     question, there is no `created_in_mode` to be tempted into reading — which is
-     exactly the bug the routines half still carries
+     question, there is no `created_in_mode` to be tempted into reading — which was
+     exactly the bug the routines half carried until it was closed on 2026-08-08
      ([KNOWN-GAPS.md](KNOWN-GAPS.md)). A test scans this module's branches for the
      stamp, so the temptation cannot return quietly.
    - **Simple keeps Remove, and only Remove.** Arm and Disarm are the capability

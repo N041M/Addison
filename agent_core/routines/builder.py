@@ -147,7 +147,10 @@ class RoutineBuilder:
 
         A routine carrying an OPEN-mode-only ability (a command step) may be saved
         ONLY in OPEN mode; attempting it in SAFE mode raises ValueError with a plain
-        sentence. ``created_in_mode`` records the mode so SAFE can later hide it."""
+        sentence. ``created_in_mode`` records the mode as DISPLAY PROVENANCE (the
+        frontend's DEV badge) and decides nothing: what a profile may list and run is
+        asked of the routine itself, one layer up, where the registry is also in
+        scope (``rpc/routines.py::_routine_needs_dev``; owner decision 2026-08-08)."""
         if self._store is None:
             raise RuntimeError("Routines can't be saved in this mode.")
         if mode is not PolicyMode.OPEN and routine_uses_dev_abilities(draft):
