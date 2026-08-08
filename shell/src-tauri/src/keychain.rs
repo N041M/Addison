@@ -495,6 +495,68 @@ fn repair_lost_forget(provider: &str) {
     }
 }
 
+// ===========================================================================
+// PUTTING BACK WHAT A SAVE REPLACED (docs/KNOWN-GAPS.md, closed 2026-08-08)
+// ===========================================================================
+// The webview stores a key and THEN asks the core to connect — that ordering is
+// required, not incidental: the core reads the key from the OS at connect time and
+// a key may never be a parameter of a core frame (G1). So a connect that fails
+// leaves a key nobody decided to keep sitting on top of whatever was saved before,
+// and for the `custom` provider that is somebody's working server's key. `provider_config`
+// is snapshot-captured so G3 can put the ADDRESS back; the keychain deliberately is
+// not, so the key was the one half of that clobber nothing could undo.
+//
+// The undo therefore belongs here, at the same seam as the save, and it stays
+// entirely inside this process: the webview names a provider and learns one boolean,
+// the core is not involved at all, and no key value moves anywhere new.
+//
+// **WHAT IT WILL NOT DO.** It never guesses. A rollback happens only where the
+// previous state was positively KNOWN — a value Addison actually read, or a
+// definite "nothing saved". A read that merely FAILED (a dismissed password dialog,
+// a keychain error) records nothing, the rollback answers "couldn't", and the
+// caller discloses instead. Deleting an item nobody could read is the one direction
+// that costs a key, which is the same rule the self-heal path lives under.
+//
+// **IT COSTS NO EXTRA OS TOUCH.** The value comes from the read `save_verdict`
+// already performs before every write; a second look would be a second dialog.
+
+/// What this session's most recent OVERWRITING save replaced, for one provider.
+/// Absent means "not known" — never "nothing was there".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Replaced {
+    /// A key was there and Addison read it. Putting it back is a write.
+    Held(String),
+    /// Nothing was saved. Putting it back is a removal.
+    Nothing,
+}
+
+/// G1: this holds the same class of value `KEY_CACHE` already holds, in the same
+/// process, for a shorter time — every entry is replaced by the next save for that
+/// provider, consumed by the rollback, or dropped by a deliberate Remove.
+static REPLACED_KEYS: OnceLock<Mutex<HashMap<String, Replaced>>> = OnceLock::new();
+
+fn replaced_keys() -> &'static Mutex<HashMap<String, Replaced>> {
+    REPLACED_KEYS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Record what the save that just landed replaced. `None` erases the record rather
+/// than leaving it: an unreadable previous state must not let a rollback put back
+/// something two saves old.
+fn replaced_remember(provider: &str, what: Option<Replaced>) {
+    if let Ok(mut replaced) = replaced_keys().lock() {
+        match what {
+            Some(previous) => replaced.insert(provider.to_string(), previous),
+            None => replaced.remove(provider),
+        };
+    }
+}
+
+/// Read and consume the record. One save, one undo — a second press must not put
+/// the same value back over a key the person has since saved deliberately.
+fn replaced_take(provider: &str) -> Option<Replaced> {
+    replaced_keys().lock().ok()?.remove(provider)
+}
+
 /// Why a credential write did not complete. The distinction is the whole point: one
 /// of these leaves the user's key exactly where it was, and the other means it is gone.
 #[derive(Debug, PartialEq, Eq)]
@@ -703,7 +765,7 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     // §5.3, and it happens FIRST, for two separate reasons. A key refused for its
     // shape must not queue behind a password dialog somebody else's read is parked
     // on — the refusal needs nothing from the OS. And the compare inside
-    // `save_would_change_nothing` has to see the same bytes the write would store:
+    // `save_verdict` has to see the same bytes the write would store:
     // comparing the raw paste against a stored, already-normalised key reads a
     // trailing newline as a change and re-mints the item for nothing, which is the
     // one operation in this module that can lose a key (§5.4, §4.2).
@@ -719,11 +781,17 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     let ledger = MintLedger::live();
     let entry = Entry::new(SERVICE, &account)
         .map_err(|_| "Couldn't reach the system keychain to save your key.".to_string())?;
-    if save_would_change_nothing(provider, &ledger, &account, &entry, key) {
-        trace!("save", &format!("provider={provider}"), "unchanged (no write)");
-        failure_forget(provider);
-        return Ok(());
-    }
+    let replaces = match save_verdict(provider, &ledger, &account, &entry, key) {
+        SaveVerdict::NoChange => {
+            trace!("save", &format!("provider={provider}"), "unchanged (no write)");
+            failure_forget(provider);
+            // Nothing was replaced, so no rollback is owed — and an older record
+            // must go, or a rollback would undo a save the person did not just make.
+            replaced_remember(provider, None);
+            return Ok(());
+        }
+        SaveVerdict::Replaces(previous) => previous,
+    };
     // NOT `set_password`. See the WRITES block above: `set_password` falls back to
     // `SecItemUpdate` on a duplicate, which preserves the old foreign ACL — so the
     // convenient call is exactly the one that makes "save it again" useless.
@@ -747,6 +815,9 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
     // Saving a key is the user's retry signal for a read that failed earlier this
     // session — drop the negative entry so reads reach the OS again.
     failure_forget(provider);
+    // Only AFTER the write landed: nothing was replaced by a write that did not
+    // happen. See `restore_replaced_provider_key`.
+    replaced_remember(provider, replaces);
     Ok(())
 }
 
@@ -777,29 +848,176 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
 /// for this press (nothing is destroyed), the record is dropped, and the second press
 /// writes and repairs. Twice, not forever.
 ///
-/// Anything unreadable answers `false`: when Addison cannot see what is stored, the
+/// Anything unreadable answers "write": when Addison cannot see what is stored, the
 /// safe move is to write, which also repairs. A dialog dismissed here therefore still
 /// lets the Save go through.
-fn save_would_change_nothing(
+///
+/// It also carries out what the write is about to REPLACE, because that answer comes
+/// from the very same look at the item and a second look would be a second password
+/// dialog (see the PUTTING BACK block above). The two facts are returned together for
+/// that reason and no other.
+fn save_verdict(
     provider: &str,
     ledger: &MintLedger,
     account: &str,
     entry: &Entry,
     key: &str,
-) -> bool {
+) -> SaveVerdict {
     if repair_lost_recorded(provider) {
-        return false;
+        // A repair destroyed the item earlier this session, so the keychain holds
+        // nothing at all — which is precisely what a rollback would restore.
+        return SaveVerdict::Replaces(Some(Replaced::Nothing));
     }
     if let Some(cached) = cache_get(provider) {
-        return cached == key;
+        if cached == key {
+            return SaveVerdict::NoChange;
+        }
+        return SaveVerdict::Replaces(Some(Replaced::Held(cached)));
     }
     let started = Instant::now();
     let stored = entry.get_password();
     let elapsed = started.elapsed();
     if !mint_record_vetoes_heal(ledger, account, elapsed) && read_looked_foreign(elapsed) {
-        return false;
+        return SaveVerdict::Replaces(replaced_from(stored));
     }
-    stored.is_ok_and(|stored| stored == key)
+    match stored {
+        Ok(value) if value == key => SaveVerdict::NoChange,
+        other => SaveVerdict::Replaces(replaced_from(other)),
+    }
+}
+
+/// The pre-write read's two answers, taken together.
+enum SaveVerdict {
+    /// Byte-identical to what is stored, on an item this build can read. No write.
+    NoChange,
+    /// Write — carrying what it replaces, when that is KNOWN. `None` where the read
+    /// failed: a rollback is then refused rather than guessed.
+    Replaces(Option<Replaced>),
+}
+
+/// One pre-write read, as the thing a rollback can act on. `NoEntry` is a definite
+/// "nothing was saved"; every other error is Addison not knowing, and not knowing is
+/// never recorded as a fact.
+fn replaced_from(stored: Result<String, keyring::Error>) -> Option<Replaced> {
+    match stored {
+        Ok(value) => Some(Replaced::Held(value)),
+        Err(keyring::Error::NoEntry) => Some(Replaced::Nothing),
+        Err(_) => None,
+    }
+}
+
+/// Webview -> Shell. Undo the last `store_provider_key` for this provider by putting
+/// back what it replaced. The rollback for the contract-mandated ordering — see the
+/// PUTTING BACK block above for why this exists and what it refuses to guess.
+///
+/// Answers `true` when the keychain is back as it was and `false` when it is NOT —
+/// which the caller must then DISCLOSE, because the person's previous key is gone
+/// and only they can restore it. It cannot FAIL, which is why it does not answer a
+/// `Result` like its two siblings: it is only ever called on a path that is already
+/// reporting a failure, and a rejection here would replace that failure's own
+/// sentence with one about the rollback. "Couldn't" is `false`, including when the
+/// blocking task itself does not come back.
+///
+/// G1: the parameter is a provider id and the answer is a boolean. No key value
+/// crosses this boundary in either direction.
+#[tauri::command]
+pub async fn restore_replaced_provider_key(provider: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || restore_replaced_provider_key_blocking(&provider))
+        .await
+        .unwrap_or(false)
+}
+
+fn restore_replaced_provider_key_blocking(provider: &str) -> bool {
+    let _os = os_guard();
+    // Consumed whether or not it is usable: one save, one undo.
+    let replaced = replaced_take(provider);
+    let account = account_for_provider(provider);
+    let ledger = MintLedger::live();
+    let Ok(entry) = Entry::new(SERVICE, &account) else {
+        return false;
+    };
+    let outcome = restore_replaced_with(
+        replaced,
+        &|previous| {
+            // The same delete-then-add-and-read-back ladder as any other write:
+            // putting a key back is a write, and a write is never trusted on a
+            // return code here.
+            let written = write_credential(&entry, &ledger, &account, previous);
+            match &written {
+                Ok(()) => {
+                    cache_put(provider, previous);
+                    repair_lost_forget(provider);
+                }
+                // The rollback itself destroyed the item. Remembered so a later read
+                // says why instead of offering to set the person up from scratch.
+                Err(WriteFailure::Lost) => repair_lost_remember(provider),
+                Err(WriteFailure::Untouched) => {}
+            }
+            written
+        },
+        &|| {
+            let removed = entry.delete_credential();
+            if matches!(removed, Ok(()) | Err(keyring::Error::NoEntry)) {
+                cache_evict(provider);
+                // The item is gone, so the mint record is a claim about nothing —
+                // the same bookkeeping `delete_provider_key` does.
+                ledger.forget(&account);
+            }
+            removed
+        },
+    );
+    trace!("rollback", &format!("provider={provider}"), outcome.trace_word());
+    // Either way the person has just acted on this key, which is the retry signal
+    // for a read that failed earlier in the session.
+    failure_forget(provider);
+    outcome != RestoreOutcome::Unavailable
+}
+
+/// What a rollback did. Only one of these leaves the person anything to be told.
+#[derive(Debug, PartialEq, Eq)]
+enum RestoreOutcome {
+    /// The previous key is back in the keychain.
+    PutBack,
+    /// Nothing was saved before, so the key just written was removed. Same net state.
+    Removed,
+    /// Nothing usable was recorded, or putting it back failed. Nothing was undone,
+    /// and the caller has to SAY so — an undisclosed clobber is the defect this
+    /// whole block was written for, and a silent failed rollback is the same defect.
+    Unavailable,
+}
+
+impl RestoreOutcome {
+    fn trace_word(&self) -> &'static str {
+        match self {
+            RestoreOutcome::PutBack => "put-back",
+            RestoreOutcome::Removed => "removed",
+            RestoreOutcome::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// The rollback as a sequence over injected operations, so the refusals are provable
+/// without an OS keychain (the module's house style — see `write_credential_with`).
+///
+/// `None` is the case that matters most: Addison never read what was there, so it
+/// does not act. Removing an item on a guess is how a rollback loses the very key it
+/// was written to protect.
+fn restore_replaced_with(
+    replaced: Option<Replaced>,
+    put_back: &dyn Fn(&str) -> Result<(), WriteFailure>,
+    remove: &dyn Fn() -> Result<(), keyring::Error>,
+) -> RestoreOutcome {
+    match replaced {
+        Some(Replaced::Held(previous)) => match put_back(&previous) {
+            Ok(()) => RestoreOutcome::PutBack,
+            Err(_) => RestoreOutcome::Unavailable,
+        },
+        Some(Replaced::Nothing) => match remove() {
+            Ok(()) | Err(keyring::Error::NoEntry) => RestoreOutcome::Removed,
+            Err(_) => RestoreOutcome::Unavailable,
+        },
+        None => RestoreOutcome::Unavailable,
+    }
 }
 
 /// Webview -> Shell. Delete a provider's stored key (the "Remove" action). A
@@ -822,6 +1040,10 @@ fn delete_provider_key_blocking(provider: &str) -> Result<(), String> {
     // A deliberate removal settles any earlier repair loss: from here on "nothing
     // saved" is the truth, not a wound, and the person must be able to onboard again.
     repair_lost_forget(provider);
+    // It settles the rollback record too. Somebody who has just chosen to remove
+    // their key must not have an older one put back underneath them by a stale
+    // record from a save earlier in the session.
+    replaced_remember(provider, None);
 
     let _os = os_guard();
     // Evict AGAIN under the lock. A read parked at a password dialog holds the lock
@@ -1400,6 +1622,20 @@ mod tests {
     use ed25519_dalek::{Signature, Verifier, VerifyingKey};
     use std::cell::{Cell, RefCell};
 
+    /// The §5.4 question as the boolean it used to be, which is how the tests below
+    /// read best. The shipped path needs the fuller answer as well — what the write
+    /// is about to replace — and gets both from the one call, because they come from
+    /// one read of the item.
+    fn save_would_change_nothing(
+        provider: &str,
+        ledger: &MintLedger,
+        account: &str,
+        entry: &Entry,
+        key: &str,
+    ) -> bool {
+        matches!(save_verdict(provider, ledger, account, entry, key), SaveVerdict::NoChange)
+    }
+
     #[test]
     fn account_is_namespaced_by_provider() {
         assert_eq!(account_for_provider("anthropic"), "provider-key:anthropic");
@@ -1695,6 +1931,108 @@ mod tests {
             self.present.set(value.clone());
             value
         }
+    }
+
+    // --- putting back what a save replaced (docs/KNOWN-GAPS.md, 2026-08-08) ------
+    //
+    // Same seam as the write tests above, for the same reason: the ORDER and the
+    // REFUSALS are the properties, and neither is provable against a real keychain.
+
+    /// Drive `restore_replaced_with` against a `FakeItem`, so a rollback is measured
+    /// by what the OS would hold afterwards rather than by a return value.
+    fn roll_back(item: &FakeItem, replaced: Option<Replaced>) -> RestoreOutcome {
+        restore_replaced_with(
+            replaced,
+            &|previous| item.write(previous),
+            &|| {
+                item.ops.borrow_mut().push("delete");
+                match item.present.take() {
+                    Some(_) => Ok(()),
+                    None => Err(keyring::Error::NoEntry),
+                }
+            },
+        )
+    }
+
+    #[test]
+    fn a_rollback_puts_the_previous_key_back() {
+        // The whole point of the entry. The card saves the new key BEFORE the core
+        // is asked to connect (the contract's ordering, G1), so a failed connect used
+        // to leave the person's working server key overwritten with no way back —
+        // `provider_config` is snapshot-captured and the keychain is not.
+        let item = FakeItem::holding(Some("sk-new"));
+        assert_eq!(roll_back(&item, Some(Replaced::Held("sk-old".into()))), RestoreOutcome::PutBack);
+        assert_eq!(item.stored().as_deref(), Some("sk-old"));
+        // Through the ordinary ladder, not a shortcut: putting a key back is a write,
+        // and a write here is never trusted on a return code.
+        assert_eq!(item.ops(), vec!["delete", "add", "read"]);
+    }
+
+    #[test]
+    fn a_rollback_removes_a_key_that_replaced_nothing() {
+        // The first-ever save for a provider. "Back as it was" means the item is gone
+        // again — leaving a rejected key saved would report a connection the person
+        // does not have.
+        let item = FakeItem::holding(Some("sk-new"));
+        assert_eq!(roll_back(&item, Some(Replaced::Nothing)), RestoreOutcome::Removed);
+        assert_eq!(item.stored(), None);
+    }
+
+    #[test]
+    fn a_rollback_never_guesses_when_addison_could_not_read_what_was_there() {
+        // THE refusal, and the reason the record is an Option rather than a default.
+        // A dismissed password dialog means Addison does not know what it replaced;
+        // deleting on that would destroy the very key the rollback exists to protect,
+        // and it would do it silently. It answers "couldn't" and the caller discloses.
+        let item = FakeItem::holding(Some("sk-new"));
+        assert_eq!(roll_back(&item, None), RestoreOutcome::Unavailable);
+        assert_eq!(item.stored().as_deref(), Some("sk-new"), "a rollback guessed and deleted");
+        assert!(item.ops().is_empty(), "a rollback with nothing recorded still touched the item");
+    }
+
+    #[test]
+    fn a_rollback_that_cannot_write_the_old_key_back_says_so_rather_than_pretending() {
+        // A silent failed rollback is the same defect as the silent clobber: the
+        // person's key is gone and nothing on screen says it. `Unavailable` is what
+        // makes the caller append the disclosure.
+        let item = FakeItem::holding(Some("sk-new"));
+        item.read_back_fails.set(true);
+        assert_eq!(
+            roll_back(&item, Some(Replaced::Held("sk-old".into()))),
+            RestoreOutcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn the_record_is_consumed_so_one_save_gets_one_undo() {
+        // A record that survived its rollback would let a later failure put back a
+        // value the person has since replaced deliberately.
+        replaced_remember("rollback-test-a", Some(Replaced::Held("sk-old".into())));
+        assert_eq!(replaced_take("rollback-test-a"), Some(Replaced::Held("sk-old".into())));
+        assert_eq!(replaced_take("rollback-test-a"), None);
+    }
+
+    #[test]
+    fn an_unknown_previous_state_erases_the_record_rather_than_leaving_it() {
+        // The stale-record direction. Save A (readable, recorded), then save B whose
+        // pre-write read fails: without the erase, a rollback of B would put back A's
+        // predecessor — a key two saves old, over one the person just chose.
+        replaced_remember("rollback-test-b", Some(Replaced::Held("sk-first".into())));
+        replaced_remember("rollback-test-b", None);
+        assert_eq!(replaced_take("rollback-test-b"), None);
+    }
+
+    #[test]
+    fn a_rollback_record_never_leaves_this_process() {
+        // G1, at the boundary this feature added. The Tauri command takes a provider
+        // id and answers a boolean; the recorded VALUE is reachable only from inside
+        // this module, exactly like KEY_CACHE.
+        let signature = item_source("pub async fn restore_replaced_provider_key");
+        assert!(
+            signature.contains("provider: String") && signature.trim_end().ends_with('}')
+                && signature.contains("-> bool"),
+            "the rollback command's shape changed — a key value must never cross it"
+        );
     }
 
     #[test]
@@ -2152,7 +2490,7 @@ mod tests {
         // §5.3 composed with §5.4, and it can only be checked at the source: the real
         // path needs an OS keychain, and `cargo test` must never touch one.
         //
-        // Order is the whole property. `save_would_change_nothing` compares against
+        // Order is the whole property. `save_verdict` compares against
         // what is STORED — a normalised value. Handing it the raw paste makes
         // "sk-same\n" look like a change to "sk-same", and the write that follows is a
         // delete-then-add: the one operation here that can lose somebody's key, run
@@ -2163,7 +2501,7 @@ mod tests {
             .expect("the save path no longer normalises the key at all (§5.3)");
         // The CALL, not the mentions of it in the comments above.
         let compare = body
-            .find("if save_would_change_nothing(")
+            .find("save_verdict(provider,")
             .expect("the unchanged-compare moved — re-point this test");
         assert!(
             normalise < compare,

@@ -288,12 +288,29 @@ twice.
   revoked one would **reinstate** it: a privilege grant delivered by a deliberately
   ungated one-action button. If it is ever captured it must be an **INTERSECT**,
   never a replace.
-- **`LiveDatabaseBlocked` should probably be a `BaseException`.** It subclasses
-  `AssertionError`, so a broad `except Exception` swallows it and
-  `JsonRpcServer._rebuild_into` reports "rebuild failed" instead of naming the
-  guard. The block still HOLDS — nothing is written; what is lost is the loud
-  message, in the one place a loud message is the whole point. Changing it alters
-  every existing handler's behaviour, so it needs its own verification pass.
+- ~~**`LiveDatabaseBlocked` should probably be a `BaseException`.**~~ **CLOSED
+  2026-08-08** (owner decision), with the verification pass this entry asked for.
+  It is a `BaseException` now, so no broad handler can quieten it, and a rebuild it
+  refuses answers with the guard's own sentence instead of `_REBUILD_FAILED` —
+  which said "your saved restore points wouldn't go back in", a false statement
+  about the floor's own storage that also hid the one fixable mistake in play.
+  **The audit was small because the surface is**: `Store.__init__` and
+  `Store._reconnect` are the only two `sqlite3.connect` calls in the tree, so the
+  only broad handlers that can sit between a raise and the top level are the ones
+  around a `Store` construction. Two methods now name it, both in `main.py` —
+  `_worker_loop`, at the startup build AND per dequeued job (a `BaseException` out
+  of a thread's `run()` KILLS it, and a dead worker is the hang §6.5 exists to
+  prevent), and `_recover_from_sidecars`, at the rebuild and at the build that
+  follows it. `_rebuild_into`'s `except Exception` deliberately no
+  longer catches: it was the swallow. `Store`'s own broad handlers all re-raise
+  (including an `except BaseException` that already did), and `_reconnect`'s connect
+  is on a path the same process already opened, so it cannot newly refuse. **The
+  per-job catch is a BELT and is stated as one**: today a build failure
+  short-circuits every job two branches earlier, so nothing can reach
+  `_ensure_built()` from a job and raise — that is a short-circuit, not a
+  guarantee, and the last time this thread was allowed to die every later request
+  hung with no frame at all. Its test reaches the branch by putting the server back
+  into its pre-build state.
 - **`routines/engine.py` — FIVE pre-gate guards each duplicate `on_failure`
   handling.** The unknown-tool refusal, the dev-only guard, the not-callable
   guard, the step-5.5 denylist and the confinement guard each shape their refusal
@@ -387,10 +404,19 @@ against the tree on 2026-07-26:
   needs no input, so it skips the fill step and runs immediately) and B carries
   A's answer under the shared name. Mutation-proven; a first version of the test
   passed under mutation because it ran A to completion first.
-- **Empty-text `sendMessage` has no guard.** `_run_send_message`
-  (`agent_core/rpc/conversation.py`) reads `params.get("text", "")` and never
-  checks it; the CLI does. An empty message persists a blank user turn the
-  rollback doesn't remove. Unreachable through the composer today — decide.
+- ~~**Empty-text `sendMessage` has no guard.**~~ **CLOSED 2026-08-08** (owner
+  decision). `_run_send_message` refuses empty or whitespace-only text — and a
+  non-string `text`, which would otherwise have persisted `str(None)` as somebody's
+  message — before anything is read, cleared or written. It is **the core keeping
+  its own invariant, not a second copy of the composer's rule**: `Composer.tsx`
+  already trims and disables the button, and the CLI skips a blank line, so no
+  shipped caller reaches it. That is exactly why it was missing, and a guard whose
+  only proof is "nothing calls it wrongly" is not a guard. Placed ahead of the
+  pending-pick reset as well, so a refusal cannot silently spend a
+  `setRoleForNextMessage` the person made for the message they are about to write.
+  *(The guard immediately found four tests sending `{"content": ...}` where the
+  wire field is `text` — they had been running whole turns on an empty user
+  message, which is the litter this entry describes.)*
 - **Local-setup pre-flight HTTP runs on the read loop.**
   `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch handler
   and calls `is_running()`, which can block frame delivery up to 5s.
@@ -492,8 +518,9 @@ are here because somebody will meet them, and because anything built on top of
 
 **Opened by steps 4 + 5 — decide these, don't rediscover them:**
 
-- **The webview cannot open an external link, at all.** `main.rs` registers three
-  commands for it (`send_to_core`, `store_provider_key`, `delete_provider_key`);
+- **The webview cannot open an external link, at all.** `main.rs` registers four
+  commands for it (`send_to_core`, `store_provider_key`, `delete_provider_key`,
+  `restore_replaced_provider_key`), and not one of them opens anything;
   `shell.openExternal` is CORE→shell, reachable only by the `open_link` tool, and
   `Markdown.tsx` states the rule as "the webview must never open URLs itself, and
   must never call any `shell.*` IPC method". So every address shown in Settings is
@@ -563,10 +590,35 @@ are here because somebody will meet them, and because anything built on top of
   bridge's 60s ceiling; browse for longer and the timeout is swallowed into
   `{"directory": null}` with no explanation, while every other store RPC queues
   behind the open dialog.
-- **A failed endpoint add still clobbers the keychain**: the card stores the key
-  under `custom` before `confirmAddEndpoint`, so a failed connect leaves the new key
-  overwriting any previous custom-server key, with no rollback and no disclosure.
-  The ordering is contract-mandated and G1 is intact; the undisclosed clobber is not.
+- ~~**A failed endpoint add still clobbers the keychain**~~ — **CLOSED 2026-08-08**
+  (owner decision) **with the rollback, not just the disclosure.** The ordering is
+  unchanged and unchangeable: the key is saved before the connect because the core
+  reads it from the OS at connect time and it may never be a parameter of a core
+  frame (G1). What changed is that the save is now UNDOABLE. `keychain.rs` records
+  what each overwriting save replaced, and a fourth Tauri command
+  (`restore_replaced_provider_key`) puts it back — the previous key rewritten
+  through the ordinary delete-then-add-and-read-back ladder, or the item removed
+  where nothing was saved before.
+  **Why shell-side and not core-side.** The save happens in the shell at the
+  webview's request, so its undo belongs at the same seam; the core learns nothing
+  new, gains no new power, and is not involved at all. The webview sends a provider
+  id and gets back one boolean — no key value crosses in either direction, so G1 is
+  untouched by the new command. It costs no extra OS touch either: the previous
+  value comes from the read the save already performs (`save_verdict`), because a
+  second look would be a second password dialog.
+  **What it deliberately will NOT do, and what remains.** It never guesses. A
+  rollback runs only where the previous state was positively KNOWN — a value read,
+  or a definite "nothing saved". A read that merely FAILED (a dismissed password
+  dialog) records nothing, the rollback answers "couldn't", and **the caller then
+  discloses**: both call sites (the add-a-server card and the Settings connect row,
+  which had the identical clobber for all four providers) append one plain sentence
+  saying the new key replaced the old one and naming the fix. So the disclosure half
+  survives as the floor for the case that cannot be undone. Also left standing,
+  deliberately: after a rolled-back failure the stored `base_url` is the NEW
+  server's while the key is the old one, and `secret_presence` may read `present`
+  when the rollback removed the item — the first is what G3's `add_endpoint`
+  restore point is for, and a stale `present` is the safe direction by design
+  (`Store.record_secret_presence`: it can never reach the relay).
 
 - `draft_message` compose handoff: Rust returns "not available yet" — a real
   discardable-draft mechanism is required by the undo invariant.

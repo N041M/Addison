@@ -1916,3 +1916,42 @@ export async function deleteProviderKey(provider: string): Promise<void> {
   }
   await invoke("delete_provider_key", { provider });
 }
+
+/**
+ * Appended to a failed-connect message when — and only when — the rollback below
+ * could NOT put things back. The clobber itself is contract-mandated (the key is
+ * saved before the connect, because the core reads it from the OS at connect time
+ * and it may never be a parameter of a core frame, G1). An UNDISCLOSED clobber is
+ * not, and this is the floor for the case Addison genuinely cannot undo.
+ */
+export const KEY_REPLACED_NOTICE =
+  "The key you entered replaced the one you had saved before, and Addison couldn't " +
+  "put the old one back. Add it again in Settings if you still need it.";
+
+/**
+ * Undo the last `storeProviderKey` for this provider by putting back whatever it
+ * replaced — for a connect that then failed and made the save pointless.
+ *
+ * Answers whether the keychain is back as it was. `false` means it is NOT, and the
+ * caller must show {@link KEY_REPLACED_NOTICE}: the shell records what a save
+ * replaced only when it positively READ it, so a dismissed password dialog leaves
+ * nothing to put back and it will not guess by deleting an item it never saw
+ * (`keychain.rs`, "PUTTING BACK WHAT A SAVE REPLACED").
+ *
+ * Never throws, and never rejects: every caller is already on a path that is
+ * reporting a failure, and a rollback that threw would replace that failure's own
+ * sentence with its own. It answers `false` instead, which discloses.
+ *
+ * G1: a provider id goes out and a boolean comes back. No key value crosses here in
+ * either direction — the previous key never leaves the Rust process.
+ */
+export async function restoreReplacedProviderKey(provider: string): Promise<boolean> {
+  if (!isEngineConnected()) {
+    return false;
+  }
+  try {
+    return (await invoke("restore_replaced_provider_key", { provider })) === true;
+  } catch {
+    return false;
+  }
+}

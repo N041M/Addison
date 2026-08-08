@@ -12,9 +12,21 @@
 // `endpoint.*` frame (no chat/core frame ever carries it). On "Add server" we
 // store the key first (keychain), then confirmAdd with the base URL only — the
 // key is never a parameter of confirmAddEndpoint.
+//
+// That ordering has a cost, and it is paid here: the key is already saved by the
+// time the connect can fail, sitting on top of whatever was saved for "your own
+// server" before. `provider_config` is snapshot-captured so G3 can put the ADDRESS
+// back; the keychain deliberately is not. So a failed add ROLLS THE KEY BACK
+// (`restoreReplacedProviderKey`) and, where the shell could not, says so plainly
+// instead of leaving somebody's server key quietly replaced.
 
 import { useState } from "react";
-import { ipc, storeProviderKey } from "../ipc/client";
+import {
+  ipc,
+  storeProviderKey,
+  restoreReplacedProviderKey,
+  KEY_REPLACED_NOTICE,
+} from "../ipc/client";
 import type { EndpointProposal } from "../types/ui";
 
 // The custom "your own server" provider id — the ONE OpenAI-compatible endpoint
@@ -39,15 +51,22 @@ export function EndpointProposalCard({ proposal, onDismiss, onAdded }: Props) {
   async function add() {
     setStatus("working");
     setError("");
+    // Whether THIS attempt wrote to the keychain. A rollback is only ever owed for
+    // a save that actually happened — asking for one otherwise would consume the
+    // record left by some earlier save.
+    let stored = false;
     try {
       const trimmed = key.trim();
       // G1: the key goes to the keychain via the Rust command, never a core frame.
-      if (trimmed) await storeProviderKey(ENDPOINT_PROVIDER, trimmed);
+      if (trimmed) {
+        await storeProviderKey(ENDPOINT_PROVIDER, trimmed);
+        stored = true;
+      }
       // The key is NOT a parameter here — only the base URL + the decision cross.
       const res = await ipc.confirmAddEndpoint(proposal.baseUrl, true);
       if (!res.ok) {
         setStatus("error");
-        setError(res.error || ADD_FAILED);
+        setError(await withKeyNotice(res.error || ADD_FAILED, stored));
         return;
       }
       setStatus("idle");
@@ -55,8 +74,18 @@ export function EndpointProposalCard({ proposal, onDismiss, onAdded }: Props) {
       onDismiss();
     } catch {
       setStatus("error");
-      setError(ADD_FAILED);
+      setError(await withKeyNotice(ADD_FAILED, stored));
     }
+  }
+
+  /** The failure's own sentence, plus the disclosure when the key could not be
+   *  put back. Nothing extra to say when the rollback worked: the keychain is
+   *  exactly as the person left it. */
+  async function withKeyNotice(message: string, stored: boolean): Promise<string> {
+    if (!stored) return message;
+    return (await restoreReplacedProviderKey(ENDPOINT_PROVIDER))
+      ? message
+      : `${message} ${KEY_REPLACED_NOTICE}`;
   }
 
   function decline() {
