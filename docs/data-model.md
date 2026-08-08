@@ -207,6 +207,18 @@ erDiagram
   `undo_payload` is the only way back from it, so retention never deletes one; the
   unreverted set is bounded where it is read instead. `docs/addison-engineering-spec.md`
   §4.5 and `docs/phase-3-review-surface-plan.md` prerequisite 3 own that decision.
+  *(2026-08-08, review surface Build §2/§3.)* The table gained **its first index**,
+  `idx_action_snapshots_tool_reverted` on `(tool_id, reverted, created_at)`, because the
+  Developer review surface reads exactly the subset retention no longer collects
+  (`Store.unreverted_snapshots_for_tool`) — a full scan once per click over a set that
+  grows for the life of an install. `write_project_file` rows also carry
+  **`wrote_sha256`** in `undo_payload`: the digest of what Addison put on disk, so the
+  surface can tell a file as Addison left it from one edited since. No migration and no
+  dataclass change — the column is TEXT holding JSON — so a row written before it simply
+  lacks the key and the surface answers "can't tell" rather than guessing. A per-file
+  revert (`agent_core/snapshots/file_revert.py`) settles a whole path's chain of these
+  rows in one UPDATE; it is a third mechanism beside `UndoManager` and `SnapshotManager`
+  and calls neither.
 - **tool_grants** — remembered coarse permission grants keyed by tool, with optional
   tool-specific `scope_details`. *(Phase-2, step 1):* **explicitly excluded from every
   snapshot.** It is live consent state, not configuration. Restoring it would reinstate

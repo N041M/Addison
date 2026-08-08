@@ -24,10 +24,17 @@ prior content exceeds the shell's size bound (would bloat ``action_snapshots``).
 Every effect crosses the Rust shell (§1.3); ``undo()`` gets no ExecutionContext, so
 its bridge is injected at construction and used only by ``undo()`` — mirroring
 ``save_file``.
+
+The snapshot also records ``wrote_sha256`` (Phase-3 review-surface plan Build §2):
+the digest of what Addison put on disk, so the review surface can tell "the file as
+Addison left it" from "the file as somebody has edited it since". Without it, a diff
+would attribute a person's own later work to Addison and Revert would throw it away
+with no warning. See ``snapshots/file_revert.py``, which reads it.
 """
 
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from pathlib import Path
@@ -135,6 +142,17 @@ class WriteProjectFileTool:
                 "path": resolved,
                 "existed": bool(prior.get("existed")),
                 "prior": prior.get("prior"),
+                # WHAT ADDISON LEFT ON DISK, hashed (review-surface plan Build §2).
+                # No migration and no dataclass change — the column is TEXT holding
+                # JSON — so a row written before this key simply lacks it, and the
+                # surface answers "Addison can't tell whether this changed since"
+                # rather than guessing. The shell writes these exact characters as
+                # UTF-8, so this digest is the digest of the file's bytes.
+                #
+                # NEVER read by ``undo()``: undo restores ``prior`` unconditionally,
+                # exactly as it did before this key existed. This is evidence for a
+                # person deciding, not a precondition for putting a file back.
+                "wrote_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
             },
             created_at=int(time.time()),
         )

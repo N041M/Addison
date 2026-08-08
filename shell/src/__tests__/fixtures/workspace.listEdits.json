@@ -1,0 +1,82 @@
+{
+  "edits": [
+    {
+      "path": "/fixture/elsewhere/orphan.txt",
+      "root": null,
+      "relativePath": "/fixture/elsewhere/orphan.txt",
+      "snapshotIds": [
+        "edit-outside"
+      ],
+      "writes": 1,
+      "created": false,
+      "firstWrittenAt": 4102444807,
+      "lastWrittenAt": 4102444807,
+      "revertable": true,
+      "onDiskChanged": false,
+      "missing": false
+    },
+    {
+      "path": "/fixture/project/gone.txt",
+      "root": "/fixture/project",
+      "relativePath": "gone.txt",
+      "snapshotIds": [
+        "edit-gone"
+      ],
+      "writes": 1,
+      "created": true,
+      "firstWrittenAt": 4102444806,
+      "lastWrittenAt": 4102444806,
+      "revertable": true,
+      "onDiskChanged": null,
+      "missing": true
+    },
+    {
+      "path": "/fixture/project/legacy.txt",
+      "root": "/fixture/project",
+      "relativePath": "legacy.txt",
+      "snapshotIds": [
+        "edit-legacy"
+      ],
+      "writes": 1,
+      "created": false,
+      "firstWrittenAt": 4102444805,
+      "lastWrittenAt": 4102444805,
+      "revertable": false,
+      "onDiskChanged": null,
+      "missing": false
+    },
+    {
+      "path": "/fixture/project/notes.md",
+      "root": "/fixture/project",
+      "relativePath": "notes.md",
+      "snapshotIds": [
+        "edit-notes"
+      ],
+      "writes": 1,
+      "created": true,
+      "firstWrittenAt": 4102444804,
+      "lastWrittenAt": 4102444804,
+      "revertable": true,
+      "onDiskChanged": false,
+      "missing": false
+    },
+    {
+      "path": "/fixture/project/src/app.py",
+      "root": "/fixture/project",
+      "relativePath": "src/app.py",
+      "snapshotIds": [
+        "edit-app-3",
+        "edit-app-2",
+        "edit-app-1"
+      ],
+      "writes": 3,
+      "created": false,
+      "firstWrittenAt": 4102444801,
+      "lastWrittenAt": 4102444803,
+      "revertable": true,
+      "onDiskChanged": true,
+      "missing": false
+    }
+  ],
+  "truncated": false
+}

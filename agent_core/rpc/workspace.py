@@ -35,6 +35,7 @@ from agent_core.policy import (
     workspace_trust_allows,
 )
 from agent_core.rpc.base import ServerContext
+from agent_core.snapshots.file_revert import FileEdit
 from agent_core.tools.base import call_is_forbidden
 
 # Frozen plain-language copy (D6, F2). The frontend asserts these bytes.
@@ -74,6 +75,60 @@ _BROWSE_NOT_TRUSTED = (
     "the folder first if you want Addison to see inside it."
 )
 _BROWSE_NO_SHELL = "Addison can't look at your files just now. Please try again."
+# The diff's own refusal (Build §2). Its own sentence rather than the not-trusted one,
+# because it answers a different question: this path may be perfectly inside a folder
+# you trusted and simply be a file Addison has not changed — or one whose change has
+# already been put back.
+_NO_EDIT_TO_SHOW = "Addison hasn't made a change to that file that's still in place."
+
+
+def _relative_to(path: str, root: str | None) -> str:
+    """What the surface shows by default. With no root — the row's trust was revoked
+    between the write and now — the WHOLE path, never a basename: a bare name for a file
+    nobody can place is less useful than the long answer, and the long answer is true."""
+    if not root:
+        return path
+    try:
+        return os.path.relpath(path, root)
+    except ValueError:
+        # Different drives on Windows. The absolute path is always sayable.
+        return path
+
+
+def _diff_payload(edit: FileEdit, *, after: str, truncated: bool) -> dict:
+    """The two panes, worded once — a deleted file takes the same shape as any other
+    diff (BEFORE against nothing), so no caller can tell the two apart by shape and then
+    render them differently."""
+    return {
+        "path": edit.path,
+        "before": edit.before,
+        "after": after,
+        "beforeTruncated": False,
+        "afterTruncated": truncated,
+    }
+
+
+def _disk_state(wrote_sha256: str | None, digest) -> dict:
+    """``onDiskChanged`` + ``missing``, from what Addison recorded and what the shell
+    found. THREE ANSWERS, not two:
+
+      * ``True``  — what is there now is not what Addison wrote. The confirm must warn
+        before a revert replaces it.
+      * ``False`` — the file is byte-for-byte as Addison left it.
+      * ``None``  — Addison CAN'T TELL, and says so. A row written before
+        ``wrote_sha256`` existed, a file the shell could not judge, or no shell at all.
+        Guessing ``False`` here would be the dangerous guess: it is the one that lets a
+        revert throw away somebody's own work without a word.
+
+    A file that is GONE reports ``missing`` and ``onDiskChanged: None``. Its absence is
+    a change, but it is not the change that sentence describes, and the surface has a
+    different thing to say about it."""
+    found = digest if isinstance(digest, dict) else {}
+    missing = bool(found.get("missing"))
+    on_disk = found.get("sha256")
+    if missing or not wrote_sha256 or not isinstance(on_disk, str):
+        return {"onDiskChanged": None, "missing": missing}
+    return {"onDiskChanged": on_disk != wrote_sha256, "missing": False}
 
 
 def is_trusted(resolved_path: str, trusted_roots: list[str], data_dir: str) -> bool:
@@ -366,6 +421,173 @@ class WorkspaceMixin(ServerContext):
             "bytes": int(answer.get("bytes") or len(content.encode("utf-8"))),
             "truncated": bool(answer.get("truncated")),
         }
+
+    # --- the review surface's diff + revert (Phase-3 plan Build §2/§3) ------
+    # THE DATA ALREADY EXISTS. Every ``write_project_file`` snapshot records the bytes
+    # that were there BEFORE it, and the shell refuses to overwrite a binary or oversize
+    # file, so every BEFORE in the table is text and ≤256 KiB. AFTER is the file on disk.
+    # No new capture table, no snapshot-scope change.
+    #
+    # CONFINEMENT IS THE SAME FOUR STEPS, with step 3 substituted and the substitution
+    # stated rather than assumed:
+    #   1. the mode gate — unchanged, and load-bearing for ``listDirectory``'s reason;
+    #   2. resolve ONCE, through the same ``_browse_resolve``;
+    #   3. MEMBERSHIP, not live trust: the resolved path must be one Addison itself
+    #      wrote and has not yet put back. That is a CLOSED SET this process produced,
+    #      which is a narrower thing than "somewhere under a folder you trusted" — the
+    #      raw parameter never reaches disk, only a key that matched a row does.
+    #      Live trust is deliberately NOT the test here, because the plan requires an
+    #      edit whose trust was revoked to stay listed (with ``root: null``) and to stay
+    #      revertable: the shell's undo path has never asked about trust either (its
+    #      ledger is session, not trust), so asking here would produce a surface that
+    #      shows a change, offers to put it back, and refuses to show you what it is.
+    #   4. pass ONLY the resolved value — the group key, never ``params``.
+    # Two batch questions, two SIBLINGS rather than one shared helper taking the method
+    # and the key — the reason ``filesystem.rs`` gives for keeping its two oversize
+    # refusals apart: a function whose entire body is the arguments its callers pass in
+    # is indirection, not reuse. Both answer ``{}`` rather than raising, because
+    # ``revertable`` / ``onDiskChanged`` / ``missing`` are honesty affordances and a
+    # listing that died because one of them could not be computed would be the least
+    # honest outcome available.
+    def _restorable_map(self, paths: list[str]) -> dict:
+        bridge = self._shell_bridge
+        if bridge is None or not paths:
+            return {}
+        try:
+            answer = bridge.can_restore_workspace_files(paths)
+        except RuntimeError:
+            return {}
+        restorable = answer.get("restorable")
+        return restorable if isinstance(restorable, dict) else {}
+
+    def _digest_map(self, paths: list[str]) -> dict:
+        bridge = self._shell_bridge
+        if bridge is None or not paths:
+            return {}
+        try:
+            answer = bridge.digest_workspace_files(paths)
+        except RuntimeError:
+            return {}
+        digests = answer.get("digests")
+        return digests if isinstance(digests, dict) else {}
+
+    def _workspace_list_edits(self) -> dict:
+        """workspace.listEdits {} -> {edits, truncated} | {ok:false, error}.
+
+        METADATA ONLY. The before/after text of twenty edits is megabytes on one JSON
+        line across two process boundaries, for a list whose job is to let somebody pick
+        ONE of them — so the text arrives per file, from ``readEditDiff``.
+
+        Three fields need the shell and none of them may fail the list: ``revertable``
+        (its session write ledger) and ``onDiskChanged`` / ``missing`` (what is on disk
+        now). Both are single batch calls, keyed by path, for the reason ``escapes``
+        reads the trust rows once — a per-file round trip would put two hundred of them
+        behind one click."""
+        self._ensure_built()
+        if self._mode() is not PolicyMode.OPEN:
+            return {"ok": False, "error": _BROWSE_NEEDS_DEVELOPER}
+        pending = self.file_revert_manager.pending_edits()
+        paths = [edit.path for edit in pending.edits]
+        restorable = self._restorable_map(paths)
+        digests = self._digest_map(paths)
+        return {
+            "edits": [
+                self._edit_payload(edit, restorable.get(edit.path), digests.get(edit.path))
+                for edit in pending.edits
+            ],
+            "truncated": pending.truncated,
+        }
+
+    def _edit_payload(self, edit: FileEdit, restorable, digest) -> dict:
+        """One ``Edit`` on the wire. ``relativePath`` is what the UI renders by default;
+        with no root to be relative to (trust revoked between the write and now) it is
+        the whole path, because a bare basename would name a file the person cannot
+        place."""
+        root = self._trusted_root_for(edit.path)
+        return {
+            "path": edit.path,
+            "root": root,
+            "relativePath": _relative_to(edit.path, root),
+            # NEWEST FIRST — the revert chain, in the order the table answered.
+            "snapshotIds": list(edit.snapshot_ids),
+            "writes": edit.writes,
+            "created": edit.created,
+            "firstWrittenAt": edit.first_written_at,
+            "lastWrittenAt": edit.last_written_at,
+            # The SHELL's answer about its own session ledger, never a permission and
+            # never an inference: false here means "Addison cannot put this back", which
+            # after a restart is true of every historic edit.
+            "revertable": bool(restorable),
+            **_disk_state(edit.wrote_sha256, digest),
+        }
+
+    def _workspace_read_edit_diff(self, params: dict) -> dict:
+        """workspace.readEditDiff {path} -> {path, before, after, beforeTruncated,
+        afterTruncated} | {ok:false, error}.
+
+        BEFORE from the database, AFTER from disk. The two panes therefore answer
+        different questions on purpose: the left is what Addison found, the right is
+        what is there NOW — including anything the person has done to it since, which is
+        exactly what ``onDiskChanged`` warns about before a revert throws it away.
+
+        A file that is GONE is a DIFF, not a refusal: BEFORE against nothing, which is
+        exactly what happened to it. The alternative — refusing because the read failed —
+        would withhold the one thing the person can still act on (the earlier text, to
+        copy) precisely when it is the only thing left. The read error is only trusted to
+        mean "gone" when the shell says so through the digest; anything else is a plain
+        sentence, because a diff whose right pane is empty because the shell was
+        unreachable would be a lie in the shape of a deletion.
+
+        ``beforeTruncated`` is always false in this tree and is on the wire anyway. The
+        shell refuses to overwrite a file whose prior exceeds its capture bound, so a
+        stored BEFORE is whole by construction — the field exists so that a later change
+        to that bound cannot make the left pane quietly incomplete with nowhere to say
+        so."""
+        self._ensure_built()
+        if self._mode() is not PolicyMode.OPEN:
+            return {"ok": False, "error": _BROWSE_NEEDS_DEVELOPER}
+        resolved = self._browse_resolve(params.get("path"))
+        if resolved is None:
+            return {"ok": False, "error": _BROWSE_NEEDS_A_FILE}
+        edit = self.file_revert_manager.chain_for(resolved)
+        if edit is None:
+            return {"ok": False, "error": _NO_EDIT_TO_SHOW}
+        bridge = self._shell_bridge
+        if bridge is None:
+            return {"ok": False, "error": _BROWSE_NO_SHELL}
+        try:
+            # The group key, never the parameter — and the viewer's read, not the
+            # tool's: this feeds a person's eyes, so an oversize file is truncated on a
+            # character boundary and said so, never refused.
+            answer = bridge.read_workspace_file_for_view(edit.path)
+        except RuntimeError as exc:
+            if self._digest_map([edit.path]).get(edit.path, {}).get("missing"):
+                return _diff_payload(edit, after="", truncated=False)
+            return {"ok": False, "error": str(exc) or _BROWSE_NO_SHELL}
+        after = answer.get("content")
+        if not isinstance(after, str):
+            return {"ok": False, "error": _BROWSE_NO_SHELL}
+        return _diff_payload(edit, after=after, truncated=bool(answer.get("truncated")))
+
+    def _workspace_revert_file(self, params: dict) -> dict:
+        """workspace.revertFile {path} -> {ok, path, detail} | {ok:false, error}.
+
+        The WHOLE unreverted chain for that path, in one write, to a state that actually
+        existed on disk — ``snapshots/file_revert.py`` owns the semantics and the reason
+        it is a third mechanism rather than a use of ``UndoManager``.
+
+        Running on the worker thread is what serialises this behind an in-flight turn:
+        no extra locking, because the queue already is one."""
+        self._ensure_built()
+        if self._mode() is not PolicyMode.OPEN:
+            return {"ok": False, "error": _BROWSE_NEEDS_DEVELOPER}
+        resolved = self._browse_resolve(params.get("path"))
+        if resolved is None:
+            return {"ok": False, "error": _BROWSE_NEEDS_A_FILE}
+        result = self.file_revert_manager.revert_path(resolved)
+        if not result.ok:
+            return {"ok": False, "error": result.detail}
+        return {"ok": True, "path": result.path, "detail": result.detail}
 
     def _workspace_revoke(self, params: dict) -> dict:
         """workspace.revokeTrust {directory} -> {ok}. Revoking only tightens, so no

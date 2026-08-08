@@ -76,17 +76,45 @@ answered where they live, the design mapping for a code surface is the last sect
 **§13c**. A `phase-3-includes-the-review-surface` row in `tests/doc_claims.py` now
 fails the suite on the sixth document to define Phase 3 as packaging alone.
 
-**Build §1 landed on 2026-08-08 — start at the plan's Build §2** (the diff, from data
-that already exists). §1 shipped the read paths: `workspace.listDirectory` and
+**Build §1, §2 and §3 landed on 2026-08-08 — start at the plan's Build §4** (the screen
+itself: the third `screen` value, the tree, the Monaco panes, and the disable-while-working
+rule §3 deliberately left to it). §1 shipped the read paths: `workspace.listDirectory` and
 `workspace.readFile` as RPC and never registry tools, two Rust bridge methods beside
 the step-5 block, and the four-step confinement order (mode gate, resolve once,
 trusted-root check, pass only the resolved value). The plan's §1 now carries what
-shipped and the decisions taken while building it; the two worth knowing before §2 are
+shipped and the decisions taken while building it; the two worth knowing are
 that a refusal answers `{ok: false, error}` while a success carries no `ok` at all, and
 that these paths are **absolute-only** — `realpath` would otherwise quietly complete a
-relative path against the core process's working directory. There is no frontend
-consumer yet, on purpose: §1 shipped the TypeScript types and the generated fixtures so
-§4 has something to parse against.
+relative path against the core process's working directory. There is still no frontend
+consumer, on purpose: each section ships the TypeScript types and the generated fixtures
+so §4 has something to parse against.
+
+**§2 and §3 shipped the data and the sharp edge.** `workspace.listEdits` (metadata only)
+`/readEditDiff` / `revertFile`, a `wrote_sha256` on every write's undo payload, and a
+THIRD revert mechanism in `agent_core/snapshots/file_revert.py` — per-path,
+out-of-order, chain-collapsing, `write_project_file`-only, beside `UndoManager` and
+`SnapshotManager` and calling neither. Four things to know before §4:
+
+- **Reverting a file settles its WHOLE unreverted chain in one write**, landing on the
+  oldest prior — a state that actually existed — so zero unreverted rows remain and the
+  undo button cannot resurrect what was reverted away from. The diff's BEFORE pane is
+  that same oldest prior, so Revert produces exactly what is on screen.
+- **`onDiskChanged` is tri-state.** `null` means Addison cannot tell (a row from before
+  the digest, or a file the shell cannot judge) and must render as that: `false` is the
+  value that lets a revert proceed with no warning.
+- **`revertable` is the shell's answer about its SESSION write ledger**, asked through a
+  new pure query (`shell.canRestoreWorkspaceFiles`) with no filesystem effect. After a
+  restart it is false for every historic edit, and §4 must render those read-only with
+  the plan's plain line rather than a button that fails. `undo.undoLastAction` now has
+  the same honesty, asked the same way, and marks nothing when the answer is no.
+- **One new Rust method beyond the plan's list: `shell.digestWorkspaceFiles`.** The core
+  has no filesystem of its own, and hashing each file core-side would ship the megabytes
+  `listEdits` is metadata-only to avoid. Both new shell methods are batches answering a
+  MAP keyed by path — never an array positioned against the request.
+
+`action_snapshots` also got **its first index** (`idx_action_snapshots_tool_reverted`), a
+line in `schema.sql`'s index block, because retention now collects reverted rows only and
+the surface's query reads precisely the subset nothing bounds.
 
 **And the name race closed with it** (KNOWN-GAPS): the card, the Activity Panel, the
 audit row and the effect now come from ONE resolution per call. A path-bounded tool

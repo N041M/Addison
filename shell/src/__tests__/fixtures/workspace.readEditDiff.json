@@ -1,0 +1,7 @@
+{
+  "path": "/fixture/project/src/app.py",
+  "before": "def main():\n    pass\n",
+  "after": "def main():\n    return 1  # my own tweak\n",
+  "beforeTruncated": false,
+  "afterTruncated": false
+}

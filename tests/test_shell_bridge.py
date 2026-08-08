@@ -228,6 +228,13 @@ _BRIDGE_CALLS = (
     # exactly what the default budget is for.
     ("list_workspace_directory", ("/tmp/project",)),
     ("read_workspace_file_for_view", ("/tmp/project/a.py",)),
+    # The review surface's revert half (Build §2/§3). DEFAULT budget for the same
+    # reason, and these two are bounded harder than anything above: the first reads
+    # NOTHING (a set lookup per path) and the second reads only as far as a 256 KiB
+    # ceiling per file, for a list the core itself caps at 200. A minute of silence
+    # from either is a wedged shell, not a slow answer.
+    ("can_restore_workspace_files", (["/tmp/project/a.py"],)),
+    ("digest_workspace_files", (["/tmp/project/a.py"],)),
 )
 
 # The one call whose budget is neither the default nor the person-paced one: a

@@ -506,6 +506,27 @@ CREATE INDEX IF NOT EXISTS idx_config_snapshots_verified_created
     ON config_snapshots(verified_working, created_at);
 CREATE INDEX IF NOT EXISTS idx_tool_audit_created
     ON tool_audit(created_at);
+-- Backs the Developer review surface's read (Store.unreverted_snapshots_for_tool,
+-- phase-3 plan Build §2): `WHERE tool_id = ? AND reverted = 0 ORDER BY created_at
+-- DESC`. THE FIRST INDEX THIS TABLE HAS EVER HAD, and it is owed to a decision taken
+-- on 2026-08-08 rather than to the new query alone: retention now deletes REVERTED
+-- rows only, so the unreverted subset — the exact subset this filter selects — is
+-- bounded by nothing and grows for the life of an install. A full scan of it once per
+-- click was fine while nothing scanned it and is not fine now.
+--
+-- Column order is the query's: the two equalities first, then the sort column, so
+-- SQLite walks the index backwards and needs no temp B-tree for the ORDER BY. The
+-- `rowid DESC` tiebreaker rides along for free — it is the index's own row order
+-- within an equal `created_at`.
+--
+-- NO MIGRATION STEP, deliberately: this script is `executescript`-ed on EVERY open
+-- (Store._apply_schema), fresh database and existing one alike, and every statement
+-- in this section is IF NOT EXISTS. An index is derived data — it holds no row that
+-- is not already in the table — so creating one on open is complete and repeatable,
+-- which is exactly the case where the repo's heavier idioms (_add_column_if_missing,
+-- the tool_audit rebuild) would be ceremony around a statement that is already safe.
+CREATE INDEX IF NOT EXISTS idx_action_snapshots_tool_reverted
+    ON action_snapshots(tool_id, reverted, created_at);
 
 -- Provider attempts that FAILED (2026-08-07). The mirror of tool_audit for the
 -- other decision Addison makes on a person's behalf: which model answers.

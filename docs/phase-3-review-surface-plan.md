@@ -1,12 +1,11 @@
 # Phase 3 — The Review Surface: a bespoke IDE for the Developer/OPEN profile
 
-**Status:** PLAN, approved 2026-07-25. Not started — but **UNBLOCKED as of
-2026-08-07**: all three prerequisites have landed (step 6 widget capability tiers
-and step 7 the MCP client on 2026-08-06/07, and step 8 the automation keyword gate
-on 2026-08-07, all four of its phases). Nothing is waiting on anything now; the
-surface waits only on somebody starting it. **The three fixes listed under
-"Prerequisites" below are also all closed as of 2026-08-08** — the resolved permission
-detail, the read ceiling, and the prune wiring, each in its own PR.
+**Status:** PLAN, approved 2026-07-25. **IN PROGRESS — Build §1, §2 and §3 are built
+(2026-08-08); §4 (the screen) and §5 (the Monaco skin) remain.** Everything it waited on
+has landed: the three sequencing prerequisites (step 6 widget capability tiers and step 7
+the MCP client on 2026-08-06/07, step 8's four phases on 2026-08-07) and the three fixes
+listed under "Prerequisites" below, each in its own PR on 2026-08-08 — the resolved
+permission detail, the read ceiling, and the prune wiring.
 [`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
 
 > **This redefines what "Phase 3" means.** Before this plan, Phase 3 meant packaging /
@@ -373,7 +372,7 @@ decisions that were not already written down, each stated at the code as well:
 types and the generated fixtures so §4 has something to parse against), no `listEdits`,
 no diff, no revert, no CSP change.
 
-### 2. The diff — from data that already exists
+### 2. The diff — from data that already exists — **BUILT 2026-08-08**
 
 Verified: `write_project_file.py:127` already records
 `undo_payload = {"path", "existed", "prior"}`. The BEFORE state is in the database for
@@ -419,7 +418,58 @@ Group by `os.path.normpath(os.path.realpath(path))` **without casefold** — do 
 `policy._canonical`; HANDOFF already flags its unconditional casefold, and here it would
 merge two genuinely different files into one revert target.
 
-### 3. Per-file revert — the sharp edge
+#### What shipped, and the decisions taken while building it
+
+Everything above, as written: `wrote_sha256` on the write's `undo_payload` (no migration,
+no dataclass change), both handlers on `WorkspaceMixin`, the `Edit` field list, the
+filesystem-not-conversation scope with `_MAX_EDITS = 200`, revoked-trust rows still listed
+with `root: null`, the N-writes collapse, and the casefold-free grouping key
+(`file_revert.revert_key`, which says at the code why `policy._canonical` is not it). The
+decisions that were not already written down:
+
+- **The mode gate applies to all three methods, and `readEditDiff`'s disk read is
+  confined by MEMBERSHIP rather than by live trust.** §1's four steps hold with step 3
+  substituted, and the substitution is stronger where it matters: the resolved parameter
+  must MATCH the group key of an unreverted `write_project_file` chain, so the only paths
+  that ever reach the filesystem are ones Addison itself wrote and has not yet put back —
+  a closed set this process produced, not "anywhere under a folder you trusted". Live
+  trust is deliberately NOT the test, because the plan requires a revoked-trust edit to
+  stay listed and (per the shell's session ledger, which never asked about trust either)
+  stay revertable; asking here would have produced a surface that shows a change, offers
+  to put it back, and refuses to show you what it is. The shell keeps its own data-dir
+  floor underneath, as always.
+- **A NEW shell method, `shell.digestWorkspaceFiles`, because the plan's own reasoning
+  requires one.** `onDiskChanged` needs the bytes on disk, and the core has no filesystem
+  of its own (§1.3). Reading each file back across the bridge to hash it core-side would
+  ship exactly the megabytes `listEdits` is metadata-only to avoid — and then discard
+  them. So the hashing happens where the bytes already are and 64 characters cross the
+  seam. One batch call for the whole list, keyed by path, with its own ceiling
+  (`DIGEST_SIZE_BOUND`) and `sha256: null` for anything it cannot judge.
+- **A batch answer is a MAP keyed by path, never an array positioned against the request.**
+  Both new shell methods. An array couples two processes to an ordering, and the failure
+  when they stop agreeing is silent and precisely wrong: a Revert offered for a file that
+  cannot take one. A key that is absent reads as the cautious answer on the core side.
+- **`onDiskChanged` is TRI-STATE and `missing` is separate.** `null` is a real answer —
+  an old row, a file the shell cannot judge, or no shell at all — and collapsing it into
+  `false` is the one wrong reading that lets a revert discard somebody's own work
+  silently. A file that is GONE reports `missing` with `onDiskChanged: null`: its absence
+  is a change, but not the change that sentence describes.
+- **Neither shell question may fail the listing.** They answer `{}` on a refusal, and the
+  row degrades to "not revertable / can't tell". A review surface that goes blank because
+  one auxiliary answer failed is the least honest outcome available.
+- **`beforeTruncated` is always `false` in this tree** and ships anyway. A stored BEFORE
+  is whole by construction (the shell refuses to overwrite a file whose prior exceeds its
+  capture bound), so the field exists only so that moving that bound cannot make the left
+  pane quietly incomplete with nowhere to say so.
+- **`relativePath` falls back to the WHOLE path when there is no root** (trust revoked
+  between the write and now). A bare basename for a file nobody can place is less useful
+  than the long answer, and the long answer is true.
+- **The index is a line in `schema.sql`'s index block**, which `executescript` runs on
+  every open — the repo's existing evolution path for an index, and complete for one,
+  since an index holds no row that is not already in the table. `EXPLAIN QUERY PLAN` in a
+  test proves the query uses it and needs no temp B-tree for the ORDER BY.
+
+### 3. Per-file revert — the sharp edge — **BUILT 2026-08-08**
 
 `UndoManager.undo_last(n)` is LIFO. "Revert this file" is out-of-order, and out-of-order
 against a LIFO stack is where this goes wrong.
@@ -507,6 +557,47 @@ Wire `workspace.revertFile` through `_WORKSPACE_JOBS` + `_worker_loop`; build
 `FileRevertManager` in `_ensure_built` beside `UndoManager`; declare it on `ServerContext`.
 Running on the worker means revert automatically serialises behind an in-flight turn — no
 extra locking needed. Disable Revert while `turn.isWorking` anyway, for honesty.
+
+#### What shipped, and the decisions taken while building it
+
+Everything above: `agent_core/snapshots/file_revert.py` with frozen `FileEdit` /
+`FileRevertResult` dataclasses, the whole-chain semantics, compute-once-write-once,
+write-first-mark-second, the no-hunk-revert decision in the docstring, the two store
+methods (`mark_snapshots_reverted` one statement and one commit), the pure
+`shell.canRestoreWorkspaceFiles` query, the worker wiring, and `undo.undoLastAction`'s
+matching honesty. The decisions that were not already written down:
+
+- **The manager holds a store and a bridge and nothing else.** No registry, no
+  `UndoManager`, no policy — so the redo stack is not reachable from it even by accident.
+  That makes the plan's "never touch `_redo_stack`" structural rather than a rule someone
+  has to remember, and it moves the only place the rule CAN be broken to the RPC handler,
+  where both objects are in scope. The test therefore drives the RPC, not the manager: a
+  manager-level test survived the mutation ("clear the redo stack so the UI is
+  consistent") that a handler-level one kills.
+- **ONE window (`_MAX_EDITS = 200` rows) for the list, the diff and the revert**, so the
+  three cannot disagree about where a chain begins — a diff whose BEFORE is not what
+  Revert produces would be worse than no diff. The plan's cap is on ROWS, which is the
+  conservative reading, and a window can therefore cut a long chain. That is safe in the
+  one direction that matters and the module says why: rows arrive newest-first, so a row
+  outside the window is strictly OLDER than every row inside it — the revert still lands
+  on a real earlier state, and any leftovers can only move the file FURTHER BACK, never
+  forward. Forward is the resurrection this design exists to prevent.
+- **A failed MARK answers `ok: false` with its own sentence** ("Addison put the file back,
+  but couldn't update its own record of the change…"). The file genuinely is back, so the
+  sentence says so; the rows genuinely still claim otherwise, so it is not a success. Re-
+  reverting recomputes the same target and writes the same bytes, and the test drives
+  exactly that convergence.
+- **`undo.undoLastAction` ASKS before it attempts.** If the next unreverted row is a
+  `write_project_file` edit the shell's ledger no longer holds, it answers a plain
+  sentence and marks nothing — no failed write, no consumed row, so the review surface can
+  still show the earlier version. Scoped to that one tool, because it is the one ledger
+  there is a pure query for: `save_file`'s undo has a session ledger of its own with no
+  such query, and it keeps today's failure rather than being given a guess about a
+  mechanism this code did not ask. Stated at the code.
+- **The refusals are two sentences, not one.** "Addison hasn't made a change to that file
+  that's still in place" (the diff) and "Addison has no change of its own to put back for
+  that file" (the revert). Neither is the not-trusted sentence, because neither is that
+  situation: the folder may be perfectly trusted and the file simply untouched.
 
 ### 4. Frontend
 
@@ -645,7 +736,8 @@ test added, name the mutation it kills"*):
 | `revertable: false` after a simulated empty ledger | The dead-button regression. |
 | Monaco theme: set `--hl-*` explicitly on `document.documentElement.style`, assert dark ≠ light | The fallback silently swallowing an empty `getPropertyValue`. |
 | A generated fixture in `tests/ipc_fixtures.py` for **every** new payload | The `roots`/`folders` incident — both suites green, wire mismatch shipped. |
-| `shell.listWorkspaceDirectory` / `readWorkspaceFileForView` / `canRestoreWorkspaceFiles` added to `ipc.rs::tests::rejects_shell_methods_from_the_webview` | The webview reaching the shell directly. |
+| `shell.listWorkspaceDirectory` / `readWorkspaceFileForView` / `canRestoreWorkspaceFiles` / `digestWorkspaceFiles` added to `ipc.rs::tests::rejects_shell_methods_from_the_webview` | The webview reaching the shell directly. |
+| `EXPLAIN QUERY PLAN` over `unreverted_snapshots_for_tool`'s exact query | `action_snapshots` — which retention no longer bounds for unreverted rows — being full-scanned once per click. |
 
 **Not to build** (`docs/test-hardening-plan.md` §5): no DOM snapshot tests, no jsdom
 assertions about dark mode, no WebDriver/Playwright harness over the packaged app.

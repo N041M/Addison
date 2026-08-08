@@ -24,6 +24,7 @@ token totals are byte-stable no matter when the fixtures are regenerated.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -39,7 +40,7 @@ from agent_core.secret_presence import SecretPresence
 from agent_core.snapshots.model import ConfigSnapshot
 from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
-from agent_core.tools.base import call_permission_detail
+from agent_core.tools.base import ActionSnapshot, call_permission_detail
 from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 
@@ -334,6 +335,9 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "workspace.list": _workspace_list_fixture(server),
         "workspace.listDirectory": _workspace_list_directory_fixture(server),
         "workspace.readFile": _workspace_read_file_fixture(server),
+        "workspace.listEdits": _workspace_list_edits_fixture(server),
+        "workspace.readEditDiff": _workspace_read_edit_diff_fixture(server),
+        "workspace.revertFile": _workspace_revert_file_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
         "automation.list": _automation_list_fixture(server),
         # The same method in the OTHER profile. Not a method name — the only fixture
@@ -431,6 +435,174 @@ def _workspace_read_file_fixture(server: JsonRpcServer) -> dict:
         server,
         "/fixture/project",
         lambda: server._workspace_read_file({"path": "/fixture/project/README.md"}),
+    )
+
+
+# --- the review surface's diff + revert (Phase-3 plan Build §2/§3) -----------
+#
+# The paths are fixed literals under a root that is not a real directory, exactly as
+# the read-path fixtures are: byte-stable, and nobody's home folder in a committed
+# file. Nothing here touches a disk — the shell's half is a fake, and what these files
+# pin is the CORE's payload, which is where every derived field is computed.
+
+_EDIT_ROOT = "/fixture/project"
+_EDIT_APP = f"{_EDIT_ROOT}/src/app.py"
+_EDIT_NOTES = f"{_EDIT_ROOT}/notes.md"
+_EDIT_LEGACY = f"{_EDIT_ROOT}/legacy.txt"
+_EDIT_GONE = f"{_EDIT_ROOT}/gone.txt"
+_EDIT_OUTSIDE = "/fixture/elsewhere/orphan.txt"
+
+_APP_BEFORE = "def main():\n    pass\n"
+_APP_WROTE = "def main():\n    return 1\n"
+_APP_ON_DISK = "def main():\n    return 1  # my own tweak\n"
+_NOTES_WROTE = "# Notes\n"
+_GONE_WROTE = "temporary\n"
+_OUTSIDE_BEFORE = "old\n"
+_OUTSIDE_WROTE = "new\n"
+
+
+def _sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+class _FixtureEditBridge:
+    """The shell's half of the three questions the diff and the list ask it.
+
+    A fake because there is no shell in this process and no files on disk — and the
+    payload that matters is the CORE's, which computes `root`, `relativePath`,
+    `onDiskChanged` and `missing` from what these answers say."""
+
+    def can_restore_workspace_files(self, paths: list[str]) -> dict:
+        # Everything except the legacy row, which stands in for the RESTART case: an
+        # edit the database remembers perfectly and the session ledger does not.
+        return {"restorable": {path: path != _EDIT_LEGACY for path in paths}}
+
+    def digest_workspace_files(self, paths: list[str]) -> dict:
+        answers = {
+            # Edited by the person since Addison wrote it -> onDiskChanged true.
+            _EDIT_APP: {"sha256": _sha(_APP_ON_DISK), "missing": False},
+            # Byte-for-byte as Addison left it -> false.
+            _EDIT_NOTES: {"sha256": _sha(_NOTES_WROTE), "missing": False},
+            # A digest the row has nothing to compare against -> null, not false.
+            _EDIT_LEGACY: {"sha256": _sha("whatever is there now\n"), "missing": False},
+            _EDIT_GONE: {"sha256": None, "missing": True},
+            _EDIT_OUTSIDE: {"sha256": _sha(_OUTSIDE_WROTE), "missing": False},
+        }
+        return {"digests": {path: answers[path] for path in paths}}
+
+    def read_workspace_file_for_view(self, path: str) -> dict:
+        content = _APP_ON_DISK if path == _EDIT_APP else ""
+        return {
+            "content": content,
+            "bytes": len(content.encode("utf-8")),
+            "truncated": False,
+        }
+
+    def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        # The revert fixture's write. Nothing to do — there is no disk in this process
+        # — and the payload being pinned is what the CORE says afterwards.
+        return None
+
+
+def _with_edit_rows(server: JsonRpcServer, call):
+    """Five unreverted `write_project_file` snapshots, a trusted root and a fake shell —
+    then everything back exactly as it was, so the fixtures after this one are
+    unaffected (`automation.list.simple`'s pattern, for its reason).
+
+    FIVE ROWS ACROSS FIVE FILES and one of them written three times, because the shape
+    is not one shape and every difference below is one the frontend renders
+    differently:
+
+      * `src/app.py` — THREE writes collapsed into one edit, and changed on disk since;
+      * `notes.md` — CREATED by Addison (empty before pane, Revert removes it);
+      * `legacy.txt` — a row from before `wrote_sha256` existed AND one the shell can no
+        longer put back: `onDiskChanged: null` and `revertable: false`, the two honest
+        unknowns, which a fixture of only happy rows would let a parser drop;
+      * `gone.txt` — the file is not there any more;
+      * `/fixture/elsewhere/orphan.txt` — outside every trusted root, so `root` is null
+        and `relativePath` is the whole path. Trust was revoked after the edit; the plan
+        requires the row to stay listed anyway, and a payload where `root` is always a
+        string would let the other side type it that way."""
+    rows = [
+        # (id, path, existed, prior, wrote_sha256, created_at)
+        ("edit-app-1", _EDIT_APP, True, _APP_BEFORE, _sha("def main():\n    ...\n"), _T0 + 1),
+        ("edit-app-2", _EDIT_APP, True, "def main():\n    ...\n", _sha("interim\n"), _T0 + 2),
+        ("edit-app-3", _EDIT_APP, True, "interim\n", _sha(_APP_WROTE), _T0 + 3),
+        ("edit-notes", _EDIT_NOTES, False, None, _sha(_NOTES_WROTE), _T0 + 4),
+        ("edit-legacy", _EDIT_LEGACY, True, "the older text\n", None, _T0 + 5),
+        ("edit-gone", _EDIT_GONE, False, None, _sha(_GONE_WROTE), _T0 + 6),
+        ("edit-outside", _EDIT_OUTSIDE, True, _OUTSIDE_BEFORE, _sha(_OUTSIDE_WROTE), _T0 + 7),
+    ]
+    for row_id, path, existed, prior, digest, created_at in rows:
+        payload: dict = {"path": path, "existed": existed, "prior": prior}
+        # ABSENT, never null, for the legacy row: that is what a row written before the
+        # key existed actually looks like in the column, and "missing key" is the state
+        # the three-valued answer is derived from.
+        if digest is not None:
+            payload["wrote_sha256"] = digest
+        server.store.insert_action_snapshot(
+            ActionSnapshot(
+                id=row_id,
+                tool_call_id=f"call-{row_id}",
+                tool_id="write_project_file",
+                undo_payload=payload,
+                created_at=created_at,
+            )
+        )
+    previous = server._shell_bridge
+    server._shell_bridge = _FixtureEditBridge()  # type: ignore[assignment]
+    # The manager holds its own reference, taken once at build time (main.py never
+    # reassigns `_shell_bridge` after construction, so that is fresh in the app). A
+    # fixture that swaps the server's bridge underneath a built manager has to swap
+    # both, or the revert half would still be talking to the previous one.
+    server.file_revert_manager._shell_bridge = server._shell_bridge  # type: ignore[assignment]
+    server.store.insert_workspace_trust(root=_EDIT_ROOT, granted_at=_T0)
+    try:
+        return call()
+    finally:
+        server.store.delete_workspace_trust(_EDIT_ROOT)
+        server._shell_bridge = previous
+        server.file_revert_manager._shell_bridge = previous  # type: ignore[assignment]
+        for row_id, *_rest in rows:
+            server.store._conn.execute("DELETE FROM action_snapshots WHERE id = ?", (row_id,))
+        server.store._conn.commit()
+
+
+def _workspace_list_edits_fixture(server: JsonRpcServer) -> dict:
+    """A `workspace.listEdits` payload (Build §2) — METADATA ONLY.
+
+    No before/after text is in here and none should be: the whole reason this method is
+    separate from `readEditDiff` is that a twenty-file turn's text is megabytes on one
+    line. A fixture that carried it would make that mistake permanent by pinning it."""
+    return _with_edit_rows(server, server._workspace_list_edits)
+
+
+def _workspace_read_edit_diff_fixture(server: JsonRpcServer) -> dict:
+    """A `workspace.readEditDiff` payload (Build §2) — the two panes for ONE file.
+
+    `src/app.py`, the three-write row: BEFORE is the prior of the OLDEST of the three
+    (where a revert lands, and what the person is therefore looking at when they press
+    it), never the prior of the newest. Reading it off the wrong end of the chain is
+    the single most likely way for this feature to be quietly wrong, and it is why the
+    seed has three writes rather than one."""
+    return _with_edit_rows(
+        server, lambda: server._workspace_read_edit_diff({"path": _EDIT_APP})
+    )
+
+
+def _workspace_revert_file_fixture(server: JsonRpcServer) -> dict:
+    """A `workspace.revertFile` answer (Build §3) — the SUCCESS shape.
+
+    Produced by actually reverting the three-write chain through the real handler, so
+    the sentence in `detail` is the one the app renders and not a copy of it. It names
+    the file (never the full path, the rule every tool label follows) and says which of
+    the two things happened — put back, or removed because Addison had created it.
+
+    A refusal is `{ok: false, error}` and is pinned in pytest rather than here: it needs
+    no fixture to be unambiguous, and a second file for it would pin the ABSENCE of
+    `path`/`detail` as though that were a shape somebody could parse wrong."""
+    return _with_edit_rows(
+        server, lambda: server._workspace_revert_file({"path": _EDIT_APP})
     )
 
 
