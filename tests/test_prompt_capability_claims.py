@@ -39,6 +39,7 @@ import re
 from agent_core.main import build_registry, load_primary_prompt, load_setup_prompt
 from agent_core.policy import PolicyMode
 from agent_core.widgets import STAT_SOURCES, WIDGET_KINDS, validate_widget_spec
+from tests import doc_claims
 from tests.gate_precision import assert_silent
 
 # One minimal VALID spec per kind, so SAFE-legality is asked of `validate_widget_spec`
@@ -564,3 +565,86 @@ def test_the_kind_bookkeeping_accepts_a_kind_that_was_added_properly():
         "the kind bookkeeping rejects a kind added to all three places at once — a "
         "forcing function that cannot be satisfied gets deleted instead of obeyed"
     )
+
+
+# ---------------------------------------------------------------------------
+# The descriptions the MODEL reads must be true, not merely quiet
+# ---------------------------------------------------------------------------
+# Everything above asks whether the prompt's gates stay SILENT on the honest copy a
+# tool carries. Nothing asked whether that copy is CORRECT — and on 2026-08-08 a QA
+# pass found the cost: `create_automation` still told the model "turning it on isn't
+# built yet", eleven days after arming shipped. Asked for a scheduled automation in
+# Developer, Addison read its own tool, believed the feature was half-finished, and
+# offered to write a cron script instead. The registry was right, the profile gate was
+# right, `primary.txt` was right, and the app could not do the thing anyway.
+#
+# `doc_claims` swept nine sentences across seven files when `AUTOMATION_ARMING_BUILT`
+# flipped, and could not reach this one: that registry scans `.md`. A tool description
+# is the most load-bearing prose in the repo — it is the only text that decides what
+# the app will DO for somebody — so it answers to the same constant here.
+
+
+def test_no_tool_tells_the_model_that_arming_was_never_built():
+    """The model-facing half of `doc_claims.AUTOMATION_ARMING_BUILT`.
+
+    Every registered description, in both modes, is read for the phrasings that were
+    true through step 8 phase 2 and false after phase 3. This is deliberately about
+    what a tool says of ADDISON'S OWN ability, not about what it promises a person:
+    "Addison never switches one on by itself" is true and must stay sayable, because it
+    is the G2 floor said out loud. What may not survive is a sentence saying the
+    switching-on does not exist.
+
+    Mutation: restore `create_automation`'s "turning it on isn't built yet" — this
+    fails, naming the tool.
+    """
+    assert doc_claims.AUTOMATION_ARMING_BUILT, (
+        "arming has been withdrawn — flip this test's expectation with the constant, "
+        "and put the tools' descriptions back in the same commit"
+    )
+    unbuilt = re.compile(
+        r"(?:turning it on|switching it on|arming)[^.]{0,40}?"
+        r"(?:isn't|is not|has not been|hasn't been)\s+(?:built|added|made)"
+        r"|(?:no|never a)\s+way to (?:turn|switch) (?:it|one|them) on"
+        r"|(?:turn|switch)(?:ing)? (?:it|one|them) on[^.]{0,30}?(?:comes later|is not built)",
+        re.IGNORECASE,
+    )
+    offenders = []
+    for mode in (PolicyMode.SAFE, PolicyMode.OPEN):
+        for tool in build_registry().visible_tools(mode):
+            if unbuilt.search(tool.description):
+                offenders.append(f"{tool.id} ({mode.value})")
+    assert not offenders, (
+        f"these tools tell the model arming was never built: {sorted(set(offenders))}. "
+        "It shipped in step 8 phase 3 (arm_automation, behind a typed per-automation "
+        "code). A description is what the model reads to decide whether it can help, "
+        "so a stale one makes a shipped feature unreachable — which is exactly how "
+        "this test came to exist."
+    )
+
+
+def test_that_check_still_lets_a_tool_say_addison_never_arms_anything_itself():
+    """The precision half, and it is the whole reason the pattern is shaped the way it
+    is. G2 said out loud — "Addison can never do this on its own" — is the sentence
+    `arm_automation` actually carries, and a check that flagged it would be asking the
+    honest copy to get worse.
+    """
+    arm = next(
+        d for d in build_registry().visible_tools(PolicyMode.OPEN) if d.id == "arm_automation"
+    )
+    assert "never do this on its own" in arm.description, (
+        "arm_automation no longer says Addison cannot arm on its own — that is the "
+        "sample this precision check rests on"
+    )
+    unbuilt = re.compile(
+        r"(?:turning it on|switching it on|arming)[^.]{0,40}?"
+        r"(?:isn't|is not|has not been|hasn't been)\s+(?:built|added|made)",
+        re.IGNORECASE,
+    )
+    for label, honest in {
+        "the real arm_automation description": arm.description,
+        "the floor said plainly": "Addison never switches one on by itself.",
+        "a person-does-it sentence": (
+            "Switching it on is a separate step the person takes, with a typed code."
+        ),
+    }.items():
+        assert not unbuilt.search(honest), f"the check flags honest copy: {label}"

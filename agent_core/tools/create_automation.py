@@ -168,9 +168,10 @@ class CreateAutomationTool:
         label="Set up an automation",
         description=(
             "Writes down something for this computer to run on a schedule — what to "
-            "run and when — and saves it as a draft. Nothing runs and nothing is "
-            "switched on: Addison writes the automation, and turning it on isn't "
-            "built yet. Available only in the Developer profile."
+            "run and when — and saves it as a draft. Writing one down does not start "
+            "it: switching it on is a separate step the person takes, where they are "
+            "shown exactly what will run and type a short code to confirm. Addison "
+            "never switches one on by itself. Available only in the Developer profile."
         ),
         risk_tier=RiskTier.MEDIUM,
         parameters_schema={
