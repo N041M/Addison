@@ -302,6 +302,14 @@ class RoutineEngine:
             # refusal branches used to hard-code a literal, which described the
             # branch rather than the call (the live loop had the same defect).
             destructive = call_is_destructive(tool, resolved_args)
+            # The step's path, RESOLVED ONCE for the whole step — the live loop's twin
+            # (KNOWN-GAPS, closed 2026-08-08). Every audit row below that names a file
+            # is built from this value, and so is the card; confinement checks the same
+            # one and hands it to `execute`. It sat at the confinement branch until
+            # then, so the rows above it re-resolved and could name a different file
+            # than the one the step acted on. None for a command step, which is what
+            # leaves those completely unaffected.
+            affected = call_affected_path(tool, resolved_args)
             if dev_only_refusal is not None:
                 # The live loop audits this branch; this one did not, so a routine
                 # step naming a dev tool in SAFE was the one refusal in the tree
@@ -388,7 +396,8 @@ class RoutineEngine:
             # command would otherwise be easiest to smuggle past a person.
             forbidden = self._forbidden_check(tool, resolved_args)
             if forbidden is not None:
-                self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
+                self._audit(routine, tool_id,
+                            call_permission_detail(tool, resolved_args, affected),
                             mode, destructive, "forbidden")
                 result = ToolResult(success=False, content=forbidden)
                 step_results[step.step_id] = result
@@ -407,9 +416,9 @@ class RoutineEngine:
             # and hand the resolved path to execute via the context (R6). The file
             # tools aren't routine-exposed in v1, so this is defence-in-depth;
             # affected_path is None for a command step, which resets resolved_path.
-            affected = call_affected_path(tool, resolved_args)
             if affected is not None and not self._trust_check(affected):
-                self._audit(routine, tool_id, call_permission_detail(tool, resolved_args),
+                self._audit(routine, tool_id,
+                            call_permission_detail(tool, resolved_args, affected),
                             mode, destructive, "confined_out")
                 result = ToolResult(success=False, content=_OUTSIDE_TRUST)
                 step_results[step.step_id] = result
@@ -435,7 +444,7 @@ class RoutineEngine:
             # and every audit row agree on one answer per step.
             # Asked once and used twice, exactly as the live loop does it: the
             # permission card and the Activity Panel must describe the SAME step.
-            detail = call_permission_detail(tool, resolved_args)
+            detail = call_permission_detail(tool, resolved_args, affected)
             status = self.permission_gate.authorize(
                 tool_id,
                 mode=mode,

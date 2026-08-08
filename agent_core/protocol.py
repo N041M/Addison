@@ -109,6 +109,30 @@ class Method:
     WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
     WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
     WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
+    # The review surface's READ paths (Phase-3 plan Build §1). RPC, NEVER a registry
+    # tool: a person clicking a folder is not the model acting, and routing a browse
+    # through the registry would hand the model a `list_directory` capability as a side
+    # effect AND put a permission card in front of a click they just made. Precedent:
+    # snapshot restore is an RPC path and never a tool.
+    #
+    # Developer/Custom only — the handler refuses outside OPEN, and that gate is
+    # load-bearing rather than decorative: trust rows persist and nothing revokes them
+    # on a profile switch, so without it a Simple-profile window could browse a folder
+    # trusted under Developer. Confinement is the same one the file tools get: resolve
+    # ONCE, then match-a-root THEN the data-dir floor.
+    #
+    # `escapes` is the honesty affordance for a symlink that points outside the folder
+    # you trusted — computed core-side by the same predicate the boundary uses, and NOT
+    # itself the boundary: the follow-up call is what refuses. There is no `depth`
+    # parameter, on purpose (one level per call, expansion-driven).
+    #
+    # A refusal answers `{ok: false, error}` — grantTrust's shape — and a success carries
+    # no `ok` at all.
+    # {directory} -> {directory, root, entries: [{name, kind, size, escapes}], truncated}
+    WORKSPACE_LIST_DIRECTORY = "workspace.listDirectory"
+    # {path} -> {path, root, content, bytes, truncated}. `bytes` is the file's size on
+    # disk (never the excerpt's), so a truncated view can say how much is not shown.
+    WORKSPACE_READ_FILE = "workspace.readFile"
     # External MCP servers Addison consumes as a CLIENT (step 7 phases 1–4; spec
     # §4.12). A discovered tool is registered namespaced (`mcp:<server>:<tool>`) and
     # dev-only, so it is absent from the SAFE view and refused outside OPEN at both
@@ -318,6 +342,17 @@ class Method:
     SHELL_READ_WORKSPACE_FILE = "shell.readWorkspaceFile"       # {path} -> {content}
     SHELL_RESTORE_WORKSPACE_FILE = "shell.restoreWorkspaceFile" # {path, content?|delete} -> {}
     SHELL_PICK_DIRECTORY = "shell.pickDirectory"                # {} -> {path} (native folder picker)
+    # The review surface's read paths (Phase-3 plan Build §1), reached ONLY from
+    # `workspace.listDirectory` / `workspace.readFile` — never from a tool. The shell
+    # opens both with its own data-dir floor, lists with `symlink_metadata` (a link is
+    # never rendered as what it points at), caps a listing at 500 entries, and TRUNCATES
+    # an oversize view on a char boundary rather than refusing it — the opposite of
+    # `shell.readWorkspaceFile`'s refusal, because a truncated file handed to a MODEL is a
+    # correctness hazard and a truncated file shown to a PERSON is a scroll bar.
+    # {path} -> {entries: [{name, kind, size}], truncated}
+    SHELL_LIST_WORKSPACE_DIRECTORY = "shell.listWorkspaceDirectory"
+    # {path} -> {content, bytes, truncated}
+    SHELL_READ_WORKSPACE_FILE_FOR_VIEW = "shell.readWorkspaceFileForView"
     # OPEN-mode command execution (step 5.5, item 1). The core does NOT run this
     # itself: run_command crosses the bridge like every other OS effect (§1.3), so
     # execution happens in the process that can apply a sandbox. `writeRoots` is the

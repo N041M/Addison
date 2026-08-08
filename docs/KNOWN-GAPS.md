@@ -541,26 +541,24 @@ are here because somebody will meet them, and because anything built on top of
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
-- **The name on the card is resolved a SECOND time, so it can go stale between the
-  label and the effect — DECIDED 2026-08-08 and scheduled, not open.** Both file
-  tools' `permission_detail` now asks `call_affected_path`, the very function
-  confinement asks, which is what stopped a symlinked `notes.txt` carding as
-  *notes.txt* while `secrets.env` was read. But it is a **separate call**: the path is
-  resolved once for the display string and once for the boundary, and a symlink
-  swapped between the two shows a name that was true only when it was read. The
-  asymmetry is the whole reason this is a gap and not a hole — **the label can lie;
-  the effect cannot.** The read or write still lands on the path confinement checked,
-  so the worst case is somebody approving under a stale name, never a tool acting
-  outside trust. `agent_core/tools/read_project_file.py`'s `permission_detail`
-  docstring states the residual next to the code, which is where this repo trusts a
-  rule most. **The fix is chosen, not pending a choice:** thread ONE resolved path
-  through `call_permission_detail` and its other callers, so the card and the boundary
-  share a single resolution. That is a signature change rather than a local edit,
-  which is why it is built as part of the review surface's read-paths work
-  ([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) Build §1, whose
-  confinement order already reads *resolve once* and *pass only the resolved value*).
-  Do not patch it inside one tool in the meantime — two tools resolving twice each is
-  exactly the shape that change removes.
+- ~~**The name on the card is resolved a SECOND time, so it can go stale between the
+  label and the effect.**~~ **CLOSED 2026-08-08**, in the review surface's read-paths
+  work as this entry scheduled it ([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md)
+  Build §1). The label and the boundary now share ONE resolution: the caller resolves
+  above its refusal branches and passes that value to `call_permission_detail`, which
+  hands it to the tool's new `permission_detail_for_path(resolved_path)`. A path tool
+  no longer sees `args` at that seam at all, so there is nothing left to resolve a
+  second time even if a later edit wanted to — which is why it is a second HOOK rather
+  than a second parameter on the first. Two things the entry did not foresee. The
+  resolution had to move UP in both dispatch loops, above the denylist and arming
+  branches, because the audit rows written there name a file too, and they were
+  re-resolving as well — so the fix is one resolution per CALL, not merely one shared
+  between the card and confinement. And the proof is not a symlink swapped mid-race
+  (that is a race, and a test of one is a flake): a fake tool whose `affected_path`
+  answers a DIFFERENT path the second time it is asked fails on ANY second resolution,
+  which is stricter than the thing it stands in for. The live loop, the routine engine
+  and the refused-before-the-gate branch each have their own test; the widget rail
+  passes nothing and says why at the code (its only tool has no `affected_path`).
 - **`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
   bridge's 60s ceiling; browse for longer and the timeout is swallowed into
   `{"directory": null}` with no explanation, while every other store RPC queues

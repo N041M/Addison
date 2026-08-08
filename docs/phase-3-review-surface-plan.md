@@ -254,7 +254,7 @@ surface blocked on a step that had landed.
 
 ## Build
 
-### 1. Read paths — RPC, never a registry tool
+### 1. Read paths — RPC, never a registry tool — **BUILT 2026-08-08**
 
 A user-driven browse is not the model acting. Routing it through the registry would hand
 the model a `list_directory` capability as a side effect **and** put a permission card in
@@ -317,6 +317,61 @@ tail), the viewer should **truncate and say so**. `VIEW_SIZE_BOUND = UNDO_SIZE_B
 Truncate on a **char boundary** — a byte cut through a multi-byte character turns a text
 file into a binary one. Binary detection needs no new code: `String::from_utf8` already
 fails and the existing plain sentence is the right copy.
+
+#### What shipped, and the decisions taken while building it
+
+Everything above, as written — the two RPC handlers on `WorkspaceMixin`, the two Rust
+methods beside the step-5 block, the four-step confinement order, `escapes` computed
+core-side, the 500-entry cap in Rust, and the viewer's truncate-on-a-char-boundary. Plus
+the KNOWN-GAPS name race, which was scheduled into this section and is now closed. The
+decisions that were not already written down, each stated at the code as well:
+
+- **A refusal answers `{ok: false, error}`; a success carries no `ok` at all.**
+  `grantTrust`'s shape for the refusal, the plan's literal shape for the answer. Five
+  frozen sentences, none of which names a mechanism ("the Developer profile" is a thing
+  on a settings screen; "OPEN mode" is not), and the not-trusted one is deliberately
+  SHARED by both handlers and by the escaping-symlink case — naming the shortcut would
+  be a worse sentence, since what the person needs to know is that it leads outside what
+  they trusted.
+- **Absolute paths only**, exactly as `grantTrust` already is. `realpath` would otherwise
+  complete a relative path against the CORE PROCESS's working directory — a folder
+  nobody chose and no surface shows. This is also what a `~someone` the OS cannot look up
+  becomes: `os.path.expanduser` hands it back unchanged (unlike `Path.expanduser`, which
+  RAISES — the crash fixed on the tool path on 2026-08-08), so it stays relative and is
+  answered with "give me the full path", which is the true thing to say about it.
+- **The trust rows are read ONCE per listing for `escapes`**, through the same pure
+  `is_trusted` the boundary asks — a store round-trip per row would put 500 identical
+  queries on the worker thread behind every click. The BOUNDARY still asks
+  `_is_trusted_path` itself, in the plan's order; only the display work shares a read.
+- **`root` is the LONGEST matching root** (nested roots name the nearer one) and is
+  display-only. `null` — a root revoked between two calls — is a rendering answer, never
+  an authorization.
+- **An entry whose target cannot be resolved is marked `escapes: true`.** The direction
+  that dims a row rather than the one that invites a click.
+- **The listing is sorted in Rust BEFORE the cap**, so a truncated folder answers "the
+  first 500 by name" rather than "500 the OS happened to hand back first" — otherwise a
+  person cannot tell a missing file from an unlucky one.
+- **The viewer reads with a bounded `take`, not `fs::read`.** Metadata is consulted first
+  (it is what `bytes` reports — the FILE's size, never the excerpt's), but the read itself
+  is capped at the bound plus one byte, so a file that grows between the two calls cannot
+  cost this process more than that byte. The source-order pin
+  (`every_size_ceiling_is_judged_before_any_bytes_are_read`) grew a fourth entry with its
+  own read marker for that reason.
+- **`NOT_TEXT_TO_READ` is worded once** in `filesystem.rs` and raised by both read paths —
+  `TOO_BIG_TO_EDIT`'s rule, for the same reason: the person must not be able to tell
+  which one refused.
+- **The name race (KNOWN-GAPS) is closed by a SECOND HOOK, not a second parameter.** A
+  path-bounded tool implements `permission_detail_for_path(resolved_path)` and never sees
+  `args` at that seam, so it structurally cannot resolve a second time; the orchestrator
+  and the routine engine resolve once, above their refusal branches, and hand that value
+  to `call_permission_detail`. The widget rail passes nothing and says why (its only tool
+  has no `affected_path` at all). Proven by a tool whose `affected_path` answers a
+  DIFFERENT path the second time it is asked — stricter than a real symlink swap, because
+  it fails on ANY second resolution rather than on an unlucky one.
+
+**Not in this section, on purpose:** no frontend consumer (that is §4 — §1 ships the
+types and the generated fixtures so §4 has something to parse against), no `listEdits`,
+no diff, no revert, no CSP change.
 
 ### 2. The diff — from data that already exists
 

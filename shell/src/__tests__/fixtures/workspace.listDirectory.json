@@ -1,0 +1,31 @@
+{
+  "directory": "/fixture/project",
+  "root": "/fixture/project",
+  "entries": [
+    {
+      "name": ".git",
+      "kind": "directory",
+      "size": 96,
+      "escapes": false
+    },
+    {
+      "name": "README.md",
+      "kind": "file",
+      "size": 812,
+      "escapes": false
+    },
+    {
+      "name": "link",
+      "kind": "symlink",
+      "size": 11,
+      "escapes": false
+    },
+    {
+      "name": "src",
+      "kind": "directory",
+      "size": 96,
+      "escapes": false
+    }
+  ],
+  "truncated": false
+}

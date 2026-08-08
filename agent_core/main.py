@@ -1321,6 +1321,10 @@ class JsonRpcServer(
                     self._respond(request_id, self._workspace_revoke(params))
                 elif kind == "workspace_pick_directory":
                     self._respond(request_id, self._workspace_pick_directory())
+                elif kind == "workspace_list_directory":
+                    self._respond(request_id, self._workspace_list_directory(params))
+                elif kind == "workspace_read_file":
+                    self._respond(request_id, self._workspace_read_file(params))
                 elif kind == "mcp_list":
                     self._respond(request_id, self._mcp_list())
                 elif kind == "mcp_add":
@@ -2042,11 +2046,20 @@ _ROUTING_JOBS = {
 # workspace.* touch the Store (read/write workspace_trust) and grantTrust mints an
 # auto-snapshot through the SnapshotManager, so they run on the worker like every
 # other store op. Method -> worker job kind. (Step 5.)
+#
+# The review surface's read paths (Phase-3 plan Build §1) queue here for BOTH halves of
+# that reason at once. They read the `workspace_trust` rows — twice, for the boundary and
+# then for `escapes` — and they make a Core -> Shell round-trip, which blocks whichever
+# thread makes it; the read loop is the thread that has to deliver the answer. This is
+# `provider.connect`'s lesson and `automation.status`'s, on a path a person can click
+# repeatedly.
 _WORKSPACE_JOBS = {
     Method.WORKSPACE_GRANT_TRUST: "workspace_grant",
     Method.WORKSPACE_REVOKE_TRUST: "workspace_revoke",
     Method.WORKSPACE_LIST: "workspace_list",
     Method.WORKSPACE_PICK_DIRECTORY: "workspace_pick_directory",
+    Method.WORKSPACE_LIST_DIRECTORY: "workspace_list_directory",
+    Method.WORKSPACE_READ_FILE: "workspace_read_file",
 }
 
 # mcp.* read/write the `mcp_servers` table and mint an auto-snapshot through the

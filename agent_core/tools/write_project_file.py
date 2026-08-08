@@ -40,7 +40,6 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
-    call_affected_path,
 )
 
 _NO_SHELL_MESSAGE = "Editing project files needs the desktop shell; not available in this mode."
@@ -97,18 +96,20 @@ class WriteProjectFileTool:
             return UNRESOLVABLE_PATH
         return str(Path(raw).expanduser().resolve())
 
-    def permission_detail(self, args: dict) -> str | None:
+    def permission_detail_for_path(self, resolved_path: str | None) -> str | None:
         """The RESOLVED file's name only (see ``read_project_file`` — no full path to
-        the webview, and read its docstring for why resolving is the point). Shown on
-        the destructive card and the Activity Panel.
+        the webview, and read its docstring for why the caller hands the path in
+        rather than this tool resolving one). Shown on the destructive card and the
+        Activity Panel.
 
         This half is the one that matters more, exactly as it is for the resolve-once
         rule this file already carries: a decoy name on a READ mislabels what Addison
-        saw, a decoy name on a WRITE mislabels what Addison destroyed."""
-        resolved = call_affected_path(self, args)
-        if not resolved or resolved == UNRESOLVABLE_PATH:
+        saw, a decoy name on a WRITE mislabels what Addison destroyed. And here the
+        card is the last thing between the person and an overwrite, so the name on it
+        being the file that actually changes is the whole value of the card."""
+        if not resolved_path or resolved_path == UNRESOLVABLE_PATH:
             return None
-        return Path(resolved).name or None
+        return Path(resolved_path).name or None
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         if context.shell_bridge is None:

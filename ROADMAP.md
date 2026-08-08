@@ -51,8 +51,10 @@ binary, and Secure Enclave identity; `updater.rs` is still a nine-line stub and 
 the only `TODO(step N)` marker in the tree. The second was added to the phase on
 2026-07-25: the **Developer review surface** — a file tree over the trusted folders,
 a read-only viewer, a diff of every edit Addison has made that is still on disk, and
-a way to put one file back. It is approved, unblocked and unstarted; see the note
-further down and [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
+a way to put one file back. It is approved and IN PROGRESS: the read paths (the
+plan's Build §1) landed 2026-08-08, and §§2–5 — the diff, per-file revert, and the
+screen itself — remain; see the note further down and
+[docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 for the rest of that day; all are finished. Their entries
@@ -227,9 +229,10 @@ line stub today. **Phase 3 also carries a second track**, added to it on 2026-07
 the Developer review surface in
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md). It waited
 on steps 6, 7 and 8, and all three landed on 2026-08-06 and 2026-08-07; the three
-fixes the plan asked for first closed on 2026-08-08, each in its own change. So it is
-**unblocked and unstarted**, and nothing is waiting on anything — it waits only on
-somebody starting it.
+fixes the plan asked for first closed on 2026-08-08, each in its own change. **Started
+the same day**: Build §1 (the read paths — `workspace.listDirectory` / `readFile` as
+RPC, one resolution per call) is merged, and §§2–5 — the diff, per-file revert, the
+screen and its Monaco skin — are what remains.
 
 ## Deliberately not being built
 

@@ -32,7 +32,7 @@ from agent_core.tools.base import ShellBridge
 class ServerShellBridge(ShellBridge, Protocol):
     """What the SERVER needs from a bridge: every tool-facing method, plus the ones
     it calls itself (``bind_sender``, ``get_app_build_ref``, ``list_armed``,
-    ``resolve_response``).
+    ``resolve_response``, and the review surface's two read paths).
 
     ``ShellBridge`` (tools/base.py) is the TOOL-facing contract and deliberately
     stops there — a tool has no business binding the server's writer. But the
@@ -52,6 +52,16 @@ class ServerShellBridge(ShellBridge, Protocol):
     def list_armed(self) -> dict: ...
 
     def resolve_response(self, req_id, result, error) -> bool: ...
+
+    # The review surface's read paths (Phase-3 plan Build §1). They are declared HERE
+    # and not on ``ShellBridge`` for the reason that Protocol's own docstring gives —
+    # it is "exactly the surface the v1 tools need", and no tool may ever have these.
+    # A browse is a person's click, answered by an RPC handler; a tool that could list
+    # a directory would be the ``list_directory`` capability this design exists to
+    # avoid handing the model.
+    def list_workspace_directory(self, path: str) -> dict: ...
+
+    def read_workspace_file_for_view(self, path: str) -> dict: ...
 
 # How long a single Core -> Shell request may wait before we give up on it. The
 # shell answers a file/clipboard/draft call from its own process, so a stall this
@@ -276,6 +286,37 @@ class IpcShellBridge:
             else {"path": path, "content": prior_content}
         )
         self._call(Method.SHELL_RESTORE_WORKSPACE_FILE, params)
+
+    # --- the review surface's read paths (Phase-3 plan Build §1) -----------
+    # NOT ON THE TOOL PROTOCOL, and that is the design rather than an oversight: these
+    # answer a person's click through ``workspace.listDirectory`` / ``workspace.readFile``,
+    # so they are declared on ``ServerShellBridge`` above and ``tools/base.py`` says why
+    # at the Protocol they are absent from. A tool with these methods would be a
+    # ``list_directory`` capability the model could reach for, and a permission card in
+    # front of a folder somebody just opened.
+    #
+    # Each takes ONE argument: the path the CALLER already resolved and checked. The
+    # handler never re-reads its raw parameter on the way here — that is the TOCTOU gap
+    # step 5 closed for the file tools, and it is the same gap on a read.
+
+    def list_workspace_directory(self, path: str) -> dict:
+        """One level of ``path``: ``{"entries": [{"name", "kind", "size"}], "truncated"}``.
+
+        Never recursive, and nothing is hidden. ``kind`` is read WITHOUT following
+        links (a symlink is ``"symlink"``, never the kind of its target), and the
+        shell caps the listing at 500 entries because that is where the bytes are —
+        a 200k-entry folder is a multi-megabyte single line on this channel."""
+        return self._call(Method.SHELL_LIST_WORKSPACE_DIRECTORY, {"path": path})
+
+    def read_workspace_file_for_view(self, path: str) -> dict:
+        """One file's text to SHOW: ``{"content", "bytes", "truncated"}``.
+
+        Its own method rather than a flag on ``read_workspace_file`` because the two
+        want OPPOSITE answers to an oversize file: the TOOL must refuse (a model that
+        reads half a file and rewrites it from what it saw destroys the tail), the
+        VIEWER truncates on a character boundary and says so. ``bytes`` is the file's
+        size on disk, so a truncated view can say how much is not shown."""
+        return self._call(Method.SHELL_READ_WORKSPACE_FILE_FOR_VIEW, {"path": path})
 
     # --- OPEN-mode command execution (step 5.5, item 1) --------------------
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:

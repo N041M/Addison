@@ -349,6 +349,13 @@ class WidgetsMixin(ServerContext):
             "run_command",
             mode=mode,
             destructive=call_is_destructive(tool, args),
+            # NO RESOLVED PATH THREADED HERE, and there is nothing to thread: the rail
+            # runs exactly one tool and `run_command` has no `affected_path` at all, so
+            # it is never confined and its detail is the command text rather than a
+            # file's name. The day a path-bounded tool becomes runnable from a widget,
+            # this site resolves once and passes that value (tools/base.
+            # call_permission_detail) — the same single-resolution rule the live loop
+            # and the routine engine follow.
             detail=call_permission_detail(tool, args),
             # Same resolution function the live loop + routine engine read (D3):
             # a Run pill can never skip a card (or add one) the chat would not.
