@@ -285,6 +285,7 @@ sequenceDiagram
     Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>CLEAR key_rejected_at (this is the person supplying a key the provider accepts — plan §5.2),<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false and the mark is LEFT STANDING, so provider.list shows it off
     Note over SRV: EVERY branch also records secret_presence (present/absent/unknown).<br/>That column — never the OS — answers every later presence question:<br/>provider.list, stats.get and the live-catalog gate (data-model.md)
     SRV-->>UI: {ok: true} or {ok: false, error}
+    Note over UI,SH: on {ok:false} with a key typed — invoke restore_replaced_provider_key(provider),<br/>putting back what the save above replaced (or removing it where nothing was saved).<br/>Where the shell never READ the old value it will not guess, answers false,<br/>and the row appends one sentence saying the key was replaced (2026-08-08)
     UI->>SRV: provider.list + model.availableRoles (refresh)
 ```
 
@@ -471,6 +472,16 @@ sequenceDiagram
     Note over SRV: runs provider.connect("custom", baseUrl) — one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop). The restore point above is<br/>one per connect ATTEMPT, taken before it (as in flow 7)
     SRV-->>WV: {ok: true} — endpoint now in the picker union
 ```
+
+**When that connect FAILS** the key is already saved, over whatever was there before —
+the ordering above requires it, since the core reads the key from the OS at connect time
+and it may never be a parameter of a core frame (G1). The address is recoverable
+(`provider_config` is snapshot-captured); the key is not. So the card asks the shell to
+put back what the save replaced — `invoke restore_replaced_provider_key("custom")`, a
+provider id out and one boolean back, no key value either way — and where the shell
+cannot (it never read what was there, so it will not guess by deleting an item it never
+saw) the card SAYS the previous key was replaced. Closed 2026-08-08; see
+`keychain.rs`'s "PUTTING BACK WHAT A SAVE REPLACED".
 
 ## 12. Workspace-trust grant and a keyword-gated powerful action
 

@@ -1133,7 +1133,7 @@ def test_the_code_reaches_the_person_and_nothing_else_ever_sees_it(tmp_path, mon
     try:
         assert _rpc(h, "profile.set", {"profileId": "developer"}, 900)["mode"] == "open"
         h.reader.feed({"jsonrpc": "2.0", "id": 1, "method": "conversation.sendMessage",
-                       "params": {"content": "switch on my tidy-up"}})
+                       "params": {"text": "switch on my tidy-up"}})
         card = _wait_for_card(h, 1)["params"]
         code = card["arming"]["nonce"]
         assert card["toolId"] == "arm_automation"
@@ -1184,7 +1184,7 @@ def test_declining_the_card_arms_nothing_and_is_audited_as_denied(tmp_path, monk
     try:
         _rpc(h, "profile.set", {"profileId": "developer"}, 900)
         h.reader.feed({"jsonrpc": "2.0", "id": 1, "method": "conversation.sendMessage",
-                       "params": {"content": "switch it on"}})
+                       "params": {"text": "switch it on"}})
         _wait_for_card(h, 1)
         h.reader.feed({
             "jsonrpc": "2.0", "id": 2, "method": "permission.respond",
@@ -1217,7 +1217,7 @@ def test_a_refused_arm_never_becomes_a_card_and_is_audited_as_forbidden(tmp_path
     try:
         _rpc(h, "profile.set", {"profileId": "developer"}, 900)
         h.reader.feed({"jsonrpc": "2.0", "id": 1, "method": "conversation.sendMessage",
-                       "params": {"content": "switch it on"}})
+                       "params": {"text": "switch it on"}})
         h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
         assert _cards(h) == []
     finally:
@@ -1258,7 +1258,7 @@ def test_an_automation_that_is_gone_never_becomes_a_card_either(tmp_path, monkey
     try:
         _rpc(h, "profile.set", {"profileId": "developer"}, 900)
         h.reader.feed({"jsonrpc": "2.0", "id": 1, "method": "conversation.sendMessage",
-                       "params": {"content": "switch it on"}})
+                       "params": {"text": "switch it on"}})
         h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
         assert _cards(h) == []
     finally:

@@ -1077,10 +1077,15 @@ class JsonRpcServer(
             error["data"] = data
         self._write_frame({"jsonrpc": "2.0", "id": request_id, "error": error})
 
-    def _raw_detail(self, exc: Exception) -> dict | None:
+    def _raw_detail(self, exc: BaseException) -> dict | None:
         """Developer-profile raw diagnostics for an error frame: the repr of the
         underlying exception, or None for Simple (which is unchanged). This adds
-        VISIBILITY only — it never changes control flow or the plain message (§8.7)."""
+        VISIBILITY only — it never changes control flow or the plain message (§8.7).
+
+        ``BaseException``, not ``Exception``: ``LiveDatabaseBlocked`` is one
+        (live_db_guard.py) and the two handlers that name it want a raw detail like
+        every other error. Widening the annotation adds no caller and loses nothing —
+        ``repr`` is defined on both."""
         profile = self._active_profile
         if profile is not None and profile.raw_diagnostics:
             return {"raw": repr(exc)}
@@ -1222,6 +1227,15 @@ class JsonRpcServer(
         # responsive and the user is told what to do.
         try:
             self._ensure_built()
+        except live_db_guard.LiveDatabaseBlocked as exc:
+            # NAMED, and it has to be. The guard raises a BaseException so no broad
+            # handler can quieten it — but a BaseException escaping this thread's
+            # run() kills the worker, which is precisely the unrecoverable state the
+            # comment above describes. Caught here, its own sentence becomes the
+            # build error, so every later job says which guard refused instead of
+            # "couldn't open its settings file" (see agent_core/live_db_guard.py).
+            self._build_error = str(exc)
+            self._build_error_detail = self._raw_detail(exc)
         except Exception as exc:
             self._build_error = _STORE_UNAVAILABLE_MESSAGE
             self._build_error_detail = self._raw_detail(exc)
@@ -1371,6 +1385,13 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_status())
                 elif kind == "automation_disarm_orphan":
                     self._respond(request_id, self._automation_disarm_orphan(params))
+            except live_db_guard.LiveDatabaseBlocked as exc:
+                # A job can reach _ensure_built() too (conversation.list, and every
+                # mixin handler that calls it), so the same rule as the startup build
+                # applies here: name it, or the BaseException ends the worker thread
+                # and every later request hangs with no frame at all. The guard's own
+                # sentence is the answer — it is the only thing that says WHY.
+                self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1498,6 +1519,14 @@ class JsonRpcServer(
                 return False, _REBUILD_FAILED
             self._move_damaged_db_aside()
             self._swap_in(rebuilt)
+        except live_db_guard.LiveDatabaseBlocked as exc:
+            # THE GAP THIS CATCH EXISTS FOR. A rebuild refused by the live-database
+            # guard is not "your restore points wouldn't go back in" — it is one
+            # specific, fixable mistake, and reporting it as _REBUILD_FAILED sent
+            # the reader looking for a damaged snapshot that was never there. The
+            # guard's own sentence names itself and the file to read; it reaches the
+            # RPC answer from here.
+            return False, str(exc)
         except Exception:
             return False, _REBUILD_FAILED
         finally:
@@ -1507,6 +1536,8 @@ class JsonRpcServer(
         # continues in place instead of requiring a restart.
         try:
             self._ensure_built()
+        except live_db_guard.LiveDatabaseBlocked as exc:
+            return False, str(exc)
         except Exception:
             return False, _REBUILD_FAILED
         return True, _REBUILT_MESSAGE if verified else _REBUILT_FROM_UNVERIFIED
@@ -1550,6 +1581,11 @@ class JsonRpcServer(
                     candidates = [item for item in candidates if item is not payload]
             return None
         except Exception:
+            # Deliberately NOT a bare handler: ``LiveDatabaseBlocked`` is a
+            # BaseException, so a rebuild refused by the live-database guard walks
+            # straight through here to _recover_from_sidecars, which names it. This
+            # ``except Exception`` used to be the thing that turned that refusal into
+            # a flat "rebuild failed" (live_db_guard.py).
             return None
         finally:
             if store is not None:

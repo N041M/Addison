@@ -70,21 +70,40 @@ _app_has_declared_itself = False
 _installed = False
 
 
-class LiveDatabaseBlocked(AssertionError):
+class LiveDatabaseBlocked(BaseException):
     """Raised when code that is not the application tries to open ``~/.addison``.
 
-    Subclasses ``AssertionError`` on purpose: under pytest it reads as a plain test
-    failure rather than an error someone might reach for an ``except`` clause to
-    quieten.
+    Subclasses ``BaseException`` rather than ``Exception``, and that inheritance is
+    the class's whole point. It used to subclass ``AssertionError`` so that under
+    pytest it read as a plain test failure — but the recovery paths are full of
+    broad ``except Exception`` handlers, and ``JsonRpcServer._rebuild_into``
+    swallowed it and answered "rebuild failed" rather than naming the guard. The
+    block held either way (nothing is ever written); what was lost was the loud
+    message, in the one place a loud message is the entire value of the thing.
 
-    It IS still caught by a broad ``except Exception``, and the recovery paths are
-    full of them — ``JsonRpcServer._rebuild_into`` against a guarded path reports
-    "rebuild failed" rather than naming the guard. The block itself holds either
-    way (nothing is written); what is lost is the loud message, in the one place
-    a loud message is the whole point. Making this a ``BaseException`` would fix
-    that and is the obvious next move, but it changes how every existing handler
-    behaves, so it is a deliberate follow-up rather than a line to slip into a
-    docstring correction. Recorded in ``docs/HANDOFF.md``.
+    A ``BaseException`` walks past every ``except Exception`` in the tree, so the
+    handlers that must still SEE it name it. They are all in ``agent_core/main.py``,
+    because ``Store.__init__`` (via ``_ensure_built``/``_store_factory``) and
+    ``_rebuild_into``'s ``Store(path)`` are the only two routes to ``sqlite3.connect``
+    the app has:
+
+    - ``_worker_loop``, at the startup build AND per dequeued job. A ``BaseException``
+      escaping a thread's ``run()`` kills that thread, and a dead worker is exactly
+      the unrecoverable state — every later request hanging with no frame at all —
+      that the G3 machinery exists to prevent. Both sites answer with the sentence
+      below instead.
+    - ``_recover_from_sidecars``, so a rebuild blocked by this guard reports the
+      guard rather than ``_REBUILD_FAILED``. That is the gap this class was changed
+      for.
+
+    Every other broad handler in the tree either cannot sit on a path that opens a
+    database, or re-raises (``Store``'s two rollback handlers do). Anything new that
+    wraps a ``Store`` construction in ``except Exception`` inherits the rule: name
+    this, or let it through — never quieten it.
+
+    The message is a DEVELOPER's sentence, not user copy, and that is deliberate:
+    ``main()`` calls :func:`allow_live_database` on itself, so the only processes
+    that can ever see this are probes, tests and one-off scripts.
     """
 
 

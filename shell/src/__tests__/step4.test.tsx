@@ -24,6 +24,7 @@ vi.mock("../ipc/client", async (importActual) => {
   return {
     ...actual,
     storeProviderKey: vi.fn(),
+    restoreReplacedProviderKey: vi.fn(),
     ipc: {
       ...actual.ipc,
       confirmAddEndpoint: vi.fn(),
@@ -35,6 +36,8 @@ vi.mock("../ipc/client", async (importActual) => {
 import {
   ipc,
   storeProviderKey,
+  restoreReplacedProviderKey,
+  KEY_REPLACED_NOTICE,
   parseEndpointProposal,
   parseCostPlan,
 } from "../ipc/client";
@@ -48,9 +51,11 @@ afterEach(cleanup);
 const confirmAddEndpoint = vi.mocked(ipc.confirmAddEndpoint);
 const applyCostPlan = vi.mocked(ipc.applyCostPlan);
 const storeKey = vi.mocked(storeProviderKey);
+const rollBackKey = vi.mocked(restoreReplacedProviderKey);
 
 beforeEach(() => {
   storeKey.mockReset().mockResolvedValue(undefined);
+  rollBackKey.mockReset().mockResolvedValue(true);
   confirmAddEndpoint.mockReset().mockResolvedValue({ ok: true });
   applyCostPlan.mockReset().mockResolvedValue({ ok: true });
 });
@@ -61,6 +66,7 @@ const PROVIDER_NAME = "Your own server";
 const PROVENANCE = "You asked Addison to add this address.";
 const LAN = "This points to your own computer or a device on your network.";
 const KEY_LABEL = "Paste the server's API key (it stays in your keychain)";
+const ADD_FAILED = "Addison couldn't add that server. Try again in a moment.";
 const COST_SUMMARY =
   "Addison will add this guidance note and switch model picking to prefer cheaper " +
   "models. Your current setup is saved as a restore point first — one click in " +
@@ -237,6 +243,70 @@ describe("the endpoint card", () => {
     fireEvent.click(screen.getByText("Add server"));
     expect(await screen.findByText("Couldn't reach that server.")).toBeTruthy();
     expect(onDismiss).not.toHaveBeenCalled();
+    // No key was typed, so nothing was saved and nothing is owed a rollback —
+    // asking for one would consume the record left by some earlier save.
+    expect(rollBackKey).not.toHaveBeenCalled();
+  });
+
+  // --- the clobber a failed add used to leave behind (KNOWN-GAPS, 2026-08-08) --
+  //
+  // The key is stored BEFORE confirmAdd and has to be (the core reads it from the
+  // OS at connect time; it may never be a parameter of a core frame, G1). So a
+  // failed connect leaves a key nobody chose to keep, over whatever was saved for
+  // "your own server" before — and unlike the base URL, the keychain is not
+  // snapshot-captured, so G3 cannot put it back.
+
+  it("puts the previous key back when the connect fails, and says nothing extra", async () => {
+    confirmAddEndpoint.mockResolvedValue({ ok: false, error: "Couldn't reach that server." });
+    renderEndpoint();
+    fireEvent.change(screen.getByLabelText(KEY_LABEL), { target: { value: "sk-secret-123" } });
+    fireEvent.click(screen.getByText("Add server"));
+
+    await waitFor(() => expect(rollBackKey).toHaveBeenCalledWith("custom"));
+    // The rollback worked, so the keychain is as the person left it and there is
+    // nothing to disclose — only the connect's own sentence.
+    expect(await screen.findByText("Couldn't reach that server.")).toBeTruthy();
+    expect(screen.queryByText(new RegExp(KEY_REPLACED_NOTICE))).toBeNull();
+  });
+
+  it("discloses the replaced key when the shell could not put it back", async () => {
+    // The shell records what a save replaced only when it positively READ it — a
+    // dismissed password dialog leaves nothing to put back, and it will not guess
+    // by deleting an item it never saw. That is the case the person must be told
+    // about: their previous key is gone and only they can restore it.
+    confirmAddEndpoint.mockResolvedValue({ ok: false, error: "Couldn't reach that server." });
+    rollBackKey.mockResolvedValue(false);
+    renderEndpoint();
+    fireEvent.change(screen.getByLabelText(KEY_LABEL), { target: { value: "sk-secret-123" } });
+    fireEvent.click(screen.getByText("Add server"));
+
+    expect(
+      await screen.findByText(`Couldn't reach that server. ${KEY_REPLACED_NOTICE}`),
+    ).toBeTruthy();
+  });
+
+  it("rolls back when the add throws after the key was already saved", async () => {
+    confirmAddEndpoint.mockRejectedValue(new Error("the pipe went away"));
+    rollBackKey.mockResolvedValue(false);
+    renderEndpoint();
+    fireEvent.change(screen.getByLabelText(KEY_LABEL), { target: { value: "sk-secret-123" } });
+    fireEvent.click(screen.getByText("Add server"));
+
+    await waitFor(() => expect(rollBackKey).toHaveBeenCalledWith("custom"));
+    expect(await screen.findByText(`${ADD_FAILED} ${KEY_REPLACED_NOTICE}`)).toBeTruthy();
+  });
+
+  it("never asks for a rollback when the save itself failed", async () => {
+    // Nothing was written, so nothing was replaced. A rollback here would consume
+    // the record of an EARLIER save and put that value back under the person.
+    storeKey.mockRejectedValue(new Error("That key is blank — paste the key and try again."));
+    renderEndpoint();
+    fireEvent.change(screen.getByLabelText(KEY_LABEL), { target: { value: "sk-secret-123" } });
+    fireEvent.click(screen.getByText("Add server"));
+
+    expect(await screen.findByText(ADD_FAILED)).toBeTruthy();
+    expect(rollBackKey).not.toHaveBeenCalled();
+    expect(confirmAddEndpoint).not.toHaveBeenCalled();
   });
 });
 

@@ -11,6 +11,8 @@ import {
   isEngineConnected,
   storeProviderKey,
   deleteProviderKey,
+  restoreReplacedProviderKey,
+  KEY_REPLACED_NOTICE,
   type ProviderInfo,
 } from "../ipc/client";
 import { asRecord } from "../lib/parse";
@@ -192,6 +194,12 @@ export function useModelSelection() {
   // with one tiny request and records the connection. On failure we throw the plain
   // error so the row can show it (and offer Remove to clear the stored key); the
   // picker's model union is refreshed either way.
+  //
+  // The key is saved BEFORE the connect and that ordering is required (the core
+  // reads it from the OS at connect time, and it may never be a parameter of a core
+  // frame, G1) — so a failed connect leaves it over whatever was saved before, which
+  // no snapshot can restore. Roll it back, and disclose where the shell could not
+  // (docs/KNOWN-GAPS.md, 2026-08-08; the add-a-server card does the same).
   async function handleConnectProvider(provider: string, key: string, baseUrl?: string) {
     if (key) await storeProviderKey(provider, key);
     let result;
@@ -202,7 +210,9 @@ export function useModelSelection() {
       refreshRoles();
     }
     if (!result.ok) {
-      throw new Error(result.error || "Couldn't connect. Check the key and try again.");
+      const message = result.error || "Couldn't connect. Check the key and try again.";
+      const restored = !key || (await restoreReplacedProviderKey(provider));
+      throw new Error(restored ? message : `${message} ${KEY_REPLACED_NOTICE}`);
     }
   }
 

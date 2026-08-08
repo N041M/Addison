@@ -10,7 +10,11 @@
 //                           keychain.* — those are Core->Shell only, §1.3/§8);
 //   - `store_provider_key`: write-only save of a BYOK key into the OS keychain,
 //                           keyed by provider id (no read-back command, §5);
-//   - `delete_provider_key`: the "Remove" action — delete a provider's stored key.
+//   - `delete_provider_key`: the "Remove" action — delete a provider's stored key;
+//   - `restore_replaced_provider_key`: undo the LAST such save by putting back what
+//                           it replaced, for a connect that then failed. Takes a
+//                           provider id, answers one boolean; no key value crosses
+//                           (keychain.rs, "PUTTING BACK WHAT A SAVE REPLACED").
 // Core->Shell `shell.*`/`keychain.*` requests arrive over the core's stdout and
 // are handled inside agent_process.rs — never reachable from the window.
 
@@ -43,6 +47,7 @@ fn main() {
             ipc::send_to_core,
             keychain::store_provider_key,
             keychain::delete_provider_key,
+            keychain::restore_replaced_provider_key,
         ])
         // TODO(Phase 3): tauri_plugin_updater — signed manifest endpoint + pubkey
         // (design-doc §7.7). Left unwired here on purpose (updater.rs).

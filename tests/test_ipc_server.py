@@ -86,6 +86,104 @@ def test_send_message_streams_and_completes(tmp_path):
         _shutdown(reader, thread)
 
 
+def _stored_transcript(tmp_path) -> tuple[list, list]:
+    """(conversations, messages) as they stand on disk, read from a SECOND
+    connection owned by the test thread — the server's own Store belongs to its
+    worker and sqlite3 refuses cross-thread use."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        conversations = list(store.list_conversations())
+        messages = [
+            row
+            for conversation in conversations
+            for row in store.messages_for_conversation(conversation["id"])
+        ]
+        return conversations, messages
+    finally:
+        store.close()
+
+
+def test_an_empty_send_message_is_refused_and_persists_nothing(tmp_path):
+    # docs/KNOWN-GAPS.md, closed 2026-08-08. `_run_send_message` read `text` and
+    # never looked at it, so an empty message created the conversation row and
+    # persisted a blank `user` message — litter a rollback does not remove (the
+    # failed-turn cleanup only trims what the TURN appended, from `pre_turn` on).
+    h = build_server(tmp_path, responses=[ModelResponse(text="unreachable", tool_calls=[])])
+    try:
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": ""}}
+        )
+        frame = h.writer.wait_for(lambda f: f.get("id") == 1 and "error" in f)
+        assert "write a message first" in frame["error"]["message"]
+
+        conversations, messages = _stored_transcript(tmp_path)
+        assert conversations == [], "an empty send created a conversation row"
+        assert messages == [], "an empty send persisted a message"
+        # And nothing in memory either, so the 1:1 alignment rewind depends on holds.
+        assert h.server.conversation.messages == []
+        assert h.server._message_ids == []
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_whitespace_only_send_message_is_refused_and_spends_nothing(tmp_path):
+    # The shape the composer's own `draft.trim()` refuses, arriving anyway. It also
+    # pins the guard's PLACEMENT: it runs before the pending-pick reset, so a
+    # refusal does not silently consume a setRoleForNextMessage the person made for
+    # the message they are about to write.
+    h = build_server(tmp_path, responses=[ModelResponse(text="unreachable", tool_calls=[])])
+    try:
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE, "params": {"role": "primary"}}
+        )
+        assert h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]["ok"]
+
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "  \n\t "}}
+        )
+        frame = h.writer.wait_for(lambda f: f.get("id") == 2 and "error" in f)
+        assert "write a message first" in frame["error"]["message"]
+
+        conversations, messages = _stored_transcript(tmp_path)
+        assert conversations == []
+        assert messages == []
+        assert h.server._next_role is not None, "a refused send spent the pending pick"
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_real_send_after_a_refused_one_is_the_first_message_in_the_chat(tmp_path):
+    # The other half: the guard refuses nothing a person actually typed, and the
+    # refusal leaves no gap in front of their real first message.
+    h = build_server(tmp_path, responses=[ModelResponse(text="Hello there.", tool_calls=[])])
+    try:
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "   "}}
+        )
+        h.writer.wait_for(lambda f: f.get("id") == 1 and "error" in f)
+
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "hi"}}
+        )
+        done = h.writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        assert done["result"]["ok"] is True
+
+        conversations, messages = _stored_transcript(tmp_path)
+        assert len(conversations) == 1
+        assert conversations[0]["title"] == "hi"
+        assert [(row["role"], row["content"]) for row in messages] == [
+            ("user", "hi"),
+            ("assistant", "Hello there."),
+        ]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
 class _CrashingTool:
     """MEDIUM-shaped tool whose execute() raises like a shell-bridge refusal
     (e.g. Rust's "A file with that name is already there")."""

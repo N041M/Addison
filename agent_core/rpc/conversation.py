@@ -31,6 +31,17 @@ _LOCAL_ONLY_EMPTY_POOL = (
     "You've asked Addison to use only models on this computer, and there aren't any "
     "set up yet. Add one under Local models, or change how models are picked."
 )
+# Frozen copy. Said when ``conversation.sendMessage`` arrives with nothing in it.
+#
+# THE CORE KEEPING ITS OWN INVARIANT, not a second copy of the composer's rule.
+# ``Composer.tsx`` already refuses an empty send (`submit()` trims and returns, and
+# the button is disabled), and the CLI skips a blank line — so no shipped caller can
+# reach this today. That is exactly why it was missing, and why it belongs here: an
+# empty message used to persist a blank ``user`` row, and rollback does not remove
+# it, so the one caller that ever gets this wrong leaves permanent litter in
+# somebody's transcript. A guard whose only proof is "nothing calls it wrongly" is
+# not a guard.
+_NOTHING_TO_SEND = "There's nothing to send yet — write a message first."
 
 
 def _auto_title(text: str) -> str | None:
@@ -65,6 +76,21 @@ class ConversationMixin(ServerContext):
 
     def _run_send_message(self, params: dict, request_id) -> None:
         text = params.get("text", "")
+        # FIRST, and before anything is read, cleared or written. An empty turn has
+        # no honest outcome further down: `_ensure_conversation` would create the
+        # conversation row, `_persist_message` would write a blank `user` message,
+        # and neither is removed by a rollback or by the failed-turn cleanup below
+        # (which only trims what the TURN appended, from `pre_turn` on).
+        #
+        # Ahead of the pending-pick reset too: a refusal must not silently consume a
+        # `model.setRoleForNextMessage` the person made for the message they are
+        # about to write. Nothing happened, so nothing is spent.
+        #
+        # A non-string `text` is refused by the same sentence rather than coerced —
+        # `str(None)` persists the four characters "None" as somebody's message.
+        if not isinstance(text, str) or not text.strip():
+            self._respond_error(request_id, _SERVER_ERROR, _NOTHING_TO_SEND)
+            return
         requested_role = self._role_from(params.get("role")) or self._next_role
         # §4.1.1 / §6.8: thread the explicit model pick (per-message param or the last
         # setRole) into resolve(); resolve() picks the named LOCAL/cloud model and
@@ -160,10 +186,12 @@ class ConversationMixin(ServerContext):
         self.conversation.messages.append(user_msg)
         user_message_id = self._persist_message(user_msg)
 
-        # Auto-title on the first user message with any content. The store call is
-        # first-write-wins (title IS NULL guard), so the flag is only an
-        # optimization that skips the write on every later turn; a whitespace-only
-        # first message leaves the flag down so the next real one can title it.
+        # Auto-title on the first user message. The store call is first-write-wins
+        # (title IS NULL guard), so the flag is only an optimization that skips the
+        # write on every later turn. ``_auto_title`` still answers None for an
+        # effectively empty message and the flag still stays down when it does — the
+        # guard at the top of this method means no send can reach here that way any
+        # more, but ``_conversation_rows`` calls the same function on legacy rows.
         if not self._conversation_titled:
             title = _auto_title(text)
             if title is not None:
