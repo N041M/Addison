@@ -478,11 +478,19 @@ def call_affected_path(tool: Any, args: dict) -> str | None:
         return None
     try:
         value = provider(args)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, RuntimeError):
         # ``Path(...).resolve()`` raises ValueError on an embedded NUL and OSError
         # on some malformed paths. A model can put either in a tool call, and this
         # runs OUTSIDE the orchestrator's per-call error handling, so letting it
         # escape ends the turn rather than the step.
+        #
+        # RuntimeError is the fourth and it was missing (found 2026-08-08, while
+        # making the permission card read the resolved path): ``Path.expanduser()``
+        # raises it — not OSError — for a ``~someone`` whose home the OS cannot look
+        # up, and ``~`` is the one thing a path argument is most likely to contain.
+        # So ``read_project_file{path:"~someone-unknown/x"}`` took the whole turn down,
+        # and on the routine path left the run recorded ``running`` forever: the very
+        # failure the other three are caught to prevent, through a gap in the tuple.
         return UNRESOLVABLE_PATH
     # None is passed through UNCHANGED: for ``run_command`` it means "no path bound
     # at all", and turning that into the sentinel would confine — and refuse — every

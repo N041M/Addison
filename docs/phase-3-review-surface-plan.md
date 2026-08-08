@@ -133,16 +133,19 @@ cannot see Tauri's runtime augmentation of the directive map.
 These are small, and each is a correctness problem the review surface makes worse rather
 than one it introduces.
 
-1. **The permission card names the raw arg, not the resolved path.** Already tracked
-   (`docs/HANDOFF.md:1272`). Both `agent_core/tools/read_project_file.py:74` and
-   `write_project_file.py:99` do `Path(args["path"]).name` on the **unresolved** argument,
-   while `affected_path` resolves. Inside a trusted root, `path="notes.txt"` symlinked to
-   `secrets.env` cards as *"notes.txt"* and writes `secrets.env`; confinement does not
-   catch it because both are inside trust. This becomes urgent here because the review
-   surface is the first place a person sees the **resolved** path (straight from
-   `undo_payload["path"]`) — so the code screen and the Activity Panel would disagree about
-   which file Addison touched. Fix: resolve first, then basename. Keeps the basename-only
-   rule; no fixture churn.
+1. ~~**The permission card names the raw arg, not the resolved path.**~~ **LANDED
+   2026-08-08.** Both file tools did `Path(args["path"]).name` on the **unresolved**
+   argument while `affected_path` resolved, so inside a trusted root `path="notes.txt"`
+   symlinked to `secrets.env` carded as *"notes.txt"* and wrote `secrets.env` —
+   confinement cannot catch it, both files being inside trust. Each `permission_detail`
+   now asks `call_affected_path`, the very function the boundary asks, and answers None
+   rather than the sentinel when nothing resolves; basename-only and the fixtures are
+   unchanged, as predicted. So the code screen this plan builds and the Activity Panel
+   will agree about which file Addison touched, which is why it was a prerequisite. Two
+   things the entry did not foresee: `call_affected_path` swallowed three exception types
+   and not `RuntimeError`, which `Path.expanduser()` raises for an unknown `~user` — a
+   live turn-crash, fixed in the same commit — and the tracking entry it pointed at is in
+   `BUILD-LOG.md`, not `HANDOFF.md` (that file was rewritten on 2026-08-07).
 
 2. **`shell.readWorkspaceFile` has no size ceiling.** `filesystem.rs:261` `read_workspace_path`
    does a bare `std::fs::read` — `UNDO_SIZE_BOUND` (256 KiB) guards only the write path's
