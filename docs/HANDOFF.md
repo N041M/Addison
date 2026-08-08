@@ -61,10 +61,10 @@ name was the only thing standing there and it named the decoy. Both now ask
 `call_affected_path`, the same function confinement asks, so the card, the Activity
 Panel and the boundary cannot name three different files. Basename-only is unchanged
 — resolving is what turns a bare argument INTO a full path, so this had to keep the
-`.name`. The plan's other two prerequisites are untouched and still owed: the missing
-read ceiling in `filesystem.rs` (its own PR — it tightens a shipped tool) and
-`UndoManager.prune()`'s zero call sites (needs an owner call, not a build decision).
-[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns all three.
+`.name`. **All three of the plan's prerequisites are now closed, each in its own PR on
+2026-08-08** — this one, the missing read ceiling in `filesystem.rs`, and the prune
+wiring below. [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns
+all three and what each cost.
 
 Found while fixing it, and fixed with it: **`call_affected_path`'s except tuple did
 not name `RuntimeError`**, which is what `Path.expanduser()` raises for a `~someone`
@@ -73,6 +73,28 @@ these call sites sit outside the per-call error handling, so the turn died inste
 the step, and a routine run was left recorded `running` forever — reachable by one
 model-authored `read_project_file{path:"~someone-unknown/x"}`, and missed because the
 tuple listed the three exceptions `resolve()` raises and none of `expanduser()`'s.
+
+**The third prerequisite — `UndoManager.prune()`'s zero call sites — needed an owner
+call, and got one on 2026-08-08: the recency arm applies to REVERTED rows only, the age
+arm stays as its co-condition, and bounding `listEdits` belongs to the surface build.**
+Wiring the prune as it was written would have been worse than leaving it unwired: it
+spanned reverted and unreverted rows alike, so the first launch after a busy week would
+have deleted the very rows that describe changes still sitting on disk — the review
+surface would list fewer edits than exist and offer no way back from the ones it
+dropped. The call site is `main.JsonRpcServer._ensure_built`: §4.5 asks for "on startup",
+and that IS the startup — the worker thread builds once before it dequeues anything, all
+store access is confined to it, so no undo is in flight and no `record()` can race. It
+is the mirror image of `SnapshotManager`, which prunes inside capture and pays for it
+with a `prune=False` escape.
+
+Two things to know before touching it. **The unreverted set is now bounded by nothing**
+— one row per live edit, forever. That is the accepted cost, not an oversight: deletion
+is retention's only instrument and for these rows deletion is the harm. If it ever needs
+a bound, that bound is a *reconciliation* (the file is gone, the prior no longer applies)
+and never a recency prune. And **the keep-set is computed over reverted rows too**, not
+just the delete — otherwise a burst of live edits silently evicts old reverted rows from
+the window, which is the same bug wearing a different hat. `tests/test_undo_manager.py`
+kills both mutations by name.
 
 - **8 — the automation keyword gate. COMPLETE: all four phases landed
   2026-08-07** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the

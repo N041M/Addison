@@ -5,7 +5,10 @@ Two independent mechanisms:
   - conversational rewind : truncate message history to an earlier point
 
 They do NOT touch each other. Retention: a startup job prunes action_snapshots
-older than the configured window (default 20 actions or 7 days).
+older than the configured window (default 20 actions or 7 days) — ``prune()``
+below, called once by ``main.JsonRpcServer._ensure_built`` before the worker
+thread serves its first job. It collects REVERTED rows only (owner decision
+2026-08-08); see ``prune()`` and ``Store.prune_action_snapshots``.
 """
 
 from __future__ import annotations
@@ -103,5 +106,22 @@ class UndoManager:
         self._store.truncate_messages(conversation_id, to_message_id, keep_anchor=keep_anchor)
 
     def prune(self, max_actions: int = 20, max_age_days: int = 7) -> None:
+        """§4.5 retention: drop snapshots outside the window so the table cannot
+        grow without bound. The defaults ARE the spec's window (20 actions or
+        7 days, whichever keeps more) and live here, in §4.5's own module, so the
+        startup caller passes nothing and there is one place to change them.
+
+        Deletes REVERTED rows only — owner decision 2026-08-08 (the recommended
+        resolution in ``docs/phase-3-review-surface-plan.md`` prerequisite 3).
+        A row still unreverted describes a change that is live on disk, and its
+        payload is the only way back from it; ``Store.prune_action_snapshots``
+        owns the full semantics and states what that costs.
+
+        Called from the BUILD path only (``main.JsonRpcServer._ensure_built``),
+        never from ``record()`` or ``undo_last()``: a prune must not run while an
+        undo is in flight (it would race the row being reverted) nor beside a
+        record (a snapshot could go before the turn that produced it finishes).
+        That call site is on the single worker thread every store touch is
+        confined to, which is what makes both impossible rather than unlikely."""
         cutoff = int(time.time()) - max_age_days * 86_400
         self._store.prune_action_snapshots(cutoff=cutoff, keep_last=max_actions)

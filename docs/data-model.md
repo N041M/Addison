@@ -200,8 +200,13 @@ erDiagram
 
 - **action_snapshots** — the backing store for action undo. Each row records what a
   mutating tool did (`undo_payload`, tool-specific JSON) so `UndoManager` can reverse
-  it; `reverted` flags a snapshot that has already been undone. Retention is roughly
-  the most recent 20 actions or 7 days, whichever keeps more.
+  it; `reverted` flags a snapshot that has already been undone. Retention (pruned once
+  per launch, from `main.JsonRpcServer._ensure_built`) is roughly the most recent 20
+  actions or 7 days, whichever keeps more — **applied to `reverted = 1` rows only**
+  (owner decision 2026-08-08). An unreverted row describes a change still on disk and its
+  `undo_payload` is the only way back from it, so retention never deletes one; the
+  unreverted set is bounded where it is read instead. `docs/addison-engineering-spec.md`
+  §4.5 and `docs/phase-3-review-surface-plan.md` prerequisite 3 own that decision.
 - **tool_grants** — remembered coarse permission grants keyed by tool, with optional
   tool-specific `scope_details`. *(Phase-2, step 1):* **explicitly excluded from every
   snapshot.** It is live consent state, not configuration. Restoring it would reinstate

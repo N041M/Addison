@@ -898,6 +898,31 @@ class JsonRpcServer(
             ),
         )
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
+        # §4.5 action-snapshot retention, and the ONLY call site: the spec asks for
+        # this "on startup", and _ensure_built IS the startup — _worker_loop runs it
+        # once before it dequeues its first job.
+        #
+        # Why a prune here can never run mid-undo or race a record(): all store
+        # access is confined to this one worker thread, undo and every tool call are
+        # jobs ON that thread, and this method is not reentrant (it returns early
+        # once the orchestrator exists). So nothing can be in flight while this line
+        # runs — which stays true on the two paths that reach _ensure_built later
+        # than launch (a post-rebuild retry, a conversation.list after a failed
+        # build), because those are themselves jobs and no other job runs beside them.
+        # That is why this sits here rather than in the record path where
+        # SnapshotManager puts its own prune: that one runs INSIDE a capture and pays
+        # for it with a `prune=False` reentrancy escape (_capture).
+        #
+        # Window defaults live in UndoManager.prune (§4.5's own module), so nothing
+        # is restated here.
+        try:
+            self.undo_manager.prune()
+        except Exception:
+            # Housekeeping must never cost a session. A retention DELETE that fails
+            # (a locked or damaged database) would otherwise escape _ensure_built and
+            # turn every later request into "couldn't open its settings file" — the
+            # exact trade SnapshotManager._capture makes for the same reason.
+            pass
         self.orchestrator = Orchestrator(
             model_router=self.model_router,
             tool_registry=self.tool_registry,

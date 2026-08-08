@@ -77,25 +77,36 @@ def test_recent_respects_limit_and_reverted_filter(store: Store):
     assert [s.id for s in store.recent_unreverted_snapshots(limit=10)] == ["mid", "old"]
 
 
+def _all_snapshot_ids(store: Store) -> set[str]:
+    """Every action_snapshots row, reverted or not. Retention now touches ONLY
+    reverted rows (owner decision 2026-08-08), which ``recent_unreverted_snapshots``
+    filters out — so asserting survivors through that reader would see an empty
+    list either way and prove nothing."""
+    return {r["id"] for r in store._conn.execute("SELECT id FROM action_snapshots").fetchall()}
+
+
+def _reverted(store: Store, snap_id: str, created_at: int) -> None:
+    store.insert_action_snapshot(_snap(snap_id, created_at=created_at))
+    store.mark_snapshot_reverted(snap_id)
+
+
 def test_prune_respects_cutoff_and_keep_last(store: Store):
-    store.insert_action_snapshot(_snap("ancient", created_at=100))
-    store.insert_action_snapshot(_snap("old", created_at=200))
-    store.insert_action_snapshot(_snap("recent", created_at=900))
+    for snap_id, created_at in (("ancient", 100), ("old", 200), ("recent", 900)):
+        _reverted(store, snap_id, created_at)
 
     # cutoff=500 => "ancient" and "old" are old enough to delete, but keep_last=1
     # forces the single most-recent snapshot to be retained no matter its age.
     store.prune_action_snapshots(cutoff=500, keep_last=1)
-    survivors = {s.id for s in store.recent_unreverted_snapshots(limit=10)}
-    assert survivors == {"recent"}
+    assert _all_snapshot_ids(store) == {"recent"}
 
 
 def test_prune_keep_last_retains_recent_even_when_all_are_old(store: Store):
     for i, snap_id in enumerate(("s1", "s2", "s3", "s4")):
-        store.insert_action_snapshot(_snap(snap_id, created_at=10 + i))
+        _reverted(store, snap_id, created_at=10 + i)
 
     # Everything is older than the cutoff, but keep_last=2 keeps the two newest.
     store.prune_action_snapshots(cutoff=10_000, keep_last=2)
-    assert [s.id for s in store.recent_unreverted_snapshots(limit=10)] == ["s4", "s3"]
+    assert _all_snapshot_ids(store) == {"s3", "s4"}
 
 
 # --- conversations / messages / rewind -------------------------------------

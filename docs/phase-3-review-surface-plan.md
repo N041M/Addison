@@ -4,7 +4,9 @@
 2026-08-07**: all three prerequisites have landed (step 6 widget capability tiers
 and step 7 the MCP client on 2026-08-06/07, and step 8 the automation keyword gate
 on 2026-08-07, all four of its phases). Nothing is waiting on anything now; the
-surface waits only on somebody starting it.
+surface waits only on somebody starting it. **The three fixes listed under
+"Prerequisites" below are also all closed as of 2026-08-08** — the resolved permission
+detail, the read ceiling, and the prune wiring, each in its own PR.
 [`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
 
 > **This redefines what "Phase 3" means.** Before this plan, Phase 3 meant packaging /
@@ -160,16 +162,29 @@ than one it introduces.
    path's prior capture got the same pre-check, with its own bound and its own message
    unchanged, because it loaded the whole file before refusing it too.
 
-3. **`UndoManager.prune()` has zero call sites** (verified: the only `prune()` call in the
-   tree is `snapshot_manager.py:620` calling its own). `action_snapshots` grows without
-   bound. Invisible today; the moment you list it, the list is unbounded and includes
-   edits whose files may no longer exist. **But wiring it as written would be worse** —
-   `prune_action_snapshots` spans reverted *and* unreverted rows, so a 20-action startup
-   prune would delete unreverted rows and make live on-disk changes both unlistable and
-   unrevertable. Recommended resolution: apply the recency arm to **reverted rows only**,
-   keep the age arm, and bound `listEdits` independently. This is a genuine conflict
-   between §4.5 retention and this feature — flag it for an owner call rather than
-   deciding it inside the build.
+3. ~~**`UndoManager.prune()` has zero call sites.**~~ **RESOLVED 2026-08-08 — owner
+   decision, taking this entry's recommendation.** The recency arm applies to **reverted
+   rows only**; the age arm is kept as its co-condition; bounding `listEdits` is deferred
+   to the surface build, where it is already written (Build §2, "The diff — from data that
+   already exists": `reverted = 0`, `_MAX_EDITS = 200`). `prune()` now has exactly one call site —
+   `main.JsonRpcServer._ensure_built`, the once-per-launch worker-thread build — which is
+   §4.5's "on startup" and is also the only place a prune cannot race: every store touch
+   is confined to that thread and no job has been dequeued yet, so nothing is mid-undo and
+   no `record()` is in flight. (Contrast `SnapshotManager`, which prunes *inside* capture
+   and therefore needs its `prune=False` reentrancy escape.)
+
+   Both halves of the recency arm are scoped to reverted rows — the keep-set too, not just
+   the delete — so a burst of live edits can never push older reverted rows out of the
+   window. **The cost the decision accepts, stated rather than hidden:** an unreverted row
+   is now deleted by nothing, so §4.5's retention no longer bounds that subset of the
+   table. That is deliberate — the only tool retention has is deletion, and for a row
+   describing a change still on disk deletion *is* the harm — but "`action_snapshots`
+   grows without bound" is therefore narrowed, not closed: it is bounded for history and
+   unbounded for live edits, one row per live edit. If that ever needs a bound, it is a
+   *reconciliation* (drop rows whose file is gone or whose prior no longer applies), never
+   a recency prune. Four mutation-proven tests in `tests/test_undo_manager.py` hold the
+   line, the load-bearing one being that unreverted rows survive however old and however
+   many they are — the exact thing the naive wiring would have broken.
 
 ---
 
@@ -566,8 +581,10 @@ than a failing button.
 
 ## Owner decisions this plan surfaces
 
-1. **`UndoManager.prune()`** conflicts with the review surface (prerequisite 3). Recommended:
-   recency arm on reverted rows only.
+1. ~~**`UndoManager.prune()`** conflicts with the review surface (prerequisite 3).~~
+   **ANSWERED 2026-08-08, as recommended** — recency arm on reverted rows only, age arm
+   kept, `listEdits` bounded in the surface build. Built the same day; prerequisite 3
+   above owns what shipped and what it costs.
 2. ~~**"The floor protects Addison's DATA, not Addison's CODE"**~~ — **ANSWERED
    2026-08-06, ahead of this wave, and as recommended.** The running app's bundle joined
    the protected set (`filesystem.rs::addison_app_bundle`), so the seatbelt denies writes
