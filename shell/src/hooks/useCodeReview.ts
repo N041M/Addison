@@ -17,12 +17,25 @@
 // what this hook believes. Nothing here is a gate; every refusal below is a
 // sentence the core wrote, forwarded whole.
 //
-// THE RACE. Every fetch carries a sequence number and a late answer for a path the
-// person has already navigated away from is DROPPED. Without it, clicking three
-// files quickly leaves whichever answer happened to arrive last on screen, under
-// whichever header arrived first — a viewer showing one file's text under another
-// file's name, on the one screen in the app whose entire job is to be exact about
-// which file is which.
+// THE RACES — there are TWO, and they get two counters because they are two
+// questions. Every fetch carries the number that answers its own, and a late answer
+// carrying a superseded one is DROPPED rather than applied.
+//
+//   * WHICH PICK IS THE PANE SHOWING (`paneSeq`, bumped on every open). Without it,
+//     clicking three files quickly leaves whichever answer happened to arrive last
+//     on screen, under whichever header arrived first — a viewer showing one file's
+//     text under another file's name, on the one screen in the app whose entire job
+//     is to be exact about which file is which.
+//   * WHICH VISIT ASKED (`visitSeq`, bumped once per arrival on the screen).
+//     Leaving cancels nothing, so the come-back re-read at the bottom of this file
+//     races the answers the LAST visit is still waiting on. All three shapes were
+//     reproduced: a file Addison deleted walks back into the tree over the fresh
+//     listing; last visit's refusal lands on top of a good listing and wins, because
+//     the row renders an error before it renders entries; and a row somebody
+//     reverted reappears with a live "put it back" beside it.
+//
+// ONE counter cannot do both jobs: the pane's bumps many times within a single
+// visit, and the visit's must not bump when somebody merely picks a second file.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -137,14 +150,24 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
   const [revertNotice, setRevertNotice] = useState<string | null>(null);
   const [revertError, setRevertError] = useState<string | null>(null);
 
-  // The race guard described in the file header.
+  // The two race guards described in the file header. Both are refs, and that is
+  // load-bearing rather than a style choice: the callbacks below close over them, so
+  // making either one state would change those callbacks' identity and re-run the
+  // come-back effect that lists them — turning a once-per-visit read into a poll.
   const paneSeq = useRef(0);
+  const visitSeq = useRef(0);
 
   const refreshEdits = useCallback(() => {
     if (!isEngineConnected()) return;
+    const visit = visitSeq.current;
     ipc
       .listWorkspaceEdits()
       .then((answer) => {
+        // Superseded by a later visit — see the header. The come-back effect has
+        // already asked this question again, and last visit's answer describes a
+        // moment that has passed: applying it walks a reverted row back onto the
+        // screen with a live "put it back" beside it.
+        if (visit !== visitSeq.current) return;
         if (answer.error !== undefined) {
           // Keep whatever was already listed rather than blanking the column: a
           // stale list with a sentence over it is more use than an empty one.
@@ -158,6 +181,7 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
         setEditsLoaded(true);
       })
       .catch(() => {
+        if (visit !== visitSeq.current) return;
         // A REJECTION IS NOT AN EMPTY LIST. `editsLoaded` alone let the column fall
         // through to "Addison hasn't changed any files that are still changed." —
         // stating as fact the one thing a call that never came back cannot know. The
@@ -184,9 +208,13 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
       // the row with no sentence, no listing and no retry: a permanent "Looking…",
       // the state the retry exists to abolish (found reviewing #85, 2026-08-08).
       if (!isEngineConnected()) return false;
+      const visit = visitSeq.current;
       ipc
         .listWorkspaceDirectory(directory)
         .then((answer) => {
+          // Superseded by a later visit — see the header. This is the answer that
+          // walks a deleted file back into the tree on top of the fresh listing.
+          if (visit !== visitSeq.current) return;
           if (answer.error !== undefined) {
             setListingErrors((prev) => ({ ...prev, [directory]: answer.error }));
             return;
@@ -195,6 +223,10 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
           setListings((prev) => ({ ...prev, [directory]: answer.value }));
         })
         .catch(() => {
+          // ...and the same for a rejection, which would otherwise put last visit's
+          // refusal over a listing that arrived and is good: the row renders its
+          // error before it renders any entries, so the stale sentence WINS.
+          if (visit !== visitSeq.current) return;
           // The folder IS open — `toggleDirectory` expanded it before asking — so a
           // silent catch left "Looking…" on screen for as long as the person stood
           // there, and the next press on the row put the folder away rather than
@@ -236,9 +268,18 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
       // The read is deliberately OUTSIDE the state updater: React may invoke an
       // updater more than once (it does under StrictMode), and a fetch inside one
       // would fire twice per click.
-      loadDirectory(directory);
+      //
+      // ...and the LAST REFUSAL GOES WITH THE REQUEST THAT REPLACES IT, on exactly
+      // the terms `retryDirectory` sets three lines above — this is the same press,
+      // reached the long way round. Without it, open → fail → close → open answers
+      // the press with the old sentence while a fresh listing is already in flight:
+      // the row states as fact a refusal nobody has repeated yet, and the retry
+      // button beside it is the only thing on screen that behaves honestly. Cleared
+      // only once the read is genuinely on its way, for the reason `loadDirectory`
+      // gives — with no engine there is nothing to replace the sentence with.
+      if (loadDirectory(directory)) clearListingError(directory);
     },
-    [expanded, loadDirectory],
+    [clearListingError, expanded, loadDirectory],
   );
 
   const openFile = useCallback((path: string) => {
@@ -249,6 +290,14 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
     setFileView(null);
     setPaneError(null);
     setPaneBusy(true);
+    // Picking something else is a new question, so last answer's Revert sentences
+    // go — the same two lines `openEdit` has always had. They matter here now that
+    // a failed Revert says so OUTSIDE `RevertBlock` (`CodeSurface`): the sentence
+    // used to vanish with that block when the pane changed to a file, and a failure
+    // about `app.py` left standing over `README.md` would be worse than the bug it
+    // was left there to fix.
+    setRevertError(null);
+    setRevertNotice(null);
     ipc
       .readWorkspaceFile(path)
       .then((answer) => {
@@ -300,6 +349,14 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
    * purpose is to change a file, and every path out of it that used to set
    * `revertError` to null left the confirm open with no sentence under it — the
    * person pressed the button and Addison said nothing at all.
+   *
+   * ...and SAYING IT IS NOT THE SAME AS RENDERING IT. The re-read on the line below
+   * is what taught that: it lands before the person can read anything, and when the
+   * row it brings back is gone (or comes back `revertable: false`) the block that
+   * used to hold this sentence is not on screen to hold it. The sentence therefore
+   * renders in `RightPane` itself, beside the block rather than inside it — the
+   * failure of a press must not depend on what the answer to a different call
+   * happens to say.
    */
   const revert = useCallback(
     async (path: string): Promise<boolean> => {
@@ -374,12 +431,20 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
     const returning = live && !wasOnScreen.current;
     wasOnScreen.current = live;
     if (!returning) return;
+    // THE VISIT NUMBER GOES UP FIRST, before a single call below is made. Everything
+    // the last visit is still waiting on carries the old one from here on and is
+    // dropped when it lands — see the header for the three shapes that reached the
+    // screen without this.
+    visitSeq.current += 1;
     // Last visit's revert notice goes with everything else that was answered before
     // the person left. It renders when nothing is selected — exactly the state a
     // successful revert leaves behind — so without this, coming back announces a
     // thing you did and already walked away from: the same held-answer problem this
-    // effect exists to end (found reviewing #85, 2026-08-08).
+    // effect exists to end (found reviewing #85, 2026-08-08). Its failure sentence
+    // goes for the same reason, and now must: it renders on its own in `CodeSurface`
+    // rather than inside a block that a re-read can unmount.
     setRevertNotice(null);
+    setRevertError(null);
     refreshEdits();
     onScreen.current.expanded.forEach((directory) => loadDirectory(directory));
     // Re-opened through the ordinary path, so the pane goes busy and empties first:
