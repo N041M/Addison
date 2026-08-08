@@ -45,10 +45,14 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**One step remains — 8, and phases 1–3 of four are BUILT. Only phase 4 is left.** `ROADMAP.md` owns
-status; trust it over this file.
+**NOTHING FROM THE PHASE-2 SEQUENCE REMAINS. Step 8 completed 2026-08-07 — all
+four phases — and with it the July-2026 scope change.** What is next is **Phase 3**
+(packaging, signing, notarisation, the auto updater, previous-binary restore,
+Secure Enclave identity), plus the **Developer review surface**, whose plan is
+approved and, since step 8 landed, **unblocked and unstarted**.
+`ROADMAP.md` owns status; trust it over this file.
 
-- **8 — the automation keyword gate. The plan exists; phases 1, 2 and 3 landed
+- **8 — the automation keyword gate. COMPLETE: all four phases landed
   2026-08-07** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the
   phases and the decisions). Syntax was decided by the owner (a per-automation
   nonce Addison shows and you retype, because a fixed prefix is forgeable by
@@ -69,19 +73,27 @@ status; trust it over this file.
   constant-time compare, three attempts), the shell's `automation.rs` (the only
   writer of `~/Library/LaunchAgents` — it builds the plist itself from typed fields
   and never takes a document), `arm_automation` (HIGH, real `undo()` = disarm) and
-  `disarm_automation` (a tightening: ordinary card, no code, no undo). **Next and
-  last: phase 4** — state honesty, Simple's disabled rows, and the `onRestored`
-  refresh hook phase 2 left owed.
+  `disarm_automation` (a tightening: ordinary card, no code, no undo). **Phase 4 =
+  state honesty**: armed truth is asked of
+  the OS when a surface loads and never stored (a restore puts a ROW back, never a
+  JOB), Simple lists automations as disabled rows instead of hiding them, and
+  `App.tsx`'s `onRestored` re-reads the list like every other captured table.
 
-  **Three things to know before touching this subsystem**, all found by the phase-3
-  review rather than by its build: the ceremony's requirement lives on the TOOL
-  (`gate.tool_requires_arming`), never on whether a preview arrived — keyed off the
-  payload it failed OPEN, downgrading to an ordinary card or, under Custom's
-  "never ask", to none; `automation.remove` disarms BEFORE it forgets, because a
-  removed row leaves a running job nobody can name or stop; and the core and the
-  shell are two implementations of one contract, now pinned in
-  `tests/test_automations.py` for BOTH the plist bytes and the label rules — the
-  label half was missing and had already drifted.
+  **Four things to know before touching this subsystem**, three from the phase-3
+  review and one from phase 4:
+
+  - Phase 4's disabled marker is decided from what an automation IS (it runs a
+    command, so always) via a literal `True` — NOT from `created_in_mode`. A branch
+    scan pins it. The routines half still reads the stamp and that remains the
+    tracked bug in KNOWN-GAPS; do not copy it here.
+  - The ceremony's requirement lives on the TOOL (`gate.tool_requires_arming`),
+    never on whether a preview arrived. Keyed off the payload it failed OPEN —
+    downgrading to an ordinary card, or under Custom's "never ask" to none.
+  - `automation.remove` disarms BEFORE it forgets, because a removed row leaves a
+    running job nobody can name or stop.
+  - The core and the shell are two implementations of one contract, pinned in
+    `tests/test_automations.py` for BOTH the plist bytes and the label rules — the
+    label half was missing and had already drifted.
 - **7 — MCP client. DONE FOR v1: phases 1–4 of five, 2026-08-06 to 2026-08-07.**
   Transport was decided by the owner on 2026-08-06: **HTTP only for v1**, which is
   what keeps the client in the Agent Core and adds no new highest-trust surface.
@@ -180,8 +192,9 @@ committed and pushed; `master` is clean.
 
 ## Branch and PR state (verified 2026-08-07, end of day)
 
-**One PR open: step 8 phase 3 (branch `claude/step-8-phase-3-arming` — the keyword
-gate and arming; this file ships in it). `master` carries everything through #67** — step 8's plan,
+**One PR open: step 8 phase 4 (branch `claude/step-8-phase-4-state-honesty` — state
+honesty and Simple's disabled rows; this file ships in it). `master` carries
+everything through #68** — step 8's plan,
 phase 1 (the fence and the table), phase 2 (authoring), and the review of both,
 merged 2026-08-07 with CI green on the merge commit. Work from `master`.
 **Re-read this section

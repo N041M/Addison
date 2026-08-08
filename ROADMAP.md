@@ -43,14 +43,16 @@ single connected provider can contribute twenty-two models.
 
 ## Next
 
-**One thing is left — step 8.** Step 7 finished what it is doing for v1 on
-2026-08-07: four of its five phases have landed (saving a server's address,
-checking what it offers, running one with your approval every time in the
-Developer profile only, and passing back what it answered), and the fifth is a
-pair of things v1 deliberately does not include. Step 5.5 headed this list until
-2026-07-31 and step 6 until 2026-08-06; both are finished. Their entries stay
-below, in place, because they are recent enough that people still ask what they
-covered.
+**Nothing from this sequence is left. Step 8 finished on 2026-08-07, and with it
+the whole July-2026 scope change.** What comes next is Phase 3 — packaging,
+signing, notarisation, the auto updater, going back to a previous app binary, and
+Secure Enclave identity. `updater.rs` is still a nine-line stub and is the only
+`TODO(step N)` marker in the tree.
+
+Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
+2026-08-07 and step 8 for the rest of that day; all are finished. Their entries
+stay below, in place, because they are recent enough that people still ask what
+they covered.
 
 5.5. **Containment for the coding harness — DONE 2026-07-31.** Step 5 gave
    Developer mode a real shell. What did not come with it was a boundary underneath
@@ -156,7 +158,7 @@ covered.
    is trimmed to a size that fits, once for the whole answer rather than once per
    piece, and the trim now says how long the answer was and how much of it you are
    seeing.
-8. **The automation keyword gate.** Let Addison write automation that the operating
+8. **The automation keyword gate — DONE 2026-08-07, all four phases.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
    never triggers itself. The keyword is a code Addison shows you and you retype,
    minted fresh for each arming — decided 2026-08-07, and what made a fixed prefix
@@ -175,6 +177,17 @@ covered.
    exists and is covered by restore points, deliberately with no way to add a row
    and no memory of "armed": what is armed is the OS's truth, so a restore can
    never re-arm anything by putting a database row back.
+
+   **What phase 4 shipped (2026-08-07, same day) — the last of it.** Two kinds of
+   honesty. Whether an automation is actually running is asked of the computer
+   when you open the page, never remembered — so after restoring a backup, or
+   reinstalling, or deleting the file by hand, what you see is what is true rather
+   than what Addison last wrote down. And automations no longer vanish when you
+   switch to the Simple profile: they are listed, plainly marked as waiting, and
+   still removable — because a switch that hides your own work reads like Addison
+   deleted it, and because turning something off should never be the thing a
+   profile change traps you out of. Simple does not show the command or offer to
+   arm anything; it shows what you wrote and whether your computer is running it.
 
    **What phase 3 shipped (2026-08-07, same day) — the part the step is named
    for.** You can now switch an automation on, and doing it takes more than a

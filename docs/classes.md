@@ -523,7 +523,9 @@ rollback. An OPEN-mode `command` step **always** raises the gate's per-invocatio
 destructive card: it runs through `run_command`, whose `affected_path` is `None`, and
 the engine passes `trusted=False` unconditionally for stored, replayable steps — so a
 trusted workspace never makes a saved routine's command card-free. The keyword gate for
-OS-run automation is Phase-2 step 8 and not built.
+OS-run automation shipped in step 8 phase 3 (2026-08-07):
+`agent_core/automation_nonce.py` mints it, the gate raises it, and the shell's
+`automation.rs` is what installs the job.
 
 ```mermaid
 classDiagram

@@ -186,7 +186,15 @@ class Method:
     # `supported` is false off macOS, where arming does not exist at all.
     AUTOMATION_STATUS = "automation.status"
     # <row> = {id, name, label, command, scheduleKind, schedule, scheduleSentence,
-    #          createdInMode, createdAt}
+    #          createdInMode, createdAt, unavailable?}
+    # `unavailable` is {reason, message} on a row the ACTIVE PROFILE cannot use, and
+    # the key is omitted entirely otherwise — so an available row's shape is what it
+    # always was. In Simple that is every row, because an automation's payload is a
+    # shell command and there is no such thing as one Simple could arm. DISPLAY ONLY:
+    # what actually refuses is the arming tools' registration and dispatch, and if
+    # the two ever disagree, dispatch wins (docs/SAFETY.md owns the rule). Rows are
+    # LISTED and disabled rather than hidden — hiding somebody's saved work on a
+    # profile switch is the failure the 2026-08-06 artifact decision reversed.
     # `schedule` is the parsed CLOSED-FIELD object for this row's kind — interval:
     # {minutes}; calendar: {hour, minute, weekday?} — with camelCase keys that are the
     # stored names exactly, because every one of them is a single word. It is a

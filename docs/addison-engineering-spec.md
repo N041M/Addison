@@ -1458,10 +1458,10 @@ These are hard constraints, not preferences — flag to the user if any of these
 > every mode, nothing in `policy.py` or the registry makes scheduling
 > mode-dependent, and item 6's reinterpretation (Addison *authors* automation, the
 > OS runs it — see the §6 automation note) is amendment-level and
-> mode-independent, not an OPEN-mode relaxation. It is also **not built**: the
-> automation keyword gate and author-OS-run automation are Phase-2 step 8, *not
-> started*. OPEN means fewer prompts, not no gate: the gate still runs and logs on
-> every call.
+> mode-independent, not an OPEN-mode relaxation. It **shipped as Phase-2 step 8 on
+> 2026-08-07**, all four phases: the fence, authoring, the keyword gate and arming,
+> and state honesty. OPEN means fewer prompts, not no gate: the gate still runs and
+> logs on every call — and arming additionally needs a code the person retypes.
 
 1. No tool may execute arbitrary shell commands or unrestricted code. The Routine Engine (§6) is declarative for the same reason.
 2. Every `risk_tier != LOW` tool must have a real `undo()`, enforced at registration (§4.2) — not a convention, a runtime check that raises if violated.
@@ -1627,9 +1627,9 @@ of that pass); code then follows in **dependency order, safety floor first**:
 7. **MCP client integration** — external tools through the registry + gate,
    mode-scoped (§4.12). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option — [plan](step-7-mcp-plan.md).
-8. **Automation keyword gate** + author-OS-run automation (§6). **Phases 1–2 of 4
-   shipped 2026-08-07** (the fence, the table, authoring as inert drafts); the gate
-   and arming are phase 3. ROADMAP owns status.
+8. **Automation keyword gate** + author-OS-run automation (§6). **COMPLETE — all
+   four phases shipped 2026-08-07** (the fence, authoring, the gate and arming, and
+   state honesty). ROADMAP owns status.
 
 **[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
 carried a second copy of the state until that copy went stale. Steps 6–8 are the
@@ -1644,7 +1644,8 @@ proceed in parallel with 5–8 once 1–2 land. Of the amendment's §13 open que
 half-resolved** — each with its reasoning recorded inline there; do not reopen them.
 **Q7 (the widget kinds/capability grammar) was resolved 2026-08-06** by step 6 — the
 kinds are a closed hard-coded set and the capability grammar was cut. Still genuinely
-open: **keyword-gate syntax (Q1)** and **the MCP-in-SAFE constraint (Q6)**. Q6 used to
+open: **the MCP-in-SAFE constraint (Q6)**. Q1 (keyword-gate syntax) was answered on
+2026-08-07 — a per-automation nonce, not a prefix — and built the same day. Q6 used to
 **block** step 7; it no longer does — the owner's 2026-08-06 decision that MCP is
 **dev-only for v1** defers SAFE admission instead of answering it, and no code depends
 on it ([`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns that question).
@@ -1668,8 +1669,8 @@ cost the plan states plainly: Monaco requires widening the webview CSP with
 `style-src 'unsafe-inline'`, globally, for one window.
 
 It is **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is done
-for v1 as of 2026-08-07, and 8 is not started. Read the plan before starting either
-Phase-3 track.
+for v1 as of 2026-08-07, and 8 completed the same day, so this is now **UNBLOCKED and
+unstarted**. Read the plan before starting either Phase-3 track.
 
 Note that **restoring a previous app binary remains a Phase-3 updater item and is
 not implemented** (owner decision 2026-07-20, §4.9): `shell/src-tauri/src/updater.rs`

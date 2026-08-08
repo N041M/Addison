@@ -12,7 +12,79 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
-## What shipped 08-07 (last) — step 8 phase 3: the keyword gate, and what its review found
+## What shipped 08-07 (sixth, last) — step 8 phase 4: state honesty, and the end of step 8
+
+The last phase of the last step. Armed-ness is read from the OS when a surface
+loads; Simple lists automations as disabled rows instead of hiding them; a restore
+re-reads the list. **Step 8 is complete, and with it the July-2026 scope change.**
+
+What is worth keeping from it is smaller than phase 3's list, and one item is a
+near-miss rather than a defect:
+
+- **THE STAMP TRAP WAS AVOIDED BY REMOVING THE QUESTION, NOT BY ANSWERING IT
+  CAREFULLY.** Routines decide availability from `created_in_mode` — the tracked
+  bug in KNOWN-GAPS, where a checklist made in Developer arrives in Simple
+  disabled and announcing it "uses developer abilities" about a widget that
+  invokes no tool. The temptation here was identical, and the escape was that
+  every automation runs a command, so the answer is `True` for all of them: the
+  caller passes a literal, and with no per-row question there is no stamp to read.
+  A branch scan pins it, because "we passed a constant" is only true until
+  somebody adds an `if`. **Where a per-row question has one answer, delete the
+  question.**
+- **A DOC CLAIM WALKED PAST THE LINE IT WAS WRITTEN FOR, because of markdown.**
+  The `automation-arming-built` row added in phase 3 matched "arming is not
+  built" — and CLAUDE.md's G2 floor said `(designed, **not built**: step 8 phase
+  3)`, where the bold split the phrase the pattern was looking for. The row was
+  green while the app's most-loaded document told every session the keyword gate
+  did not exist. Widened to match the parenthetical shape, punctuation and
+  emphasis included, and re-proven against the exact line. **A pattern written
+  against prose must be tested against the tree's MARKUP, not against the
+  sentence you would have written.**
+- **Two independent answers drive the disabled row**, deliberately: the core's
+  marker and the active profile, either sufficient. A core that forgot to mark a
+  row still renders it inert. That is the cheap direction to be redundant in.
+- **THE SWEEP DECLARED STEP 8 COMPLETE WITHOUT READING THE TREE.** Nine live
+  sentences across seven files still said arming was not built — README's
+  user-facing paragraph, three in flows.md (one of them describing the rejected
+  `!run` design), architecture.md, classes.md, four in the engineering spec, and
+  **the KNOWN-GAPS clause the plan's own §7 had listed as phase 4's owed item**.
+  Worse, §7 asserted "every item below is done" and named flows.md, which the
+  commit never opened. The sweep had been done by following the `doc_claims` row
+  rather than by grepping, and the row's patterns matched none of those phrasings.
+  **A mechanical check is a floor, not a sweep** — it catches the shapes somebody
+  already thought of, and a completion claim has to be verified against the tree.
+- **The frontend agent's first mutation round produced five false "survived"
+  verdicts** — anchors that matched the *widget* parser's byte-identical idiom in
+  the same file, and a test whose fixture row was marked so the profile half never
+  ran. It re-anchored and re-ran with exit-code verdicts. Worth recording because
+  a mutation harness that reports "survived" wrongly is worse than none: it
+  retires a real test.
+- **Two user-facing strings leaked the capability Simple refuses.** The build
+  correctly withheld the command text and the Arm/Disarm controls, then left the
+  prose: an empty state reading "Ask Addison to set one up" (for a tool that is
+  `open_only` and can only answer with a refusal) and a row reading "nothing runs
+  until you arm it" directly beneath the line saying this profile cannot.
+  SAFETY.md names that exact shape — "a vocabulary that teaches one, an affordance
+  that invites one" — and it also falsified a sentence written in the same diff.
+  **Withholding the control is half of it; the copy is the other half.**
+- **A new comment claimed `arm_automation` registers `dev_only`. It registers
+  `open_only`, and the difference is undo enforcement** — `dev_only` takes the
+  waiver, and this is a HIGH tool with a real `undo()`. `main.py` warns about this
+  exact misreading in the file the comment contradicts. An agent trusting the
+  comment and "correcting" the registration would silently drop SAFE invariant 2
+  from the one tool that hands a job to the OS.
+- **`automation.remove` disarmed the job BEFORE minting its restore point**, so a
+  capture failure answered "it didn't remove anything" after the automation had
+  been switched off — with no snapshot, no audit row (it is an RPC, not a tool) and
+  no undo. Reordered; the cost is a restore point on a removal that then refuses,
+  which is the cheap direction.
+- **A G3 restore can orphan an armed job**, and phase 4 made the row vanish rather
+  than sit uselessly on screen. Recorded in KNOWN-GAPS rather than fixed: the real
+  answer is reconcile-on-restore, and the alternatives (blocking a restore, or
+  disarming inside one) would put arming decisions inside the one action G3
+  promises is always available.
+
+## What shipped 08-07 (fifth) — step 8 phase 3: the keyword gate, and what its review found
 
 Arming exists. `arm_automation` installs a launchd job through the shell, behind the
 ordinary card PLUS a six-character code the person retypes. The plan owns the
@@ -71,7 +143,7 @@ made while fixing them.
 - A guard I added was unreachable from its real caller, so no mutation killed it,
   until the choice was extracted as a pure function and tested at its own boundary.
 
-## What shipped 08-07 (second-last) — the review of step 8 phases 1–2, and of its own fixes
+## What shipped 08-07 (fourth) — the review of step 8 phases 1–2, and of its own fixes
 
 Four read-only reviewers over disjoint scopes (Python correctness, Rust+frontend,
 cleanup, doc currency), then an adversarial pass over the FIXES. The fix pass is
@@ -137,7 +209,7 @@ precedent it cites carries one; `HOME=""` silently dropped three seatbelt
 write-denies; and six documents plus five source docstrings still described a
 tree where nothing could author automation.
 
-## What shipped 08-07 (second-last) — step 8 phase 2: authoring, and a preview that may not travel
+## What shipped 08-07 (third) — step 8 phase 2: authoring, and a preview that may not travel
 
 `create_automation` (dev-only) writes a draft row; the Settings surface lists
 drafts; nothing can arm one. The plan's phase-2 entry owns the decisions; what

@@ -74,6 +74,14 @@ _ROUTINE_DEV_ABILITIES_MESSAGE = (
 _WIDGET_DEV_ABILITIES_MESSAGE = (
     "That widget uses developer abilities, so it's waiting in Developer profile."
 )
+# An automation's payload is a shell command, so EVERY automation needs Developer —
+# there is no such thing as one a Simple profile could arm. That uniformity is why
+# its caller passes a decided `True` rather than asking the row anything: with no
+# per-row question there is no stamp to be tempted into reading (step 8 phase 4;
+# the routines half above is the cautionary entry in KNOWN-GAPS).
+_AUTOMATION_DEV_ABILITIES_MESSAGE = (
+    "That automation runs a command, so it's waiting in Developer profile."
+)
 
 
 def _unavailable_marker(mode: PolicyMode, needs_dev: bool, message: str) -> dict | None:

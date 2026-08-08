@@ -24,7 +24,9 @@ about what does:
   (4) the table is snapshot-CAPTURED, so a restore genuinely puts the list back
       (reversible config, plan §1);
   (5) both methods answer in EVERY profile, because saved configuration is not a
-      capability and a tightening must never be trapped by a profile switch;
+      capability and a tightening must never be trapped by a profile switch — and
+      (phase 4) Simple gets those rows LISTED AND DISABLED, carrying the sentence
+      that says why, decided without ever asking a row where it was born;
   (6) every ``automation.*`` method is answered ON THE WORKER THREAD.
 
 Every test here was mutation-proven: the line it guards was broken and this test
@@ -87,6 +89,31 @@ _CALENDAR = {
     "schedule_json": json.dumps({"hour": 7, "minute": 30, "weekday": 1}),
     "created_in_mode": "open",
     "created_at": 1_700_000_100,
+}
+# A row stamped ``safe``. No tool can write one — ``create_automation`` is OPEN-only —
+# but a hand-edited database, an older build or a restored payload can, and the phase-4
+# tests below need one: it is the row that TELLS THE TWO QUESTIONS APART. Availability
+# read off the stamp would call this one usable in Simple (it was "born safe"), and the
+# person would get a Run-shaped row for a shell command in the profile that has no shell.
+_SAFE_STAMPED = {
+    "id": "auto-3",
+    "name": "Say the time",
+    "label": "com.addison.auto.say-the-time",
+    "command": "/usr/bin/say the time",
+    "schedule_kind": "interval",
+    "schedule_json": json.dumps({"minutes": 30}),
+    "created_in_mode": "safe",
+    "created_at": 1_700_000_200,
+}
+
+# The frozen phase-4 sentence and slug, as literals. Written out here rather than
+# imported from rpc/constants.py on purpose: a test that asserts a payload equals the
+# constant the payload was built from passes whatever either of them says. The frontend
+# pins this same string, so a reword lands as a red build on both sides rather than as
+# new wording in front of somebody.
+_DISABLED_IN_SIMPLE = {
+    "reason": "developer_abilities",
+    "message": "That automation runs a command, so it's waiting in Developer profile.",
 }
 
 
@@ -483,6 +510,195 @@ def test_a_saved_automation_is_listed_and_removable_in_every_profile(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# (5b) ...and in Simple they are listed DISABLED, saying why — phase 4
+# ---------------------------------------------------------------------------
+
+
+def test_simple_lists_every_automation_disabled_and_says_why(tmp_path):
+    """The artifact rule (docs/SAFETY.md), applied to a table where it is UNIFORM:
+    an automation's payload is a shell command, so every row is waiting for Developer
+    and every row says so, in the one sentence rpc/constants.py holds for both the
+    surface and the refusal.
+
+    The third row is the load-bearing one. It is stamped ``safe`` — which no tool can
+    produce, but a hand edit, an older build or a restored payload can — and it is
+    marked exactly like the other two, because what decides this is what an automation
+    IS, not where it was born. Read off the stamp (the routines bug in
+    docs/KNOWN-GAPS.md) this row would arrive in Simple looking usable.
+
+    Frozen copy, asserted as a literal rather than against the constant it is built
+    from: a test that compares a payload to its own source passes whatever that source
+    says, and the frontend pins this same sentence.
+
+    Mutations: (a) drop the ``if unavailable is not None`` block from
+    ``_automation_wire_row`` — this fails on the first row; (b) pass
+    ``row.created_in_mode == PolicyMode.OPEN.value`` as the decision, the routines
+    bug — this fails on the ``safe``-stamped row alone; (c) reword
+    ``_AUTOMATION_DEV_ABILITIES_MESSAGE`` — this fails on the sentence."""
+    h = _server_with(tmp_path, _INTERVAL, _CALENDAR, _SAFE_STAMPED)
+    try:
+        rows = _call(h, "automation.list", {}, 1)["automations"]
+        assert [r["id"] for r in rows] == ["auto-1", "auto-2", "auto-3"]
+        for row in rows:
+            assert row["unavailable"] == _DISABLED_IN_SIMPLE, row["id"]
+        # The stamp still rides along as display provenance — it is a badge, and this
+        # test is not asking for it to be removed. It is asking for it to be ignored.
+        assert [r["createdInMode"] for r in rows] == ["open", "open", "safe"]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_developer_and_custom_list_the_same_rows_with_no_marker_at_all(tmp_path):
+    """Both OPEN profiles, and the key is ABSENT rather than present-and-null — the
+    shape every existing parser already reads, byte-for-byte. A ``"unavailable": null``
+    would be a new key on a row nothing is wrong with, and a frontend that rendered
+    truthiness would be right by accident until somebody sent it ``{}``.
+
+    Custom is listed here because it derives OPEN exactly as Developer does
+    (policy.mode_for_profile) and its guards are prompting guards, never floors: an
+    automation is no more disabled there than it is in Developer.
+
+    Mutation: hard-code ``PolicyMode.SAFE`` in ``_automation_list`` instead of calling
+    ``self._mode()`` — this fails in both halves."""
+    h = _server_with(tmp_path, _INTERVAL, _CALENDAR, _SAFE_STAMPED)
+    try:
+        _developer(h)
+        for row in _call(h, "automation.list", {}, 1)["automations"]:
+            assert "unavailable" not in row, row["id"]
+        assert _call(h, "profile.set", {"profileId": "custom"}, 2)["mode"] == "open"
+        rows = _call(h, "automation.list", {}, 3)["automations"]
+        assert [r["id"] for r in rows] == ["auto-1", "auto-2", "auto-3"]
+        for row in rows:
+            assert "unavailable" not in row, row["id"]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_marker_is_the_only_thing_a_profile_switch_changes(tmp_path):
+    """Two claims in one, because they are the same claim from either end.
+
+    THE SHAPE IS NOT PERTURBED: strip ``unavailable`` from the Simple rows and what is
+    left is the Developer payload, key for key and value for value. A display marker
+    that also moved a schedule, dropped a command or reordered the list would be a
+    profile switch quietly rewriting somebody's configuration.
+
+    AND IT TAKES EFFECT WITH NO RESTART, in both directions: the same running server,
+    the same rows, three answers. ``_mode()`` is derived from the live active profile
+    on every call, so the switch is visible on the very next list — and switching back
+    brings the marker back, which is what makes the disabling a display state rather
+    than a latch.
+
+    Mutation: cache the mode on the instance (``self._cached_mode = self._mode()``
+    computed once) — this fails at the second listing, while every other test in this
+    file still passes."""
+    h = _server_with(tmp_path, _INTERVAL, _CALENDAR, _SAFE_STAMPED)
+    try:
+        simple_rows = _call(h, "automation.list", {}, 1)["automations"]
+        _developer(h)
+        dev_rows = _call(h, "automation.list", {}, 2)["automations"]
+        assert len(simple_rows) == len(dev_rows) == 3
+        for before, after in zip(simple_rows, dev_rows, strict=True):
+            assert set(before) == set(after) | {"unavailable"}
+            assert {k: v for k, v in before.items() if k != "unavailable"} == after
+        # ...and back again, on the same server, with no restart in between.
+        assert _call(h, "profile.set", {"profileId": "simple"}, 3)["mode"] == "safe"
+        again = _call(h, "automation.list", {}, 4)["automations"]
+        assert again == simple_rows
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_disabled_automation_is_still_removable_in_simple(tmp_path):
+    """A TIGHTENING IS NEVER TRAPPED — the phase-1 rule, restated against the thing
+    phase 4 added that could break it. The obvious way to implement "disabled" is to
+    refuse the row's methods too, and that would leave somebody looking at a command
+    they no longer want, told it is unavailable, with no way to be rid of it short of
+    turning on the profile they were avoiding.
+
+    Mutation: return the ``unavailable`` sentence as an error from
+    ``_automation_remove`` when the mode is SAFE — this fails."""
+    h = _server_with(tmp_path, _INTERVAL, _SAFE_STAMPED)
+    try:
+        rows = _call(h, "automation.list", {}, 1)["automations"]
+        assert all("unavailable" in row for row in rows)
+        assert _call(h, "automation.remove", {"id": "auto-1"}, 2)["ok"] is True
+        assert _call(h, "automation.remove", {"id": "auto-3"}, 3)["ok"] is True
+        assert _call(h, "automation.list", {}, 4)["automations"] == []
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_this_surface_never_asks_a_row_where_it_was_born():
+    """THE STRUCTURAL HALF, and the reason this file has one: the behavioural tests
+    above are green today under the routines bug for two rows out of three, because a
+    row stamped ``open`` gets the right answer for the wrong reason. What must hold is
+    stronger than the payload — this module must not ASK the question at all.
+
+    So two pins. The decision handed to ``_unavailable_marker`` is a LITERAL ``True``:
+    every automation runs a shell command, so there is nothing to ask a row, and a
+    decision that asks nothing cannot drift into asking the wrong thing. And no
+    branch, comparison or boolean operator anywhere in the module names
+    ``created_in_mode`` — the stamp reaches the wire as display provenance
+    (``createdInMode``) and is read for nothing else.
+
+    ``rpc/routines.py`` is the module this one is being kept out of
+    (docs/KNOWN-GAPS.md: a search-only routine saved in Developer is listed disabled
+    in Simple and refused at dispatch, both wrongly).
+
+    Mutations: pass ``row.created_in_mode == PolicyMode.OPEN.value`` as the decision —
+    this fails on the literal-``True`` pin; or keep the ``True`` and clear the marker
+    behind ``if row.created_in_mode == "safe"`` — this fails on the branch scan, which
+    is why one pin was not enough."""
+    tree = ast.parse(_AUTOMATIONS_SRC.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_unavailable_marker"
+    ]
+    assert len(calls) == 1, "expected exactly one unavailability decision in this module"
+    decision = calls[0].args[1] if len(calls[0].args) > 1 else None
+    assert isinstance(decision, ast.Constant) and decision.value is True, (
+        "rpc/automations.py asks something per row to decide availability: every "
+        "automation's payload is a shell command, so the answer is a decided True and "
+        "there is no per-row question for a stamp to sneak into (docs/KNOWN-GAPS.md)"
+    )
+
+    stamp = {"created_in_mode", "createdInMode"}
+    decisions: list[ast.expr] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If | ast.IfExp | ast.While):
+            decisions.append(node.test)
+        elif isinstance(node, ast.Compare | ast.BoolOp):
+            decisions.append(node)
+    for node in decisions:
+        for inner in ast.walk(node):
+            named = (
+                (isinstance(inner, ast.Attribute) and inner.attr in stamp)
+                or (isinstance(inner, ast.Name) and inner.id in stamp)
+                or (
+                    isinstance(inner, ast.Constant)
+                    and isinstance(inner.value, str)
+                    and inner.value in stamp
+                )
+            )
+            assert not named, (
+                f"rpc/automations.py branches on created_in_mode at line {node.lineno}: "
+                "the stamp records where a row was BORN and can never decide what it "
+                "NEEDS — that is the live routines bug in docs/KNOWN-GAPS.md"
+            )
+
+    # ...and it is read exactly once, where it becomes the display-only badge.
+    reads = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Attribute) and node.attr == "created_in_mode"
+    ]
+    assert len(reads) == 1, "the stamp is read once, to put it on the wire, and never again"
+
+
+# ---------------------------------------------------------------------------
 # (6) Every automation.* method is answered on the worker thread
 # ---------------------------------------------------------------------------
 
@@ -550,17 +766,26 @@ def test_the_wire_shape_is_the_one_the_frontend_parses(tmp_path):
     ``command`` rides WHOLE: it is the one field somebody must read before arming
     anything, and phase 3's typed keyword exists to make them read it.
 
+    Phase 4 added the ONE key that is profile-dependent — ``unavailable``, present on
+    every row while Simple is active and absent entirely otherwise — so the shape is
+    pinned in both profiles here, and section (5b) owns what it says.
+
     Mutation: send ``row.schedule_json`` instead of the projection, or rename a key —
     this fails."""
+    base = {
+        "id", "name", "label", "command", "scheduleKind", "schedule",
+        "scheduleSentence", "createdInMode", "createdAt",
+    }
     h = _server_with(tmp_path, _INTERVAL, _CALENDAR)
     try:
-        rows = _call(h, "automation.list", {}, 1)["automations"]
+        # Simple (the default): the base row plus the disabled marker, and nothing else.
+        for row in _call(h, "automation.list", {}, 1)["automations"]:
+            assert set(row) == base | {"unavailable"}
+        _developer(h)
+        rows = _call(h, "automation.list", {}, 2)["automations"]
         assert [r["id"] for r in rows] == ["auto-1", "auto-2"]
         for row in rows:
-            assert set(row) == {
-                "id", "name", "label", "command", "scheduleKind", "schedule",
-                "scheduleSentence", "createdInMode", "createdAt",
-            }
+            assert set(row) == base
         assert rows[0]["name"] == "Tidy up downloads"
         assert rows[0]["label"] == "com.addison.auto.tidy-downloads"
         assert rows[0]["command"] == _INTERVAL["command"]
@@ -1251,8 +1476,13 @@ def test_a_removal_that_cannot_switch_the_job_off_is_refused_and_keeps_the_row(s
     assert "still running it" in answer["error"]
     # The row survives, so the person can still see it and press Disarm.
     assert [row.id for row in store.list_automations()] == [_INTERVAL["id"]]
-    # ...and no restore point was minted for a change that did not happen.
-    assert server.captured == []
+    # A restore point WAS minted, and that is the corrected order (phase-4 review).
+    # It used to disarm first and capture second, so a failed capture answered "it
+    # didn't remove anything" AFTER the job had been switched off — false about the
+    # one thing the person was watching, with no snapshot and no undo behind it.
+    # Minting first costs a restore point on a removal that then refuses; that is
+    # an extra way back, which is the cheap direction to be wrong in.
+    assert server.captured == ["automation_remove"]
 
 
 def test_a_row_the_os_is_not_holding_is_removed_without_ceremony(store: Store):

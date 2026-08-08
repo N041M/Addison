@@ -147,6 +147,26 @@ and where it goes.
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
+- **A G3 restore can orphan an armed job, and nothing on any surface can then name
+  or stop it (found by the phase-4 review, 2026-08-07).** `apply_config_state` is
+  REPLACE-ALL, so restoring a snapshot that predates an automation deletes its row —
+  while `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on
+  running it at every login. After that: `disarm_automation` refuses ("that
+  automation isn't saved any more"), `automation.remove` refuses the same way before
+  it can reach `_disarm_before_forgetting`, and the Settings section renders
+  armed-ness per ROW so it shows nothing at all. Recovery is `launchctl` by hand.
+  **This is the same shape phase 3's review fixed for the Remove path** — a job
+  nobody can see and nobody can stop — reachable now through Restore instead.
+  Phase 4 made it *tidier and no better*: before, the stale row sat on screen doing
+  nothing useful; now it vanishes.
+  The plan's §5.6 says a restore "never arms", and `snapshots/scope.py` says it
+  "cannot arm, and cannot un-arm either" — both true, and both silent about a
+  restore that takes the ROW away from a job that is still running.
+  **The real fix is reconcile-on-restore**: after a restore, ask the OS what it
+  holds and surface any armed label with no row as its own row ("running, but not
+  saved here") with a Disarm on it. Until then this is recorded rather than closed,
+  because the alternative — blocking the restore, or silently disarming during one —
+  would put arming decisions inside the one action G3 promises is always available.
 - **An armed automation may launch Addison itself, and nothing refuses it — an
   OWNER QUESTION, not a defect (raised by the phase-3 review, 2026-08-07).**
   `policy._ARMING_BINARIES` refuses `launchctl`/`crontab`/`at`/`batch` as a
@@ -301,9 +321,9 @@ questions were resolved during steps 1–3 and went with it):
   already meets a per-invocation card and the seatbelt, and the recurring,
   unconfined, outlives-the-session nature of an armed job is the jump that earns
   the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
-  build order and the surrounding decisions. The gate and arming are phase 3 and
-  are NOT built; phases 1–2 — the fence, the table, and authoring as inert drafts
-  — landed 2026-08-07.
+  build order and the surrounding decisions. **All four phases landed 2026-08-07** —
+  the fence, authoring, the gate and arming, and state honesty — so this question is
+  answered AND built.
 - **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on

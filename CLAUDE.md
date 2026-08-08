@@ -79,7 +79,8 @@ used to mean editing thirteen files.
   at the moment of use. Do not touch this machinery.
 - **G2** — Addison never triggers itself. It may *author* automation the OS runs;
   arming a powerful action needs a user-typed keyword — a per-automation nonce
-  Addison shows and you retype (designed, **not built**: step 8 phase 3).
+  Addison shows and you retype (**built**, step 8 phase 3). The OS runs the job;
+  `RunAtLoad` is never set, so arming itself causes no run.
 - **G3** — Guaranteed rollback. Snapshots (auto before risky changes, plus
   on-command) always allow a one-action restore to the last verified-working config.
   **True in both modes since Phase-2 step 5.5** (2026-07-31) put a seatbelt profile
@@ -215,7 +216,12 @@ The one dependency that is not obvious from the list was inside 7:
   the ordinary card PLUS a per-automation code the person retypes
   (`agent_core/automation_nonce.py`). **G2 is unchanged and still holds**: the OS
   runs the job, Addison never fires it, and `RunAtLoad` is never set so arming
-  causes no run. Phase 4 (state honesty + Simple's disabled rows) is next.
+  causes no run. Phase 4 finished it: armed truth is read from the OS when a
+  surface loads (never stored, so a restore can put a ROW back and never a JOB),
+  and Simple lists automations as disabled rows that say why — decided from what
+  an automation IS (it runs a command, so always) rather than from its
+  `created_in_mode` stamp, which is the routines bug this deliberately did not
+  copy. **Step 8 is COMPLETE, and with it the Phase-2 sequence.**
   [`docs/step-8-automation-plan.md`](docs/step-8-automation-plan.md) owns the
   phases and decisions.
 
