@@ -12,6 +12,52 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-08 (third) — the hunt over the FIXES, which is where the worst of it was
+
+PRs #89–#93. The first hunt's fixes were merged with the orchestrator verifying one
+or two mutations per branch by sampling. A second pass replayed all 84 claimed
+mutations and hunted the fix commits themselves. **Five claimed mutations did not
+kill, and the two most dangerous defects of the entire day were introduced BY the
+first round of fixes.** The lesson is the whole entry:
+
+- **A FIX IS NEW CODE AND DESERVES THE HUNT THE ORIGINAL GOT.** PR #83 refused
+  non-regular files on all five READ paths and did not enumerate the path that opens
+  for WRITING — so `restore_workspace_path` could still block for ever on a FIFO, on
+  the stdout pump, reachable from ONE press of "put it back". The fix for a wedge
+  left the same wedge one door along.
+- **AN IDENTITY THAT IS ASKED OF THE PRESENT ANSWERS ABOUT THE PRESENT.** #84 fixed
+  a case-collision bug by grouping on `st_dev:st_ino` — correct for that bug, and it
+  made hard links merge two files' chains, so a revert wrote one file's prior bytes
+  into another and the other's edit vanished. Verbatim the harm the same function's
+  docstring refuses casefolding to avoid. The repair records the identity AT WRITE
+  TIME and joins on name OR file, because either alone is wrong: identity alone
+  splits a file replaced between two writes, name alone was the original bug.
+- **THE ORCHESTRATOR'S SAMPLING WAS THE HOLE.** Verifying "one or two mutations per
+  branch" reads as diligence and is not: 79 of 84 killed, and the five that did not
+  were exactly where the false confidence lived — including a docstring naming
+  `stat`-vs-`lstat` as killed when only a symlink discriminates the two and the test
+  planted none.
+- **A GUARD ADDED BESIDE AN EXISTING GUARD INHERITS NOTHING FROM IT.** The pane had a
+  generation counter precisely because a late answer must not win; the re-entry fix
+  added two more concurrent writers for the same state with none, so a previous
+  visit's answer landed in the next one.
+- **A SENTENCE THAT ONLY RENDERS IN ONE PLACE CAN BE DELETED BY ITS OWN SIDE
+  EFFECT.** The Revert failure message lived two conditionals deep inside the block
+  that its own `refreshEdits()` could remove — so the button whose entire purpose is
+  to change a file could fail in silence, while a hook-state test asserted it was
+  fine. **Assert what renders, not what the hook holds.**
+- **A NAMED ALLOWANCE THAT CANNOT NAME ANYTHING IS A BLANKET FILTER.** The
+  orchestrator's own CSP suppression matched a scheme-only report — which is the ONLY
+  shape a compliant engine files for that endpoint — so it checked no host, no path
+  and no boundary, dropping every `ipc://` violation including a real command
+  invocation. Written by the reviewer, unreviewed by anyone, exactly the shape this
+  log keeps recording.
+- **AND RUNNING IT FOUND WHAT NO SUITE COULD**: the Monaco pre-bundling hint named a
+  path that no longer resolves, so every dev start printed a resolve failure and
+  crawled thousands of files. No test covers a dev-server hint. Screen access was
+  declined, so the app was verified by building, launching and reading its output —
+  which was enough to find that.
+
 ## What shipped 08-08 (second) — five gaps closed, then an adversarial hunt over the day's own work
 
 PRs #80–#87. Five KNOWN-GAPS entries closed (the routine stamp, orphaned armed
