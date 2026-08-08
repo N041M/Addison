@@ -1369,6 +1369,8 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_remove(params))
                 elif kind == "automation_status":
                     self._respond(request_id, self._automation_status())
+                elif kind == "automation_disarm_orphan":
+                    self._respond(request_id, self._automation_disarm_orphan(params))
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -2129,10 +2131,15 @@ _MCP_JOBS = {
 # reason: a Core -> Shell round-trip blocks whichever thread makes it, and the read
 # loop is the thread that has to deliver the ANSWER. Parking it on the worker is
 # `provider.connect`'s lesson, and the shell bridge's own docstring says so.
+#
+# `automation.disarmOrphan` (2026-08-08) queues here for BOTH halves at once: it reads
+# the store (is this label still saved?) and it makes a Core -> Shell round-trip to
+# switch the job off.
 _AUTOMATION_JOBS = {
     Method.AUTOMATION_LIST: "automation_list",
     Method.AUTOMATION_REMOVE: "automation_remove",
     Method.AUTOMATION_STATUS: "automation_status",
+    Method.AUTOMATION_DISARM_ORPHAN: "automation_disarm_orphan",
 }
 
 

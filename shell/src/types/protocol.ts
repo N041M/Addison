@@ -218,6 +218,15 @@ export const Method = {
   AutomationList: "automation.list",
   AutomationRemove: "automation.remove",
   AutomationStatus: "automation.status",
+  // Switch off a job your computer is running that Addison has no saved copy of.
+  // Restoring a restore point from before an automation was written takes its saved
+  // copy away, and your computer keeps running the job — so the Automations section
+  // compares what the operating system says it is running against what is saved, and
+  // shows anything left over as its own row with a "switch off" on it. That button
+  // sends this. It takes a LABEL, only ever one Addison itself set up, and the only
+  // thing it can do is stop it: there is still no way for the app to start, install
+  // or schedule anything from this screen, in any profile. Mirrored in protocol.py.
+  AutomationDisarmOrphan: "automation.disarmOrphan",
 
   // Routing — how Addison picks which model answers a turn (Phase-2 step 3).
   // `get` returns the current strategy, the strategies this surface may pick

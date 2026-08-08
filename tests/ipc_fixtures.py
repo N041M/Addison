@@ -345,6 +345,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # frontend has to render both: a marked row is what Simple gets for every
         # automation it holds (step 8 phase 4), and no single call can show both.
         "automation.list.simple": _automation_list_simple_fixture(server),
+        "automation.disarmOrphan": _automation_disarm_orphan_fixture(server),
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
@@ -778,6 +779,24 @@ def _automation_list_simple_fixture(server: JsonRpcServer) -> dict:
         return _automation_list_fixture(server)
     finally:
         server._active_profile = previous
+
+
+def _automation_disarm_orphan_fixture(server: JsonRpcServer) -> dict:
+    """An ``automation.disarmOrphan`` answer — the REFUSAL shape, for a label Addison
+    did not mint (2026-08-08).
+
+    The refusal rather than the success, because the success is ``{"ok": true}`` and a
+    fixture of it pins nothing the mutation parser could get wrong. This one carries
+    the field the surface actually renders: ``error``, a plain sentence written by the
+    core, which the section prints verbatim in preference to anything it would say
+    itself. A payload that lost it would leave a person pressing a button that appears
+    to do nothing.
+
+    Deterministic with no shell in the process at all, and that is a property of the
+    handler rather than of this fixture: a label outside Addison's own namespace is
+    refused BEFORE the store is read and before the bridge is reached, which is the
+    ordering the core tests pin by name."""
+    return server._automation_disarm_orphan({"label": "com.example.somebody-elses-job"})
 
 
 def write_fixtures(tmp_dir: Path) -> list[Path]:

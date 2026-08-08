@@ -50,6 +50,7 @@ from agent_core.automations import (
     SCHEDULE_FIELDS,
     SCHEDULE_KINDS,
     Automation,
+    label_is_addisons_own,
     plist_text,
     schedule_fields,
     derive_label,
@@ -57,10 +58,16 @@ from agent_core.automations import (
     schedule_sentence,
 )
 from agent_core.memory.store import Store
-from agent_core.rpc.automations import _NO_SUCH_AUTOMATION
+from agent_core.rpc.automations import (
+    _COULDNT_DISARM_ORPHAN,
+    _NO_SHELL_TO_DISARM,
+    _NO_SUCH_AUTOMATION,
+    _NOT_ADDISONS_OWN,
+    _SAVED_AGAIN,
+)
 from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import REASONS
-from tests.conftest import IPC_DB_NAME, _shutdown, build_server
+from tests.conftest import IPC_DB_NAME, ShellBridgeStubs, _shutdown, build_server
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _AUTOMATIONS_SRC = _REPO_ROOT / "agent_core" / "rpc" / "automations.py"
@@ -130,7 +137,7 @@ def _developer(harness, request_id: int = 900) -> None:
     assert result["ok"] is True and result["mode"] == "open"
 
 
-def _server_with(tmp_path, *rows: dict):
+def _server_with(tmp_path, *rows: dict, bridge=None):
     """A live server whose database already holds these automations.
 
     Seeded through a ``store_factory`` — on the worker thread, before the server
@@ -145,7 +152,7 @@ def _server_with(tmp_path, *rows: dict):
             store.insert_automation(**row)
         return store
 
-    return build_server(tmp_path, register_tool=False, store_factory=factory)
+    return build_server(tmp_path, register_tool=False, store_factory=factory, bridge=bridge)
 
 
 @pytest.fixture
@@ -193,11 +200,20 @@ def test_the_surface_has_no_way_to_create_an_automation(tmp_path):
         if isinstance(value, str) and value.startswith("automation.")
     }
     # Phase 3 added `automation.status` — a READ, and one that asks the operating
-    # system rather than the store (plan §5.6). Still no add and still no arm:
-    # writing a row is the `create_automation` TOOL and switching one on is the
+    # system rather than the store (plan §5.6). 2026-08-08 added
+    # `automation.disarmOrphan`, which STOPS one: the orphan a G3 restore leaves
+    # behind has no row, so `remove` and the disarm TOOL both refuse it and nothing
+    # could reach it (KNOWN-GAPS, closed). Still no add and still no arm: writing a
+    # row is the `create_automation` TOOL and switching one ON is the
     # `arm_automation` TOOL, both gated and audited, neither reachable from this
-    # namespace.
-    assert named == {"automation.list", "automation.remove", "automation.status"}
+    # namespace — and the method whose name contains "disarm" is the direction that
+    # is safe to reach without one.
+    assert named == {
+        "automation.list",
+        "automation.remove",
+        "automation.status",
+        "automation.disarmOrphan",
+    }
 
     h = _server_with(tmp_path)
     try:
@@ -268,6 +284,77 @@ def test_the_automation_surface_cannot_reach_a_process_a_shell_or_a_plist():
                     "belongs to the typed shell surface (plan §5.8), never to the "
                     "process with no OS permissions of its own"
                 )
+
+
+def test_this_namespace_may_only_ask_the_shell_to_STOP_things():
+    """THE ONE-DIRECTION RULE, as an allowlist rather than a hope.
+
+    This module DOES cross the shell bridge — `_disarm_before_forgetting` (phase 3's
+    review fix) and `_automation_disarm_orphan` (2026-08-08) — and both are
+    TIGHTENINGS: they ask the OS what it holds and ask it to stop something. The
+    bridge sitting on `self._shell_bridge` also carries `arm_automation`, so what
+    stands between this namespace and an install is nothing but the fact that nobody
+    has typed it. This test is that fact, enforced.
+
+    Read as an ALLOWLIST against the bridge's OWN method set, so it cannot go stale:
+    a method added to the bridge is covered the moment it exists, and the assertion
+    names the two this module may say. Docstrings are excluded for the reason the
+    scan above gives — prose explaining why arming lives in the shell is exactly what
+    belongs here, and this test reads ATTRIBUTES, which prose cannot be.
+
+    Mutations: add ``bridge.arm_automation(label, command, kind, schedule)`` anywhere
+    in rpc/automations.py — this fails, naming the method. And the evasion shape:
+    ``getattr(self._shell_bridge, "arm_automation", None)`` — the attribute scan alone
+    let that one through (found by the orchestrating review, 2026-08-08), because a
+    string literal is not an ``ast.Attribute``. So non-docstring string constants are
+    scanned too, the way ``test_this_surface_never_asks_a_row_where_it_was_born``
+    scans for the stamp's name."""
+    from agent_core.shell_bridge import ServerShellBridge
+    from agent_core.tools.base import ShellBridge
+
+    bridge_methods = {
+        name
+        for name in set(dir(ShellBridge)) | set(dir(ServerShellBridge))
+        if not name.startswith("_")
+    }
+    assert "arm_automation" in bridge_methods, "the bridge no longer has an arm — did it move?"
+    allowed = {"list_armed", "disarm_automation"}
+
+    tree = ast.parse(_AUTOMATIONS_SRC.read_text(encoding="utf-8"))
+    named = {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
+    } & bridge_methods
+    assert named == allowed, (
+        f"rpc/automations.py names {sorted(named)} on the shell bridge: this namespace "
+        "may ask the operating system what it holds and ask it to STOP something, and "
+        "nothing else — arming is a gated, audited TOOL behind a typed code (G2)"
+    )
+    # The evasion shape: a bridge method reached by its NAME AS A STRING (getattr, a
+    # dispatch dict, operator.methodcaller). Docstrings are prose, not reach — prose
+    # explaining that arming is a tool is exactly what belongs in this module — so
+    # only non-docstring string constants are scanned.
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    strung = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node not in docstrings
+        and node.value in bridge_methods
+    } - allowed
+    assert not strung, (
+        f"rpc/automations.py holds bridge method name(s) {sorted(strung)} as string "
+        "literals: a getattr-by-string reaches the bridge exactly as an attribute "
+        "does, and this namespace may only ever stop things"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1401,8 +1488,12 @@ def test_neither_builder_will_ever_set_run_at_load():
 # names it") and phase 3 shipped without honouring it.
 
 
-class _ArmedBridge:
-    """A shell that reports one armed label and records what it was asked to do."""
+class _ArmedBridge(ShellBridgeStubs):
+    """A shell that reports one armed label and records what it was asked to do.
+
+    Inherits the stubs so it is a WHOLE bridge — every other method raises, which is
+    what makes "the orphan path asked the shell for exactly one thing" observable
+    rather than assumed."""
 
     def __init__(self, armed: list[str], *, supported: bool = True, fail: bool = False):
         self._armed = list(armed)
@@ -1555,3 +1646,214 @@ def test_every_label_the_core_can_mint_is_one_the_shell_accepts():
         # ...and the stem is in the shell's alphabet, which is the other half of
         # what `validated_label` checks.
         assert re.fullmatch(r"[a-z0-9][a-z0-9-]*", stem), label
+
+
+# ---------------------------------------------------------------------------
+# (8) The ORPHAN — a job the OS holds that no row can reach (2026-08-08)
+# ---------------------------------------------------------------------------
+# `apply_config_state` is REPLACE-ALL, so restoring a snapshot that predates an
+# automation deletes its row while `<label>.plist` stays installed and launchd goes on
+# running it at every login. Everything else then refuses: `disarm_automation` (the
+# tool) and `automation.remove` both look the row up first, and the Settings section
+# renders armed-ness per ROW, so it could not even name the thing. A job nobody can see
+# and nobody can stop — phase 3's Remove-path bug, reached through Restore instead
+# (KNOWN-GAPS, closed by `automation.disarmOrphan`).
+#
+# The fix is RECONCILE-ON-RESTORE and deliberately not the two alternatives: a restore
+# is never blocked, and nothing is silently disarmed during one. An arming decision
+# must not live inside the one action G3 promises is always available.
+
+
+def test_a_job_the_os_holds_with_no_row_can_be_switched_off(store: Store):
+    """THE GAP, CLOSED. Nothing is saved for this label — that is the whole premise —
+    and the job still goes off.
+
+    Mutation: make ``_automation_disarm_orphan`` look the row up and refuse when it is
+    missing (the shape ``remove`` and the disarm tool have) — this fails, and the job
+    stays running with nothing able to name it."""
+    orphan = "com.addison.auto.tidy-downloads"
+    bridge = _ArmedBridge([orphan])
+    server = _remover(bridge)(store, bridge)
+    assert store.list_automations() == []
+
+    assert server._automation_disarm_orphan({"label": orphan}) == {"ok": True}
+    assert bridge.disarmed == [orphan]
+    assert bridge.list_armed()["armed"] == []
+    # NO RESTORE POINT. ``remove`` mints one because it deletes a ROW somebody wrote;
+    # here there is no row, and what changes is a file in the OS's own folder that no
+    # snapshot has ever held or could put back.
+    #
+    # Mutation: add ``self._snapshot_auto("automation_disarm")`` — this fails.
+    assert server.captured == []
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "com.example.nightly",              # somebody else's launchd job entirely
+        "com.addison.auto",                 # the prefix without its final dot
+        "com.addison.autotidy",             # the prefix run into the stem
+        "com.addison.auto.",                # prefix, no stem
+        "com.addison.auto.tidy.plist",      # a dot after the prefix
+        "com.addison.auto.../../evil",      # traversal
+        "com.addison.auto./etc/passwd",     # a path separator
+        "com.addison.auto.Tidy",            # upper case
+        "com.addison.auto.-tidy",           # a stem starting with a hyphen
+        "com.addison.auto.tidy downloads",  # a space
+        "com.addison.auto.tidy\n",          # a trailing newline
+        " com.addison.auto.tidy",           # leading whitespace
+        "x.com.addison.auto.tidy",          # the prefix buried mid-string
+        "com.addison.auto.zálohování",      # non-ASCII
+        "com.addison.auto." + "n" * 41,     # one character past the shell's cap
+    ],
+)
+def test_a_label_addison_did_not_mint_never_reaches_the_shell(store: Store, label: str):
+    """THE VALIDATION IS THE WHOLE OF WHAT MAKES THIS SAFE TO EXIST. This method takes a
+    LABEL from a surface rather than an id from a row, so without it a stale or hostile
+    caller could name any launchd job on the machine and have the highest-trust process
+    delete its file. The shell validates too (plan §5.8 — it does not trust the core),
+    and that is the point of asking here as well: Addison refuses its own bad request,
+    with its own sentence, before a round trip.
+
+    Refused BEFORE the store is read and before the bridge is reached, which is why the
+    bridge recorded nothing.
+
+    Mutation: replace the check with ``label.startswith(LABEL_PREFIX)`` — the traversal,
+    separator, upper-case, whitespace and over-length rows all fail."""
+    bridge = _ArmedBridge([])
+    server = _remover(bridge)(store, bridge)
+
+    answer = server._automation_disarm_orphan({"label": label})
+    assert answer["ok"] is False
+    assert answer["error"] == _NOT_ADDISONS_OWN
+    assert bridge.disarmed == []
+
+
+@pytest.mark.parametrize("label", [None, "", 12, {"label": "x"}, ["com.addison.auto.tidy"]])
+def test_a_label_that_is_not_even_a_string_is_refused_the_same_way(store: Store, label):
+    """One sentence for every unusable label, and no exception for any of them: the
+    caller is a webview, and a handler that raises on a malformed param answers with an
+    error frame a surface can only render as "something went wrong"."""
+    bridge = _ArmedBridge([])
+    server = _remover(bridge)(store, bridge)
+
+    assert server._automation_disarm_orphan({"label": label})["error"] == _NOT_ADDISONS_OWN
+    assert server._automation_disarm_orphan({})["error"] == _NOT_ADDISONS_OWN
+    assert bridge.disarmed == []
+
+
+def test_an_automation_that_is_saved_again_is_not_switched_off_by_this_path(store: Store):
+    """The narrowness, enforced. A row-backed automation has its own controls — the
+    ``disarm_automation`` TOOL, which raises an ordinary card, and Remove, which disarms
+    before it forgets. Letting this answer for one too would put a second, CARDLESS
+    disarm beside the one that deliberately asks.
+
+    The only way a person meets this refusal is a restore landing between the surface
+    reading the list and the press — and then the row is on screen with its own Disarm,
+    which is what the sentence tells them.
+
+    Mutation: delete the saved-row check — this fails."""
+    store.insert_automation(**_INTERVAL)
+    bridge = _ArmedBridge([_INTERVAL["label"]])
+    server = _remover(bridge)(store, bridge)
+
+    answer = server._automation_disarm_orphan({"label": _INTERVAL["label"]})
+    assert answer == {"ok": False, "error": _SAVED_AGAIN}
+    assert bridge.disarmed == []
+    # ...and the row is untouched, so the surface still has something to render.
+    assert [row.id for row in store.list_automations()] == [_INTERVAL["id"]]
+
+
+def test_the_shells_own_refusal_is_relayed_rather_than_guessed_at(store: Store):
+    """The shell knows which of its refusals happened (not a Mac, no home folder, the
+    scheduler would not answer); this side would only be inventing one. The same rule
+    the removal path follows.
+
+    Mutation: return ``_COULDNT_DISARM_ORPHAN`` unconditionally — this fails."""
+    orphan = "com.addison.auto.tidy-downloads"
+    bridge = _ArmedBridge([orphan], fail=True)
+    server = _remover(bridge)(store, bridge)
+
+    answer = server._automation_disarm_orphan({"label": orphan})
+    assert answer == {"ok": False, "error": "the scheduler didn't answer"}
+
+
+def test_a_shell_that_cannot_be_reached_says_so_in_plain_words(store: Store):
+    """Two ways the shell is not there: no bridge at all (the CLI, a test), and a bridge
+    that raises. Both answer one plain sentence and NEVER ``ok:true`` — telling somebody
+    a job is off while their computer runs it is the one lie this whole subsystem is
+    arranged to avoid."""
+
+    class _Broken(ShellBridgeStubs):
+        def disarm_automation(self, label: str) -> dict:
+            raise RuntimeError("the shell went away")
+
+    orphan = "com.addison.auto.tidy-downloads"
+    no_shell = _remover(None)(store, None)
+    assert no_shell._automation_disarm_orphan({"label": orphan}) == {
+        "ok": False,
+        "error": _NO_SHELL_TO_DISARM,
+    }
+
+    broken = _remover(_Broken())(store, _Broken())
+    assert broken._automation_disarm_orphan({"label": orphan}) == {
+        "ok": False,
+        "error": _COULDNT_DISARM_ORPHAN,
+    }
+
+
+def test_switching_off_an_orphan_answers_in_every_profile(tmp_path):
+    """A TIGHTENING IS NEVER PROFILE-GATED — the rule ``automation.remove`` follows, for
+    a sharper reason here. Every automation is armed from Developer (arming is
+    ``dev_only``), so a person who switches to Simple and then restores an old snapshot
+    is EXACTLY the person left with a job running and no way to stop it. Gating this on
+    the profile would trap them.
+
+    Mutation: add ``if self._mode() is not PolicyMode.OPEN: return {...}`` to the
+    handler — this fails in the Simple half, which runs first because Simple is the
+    default."""
+    first, second = "com.addison.auto.tidy-downloads", "com.addison.auto.backup-notes"
+    bridge = _ArmedBridge([first, second])
+    h = _server_with(tmp_path, bridge=bridge)
+    try:
+        # Simple is the default profile, and it can stop a job it could never have
+        # started.
+        assert _call(h, "automation.disarmOrphan", {"label": first}, 1) == {"ok": True}
+        _developer(h)
+        assert _call(h, "automation.disarmOrphan", {"label": second}, 2) == {"ok": True}
+        assert bridge.disarmed == [first, second]
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_core_refuses_exactly_the_labels_the_shell_refuses():
+    """THE THIRD LEG OF THE CROSS-LANGUAGE LOCKSTEP, beside the plist comparison and the
+    label-minting test above. ``label_is_addisons_own`` exists to refuse one process
+    earlier than ``automation.rs::label_is_valid`` does — which is only worth anything
+    if the two agree, so the RULE is read out of the Rust rather than restated here.
+
+    Mutation: change ``MAX_STEM_CHARS`` in automation.rs (or ``MAX_SLUG_CHARS`` here)
+    alone — this fails."""
+    source = (
+        _REPO_ROOT / "shell" / "src-tauri" / "src" / "automation.rs"
+    ).read_text(encoding="utf-8")
+    cap = re.search(r"const MAX_STEM_CHARS: usize = (\d+);", source)
+    prefix = re.search(r'const LABEL_PREFIX: &str = "([^"]+)";', source)
+    assert cap and prefix, "automation.rs no longer states its label rule as constants"
+    max_stem, shell_prefix = int(cap.group(1)), prefix.group(1)
+    assert shell_prefix == LABEL_PREFIX
+    assert max_stem == MAX_SLUG_CHARS
+
+    # The exact boundary, from both sides of it.
+    assert label_is_addisons_own(f"{LABEL_PREFIX}{'n' * max_stem}")
+    assert not label_is_addisons_own(f"{LABEL_PREFIX}{'n' * (max_stem + 1)}")
+    # ...and every label the core can MINT is one this predicate accepts, so the check
+    # can never refuse Addison's own work.
+    taken: list[str] = []
+    for _ in range(5):
+        minted = derive_label("n" * (MAX_SLUG_CHARS + 20), taken)
+        assert minted is not None and label_is_addisons_own(minted)
+        taken.append(minted)
+    for name in ("Tidy up downloads", "Zálohování", "back-up NOTES 2"):
+        minted = derive_label(name)
+        assert minted is not None and label_is_addisons_own(minted)

@@ -35,9 +35,28 @@
 // held a moment ago. The cached answer stays true, and a row's armed-ness is
 // recomputed from its own label on every render.
 //
+// THE ORPHAN, AND WHEN IT IS SEEN (2026-08-08, closing the KNOWN-GAPS entry).
+// A restore CAN take a row away from a job the OS is still running: the config
+// capture is REPLACE-ALL, so restoring a point from before an automation was written
+// deletes its row while `<label>.plist` stays installed. The armed set and the rows
+// then disagree, and the leftover label is an ORPHAN — a job with nothing on any
+// surface to name it or stop it. The section reconciles the two answers it already
+// has and renders one; `handleDisarmOrphan` below is the only thing that acts.
+//
+// THE LATENCY IS THE ACCEPTED COST. Because a restore re-reads the rows and does NOT
+// re-ask the OS, an orphan created by a restore while Settings is open appears on the
+// NEXT section load, not at once. Re-asking the OS in App's `onRestored` would close
+// that window and is exactly the check-nobody-caused that §5.6 forbids — and the ask
+// would be wrong on its own terms, since a restore cannot have changed what launchd
+// holds. Nothing polls, here or anywhere. Reconciling on the next visit is the whole
+// of the fix, and it is enough: the job keeps running either way, and the surface
+// that can stop it is the one somebody has to open to see it.
+//
 // Nothing here is ever the job FILE, and nothing here can arm: arming is a TOOL
 // behind the ordinary card plus a typed code, and there is deliberately no
-// `automation.arm` on the Frontend→Core surface at all.
+// `automation.arm` on the Frontend→Core surface at all. `disarmOrphanAutomation` is
+// the one exception to "this hook only reads and removes rows", and it is a
+// TIGHTENING in the direction the exception is safe in — it can only stop something.
 
 import { useCallback, useEffect, useState } from "react";
 import type { Automation, AutomationStatus } from "../types/protocol";
@@ -53,6 +72,13 @@ interface UseAutomationsArgs {
  * or the job could not be switched off first). */
 const REMOVE_FAILED = "Addison couldn't remove that automation just now.";
 
+/** When switching off an orphaned job doesn't land and the core said nothing usable.
+ * The core's own sentence is preferred whenever there is one — it knows which refusal
+ * happened (the label isn't one Addison set up, the automation is saved again, or the
+ * computer's scheduler wouldn't answer), and one of those is a fact this side has no
+ * way to work out. */
+const DISARM_ORPHAN_FAILED = "Addison couldn't switch that off just now.";
+
 export function useAutomations({ connected }: UseAutomationsArgs) {
   const [automations, setAutomations] = useState<Automation[]>([]);
   // What the OPERATING SYSTEM said the last time the surface asked. `null` is "no
@@ -63,6 +89,15 @@ export function useAutomations({ connected }: UseAutomationsArgs) {
   // "not asked yet" vs "asked" — a slow first fetch must not render as a claim
   // that the person has no saved automations.
   const [loaded, setLoaded] = useState(false);
+  // ...and "asked but not ANSWERED", which is a third thing again. The list is kept
+  // on a failure rather than blanked, so `automations` alone cannot say whether it is
+  // the core's current answer or the last one that arrived — and the ORPHAN
+  // reconciliation is the one reader for which that difference is everything. An
+  // empty list read as "nothing is saved" beside an armed label would render every
+  // one of somebody's real automations as "running, but not saved here", on the
+  // first load after a list fetch that failed. Same shape as `statusFailed`, for
+  // the same reason: a guess in either direction is the failure.
+  const [automationsFailed, setAutomationsFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,11 +107,13 @@ export function useAutomations({ connected }: UseAutomationsArgs) {
       .listAutomations()
       .then((rows) => {
         setAutomations(rows);
+        setAutomationsFailed(false);
         setLoaded(true);
       })
       .catch(() => {
         // Keep the last-known list rather than blanking the section; still stop the
-        // looking-for line.
+        // looking-for line. But SAY that it is last-known: see the flag's comment.
+        setAutomationsFailed(true);
         setLoaded(true);
       });
   }, [connected]);
@@ -127,9 +164,38 @@ export function useAutomations({ connected }: UseAutomationsArgs) {
     [refreshAutomations],
   );
 
+  /** Switch off a job the operating system is holding that no saved row can reach.
+   * The LABEL is all there is to send — an orphan has no id, no name and no command,
+   * which is the whole problem it exists to solve.
+   *
+   * BOTH ANSWERS ARE RE-READ, and both halves are re-read, because whether a label is
+   * an orphan is a fact about the ROWS and the OS TOGETHER: a success takes the label
+   * out of the armed set, and the one refusal a person can actually meet ("that
+   * automation is saved again") means the rows on screen are stale. Asking the OS here
+   * is not a check nobody caused — it is the direct result of a button somebody just
+   * pressed, which is the same rule that puts the ask in the section's load. */
+  const handleDisarmOrphan = useCallback(
+    async (label: string): Promise<void> => {
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await ipc.disarmOrphanAutomation(label);
+        if (!result.ok) setError(result.error ?? DISARM_ORPHAN_FAILED);
+      } catch {
+        setError(DISARM_ORPHAN_FAILED);
+      } finally {
+        setBusy(false);
+        refreshAutomations();
+        refreshArmedState();
+      }
+    },
+    [refreshAutomations, refreshArmedState],
+  );
+
   return {
     automations,
     automationsLoaded: loaded,
+    automationsFailed,
     status,
     statusFailed,
     busy,
@@ -137,6 +203,7 @@ export function useAutomations({ connected }: UseAutomationsArgs) {
     refreshAutomations,
     refreshArmedState,
     handleRemove,
+    handleDisarmOrphan,
   };
 }
 

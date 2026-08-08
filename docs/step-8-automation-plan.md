@@ -348,6 +348,29 @@ the whole truth rather than a summary.
    `automation.status` when it loads, and what launchd says is what the person
    sees. A restore, a reinstall, or somebody deleting the plist by hand all
    converge on the same honest answer without a special case.
+
+   **RECONCILE-ON-RESTORE — added 2026-08-08, owner-authorized, closing the
+   KNOWN-GAPS entry the phase-4 review opened.** The paragraph above was true and
+   incomplete: a restore never arms, but it can take the ROW away from a job that
+   is still running (the capture is REPLACE-ALL), and the row was the only thing
+   that could name that job or reach it with a control. So the surface now
+   reconciles the two answers it already holds — the OS's armed labels and the
+   saved rows — and renders any armed label with no row as its own row, "Running,
+   but not saved here", with a switch-off on it. `automation.disarmOrphan {label}`
+   is the path that works with no row: it validates the label against the set
+   Addison mints (§5.8's prefix rule, asked one process earlier than the shell
+   asks it), refuses one that HAS a row, and answers in every profile like the
+   other tightenings here. It can only ever STOP something — G2 is untouched, and
+   the structural test now pins that this namespace names `list_armed` and
+   `disarm_automation` on the bridge and nothing else.
+
+   **What was NOT done, and must not be:** the restore is never blocked, and
+   nothing is silently disarmed during one. An arming decision cannot live inside
+   the one action G3 promises is always available. The cost of that is a latency,
+   not a hole: `onRestored` re-reads the rows and does not re-ask the OS (asking
+   there is the check-nobody-caused this section forbids, and a restore cannot
+   have changed what launchd holds), so an orphan created while Settings is open
+   appears on the next section load. Nothing polls.
 7. **An armed job runs unconfined, and `RunAtLoad` is never set.** The seatbelt
    confines *Addison's* commands; an armed job is the *person's* automation,
    consented to with the strongest ceremony the app has, run by the OS with

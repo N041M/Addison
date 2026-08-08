@@ -147,26 +147,41 @@ and where it goes.
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
-- **A G3 restore can orphan an armed job, and nothing on any surface can then name
-  or stop it (found by the phase-4 review, 2026-08-07).** `apply_config_state` is
-  REPLACE-ALL, so restoring a snapshot that predates an automation deletes its row —
-  while `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on
-  running it at every login. After that: `disarm_automation` refuses ("that
-  automation isn't saved any more"), `automation.remove` refuses the same way before
-  it can reach `_disarm_before_forgetting`, and the Settings section renders
-  armed-ness per ROW so it shows nothing at all. Recovery is `launchctl` by hand.
-  **This is the same shape phase 3's review fixed for the Remove path** — a job
-  nobody can see and nobody can stop — reachable now through Restore instead.
-  Phase 4 made it *tidier and no better*: before, the stale row sat on screen doing
-  nothing useful; now it vanishes.
-  The plan's §5.6 says a restore "never arms", and `snapshots/scope.py` says it
-  "cannot arm, and cannot un-arm either" — both true, and both silent about a
-  restore that takes the ROW away from a job that is still running.
-  **The real fix is reconcile-on-restore**: after a restore, ask the OS what it
-  holds and surface any armed label with no row as its own row ("running, but not
-  saved here") with a Disarm on it. Until then this is recorded rather than closed,
-  because the alternative — blocking the restore, or silently disarming during one —
-  would put arming decisions inside the one action G3 promises is always available.
+- ~~**A G3 restore can orphan an armed job, and nothing on any surface can then name
+  or stop it.**~~ **CLOSED 2026-08-08 (owner-authorized), by reconcile-on-restore —
+  exactly the fix this entry prescribed and none of the ones it forbade.** The gap,
+  found by the phase-4 review 2026-08-07: `apply_config_state` is REPLACE-ALL, so
+  restoring a snapshot that predates an automation deletes its row — while
+  `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on running
+  it at every login. After that, `disarm_automation` refused ("that automation isn't
+  saved any more"), `automation.remove` refused the same way before it could reach
+  `_disarm_before_forgetting`, and the Settings section rendered armed-ness per ROW so
+  it showed nothing at all. Recovery was `launchctl` by hand. It was the same shape
+  phase 3's review fixed for the Remove path — a job nobody can see and nobody can
+  stop — reached through Restore instead.
+  **What closed it, in three pieces.** (1) DETECTION needed no new question: the
+  section already asks `automation.status` (armed LABELS) and `automation.list`
+  (rows) when it loads, so an orphan is an armed label matching no row, computed
+  where the two answers already meet and filtered to the labels Addison MINTS
+  (`com.addison.auto.[a-z0-9][a-z0-9-]{0,39}`) so somebody's unrelated launchd jobs
+  are never rendered. (2) THE ROW says *"Running, but not saved here"*, carries the
+  label — the only fact left — and says the honest limit out loud: there is no row, so
+  Addison cannot show what it runs, only switch it off. (3) STOPPING it is
+  `automation.disarmOrphan {label}`, a new RPC that works with NO row, validates the
+  label against the set Addison mints before it reads the store or reaches the shell,
+  refuses a label that HAS a row (that one has its own controls), and answers in EVERY
+  profile — a tightening is never profile-gated, and a Simple person who restored an
+  old point is precisely who this strands. G2 is untouched: it can only stop, and the
+  structural test now reads the shell bridge's own method set and pins that this
+  namespace names `list_armed` and `disarm_automation` and nothing else.
+  **The restore itself is unchanged** — never blocked, and nothing silently disarmed
+  during one, because an arming decision must not live inside the one action G3
+  promises is always available. **The accepted cost, stated where the code makes it
+  (`hooks/useAutomations.ts`):** a restore re-reads the ROWS and deliberately does not
+  re-ask the OS, so an orphan created while Settings is open appears on the NEXT
+  section load rather than at once. Re-asking on restore would be the check nobody
+  caused that plan §5.6 forbids, and wrong on its own terms — a restore cannot change
+  what launchd holds. Nothing polls.
 - **An armed automation may launch Addison itself, and nothing refuses it — an
   OWNER QUESTION, not a defect (raised by the phase-3 review, 2026-08-07).**
   `policy._ARMING_BINARIES` refuses `launchctl`/`crontab`/`at`/`batch` as a

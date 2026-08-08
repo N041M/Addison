@@ -7,12 +7,14 @@ the app a timer, a watcher, a scheduler or a callback of its own. This module is
 declarative: a dataclass mirroring the ``automations`` table and pure functions over
 a row. It starts nothing and reaches nothing.
 
-**Authoring exists; ARMING does not.** ``create_automation`` (phase 2, Developer
-only) writes a draft row through this module's pure functions; there is no arming
-surface anywhere in the tree, so nothing here has ever been handed to launchd —
-that is phase 3. What this module holds is the row shape, the closed schedule
-vocabulary, the two renderers (``schedule_sentence``, ``plist_text``) and the
-authoring door's validators.
+**Authoring AND arming both exist now (phases 2 and 3, 2026-08-07) — and neither
+lives here.** ``create_automation`` writes a draft row through this module's pure
+functions; ``arm_automation`` hands one to launchd through the SHELL's typed
+surface (``automation.rs``), behind the ordinary card plus the typed code. What
+this module holds is what it always held: the row shape, the closed schedule
+vocabulary, the two renderers (``schedule_sentence``, ``plist_text``), the
+authoring door's validators, and ``label_is_addisons_own`` — pure functions, no
+bridge, nothing that could itself start or stop anything.
 [docs/step-8-automation-plan.md](../docs/step-8-automation-plan.md) owns the phase
 order.
 
@@ -447,3 +449,49 @@ def derive_label(name: object, taken_labels: Iterable[str] = ()) -> str | None:
         if candidate not in taken:
             return candidate
     return None
+
+
+def _in_the_stem_alphabet(ch: str) -> bool:
+    """One character of a label's stem, excluding the hyphen — which the first
+    character may not be, so it is asked for separately below."""
+    return ("a" <= ch <= "z") or ("0" <= ch <= "9")
+
+
+def label_is_addisons_own(label: object) -> TypeGuard[str]:
+    """Is this one of the labels Addison MINTS — ``com.addison.auto.<stem>``?
+
+    ``^com\\.addison\\.auto\\.[a-z0-9][a-z0-9-]{0,39}$``, which is
+    ``shell/src-tauri/src/automation.rs::label_is_valid`` said again on this side.
+    The repetition is the design (plan §5.8): the shell validates every label it is
+    handed because it is the process that WRITES the file, and it does not trust the
+    core for it. This asks the same question one process earlier, so the core can
+    refuse a label it should never have sent — with its own plain sentence, before a
+    round trip — instead of relaying somebody else's.
+
+    **Its one caller is a STOPPING path.** ``rpc/automations.py``'s orphan disarm
+    (the only place a label arrives from a surface rather than from a row Addison
+    wrote), where the question being asked is "is this a job Addison installed, and
+    therefore one it may take back out". Nothing here decides that anything may be
+    STARTED: ``arm_automation`` names a saved row and takes its label from
+    ``derive_label`` above, never from a caller.
+
+    A ``TypeGuard`` rather than a plain ``bool`` because every caller needs the
+    narrowed ``str`` immediately afterwards, and re-asserting the type after asking
+    the question is how the two drift apart.
+
+    One deliberate difference from the Rust, and it costs nothing: the length is
+    counted in CHARACTERS here and in BYTES there. They agree on every string this
+    can return True for, because a stem outside ASCII fails the alphabet walk on
+    both sides before either length is reached."""
+    if not isinstance(label, str) or not label.startswith(LABEL_PREFIX):
+        return False
+    stem = label[len(LABEL_PREFIX) :]
+    if not stem or len(stem) > MAX_SLUG_CHARS:
+        return False
+    # The first character carries no hyphen, so a label can never start with one and
+    # can never be all punctuation — and, with the alphabet below, can never hold a
+    # path separator, a dot or a NUL. That is what makes `<label>.plist` a file name
+    # the shell cannot be walked out of its own directory with.
+    if not _in_the_stem_alphabet(stem[0]):
+        return False
+    return all(_in_the_stem_alphabet(ch) or ch == "-" for ch in stem[1:])
