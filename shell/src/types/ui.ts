@@ -7,11 +7,19 @@ import { asRecord } from "../lib/parse";
 
 /**
  * Which in-window view is showing (docs/design-brief-dark, "Screens"). "chat" is
- * the live conversation; the other four are SURFACES — they replace the chat
+ * the live conversation; the other five are SURFACES — they replace the chat
  * column (the right rail hides entirely, the sidebar stays) and are left with
  * the header's ← or Escape.
+ *
+ * "code" is the Developer/Custom REVIEW SURFACE (Phase-3 plan Build §4): what
+ * Addison changed, what is on disk, and putting one file back. It is the only
+ * member gated on the active PROFILE — App renders it, and the Sidebar offers a
+ * way to it, for `developer`/`custom` only. The gate keys off the profile and
+ * never off the policy mode, exactly as the workspace-trust card does: trust rows
+ * outlive a profile switch core-side, so a Simple-profile window must not be able
+ * to browse a folder that was trusted under Developer.
  */
-export type View = "chat" | "settings" | "tools" | "snapshots" | "widgets";
+export type View = "chat" | "settings" | "tools" | "snapshots" | "widgets" | "code";
 
 /** A message as rendered in the thread, with transient display flags. */
 export interface DisplayMessage extends ChatMessage {

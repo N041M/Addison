@@ -48,9 +48,26 @@ Two things it cannot check, both learned the hard way the same day:
 **NOTHING FROM THE PHASE-2 SEQUENCE REMAINS. Step 8 completed 2026-08-07 — all
 four phases — and with it the July-2026 scope change.** What is next is **Phase 3**
 (packaging, signing, notarisation, the auto updater, previous-binary restore,
-Secure Enclave identity), plus the **Developer review surface**, whose plan is
-approved and, since step 8 landed, **unblocked and unstarted**.
+Secure Enclave identity). The **Developer review surface** — the phase's second track —
+is **BUILT: all five of its plan's Build sections landed on 2026-08-08**, and the only
+thing left on it is a manual pass (see the next paragraph).
 `ROADMAP.md` owns status; trust it over this file.
+
+**START HERE ON THE REVIEW SURFACE: the §13c manual pass, not more code.**
+`TESTING-CHECKLIST.md` §13c is live and unrun. It matters more than a checklist usually
+does, because this wave widened the webview's content-security policy — one directive
+(`style-src 'unsafe-inline'`, which Monaco genuinely cannot run without) against four
+tightenings — and **a CSP is enforced by a real webview and by nothing else**. The build
+could not run one. `tests/test_csp_is_pinned.py` holds the authored string and the two
+structural rules (`script-src` never admits `'unsafe-eval'`/`'unsafe-inline'`; no
+directive admits `*`, `http:`, `https:` or `blob:`), and `shell/src/lib/cspReport.ts`
+reports every violation into the Developer diagnostics ring permanently — so §13c is a
+matter of opening that panel, using the screen properly on all three platforms, and
+confirming it stays empty. The bright line, if it does not: **do not widen `script-src`
+or admit `blob:`.** The fallback the plan names is the `<pre>` + highlight.js viewer.
+Everything else outstanding is the plan's follow-up list — an editor zoom control (the
+12px type size is recorded as a tension, not a settled answer), JSON highlighting, and
+`shell.adoptWorkspacePath` for the post-restart revert case.
 
 **The review surface's first prerequisite is now done (2026-08-08).** The two file
 tools' `permission_detail` read the RAW `path` argument while `affected_path`
@@ -76,24 +93,24 @@ answered where they live, the design mapping for a code surface is the last sect
 **§13c**. A `phase-3-includes-the-review-surface` row in `tests/doc_claims.py` now
 fails the suite on the sixth document to define Phase 3 as packaging alone.
 
-**Build §1, §2 and §3 landed on 2026-08-08 — start at the plan's Build §4** (the screen
-itself: the third `screen` value, the tree, the Monaco panes, and the disable-while-working
-rule §3 deliberately left to it). §1 shipped the read paths: `workspace.listDirectory` and
+**Build §1 through §5 all landed on 2026-08-08.** §1 shipped the read paths: `workspace.listDirectory` and
 `workspace.readFile` as RPC and never registry tools, two Rust bridge methods beside
 the step-5 block, and the four-step confinement order (mode gate, resolve once,
 trusted-root check, pass only the resolved value). The plan's §1 now carries what
 shipped and the decisions taken while building it; the two worth knowing are
 that a refusal answers `{ok: false, error}` while a success carries no `ok` at all, and
 that these paths are **absolute-only** — `realpath` would otherwise quietly complete a
-relative path against the core process's working directory. There is still no frontend
-consumer, on purpose: each section ships the TypeScript types and the generated fixtures
-so §4 has something to parse against.
+relative path against the core process's working directory. Each section shipped its
+TypeScript types and generated fixtures ahead of a consumer, and §4's parsers now run
+over those same fixtures in `workspaceReadPaths.fixtures.test.ts` /
+`workspaceEdits.fixtures.test.ts` — which is the `roots`/`folders` drift loop finally
+closed on both sides rather than one.
 
 **§2 and §3 shipped the data and the sharp edge.** `workspace.listEdits` (metadata only)
 `/readEditDiff` / `revertFile`, a `wrote_sha256` on every write's undo payload, and a
 THIRD revert mechanism in `agent_core/snapshots/file_revert.py` — per-path,
 out-of-order, chain-collapsing, `write_project_file`-only, beside `UndoManager` and
-`SnapshotManager` and calling neither. Four things to know before §4:
+`SnapshotManager` and calling neither. Four things §4 had to honour, and did:
 
 - **Reverting a file settles its WHOLE unreverted chain in one write**, landing on the
   oldest prior — a state that actually existed — so zero unreverted rows remain and the
@@ -104,13 +121,29 @@ out-of-order, chain-collapsing, `write_project_file`-only, beside `UndoManager` 
   value that lets a revert proceed with no warning.
 - **`revertable` is the shell's answer about its SESSION write ledger**, asked through a
   new pure query (`shell.canRestoreWorkspaceFiles`) with no filesystem effect. After a
-  restart it is false for every historic edit, and §4 must render those read-only with
-  the plan's plain line rather than a button that fails. `undo.undoLastAction` now has
+  restart it is false for every historic edit, and §4 renders those read-only with the
+  plan's plain line rather than a button that fails. `undo.undoLastAction` now has
   the same honesty, asked the same way, and marks nothing when the answer is no.
 - **One new Rust method beyond the plan's list: `shell.digestWorkspaceFiles`.** The core
   has no filesystem of its own, and hashing each file core-side would ship the megabytes
   `listEdits` is metadata-only to avoid. Both new shell methods are batches answering a
   MAP keyed by path — never an array positioned against the request.
+
+**§4 and §5 shipped the screen and the skin**, and the plan was wrong about the tree in
+two places that are worth knowing because they will mislead the next reader of it too:
+there is no `screen` state — `App.tsx` holds `view: View` and the union already had five
+members, not two — and the Escape handler already read `view !== "chat"`. The third call
+site the plan warned about was real: widening the type without a Sidebar entry leaves a
+screen with no way to reach it, so the nav row exists and **its gate is the handler** —
+App passes `onOpenCode` only under Developer/Custom, and the Sidebar renders no row
+without one. The screen is gated a second time at the render, because a profile can
+change under an open screen. Monaco is loaded from the ESM API entry only (in monaco
+0.56 that is `monaco-editor/editor/editor.api`, not the `esm/vs/…` path the plan names —
+the package gained an `exports` map), its worker is bundled with a plain `?worker`, and
+its theme is built from the `--hl-*` variables `styles.css` already carried, so the repo
+has one code palette rather than two. The editor is a lazy chunk nobody who avoids the
+screen ever downloads: measured against a build of master, the initial bundle grows by
+23 kB (7 kB gzip), which is the screen's own code and none of it Monaco.
 
 `action_snapshots` also got **its first index** (`idx_action_snapshots_tool_reverted`), a
 line in `schema.sql`'s index block, because retention now collects reverted rows only and

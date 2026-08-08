@@ -348,14 +348,28 @@ mapping against a stale picture. None of them change the design language.
 ## The code surface (Phase 3) — the mapping, written before the build
 
 The Developer **review surface** — file tree, read-only viewer, a diff of every edit
-Addison has made that is still live on disk, per-file revert — is approved and
-unstarted; [`../phase-3-review-surface-plan.md`](../phase-3-review-surface-plan.md)
-owns the build and everything about it that is not design. This section is the
-**design mapping**, and it is written first for the reason the rest of this file
-exists: the brief above has **no vocabulary for code**. Nothing in the prototype is a
-document surface, and a code editor is the one component that arrives with somebody
-else's theme already attached — the place a second look leaks into an app that has
-exactly one.
+Addison has made that is still live on disk, per-file revert — **shipped 2026-08-08**;
+[`../phase-3-review-surface-plan.md`](../phase-3-review-surface-plan.md) owns the build
+and everything about it that is not design. This section is the **design mapping**, and
+it is written first for the reason the rest of this file exists: the brief above has
+**no vocabulary for code**. Nothing in the prototype is a document surface, and a code
+editor is the one component that arrives with somebody else's theme already attached —
+the place a second look leaks into an app that has exactly one.
+
+**It shipped as written**, in `shell/src/lib/monacoTheme.ts` and
+`shell/src/components/CodeSurface.tsx`: no new token entered `styles.css`, no new hue
+entered the app, and the editor reads the `--hl-*` variables the markdown code blocks
+already use. Three notes the mapping did not anticipate, none of which changes the
+design language. `editor.foreground` had to be mapped as well (to `ink`) — with
+`inherit: false`, it is what every unmapped token falls to, so leaving it unset would
+have let Visual Studio's default through the one gap. `--hl-builtin` and `--hl-link`
+stay unmapped, because Monaco has no token corresponding to either and inventing a
+mapping would put a colour on screen that no rule here puts anywhere else. And the
+screen is **not** a `<Surface>`: that component is the 580px centred reading column, and
+a two-pane diff does not survive inside one — so the code screen is the first full-width
+view in the app. It keeps everything else: hairline separators, the 2px accent left rail
+on the selected row, section labels on a 2px `rail` rule, and the surface enter/leave
+motion.
 
 **One palette, zero new tokens.** `shell/src/styles.css` already carries a full
 highlight.js token theme for both themes — `--hl-comment` / `keyword` / `string` /

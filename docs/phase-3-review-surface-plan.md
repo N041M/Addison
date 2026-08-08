@@ -1,12 +1,15 @@
 # Phase 3 — The Review Surface: a bespoke IDE for the Developer/OPEN profile
 
-**Status:** PLAN, approved 2026-07-25. **IN PROGRESS — Build §1, §2 and §3 are built
-(2026-08-08); §4 (the screen) and §5 (the Monaco skin) remain.** Everything it waited on
-has landed: the three sequencing prerequisites (step 6 widget capability tiers and step 7
-the MCP client on 2026-08-06/07, step 8's four phases on 2026-08-07) and the three fixes
-listed under "Prerequisites" below, each in its own PR on 2026-08-08 — the resolved
-permission detail, the read ceiling, and the prune wiring.
-[`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
+**Status:** PLAN, approved 2026-07-25. **BUILT — all five Build sections landed
+2026-08-08** (§1 read paths, §2 the diff, §3 per-file revert, §4 the screen, §5 the
+Monaco skin). What remains is not code: the **§13c manual pass** in
+[`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md), which is the only place the CSP is
+enforced by a real webview, and the follow-up list at the end of §5's shipped notes.
+Everything the plan waited on had landed first: the three sequencing prerequisites
+(step 6 widget capability tiers and step 7 the MCP client on 2026-08-06/07, step 8's
+four phases on 2026-08-07) and the three fixes listed under "Prerequisites" below, each
+in its own PR on 2026-08-08 — the resolved permission detail, the read ceiling, and the
+prune wiring. [`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over this line.
 
 > **This redefines what "Phase 3" means.** Before this plan, Phase 3 meant packaging /
 > signing / notarisation / auto-updater / binary restore / Secure-Enclave identity, and
@@ -98,7 +101,26 @@ Three consequences, all of which the build must handle rather than absorb silent
 and the token theme already exists at `shell/src/styles.css:481–571`). Do not widen
 `script-src` to make a rendering choice work.
 
-### Measure, then widen — do not guess
+### Measure, then widen — do not guess — **DONE 2026-08-08**
+
+> **What actually happened, in the plan's own order.** Step A shipped and stayed:
+> `shell/src/lib/cspReport.ts` pushes `{blockedURI, violatedDirective, sourceFile}` into
+> the diagnostics ring, installed from `main.tsx` before the app renders. It is
+> permanent, not scaffolding — a CSP is a floor the app cannot see enforced from the
+> inside any other way, and a blocked worker is silent in the DOM and loud only in a
+> devtools console nobody has open in a packaged build. Step B landed the target literal
+> below, byte-for-byte. Step C is `tests/test_csp_is_pinned.py`, with the equality
+> assertion and both structural rules.
+>
+> **The measurement itself was discharged by construction, and that is a weaker claim
+> than running it.** A policy is enforced by a real webview and by nothing else, and
+> this build could not run one — so what was relied on is the narrow fact that ESM
+> Monaco plus a `?worker` worker needs `style-src 'unsafe-inline'` and nothing else,
+> with the pin test holding the bright line permanently. **The live check is
+> [`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md) §13c**, on all three platforms, and it
+> is the outstanding work of this wave. The build output backs the narrow fact as far as
+> a build can: no `blob:` appears anywhere in `dist/`, and the worker is referenced as
+> `new Worker("/assets/editor.worker-….js")`.
 
 **Step A.** Land a `securitypolicyviolation` listener in `shell/src/main.tsx` that pushes
 `{blockedURI, violatedDirective, sourceFile}` into the existing `subscribeDiagnostics`
@@ -599,7 +621,7 @@ matching honesty. The decisions that were not already written down:
   that file" (the revert). Neither is the not-trusted sentence, because neither is that
   situation: the folder may be perfectly trusted and the file simply untouched.
 
-### 4. Frontend
+### 4. Frontend — **BUILT 2026-08-08**
 
 **The screen.** Widen `screen` in `App.tsx:82` — and note **three** call sites, one of
 which is a dead end: `Sidebar.tsx:27` types the prop `"chat" | "settings"` (verified) and
@@ -645,7 +667,93 @@ structural swap; plan the tree as collapsible-to-a-rail from the start, because
 `SettingsPage` survives 1000px only by being a single scroll column and a two-pane diff
 will not.
 
-### 5. Skinning Monaco to the dark direction — one palette, zero new tokens
+#### What shipped, and the decisions taken while building it
+
+Everything above: the third screen and its nav entry, the Developer/Custom gate on the
+active profile, the moved `workBlock`/`consentBlock` slots, the ESM-only Monaco with its
+`?worker` worker, and the `renderSideBySideInlineBreakpoint` + `MobileDrawer` layout.
+The CSP was widened to the target literal and pinned. New files:
+`components/CodeSurface.tsx`, `components/CodeEditor.tsx`, `hooks/useCodeReview.ts`,
+`lib/monaco.ts`, `lib/monacoTheme.ts`, `lib/cspReport.ts`, `lib/sanitizeSvg.ts`.
+
+**Two things this section got wrong about the tree it was describing**, both corrected
+rather than worked around:
+
+- **There is no `screen` state and there never was.** `App.tsx` holds `view: View`
+  (`types/ui.ts`), and the union already had FIVE members — `chat | settings | tools |
+  snapshots | widgets` — not two. So `"code"` was added to `View`, and `SURFACE_TITLES`
+  (a `Record<Exclude<View, "chat">, string>`) made the missing title a type error rather
+  than a blank header, which is the good version of this mistake.
+- **The Escape handler already read `view !== "chat"`.** It was widened when the third
+  and fourth surfaces landed; the plan was describing the two-surface tree. Nothing to
+  do, and the test that would have caught the plan's version is in
+  `codeScreen.test.tsx` regardless. The third call site the plan warned about — a
+  widened type with no way to reach the screen — was real and is why the nav row exists.
+
+The decisions that were not already written down:
+
+- **The nav row's GATE IS THE HANDLER.** `Sidebar` renders the "Code" row only when it
+  is given an `onOpenCode`, and App passes one only under Developer/Custom. Simple has
+  no row rather than a disabled row — a disabled control invites the question, and the
+  answer ("switch profiles") is not one this row should be teaching.
+- **The screen is gated in TWO places, and the second is the one that holds.** A profile
+  can change under an open screen (Settings, or a G3 restore putting a configuration
+  back), so the render refuses to draw the surface the moment `activeProfile` stops
+  qualifying, and an effect then returns to chat. Gating only the nav entry would have
+  left whoever was already standing there.
+- **The rail's `work` slot stands down on a surface, exactly as `consent` already did.**
+  The Activity Panel was previously rendered into a rail that a surface collapses to
+  zero width and marks `inert` — in the DOM, visible to nobody. The code screen renders
+  it itself. The consent card needed no change at all: `SurfaceConsentLayer` already
+  hoists it onto a fixed layer for every surface, so it followed the person here for
+  free, and "never duplicated" is a test rather than a convention.
+- **It is NOT a `<Surface>`.** That component is a 580px centred reading column and a
+  two-pane diff will not survive inside one. It keeps the two contracts App's view
+  machine depends on — the `SURFACE_ID` root and `data-surf` text — so entering and
+  leaving animate like every other screen.
+- **An escaping entry is dimmed AND inert, whatever its kind.** The plan asked for
+  dimming; making the row do nothing as well costs nothing and removes the click the
+  core would only refuse. A symlink that does NOT escape is shown as a shortcut and is
+  also not opened from here: this side does not know whether it points at a file or a
+  folder, and guessing puts the wrong control on screen.
+- **Every pane fetch carries a sequence number.** Clicking three files quickly would
+  otherwise leave whichever answer arrived last under whichever header arrived first —
+  a viewer showing one file's text under another file's name, on the one screen whose
+  entire job is to be exact about which file is which.
+- **Each trusted root opens ONE level when the screen first shows it.** Never recursive,
+  and `.git`/`node_modules` are listed and left collapsed. A tree that shows only
+  collapsed root names looks broken; a tree that walks a repo is the accident the
+  missing `depth` parameter exists to prevent.
+- **`optimizeDeps.include` alone was not enough — the import specifier changed.** The
+  plan names `monaco-editor/esm/vs/editor/editor.api`, which is the pre-0.53 path;
+  monaco 0.56 ships an `exports` map (`"./*": "./esm/vs/*.js"`), so the same entry is
+  `monaco-editor/editor/editor.api`. Same decision, current spelling. `src/vite-env.d.ts`
+  was added so both tsconfigs can see Vite's `?worker` declaration.
+- **The basic-language REGISTRATIONS ship with it, and the language services do not.**
+  `editor.api` alone registers no grammars at all, so §5's whole token map would have
+  had nothing to colour. `basic-languages/monaco.contribution` adds ~80 registrations of
+  a few hundred bytes each, and every grammar is a lazy chunk fetched the first time a
+  file of that type is opened. These are Monarch tokenizers on the main thread — not the
+  four worker-backed language services the api entry exists to exclude. JSON is the one
+  common type with no Monarch grammar upstream and renders as plain text.
+- **`worker.format` is `iife`, stated rather than defaulted.** A module worker would ask
+  `new Worker(url, {type: "module"})` of three different webviews this build cannot
+  check. The worker has no dynamic imports, so a classic script costs nothing.
+- **A failed editor load degrades to plain text, not to a spinner.** The text is what
+  the person came for; the diff's fallback shows BOTH panes stacked, because showing
+  only "after" would hide the state Revert lands on.
+
+**Sizes, since the plan calls the api entry the biggest lever — measured against a
+build of `origin/master`, not estimated.** The initial bundle goes 658 kB → 681 kB
+(199 kB → 206 kB gzip): **+23 kB, and none of it is Monaco.** That is the screen's own
+code, which App imports statically like every other surface. The editor is a lazy chunk
+of 2,681 kB (695 kB gzip), plus 80 kB of its own CSS (13 kB gzip), an emitted 273 kB
+worker, and ~80 language-grammar chunks of 2–20 kB each — none of which is fetched by
+anyone who never opens the screen. Two facts about the built output are worth recording
+because they are the parts a reviewer cannot check by reading source: `blob:` appears
+nowhere in `dist/`, and the TypeScript language service is not in the editor chunk.
+
+### 5. Skinning Monaco to the dark direction — one palette, zero new tokens — **BUILT 2026-08-08**
 
 The design brief has no vocabulary for code. But `shell/src/styles.css:481–571` **already**
 carries a full highlight.js token theme, tuned toward the violet accent, for both themes
@@ -712,6 +820,46 @@ up from the nearest precedent rather than a match to it — defensible for a sur
 as a document instead of as an excerpt inside a message, and still better than inventing
 a size token.)*
 
+#### What shipped, and the decisions taken while building it
+
+Everything above, in `shell/src/lib/monacoTheme.ts`: the `--hl-*` reads with the
+channels-to-hex conversion, `base` + `inherit: false`, the token map exactly as written,
+weight 400 with italic on comments alone, the chrome mapped onto existing tokens with no
+additions, the alpha ladder as named constants in that file rather than in `styles.css`,
+selection as the accent at low alpha, and `fontSize: 12` / `lineHeight: 19`. The
+re-theme is the one line this section asked for: `App.tsx`'s `apply()` now calls
+`setResolvedTheme(resolved)` on the value it was already computing, and that value is
+prop-drilled to the screen. No `MutationObserver` anywhere. The decisions that were not
+already written down:
+
+- **`editor.foreground` had to be mapped, and the section does not name it.**
+  `inherit: false` is what makes unmapped tokens fall to it, so leaving it unset would
+  have made "code, not confetti" resolve to whatever `vs-dark` happens to use. It takes
+  `--c-ink`, which is already the app's text.
+- **`--hl-builtin` and `--hl-link` are deliberately unmapped.** The section's map names
+  neither, and Monaco has no token that corresponds to either; inventing one would put a
+  colour on screen that no rule in `styles.css` puts anywhere else. They stay in the
+  token file for the markdown blocks that do use them.
+- **TWO theme names, not one redefined in place.** `applyMonacoTheme` defines both and
+  then selects one, so `setTheme` always has a name change to act on and a flip can
+  never depend on `defineTheme`'s re-application behaviour.
+- **ONE pair of hex literals exists, and they are `--c-ink`.** Every read needs a
+  fallback because Monaco THROWS on an invalid colour and jsdom answers `""` for every
+  custom property — a missing fallback is a crash in the rig, not a wrong hue. A
+  twelve-entry fallback table would have been the second palette this approach exists to
+  avoid, so one neutral foreground per theme is the whole of it, and the degenerate
+  theme it produces is monochrome rather than wrong.
+- **A garbled value is treated as unreadable.** `rgb(1,2,3)`, a channel over 255, an
+  empty string: all fall back rather than being passed through, because "passed through"
+  means an exception inside `defineTheme` at the moment somebody opens a file.
+- **`minimap: false` is spelled `minimap: {enabled: false}`.** Monaco's option is an
+  object; same decision, the API's spelling. (The plan's other option names are exact.)
+
+**On the follow-up list, not folded in as though it were settled:** an editor zoom
+control (the 12px tension this section records); JSON highlighting, which would mean
+admitting the JSON language service and its worker; and the plan's own deferred item,
+`shell.adoptWorkspacePath`, which would recover the post-restart revert case.
+
 ---
 
 ## Verification
@@ -773,7 +921,26 @@ than a failing button.
    and states what remains open (the wording, not the code). The surface still makes it
    vivid: if the repo sits under a trusted root, the person will *see* `policy.py` in the
    file tree.
-3. **`style-src 'unsafe-inline'` applies to the Simple profile too.** Mitigations belong in
-   the same PR: confirm/strip `<style>` and `style=` from mermaid's injected SVG, and give
-   `PermissionCard` a hardened container (own stacking context, `isolation: isolate`, no
-   model-stylable ancestor).
+3. ~~**`style-src 'unsafe-inline'` applies to the Simple profile too.**~~ **ANSWERED
+   2026-08-08 by building both mitigations in the same change, and the first one is
+   STRIP rather than confirm.** `shell/src/lib/sanitizeSvg.ts` parses mermaid's rendered
+   SVG into an inert `<template>` and removes every `<style>`, `style=`, `on*` and
+   `<script>` before injection. Stripping costs nothing that the app had: `style-src
+   'self'` was already blocking both, so this keeps diagram rendering byte-identical to
+   the shipped app while closing the path the widening would otherwise open — and it is
+   a real path, because a flowchart's `classDef` becomes a `<style>` block that applies
+   to the WHOLE document and its `style A fill:…` becomes an attribute that can pin one
+   node over the window. `PermissionCard` got the hardened container (`isolation:
+   isolate`, its own stacking context, `data-consent-card`), and the structural half is
+   now a test: the card is never a descendant of `.markdown-body` or a diagram.
+
+   **What the mitigation does NOT cover, stated rather than implied.** The widening is
+   global, so a Simple session carries `'unsafe-inline'` for a screen it can never reach
+   — that cost is unchanged and is the honest price of this decision. `isolation:
+   isolate` cannot stop a global rule aimed at the card by selector, and nothing at that
+   layer could; what stops one is there being no path for such a rule to arrive, which
+   is the sanitizer's job. Nothing here constrains CSS delivered by a first-party asset,
+   which `'self'` admits by definition. And a SECOND injection site added later would
+   bypass all of it — so `src/__tests__/cspMitigations.test.tsx` asserts at source level
+   that the app has exactly one `dangerouslySetInnerHTML` and that it routes through the
+   sanitizer.

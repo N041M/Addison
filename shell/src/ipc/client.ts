@@ -18,6 +18,13 @@ import {
   type AutomationStatus,
   type ModelRole,
   type PermissionRequest,
+  type WorkspaceEdit,
+  type WorkspaceEditDiff,
+  type WorkspaceEditList,
+  type WorkspaceEntry,
+  type WorkspaceFileView,
+  type WorkspaceListing,
+  type WorkspaceRevertResult,
 } from "../types/protocol";
 import { asRecord, normalizeUnavailable } from "../lib/parse";
 import {
@@ -330,6 +337,24 @@ export function subscribeDiagnostics(handler: (entry: DiagnosticEntry) => void):
   };
 }
 
+/**
+ * Report a diagnostic that did NOT arrive on a JSON-RPC response.
+ *
+ * The ring's first source was `error.data.raw` off a failed core reply, which is
+ * why it lives in this module at all. The second is the webview reporting its own
+ * Content-Security-Policy violations (`lib/cspReport.ts`) — a fact about this
+ * process, with no core round trip anywhere in it. Both belong in the same ring
+ * because they answer the same question for the same reader: the Developer
+ * profile's "what actually went wrong just now".
+ *
+ * Deliberately not a second channel with a second subscriber list: two rings would
+ * mean two places to look, and the one that nobody wired up would be the one
+ * holding the answer.
+ */
+export function pushDiagnostic(entry: DiagnosticEntry): void {
+  diagnosticsHandlers.forEach((h) => h(entry));
+}
+
 function toPlainMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
@@ -554,6 +579,25 @@ export const ipc = {
     call(Method.WorkspaceList).then(parseWorkspaceRoots),
   pickWorkspaceDirectory: (): Promise<string | null> =>
     call(Method.WorkspacePickDirectory).then(parseWorkspaceDirectory),
+
+  // The review surface (Phase 3). Browsing is a USER-DRIVEN read, which is why it
+  // is RPC and never a registry tool: routing it through the registry would hand
+  // the model a `list_directory` capability as a side effect AND put a permission
+  // card in front of a click the person just made. Precedent: snapshot restore.
+  //
+  // Every one of these is refused core-side outside the Developer/Custom profile,
+  // and the read paths are confined to a currently-trusted folder; nothing here is
+  // the boundary, it is the way to ASK across it.
+  listWorkspaceDirectory: (directory: string): Promise<BrowseResult<WorkspaceListing>> =>
+    call(Method.WorkspaceListDirectory, { directory }).then(parseWorkspaceListing),
+  readWorkspaceFile: (path: string): Promise<BrowseResult<WorkspaceFileView>> =>
+    call(Method.WorkspaceReadFile, { path }).then(parseWorkspaceFileView),
+  listWorkspaceEdits: (): Promise<BrowseResult<WorkspaceEditList>> =>
+    call(Method.WorkspaceListEdits).then(parseWorkspaceEditList),
+  readWorkspaceEditDiff: (path: string): Promise<BrowseResult<WorkspaceEditDiff>> =>
+    call(Method.WorkspaceReadEditDiff, { path }).then(parseWorkspaceEditDiff),
+  revertWorkspaceFile: (path: string): Promise<WorkspaceRevertResult> =>
+    call(Method.WorkspaceRevertFile, { path }).then(parseWorkspaceRevert),
 
   // MCP servers — external tool servers Addison consumes as a client (Phase-2
   // step 7, phases 1–2). `addMcpServer` saves a name and an address; nothing
@@ -1337,6 +1381,181 @@ export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// The review surface's read paths, diff and revert (Phase-3 plan Build §1–§4).
+//
+// EVERY ONE of these handlers answers one of two shapes: the payload itself, with
+// no `ok` key at all, or `{ok: false, error}` carrying a plain sentence the core
+// already wrote for a person. So the parsers below return a two-armed result and
+// the screen renders one or the other — it never has to decide what an empty
+// object means.
+//
+// Fail CLOSED, and each closure is a specific harm rather than a habit:
+//   * an entry whose `escapes` we cannot read is treated as ESCAPING, so the row
+//     is dimmed and carries its warning. The opposite would invite a click.
+//   * an edit whose `revertable` is not literally `true` renders read-only. The
+//     opposite is a button that can only fail.
+//   * an edit whose `onDiskChanged` is not literally `true` or `false` is `null` —
+//     "Addison can't tell" — because collapsing an unknown into `false` is the one
+//     wrong reading that lets a revert discard somebody's own work with no warning.
+//   * a shape we cannot read at all becomes an error sentence, never an empty
+//     listing: a file tree that renders "nothing here" for a folder full of files
+//     is a lie in exactly the place this surface exists to tell the truth.
+// ---------------------------------------------------------------------------
+
+/** Either the payload, or one plain sentence to show instead of it. */
+export type BrowseResult<T> = { value: T; error?: undefined } | { value?: undefined; error: string };
+
+/** The one sentence this side authors. Every other refusal is the core's own
+ * words, forwarded whole. */
+const UNREADABLE_ANSWER = "Addison couldn't read that just now.";
+
+/** `{ok:false, error}` → the sentence; anything else → null (it is a payload). */
+function refusal(result: unknown): string | null {
+  const obj = asRecord(result);
+  if (!obj) return UNREADABLE_ANSWER;
+  if (obj.ok === false) {
+    return typeof obj.error === "string" && obj.error ? obj.error : UNREADABLE_ANSWER;
+  }
+  return null;
+}
+
+/** The closed set of kinds. Anything else is "other" — NOT "directory", so an
+ * unrecognised row can never render as a folder somebody expands. */
+function parseEntryKind(value: unknown): WorkspaceEntry["kind"] {
+  return value === "file" || value === "directory" || value === "symlink" ? value : "other";
+}
+
+export function parseWorkspaceListing(result: unknown): BrowseResult<WorkspaceListing> {
+  const refused = refusal(result);
+  if (refused) return { error: refused };
+  const obj = asRecord(result)!;
+  if (typeof obj.directory !== "string" || !obj.directory) return { error: UNREADABLE_ANSWER };
+  const rows = Array.isArray(obj.entries) ? (obj.entries as unknown[]) : [];
+  const entries: WorkspaceEntry[] = [];
+  for (const item of rows) {
+    const row = asRecord(item);
+    // A row with no name is a row nothing can be said about, and every later call
+    // is keyed by it. Dropping beats rendering a nameless line.
+    if (!row || typeof row.name !== "string" || !row.name) continue;
+    entries.push({
+      name: row.name,
+      kind: parseEntryKind(row.kind),
+      size: typeof row.size === "number" && Number.isFinite(row.size) ? row.size : 0,
+      // Unreadable → escaping. See the fail-closed note above.
+      escapes: row.escapes !== false,
+    });
+  }
+  return {
+    value: {
+      directory: obj.directory,
+      root: typeof obj.root === "string" && obj.root ? obj.root : null,
+      entries,
+      truncated: obj.truncated === true,
+    },
+  };
+}
+
+export function parseWorkspaceFileView(result: unknown): BrowseResult<WorkspaceFileView> {
+  const refused = refusal(result);
+  if (refused) return { error: refused };
+  const obj = asRecord(result)!;
+  if (typeof obj.path !== "string" || !obj.path) return { error: UNREADABLE_ANSWER };
+  // An empty file is a real answer (`""`), so this checks the TYPE and not the
+  // truthiness — the difference between "nothing in it" and "we got nothing".
+  if (typeof obj.content !== "string") return { error: UNREADABLE_ANSWER };
+  return {
+    value: {
+      path: obj.path,
+      root: typeof obj.root === "string" && obj.root ? obj.root : null,
+      content: obj.content,
+      bytes:
+        typeof obj.bytes === "number" && Number.isFinite(obj.bytes)
+          ? obj.bytes
+          : obj.content.length,
+      truncated: obj.truncated === true,
+    },
+  };
+}
+
+function parseEdit(item: unknown): WorkspaceEdit | null {
+  const row = asRecord(item);
+  if (!row || typeof row.path !== "string" || !row.path) return null;
+  const path = row.path;
+  return {
+    path,
+    root: typeof row.root === "string" && row.root ? row.root : null,
+    relativePath:
+      typeof row.relativePath === "string" && row.relativePath ? row.relativePath : path,
+    snapshotIds: Array.isArray(row.snapshotIds)
+      ? (row.snapshotIds as unknown[]).filter((id): id is string => typeof id === "string")
+      : [],
+    writes: typeof row.writes === "number" && Number.isFinite(row.writes) ? row.writes : 1,
+    created: row.created === true,
+    firstWrittenAt: typeof row.firstWrittenAt === "number" ? row.firstWrittenAt : 0,
+    lastWrittenAt: typeof row.lastWrittenAt === "number" ? row.lastWrittenAt : 0,
+    // Only a literal `true` earns a Revert control.
+    revertable: row.revertable === true,
+    // TRI-STATE, and `null` is the answer for everything that is not one of the
+    // two booleans.
+    onDiskChanged:
+      row.onDiskChanged === true ? true : row.onDiskChanged === false ? false : null,
+    missing: row.missing === true,
+  };
+}
+
+export function parseWorkspaceEditList(result: unknown): BrowseResult<WorkspaceEditList> {
+  const refused = refusal(result);
+  if (refused) return { error: refused };
+  const obj = asRecord(result)!;
+  const rows = Array.isArray(obj.edits) ? (obj.edits as unknown[]) : [];
+  const edits: WorkspaceEdit[] = [];
+  for (const item of rows) {
+    const edit = parseEdit(item);
+    if (edit) edits.push(edit);
+  }
+  return { value: { edits, truncated: obj.truncated === true } };
+}
+
+export function parseWorkspaceEditDiff(result: unknown): BrowseResult<WorkspaceEditDiff> {
+  const refused = refusal(result);
+  if (refused) return { error: refused };
+  const obj = asRecord(result)!;
+  if (typeof obj.path !== "string" || !obj.path) return { error: UNREADABLE_ANSWER };
+  // Both panes must be strings for the same reason as `content` above: a created
+  // file's BEFORE is legitimately "".
+  if (typeof obj.before !== "string" || typeof obj.after !== "string") {
+    return { error: UNREADABLE_ANSWER };
+  }
+  return {
+    value: {
+      path: obj.path,
+      before: obj.before,
+      after: obj.after,
+      beforeTruncated: obj.beforeTruncated === true,
+      afterTruncated: obj.afterTruncated === true,
+    },
+  };
+}
+
+/** workspace.revertFile → {ok, path?, detail?} | {ok:false, error}. A refusal is a
+ * resolved answer carrying the core's plain sentence, never a reject — the same
+ * shape `grantTrust` uses. */
+export function parseWorkspaceRevert(result: unknown): WorkspaceRevertResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    path: typeof obj?.path === "string" ? obj.path : undefined,
+    detail: typeof obj?.detail === "string" ? obj.detail : undefined,
+    error:
+      obj?.ok === true
+        ? undefined
+        : typeof obj?.error === "string" && obj.error
+          ? obj.error
+          : UNREADABLE_ANSWER,
+  };
 }
 
 /** mcp.add/mcp.remove → {ok, error?}. A refusal — a bad address, a name already

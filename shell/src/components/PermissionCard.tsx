@@ -66,6 +66,38 @@ interface Props {
 // exactly as before.
 const RUN_PREFIX = "run: ";
 
+// ---------------------------------------------------------------------------
+// The hardened container (2026-08-08, Phase-3 review surface, owner decision 3).
+//
+// The app's CSP now carries `style-src 'self' 'unsafe-inline'` so Monaco can
+// position its view lines. Script execution is untouched, so what that widening
+// admits is CSS, and the residual risk it names is VISUAL SPOOFING — CSS that
+// overlays, hides or re-labels UI. This card is the UI that matters: it is the
+// surface a person reads before allowing Addison to act.
+//
+// Two things are done about it here, and it is worth being precise about which
+// problem each one solves, because neither solves the whole of it:
+//
+//   * `isolate` (isolation: isolate) + `relative` gives the card its OWN stacking
+//     context. Within its parent it is a single, atomic layer: nothing nested
+//     inside a sibling can interleave with the card's internals, and the card's
+//     own painting order cannot be rearranged from outside without also moving
+//     the card. It does NOT stop a global `display:none` aimed at this element,
+//     and nothing at this layer could.
+//   * `data-consent-card` is the handle the tests use to assert the structural
+//     half, which is the half that actually holds: the card NEVER has a
+//     model-stylable ancestor. It renders in the widget rail, in the thread's
+//     footer slot, or on App's fixed consent layer — always a SIBLING of the
+//     message list, never a descendant of `.markdown-body` or a diagram.
+//
+// The real mitigation is upstream and is not in this file: the one path by which
+// markup the app did not author reaches the DOM (`MermaidDiagram.tsx`) now has
+// every stylesheet and style attribute stripped out of it (`lib/sanitizeSvg.ts`).
+// This container is defence in depth behind that, not instead of it.
+const CONSENT_CONTAINER = { "data-consent-card": "" } as const;
+const CONSENT_CLASS =
+  "relative isolate animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel";
+
 function splitCommand(description: string): { lead: string; command: string | null } {
   const at = description.indexOf(RUN_PREFIX);
   if (at === -1) return { lead: description, command: null };
@@ -83,7 +115,10 @@ export function PermissionCard({ request, onRespond }: Props) {
   }
   const { lead, command } = splitCommand(request.description);
   return (
-    <div className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3">
+    <div
+      {...CONSENT_CONTAINER}
+      className={CONSENT_CLASS + " px-3.5 py-3"}
+    >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-ink">{request.label}</p>
       <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-ink-soft">{lead}</p>
       {command && (
@@ -191,7 +226,8 @@ function ArmingCard({
     // sends a message everywhere else in this app.
     <form
       onSubmit={submit}
-      className="animate-[fadeRise_.2s_ease_both] rounded-[7px] border border-rail bg-panel px-3.5 py-3"
+      {...CONSENT_CONTAINER}
+      className={CONSENT_CLASS + " px-3.5 py-3"}
     >
       <p className="m-0 text-[12px] font-medium leading-[1.45] text-ink">{request.label}</p>
 

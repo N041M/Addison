@@ -11,6 +11,11 @@
 // when a handler drifts from the committed files.
 import { describe, expect, it } from "vitest";
 
+import {
+  parseWorkspaceEditDiff,
+  parseWorkspaceEditList,
+  parseWorkspaceRevert,
+} from "../ipc/client";
 import type {
   WorkspaceEdit,
   WorkspaceEditDiff,
@@ -143,5 +148,101 @@ describe("workspace.revertFile over the real payload", () => {
     // A success carries no `error` at all, so a renderer keying off its presence
     // cannot show one.
     expect(reverted.error).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The parsers, over the same payloads (§4 — the consumers now exist)
+// ---------------------------------------------------------------------------
+
+describe("the diff parsers against the real payloads", () => {
+  it("reads every edit the core sends, in the order it sends them", () => {
+    // The half the type check cannot do: that the code driving the screen reads
+    // THESE keys. Kills a parser whose field names drifted while both suites stayed
+    // green — the `roots`/`folders` failure, repeated.
+    const answer = parseWorkspaceEditList(editsFixture);
+    expect(answer.error).toBeUndefined();
+    expect(answer.value!.edits.map((e) => e.path)).toEqual(list.edits.map((e) => e.path));
+    const app = answer.value!.edits.find((e) => e.path === "/fixture/project/src/app.py")!;
+    expect(app.writes).toBe(3);
+    expect(app.snapshotIds).toEqual(["edit-app-3", "edit-app-2", "edit-app-1"]);
+    expect(app.relativePath).toBe("src/app.py");
+    expect(app.onDiskChanged).toBe(true);
+    // The revoked-trust row keeps its whole path, because there is nothing for it
+    // to be relative to.
+    const orphan = answer.value!.edits.find((e) => e.root === null)!;
+    expect(orphan.relativePath).toBe("/fixture/elsewhere/orphan.txt");
+  });
+
+  it("keeps the three-valued onDiskChanged three-valued", () => {
+    const answer = parseWorkspaceEditList(editsFixture);
+    const legacy = answer.value!.edits.find((e) => e.path === "/fixture/project/legacy.txt")!;
+    expect(legacy.onDiskChanged).toBeNull();
+    expect(legacy.revertable).toBe(false);
+  });
+
+  it("reads both diff panes, including a BEFORE that is empty", () => {
+    const answer = parseWorkspaceEditDiff(diffFixture);
+    expect(answer.error).toBeUndefined();
+    expect(answer.value!.before).toBe("def main():\n    pass\n");
+    expect(answer.value!.after).toContain("my own tweak");
+    // A file Addison CREATED has an empty before pane; a truthiness check would
+    // report that as an unreadable answer.
+    const created = parseWorkspaceEditDiff({ path: "/p/new.md", before: "", after: "hi\n" });
+    expect(created.error).toBeUndefined();
+    expect(created.value!.before).toBe("");
+  });
+
+  it("reads the revert answer, and a refusal as a refusal", () => {
+    expect(parseWorkspaceRevert(revertFixture).ok).toBe(true);
+    const refused = parseWorkspaceRevert({
+      ok: false,
+      error: "Addison has no change of its own to put back for that file.",
+    });
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toBe("Addison has no change of its own to put back for that file.");
+    // A shape nobody can read is a refusal with a sentence, never a silent success.
+    expect(parseWorkspaceRevert(undefined).ok).toBe(false);
+    expect(parseWorkspaceRevert(undefined).error).toBeTruthy();
+  });
+});
+
+describe("the diff parsers fail CLOSED", () => {
+  it("only a literal `true` earns a Revert control", () => {
+    // Kills `revertable: row.revertable !== false`. The shell's ledger of files it
+    // has written is session-scoped, so after a restart this is false for every
+    // historic edit — and a button that could only fail is exactly the dead-button
+    // regression the honest read-only line exists to replace.
+    const answer = parseWorkspaceEditList({
+      edits: [
+        { path: "/a", revertable: true },
+        { path: "/b", revertable: "yes" },
+        { path: "/c" },
+      ],
+    });
+    expect(answer.value!.edits.map((e) => e.revertable)).toEqual([true, false, false]);
+  });
+
+  it("collapses anything that is not a boolean into `null`, never into `false`", () => {
+    // THE one wrong reading that costs somebody their own work: `false` is what
+    // lets a revert proceed with no warning, and an unknown must never become it.
+    const answer = parseWorkspaceEditList({
+      edits: [
+        { path: "/a", onDiskChanged: true },
+        { path: "/b", onDiskChanged: false },
+        { path: "/c", onDiskChanged: "maybe" },
+        { path: "/d" },
+      ],
+    });
+    expect(answer.value!.edits.map((e) => e.onDiskChanged)).toEqual([true, false, null, null]);
+  });
+
+  it("drops a row it cannot name rather than rendering a nameless one", () => {
+    // Every later call about an edit is keyed by its path — a row without one is a
+    // row whose Revert could only be aimed at nothing.
+    const answer = parseWorkspaceEditList({
+      edits: [{ path: "/a" }, { path: "" }, { relativePath: "b.txt" }, "nonsense"],
+    });
+    expect(answer.value!.edits.map((e) => e.path)).toEqual(["/a"]);
   });
 });

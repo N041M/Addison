@@ -51,9 +51,12 @@ binary, and Secure Enclave identity; `updater.rs` is still a nine-line stub and 
 the only `TODO(step N)` marker in the tree. The second was added to the phase on
 2026-07-25: the **Developer review surface** — a file tree over the trusted folders,
 a read-only viewer, a diff of every edit Addison has made that is still on disk, and
-a way to put one file back. It is approved and IN PROGRESS: the read paths, the diff
-and per-file revert (the plan's Build §1–§3) landed 2026-08-08, and §§4–5 — the screen
-itself — remain; see the note further down and
+a way to put one file back. **All five of the plan's Build sections landed 2026-08-08**
+— the read paths, the diff, per-file revert, the screen itself and its Monaco skin — so
+the surface is COMPLETE PENDING ITS MANUAL PASS: what is left is
+[docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md) §13c, which is the only place the
+widened content-security policy is enforced by a real webview, on all three platforms.
+See the note further down and
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
@@ -229,12 +232,21 @@ line stub today. **Phase 3 also carries a second track**, added to it on 2026-07
 the Developer review surface in
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md). It waited
 on steps 6, 7 and 8, and all three landed on 2026-08-06 and 2026-08-07; the three
-fixes the plan asked for first closed on 2026-08-08, each in its own change. **Started
-the same day**: Build §1 (the read paths — `workspace.listDirectory` / `readFile` as
-RPC, one resolution per call) is merged, and so are §2 and §3 — the list of every edit
-Addison has made that is still on disk, the before-and-after for one of them, and
-putting one file back to the state Addison found it in. What remains is §§4–5: the
-screen and its Monaco skin.
+fixes the plan asked for first closed on 2026-08-08, each in its own change. **Built,
+start to finish, the same day**: Build §1 (the read paths — `workspace.listDirectory` /
+`readFile` as RPC, one resolution per call), §2 and §3 (the list of every edit Addison
+has made that is still on disk, the before-and-after for one of them, and putting one
+file back to the state Addison found it in), and §§4–5 — the screen itself, a third
+sidebar entry that exists only under the Developer and Custom profiles, with Monaco
+skinned from the palette the app already had. Shipping the editor meant widening the
+webview's content-security policy by one directive (`style-src 'unsafe-inline'`, which
+Monaco cannot run without) while tightening four others; the policy is pinned by
+`tests/test_csp_is_pinned.py` and the one path by which markup the app did not author
+reaches the page has its CSS stripped before injection. **What remains is not code:**
+the §13c manual pass in [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md), which is
+where a real webview says what that policy actually refuses, plus the plan's follow-up
+list (an editor zoom control the 12px type size does not settle, JSON highlighting, and
+recovering the post-restart revert case).
 
 ## Deliberately not being built
 

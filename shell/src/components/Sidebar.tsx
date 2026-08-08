@@ -43,6 +43,14 @@ interface Props {
   onOpenTools?: () => void;
   /** Opens the Snapshots surface (same toggle behaviour). */
   onOpenSnapshots?: () => void;
+  /**
+   * Opens the Code review surface (Phase-3). ITS PRESENCE IS THE NAV GATE: App
+   * passes a handler only under the Developer/Custom profile, and without one the
+   * row is not rendered at all — not rendered disabled, not rendered dimmed,
+   * absent. A Simple-profile window has no way to reach that screen from here,
+   * which is the point; the core refuses every one of its calls independently.
+   */
+  onOpenCode?: () => void;
   /** Mono hint beside "Tools" — the trusted-folder count, else the policy mode. */
   toolsHint?: string;
   /** Mono hint beside "Snapshots" — how many restore points exist. */
@@ -80,6 +88,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenTools,
   onOpenSnapshots,
+  onOpenCode,
   toolsHint,
   snapshotsHint,
   profileLabel,
@@ -265,6 +274,12 @@ export function Sidebar({
             active={view === "snapshots"}
             onClick={onOpenSnapshots}
           />
+          {/* Developer/Custom only — see the prop's comment. Rendered ONLY when
+              App hands over a handler, so there is no row to reason about in
+              Simple and no disabled control inviting a question about why. */}
+          {onOpenCode && (
+            <WorkspaceRow label="Code" active={view === "code"} onClick={onOpenCode} />
+          )}
         </div>
       </div>
 
