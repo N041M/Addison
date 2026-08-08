@@ -48,6 +48,7 @@ import {
   SurfaceRow,
   SurfaceSection,
   SURFACE_ID,
+  WaitingTag,
 } from "./Surface";
 import { RoutineLibrary } from "./RoutineLibrary";
 import { SkillsSection } from "./SkillsSection";
@@ -1025,19 +1026,6 @@ const AUTOMATION_NOT_ARMED_SIMPLE = "Not running.";
  * until it has asked. */
 const AUTOMATIONS_LOADING = "Looking for your automations…";
 
-/** The blocky annotation a row wears while another profile is what it needs. The
- * routine library's `WaitingTag`, to the class: one look for "listed, yours, not
- * usable here", so somebody who has met a waiting routine reads a waiting
- * automation without being taught twice. Muted rail, never the violet accent —
- * the accent means an action or live state, and this row has neither. */
-function WaitingTag() {
-  return (
-    <span className="mb-1 inline-block border-l-2 border-rail pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-muted">
-      Waiting
-    </span>
-  );
-}
-
 // Exported for the step-8 tests (automations.test.tsx). It is still only rendered
 // from within this page.
 export function AutomationsSection({
@@ -1066,6 +1054,7 @@ export function AutomationsSection({
     statusFailed,
     busy,
     error,
+    refreshAutomations,
     refreshArmedState,
     handleRemove,
   } = automations;
@@ -1079,13 +1068,21 @@ export function AutomationsSection({
 
   useEffect(() => {
     if (!connected) return;
-    // ONCE, when the section loads — not on every list refresh, never on a timer and
-    // never at startup: removing a row does not change what launchd holds, and a
-    // surface that keeps asking is a surface taking an action nobody just caused
-    // (the MCP temperament). The hook owns the ANSWER; the ask belongs to the moment
-    // somebody opened the page.
+    // The ROWS again as well as the OS. The hook read them when App mounted it, but
+    // `create_automation` writes rows from CHAT, and this page unmounts between
+    // visits — without a re-read here, an automation somebody just asked Addison
+    // for is missing from the very screen they open to see it, until a restart or
+    // a removal happens to re-read the list (found by the post-merge review of
+    // phase 4; phase 3's self-fetching section never had the gap). A local read,
+    // which the hook's own header calls safe on any visit.
+    refreshAutomations();
+    // The OS ask stays ONCE, when the section loads — not on every list refresh,
+    // never on a timer and never at startup: removing a row does not change what
+    // launchd holds, and a surface that keeps asking is a surface taking an action
+    // nobody just caused (the MCP temperament). The hook owns the ANSWER; the ask
+    // belongs to the moment somebody opened the page.
     refreshArmedState();
-  }, [connected, refreshArmedState]);
+  }, [connected, refreshAutomations, refreshArmedState]);
 
   async function remove(automation: Automation) {
     if (confirmingRemove !== automation.id) {

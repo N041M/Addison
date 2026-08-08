@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { ipc, isEngineConnected } from "../ipc/client";
 import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
 import type { ArtifactUnavailable } from "../types/ui";
-import { RowAction, SurfaceRow } from "./Surface";
+import { RowAction, SurfaceRow, WaitingTag } from "./Surface";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
 // `routine.list` ONLY under the Developer profile; they are rendered READ-ONLY
@@ -286,21 +286,6 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
         </SurfaceRow>
       ))}
     </>
-  );
-}
-
-// The annotation on a routine the active profile can't use. Deliberately NOT the
-// accent "Dev" tag beside it: the accent means an action, a selection or live
-// state, and a row that is waiting is none of those — it sits on the inactive
-// 2px `rail` rule instead, the same way an unselected section label does.
-//
-// "Disabled" is said three ways, never colour alone (personas 54/68): this word,
-// the missing Run control, and the plain sentence under the row.
-function WaitingTag() {
-  return (
-    <span className="mb-1 inline-block border-l-2 border-rail pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-muted">
-      Waiting
-    </span>
   );
 }
 

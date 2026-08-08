@@ -15,7 +15,11 @@
 // TWO REFRESHES, DELIBERATELY NOT ONE:
 //
 //   * `refreshAutomations` reads the saved ROWS. Local, cheap, and safe to do on
-//     mount and after any change to configuration.
+//     mount and after any change to configuration. The SECTION calls it again on
+//     every visit: `create_automation` writes rows from CHAT, and the Settings
+//     page unmounts between visits, so a list read only at launch would be
+//     missing the automation somebody just asked Addison for (post-merge review
+//     of phase 4).
 //   * `refreshArmedState` asks the OPERATING SYSTEM what it is actually running,
 //     and is called by the SECTION when it loads — never here on mount. Plan §5.6
 //     is explicit that nothing polls and NOTHING CHECKS AT STARTUP (the mcp

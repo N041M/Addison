@@ -276,7 +276,6 @@ export interface PermissionRequest {
   };
 }
 
-
 /**
  * `automation.status` — what the OPERATING SYSTEM currently holds, asked on demand.
  * Never stored and never polled: a G3 restore can put a database row back and can
