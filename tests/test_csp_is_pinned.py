@@ -192,6 +192,80 @@ def test_no_directive_is_stated_twice() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "authored,planted,planted_first,enforced,why",
+    [
+        (
+            "script-src 'self'",
+            "script-src 'unsafe-eval'",
+            True,
+            ["'unsafe-eval'"],
+            "the shape the last-wins parser hid: the enforced copy is the dangerous one "
+            "and the decorative copy is the one a reader's eye lands on",
+        ),
+        (
+            "script-src 'self'",
+            "script-src 'unsafe-eval'",
+            False,
+            ["'self'"],
+            "the other order — the enforced copy is the safe one, and the policy is "
+            "refused anyway because nobody can tell by eye which half is live",
+        ),
+        (
+            "connect-src 'self'",
+            "connect-src telemetry.example.com",
+            False,
+            ["'self'"],
+            "a repeat outside script-src: the vocabulary rule inspects the first copy "
+            "and sees nothing wrong, so the repeat report is the only thing left",
+        ),
+    ],
+)
+def test_a_repeated_directive_is_read_the_way_a_browser_reads_it(
+    authored: str, planted: str, planted_first: bool, enforced: list[str], why: str
+) -> None:
+    """``_parse`` itself, driven against a DOCTORED policy — the headline fix of the
+    commit that wrote it, and until now the only rule in this file with nothing behind it.
+
+    A browser enforces the FIRST occurrence of a directive and ignores every later one.
+    This file built its map last-wins, so ``script-src 'unsafe-eval'; …; script-src
+    'self'`` passed every rule below while the webview obeyed ``'unsafe-eval'``: the rules
+    read the decorative copy and the window ran the real one.
+
+    The real policy states nothing twice, so no test that reads
+    ``tauri.conf.json`` can tell the two parsers apart — which is exactly why reverting
+    ``_parse`` to last-wins left this whole file green. The doctored string is the only
+    fixture that can, and it is the same technique the vocabulary rule's own driver uses
+    one screen down.
+
+    Mutation: build the map last-wins (``out[name] = parts[1:]`` unconditionally, with no
+    ``repeated`` list). The first case reports ``'self'`` as enforced when the browser
+    would run ``'unsafe-eval'``, and every case loses its repeat report."""
+    both = f"{planted}; {authored}" if planted_first else f"{authored}; {planted}"
+    doctored = EXPECTED_CSP.replace(authored, both, 1)
+    assert doctored != EXPECTED_CSP, "the fixture must actually alter the policy"
+
+    directives, repeated = _parse(doctored)
+    name = authored.split()[0]
+    assert directives[name] == enforced, (
+        f"{name} must be read as the browser reads it — the FIRST copy ({why})"
+    )
+    assert repeated == [name], (
+        f"a directive stated twice must be REPORTED as well as read first-wins: a policy "
+        f"with a live half and a decorative half is one no reviewer can check by eye "
+        f"({why})"
+    )
+
+    # And which rule catches it, which is the whole reason both halves exist: with
+    # `'unsafe-eval'` enforced the vocabulary rule sees it; with `'unsafe-eval'` merely
+    # decorative, the repeat report above is the only thing standing there.
+    offending = _outside_the_vocabulary(directives)
+    if "'unsafe-eval'" in enforced:
+        assert f"{name} 'unsafe-eval'" in offending
+    else:
+        assert offending == [], offending
+
+
 def test_script_src_never_admits_unsafe_eval_or_unsafe_inline() -> None:
     """The plan's bright line, as a rule rather than a paragraph.
 

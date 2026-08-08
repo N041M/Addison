@@ -356,6 +356,31 @@ def test_the_write_records_the_digest_of_what_it_put_on_disk(tmp_path):
     assert snapshot.undo_payload["prior"] is None
 
 
+def test_the_write_records_which_file_it_landed_on(tmp_path):
+    """``wrote_ident`` — the OTHER fact a chain is built from, and the one that has to be
+    taken WHILE IT IS STILL TRUE. Asked afterwards, "which file is this name" answers
+    about the disk as it is now, so anything that moves a name onto another file moves
+    the grouping with it (the two tests at the end of this file are both that).
+
+    Minted by ``revert_key``, the same function the reverting side asks with: an identity
+    recorded by one spelling of a question and checked by another is one that drifts.
+
+    Mutation: drop the key from ``undo_payload``. Every row becomes a legacy row, the
+    grouping falls back to asking the disk at read time, and the two hazard tests below
+    go red."""
+    real = tmp_path / "real.txt"
+    real.write_text("v0\n", encoding="utf-8")
+    shell = _FakeWorkspaceShell(disk={str(real): "v0\n"})
+    bench = _Bench(tmp_path, shell)
+
+    snapshot = bench.write(str(real), "v1\n")
+    assert snapshot.undo_payload["wrote_ident"] == revert_key(str(real))
+    # An identity the OS answered for, not the fallback: the file was there to ask about.
+    assert snapshot.undo_payload["wrote_ident"].startswith("file:")
+    # And it is EVIDENCE, never the address: what a revert writes is still the path.
+    assert snapshot.undo_payload["path"] == str(real)
+
+
 # ============================================================================
 # THE COLLAPSE — N writes to one file are ONE edit
 # ============================================================================
@@ -666,7 +691,7 @@ def test_the_list_is_bounded_and_says_when_it_is(tmp_path):
     unreverted subset is bounded by nothing on disk — which is why every read of it
     bounds itself, and why a bounded answer has to admit that it is one.
 
-    Mutation: drop the ``+ 1`` in ``_grouped`` and ``truncated`` is always false, so a
+    Mutation: drop the ``+ 1`` in ``_read`` and ``truncated`` is always false, so a
     person cannot tell a complete list from a clipped one."""
     shell = _FakeWorkspaceShell()
     bench = _Bench(tmp_path, shell)
@@ -701,9 +726,16 @@ def test_the_grouping_key_is_whatever_the_filesystem_says_those_two_names_are(tm
 
     Mutations, all killed here: casefold the key (fails wherever ``samefile`` is False);
     compare the resolved path alone (fails wherever it is True); use ``stat`` on the
-    resolved path rather than the name (the hard link below stops being one file only if
-    the identity stops being the file's); drop ``st_dev`` (not killed here — that one is
-    argued at the code, since a second volume is not reachable from a test)."""
+    resolved path rather than the name (the SHORTCUT at the end — see there); drop
+    ``st_dev`` (not killed here — that one is argued at the code, since a second volume is
+    not reachable from a test).
+
+    The ``stat``-instead-of-``lstat`` mutation was claimed here before the shortcut was
+    planted, and the claim was false: the only fixture that discriminated between them
+    was the hard link, and a hard link answers with the SAME ``(st_dev, st_ino)`` under
+    both calls. Nothing in this test moved, so the mutation survived — and under it a
+    link planted at a written path merges that path's chain with its target's, which is
+    the harm ``another_file_stands_there`` exists for, reached from the other side."""
     upper = tmp_path / "Notes.md"
     lower = tmp_path / "notes.md"
     upper.write_text("upper\n", encoding="utf-8")
@@ -723,6 +755,14 @@ def test_the_grouping_key_is_whatever_the_filesystem_says_those_two_names_are(tm
     link = tmp_path / "linked.md"
     os.link(other, link)
     assert revert_key(str(link)) == revert_key(str(other))
+    # A SHORTCUT is the opposite answer, and the only fixture that can tell ``lstat``
+    # from ``stat``: the question is which directory entry this NAME reaches, and a
+    # shortcut that appeared after a write reaches a file confinement never saw. Under
+    # ``stat`` these two are equal, and a link planted at a written path silently joins
+    # its chain to its target's.
+    shortcut = tmp_path / "shortcut.md"
+    os.symlink(other, shortcut)
+    assert revert_key(str(shortcut)) != revert_key(str(other))
 
 
 def test_two_spellings_of_one_file_are_one_chain_with_one_before(tmp_path):
@@ -805,6 +845,187 @@ def test_two_names_the_filesystem_cannot_answer_for_are_never_merged(tmp_path):
 
     assert bench.reverter.revert_path("/p/Notes.md").ok is True
     assert shell.disk == {"/p/Notes.md": "upper\n", "/p/notes.md": "lower edited\n"}
+
+
+# ============================================================================
+# WHAT JOINS TWO WRITES IS RECORDED WHEN THEY HAPPEN
+# ============================================================================
+def test_a_hard_link_planted_at_a_written_path_never_merges_two_files_chains(
+    tmp_path, project
+):
+    """THE SWAP A SYMLINK CHECK CANNOT SEE, and the reason a chain's identity is a
+    RECORDED fact rather than a question asked at read time.
+
+    Addison edits a.txt and b.txt. Somebody runs ``rm a.txt; ln b.txt a.txt`` — an
+    ordinary enough act, and one ``run_command`` can perform inside a trusted root — and
+    the two names now reach one file. Keyed off THAT, the two chains became one:
+
+      * b.txt's edit left the surface entirely (one row where there were two);
+      * pressing Revert wrote a.txt's prior bytes into b.txt, through the ledger check,
+        because the ledger holds the NAME;
+      * b's rows were marked reverted, so B's own prior was unreachable afterwards.
+
+    ``replaced_by_a_link`` refuses none of it: a hard link is not a symlink. Both chains
+    now carry the identity each write LANDED on, so nothing done afterwards can join
+    them, and both doors ask ``another_file_stands_there`` before they act.
+
+    Mutations, one per assertion group:
+      * group by ``revert_key`` at read time again (or drop ``wrote_ident`` from the
+        payload): ONE edit is listed instead of two, and b.txt's row is gone;
+      * drop the check in ``revert_path``: the revert of a.txt goes through, and the
+        shell is handed b.txt's file to write A's prior into;
+      * drop the check in ``_workspace_read_edit_diff``: the diff opens the name and
+        renders b.txt's text as a.txt's AFTER pane — two unrelated files diffed.
+
+    THE BYTES the write-through would move are not asserted here, and that is the fake's
+    honest limit: it keys its disk by NAME, so the one thing it cannot model is two names
+    reaching one file. What it can model — and what the refusal makes moot — is that
+    nothing crossed at all."""
+    a = str(project / "a.txt")
+    b = str(project / "b.txt")
+    # REAL files, because the identity is a real question about a real inode. The bytes
+    # every assertion reads are still the fake shell's, as everywhere else in this suite.
+    (project / "a.txt").write_text("A0\n", encoding="utf-8")
+    (project / "b.txt").write_text("B0\n", encoding="utf-8")
+
+    shell = _FakeWorkspaceShell(disk={a: "A0\n", b: "B0\n"})
+    harness = _Harness(tmp_path, shell, edits=((a, "addison a\n", 100), (b, "addison b\n", 101)))
+    try:
+        harness.trust(project)
+        assert len(harness.call("workspace.listEdits")["edits"]) == 2
+
+        os.unlink(a)
+        os.link(b, a)
+        assert revert_key(a) == revert_key(b), "the two names are one file now"
+
+        listed = harness.call("workspace.listEdits")["edits"]
+        assert [edit["path"] for edit in listed] == [b, a], "two files, two rows, still"
+
+        diff = harness.call("workspace.readEditDiff", {"path": a})
+        assert diff["ok"] is False
+        assert diff["error"] == (
+            "A different file is at that name now, so this isn't the change Addison made."
+        )
+        assert shell.viewed == [], "nothing was read through it"
+
+        reverted = harness.call("workspace.revertFile", {"path": a})
+        assert reverted["ok"] is False
+        assert reverted["error"] == (
+            "A different file is at that name now, so Addison won't put the old text "
+            "there. Nothing was changed."
+        )
+        assert shell.restored == [], "and nothing was written through it"
+
+        # b.txt is still b.txt's own chain, and it still works: the guard refuses a name
+        # that reaches ANOTHER file, never one that reaches its own.
+        assert harness.call("workspace.readEditDiff", {"path": b})["before"] == "B0\n"
+        assert harness.call("workspace.revertFile", {"path": b})["ok"] is True
+        assert shell.disk[b] == "B0\n"
+        # And a.txt's row survives the whole thing — a refusal settles nothing.
+        assert [edit["path"] for edit in harness.call("workspace.listEdits")["edits"]] == [a]
+    finally:
+        harness.close()
+
+
+def test_deleting_the_file_does_not_split_the_chain_that_is_about_it(tmp_path):
+    """THE OTHER HALF of the same fact, and the hazard the module's own docstring says is
+    impossible by construction.
+
+    ``Notes.md`` holds v0; Addison writes v1 under that spelling and v2 under
+    ``notes.md``. One file, one chain — until the person deletes it. Keyed off a live
+    question, the key then fell back to the stored spelling and the chain SPLIT into two
+    rows, at which point:
+
+      * one row rendered ``before='v1'`` under "the way it was before Addison changed
+        it" — a state ADDISON wrote, offered as the state it found;
+      * reverting the v0 row RECREATED the file, so the other row no longer pointed at
+        nothing, and the next "Undo last action" wrote v1 back over it. The S1/S2
+        resurrection, arrived at through the front door.
+
+    Both rows recorded the same identity when they were written, so the delete changes
+    nothing about which chain they are in.
+
+    Mutation: group by ``revert_key`` at read time again (or drop ``wrote_ident``). The
+    case-insensitive arm sees two edits, one of them offering v1 as its BEFORE, and the
+    undo at the end resurrects it."""
+    upper = str(tmp_path / "Notes.md")
+    lower = str(tmp_path / "notes.md")
+    (tmp_path / "Notes.md").write_text("v0\n", encoding="utf-8")
+    one_file = os.path.exists(lower) and os.path.samefile(upper, lower)
+    if not one_file:
+        (tmp_path / "notes.md").write_text("w0\n", encoding="utf-8")
+
+    shell = _FakeWorkspaceShell(
+        disk={upper: "v0\n"} if one_file else {upper: "v0\n", lower: "w0\n"},
+        case_insensitive=one_file,
+    )
+    bench = _Bench(tmp_path, shell)
+    bench.write(upper, "v1\n")
+    bench.write(lower, "v2\n")
+
+    # The person deletes the file — from the real disk, which is what the identity
+    # question is asked of, and from the shell's, which is where the bytes are.
+    os.unlink(upper)
+    if not one_file:
+        os.unlink(lower)
+    shell.disk.pop(upper.casefold() if one_file else upper)
+
+    edits = bench.reverter.pending_edits().edits
+    if one_file:
+        assert len(edits) == 1, "one file is one chain, gone or not"
+        assert edits[0].before == "v0\n", "the OLDEST prior, never a state Addison wrote"
+        assert edits[0].writes == 2
+
+        assert bench.reverter.revert_path(upper).ok is True
+        assert shell.disk[upper.casefold()] == "v0\n"
+        # ZERO rows left, which is what makes the resurrection unreachable rather than
+        # merely unlikely: there is nothing for the undo button to replay.
+        assert bench.unreverted() == []
+        bench.undo.undo_last(1)
+        assert shell.disk[upper.casefold()] == "v0\n"
+    else:
+        # A case-sensitive volume: two files that were never one, still two chains, and
+        # deleting them does not merge them either.
+        assert {edit.before for edit in edits} == {"v0\n", "w0\n"}
+
+
+def test_a_file_replaced_between_two_writes_is_still_one_chain(tmp_path):
+    """The case that keeps the identity from being the WHOLE answer, and the reason two
+    writes are also joined by the NAME they were written to.
+
+    An editor that saves by rename, or ``git checkout``, does not overwrite a file — it
+    puts a NEW file at the same name. So Addison's two writes to one path can honestly
+    have landed on two different files, and they are still one chain: the person edited
+    one thing, the surface must show one row, and the revert must reach the oldest prior
+    of it.
+
+    Mutations, both of them mine to make and neither of them caught elsewhere:
+      * group by the recorded identity ALONE: two rows for one file, the newer offering a
+        state Addison wrote as its BEFORE — the split this whole section is about;
+      * compare the standing file against the OLDEST row's identity only: the revert
+        refuses for ever, because the file at that name is the newer one."""
+    path = str(tmp_path / "x.txt")
+    (tmp_path / "x.txt").write_text("v0\n", encoding="utf-8")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    bench = _Bench(tmp_path, shell)
+
+    bench.write(path, "v1\n")
+    first = revert_key(path)
+    # The swap: a new file at the same name, exactly as an atomic save leaves it.
+    os.unlink(path)
+    (tmp_path / "x.txt").write_text("v1\n", encoding="utf-8")
+    assert revert_key(path) != first, "a new file at the same name, or this proves nothing"
+    bench.write(path, "v2\n")
+
+    edits = bench.reverter.pending_edits().edits
+    assert len(edits) == 1 and edits[0].writes == 2
+    assert edits[0].before == "v0\n"
+    # Two identities in one chain is ordinary, and putting it back onto the file it most
+    # recently wrote is the ask.
+    assert len(edits[0].identities) == 2
+    assert bench.reverter.revert_path(path).ok is True
+    assert shell.disk[path] == "v0\n"
+    assert bench.unreverted() == []
 
 
 def test_only_write_project_file_rows_are_listed(tmp_path):
@@ -1220,24 +1441,36 @@ def test_the_restart_question_is_asked_about_the_path_the_undo_would_use(
     restart anywhere in it. And it was permanent: the pre-check marks nothing, so the
     row stayed and the sentence came back every time.
 
-    Mutation: resolve the path before asking (``revert_key(...)``). The answer below
-    becomes the restart refusal, the undo never runs, and the file keeps Addison's
-    version for ever."""
+    Mutation: resolve the path before asking (``revert_key(...)``). The shell is asked
+    about a name its ledger never held, the answer below becomes the restart refusal, and
+    the person is told about a restart that did not happen.
+
+    WHAT THE UNDO THEN DOES changed on 2026-08-08 and is asserted here rather than
+    elsewhere, because this is the test that plants the swap. It used to write v0 THROUGH
+    the shortcut, into the private key — the half of the shortcut gap KNOWN-GAPS recorded
+    as still open on this path. ``WriteProjectFileTool.undo()`` now asks the same question
+    the review surface's Revert asks (``another_file_stands_there``): the name reaches a
+    file this row never wrote, so nothing is written. The pre-check is still what this
+    test is about — the two are distinguishable in the answer, and only one of them
+    mentions a restart."""
     path = str(project / "config.yml")
-    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    secret = str(tmp_path / "outside" / "id_rsa")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n", secret: _SECRET})
     harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
     try:
         harness.trust(project)
-        _plant_a_shortcut(path, str(tmp_path / "outside" / "id_rsa"))
+        _plant_a_shortcut(path, secret)
 
         answer = harness.call("undo.undoLastAction")
-        assert answer["ok"] is True, answer
-        assert "restarted" not in answer["detail"]
-        # The undo itself is the LIFO mechanism and writes through the shell's ledger
-        # exactly as it always has; what this test is about is which path was asked
-        # about. (That the shell would follow a shortcut on a write is the shell's own
-        # gap, and is recorded in KNOWN-GAPS rather than papered over here.)
-        assert shell.restored == [(path, "v0\n")]
+        assert "restarted" not in answer["detail"], answer
+        # THE RECORDED NAME is what the shell was asked about — the whole subject of this
+        # test, and the assertion the mutation above fails on directly.
+        assert shell.asked_to_restore == [[path]]
+        # And the attempt itself refused: nothing crossed, and the key is untouched.
+        assert answer["ok"] is False
+        assert shell.restored == []
+        assert shell.disk[secret] == _SECRET
+        assert Path(secret).read_text() == _SECRET
     finally:
         harness.close()
 

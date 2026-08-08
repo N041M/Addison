@@ -211,8 +211,9 @@ fn refuse_oversize_batch(paths: &[Value]) -> Result<(), RpcError> {
     Ok(())
 }
 
-/// Worded once because five paths raise it — the three reads, the write's capture of
-/// the prior text, and the digest. The person must not be able to tell which refused.
+/// Worded once because six paths raise it — the three reads, the write's capture of the
+/// prior text, the digest, and the undo's write-back. The person must not be able to tell
+/// which refused.
 const NOT_A_REGULAR_FILE: &str = "That isn't an ordinary file, so Addison won't open it.";
 
 /// A path that is not a REGULAR file, refused from metadata that has already been
@@ -226,6 +227,11 @@ const NOT_A_REGULAR_FILE: &str = "That isn't an ordinary file, so Addison won't 
 /// permanent and total: no core frame of any kind is relayed again, the core's bridge
 /// times out, and the app never recovers. `read_project_file` is SHIPPED, so this was
 /// one `mkfifo` inside a trusted root away from a model in OPEN mode.
+///
+/// OPENING TO WRITE IS THE SAME WEDGE, which the first version of this check did not
+/// enumerate: `fs::write` opens `O_WRONLY`, and on a FIFO that waits for a READER rather
+/// than for data. `restore_workspace_path` is therefore the sixth caller, and the only
+/// one a person reaches with a click rather than a model reaches with a tool.
 ///
 /// THE CHECK IS THE METADATA, not a second syscall. Every caller already asks the OS
 /// about the path in order to judge its size; `stat_on_disk` hands back the whole
@@ -768,6 +774,30 @@ fn restore_workspace_path(
         if !written.contains(&path) {
             return Err(RpcError::app("Addison can only undo a file change it made."));
         }
+    }
+    // AND WHAT STANDS THERE NOW, from one stat, before anything opens it.
+    //
+    // THE ENUMERATION MISSED THIS ONE. `refuse_non_regular_file` went in over the five
+    // paths that READ, and the sixth — the one that opens for WRITING — was not on the
+    // list. `fs::write` opens `O_WRONLY`, which on a FIFO blocks until a reader appears
+    // and on a named pipe nobody ever does; this handler is awaited INLINE on the core's
+    // stdout pump, so that block is the same permanent, total wedge, arrived at through
+    // the one door a person can open with a single click (`workspace.revertFile`,
+    // `undo.undoLastAction`). Nothing above it refuses either: the core's
+    // `replaced_by_a_link` is `islink`, which is False for a FIFO, and
+    // `canRestoreWorkspaceFiles` deliberately stats nothing, so the button is offered.
+    //
+    // A PATH THAT IS NOT THERE IS NOT REFUSED, and must not be: an undo legitimately
+    // CREATES the file again when the write overwrote one that has since been removed.
+    // `stat_on_disk` answers `None` for it, which is the same "cannot judge yet" every
+    // read path treats as "carry on".
+    //
+    // BOTH BRANCHES, from the one stat. The delete branch does not block — `remove_file`
+    // opens nothing — but a pipe, a device node or a directory at that name is not the
+    // file the write created, and removing somebody else's is not an undo of anything.
+    // `/dev/null` answered `Ok` here before this, having "restored" nothing at all.
+    if let Some(meta) = stat_on_disk(&path) {
+        refuse_non_regular_file(&meta)?;
     }
     if params.get("delete").and_then(Value::as_bool).unwrap_or(false) {
         // Undo of a created file: remove it. A file already gone is a no-op success —
@@ -1832,6 +1862,30 @@ mod tests {
                 "{name} must judge WHAT the path is BEFORE opening it:\n{body}"
             );
         }
+
+        // THE WRITE-BACK is the sixth path and it is pinned apart from the loop, because
+        // it has no size to judge: the bytes come from an undo payload the core already
+        // bounded, so there is no ceiling here to order. The KIND question is the same
+        // question and it is the whole of what this path needs — `fs::write` opens
+        // `O_WRONLY`, which on a FIFO waits for a reader instead of for data, and this
+        // one is reachable from a click rather than from a tool.
+        let start = source
+            .find("fn restore_workspace_path")
+            .expect("fn restore_workspace_path must exist");
+        let rest = &source[start..];
+        let end = rest.find("\n}\n").expect("fn restore_workspace_path must be closed");
+        let body = &rest[..end];
+        let kind = body.find("refuse_non_regular_file(").unwrap_or_else(|| {
+            panic!("restore_workspace_path must refuse a non-regular file — writing to a \
+                    FIFO blocks in the open, and this handler is awaited on the pump:\n{body}")
+        });
+        let write = body
+            .find("std::fs::write(")
+            .expect("restore_workspace_path must write the file");
+        assert!(
+            kind < write,
+            "restore_workspace_path must judge WHAT the path is BEFORE writing it:\n{body}"
+        );
     }
 
     // --- The review surface's read paths (phase-3 plan Build §1). The core confines
@@ -2502,6 +2556,98 @@ mod tests {
         assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
 
         let _ = std::fs::remove_file(&fifo);
+    }
+
+    #[test]
+    fn the_undo_write_back_refuses_a_named_pipe_instead_of_blocking_on_it() {
+        // THE SIXTH DOOR, and the one that opens for WRITING. The check above went in
+        // over the five paths that READ; `fs::write` blocks on a FIFO too, in the `open`
+        // rather than in the read — `O_WRONLY` on a pipe waits for a READER, and on a
+        // named pipe nobody ever provides one.
+        //
+        // WORSE THAN THE OTHERS, because it takes no model. `workspace.revertFile` and
+        // `undo.undoLastAction` both land here from one click, and everything upstream
+        // says yes: the core's `replaced_by_a_link` is `islink` (False for a FIFO) and
+        // `canRestoreWorkspaceFiles` answers from the ledger without stating a thing. A
+        // `mkfifo` inside a trusted root — which `run_command` can perform in Developer —
+        // is the whole of the setup.
+        //
+        // Delete the `refuse_non_regular_file` call and this does not go red, it HANGS;
+        // `within_two_seconds` is what turns that back into a failure a person can read.
+        let Some(fifo) = make_fifo() else {
+            eprintln!("no mkfifo on PATH — skipping the named-pipe write refusal");
+            return;
+        };
+
+        let path = fifo.clone();
+        let err = within_two_seconds(move || {
+            let state = FileState::default();
+            lock(&state.workspace_written).insert(path.clone());
+            let params = json!({ "path": path.to_string_lossy(), "content": "PUT BACK" });
+            restore_workspace_path(&state, path, &params)
+        })
+        .unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "restoreWorkspaceFile");
+
+        // The DELETE branch does not block — `remove_file` opens nothing — and is refused
+        // all the same: a pipe standing at that name is not the file the write created,
+        // and removing somebody else's is not an undo of anything.
+        let path = fifo.clone();
+        let state = FileState::default();
+        lock(&state.workspace_written).insert(path.clone());
+        let params = json!({ "path": path.to_string_lossy(), "delete": true });
+        let err = restore_workspace_path(&state, path, &params).unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "restoreWorkspaceFile delete");
+        assert!(fifo.exists(), "and the pipe is still there");
+
+        let _ = std::fs::remove_file(&fifo);
+    }
+
+    #[test]
+    fn the_undo_write_back_refuses_a_device_node_and_a_directory_but_still_creates_and_deletes() {
+        // The other three thirds of the same guard, and the two halves that must NOT be
+        // refused — a check that stopped the wedge by refusing everything would take the
+        // undo with it.
+        let state = FileState::default();
+
+        // A DEVICE NODE. It does not block, it SWALLOWS: `restore_workspace_path`
+        // answered `Ok` for `/dev/null`, having put nothing anywhere, and the core then
+        // marked the row reverted — a file reported as put back that never was.
+        let dev_null = PathBuf::from("/dev/null");
+        lock(&state.workspace_written).insert(dev_null.clone());
+        let params = json!({ "path": "/dev/null", "content": "PUT BACK" });
+        let err = restore_workspace_path(&state, dev_null, &params).unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "/dev/null");
+
+        // A DIRECTORY, which `fs::write` already refused with an errno that mapped to
+        // "Addison couldn't undo that file change" — true of everything and saying
+        // nothing. This says what is actually the matter.
+        let dir = temp_dir_path();
+        lock(&state.workspace_written).insert(dir.clone());
+        let params = json!({ "path": dir.to_string_lossy(), "content": "PUT BACK" });
+        let err = restore_workspace_path(&state, dir.clone(), &params).unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "a directory");
+
+        // THE CREATE CASE. A write that overwrote a file somebody has since deleted must
+        // still put it back — there is nothing at the name to judge, and `stat_on_disk`'s
+        // `None` is "cannot judge yet", never "refuse".
+        let gone = dir.join("was-deleted.txt");
+        lock(&state.workspace_written).insert(gone.clone());
+        let params = json!({ "path": gone.to_string_lossy(), "content": "the prior text" });
+        restore_workspace_path(&state, gone.clone(), &params).expect("a missing file is created");
+        assert_eq!(std::fs::read_to_string(&gone).unwrap(), "the prior text");
+
+        // THE ORDINARY OVERWRITE, and then the DELETE branch on a real file: both
+        // untouched by the kind check, or `is_file()` inverted would leave every
+        // assertion above green while the undo refused everything.
+        let params = json!({ "path": gone.to_string_lossy(), "content": "and again" });
+        restore_workspace_path(&state, gone.clone(), &params).expect("an ordinary file is written");
+        assert_eq!(std::fs::read_to_string(&gone).unwrap(), "and again");
+        let params = json!({ "path": gone.to_string_lossy(), "delete": true });
+        restore_workspace_path(&state, gone.clone(), &params).expect("an undone create is removed");
+        assert!(!gone.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
