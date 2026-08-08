@@ -18,23 +18,27 @@ Same idiom as `test_capture_scope_covers_every_schema_table`: the build fails wh
 document and the tree disagree, so the decision is forced at the moment of the
 change rather than discovered a fortnight later.
 
-**Every gate here has two halves**, and the second is not optional: it fires on the
-drift it was written for, *and* it is silent on prose a future document would
-legitimately contain. The silence half is asserted with `assert_silent`, next to the
-gate it belongs to; [`gate_precision.py`](gate_precision.py) owns why a false
-positive costs more than a missed one here. That is also why each check below is a
-module-level **scanner** — a function from text to findings — rather than a loop in a
-test body: a precision test of a copy of the logic tests the copy.
+**Every gate here has two halves**, and neither is optional: it fires on the drift it
+was written for (`assert_flags`), *and* it is silent on prose a future document would
+legitimately contain (`assert_silent`). Both sit next to the gate they belong to;
+[`gate_precision.py`](gate_precision.py) owns why a false positive costs more than a
+missed one here, and why "found nothing" is the shape a DEAD gate and a clean tree
+share. That is also why each check below is a module-level **scanner** — a function
+from text to findings — rather than a loop in a test body: a precision test of a copy
+of the logic tests the copy.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
+from agent_core.mcp_catalog import MCP_TOOLS_ARE_CALLABLE
 from tests.doc_claims import (
     CLAIMS,
+    MCP_TOOLS_ARE_NOT_CALLABLE,
     REPO,
     Claim,
     Offender,
@@ -43,7 +47,7 @@ from tests.doc_claims import (
     markdown_files,
     offenders_for,
 )
-from tests.gate_precision import assert_silent
+from tests.gate_precision import assert_flags, assert_silent
 
 
 def _broken_links(text: str, parent: Path) -> list[str]:
@@ -969,6 +973,53 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "before a risky change and available on command."
         ),
     },
+    "g2-addison-never-triggers-itself": {
+        "the floor stated at its true strength": (
+            "Addison never triggers itself: it may author automation the OS runs, and "
+            "the OS is what fires it."
+        ),
+        "`RunAtLoad` inside the sentence that says it is never set": (
+            "**`RunAtLoad` is never set**, so arming an automation causes no run of "
+            "its own."
+        ),
+        "the design-doc's row, which denies the scheduler outright": (
+            "Addison never triggers itself; it may author OS-run automation, but the "
+            "OS runs it — no scheduler in Addison (§4)."
+        ),
+        "the user pressing Run, which is the ordinary way a routine runs": (
+            "Addison runs the routine when you press Run, and every step is carded "
+            "exactly as it would be in the live loop."
+        ),
+        "concurrency the core legitimately needs, which is not a clock": (
+            "A thread runs the worker loop in the Agent Core; it parks on a blocking "
+            "queue and can only consume work someone else handed in."
+        ),
+        "the same guarantee written in the plist's vocabulary instead of prose": (
+            "The shell builds the plist from typed fields and sets `RunAtLoad` to "
+            "false, so arming installs the job without running it."
+        ),
+    },
+    "c6-snapshots-are-never-hidden-by-mode": {
+        "the rule stated at today's polarity": (
+            "Snapshots are never hidden by mode: `created_in_mode` ships on the row "
+            "for display only."
+        ),
+        "the prohibition, which names every query it forbids": (
+            "No list, restore, prune, or delete query may filter on it, in any mode."
+        ),
+        "the source-level test named in prose": (
+            "`test_no_snapshot_query_filters_on_created_in_mode` reads the SQL in "
+            "`store.py` and fails if the column ever appears in a filter position."
+        ),
+        "the ARTIFACT rule, which is a different rule about different rows": (
+            "Routines and widgets that need developer abilities are listed but "
+            "disabled under SAFE, and snapshots are the one exception to all of it."
+        ),
+        "the overridden DDL comment, recounted in order to override it": (
+            "The provisional DDL comment said this column mirrors existing artifact "
+            "hiding; that phrasing was overridden, not followed."
+        ),
+    },
     "artifact-disabling-polarity": {
         "the owner's own past-tense account of the old behaviour": (
             "*They used to be hidden: filtered out of `routine.list` and "
@@ -981,9 +1032,44 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "The two `open_only` file tools are hidden from the SAFE view and refused "
             "at dispatch outside OPEN."
         ),
+        # CORRECTED 2026-08-08. This sample used to read "Routines and widgets
+        # **created in OPEN** are listed but disabled under SAFE" and was labelled
+        # "today's rule stated plainly" — but that criterion was RETIRED the same day
+        # (availability is derived from what an artifact NEEDS; the stamp decides
+        # nothing). A precision sample is prose the gate declares LEGITIMATE, so a
+        # stale one does not merely fail to help: it is the tree's own wrong sentence,
+        # held in the test file where nothing else in the doc set can contradict it.
         "today's rule stated plainly": (
-            "Routines and widgets created in OPEN are listed but disabled under SAFE, "
-            "and return untouched when Developer is active again."
+            "Routines and widgets that need developer abilities are listed but "
+            "disabled under SAFE, and return untouched when Developer is active again."
+        ),
+    },
+    "artifact-availability-asks-the-artifact": {
+        "the rule stated at today's polarity, which mentions the stamp to deny it": (
+            "*\"Needs developer abilities\" is asked of the ARTIFACT, never of the "
+            "`created_in_mode` stamp* — widgets since 2026-08-06, routines since "
+            "2026-08-08."
+        ),
+        "the stamp described as the display-only provenance it still is": (
+            "`created_in_mode` still ships as display provenance for the DEV badge "
+            "and decides nothing."
+        ),
+        "the history of the bug, in the past tense": (
+            "Both surfaces used to read `created_in_mode == 'open'`, which is a "
+            "question about where a routine was born rather than what it needs."
+        ),
+        "BUILD-LOG's way of narrating the behaviour that has since changed": (
+            "Routines then decided availability from `created_in_mode` — the bug "
+            "KNOWN-GAPS tracked until it was closed on 2026-08-08."
+        ),
+        "the DDL description, which names the column without deciding anything": (
+            "`created_in_mode` (`safe` | `open`) records the policy mode the routine "
+            "was saved under, for display only."
+        ),
+        "the automations table, whose marker is a literal and names the stamp to "
+        "say it is not the source": (
+            "Phase 4's disabled marker is decided from what an automation IS (it runs "
+            "a command, so always), never from `created_in_mode`."
         ),
     },
     "mcp-transport-http-only": {
@@ -1170,6 +1256,371 @@ def test_the_claims_registry_is_silent_on_legitimate_prose():
             lambda text, claim=claim: findings_in_text(claim, text),
             _LEGITIMATE_PROSE[claim.id],
         )
+
+
+# Prose each row MUST flag — the mirror of `_LEGITIMATE_PROSE`, and the half without
+# which a row cannot be told apart from a satisfied one.
+#
+# WHY THIS EXISTS. `test_no_document_contradicts_a_registered_claim` is
+# `assert not reports`. A row whose pattern matches NOTHING anywhere in the tree is
+# therefore in the PASSING state — indistinguishable, from inside the run, from a row
+# whose tree is clean. Registering a row for `zzqqxx-this-string-cannot-exist` left
+# the suite green, and on 2026-08-08 two live rows were already in exactly that
+# condition: `artifact-disabling-polarity`'s `while_false` bounded its span with
+# `[^.\n]` while all six real passages wrap the line, and
+# `mcp-tools-are-not-callable`'s `while_true` could not cross the em dash the one live
+# sentence uses. Both had `fix` strings telling a future agent to flip the constant
+# and rely on them.
+#
+# EVERY ARM IS ASSERTED, NOT ONLY THE ACTIVE ONE, and that is the whole decision here.
+# The inactive arm is the one nothing has ever run — it is *born* dead and stays dead,
+# and the day it matters is the day somebody flips the owner constant and trusts the
+# empty report. Checking it costs one `dataclasses.replace` of a frozen row.
+#
+# The silence samples above are deliberately NOT symmetric with this: they are only
+# ever run against the ACTIVE arm, because "prose a careful writer would legitimately
+# produce" is a claim about today's fact. Under the opposite fact, different prose is
+# legitimate — which is why "routines and widgets that need developer abilities are
+# listed but disabled" appears in both tables, as legitimate today and as the offence
+# the day artifacts go back to being hidden.
+#
+# Write the sample in the tree's own voice. A sentence transcribed from the regex
+# proves the regex matches itself and nothing about the documents.
+_MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
+    "g3-open-mode-polarity": {
+        "while_true": {
+            "the floor asserted as still limited, in the present tense": (
+                "G3 is still overclaimed in OPEN: an approved command can delete the "
+                "recovery floor's own files."
+            ),
+        },
+        "while_false": {
+            "the closure asserted while the floor is limited again": (
+                "The seatbelt profile and the pre-gate denylist landed on 2026-07-31, "
+                "so the guarantee holds again."
+            ),
+        },
+    },
+    "g3-guarantee-defers-to-owner": {
+        "while_true": {
+            "the guarantee restated with no pointer at its owner anywhere near it": (
+                "Neither the user nor the model can drive Addison into an "
+                "unrecoverable configuration. Restore is one action from the sidebar."
+            ),
+        },
+        "while_false": {
+            "the same restatement, with neither the owner nor the live caveat": (
+                "The restore path is itself unbreakable, so a broken configuration is "
+                "always one action from being undone."
+            ),
+        },
+    },
+    "g2-addison-never-triggers-itself": {
+        "while_true": {
+            "a scheduler in the core, which is a second author of Addison's actions": (
+                "Addison fires its own automations on schedule from inside the Agent "
+                "Core, so an overnight routine needs nothing from the person."
+            ),
+            "the plist arming a job that runs immediately": (
+                "The generated plist sets `RunAtLoad` to true, so the job runs once "
+                "the moment it is armed."
+            ),
+            "a clock handed a callback, described as ordinary design": (
+                "A scheduler in the Agent Core wakes every hour and replays any "
+                "routine whose interval has elapsed."
+            ),
+            "arming described as its own first run": (
+                "Arming causes an immediate run, so the person sees the automation "
+                "work before they walk away."
+            ),
+        },
+    },
+    "c6-snapshots-are-never-hidden-by-mode": {
+        "while_true": {
+            "the mode-scoped restore list, which is the C6 override reversed": (
+                "`snapshot.list` filters on `created_in_mode`, so Simple shows only "
+                "the restore points made in Simple."
+            ),
+            "the spec's DDL comment taken literally instead of overridden": (
+                "Snapshots made in Developer are hidden while the Simple profile is "
+                "active, mirroring the artifact rule."
+            ),
+            "the same rule written as a scope rather than as a filter": (
+                "The restore point list is scoped to the active mode, so a person in "
+                "Simple never sees a Custom-mode row."
+            ),
+        },
+    },
+    "artifact-disabling-polarity": {
+        "while_true": {
+            "the pre-2026-08-06 behaviour asserted in the present tense": (
+                "Routines and widgets that need developer abilities are hidden from "
+                "`routine.list` and `widget.list` while Simple is active."
+            ),
+        },
+        "while_false": {
+            # THE SAMPLE THAT WAS DEAD. Transcribed from CLAUDE.md, line wrap and all:
+            # this arm's span used to be `[^.\n]`, and every real passage in the tree
+            # breaks the line exactly here.
+            "today's rule asserted after artifacts go back to being hidden": (
+                "routines/widgets that **need** developer abilities are\n  "
+                "**listed but disabled** in SAFE, carrying a display-only "
+                "`unavailable` reason"
+            ),
+            # And the other half of the same failure: three passages hyphenate it.
+            "the hyphenated spelling, which is how half the tree writes it": (
+                "§8's artifact rule is scoped to routines\nand widgets (which are "
+                "listed-but-disabled since 2026-08-06, never hidden)"
+            ),
+        },
+    },
+    "artifact-availability-asks-the-artifact": {
+        "while_true": {
+            "the stamp put back in the deciding position": (
+                "A routine's availability in Simple is read from its "
+                "`created_in_mode` stamp, so anything saved while Developer happened "
+                "to be active is refused."
+            ),
+            "the same fact written as the column doing the deciding": (
+                "`created_in_mode` decides whether a routine arrives in Simple "
+                "disabled, and `routine.run` asks the same column."
+            ),
+            "the dispatch test that was the bug, quoted as current behaviour": (
+                "`_handle_routine_run` refuses the routine when "
+                "`created_in_mode == 'open'`."
+            ),
+            # CLAUDE.md's own sentence until 2026-08-08, verbatim.
+            "the short form's live gap sentence, put back": (
+                "Widgets ask correctly (`widget_uses_dev_abilities`); **routines "
+                "still read the stamp** — a live gap in docs/KNOWN-GAPS.md."
+            ),
+            "the stamp consulted where the artifact should have been": (
+                "The refusal checks `created_in_mode` instead, which answers where a "
+                "routine was born."
+            ),
+        },
+        "while_false": {
+            "today's derivation asserted after availability goes back to the stamp": (
+                "The list marker and `routine.run`'s refusal both ask "
+                "`_routine_needs_dev`, which reads the plan and the SAFE tool view."
+            ),
+        },
+    },
+    "mcp-transport-http-only": {
+        "while_true": {
+            "the pre-decision data-model sketch, which invites the column": (
+                "`config_json` holds the launch command or the base URL, depending on "
+                "which transport the server uses."
+            ),
+        },
+        "while_false": {
+            "the HTTP-only decision asserted after stdio ships": (
+                "A server row stores a URL and never a command, and nothing in step 7 "
+                "launches a program."
+            ),
+        },
+    },
+    "mcp-is-dev-only-in-v1": {
+        "while_true": {
+            "the pre-decision constraint, asserted rather than quoted": (
+                "In SAFE only read-only or genuinely undo-able MCP tools are "
+                "admitted, and a server's metadata declares which of its tools "
+                "qualify."
+            ),
+            # THE LEAK. `deferred` used to be an excuse token on its own at a
+            # 400-character window, so an unrelated section heading a paragraph away
+            # forgave the offence above. This sample is the two paragraphs as a
+            # document would carry them.
+            "the offence forgiven by a neighbouring section's own use of 'deferred'": (
+                "In SAFE only read-only or genuinely undo-able MCP tools are "
+                "admitted.\n\n## Do NOT build yet\n\nStill deferred: fully-automatic "
+                "task classification for routing, messaging channels, and a Rust "
+                "rewrite of the Agent Core."
+            ),
+        },
+        "while_false": {
+            "the dev-only decision asserted after SAFE admission ships": (
+                "MCP is dev-only for v1, so no MCP tool enters the SAFE view at all."
+            ),
+        },
+    },
+    "mcp-tools-are-not-callable": {
+        "while_true": {
+            # THE SENTENCE THIS ARM COULD NOT REACH. Transcribed from KNOWN-GAPS: the
+            # aside between `tools` and `are` is an em dash, and the arm demanded a
+            # literal space.
+            "the live KNOWN-GAPS sentence, whose subject and verb are split by an "
+            "aside": (
+                "The refusal branch itself is now quiet for MCP tools — they are "
+                "callable — and remains the mechanism the constant operates through."
+            ),
+            "the promotion of 'can see' to 'can use', asserted of Addison": (
+                "Addison can now use a tool server's tools whenever the workspace is "
+                "trusted."
+            ),
+        },
+        "while_false": {
+            "the stale reassurance about a stranger's code, with no phase named": (
+                "Nothing a tool server offers is callable: an `mcp:` id is kept out "
+                "of `visible_tools` in every mode."
+            ),
+        },
+    },
+    "redaction-is-a-backstop": {
+        "while_true": {
+            "the universal, which is the over-claim a reader cannot check": (
+                "Redaction strips every credential out of a tool result before "
+                "anything reaches the model."
+            ),
+        },
+    },
+    "retired-amendment-has-no-precedence": {
+        "while_true": {
+            "the precedence rule applied rather than described": (
+                "Where the amendment and the two specs differ, the amendment wins."
+            ),
+        },
+    },
+    "live-dev-signing-script": {
+        "while_true": {
+            "the superseded script offered as the fix, with nothing beside it": (
+                "If the keychain prompts on every rebuild, re-run "
+                "`scripts/sign-dev-binary.sh` and the signature will survive."
+            ),
+        },
+    },
+    "gate-list-owner": {
+        "while_true": {
+            "a fenced block that restates the gates instead of calling the script": (
+                "Run the gates:\n\n```bash\nruff check agent_core/ tests/\n"
+                "pytest tests/ -q\n```\n"
+            ),
+        },
+    },
+    "automation-arming-built": {
+        "while_true": {
+            "the phase-2 parenthetical, whose emphasis marks split the phrase": (
+                "arming a powerful action needs a user-typed keyword (designed, "
+                "**not built**: step 8 phase 3)"
+            ),
+            # The ceremony half, which had no pattern at all until 2026-08-08 even
+            # though `true_state` printed it to every reader as fact.
+            "the ceremony downgraded to an ordinary permission card": (
+                "Arming an automation needs only the ordinary permission card, the "
+                "same one every HIGH tool shows."
+            ),
+            "the nonce written out of the design": (
+                "The per-automation nonce was cut, so arming shows a card and there "
+                "is nothing to type back."
+            ),
+            "the ceremony denied in passing, which is how a floor erodes": (
+                "The job is installed with no typed keyword, exactly like any other "
+                "HIGH action."
+            ),
+        },
+        "while_false": {
+            "arming asserted after it is removed from the tree": (
+                "`arm_automation` installs a launchd job through the shell, and the "
+                "OS runs it from then on."
+            ),
+        },
+    },
+    "phase-3-includes-the-review-surface": {
+        "while_true": {
+            "the packaging-only definition this repo has already shipped twice": (
+                "Phase 3 is packaging, signing, notarisation and the auto-updater."
+            ),
+        },
+        "while_false": {
+            "the two-track definition asserted after the surface leaves the phase": (
+                "Phase 3 also carries the Developer review surface: a file tree, a "
+                "read-only viewer, a diff and per-file revert."
+            ),
+        },
+    },
+}
+
+
+def test_every_claim_row_still_fires_on_the_drift_it_was_written_for():
+    """The mirror of `test_the_claims_registry_is_silent_on_legitimate_prose`, and the
+    half that turns `assert not reports` from a tautology into a check.
+
+    A row is DEAD when its pattern can no longer match anything the tree would ever
+    say — a span that cannot cross a line wrap, a literal space where the prose puts
+    an em dash, a phrase somebody rewrote. From inside the run, a dead row and a
+    clean tree produce byte-identical output: nothing. Two rows were in that state on
+    2026-08-08 and had been for as long as anyone could measure, both with `fix`
+    strings instructing a future agent to depend on them.
+
+    So every arm of every row is run against prose it is REQUIRED to flag, including
+    the arm that is currently inactive — that one has never been run at all, and it is
+    the arm somebody reaches for on the day the fact changes and they have the least
+    appetite for discovering the gate is a decoration.
+    """
+    ids = {claim.id for claim in CLAIMS}
+    missing: list[str] = []
+    for claim in CLAIMS:
+        arms = _MUST_FLAG.get(claim.id, {})
+        for name, wrong in (("while_true", claim.while_true), ("while_false", claim.while_false)):
+            if wrong is None:
+                if arms.get(name):
+                    missing.append(f"{claim.id}: samples for `{name}`, which is None")
+            elif not arms.get(name):
+                missing.append(f"{claim.id}: no `{name}` sample")
+    assert not missing, (
+        "these claim arms have no must-flag sample:\n  " + "\n  ".join(missing) + "\n"
+        "A row needs BOTH halves. `_LEGITIMATE_PROSE` proves it stays quiet; this "
+        "table proves it still speaks. Add a sentence in the tree's own voice that "
+        "the arm is required to catch — not a transcription of the regex, which "
+        "would only prove the regex matches itself."
+    )
+    stale = [key for key in _MUST_FLAG if key not in ids]
+    assert not stale, f"must-flag samples for rows that no longer exist: {stale}"
+
+    for claim in CLAIMS:
+        for name, wrong in (("while_true", claim.while_true), ("while_false", claim.while_false)):
+            if wrong is None:
+                continue
+            # A frozen throwaway, so the INACTIVE arm is exercised without touching
+            # the registry the rest of the suite reads.
+            armed = replace(claim, holds=(name == "while_true"))
+            assert_flags(
+                f"claim `{claim.id}` ({name})",
+                lambda text, armed=armed: findings_in_text(armed, text),
+                _MUST_FLAG[claim.id][name],
+                fix=(
+                    "re-read the passages this arm was written against and widen the "
+                    "pattern to what they ACTUALLY say — a line wrap (`[^.\\n]` cannot "
+                    "cross one), an em dash between subject and verb, and a hyphenated "
+                    "spelling are the three ways these rows have died. If the arm's "
+                    "excuse is what swallowed the sample, tighten the excuse instead. "
+                    "If no document could ever say this any more, the row's FACT may "
+                    "have changed: investigate and correct the row — do not weaken the "
+                    "sample to match a pattern that guards nothing."
+                ),
+            )
+
+
+def test_the_two_halves_of_mcp_dispatch_cannot_disagree():
+    """`doc_claims.MCP_TOOLS_ARE_NOT_CALLABLE` and
+    `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` are the same fact — one enforced in code,
+    one in prose — and both `fix` strings say to flip them in the SAME commit. Until
+    2026-08-08 nothing checked that, so the instruction was an honour system across a
+    process boundary: half-flipping would leave the code refusing every call while
+    every document, and the gate that polices the documents, insisted it dispatches.
+
+    The prose half is the one that goes stale silently, because a wrong document
+    breaks nothing and a wrong constant breaks a test.
+    """
+    assert MCP_TOOLS_ARE_NOT_CALLABLE is not MCP_TOOLS_ARE_CALLABLE, (
+        "the code and the prose disagree about whether an MCP tool can run.\n"
+        f"  agent_core/mcp_catalog.py MCP_TOOLS_ARE_CALLABLE     = {MCP_TOOLS_ARE_CALLABLE}\n"
+        f"  tests/doc_claims.py       MCP_TOOLS_ARE_NOT_CALLABLE = "
+        f"{MCP_TOOLS_ARE_NOT_CALLABLE}\n"
+        "They are one fact. Flip both in the same commit, and amend the documents "
+        "`test_no_document_contradicts_a_registered_claim` then names — that run is "
+        "the point of flipping the prose half at all."
+    )
 
 
 def test_a_work_order_admits_that_the_row_itself_could_be_wrong():

@@ -30,10 +30,30 @@ A row is worth adding when all three hold:
 3. The fact has **one owner**. The row names it, and the work order says *"link to
    the owner"* rather than *"copy the correction everywhere"*.
 
-Then **prove the row**: break the thing it guards (edit a document to the wrong
-polarity, or flip the claim's `holds`), watch
-`test_no_document_contradicts_a_registered_claim` name the file and line, and put it
-back. A pattern that has never been seen to fail is decoration.
+Then **prove the row**, and prove it in the file rather than in a session. Break the
+thing it guards (edit a document to the wrong polarity, or flip the claim's `holds`),
+watch `test_no_document_contradicts_a_registered_claim` name the file and line, and
+put it back. A pattern that has never been seen to fail is decoration.
+
+**That hand-mutation is not enough on its own, and 2026-08-08 is why.**
+`test_no_document_contradicts_a_registered_claim` is `assert not reports`, so a row
+whose pattern can no longer match ANYTHING is in the passing state — indistinguishable
+from a row whose tree is clean. Registering a row for a string that cannot exist left
+the suite green. Two live rows were already in that condition: one bounded its span
+with `[^.\n]` while all six real passages wrap the line, and one demanded a literal
+space where the tree writes an em dash. Both carried `fix` strings telling a future
+agent to flip the constant and depend on them.
+
+So a row ships with **two sample tables in `test_docs_drift.py`**, one per direction,
+and both are asserted per arm — including the arm that is currently inactive, which is
+the arm nothing has ever run:
+
+* `_LEGITIMATE_PROSE` — prose the row must stay SILENT on (`assert_silent`);
+* `_MUST_FLAG` — prose the row MUST catch (`assert_flags`).
+
+Write the must-flag sample by transcribing a sentence from the tree, wraps and dashes
+and backticks included. A sample composed from the regex proves the regex matches
+itself.
 
 ## The failure output is the product
 
@@ -97,12 +117,30 @@ G3_RESOLVED_IN_OPEN = True
 # owns why.
 #
 # This row is about the LISTED-vs-HIDDEN polarity only. WHICH artifacts are disabled
-# is a second fact and it changed on 2026-08-08: it was "created in OPEN" (the stamp)
-# and is now "needs developer abilities" (asked of the artifact — widgets since
-# 2026-08-06, routines since 2026-08-08). No document asserted the stamp criterion in
-# a shape worth registering, so the wording above was amended rather than a second row
-# minted; if one ever does, that is the row to add.
+# is a second fact, registered separately below as
+# `AVAILABILITY_ASKS_THE_ARTIFACT`. Until 2026-08-08 this comment said no document
+# asserted the stamp criterion "in a shape worth registering" and left the fact to a
+# sentence in the row's `true_state` — which is a sentence PRINTED TO THE NEXT AGENT
+# AS FACT with no pattern behind it. Appending "a routine's availability is read from
+# its `created_in_mode` stamp" to docs/SAFETY.md left the suite green.
 ARTIFACTS_LISTED_NOT_HIDDEN = True
+
+# Which artifacts are unavailable in Simple (owner decision 2026-08-08, and 2026-08-06
+# for the widget half). The question is asked of the ARTIFACT — what a routine's plan
+# needs (`rpc/routines.py::_routine_needs_dev`), what a widget's spec declares
+# (`_widget_needs_dev`) — and NEVER of the `created_in_mode` stamp, which records only
+# where a thing was born and decides nothing.
+#
+# Registered because the two answers part company for everything perfectly usable in
+# Simple that happened to be made while Developer was active: read off the stamp, a
+# shopping-list widget arrived in Simple disabled, announcing it "uses developer
+# abilities" about a widget that uses none — and for routines the same read reached
+# DISPATCH and refused the thing outright. Five documents asserted the stamp criterion
+# before 2026-08-08 and each was correct when written. The cost of believing the stale
+# version is specific and repeatable: it is the bug, spelled out as a specification.
+#
+# Flip this only if availability genuinely goes back to reading the stamp.
+AVAILABILITY_ASKS_THE_ARTIFACT = True
 
 # MCP transport (owner decision 2026-08-06, step 7 phase 1). HTTP only for v1: an
 # `mcp_servers` row stores a URL and there is no column that could hold a launch
@@ -394,6 +432,112 @@ CLAIMS: tuple[Claim, ...] = (
         # is the worst copy in the tree.
         exempt=_RESTATEMENT_EXEMPT | {"docs/SAFETY.md"},
     ),
+    # -- G2: Addison authors, the OS runs ----------------------------------
+    #
+    # NO OWNER CONSTANT, DELIBERATELY, and the same goes for C6 below. A constant is
+    # a promise that the commit changing the fact flips it — which is the right shape
+    # for a decision (transport, admission, a phase's contents) and the wrong shape
+    # for a FLOOR. CLAUDE.md's instruction about the four floors is "never relaxed in
+    # any mode. Flag a conflict, never work around it", and a flippable `G2_HOLDS`
+    # would read as the sanctioned way to work around it. The row is one-directional
+    # for the same reason `redaction-is-a-backstop` is: there is no opposite state of
+    # this repo worth writing a pattern for.
+    Claim(
+        id="g2-addison-never-triggers-itself",
+        owner="docs/SAFETY.md",
+        true_state=(
+            "G2: Addison never triggers itself, in any mode. It may AUTHOR automation "
+            "the OS runs — `arm_automation` installs a launchd job through the shell, "
+            "behind a typed per-automation code — and the OS is what fires it. "
+            "`RunAtLoad` is never set, so arming itself causes no run."
+        ),
+        # Added 2026-08-08 because the floor had NO row at all: appending "Addison
+        # fires its own automations on schedule from inside the Agent Core" to a
+        # document left the whole suite green. G2 is enforced hard in code
+        # (`tests/test_g2_no_self_trigger.py` AST-scans every module in `agent_core/`
+        # for a callback handed to a clock), and that is exactly why the doc layer
+        # matters: an agent that reads a scheduler into the design writes the ticket,
+        # the plan and the review comment before anything reaches the AST scan.
+        #
+        # Anchored on ADDISON AS THE SUBJECT of a firing verb with an automation as
+        # the object, because the tree says "the OS runs it" and "Addison never fires
+        # itself" constantly and both must stay silent. `routine` is deliberately NOT
+        # in the object list: "Addison runs the routine" is what happens every time
+        # somebody presses Run, and a rule that flags it is a rule that gets deleted.
+        while_true=Wrong(
+            pattern=(
+                r"Addison\s+(?:can\s+|does\s+|will\s+|now\s+)?"
+                r"(?:fires?|triggers?|schedules?|runs?)\s+"
+                r"(?:its own|their own|the)\s+(?:automations?|jobs?|schedules?)"
+                r"|\b(?:an?|its own|an internal)\s+(?:scheduler|cron daemon|timer)\s+"
+                r"(?:in|inside|within)\s+(?:the\s+)?(?:Agent Core|Addison)"
+                r"|(?:the Agent Core|Addison)\s+(?:wakes|self-triggers|self-schedules)\b"
+                # `(?!...false)` twice: "sets `RunAtLoad` to false" and "`RunAtLoad`
+                # is set to false" both SAY the floor holds, in the vocabulary of the
+                # plist rather than of the prose, and a rule that flags them is a rule
+                # somebody switches off.
+                r"|\bsets?\s+`?RunAtLoad`?(?![^.\n]{0,20}false)"
+                r"|RunAtLoad`?\W{0,3}(?:is\s+|to\s+)?(?:set\b|true\b|enabled\b)"
+                r"(?![^.\n]{0,20}false)"
+                r"|arming\s+(?:itself\s+)?(?:causes|triggers|fires|starts)\s+"
+                r"(?:an?|the)\s+(?:immediate\s+)?(?:run|job)"
+            ),
+            fix=(
+                "G2 is a GLOBAL floor and this line breaks it. Addison AUTHORS "
+                "automation and the OS runs it — nothing in `agent_core/` may hand a "
+                "callback to a clock, and `RunAtLoad` is never set so arming itself "
+                "causes no run. Amend the sentence and link to docs/SAFETY.md, which "
+                "owns the floor. If you believe the floor should change, that is an "
+                "owner decision: flag it, do not write it down as though it had "
+                "happened (CLAUDE.md, 'flag a conflict, never work around it')."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- C6: a snapshot is never hidden by the mode it was made in ---------
+    Claim(
+        id="c6-snapshots-are-never-hidden-by-mode",
+        owner="docs/SAFETY.md",
+        true_state=(
+            "C6: `created_in_mode` ships on `config_snapshots` for DISPLAY ONLY. No "
+            "list, restore, prune or delete query may filter on it, in any mode — a "
+            "source-level test reads the SQL in store.py and snapshot_manager.py and "
+            "fails if the column appears in a filter position."
+        ),
+        # Added 2026-08-08 for the same reason as the G2 row: appending
+        # "`snapshot.list` filters on `created_in_mode`" to a document left the suite
+        # green, so the one rule this repo calls "a deliberate override" of its own
+        # spec had no prose guard at all. The spec's provisional DDL comment — that
+        # the column "mirrors existing artifact hiding" — is still sitting in the tree
+        # being overridden, which is precisely the sentence a future agent implements
+        # by accident.
+        #
+        # The stakes are G3's: a person who weakened a guard in Custom, broke
+        # something and switched to Simple opens Restore points and finds an empty
+        # list. Every honest passage negates ("never hidden", "never filters a query",
+        # "no query filters on `created_in_mode`"), so the negation is what the
+        # patterns are built to walk past rather than what they are built to excuse.
+        while_true=Wrong(
+            pattern=(
+                r"\bsnapshots?\b[^.\n]{0,60}\b(?:are|is)\s+(?!never\b|not\b)"
+                r"(?:\w+\s+){0,2}hidden\b"
+                r"|\bsnapshot\.(?:list|restore|prune|delete)\w*\b[^\n]{0,60}?created_in_mode"
+                r"|\b(?:snapshots?|restore points?)\b[^.\n]{0,70}"
+                r"\b(?:filter(?:s|ed)?|scoped?)\s+(?:on|by|to)\s+"
+                r"(?:`?created_in_mode|the\s+(?:active|current)\s+mode)"
+            ),
+            fix=(
+                "Snapshots are NEVER hidden by mode (C6, a deliberate override of the "
+                "spec's provisional DDL comment). `created_in_mode` is display-only "
+                "provenance and no list, restore, prune or delete query may filter on "
+                "it, in any mode. Amend the sentence and link to docs/SAFETY.md, which "
+                "owns the rule and the reasoning — a filtered restore list hides the "
+                "way back from exactly the person who most needs it, which is a larger "
+                "threat to G3 than anything mode-scoping would buy."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
     # -- Artifact disabling: polarity --------------------------------------
     Claim(
         id="artifact-disabling-polarity",
@@ -428,11 +572,100 @@ CLAIMS: tuple[Claim, ...] = (
                 "to docs/SAFETY.md, which owns the rule and the reasoning."
             ),
         ),
+        # `[^.]`, NOT `[^.\n]` — and that one character is the whole finding of
+        # 2026-08-08. This arm used to bound its span at a newline, and EVERY real
+        # passage wraps between the noun and the phrase: CLAUDE.md's "routines/widgets
+        # that **need** developer abilities are\n  **listed but disabled**" is typical,
+        # and three more spell it `listed-but-disabled`. Raw hits tree-wide: zero. The
+        # row was in the passing state with no reachable match anywhere, which is
+        # spelled exactly like a clean tree — see `assert_flags` in gate_precision.py,
+        # which is the mirror that now makes the difference visible.
         while_false=Wrong(
-            pattern=r"\b(?:routines?|widgets?|artifacts?)\b[^.\n]{0,110}?listed but disabled",
+            pattern=(
+                r"\b(?:routines?|widgets?|artifacts?)\b[^.]{0,110}?listed[- ]but[- ]disabled"
+            ),
             fix=(
                 "Artifacts are hidden under SAFE again — this line says they are listed. "
                 "Amend it, or link to docs/SAFETY.md."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- Which artifacts are unavailable: asked of the artifact, not the stamp --
+    Claim(
+        id="artifact-availability-asks-the-artifact",
+        owner="docs/SAFETY.md",
+        holds=AVAILABILITY_ASKS_THE_ARTIFACT,
+        true_state=(
+            "Whether an artifact is unavailable in Simple is asked of the ARTIFACT — a "
+            "routine's plan and the SAFE tool view (`_routine_needs_dev`), a widget's "
+            "spec (`_widget_needs_dev`) — and NEVER of the `created_in_mode` stamp, "
+            "which is display-only provenance. Widgets 2026-08-06, routines 2026-08-08."
+        ),
+        false_state=(
+            "Availability is decided from the `created_in_mode` stamp again, so where an "
+            "artifact was born is what makes it unavailable."
+        ),
+        # Anchored on the STAMP STANDING IN A DECIDING POSITION, in the shapes the tree
+        # actually carried before 2026-08-08 — `_handle_routine_run` testing
+        # `created_in_mode == 'open'`, "routines still read the stamp", availability
+        # "read from" the column.
+        #
+        # THE NEGATION IS IN THE PATTERN, NOT IN `excused_by`, and that placement is
+        # the point. Every honest passage in the tree denies the stamp in the SAME
+        # CLAUSE it names it: "asked of the artifact, NEVER of the stamp", "decided
+        # from what an automation IS, NOT from `created_in_mode`", "records the mode,
+        # for display only". A `never` in the excuse list would have to be forgiven at
+        # some window, and a window reaches the neighbouring paragraph — this row was
+        # written with `never` at 400 characters and a contradicting sentence appended
+        # to the END of docs/SAFETY.md was forgiven by a sentence about widget kinds
+        # eight lines above it. A negation that belongs to a different sentence is not
+        # an excuse; a `(?!\bnever\b)` inside the span says exactly that and needs no
+        # window at all. `excused_by` is left holding only unambiguous past-tense
+        # narration, which genuinely can sit a clause away.
+        while_true=Wrong(
+            pattern=(
+                r"(?:availability|available|disabled|unavailable|refus\w+|hidden)"
+                r"(?:(?!\bnever\b|\bnot\b|\bnothing\b)[^.\n]){0,70}"
+                r"\b(?:from|by|off)\s+(?:its\s+|the\s+|a\s+)?`?created_in_mode"
+                # `(?!\s+nothing)` because the honest sentence puts its denial on the
+                # far side of the verb — "`created_in_mode` still ships as display
+                # provenance and decides nothing" — where a guard reading only the
+                # span in front cannot see it.
+                r"|`?created_in_mode`?(?:(?!\bnever\b|\bnot\b|\bnothing\b)[^.\n]){0,70}"
+                r"\b(?:decides?|determines?|drives?|governs?)\b(?!\s+nothing\b)"
+                r"|created_in_mode`?\s*==\s*['\"]?open"
+                r"|(?:routines?|widgets?|artifacts?) still reads? the stamp"
+                r"|\b(?:reads?|tests?|checks?)\s+(?:its\s+|the\s+)?`?created_in_mode`?"
+                r"(?:(?!\bnever\b|\bnot\b|\bnothing\b)[^.\n]){0,40}"
+                r"\b(?:to decide|for availability|instead)"
+            ),
+            fix=(
+                "Availability is asked of the ARTIFACT, never of the stamp — a routine "
+                "asks `_routine_needs_dev` (the plan AND the SAFE tool view), a widget "
+                "asks `_widget_needs_dev`. Amend the sentence, put it in the past tense "
+                "if it is history, or link to docs/SAFETY.md, which owns the rule. If "
+                "availability genuinely reads the stamp again, flip "
+                "AVAILABILITY_ASKS_THE_ARTIFACT in tests/doc_claims.py in the SAME commit."
+            ),
+            # Past-tense narration only. `then decided` / `then read` is BUILD-LOG's
+            # way of recounting behaviour that has since changed — an unambiguous
+            # tell, unlike a bare "closed", which would forgive any paragraph that
+            # mentions a closed gap.
+            excused_by=(
+                r"used to|no longer|closed (?:on )?2026-08-0[68]|"
+                r"\bthen (?:decided|read|asked|tested)\b|deliberately did not"
+            ),
+            window=200,
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"_routine_needs_dev|_widget_needs_dev|widget_uses_dev_abilities"
+                r"|asked of the (?:ARTIFACT|artifact)"
+            ),
+            fix=(
+                "Availability reads the stamp again — this line says it is asked of the "
+                "artifact. Amend it, or link to docs/SAFETY.md, which owns the rule."
             ),
         ),
         exempt=FROZEN,
@@ -530,7 +763,23 @@ CLAIMS: tuple[Claim, ...] = (
                 "tests/doc_claims.py in the SAME commit."
             ),
             # Prose that states the deferral in the same breath is the correct shape.
-            excused_by=r"dev-only|Developer-only|deferred|defers",
+            #
+            # TIGHTENED 2026-08-08. The excuse used to include a bare `deferred|defers`
+            # at a 400-character window, and a 400-character window reaches the
+            # NEIGHBOURING SECTION: this repo's "Do NOT build yet" lists open with
+            # "Still deferred:", so an offending MCP sentence a paragraph above one was
+            # forgiven by a word about routing. Renaming that heading — an edit about
+            # nothing MCP-related — turned the rule red, which is the tell of an excuse
+            # satisfied by ordinary prose rather than by the deferral itself. The
+            # deferral must now be stated ABOUT something (the question, the admission,
+            # the constraint) or the decision named outright.
+            excused_by=(
+                r"dev-only|Developer-only"
+                r"|(?:question|admission|constraint|choice|it)\s+(?:is|was|remains)\s+"
+                r"deferred"
+                r"|deferred rather than"
+                r"|defers? (?:the|that) (?:question|choice|constraint)"
+            ),
             window=400,
         ),
         while_false=Wrong(
@@ -563,12 +812,20 @@ CLAIMS: tuple[Claim, ...] = (
         # ordinary sentences that say nothing about this phase. The `run`/`call`
         # halves are the shapes phase 3's own prose will use, which is the point:
         # they must not appear until it ships.
+        #
+        # WIDENED 2026-08-08, because this arm had ZERO reachable hits tree-wide and
+        # its own `fix` string tells a future agent to flip the constant — which would
+        # have activated a pattern that reports nothing. The live sentence it must
+        # catch is KNOWN-GAPS' "The refusal branch itself is now quiet for MCP tools —
+        # they are callable", and the em dash sat between `tools` and `are`. A literal
+        # space where the tree writes an aside is how a rule stops existing.
         while_true=Wrong(
             pattern=(
                 r"Addison\s+(?:can|does|will)\s+(?:now\s+)?(?:use|run|call|invoke)\s+"
                 r"(?:a\s+|the\s+|its\s+|those\s+|these\s+|their\s+)?"
                 r"(?:tool[- ]server|MCP)[^.\n]{0,20}\btools?\b"
-                r"|MCP tools? (?:are|is) (?:now )?(?:callable|dispatched|runnable)"
+                r"|MCP tools?\b[^.\n]{0,30}?\b(?:are|is) (?:now )?"
+                r"(?:callable|dispatched|runnable)"
             ),
             fix=(
                 "Phase 2 discovers tools and runs none of them: an mcp: id is kept out of "
@@ -802,6 +1059,19 @@ CLAIMS: tuple[Claim, ...] = (
                 r"|(?:keyword gate|nonce)[^\n]{0,40}(?:does not exist|is not built)"
                 r"|there is no keyword-gate code"
                 r"|arming (?:does not exist|doesn't exist)"
+                # THE CEREMONY HALF, added 2026-08-08. `true_state` has always said
+                # "behind a per-automation code the person retypes" and nothing
+                # matched it: appending "arming needs only the ordinary permission
+                # card" to docs/SAFETY.md left the suite green, so the row printed a
+                # promise about G2's keyword gate that it did not enforce. This half
+                # is the more dangerous one, because a document that downgrades the
+                # ceremony to an ordinary card is a document telling the next agent
+                # the floor is cheaper than it is.
+                r"|arming[^.\n]{0,60}\b(?:needs|requires|is behind|takes)\b"
+                r"[^.\n]{0,30}\b(?:only|just|nothing (?:more|but))\b"
+                r"|(?:no|without an?)\s+(?:user-)?typed\s+(?:keyword|code|nonce)"
+                r"|(?:keyword gate|per-automation (?:code|nonce))[^.\n]{0,30}"
+                r"\b(?:was|were|is|been)\s+(?:cut|dropped|removed|abandoned)"
             ),
             # A document RECOUNTING the phase where this was true is doing its job.
             excused_by=(
@@ -825,8 +1095,14 @@ CLAIMS: tuple[Claim, ...] = (
             ),
         ),
         while_false=Wrong(
+            # `\W{0,2}` after the tool id, not a literal space: every mention in the
+            # tree is `` `arm_automation` installs ``, and the closing backtick made
+            # this alternative unreachable. The arm as a whole stayed alive on
+            # "arming exists", which is how a dead alternative hides inside a live
+            # pattern — found 2026-08-08 by the must-flag sample, which is written
+            # from the tree's own sentence rather than from the regex.
             pattern=(
-                r"arm_automation (?:installs|arms|exists|shipped)"
+                r"arm_automation\W{0,2}(?:installs|arms|exists|shipped)"
                 r"|arming (?:shipped|exists|is built)"
             ),
             fix=(
