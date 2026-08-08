@@ -29,7 +29,7 @@
 // comment nobody reads: the widening is global, so a Simple-profile session carries
 // `'unsafe-inline'` for a screen it can never reach; this closes the one injection
 // path that exists TODAY and cannot stop a future one (see the source-level pin in
-// `src/__tests__/mermaidSanitizer.test.ts`, which fails when a second
+// `src/__tests__/cspMitigations.test.tsx`, which fails when a second
 // `dangerouslySetInnerHTML` appears); and it says nothing about CSS delivered by a
 // compromised first-party asset, which `'self'` admits by definition.
 
