@@ -19,7 +19,7 @@ export default defineConfig({
     // that single choice is the biggest size lever this screen has. It is also
     // what makes "no language workers" structurally true rather than a config
     // claim somebody can undo.
-    include: ["monaco-editor/esm/vs/editor/editor.api"],
+    include: ["monaco-editor/editor/editor.api"],
   },
   worker: {
     // The editor worker is imported with Vite's `?worker` suffix, which emits a
