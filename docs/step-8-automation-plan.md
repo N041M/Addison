@@ -1,7 +1,7 @@
 # Step 8 — OS-run automation and the keyword gate
 
-**Status: COMPLETE. All four phases built 2026-08-07**, the day this plan was
-written. With it, step 8 is done and the Phase-2 sequence closes. This plan turns the recorded decisions into a build
+**Status: COMPLETE. Phases 1–3 built 2026-08-07**, the day this plan was written,
+**and phase 4 on 2026-08-08**. With it, step 8 is done and the Phase-2 sequence closes. This plan turns the recorded decisions into a build
 order and settles the engineering decisions those left open. The principle is the
 scope amendment's §9 sentence, unchanged since 2026-07-20:
 
@@ -256,7 +256,7 @@ the whole truth rather than a summary.
    - macOS only, and honest about it: elsewhere the tool answers with one plain
      sentence, the same temperament as the seatbelt's non-mac disclosure.
    - This phase flips the documents in §7 and closes the KNOWN-GAPS question.
-4. **State honesty + the Simple profile — BUILT 2026-08-07. STEP 8 COMPLETE.**
+4. **State honesty + the Simple profile — BUILT 2026-08-08. STEP 8 COMPLETE.**
    - Armed-ness is reconciled on demand from `automation.status` when the
      surface loads — the OS owns that truth (§5.6); nothing polls, nothing
      checks at startup (the mcp temperament: no action the person did not just

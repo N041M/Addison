@@ -46,6 +46,19 @@ and where it goes.
   candidate, and it would fix the transition and the position together. Check git
   history before rebuilding it from scratch.
 
+**The sidebar's "Code" row carries no mono hint, and its two siblings do (UI/UX,
+owner call).** `design-brief-dark/IMPLEMENTATION.md` describes the Workspace block as
+rows whose right-hand mono fact is "a real count (or the policy mode); never a
+placeholder" — Tools shows the trusted-root count or the mode, Snapshots shows the
+restore-point count. `Code` (shipped 2026-08-08, Developer/Custom only) shows
+nothing, so one row in a three-row block has an empty right column. Either is
+defensible and this is not a bug: the honest candidate hint is the number of edits
+still live on disk, which is exactly `workspace.listEdits`'s count and already
+fetched by `useCodeReview`; the honest argument against is that a hint reading `0`
+next to a screen whose whole job is "show me what changed" is noise. Decide it as
+design, not as a fix — `Sidebar.tsx` renders the row and `IMPLEMENTATION.md` owns
+the block's look.
+
 **Opened by step 5.5 items 1–3 (2026-07-31):**
 
 - ~~The denylist's CONTAINS direction is scaffolding and should be deleted.~~
@@ -353,9 +366,9 @@ questions were resolved during steps 1–3 and went with it):
   already meets a per-invocation card and the seatbelt, and the recurring,
   unconfined, outlives-the-session nature of an armed job is the jump that earns
   the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
-  build order and the surrounding decisions. **All four phases landed 2026-08-07** —
-  the fence, authoring, the gate and arming, and state honesty — so this question is
-  answered AND built.
+  build order and the surrounding decisions. **Phases 1–3 landed 2026-08-07** — the
+  fence, authoring, the gate and arming — **and phase 4 (state honesty) on
+  2026-08-08**, so this question is answered AND built.
 - **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on
@@ -553,10 +566,15 @@ are here because somebody will meet them, and because anything built on top of
   and this file both said step 5 would add ("as those capabilities land, never
   before"). It was not in the frozen step-5 contract, so it was not built. In the
   meantime the precedence question is answered defensively: `auto_grant_scope='none'`
-  now beats trust (see rigor-pass item 6). **Decide at step 6 or 8** whether the
-  panel grows the third guard or whether that precedence rule is the whole answer.
-  *(Step 6 shipped 2026-08-06 without touching it — it turned out to be entirely
-  widget-side — so this is step 8's decision now, or an owner call before it.)*
+  now beats trust (see rigor-pass item 6). **This is an open owner call with no
+  step left to carry it**: does the panel grow a third guard, or is that precedence
+  rule the whole answer? It was scheduled against step 6 and then step 8; 6 shipped
+  2026-08-06 without touching it (it turned out to be entirely widget-side) and 8
+  completed 2026-08-08 without touching it either, and `GuardConfig` in
+  `agent_core/policy.py` still has exactly two fields. **Do not re-schedule it
+  against the next step** — the last two deadlines passed silently, which is what a
+  deadline nobody owns does. Decide it, or record that the precedence rule is the
+  answer and close this entry.
 - ~~`tsc --noEmit` does not cover the test files.~~ **CLOSED 2026-08-01.**
   `shell/tsconfig.test.json` + an `npm run typecheck` script that runs both
   configs. Every error it found on the first run was real, in four classes,

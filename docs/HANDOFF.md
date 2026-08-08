@@ -45,8 +45,9 @@ Two things it cannot check, both learned the hard way the same day:
 
 ## Next up
 
-**NOTHING FROM THE PHASE-2 SEQUENCE REMAINS. Step 8 completed 2026-08-07 — all
-four phases — and with it the July-2026 scope change.** What is next is **Phase 3**
+**NOTHING FROM THE PHASE-2 SEQUENCE REMAINS. Step 8 completed 2026-08-08 —
+phases 1–3 on 2026-08-07, phase 4 the next morning — and with it the July-2026
+scope change.** What is next is **Phase 3**
 (packaging, signing, notarisation, the auto updater, previous-binary restore,
 Secure Enclave identity). The **Developer review surface** — the phase's second track —
 is **BUILT: all five of its plan's Build sections landed on 2026-08-08**, and the only
@@ -55,9 +56,11 @@ thing left on it is a manual pass (see the next paragraph).
 
 **START HERE ON THE REVIEW SURFACE: the §13c manual pass, not more code.**
 `TESTING-CHECKLIST.md` §13c is live and unrun. It matters more than a checklist usually
-does, because this wave widened the webview's content-security policy — one directive
-(`style-src 'unsafe-inline'`, which Monaco genuinely cannot run without) against four
-tightenings — and **a CSP is enforced by a real webview and by nothing else**. The build
+does, because this wave widened the webview's content-security policy — two
+directives against four tightenings — and **a CSP is enforced by a real webview and
+by nothing else**. The widenings are `style-src 'unsafe-inline'`, which Monaco
+genuinely cannot run without, and `img-src 'self' data:`, which the previous policy
+(literally `default-src 'self'` and nothing more) refused. The build
 could not run one. `tests/test_csp_is_pinned.py` holds the authored string and the two
 structural rules (`script-src` never admits `'unsafe-eval'`/`'unsafe-inline'`; no
 directive admits `*`, `http:`, `https:` or `blob:`), and `shell/src/lib/cspReport.ts`
@@ -74,9 +77,14 @@ tools' `permission_detail` read the RAW `path` argument while `affected_path`
 resolved, so the name a person was shown and the file Addison touched were two
 different answers whenever a symlink sat between them — and inside a trusted root
 (`notes.txt` → `secrets.env`, both in trust) nothing refuses that, so the displayed
-name was the only thing standing there and it named the decoy. Both now ask
-`call_affected_path`, the same function confinement asks, so the card, the Activity
-Panel and the boundary cannot name three different files. Basename-only is unchanged
+name was the only thing standing there and it named the decoy. Both now implement
+`permission_detail_for_path(resolved_path)` and never see `args` at that seam, so
+they are handed the caller's single resolution and structurally cannot make a second
+one — the card, the Activity Panel and the boundary cannot name three different
+files. (An intermediate version of this fix had both tools call
+`call_affected_path` themselves; that was superseded on the same day, because two
+call sites resolving separately is the defect, not the fix. See the paragraph on the
+name race further down.) Basename-only is unchanged
 — resolving is what turns a bare argument INTO a full path, so this had to keep the
 `.name`. **All three of the plan's prerequisites are now closed, each in its own PR on
 2026-08-08** — this one, the missing read ceiling in `filesystem.rs`, and the prune
@@ -186,8 +194,8 @@ just the delete — otherwise a burst of live edits silently evicts old reverted
 the window, which is the same bug wearing a different hat. `tests/test_undo_manager.py`
 kills both mutations by name.
 
-- **8 — the automation keyword gate. COMPLETE: all four phases landed
-  2026-08-07** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the
+- **8 — the automation keyword gate. COMPLETE: phases 1–3 landed 2026-08-07 and
+  phase 4 on 2026-08-08** ([`step-8-automation-plan.md`](step-8-automation-plan.md) owns the
   phases and the decisions). Syntax was decided by the owner (a per-automation
   nonce Addison shows and you retype, because a fixed prefix is forgeable by
   anything that can write English); the plan settles what it gates (ARMING only),
@@ -270,14 +278,16 @@ the ones that change how you should read the tree.
   escaping passed 1449 tests), and **the arming fence's blast radius is not what a
   comment says it is** — a step-over meant for `VAR=value` chained through any
   `=`-bearing word until it was caught and narrowed.
-- **Step 8 has a plan and landed phases 1 and 2** — see "Next up" above for the
+- **Step 8 has a plan and all four phases are in** — see "Next up" above for the
   whole shape. What changes how you read the tree: `~/Library`, `~/.config` and
   the eleven OS-automation directories are no longer trustable workspaces,
   commands naming them (or invoking `launchctl`/`crontab`/`at`/`batch` as a first
   word) are refused pre-gate with their own sentence, `policy.trust_refusal` is
   the reason-reporting form of `workspace_trust_allows`, and the `automations`
-  table now fills ONLY through `create_automation` (dev-only, four-refusal door)
-  — still no armed column and no way to arm, by design until phase 3.
+  table fills ONLY through `create_automation` (dev-only, four-refusal door).
+  There is still **no armed column** — armed-ness is read back from the OS on
+  demand — and arming goes through `arm_automation` behind a code the person
+  retypes.
 
 - **Step 7 is COMPLETE for v1.** Phases 2, 3 and 4 all landed: a tool server's tools
   are discovered, callable through the ordinary gate, and what one answers is
@@ -325,13 +335,13 @@ committed and pushed; `master` is clean.
   list; `tests/doc_claims.py` is a registry of load-bearing facts, one row each, with
   a test that names the file and line of any document contradicting one.
 
-## Branch and PR state (verified 2026-08-07, end of day)
+## Branch and PR state (verified 2026-08-08)
 
-**One PR open: step 8 phase 4 (branch `claude/step-8-phase-4-state-honesty` — state
-honesty and Simple's disabled rows; this file ships in it). `master` carries
-everything through #68** — step 8's plan,
-phase 1 (the fence and the table), phase 2 (authoring), and the review of both,
-merged 2026-08-07 with CI green on the merge commit. Work from `master`.
+**No PR open. `master` carries everything through #82** — step 8's four phases and
+their review (#65–#70), the review surface's three prerequisites (#71, #72, #74)
+plus the picker read ceiling beside them (#73), its docs-first wave (#75) and all
+five of its Build sections (#76–#78), the BUILD-LOG entry for that wave (#79), and
+three gap closures after it (#80–#82). Work from `master`.
 **Re-read this section
 immediately after any merge:** it was
 false for ninety minutes on 2026-07-26 because a merge falsified six passages without
@@ -399,8 +409,9 @@ was that a mutation which *should* have killed something did not.
 
 ## Where the project stands
 
-- v1 (spec §11, steps 1–11) and Phase-2 steps 1–7 are implemented and merged. **8 is
-  not started.**
+- v1 (spec §11, steps 1–11) and **all eight Phase-2 steps** are implemented and
+  merged, and so is Phase 3's Developer review surface. What is left of Phase 3 is
+  the packaging track. `ROADMAP.md` owns status.
 - Addison is a **butler**: Developer = a Claude-Code-class coding harness; Simple = an
   all-in-one companion; Custom tunes prompting guards. Safety means **guaranteed
   rollback**, and that has code and tests behind it in both modes.

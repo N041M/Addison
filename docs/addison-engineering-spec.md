@@ -1454,8 +1454,9 @@ Keep `protocol.py` (Agent Core) and `types/protocol.ts` (frontend) hand-synced f
 
 *(Phase 3 is no longer packaging-and-tooling only. Since 2026-07-25 it also carries
 the Developer **review surface** — file tree, read-only viewer, diff of Addison's
-live edits, per-file revert — scoped in `docs/phase-3-review-surface-plan.md` and
-sequenced after Phase-2 steps 6–8. See the Phase-3 note at the end of §11.)*
+live edits, per-file revert — scoped in `docs/phase-3-review-surface-plan.md`,
+sequenced after Phase-2 steps 6–8, and built 2026-08-08. See the Phase-3 note at the
+end of §11.)*
 
 ---
 
@@ -1480,9 +1481,9 @@ These are hard constraints, not preferences — flag to the user if any of these
 > every mode, nothing in `policy.py` or the registry makes scheduling
 > mode-dependent, and item 6's reinterpretation (Addison *authors* automation, the
 > OS runs it — see the §6 automation note) is amendment-level and
-> mode-independent, not an OPEN-mode relaxation. It **shipped as Phase-2 step 8 on
-> 2026-08-07**, all four phases: the fence, authoring, the keyword gate and arming,
-> and state honesty. OPEN means fewer prompts, not no gate: the gate still runs and
+> mode-independent, not an OPEN-mode relaxation. It **shipped as Phase-2 step 8**:
+> the fence, authoring, and the keyword gate and arming on 2026-08-07, then state
+> honesty on 2026-08-08. OPEN means fewer prompts, not no gate: the gate still runs and
 > logs on every call — and arming additionally needs a code the person retypes.
 
 1. No tool may execute arbitrary shell commands or unrestricted code. The Routine Engine (§6) is declarative for the same reason.
@@ -1649,14 +1650,14 @@ of that pass); code then follows in **dependency order, safety floor first**:
 7. **MCP client integration** — external tools through the registry + gate,
    mode-scoped (§4.12). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option — [plan](step-7-mcp-plan.md).
-8. **Automation keyword gate** + author-OS-run automation (§6). **COMPLETE — all
-   four phases shipped 2026-08-07** (the fence, authoring, the gate and arming, and
-   state honesty). ROADMAP owns status.
+8. **Automation keyword gate** + author-OS-run automation (§6). **COMPLETE —
+   phases 1–3 shipped 2026-08-07** (the fence, authoring, the gate and arming) **and
+   phase 4 on 2026-08-08** (state honesty). ROADMAP owns status.
 
 **[`ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*, and it
-carried a second copy of the state until that copy went stale. Steps 6–8 are the
-three prerequisites the Phase-3 review surface waits on (see the Phase-3 note
-below).
+carried a second copy of the state until that copy went stale. Steps 6–8 were the
+three prerequisites the Phase-3 review surface waited on; all three landed, and the
+surface was built on 2026-08-08 (see the Phase-3 note below).
 
 Each Phase-2 step stays independently testable and ships behind the same gate as
 today. Steps 3–4 are companion-facing and independent of the harness, so they can
@@ -1676,23 +1677,26 @@ on it ([`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns that question).
 
 This spec has described Phase 3 as packaging work only — installer signing and
 notarisation, the auto-updater, and the IPC codegen improvement noted at the end of
-§7. **`docs/phase-3-review-surface-plan.md` (approved 2026-07-25, not started) adds
-a second track to that phase:** a Developer/OPEN **review surface** — a file tree
-over trusted roots, a read-only viewer, a real diff of every edit Addison has made
-that is still live on disk, and per-file revert.
+§7. **`docs/phase-3-review-surface-plan.md` (approved 2026-07-25, BUILT 2026-08-08)
+adds a second track to that phase:** a Developer/OPEN **review surface** — a file
+tree over trusted roots, a read-only viewer, a real diff of every edit Addison has
+made that is still live on disk, and per-file revert.
 
 The reason it belongs to a phase, not a patch: step 5 gave the harness the ability
-to edit a real project, and the only evidence of an edit today is a one-line
-Activity Panel entry and a LIFO "Undo last action". G3 gives a guaranteed way back
-for *config*; nothing yet gives a person a way to **see** what changed in *code*
-before deciding to roll it back. The surface adds **zero new execution surface and
-zero new model capability** — it is a flow and trust layer — but it carries a real
-cost the plan states plainly: Monaco requires widening the webview CSP with
-`style-src 'unsafe-inline'`, globally, for one window.
+to edit a real project, and the only evidence of an edit was a one-line Activity
+Panel entry and a LIFO "Undo last action". G3 gives a guaranteed way back for
+*config*; nothing gave a person a way to **see** what changed in *code* before
+deciding to roll it back. The surface adds **zero new execution surface and zero new
+model capability** — it is a flow and trust layer — but it carries a real cost the
+plan states plainly: Monaco requires widening the webview CSP with `style-src
+'unsafe-inline'`, globally, for one window.
 
-It is **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is done
-for v1 as of 2026-08-07, and 8 completed the same day, so this is now **UNBLOCKED and
-unstarted**. Read the plan before starting either Phase-3 track.
+It was **sequenced after Phase-2 steps 6, 7 and 8** — 6 landed 2026-08-06, 7 is done
+for v1 as of 2026-08-07, 8 completed 2026-08-08 — and all five of the plan's Build
+sections landed on 2026-08-08. What is outstanding on this track is the §13c manual
+pass in [`TESTING-CHECKLIST.md`](TESTING-CHECKLIST.md), where a real webview says
+what the widened policy actually refuses. **The packaging track has not started.**
+Read the plan before starting it.
 
 Note that **restoring a previous app binary remains a Phase-3 updater item and is
 not implemented** (owner decision 2026-07-20, §4.9): `shell/src-tauri/src/updater.rs`

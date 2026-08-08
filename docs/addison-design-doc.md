@@ -685,7 +685,7 @@ Non-technical users can't debug a stuck or broken agent, so Addison needs a buil
 
 Design implications:
 - Every tool that mutates state (`write_file`, `delete_file`, `save_setting`) must implement a paired `undo()` at registration time — this is a constraint on the tool interface itself (§7.4), not an optional add-on. A tool without a defined undo path is automatically capped at "low risk / read-only" until one exists.
-- Snapshots are stored locally (diffs or full copies, whichever is cheaper per file type) with a rolling retention window (e.g., last 20 actions or 7 days, configurable) so this doesn't grow unbounded on disk.
+- Snapshots are stored locally (diffs or full copies, whichever is cheaper per file type) with a rolling retention window (e.g., last 20 actions or 7 days, configurable). *(**Narrowed to reverted rows — owner decision 2026-08-08.** The window still applies, but only to rows already put back; an unreverted row describes a change still on disk and its payload is the only way back from it. So retention no longer bounds the unreverted subset — that is bounded where it is read instead. `addison-engineering-spec.md` §4.5 owns the rule and the cost.)*
 - The rewind/self-repair control lives in the Activity Panel (§7.1) at all times, not buried in Settings — it's the panic button, and panic buttons need to be where the panic is.
 - A harder "Reset Addison" exists one level down in Settings for the rare case of genuinely corrupted local state (e.g., a malformed SQLite file) — this clears app state but explicitly does not touch the versioned file snapshots, so a full reset still leaves user files recoverable.
 - This whole feature is a natural fit for local-first, versioned storage — closer in spirit to how you're already thinking about Almanac's data model than a bolt-on, so the underlying snapshot mechanism may be worth designing once and sharing between the two projects.
@@ -1006,26 +1006,28 @@ Build the free relay (§7.5.1): integrate at least one, ideally two, free hosted
 Installer signing/notarization for macOS/Windows, auto-update pipeline, a real landing page, expand tool set carefully (email drafting, calendar look-ups) — always tiered by risk per §7.4. Rewind/self-repair (§7.9) ships no later than this phase — it's a trust prerequisite for widening the tool set, not a nice-to-have that comes after.
 
 > **Amended 2026-07-25 — Phase 3 is no longer packaging-only.**
-> **`docs/phase-3-review-surface-plan.md`** (approved 2026-07-25, **not started**)
-> adds a second track to this phase: a Developer/OPEN **review surface** — a file
-> tree over trusted roots, a read-only viewer, a real **diff** of every edit Addison
-> has made that is still live on disk, and per-file revert.
+> **`docs/phase-3-review-surface-plan.md`** (approved 2026-07-25, **built
+> 2026-08-08**) adds a second track to this phase: a Developer/OPEN **review
+> surface** — a file tree over trusted roots, a read-only viewer, a real **diff** of
+> every edit Addison has made that is still live on disk, and per-file revert.
 >
 > Why it belongs here rather than in a patch: the Phase-2 harness (§7.11) can now
-> edit a real project, and the only evidence of an edit today is a one-line Activity
+> edit a real project, and the only evidence of an edit was a one-line Activity
 > Panel entry and a LIFO "Undo last action". G3 guarantees a way back for *config*;
-> nothing yet lets a person **see** what changed in *code* before deciding to roll it
+> nothing let a person **see** what changed in *code* before deciding to roll it
 > back — and you cannot judge a rollback you were never shown. The surface adds
 > **zero new execution surface and zero new model capability** (no typing into files,
 > no save, no terminal, no run button), which is what makes it shippable at this
 > size; its one real cost, stated plainly in the plan, is that Monaco requires
 > widening the webview CSP with `style-src 'unsafe-inline'` globally.
 >
-> It was sequenced **after Phase-2 steps 6, 7 and 8**, and all three have landed —
-> 6 on 2026-08-06, and on 2026-08-07 both 7 (done for v1) and 8 (complete, all four
-> phases) — so the surface is now **unblocked and unstarted**. The plan's own three
-> prerequisites, each a correctness problem the surface would have made worse rather
-> than one it introduced, closed on 2026-08-08.
+> It was sequenced **after Phase-2 steps 6, 7 and 8**, and all three landed — 6 on
+> 2026-08-06, 7 (done for v1) on 2026-08-07, 8 (complete, all four phases) on
+> 2026-08-08 — as did the plan's own three prerequisites, each a correctness problem
+> the surface would have made worse rather than one it introduced. **All five of the
+> plan's Build sections then shipped on 2026-08-08**; what is left on this track is
+> the §13c manual pass in `docs/TESTING-CHECKLIST.md`, not code. The *packaging*
+> track above has not started.
 > Note also that **restoring a previous app binary stays a Phase-3 updater item and
 > is not implemented** — `shell/src-tauri/src/updater.rs` is an unwired stub.
 
@@ -1100,9 +1102,9 @@ three bars — persona fit (§5), full compatibility with every safety invariant
 > trust-suppressed. It is not a default tool in any profile, which is the non-goal
 > in §4 that still holds. **Scheduling** is reconciled rather than repealed: Addison
 > may *author* OS-run automation behind a user-typed keyword — a per-automation
-> nonce Addison shows and the person retypes (Phase-2 step 8, **COMPLETE 2026-08-07**
-> — all four phases: the fence, authoring as inert drafts, the gate and arming, and
-> state honesty), but **G2** — Addison never triggers itself — is a floor and does not
+> nonce Addison shows and the person retypes (Phase-2 step 8, **COMPLETE**: the
+> fence, authoring as inert drafts, and the gate and arming on 2026-08-07, then
+> state honesty on 2026-08-08), but **G2** — Addison never triggers itself — is a floor and does not
 > move: the OS runs the job and `RunAtLoad` is never set, so arming itself causes no
 > run. Multi-agent orchestration is unchanged and still deferred.
 
@@ -1142,13 +1144,14 @@ track (post-greenlight):
    mode-scoped (OPEN under workspace-trust; SAFE admission **deferred**, since MCP
    is Developer-only for v1). **DONE FOR v1 — phases 1–4 of five, 2026-08-06 to
    2026-08-07**; phase 5 is a recorded later option.
-8. **Automation keyword gate** + author-OS-run automation (§4, §9). **COMPLETE — all
-   four phases shipped 2026-08-07**: the fence, authoring as inert drafts, the gate
-   and arming, and state honesty + Simple's disabled rows.
+8. **Automation keyword gate** + author-OS-run automation (§4, §9). **COMPLETE —
+   phases 1–3 shipped 2026-08-07** (the fence, authoring as inert drafts, the gate
+   and arming) **and phase 4 on 2026-08-08** (state honesty + Simple's disabled rows).
 
 **[`../ROADMAP.md`](../ROADMAP.md) owns status** — this list is the *order*. Steps
-6–8 are also the prerequisites for the Phase-3 **review surface**
-(`docs/phase-3-review-surface-plan.md`) — see the Phase-3 note above.
+6–8 were also the prerequisites for the Phase-3 **review surface**
+(`docs/phase-3-review-surface-plan.md`), which was built 2026-08-08 — see the
+Phase-3 note above.
 
 Steps 3–4 are companion-facing and independent of the harness, so they can run in
 parallel with 5–8 once 1–2 land. Each step stays independently testable behind the
@@ -1228,11 +1231,12 @@ built-in schedulers).
 **Amended 2026-07-20 — open questions from the butler amendment (to resolve during
 the docs/spec update; all Phase-2).**
 
-*(Status 2026-08-07: of the eight below, **10, 11, 12, 15 and 16 are resolved** and
-**13 is half-resolved**, each with its reasoning recorded inline and in amendment
-§13 — do not reopen them. **9 and 14 are genuinely still open**; 9 belongs to step 8,
-which is not started, and 14 belongs to step 7, which is done for v1 and was
-unblocked by deferring 14 rather than answering it.)*
+*(Status 2026-08-08: of the eight below, **9, 10, 11, 12, 15 and 16 are resolved**
+and **13 is half-resolved**, each with its reasoning recorded inline and in
+amendment §13 — do not reopen them. 9 was answered by the owner on 2026-08-07 and
+built as step 8 the same day; see its own entry. **14 is the one genuinely still
+open**, and it belongs to step 7, which is done for v1 and was unblocked by
+deferring 14 rather than answering it.)*
 
 9. ~~**Keyword-gate syntax**~~ — **RESOLVED 2026-08-07 (owner).** Not a fixed
    prefix (`!run`, `arm:`…) but a **per-automation nonce**: Addison shows a short

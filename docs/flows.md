@@ -16,7 +16,8 @@
 > 8 phase 3** (2026-08-07). One thing is still unbuilt and is marked where it appears:
 > inside the now mostly-shipped **flow 13**, the code-backed widget branch. **Flow 15** (MCP, step 7)
 > is real code as of 2026-08-07, when phases 1–4 of five landed; the names in it are
-> the ones in the modules. The `reason` slugs quoted throughout are entries of the
+> the ones in the modules. **Flow 16** is not the amendment's at all — it is Phase 3's
+> Developer review surface, added when that shipped (2026-08-08). The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
 > around them is not.
 
@@ -688,3 +689,79 @@ sequenceDiagram
 reach SAFE. The durable record of what happened is the `tool_audit` row, which is written
 on every outcome including the refusals — a call that was forbidden, one the gate said yes
 to that never landed, and one naming a tool nothing is registered under.
+
+## 16. The review surface — seeing an edit, and putting one file back
+
+**Phase 3, the Developer review surface — BUILT 2026-08-08**
+([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns the build).
+It belongs here for the reason this document exists: it crosses all three process
+boundaries on every action, and **none of it is a registry tool**. A person clicking
+a folder open is not the model acting, so the whole surface is `workspace.*` RPC —
+routing it through the registry would hand the model a directory-listing capability
+as a side effect and put a permission card in front of a click somebody just made.
+The model gains **nothing** from this flow.
+
+```mermaid
+sequenceDiagram
+    participant WV as React webview (CodeSurface / useCodeReview)
+    participant SRV as Core server (WorkspaceMixin)
+    participant FRM as FileRevertManager
+    participant ST as Store (action_snapshots)
+    participant SH as Rust shell (filesystem.rs)
+
+    Note over WV,SRV: browsing — Developer/Custom only, one resolution per call
+    WV->>SRV: workspace.listDirectory {directory}
+    SRV->>SH: shell.listWorkspaceDirectory
+    SH-->>SRV: entries (kind, size); a target outside the root is marked escaping
+    SRV-->>WV: {directory, root, entries, truncated}
+    WV->>SRV: workspace.readFile {path}
+    SRV->>SH: shell.readWorkspaceFileForView
+    SRV-->>WV: {content, bytes, truncated}
+
+    Note over WV,SRV: the CHANGES list — metadata only, newest first
+    WV->>SRV: workspace.listEdits
+    SRV->>FRM: pending_edits(limit=200)
+    FRM->>ST: unreverted write_project_file rows, grouped per file
+    ST-->>FRM: rows
+    FRM-->>SRV: PendingEdits(edits, truncated)
+    SRV->>SH: shell.canRestoreWorkspaceFiles + shell.digestWorkspaceFiles
+    Note over SH: two BATCH queries, no writes:<br/>is this still in the session ledger,<br/>and does disk still match what Addison wrote
+    SRV-->>WV: edits + revertable + onDiskChanged (true / false / null)
+
+    WV->>SRV: workspace.readEditDiff {path}
+    Note over SRV: BEFORE from the OLDEST unreverted row,<br/>AFTER read from disk now — never the intermediate write
+    SRV-->>WV: {before, after, beforeTruncated, afterTruncated}
+
+    Note over WV,SRV: putting it back — two-step inline confirm, never a dialog
+    WV->>SRV: workspace.revertFile {path}
+    SRV->>FRM: revert_path(resolved)
+    FRM->>ST: the whole unreverted chain for that file
+    FRM->>SH: shell.restoreWorkspaceFile — ONE write, computed once
+    FRM->>ST: mark_snapshots_reverted (write first, mark second)
+    FRM-->>SRV: FileRevertResult
+    SRV-->>WV: {ok, path, detail}
+```
+
+Four things the diagram cannot show:
+
+- **`FileRevertManager` is a THIRD mechanism, beside `UndoManager` and
+  `SnapshotManager`, and deliberately so.** Undo is LIFO and per-action; this is
+  out-of-order and per-file. It holds a store and a shell bridge and **nothing else**
+  — no registry, no `UndoManager`, no policy — which makes "never touch the redo
+  stack" structural rather than a rule somebody has to remember.
+  [`classes.md`](classes.md) draws it; `agent_core/snapshots/file_revert.py` owns the
+  semantics.
+- **Confinement and the mode gate live at the RPC layer**, exactly as they do for
+  every other path that reaches the filesystem — `workspace.*` refuses outside OPEN
+  and outside a currently-trusted root, on every call. Nothing the tree drew is a
+  boundary: a row marked as escaping is drawn dimmed and inert, and the refusal that
+  matters is the core's on the next call.
+- **A restart makes an edit read-only rather than broken.** `revertable` comes from
+  the shell's own session ledger, which does not survive a quit — so the row keeps
+  its BEFORE text and says it cannot put the file back, and `undo.undoLastAction`
+  asks the same question before it attempts, so neither control is offered and then
+  fails.
+- **One window (200 rows) serves the list, the diff and the revert**, so the three
+  cannot disagree about where a chain begins. Rows arrive newest-first, so anything
+  outside the window is strictly older: a truncated chain still lands on a real
+  earlier state, and leftovers can only move a file further back, never forward.

@@ -258,6 +258,31 @@ classDiagram
         +binary_ref
         +created_in_mode
     }
+    class FileRevertManager {
+        +pending_edits(limit) PendingEdits
+        +revert_path(path) FileRevertResult
+    }
+    class PendingEdits {
+        +edits
+        +truncated
+    }
+    class FileEdit {
+        +path
+        +snapshot_ids
+        +writes
+        +created
+        +first_written_at
+        +last_written_at
+        +before
+        +wrote_sha256
+    }
+    class FileRevertResult {
+        +ok
+        +path
+        +detail
+        +snapshot_ids
+        +deleted
+    }
 
     Profile --> PolicyMode
     GuardConfig ..> Profile
@@ -267,6 +292,10 @@ classDiagram
     WorkspaceTrustRow --> Store
     SnapshotManager ..> ConfigSnapshot
     SnapshotManager --> Store
+    FileRevertManager --> Store
+    FileRevertManager ..> PendingEdits
+    PendingEdits "1" *-- "many" FileEdit
+    FileRevertManager ..> FileRevertResult
 ```
 
 `mode_for_profile` is a module function in `policy.py`, not a `GuardConfig` member:
@@ -289,6 +318,25 @@ there is nothing for a widget to declare and nothing to map. The widget validato
 takes the `PolicyMode` itself, and where a widget invokes a tool the tier check is
 `registry.visible_tools(mode)` — never a second risk model. Keep the box only as a
 record of the design that was considered.
+
+**`FileRevertManager` is the THIRD reversal mechanism**, beside `UndoManager` (§ Core
+orchestration) and `SnapshotManager` above, and it is drawn as its own cluster because
+that is what it is — `agent_core/snapshots/file_revert.py`, shipped with the Phase-3
+review surface on 2026-08-08. The division: `UndoManager` is **LIFO and per action**,
+`SnapshotManager` is **whole-config and point-in-time**, and this is **per file and
+out of order** — "put *this* file back", which neither of the other two can express.
+It reads unreverted `write_project_file` rows from `action_snapshots`, collapses the
+chain for one file into a single `FileEdit`, and puts that file back in **one** shell
+write computed from the oldest row (never N replayed undos, which would put
+intermediate states on disk and could strand the file mid-chain). It holds a `Store`
+and a shell bridge and **nothing else** — no registry, no `UndoManager`, no policy —
+so "never touch the redo stack" is structural rather than remembered, and confinement
+and the mode gate stay where every other filesystem path has them, at the RPC layer
+(`rpc/workspace.py`; [`flows.md`](flows.md) flow 16 draws the round trip).
+`revert_key` is a module function, not a member: `normpath(realpath(path))`, and
+deliberately **not** `policy._canonical`, whose unconditional casefold would merge
+two spellings of one name — differing only in case, and genuinely two different files
+on a case-sensitive volume — into a single revert target. This path writes bytes.
 
 `SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the

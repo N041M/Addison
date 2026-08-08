@@ -1663,7 +1663,7 @@ and tested but rendered nowhere — now wired through a `useOffers` hook mirrori
 the widget propose→card→confirm flow, triggered off the USER's text only (the
 model's reply must never arm a card; the core enforces the same rule). The Google
 free-tier line was an `<a href target="_blank">` **that could not open anything** —
-the Rust shell registers exactly three commands for the webview and none is
+the Rust shell registers exactly four commands for the webview and none is
 `openExternal`, and `Markdown.tsx` states the standing rule that the webview never
 opens URLs itself. Its test asserted the `href` and passed while the control was
 dead. Now selectable mono text the person can copy, with a test pinning the absence
