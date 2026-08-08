@@ -333,22 +333,40 @@ class Store:
     def prune_action_snapshots(self, cutoff: int, keep_last: int) -> None:
         """Retention for the action-rewind window (spec §4.5).
 
-        Semantics: a snapshot is deleted only when it is BOTH older than
-        ``cutoff`` (its ``created_at`` epoch seconds is strictly less) AND not
-        among the ``keep_last`` most recent snapshots. The two conditions are
-        ANDed, so the most-recent ``keep_last`` are always retained regardless of
-        age (they can never satisfy the delete), and a snapshot newer than
-        ``cutoff`` is always retained regardless of how many exist. This is the
-        "20 actions OR 7 days" floor from §4.5: whichever keeps *more* wins.
+        **Reverted rows only** — owner decision 2026-08-08, adopting the
+        recommendation in ``docs/phase-3-review-surface-plan.md`` prerequisite 3.
+        An UNREVERTED row is not history: it describes a change that is still on
+        disk, and its ``undo_payload`` is the only way back from it. Deleting one
+        makes a live change both unlistable and unrevertable, which is precisely
+        what the Developer review surface will offer per file — so retention may
+        collect what has already been undone and nothing else.
 
-        "Most recent" uses the same (created_at, rowid) ordering as
-        ``recent_unreverted_snapshots``, and — being pure disk retention — spans
-        both reverted and unreverted rows. ``keep_last = 0`` disables the
-        recency floor (LIMIT 0 selects no rows), pruning purely by ``cutoff``."""
+        Semantics for the rows it does touch: a reverted snapshot is deleted only
+        when it is BOTH older than ``cutoff`` (its ``created_at`` epoch seconds is
+        strictly less) AND not among the ``keep_last`` most recent REVERTED
+        snapshots. The two conditions are ANDed, so the most-recent ``keep_last``
+        reverted rows are always retained regardless of age (they can never
+        satisfy the delete), and a reverted snapshot newer than ``cutoff`` is
+        always retained regardless of how many exist. This is the "20 actions OR
+        7 days" floor from §4.5: whichever keeps *more* wins.
+
+        Both halves of the recency arm are scoped the same way — the keep-set is
+        computed over reverted rows, not over the whole table — so a burst of live
+        edits can never push older reverted rows out of the window. "Most recent"
+        uses the same (created_at, rowid) ordering as
+        ``recent_unreverted_snapshots``. ``keep_last = 0`` disables the recency
+        floor (LIMIT 0 selects no rows), pruning reverted rows purely by
+        ``cutoff``.
+
+        The cost of the decision, stated rather than hidden: unreverted rows are
+        now bounded by nothing here. A surface that lists them bounds its own
+        query (the plan's third clause, deferred to that build) — retention is
+        not the place to solve it, because the only tool retention has is
+        deletion and deletion is the harm."""
         self._conn.execute(
             "DELETE FROM action_snapshots "
-            "WHERE created_at < ? AND id NOT IN ("
-            "  SELECT id FROM action_snapshots "
+            "WHERE reverted = 1 AND created_at < ? AND id NOT IN ("
+            "  SELECT id FROM action_snapshots WHERE reverted = 1 "
             "  ORDER BY created_at DESC, rowid DESC LIMIT ?"
             ")",
             (cutoff, keep_last),
@@ -1669,8 +1687,9 @@ class Store:
           * ``undeletable = 0``      (anchors AND genesis never prune), AND
           * it is not among the newest TWO ``verified_working = 1`` rows.
 
-        The first two mirror ``prune_action_snapshots`` ("whichever keeps MORE
-        wins"). The last two are load-bearing on the floor rather than
+        The first two mirror ``prune_action_snapshots``'s age/recency AND
+        ("whichever keeps MORE wins") — not its reverted-only scope, which is
+        specific to live-change rows. The last two are load-bearing on the floor rather than
         housekeeping: pruning the last verified rows would leave
         ``restore_last_working()`` with no target, i.e. G3 silently off.
 
