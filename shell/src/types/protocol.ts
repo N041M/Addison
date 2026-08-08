@@ -117,6 +117,27 @@ export const Method = {
   WorkspaceList: "workspace.list",
   WorkspacePickDirectory: "workspace.pickDirectory",
 
+  // Looking at what is in a trusted folder — the review surface's read paths
+  // (Phase 3). `listDirectory` answers ONE level of a folder you have trusted;
+  // `readFile` answers one file's text so it can be shown, never changed. Nothing
+  // here writes, and nothing here is a thing Addison can decide to do: these answer
+  // a click you just made, which is why they are plain requests and not tools the
+  // model can reach for — and why they raise no permission card.
+  //
+  // Both are Developer/Custom only. Trusting a folder does not expire when you
+  // switch to Simple, so the core refuses these outside Developer rather than
+  // trusting the window to stop asking.
+  //
+  // Nothing is hidden from a listing — `.git` and `node_modules` are there like
+  // everything else, because a file tree that quietly leaves things out is worse
+  // than none. A shortcut that points somewhere outside the folder you trusted is
+  // marked (`escapes`) so it can be shown for what it is; opening it is refused by
+  // the core, not by that mark. A very large folder answers with its first 500
+  // entries by name and says it did (`truncated`); a very large file is shown from
+  // the start and says how big it really is. Mirrored in protocol.py.
+  WorkspaceListDirectory: "workspace.listDirectory",
+  WorkspaceReadFile: "workspace.readFile",
+
   // MCP servers — the external tool servers Addison consumes as a client (Phase-2
   // step 7, phases 1–4 of five). `refresh` connects, lists the server's tools, and
   // registers each one namespaced and Developer-only: absent from the SAFE view and
@@ -206,6 +227,10 @@ export const Method = {
   ShellReadWorkspaceFile: "shell.readWorkspaceFile",
   ShellRestoreWorkspaceFile: "shell.restoreWorkspaceFile",
   ShellPickDirectory: "shell.pickDirectory",
+  // The review surface's read paths (Phase 3). Reached only from the core's
+  // `workspace.listDirectory` / `workspace.readFile`, never from here.
+  ShellListWorkspaceDirectory: "shell.listWorkspaceDirectory",
+  ShellReadWorkspaceFileForView: "shell.readWorkspaceFileForView",
   ShellRunCommand: "shell.runCommand",
   // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
   // from typed fields and never accepts a document (plan §5.8).
@@ -341,6 +366,67 @@ export interface Automation {
    * disagree, dispatch wins.
    */
   unavailable?: ArtifactUnavailable;
+}
+
+/**
+ * One row of a `workspace.listDirectory` answer — the review surface's file tree
+ * (Phase-3 plan Build §1). HAND-SYNCED with `_workspace_list_directory` in
+ * agent_core/rpc/workspace.py, and pinned against the generated
+ * shell/src/__tests__/fixtures/workspace.listDirectory.json.
+ *
+ * TYPES ONLY for now: §1 ships the read paths, and the screen that renders them is
+ * §4. A consumer added here before then would be a parser with nothing to parse.
+ */
+export interface WorkspaceEntry {
+  /** The entry's own name — never a path. The parent is the listing's `directory`. */
+  name: string;
+  /**
+   * What it IS on disk, read WITHOUT following links: a shortcut is "symlink" and
+   * never the kind of the thing it points at. That distinction is the whole reason
+   * this field exists — a link to somewhere else must not render as a folder the
+   * person can open, because they would open it before anything refused.
+   */
+  kind: "file" | "directory" | "symlink" | "other";
+  /** The entry's own size in bytes, as the OS reports it. A link's own, never its target's. */
+  size: number;
+  /**
+   * True when this entry resolves OUTSIDE the folder that was trusted. An honesty
+   * affordance — dim it, say it points outside — and never the boundary: opening it
+   * is refused by the core's own check, which is the same predicate that computed
+   * this. Treating it as the guard would put the boundary in the window.
+   */
+  escapes: boolean;
+}
+
+/** A `workspace.listDirectory` answer. One level, never recursive. */
+export interface WorkspaceListing {
+  /** The folder that was listed, as the core RESOLVED it (links and `~` collapsed). */
+  directory: string;
+  /** The trusted root it sits under, when one can be named. Display only. */
+  root: string | null;
+  entries: WorkspaceEntry[];
+  /**
+   * True when the folder holds more than the listing carries — a very large folder
+   * answers with its first entries by name. Say so in the UI: a listing that is
+   * quietly incomplete is indistinguishable from a file that is not there.
+   */
+  truncated: boolean;
+}
+
+/** A `workspace.readFile` answer — text to SHOW, never to edit. */
+export interface WorkspaceFileView {
+  /** The file, as the core RESOLVED it. */
+  path: string;
+  /** The trusted root it sits under, when one can be named. Display only. */
+  root: string | null;
+  content: string;
+  /**
+   * The file's size on disk — NOT the length of `content`. They differ exactly when
+   * `truncated` is true, which is when the difference is the thing worth showing.
+   */
+  bytes: number;
+  /** True when `content` is the beginning of a larger file, cut on a character boundary. */
+  truncated: boolean;
 }
 
 export interface ActivityUpdate {

@@ -138,7 +138,18 @@ mod tests {
 
     #[test]
     fn rejects_shell_methods_from_the_webview() {
-        for m in ["shell.saveNewFile", "shell.pickFile", "shell.readClipboard"] {
+        for m in [
+            "shell.saveNewFile",
+            "shell.pickFile",
+            "shell.readClipboard",
+            // The review surface's read paths (phase-3 plan Build §1). The window
+            // renders the file tree, so the window is exactly what must not be able to
+            // ask for a directory listing or a file's bytes directly: it goes through
+            // the core's `workspace.*` RPC, which mode-gates, resolves once and checks
+            // the trusted root before any of this is reached.
+            "shell.listWorkspaceDirectory",
+            "shell.readWorkspaceFileForView",
+        ] {
             let frame = json!({ "jsonrpc": "2.0", "method": m, "id": 1 });
             assert!(
                 validate_outbound_frame(&frame).is_err(),

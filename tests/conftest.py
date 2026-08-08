@@ -143,11 +143,19 @@ class ShellBridgeStubs:
     def disarm_automation(self, label: str) -> dict:
         raise NotImplementedError
 
-    # The three the SERVER calls, rather than the tools (see ServerShellBridge).
+    # The ones the SERVER calls, rather than the tools (see ServerShellBridge) —
+    # including the review surface's two read paths, which are deliberately absent
+    # from the tool-facing Protocol (tools/base.py says why).
     def bind_sender(self, send) -> None:
         pass
 
     def list_armed(self) -> dict:
+        raise NotImplementedError
+
+    def list_workspace_directory(self, path: str) -> dict:
+        raise NotImplementedError
+
+    def read_workspace_file_for_view(self, path: str) -> dict:
         raise NotImplementedError
 
     def get_app_build_ref(self) -> dict:

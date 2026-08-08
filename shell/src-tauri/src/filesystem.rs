@@ -8,7 +8,7 @@
 // a native dialog or scoped to a handle/path the shell itself minted this session.
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -106,6 +106,37 @@ const READ_SIZE_BOUND: u64 = 256 * 1024;
 /// Kept a whole number of MB: the sentence names it in MB and derives it from here.
 const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
 
+/// How much of one file the read-only VIEWER may show (`shell.readWorkspaceFileForView`,
+/// the review surface's file pane — phase-3 plan Build §1).
+///
+/// A DERIVATION, deliberately, where `READ_SIZE_BOUND` above is deliberately not one:
+/// this bound exists so that **any file Addison could have edited is a file the viewer
+/// can show whole**. The write path refuses a prior larger than `UNDO_SIZE_BOUND`, so
+/// tying the viewer to that same number is the property, not a coincidence — if the undo
+/// bound ever moves, this must move with it or the surface starts truncating diffs of
+/// edits it is showing a person in order to ask "shall I put this back?".
+///
+/// TRUNCATION, never a refusal — the OPPOSITE of every other ceiling in this file, and
+/// the asymmetry is the point. The tool must refuse (a harness that reads half a file and
+/// then rewrites it from what it saw destroys the tail); the viewer must truncate and say
+/// so (a person looking at the first 256 KB of a lockfile has lost nothing, and a refusal
+/// would leave them with an empty pane and no way to look).
+const VIEW_SIZE_BOUND: usize = UNDO_SIZE_BOUND;
+
+/// How many entries one directory listing may carry (`shell.listWorkspaceDirectory`).
+///
+/// CAPPED HERE, in the shell, for `UNDO_SIZE_BOUND`'s reason: this is where the bytes
+/// are. A 200k-entry `node_modules` is a multi-megabyte SINGLE LINE on a line-delimited
+/// channel, and `agent_process.rs` reads the core's side with an uncapped
+/// `BufReader::lines()` — the same wedge every ceiling in this file exists to prevent,
+/// arriving through a folder rather than a file.
+const MAX_DIR_ENTRIES: usize = 500;
+
+/// Worded once because two read paths raise it: the tool's read and the viewer's. The
+/// person must not be able to tell which one refused, and neither of them can show a
+/// file that is not text.
+const NOT_TEXT_TO_READ: &str = "That file isn't a text file, so Addison can't read it here.";
+
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
 pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, RpcError> {
@@ -123,6 +154,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.readWorkspaceFile" => read_workspace_file(params),
         "shell.restoreWorkspaceFile" => restore_workspace_file(app, params),
         "shell.pickDirectory" => pick_directory(app).await,
+        // The review surface's READ paths (phase-3 plan Build §1). A person clicking a
+        // folder is not the model acting, so these are reached from a `workspace.*` RPC
+        // and never from a registry tool — the core confines which paths arrive
+        // (mode gate, resolve once, trusted-root check), exactly as it does for the two
+        // above, and the shell keeps its own independent floor underneath.
+        "shell.listWorkspaceDirectory" => list_workspace_directory(params),
+        "shell.readWorkspaceFileForView" => read_workspace_file_for_view(params),
         // NOTE: `shell.runCommand` is deliberately NOT routed here. It is OPEN-mode
         // command execution (step 5.5, items 1+2) and it lands in the shell for the
         // same reason the workspace file methods do — this is the process with OS
@@ -370,8 +408,140 @@ fn read_workspace_path(path: &Path) -> Result<Value, RpcError> {
     refuse_oversize_read(bytes.len() as u64)?;
     match String::from_utf8(bytes) {
         Ok(text) => Ok(json!({ "content": text })),
-        Err(_) => Err(RpcError::app("That file isn't a text file, so Addison can't read it here.")),
+        Err(_) => Err(RpcError::app(NOT_TEXT_TO_READ)),
     }
+}
+
+// shell.listWorkspaceDirectory {path} -> {entries: [{name, kind, size}], truncated}
+//
+// ONE LEVEL, never recursive: the surface expands a folder when a person opens it, and
+// a depth knob is how a full repo walk gets requested by accident (phase-3 plan §1).
+fn list_workspace_directory(params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A folder path is required.")?);
+    list_workspace_path(&path)
+}
+
+fn list_workspace_path(path: &Path) -> Result<Value, RpcError> {
+    refuse_addison_data_dir(path)?;
+    let reader = std::fs::read_dir(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => RpcError::app("That folder isn't there."),
+        _ => RpcError::app("Addison couldn't open that folder."),
+    })?;
+
+    // NAMES ONLY, and nothing is hidden. `.git` and `node_modules` are listed like
+    // everything else: hiding them is a lie about what is on disk, and telling the truth
+    // about what is on disk is this surface's only value. The UI renders them collapsed
+    // and never auto-expands, which is a rendering decision and belongs there.
+    let mut entries: Vec<(String, &'static str, u64)> = Vec::new();
+    for entry in reader.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        // `symlink_metadata`, NEVER `metadata`. Following the link would render
+        // `project/link -> ~/.ssh` as an ordinary expandable directory, and the person
+        // would click it before anything refused. The link's own kind is the honest
+        // answer, and `size` is the link's own size for the same reason — never the
+        // target's, which this call deliberately never looks at.
+        let (kind, size) = match std::fs::symlink_metadata(entry.path()) {
+            Ok(meta) => (kind_of(&meta), meta.len()),
+            // A name the OS will not describe is still a name that is there. Saying so
+            // is more honest than dropping the row, and "other" is already the value for
+            // everything that is not a file, a folder or a link.
+            Err(_) => ("other", 0),
+        };
+        entries.push((name, kind, size));
+    }
+
+    // Sorted BEFORE the cap, so a truncated listing is "the first 500 by name" rather
+    // than "500 the OS happened to hand back first" — the same folder must answer the
+    // same way twice, or a person cannot tell a missing file from an unlucky one. The
+    // full name list is collected to do it; that is bounded by the directory's own
+    // entries and is a fraction of the serialized line the cap exists to prevent.
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    let truncated = entries.len() > MAX_DIR_ENTRIES;
+    entries.truncate(MAX_DIR_ENTRIES);
+
+    let listed: Vec<Value> = entries
+        .into_iter()
+        .map(|(name, kind, size)| json!({ "name": name, "kind": kind, "size": size }))
+        .collect();
+    Ok(json!({ "entries": listed, "truncated": truncated }))
+}
+
+/// What one directory entry IS, from metadata that did not follow the link.
+/// `symlink` is a kind of its own rather than a flag on a file, because the whole
+/// point is that the surface must not present it as the thing it points at.
+fn kind_of(meta: &std::fs::Metadata) -> &'static str {
+    let file_type = meta.file_type();
+    if file_type.is_symlink() {
+        "symlink"
+    } else if file_type.is_dir() {
+        "directory"
+    } else if file_type.is_file() {
+        "file"
+    } else {
+        "other"
+    }
+}
+
+// shell.readWorkspaceFileForView {path} -> {content, bytes, truncated}
+//
+// ITS OWN METHOD, not a flag on `shell.readWorkspaceFile`, because the tool and the
+// viewer want OPPOSITE semantics for an oversize file (see `VIEW_SIZE_BOUND`): the tool
+// refuses, the viewer truncates and says so. One method with a mode switch would be one
+// edit away from handing the model a truncated file.
+fn read_workspace_file_for_view(params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    read_workspace_view(&path)
+}
+
+fn read_workspace_view(path: &Path) -> Result<Value, RpcError> {
+    refuse_addison_data_dir(path)?;
+    // The size is asked FIRST, exactly as every other read path here asks it — but this
+    // one is not deciding a refusal with it, so it is not load-bearing for the wedge:
+    // the read below is bounded by `take` no matter what metadata claims, which is the
+    // stronger version of the same property (a file that grows between the two calls
+    // cannot cost this process more than one extra byte). What metadata buys is the
+    // HONEST `bytes`: how big the file actually is, which a truncated read cannot say
+    // and which is the number the person needs to know how much is not shown.
+    let on_disk = size_on_disk(path);
+    let file = std::fs::File::open(path).map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => RpcError::app("That file isn't there."),
+        _ => RpcError::app("Addison couldn't read that file."),
+    })?;
+    let mut bytes: Vec<u8> = Vec::new();
+    // BOUND + 1: the one extra byte is what tells a file exactly AT the bound apart from
+    // one over it, without reading a byte more of the one that is over.
+    file.take(VIEW_SIZE_BOUND as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| RpcError::app("Addison couldn't read that file."))?;
+
+    let truncated = bytes.len() > VIEW_SIZE_BOUND;
+    if truncated {
+        bytes.truncate(char_boundary(&bytes, VIEW_SIZE_BOUND));
+    }
+    // What the file IS, not what came back — the two differ exactly when `truncated` is
+    // true, which is when the difference is the thing worth saying. `None` means the OS
+    // would not answer, and then the honest number is the one we hold.
+    let total = on_disk.unwrap_or(bytes.len() as u64);
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(json!({ "content": text, "bytes": total, "truncated": truncated })),
+        // Binary detection needs no new code and no new sentence: the decode already
+        // fails, and the refusal a person reads is the one the tool's read gives them.
+        Err(_) => Err(RpcError::app(NOT_TEXT_TO_READ)),
+    }
+}
+
+/// The largest cut at or below `at` that does not fall INSIDE a character.
+///
+/// A byte cut through a multi-byte character turns a text file into a binary one:
+/// `String::from_utf8` then fails on a perfectly ordinary source file, and the viewer
+/// reports it as unreadable for no reason except that it was big. Walking back over
+/// UTF-8 continuation bytes (`10xxxxxx`) costs at most three steps.
+fn char_boundary(bytes: &[u8], at: usize) -> usize {
+    let mut cut = at.min(bytes.len());
+    while cut > 0 && cut < bytes.len() && (bytes[cut] & 0b1100_0000) == 0b1000_0000 {
+        cut -= 1;
+    }
+    cut
 }
 
 /// The read ceiling, refused in plain language. The size is named in the sentence
@@ -1186,8 +1356,21 @@ mod tests {
         // is the third and it is one list, not a second mechanism beside it: a path
         // that grows a bound later must join this loop, and a name that counted the
         // members would quietly stop being a place to add one.
+        //
+        // The VIEWER's read (`read_workspace_view`) is the fourth, and it carries its
+        // own marker because it never calls `fs::read` at all: it opens the file and
+        // `take`s a bounded number of bytes, which is the STRONGER version of the same
+        // property — metadata can be stale, a `take` cannot. The pin still asks the same
+        // question of it (is the size consulted before the file is opened?), because the
+        // answer it gets from metadata is what `bytes` reports, and a `bytes` computed
+        // after a truncated read would quietly describe the truncation instead of the file.
         let source = include_str!("filesystem.rs");
-        for name in ["fn read_workspace_path", "fn capture_prior_text", "fn read_scoped_handle"] {
+        for (name, opens_with) in [
+            ("fn read_workspace_path", "std::fs::read("),
+            ("fn capture_prior_text", "std::fs::read("),
+            ("fn read_scoped_handle", "std::fs::read("),
+            ("fn read_workspace_view", "std::fs::File::open("),
+        ] {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} must exist"));
             let rest = &source[start..];
             let end = rest.find("\n}\n").unwrap_or_else(|| panic!("{name} must be closed"));
@@ -1197,13 +1380,217 @@ mod tests {
                 .find("size_on_disk")
                 .unwrap_or_else(|| panic!("{name} must ask the file's size:\n{body}"));
             let read = body
-                .find("std::fs::read(")
-                .unwrap_or_else(|| panic!("{name} must read the file:\n{body}"));
+                .find(opens_with)
+                .unwrap_or_else(|| panic!("{name} must read the file ({opens_with}):\n{body}"));
             assert!(
                 sized < read,
                 "{name} must judge the size BEFORE reading the bytes:\n{body}"
             );
         }
+    }
+
+    // --- The review surface's read paths (phase-3 plan Build §1). The core confines
+    // WHICH paths reach these (mode gate, resolve once, trusted-root check); these tests
+    // drive the shell's own half against a real temp directory.
+
+    fn temp_dir_path() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("addison-view-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("seed temp dir");
+        dir
+    }
+
+    #[test]
+    fn listing_a_directory_caps_at_five_hundred_entries_and_says_it_truncated() {
+        // A 200k-entry `node_modules` listing is a multi-megabyte SINGLE LINE on a
+        // line-delimited channel that `agent_process.rs` reads with an uncapped
+        // `BufReader::lines()`. Delete the `truncate` and this returns 501 rows — the
+        // mutation this exists to catch — and `truncated: false` would be the lie
+        // underneath it: a person cannot tell a missing file from an unlucky one unless
+        // the payload says some are missing.
+        let dir = temp_dir_path();
+        for i in 0..(MAX_DIR_ENTRIES + 1) {
+            // Zero-padded so the byte ordering the handler sorts by is also the numeric
+            // one — this test asserts WHICH 500 came back, not merely how many.
+            std::fs::write(dir.join(format!("f{i:04}.txt")), "x").expect("seed entry");
+        }
+
+        let result = list_workspace_path(&dir).unwrap();
+        let entries = result.get("entries").and_then(Value::as_array).expect("entries");
+        assert_eq!(entries.len(), MAX_DIR_ENTRIES, "the cap is the cap");
+        assert_eq!(result.get("truncated").and_then(Value::as_bool), Some(true));
+        // Sorted before the cap: the same folder answers the same way twice.
+        assert_eq!(entries[0].get("name").and_then(Value::as_str), Some("f0000.txt"));
+        assert_eq!(
+            entries[MAX_DIR_ENTRIES - 1].get("name").and_then(Value::as_str),
+            Some("f0499.txt")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn listing_a_directory_under_the_cap_is_not_marked_truncated() {
+        // The half that keeps the flag honest: without it, `truncated: true` for every
+        // listing would pass the test above, and the UI would tell every person that
+        // every folder is incomplete.
+        let dir = temp_dir_path();
+        std::fs::write(dir.join("a.txt"), "x").expect("seed");
+
+        let result = list_workspace_path(&dir).unwrap();
+        assert_eq!(result.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(result.get("entries").and_then(Value::as_array).map(Vec::len), Some(1));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_symlink_is_listed_as_a_symlink_and_never_as_what_it_points_at() {
+        // THE NEW EXPOSURE, and the whole reason `symlink_metadata` is named in the
+        // plan. Swap it for `metadata` and `project/link -> somewhere-else` comes back
+        // `kind: "directory"` — an expandable folder the person clicks before anything
+        // refuses. The refusal is the core's follow-up check; this is what stops the
+        // surface from inviting the click in the first place.
+        //
+        // Nothing is hidden either: a dotfile directory is listed like everything else.
+        let dir = temp_dir_path();
+        let target = dir.join(".git");
+        std::fs::create_dir_all(&target).expect("seed target dir");
+        std::fs::write(dir.join("plain.txt"), "hello").expect("seed file");
+        std::os::unix::fs::symlink(&target, dir.join("link")).expect("plant the link");
+
+        let result = list_workspace_path(&dir).unwrap();
+        let entries = result.get("entries").and_then(Value::as_array).expect("entries");
+        let kind_of_name = |name: &str| -> String {
+            entries
+                .iter()
+                .find(|e| e.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(|e| e.get("kind").and_then(Value::as_str))
+                .unwrap_or("missing")
+                .to_string()
+        };
+        assert_eq!(kind_of_name("link"), "symlink", "a link must never render as its target");
+        assert_eq!(kind_of_name(".git"), "directory", "`.git` is listed, never hidden");
+        assert_eq!(kind_of_name("plain.txt"), "file");
+        // The size is the file's own; a link's is its own too, never the target's.
+        let plain = entries
+            .iter()
+            .find(|e| e.get("name").and_then(Value::as_str) == Some("plain.txt"))
+            .expect("plain.txt");
+        assert_eq!(plain.get("size").and_then(Value::as_u64), Some(5));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn listing_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // The shell's independent floor, on the new read path too — the core already
+        // refuses it, and that is exactly why this must not depend on the core.
+        let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+
+        let err = list_workspace_path(&data_dir).unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn the_viewer_refuses_the_addison_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let data_dir = std::env::temp_dir().join(format!("addison-dd-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let secret = data_dir.join("addison.sqlite3");
+        std::fs::write(&secret, "secret db bytes").expect("seed db");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", &secret);
+
+        let err = read_workspace_view(&secret).unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn the_viewer_shows_a_file_at_the_bound_whole_and_reports_its_size() {
+        // The half that keeps the truncation honest: a viewer that always truncated
+        // would pass the test below. At exactly the bound nothing is cut, `truncated` is
+        // false, and `bytes` is the file's real size.
+        let path = temp_path();
+        let at_bound = "a".repeat(VIEW_SIZE_BOUND);
+        std::fs::write(&path, &at_bound).expect("seed a file at the bound");
+
+        let result = read_workspace_view(&path).unwrap();
+        assert_eq!(result.get("truncated").and_then(Value::as_bool), Some(false));
+        assert_eq!(result.get("bytes").and_then(Value::as_u64), Some(VIEW_SIZE_BOUND as u64));
+        assert_eq!(
+            result.get("content").and_then(Value::as_str).map(str::len),
+            Some(at_bound.len()),
+            "a file at the bound must come back whole"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_viewer_truncates_on_a_char_boundary_and_never_through_a_character() {
+        // TRUNCATE AND SAY SO — the opposite of the tool's refusal, and the plan says
+        // why. The sharp edge is the CUT: a byte cut through a multi-byte character
+        // makes `String::from_utf8` fail, so an ordinary source file with an accent in
+        // it would be reported as "not a text file" purely because it was big. The seed
+        // puts a two-byte `é` straddling the bound exactly; delete the `char_boundary`
+        // walk-back and this returns that refusal instead of text.
+        let path = temp_path();
+        let mut content = "a".repeat(VIEW_SIZE_BOUND - 1);
+        content.push('é'); // its first byte is the last byte inside the bound
+        content.push_str(&"b".repeat(1024));
+        let raw = content.as_bytes().to_vec();
+        std::fs::write(&path, &raw).expect("seed a file straddling the bound");
+
+        let result = read_workspace_view(&path).unwrap();
+        assert_eq!(result.get("truncated").and_then(Value::as_bool), Some(true));
+        // `bytes` is the FILE, not the excerpt — the number that tells a person how much
+        // is not on screen. Computing it from the returned content would report the cut.
+        assert_eq!(result.get("bytes").and_then(Value::as_u64), Some(raw.len() as u64));
+        let text = result.get("content").and_then(Value::as_str).expect("text content");
+        assert_eq!(
+            text.len(),
+            VIEW_SIZE_BOUND - 1,
+            "the cut must step back off the character it would have split"
+        );
+        assert!(text.ends_with('a') && !text.contains('é'));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn the_viewer_refuses_a_file_that_is_not_text() {
+        // Binary detection is the decode that already exists, and the sentence is the
+        // one the tool's read already gives a person — worded once (NOT_TEXT_TO_READ),
+        // because two spellings of one refusal is how they drift.
+        let path = temp_path();
+        std::fs::write(&path, [0u8, 159, 146, 150]).expect("seed non-utf8");
+
+        let err = read_workspace_view(&path).unwrap_err();
+        assert_eq!(err.message, "That file isn't a text file, so Addison can't read it here.");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

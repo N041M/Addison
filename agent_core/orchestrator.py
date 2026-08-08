@@ -720,6 +720,20 @@ class Orchestrator:
             # exactly the rows the log exists for. The tool already answers this
             # question (tools/base.call_is_destructive); ask it.
             destructive = call_is_destructive(tool, call.args)
+            # THE PATH, RESOLVED ONCE FOR THE WHOLE CALL — the label's and the
+            # boundary's, one answer (KNOWN-GAPS, closed 2026-08-08 with the review
+            # surface's read paths). This used to sit down at the confinement branch,
+            # so every audit row above it that named a file re-resolved the path
+            # inside `permission_detail`, and a symlink swapped between the two could
+            # put a name on the card that was true only when it was read. Confinement
+            # still asks its own question below and still hands this value to
+            # `execute` (R6); what moved is only WHERE the single resolution happens,
+            # so that everything downstream of here can be handed it. Resolving costs
+            # a realpath and cannot raise (`call_affected_path` never does), so the
+            # refusal branches pay nothing for it that they were not already paying.
+            # None for every tool without an `affected_path` — run_command included —
+            # which is what leaves those tools completely unaffected.
+            affected = call_affected_path(tool, call.args)
             if dev_only_refusal is not None:
                 self._audit(conversation, call.tool_id, None, mode, destructive, "dev_only")
                 conversation.append_tool_result(
@@ -759,7 +773,7 @@ class Orchestrator:
                 # invisible outside the transcript today).
                 self._audit(
                     conversation, call.tool_id,
-                    call_permission_detail(tool, call.args), mode, destructive,
+                    call_permission_detail(tool, call.args, affected), mode, destructive,
                     "forbidden",
                 )
                 conversation.append_tool_result(
@@ -781,7 +795,7 @@ class Orchestrator:
             if arming_refusal is not None:
                 self._audit(
                     conversation, call.tool_id,
-                    call_permission_detail(tool, call.args), mode, destructive,
+                    call_permission_detail(tool, call.args, affected), mode, destructive,
                     "forbidden",
                 )
                 conversation.append_tool_result(
@@ -789,19 +803,17 @@ class Orchestrator:
                 )
                 continue
             # CONFINEMENT (step 5, D3): a path-bounded tool (non-None affected_path)
-            # may only ever run INSIDE a currently-trusted root. Resolve the path
-            # ONCE here; hard-refuse before the gate and before execute if it is not
-            # trusted (permission-to-touch, separate from the card). The resolved
-            # path rides on the context so execute acts on the exact path checked —
-            # never a re-read of args["path"] (R6, TOCTOU). affected_path is None for
-            # every non-path tool (run_command included), which resets resolved_path
-            # and leaves those tools completely unaffected.
-            affected = call_affected_path(tool, call.args)
+            # may only ever run INSIDE a currently-trusted root. Hard-refuse before
+            # the gate and before execute if it is not trusted (permission-to-touch,
+            # separate from the card). The path was resolved ONCE, above the refusal
+            # branches, and this checks THAT value; it then rides on the context so
+            # execute acts on the exact path checked — never a re-read of
+            # args["path"] (R6, TOCTOU).
             trusted = bool(affected) and self._trust_check(affected)
             if affected is not None and not trusted:
                 self._audit(
                     conversation, call.tool_id,
-                    call_permission_detail(tool, call.args), mode, destructive,
+                    call_permission_detail(tool, call.args, affected), mode, destructive,
                     "confined_out",
                 )
                 conversation.append_tool_result(
@@ -820,8 +832,10 @@ class Orchestrator:
             # Asked once and used twice, on purpose: the permission card and the
             # Activity Panel must describe the SAME call. Calling the tool's
             # permission_detail a second time could describe a different one if it ever
-            # stops being a pure read of args.
-            detail = call_permission_detail(tool, call.args)
+            # stops being a pure read of args. `affected` rides along for the same
+            # reason one step further down: a path tool's detail is made FROM the
+            # resolved path, and this is the value confinement just approved.
+            detail = call_permission_detail(tool, call.args, affected)
             # THE KEYWORD CARD'S PREVIEW (step 8 phase 3). None for every tool but
             # `arm_automation` — including `disarm_automation`, whose card is
             # ordinary because a tightening must never be something a code can trap

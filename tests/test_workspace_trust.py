@@ -56,10 +56,12 @@ from agent_core.snapshots import scope
 from agent_core.snapshots.snapshot_manager import SnapshotManager
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
+    UNRESOLVABLE_PATH,
     ActionSnapshot,
     RiskTier,
     ToolDefinition,
     ToolResult,
+    call_permission_detail,
 )
 from agent_core.tools.read_project_file import ReadProjectFileTool
 from agent_core.tools.registry import ToolRegistry
@@ -917,6 +919,16 @@ def test_a_turn_scoped_not_now_is_honoured_even_inside_a_trusted_folder(tmp_path
 # displayed name was the only thing standing there, and it named the decoy. The
 # review surface makes the disagreement visible (it renders the RESOLVED path), but
 # the defect is here, in what the person was told at the moment of the edit.
+#
+# **These now ask through ``call_permission_detail``, and that is the point rather than
+# a change of spelling.** The 2026-08-08 fix left a SECOND realpath — each tool asked
+# ``call_affected_path`` itself — so a symlink swapped between the label's resolution
+# and the boundary's could still put a stale name on the card. Closing that window
+# (KNOWN-GAPS, closed with the review surface's read paths) moved the single resolution
+# to the CALLER, which hands it in; the tools implement ``permission_detail_for_path``
+# and have no argument left to resolve a second time. Every property these two tests
+# pinned is unchanged and still pinned — they ask at the door the app uses instead of
+# reaching past it.
 
 
 def test_the_displayed_name_is_the_symlinks_target_not_the_link(tmp_path):
@@ -944,7 +956,9 @@ def test_the_displayed_name_is_the_symlinks_target_not_the_link(tmp_path):
     read_tool = ReadProjectFileTool()
     write_tool = WriteProjectFileTool()
     for tool in (read_tool, write_tool):
-        detail = tool.permission_detail({"path": str(link)})
+        # No resolved path supplied — the caller-less shape, which resolves exactly
+        # once here. The live loop supplies its own, asserted end to end below.
+        detail = call_permission_detail(tool, {"path": str(link)})
         assert detail is not None
         assert detail == "secrets.env", tool.definition.id
         assert detail != "notes.txt", tool.definition.id
@@ -992,13 +1006,17 @@ def test_a_name_that_cannot_be_resolved_is_no_name_rather_than_a_wrong_one(tmp_p
             "~addison_no_such_user_42/x.txt",   # RuntimeError out of expanduser()
             "", None, 42, {"not": "a path"},
         ]:
-            detail = tool.permission_detail({"path": bad})
+            detail = call_permission_detail(tool, {"path": bad})
             assert detail is None, (tool.definition.id, bad)
+            # And for a CALLER that resolved first and got nothing usable: the
+            # sentinel is exactly what confinement is handed for an unreadable
+            # argument, and it must never reach a screen or an audit row as a name.
+            assert call_permission_detail(tool, {"path": bad}, UNRESOLVABLE_PATH) is None
 
     # Not vacuous: the same call with a usable path still produces a name.
     target = tmp_path / "project" / "f.txt"
     target.parent.mkdir()
-    assert ReadProjectFileTool().permission_detail({"path": str(target)}) == "f.txt"
+    assert call_permission_detail(ReadProjectFileTool(), {"path": str(target)}) == "f.txt"
 
 
 # ============================================================================

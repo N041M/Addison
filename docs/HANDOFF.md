@@ -74,8 +74,26 @@ its own packaging-only definition since), the two sentences this wave strains ar
 answered where they live, the design mapping for a code surface is the last section of
 `design-brief-dark/IMPLEMENTATION.md`, and the manual pass is TESTING-CHECKLIST
 **§13c**. A `phase-3-includes-the-review-surface` row in `tests/doc_claims.py` now
-fails the suite on the sixth document to define Phase 3 as packaging alone. Start at
-the plan's **Build §1** (the read paths, RPC and never a registry tool).
+fails the suite on the sixth document to define Phase 3 as packaging alone.
+
+**Build §1 landed on 2026-08-08 — start at the plan's Build §2** (the diff, from data
+that already exists). §1 shipped the read paths: `workspace.listDirectory` and
+`workspace.readFile` as RPC and never registry tools, two Rust bridge methods beside
+the step-5 block, and the four-step confinement order (mode gate, resolve once,
+trusted-root check, pass only the resolved value). The plan's §1 now carries what
+shipped and the decisions taken while building it; the two worth knowing before §2 are
+that a refusal answers `{ok: false, error}` while a success carries no `ok` at all, and
+that these paths are **absolute-only** — `realpath` would otherwise quietly complete a
+relative path against the core process's working directory. There is no frontend
+consumer yet, on purpose: §1 shipped the TypeScript types and the generated fixtures so
+§4 has something to parse against.
+
+**And the name race closed with it** (KNOWN-GAPS): the card, the Activity Panel, the
+audit row and the effect now come from ONE resolution per call. A path-bounded tool
+implements `permission_detail_for_path(resolved_path)` — it no longer sees `args` at
+that seam, so it cannot resolve a second time — and the orchestrator and routine engine
+resolve above their refusal branches, which is where the second realpath actually lived:
+the denylist and arming rows name a file too, and they were re-resolving as well.
 
 Found while fixing it, and fixed with it: **`call_affected_path`'s except tuple did
 not name `RuntimeError`**, which is what `Path.expanduser()` raises for a `~someone`

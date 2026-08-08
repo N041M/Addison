@@ -220,6 +220,14 @@ _BRIDGE_CALLS = (
     ),
     ("disarm_automation", ("com.addison.auto.tidy",)),
     ("list_armed", ()),
+    # The review surface's read paths (Phase-3 plan Build §1). DEFAULT budget, and
+    # the classification is not a shrug: both are the shell answering out of its own
+    # process, with no person and no child in the way, and both are BOUNDED by
+    # construction — a listing is capped at 500 entries and a view read stops at
+    # 256 KiB. A minute of silence from either means the shell is wedged, which is
+    # exactly what the default budget is for.
+    ("list_workspace_directory", ("/tmp/project",)),
+    ("read_workspace_file_for_view", ("/tmp/project/a.py",)),
 )
 
 # The one call whose budget is neither the default nor the person-paced one: a

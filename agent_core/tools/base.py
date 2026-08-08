@@ -209,6 +209,20 @@ class ShellBridge(Protocol):
         state, so it answers ok rather than an error."""
         ...
 
+    # --- what is DELIBERATELY not here: the review surface's read paths ----
+    # ``shell.listWorkspaceDirectory`` and ``shell.readWorkspaceFileForView`` (Phase-3
+    # plan Build §1) exist on the bridge, and NOT on this Protocol, on purpose. This
+    # docstring's promise is "exactly the surface the v1 tools need — nothing broader",
+    # and those two are not for tools at all: they answer a person's click in the review
+    # surface, through the ``workspace.listDirectory`` / ``workspace.readFile`` RPC.
+    #
+    # Adding them here would do the two things the design exists to prevent. A tool
+    # able to list a directory IS a ``list_directory`` capability, handed to the model
+    # as a side effect of building a file tree; and a browse routed through the registry
+    # would raise a permission card in front of a folder somebody just opened. They are
+    # declared on ``shell_bridge.ServerShellBridge`` — the SERVER's contract — beside
+    # the other methods the server calls itself and no tool ever does.
+
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         """Undo-time restore for ``write_project_file``: put ``prior_content`` back at
         ``path`` (the bytes it overwrote), or DELETE the file when ``prior_content``
@@ -523,11 +537,27 @@ BROWSER_USER_AGENT = (
 MAX_PERMISSION_DETAIL_CHARS = 120
 
 
-def call_permission_detail(tool: Any, args: dict) -> str | None:
+def call_permission_detail(tool: Any, args: dict, resolved_path: str | None = None) -> str | None:
     """What exactly this call would do, in words the person will see.
 
     A tool may implement ``permission_detail(args) -> str``; None (the default)
     leaves the surface with just the tool's static label/description.
+
+    A PATH-BOUNDED tool implements ``permission_detail_for_path(resolved_path)``
+    INSTEAD, and never sees ``args`` here at all. That is the whole of the
+    2026-08-08 fix (KNOWN-GAPS, "the name on the card is resolved a SECOND time"):
+    the caller has ALREADY resolved this call's path for confinement, and it passes
+    that exact value in, so the label and the boundary are one resolution rather
+    than two. Two realpaths meant a symlink swapped between them could put a name on
+    the card that was true only when it was read — the label could lie while the
+    effect stayed correct, which is why it was a gap and not a hole.
+
+    The hook is a SECOND name rather than a second parameter on the first, so that a
+    path tool structurally cannot reach for ``args["path"]`` and resolve it again:
+    it is handed the answer and has nothing else to work from. ``resolved_path``
+    left None (a caller with no resolution of its own, e.g. the widget rail, whose
+    only tool has no ``affected_path`` at all) falls back to asking
+    ``call_affected_path`` here — still exactly one resolution for the call.
 
     TWO CONSUMERS, and the second one is the reason this needs reading carefully:
 
@@ -544,13 +574,28 @@ def call_permission_detail(tool: Any, args: dict) -> str | None:
     because a query string can carry whatever a page hid in it and would land in
     the panel, and in any screenshot of it. Return the least that still tells the
     person what is being touched."""
+    by_path = getattr(tool, "permission_detail_for_path", None)
+    if callable(by_path):
+        # The caller's own resolution, or — for a caller that has none — one made
+        # here, once. Never a second one on top of a supplied value: that is the
+        # entire point of the parameter.
+        if resolved_path is None:
+            resolved_path = call_affected_path(tool, args)
+        return _capped_detail(by_path(resolved_path))
     provider = getattr(tool, "permission_detail", None)
     if callable(provider):
-        value = provider(args)
-        if not value:
-            return None
-        text = str(value)
-        if len(text) > MAX_PERMISSION_DETAIL_CHARS:
-            text = text[:MAX_PERMISSION_DETAIL_CHARS] + "…"
-        return text
+        return _capped_detail(provider(args))
     return None
+
+
+def _capped_detail(value: Any) -> str | None:
+    """The one cut, applied to whichever hook answered. Held here rather than
+    repeated per branch so the two hooks cannot grow two different caps — the cap
+    exists because a detail is attacker-influenced by construction, and one that
+    applied to only half the tools would be the half that mattered."""
+    if not value:
+        return None
+    text = str(value)
+    if len(text) > MAX_PERMISSION_DETAIL_CHARS:
+        text = text[:MAX_PERMISSION_DETAIL_CHARS] + "…"
+    return text

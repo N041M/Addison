@@ -332,6 +332,8 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # shape. A fixture generated from the real handler is the only artifact
         # both sides share, so add one for every new payload a parser consumes.
         "workspace.list": _workspace_list_fixture(server),
+        "workspace.listDirectory": _workspace_list_directory_fixture(server),
+        "workspace.readFile": _workspace_read_file_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
         "automation.list": _automation_list_fixture(server),
         # The same method in the OTHER profile. Not a method name — the only fixture
@@ -355,6 +357,81 @@ def _workspace_list_fixture(server: JsonRpcServer) -> dict:
         return server._workspace_list()
     finally:
         server.store.delete_workspace_trust("/fixture/project")
+
+
+class _FixtureBrowseBridge:
+    """The shell's half of the review surface's two read paths, answering fixed rows.
+
+    A fake rather than the real bridge because there is no shell in this process at all;
+    the payload that matters is the CORE's, and everything the core adds — the resolved
+    ``directory``/``path``, ``root``, and ``escapes`` on every entry — is produced by the
+    real handler over these rows."""
+
+    def list_workspace_directory(self, path: str) -> dict:
+        return {
+            "entries": [
+                {"name": ".git", "kind": "directory", "size": 96},
+                {"name": "README.md", "kind": "file", "size": 812},
+                {"name": "link", "kind": "symlink", "size": 11},
+                {"name": "src", "kind": "directory", "size": 96},
+            ],
+            "truncated": False,
+        }
+
+    def read_workspace_file_for_view(self, path: str) -> dict:
+        return {"content": "# Fixture project\n", "bytes": 18, "truncated": False}
+
+
+def _with_browse_bridge(server: JsonRpcServer, directory: str, call):
+    """Run one read-path handler with a trusted root and a fake shell in place, then put
+    the server back exactly as it was — the ``automation.list.simple`` pattern, for the
+    same reason: the payload must come from the shipping code path, and every fixture
+    after this one must be unaffected."""
+    previous = server._shell_bridge
+    server._shell_bridge = _FixtureBrowseBridge()  # type: ignore[assignment]
+    server.store.insert_workspace_trust(root=directory, granted_at=_T0)
+    try:
+        return call()
+    finally:
+        server.store.delete_workspace_trust(directory)
+        server._shell_bridge = previous
+
+
+def _workspace_list_directory_fixture(server: JsonRpcServer) -> dict:
+    """A ``workspace.listDirectory`` payload with rows in it (Phase-3 plan Build §1).
+
+    Four entries, one per KIND, because the frontend renders them differently and a
+    listing with only files would let a parser drop the field that decides whether a row
+    can be expanded — the ``roots``/``folders`` class of failure, which shipped green on
+    both sides. ``.git`` is in there deliberately: nothing is hidden, and a fixture that
+    quietly omitted it would be the first place that rule could rot.
+
+    The root is a fixed literal, never a real directory, so the file is byte-stable and
+    names nobody's home folder. That costs one thing, and it is worth stating: every
+    ``escapes`` here is ``false``. ``escapes`` is computed by RESOLVING each entry, so a
+    ``true`` needs a real symlink on a real disk — which would put a machine-specific
+    tmp path in a committed file. The ``true`` case is pinned in pytest instead
+    (``tests/test_review_surface_read_paths.py``), against a real link; what this file
+    pins is the shape, which is what the frontend parser can get wrong."""
+    return _with_browse_bridge(
+        server,
+        "/fixture/project",
+        lambda: server._workspace_list_directory({"directory": "/fixture/project"}),
+    )
+
+
+def _workspace_read_file_fixture(server: JsonRpcServer) -> dict:
+    """A ``workspace.readFile`` payload — text to SHOW, never to edit.
+
+    ``bytes`` is the FILE's size rather than the excerpt's, which is the field most
+    likely to be mistaken for "length of content" on the other side; it and
+    ``truncated`` are the pair the UI needs to say how much of a large file is not on
+    screen."""
+    return _with_browse_bridge(
+        server,
+        "/fixture/project",
+        lambda: server._workspace_read_file({"path": "/fixture/project/README.md"}),
+    )
 
 
 def _mcp_list_fixture(server: JsonRpcServer) -> dict:
