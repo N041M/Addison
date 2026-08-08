@@ -298,3 +298,21 @@ export function PermanentTag() {
     </span>
   );
 }
+
+/** The annotation on an artifact row the active profile can't use — a waiting
+ * routine (RoutineLibrary) or a waiting automation (the Settings section), one
+ * look for "listed, yours, not usable here" so a person who has met either reads
+ * the other without being taught twice. Deliberately NOT the accent: the accent
+ * means an action, a selection or live state, and a row that is waiting is none
+ * of those — it sits on the inactive 2px `rail` rule instead, the same way an
+ * unselected section label does.
+ *
+ * "Disabled" is said three ways, never colour alone (personas 54/68): this word,
+ * the missing Run/Arm control, and the plain sentence under the row. */
+export function WaitingTag() {
+  return (
+    <span className="mb-1 inline-block border-l-2 border-rail pl-1.5 text-[9.5px] font-medium uppercase tracking-[.09em] text-muted">
+      Waiting
+    </span>
+  );
+}

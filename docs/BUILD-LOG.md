@@ -83,6 +83,18 @@ near-miss rather than a defect:
   answer is reconcile-on-restore, and the alternatives (blocking a restore, or
   disarming inside one) would put arming decisions inside the one action G3
   promises is always available.
+- **THE ROW READ MOVED INTO A HOOK AND LOST ITS PER-VISIT CADENCE (post-merge
+  review, 2026-08-08).** Phase 3's section fetched the rows every time Settings
+  opened; phase 4 moved that fetch into `useAutomations`, which App mounts once at
+  launch, and the section's own load effect kept only the OS ask. But
+  `create_automation` writes rows from CHAT — so the automation somebody had just
+  asked Addison for was missing from the very screen they open to see it, until a
+  restart, a removal or a restore happened to re-read the list. No test caught it
+  because every rendering test mounts the hook and the section together. The
+  section re-reads the rows on load again, and a test that models the app's real
+  shape — hook at launch, section per visit, a row authored in between — pins it.
+  **A refactor that moves a fetch also moves its cadence; check what the old
+  call-site's mount MEANT before inheriting a different one.**
 
 ## What shipped 08-07 (fifth) — step 8 phase 3: the keyword gate, and what its review found
 

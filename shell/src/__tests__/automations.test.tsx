@@ -493,11 +493,50 @@ describe("the Automations section", () => {
   it("re-reads the list after a removal instead of trusting the screen", async () => {
     // The core mints a restore point for a removal and REFUSES the whole thing if it
     // cannot — so what is on screen after a press is a guess until it has asked again.
+    // Two reads before the press: the hook's own at mount, and the section's at load.
     const ipc = await renderSection([automation()]);
-    expect(ipc.listAutomations).toHaveBeenCalledTimes(1);
+    expect(ipc.listAutomations).toHaveBeenCalledTimes(2);
     fireEvent.click(screen.getByRole("button", { name: "Remove Tidy up downloads" }));
     fireEvent.click(screen.getByRole("button", { name: "Remove Tidy up downloads" }));
-    await waitFor(() => expect(ipc.listAutomations).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(ipc.listAutomations).toHaveBeenCalledTimes(3));
+  });
+
+  it("re-reads the saved rows when the section loads, so a row authored in chat is on screen", async () => {
+    // `create_automation` writes rows from CHAT, and the hook read the list when App
+    // mounted it — possibly long before. This page unmounts between visits, so the
+    // section re-reads on load; without that read (found by the post-merge review of
+    // phase 4), the automation somebody just asked Addison for stayed missing from
+    // the very screen they open to see it until a restart, a removal or a restore —
+    // "where did my stuff go?", on the surface that exists to answer it. The OS ask
+    // is a different question with a different cadence and is pinned separately.
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      armed: [],
+      supported: true,
+    });
+    // The app's own shape: the hook lives in App, the section mounts per visit.
+    function AppShape({ visiting }: { visiting: boolean }) {
+      const bundle = useAutomations({ connected: true });
+      if (!visiting) return null;
+      return (
+        <AutomationsSection
+          connected={true}
+          automations={bundle}
+          developerSurface={true}
+          onAsk={onAsk}
+        />
+      );
+    }
+    const { rerender } = render(<AppShape visiting={false} />);
+    // Launch: the hook reads the rows once. Nobody is looking yet.
+    await waitFor(() => expect(ipc.listAutomations).toHaveBeenCalledTimes(1));
+    // Chat: Addison authors a row. The hook has no way to hear about it.
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([automation()]);
+    // The visit: opening Settings re-reads, and the new row is simply there.
+    rerender(<AppShape visiting={true} />);
+    await screen.findByText("Tidy up downloads");
+    expect(ipc.listAutomations).toHaveBeenCalledTimes(2);
   });
 
   it("renders a refusal as the core's own plain sentence, not a stack trace", async () => {

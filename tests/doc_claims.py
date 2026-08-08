@@ -778,14 +778,13 @@ CLAIMS: tuple[Claim, ...] = (
             excused_by=(
                 r"used to|until phase 3|before phase 3|through phase [12]|no longer|"
                 r"superseded|historical|standing claim|at the time|by absence|"
-                # A RECOUNT quoting the retired sentence — `floor said`, `it said`.
+                # A RECOUNT quoting the retired sentence — `floor said`, `it said
+                # "…"`, `it now says` — is a document recording that it changed.
                 # Bare \bsaid\b was measured at 3.2% of the corpus and excused
                 # unrelated prose ("what the SERVER said"); anchoring it to the
-                # subject doing the quoting costs about a third of that.
-                r"floor said|wording said|it said|used to say|it now says|"
-                # `it said "…"` / `used to say` — a document QUOTING the retired
-                # sentence in order to record that it changed.
-                r"it said|used to say|it now says"
+                # subject doing the quoting costs about a third of that. (`used to
+                # say` needs no branch: `used to` above already matches it.)
+                r"floor said|wording said|it said|it now says"
             ),
             window=120,
             fix=(
