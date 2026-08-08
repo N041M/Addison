@@ -712,7 +712,7 @@ sequenceDiagram
     Note over WV,SRV: browsing — Developer/Custom only, one resolution per call
     WV->>SRV: workspace.listDirectory {directory}
     SRV->>SH: shell.listWorkspaceDirectory
-    SH-->>SRV: entries (kind, size); a target outside the root is marked escaping
+    SH-->>SRV: entries (kind, size) — a target outside the root is marked escaping
     SRV-->>WV: {directory, root, entries, truncated}
     WV->>SRV: workspace.readFile {path}
     SRV->>SH: shell.readWorkspaceFileForView
