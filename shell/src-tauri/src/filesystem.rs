@@ -72,6 +72,40 @@ const TOO_BIG_TO_EDIT: &str = "That file is too big for Addison to edit while ke
 /// from it is worse than one that read nothing and said so.
 const READ_SIZE_BOUND: u64 = 256 * 1024;
 
+/// A file the PERSON picked in the native dialog, larger than this, refuses the
+/// read (`shell.readScopedFile`, i.e. the shipped `read_file` tool) rather than
+/// crossing the bridge.
+///
+/// ITS OWN CONSTANT, and deliberately FOUR TIMES `READ_SIZE_BOUND`, because the two
+/// answer different questions. That one bounds what a coding harness may swallow
+/// from a path a MODEL named; here the person chose this exact file in an OS dialog
+/// and no model can name it — so the ceiling is not standing between a model and a
+/// file, and what a person picks is often a picture. A screenshot or a photo is
+/// legitimately larger than any source file, and base64 adds a third on top before
+/// it crosses.
+///
+/// NOT LARGER STILL, for the reason a ceiling exists here at all. The bytes are
+/// serialized onto ONE line of a line-delimited stdio channel by a handler awaited
+/// INLINE on the core's stdout pump (`agent_process.rs`), so a 2 GB file picked by
+/// accident stalls every frame in the app while it loads — the wedge is mechanical
+/// and does not care who chose the file. And v1 has NO image-block path: the shell's
+/// `{content, kind}` is JSON-serialized into a `tool_result` STRING
+/// (`orchestrator._result_as_text`, `anthropic_provider._translate_history`), so a
+/// picked image is charged to the turn as base64 TEXT. 1 MiB is already ~1.4 MB of
+/// characters and several hundred thousand tokens: the outer edge of the largest
+/// context Addison can route to, and far past a local or free-tier one. A ceiling
+/// above this would only buy a slower way to be told the turn is too big.
+///
+/// ONE bound for text and pictures alike, judged BEFORE the extension is consulted.
+/// `is_image_path` is a guess about content made from a filename, and a guess must
+/// never be what decides whether a ceiling applies.
+///
+/// A REFUSAL, never truncation — half a picture is not a picture, and half a
+/// document read as text is worse than none, because it reads as the whole one.
+///
+/// Kept a whole number of MB: the sentence names it in MB and derives it from here.
+const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
+
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
 pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, RpcError> {
@@ -232,7 +266,21 @@ fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError
         .cloned()
         .ok_or_else(|| RpcError::app("Addison can't read that file — please pick it again."))?;
 
+    // Judged from the file's SIZE, before a byte is read, exactly as the workspace
+    // paths do it: a refusal that first allocates the 2 GB it is refusing has
+    // already stalled the app it was protecting. A size the OS won't give us is not
+    // a refusal — fall through to the read, whose own error mapping speaks.
+    if let Some(len) = size_on_disk(&path) {
+        refuse_oversize_pick(len)?;
+    }
+
     let bytes = std::fs::read(&path).map_err(|_| RpcError::app("Addison couldn't read that file."))?;
+    // The file that GREW between those two calls, or one metadata could not answer
+    // for at all. It has already cost this process the memory; it does not also get
+    // to cross the bridge — and base64 would make it a third bigger on the way. The
+    // same race backstop the workspace read carries, and like it, unreachable from a
+    // test: stated plainly rather than pinned by a test that would test only itself.
+    refuse_oversize_pick(bytes.len() as u64)?;
 
     if is_image_path(&path) {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -333,6 +381,24 @@ fn refuse_oversize_read(len: u64) -> Result<(), RpcError> {
         return Err(RpcError::app(format!(
             "That file is too big for Addison to read — Addison can read files up to {} KB.",
             READ_SIZE_BOUND / 1024
+        )));
+    }
+    Ok(())
+}
+
+/// The picked-file ceiling, refused in plain language for someone standing at a
+/// file dialog: it names a size they can act on and the one thing to do next.
+///
+/// A SIBLING of `refuse_oversize_read`, not a reuse of it. Same shape, different
+/// bound and different sentence — and a shared version would be a function whose
+/// entire body is the two arguments its callers pass in, which is not reuse, only
+/// indirection. `TOO_BIG_TO_EDIT` is worded once because the SAME refusal is raised
+/// twice; these are two refusals.
+fn refuse_oversize_pick(len: u64) -> Result<(), RpcError> {
+    if len > PICKED_FILE_SIZE_BOUND {
+        return Err(RpcError::app(format!(
+            "That file is too big for Addison to open — please pick one that's {} MB or smaller.",
+            PICKED_FILE_SIZE_BOUND / (1024 * 1024)
         )));
     }
     Ok(())
@@ -862,6 +928,72 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    #[test]
+    fn read_scoped_reads_a_picked_image_exactly_at_the_size_ceiling() {
+        // The ceiling is inclusive, and this is the half that keeps the refusal
+        // honest: without it the test below would pass under an always-refuse. It
+        // drives the IMAGE branch on purpose — that is the one the picker bound was
+        // raised above `READ_SIZE_BOUND` for, and the one base64 then inflates.
+        let state = FileState::default();
+        let path = temp_path().with_extension("png");
+        let at_ceiling = vec![0xFFu8; PICKED_FILE_SIZE_BOUND as usize];
+        std::fs::write(&path, &at_ceiling).expect("seed a picked file at the ceiling");
+        let handle = uuid::Uuid::new_v4().to_string();
+        lock(&state.handles).insert(handle.clone(), path.clone());
+
+        let result = read_scoped_handle(&state, &handle).unwrap();
+        assert_eq!(result.get("kind").and_then(Value::as_str), Some("image"));
+        let encoded = result.get("content").and_then(Value::as_str).expect("base64 content");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD.decode(encoded).unwrap().len(),
+            at_ceiling.len(),
+            "a picked file at the ceiling must come back whole, never truncated"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_scoped_refuses_a_picked_file_one_byte_over_the_size_ceiling() {
+        // The picker is not a steering surface — the person named this file in a
+        // native dialog and no model can — but the WEDGE is mechanical and does not
+        // care who chose: the bytes go onto one line of a line-delimited channel,
+        // loaded by a handler awaited inline on the core's stdout pump, so a file
+        // picked by accident stalls every frame in the app. Delete the two
+        // `refuse_oversize_pick` calls in `read_scoped_handle` and both of these
+        // return Ok — the mutation this test exists to catch.
+        //
+        // BOTH BRANCHES, because the guard sits before the branch. A ceiling that
+        // covered only text would leave the base64 path — the one that grows by a
+        // third — wide open, which is precisely the wrong half to protect.
+        let state = FileState::default();
+        for ext in ["txt", "png"] {
+            let path = temp_path().with_extension(ext);
+            let over = vec![b'a'; PICKED_FILE_SIZE_BOUND as usize + 1];
+            std::fs::write(&path, &over).expect("seed a picked file one byte over");
+            let handle = uuid::Uuid::new_v4().to_string();
+            lock(&state.handles).insert(handle.clone(), path.clone());
+
+            let err = read_scoped_handle(&state, &handle).unwrap_err();
+            assert_eq!(err.code, -32000, "{ext}");
+            // A refusal, not a truncation, and worded for a person who is standing
+            // at a file dialog: no byte counts, no "exceeds", a size they can act on
+            // and the one thing to do next.
+            assert_eq!(
+                err.message,
+                "That file is too big for Addison to open — please pick one that's 1 MB or smaller.",
+                "{ext}"
+            );
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().len(),
+                over.len() as u64,
+                "a refused read must leave the file exactly as it was"
+            );
+
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
     /// Serializes every test that mutates the PROCESS-GLOBAL `ADDISON_DB_PATH`.
     /// cargo runs tests in parallel threads, so without this one test's `set_var`
     /// lands in the middle of another's assertion — which is exactly what happened
@@ -1039,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn both_size_ceilings_are_judged_before_any_bytes_are_read() {
+    fn every_size_ceiling_is_judged_before_any_bytes_are_read() {
         // THE POINT OF A CEILING IS THAT THE REFUSAL COSTS NOTHING. A check made
         // after `fs::read` has already allocated the 500 MB it is about to refuse,
         // and every `shell.*` handler is awaited inline on the core's stdout pump
@@ -1049,8 +1181,13 @@ mod tests {
         // No runtime assertion here can see the difference: both orders return the
         // same error. So the ORDER is pinned at the source, the same way the bundle
         // wiring above is — docs/HANDOFF.md trap 3.
+        //
+        // Was `both_…` when there were two paths with a ceiling. `read_scoped_handle`
+        // is the third and it is one list, not a second mechanism beside it: a path
+        // that grows a bound later must join this loop, and a name that counted the
+        // members would quietly stop being a place to add one.
         let source = include_str!("filesystem.rs");
-        for name in ["fn read_workspace_path", "fn capture_prior_text"] {
+        for name in ["fn read_workspace_path", "fn capture_prior_text", "fn read_scoped_handle"] {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} must exist"));
             let rest = &source[start..];
             let end = rest.find("\n}\n").unwrap_or_else(|| panic!("{name} must be closed"));
