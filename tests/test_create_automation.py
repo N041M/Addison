@@ -178,18 +178,37 @@ def test_the_undo_is_real_and_the_tier_is_honest(tool: CreateAutomationTool):
 
 
 def test_the_description_tells_the_person_it_writes_and_never_runs():
-    """The one claim a draft-authoring tool must not get wrong. A description that
-    promised running would have Addison offer scheduling that does not exist, in the
-    voice of the app itself — the failure `tests/test_prompt_capability_claims.py`
-    exists for.
+    """The one claim a draft-authoring tool must not get wrong — and it got it wrong
+    for eleven days, held there BY THIS TEST.
 
-    Mutation: delete "isn't built yet" from the description — this fails, and so does
-    the exemption guard in test_prompt_capability_claims.py."""
+    Until 2026-08-08 this asserted ``"isn't built yet" in text``, which was true when
+    it was written (phase 2, no arming anywhere) and false the moment phase 3 shipped
+    ``arm_automation``. The description could not be corrected without failing the
+    suite, so the sweep that flipped nine sentences across seven documents when
+    ``AUTOMATION_ARMING_BUILT`` went true could not reach the one piece of prose that
+    changes what the app DOES: asked in Developer for a scheduled automation, Addison
+    read its own tool, believed the feature was half-finished, and offered to write a
+    cron script instead (found by a QA pass).
+
+    What must hold is the pair, and neither alone: writing one down does not start it
+    (or Addison would offer scheduling it cannot perform), AND Addison never switches
+    one on by itself (the G2 floor, in the app's own voice). What must NOT hold is any
+    claim that the switching-on does not exist.
+
+    Mutations: drop "does not start" — this fails, and so does the exemption guard in
+    test_prompt_capability_claims.py, which reads this description for a denial;
+    restore "isn't built yet" — this passes here and fails
+    test_no_tool_tells_the_model_that_arming_was_never_built, which is the check that
+    now owns that claim for every tool at once."""
     definition = CreateAutomationTool(store_ref=lambda: None).definition
     assert definition.label == "Set up an automation"
     text = definition.description.lower()
-    assert "isn't built yet" in text
-    assert "nothing runs" in text
+    assert "does not start" in text
+    assert "never switches one on by itself" in text
+    assert "isn't built yet" not in text, (
+        "arming shipped in step 8 phase 3 — a description saying otherwise makes a "
+        "built feature unreachable, because the model believes it"
+    )
     for jargon in ("launchd", "plist", "cron", "registry", "sqlite", "dev_only"):
         assert jargon not in text, jargon
 
