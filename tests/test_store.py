@@ -1043,7 +1043,7 @@ def test_the_live_database_guard_is_not_escapable_by_a_relative_path(tmp_path: P
     # the guard was weakened to check the failure was detected. Clean up regardless
     # of outcome, and say so if a file was made.
     try:
-        with pytest.raises(AssertionError, match="live database"):
+        with pytest.raises(live_db_guard.LiveDatabaseBlocked, match="live database"):
             Store(escaping)
         assert not escaping.resolve().exists(), (
             "the guard let the file through before raising — check ~/.addison"
@@ -1085,7 +1085,7 @@ def test_a_bare_sqlite3_connect_cannot_reach_the_live_directory(fake_live_dir: P
     """
     target = fake_live_dir / "bare-connect.sqlite3"
 
-    with pytest.raises(AssertionError, match="live database"):
+    with pytest.raises(live_db_guard.LiveDatabaseBlocked, match="live database"):
         sqlite3.connect(target)
 
     assert not target.exists(), "the guard raised but sqlite3 had already made the file"
@@ -1105,7 +1105,7 @@ def test_a_store_subclass_that_skips_super_init_is_still_blocked(fake_live_dir: 
 
     target = fake_live_dir / "subclass.sqlite3"
 
-    with pytest.raises(AssertionError, match="live database"):
+    with pytest.raises(live_db_guard.LiveDatabaseBlocked, match="live database"):
         _RogueStore(target)
 
     assert not target.exists()
@@ -1121,7 +1121,7 @@ def test_the_running_app_may_open_its_own_live_database(fake_live_dir: Path):
     """
     target = fake_live_dir / "addison.sqlite3"
 
-    with pytest.raises(AssertionError, match="live database"):
+    with pytest.raises(live_db_guard.LiveDatabaseBlocked, match="live database"):
         sqlite3.connect(target)
 
     live_db_guard.allow_live_database()
@@ -1131,6 +1131,36 @@ def test_the_running_app_may_open_its_own_live_database(fake_live_dir: Path):
     finally:
         connection.close()
     assert target.exists()
+
+
+def test_a_broad_except_exception_cannot_swallow_the_guard(fake_live_dir: Path):
+    """The inheritance IS the feature (docs/KNOWN-GAPS.md, closed 2026-08-08).
+
+    While this subclassed ``AssertionError`` the recovery paths' broad handlers
+    caught it — ``JsonRpcServer._rebuild_into`` answered "rebuild failed" and never
+    named the guard. The block held either way; the loud message did not, in the one
+    place a loud message is the whole point.
+
+    Written as the swallow itself rather than as ``issubclass``: a type assertion
+    passes against a class nobody raises, while this fails the moment the guard is
+    catchable again.
+    """
+    swallowed = False
+    caught = None
+    try:
+        sqlite3.connect(fake_live_dir / "swallowed.sqlite3")
+    except Exception as exc:  # noqa: BLE001 — being uncatchable here is the point
+        swallowed = True
+        caught = exc
+    except live_db_guard.LiveDatabaseBlocked as exc:
+        caught = exc
+
+    assert not swallowed, (
+        "a broad `except Exception` swallowed the live-database guard — it is an "
+        "Exception subclass again, and every recovery-path handler in the tree "
+        "silently quietens it"
+    )
+    assert isinstance(caught, live_db_guard.LiveDatabaseBlocked)
 
 
 def test_the_guard_is_armed_outside_pytest_by_importing_agent_core():
@@ -1145,15 +1175,24 @@ def test_the_guard_is_armed_outside_pytest_by_importing_agent_core():
     here uses a stand-in directory, so without this one nothing proves the path
     that matters is covered. The probe filename is unique and unlinked afterwards
     in case the guard is broken and the file is actually created.
+
+    The probe wraps the connect in a broad ``except Exception`` INSIDE the named
+    handler, so this test also carries the 2026-08-08 property end to end, in the
+    process shape it was written for: exit 4 means a blind handler quietened the
+    guard, which is the defect and not the protection.
     """
     repo_root = Path(__file__).resolve().parents[1]
     probe = Path.home() / ".addison" / f"guard-check-{uuid4().hex}.sqlite3"
     source = (
         "import sys, sqlite3\n"
         "import agent_core  # arming the guard is this import's whole job\n"
+        "from agent_core.live_db_guard import LiveDatabaseBlocked\n"
         "try:\n"
-        f"    sqlite3.connect({str(probe)!r})\n"
-        "except AssertionError as exc:\n"
+        "    try:\n"
+        f"        sqlite3.connect({str(probe)!r})\n"
+        "    except Exception:\n"
+        "        sys.exit(4)\n"
+        "except LiveDatabaseBlocked as exc:\n"
         "    print(exc)\n"
         "    sys.exit(3)\n"
         "sys.exit(0)\n"
@@ -1165,6 +1204,10 @@ def test_the_guard_is_armed_outside_pytest_by_importing_agent_core():
             capture_output=True,
             text=True,
             timeout=60,
+        )
+        assert result.returncode != 4, (
+            "a broad `except Exception` swallowed the guard — the block still holds, "
+            "but nothing says which guard refused (docs/KNOWN-GAPS.md, 2026-08-08)"
         )
         assert result.returncode == 3, (
             "a plain python process opened the live directory unchallenged; "

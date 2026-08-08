@@ -18,6 +18,7 @@ import re
 import sqlite3
 from pathlib import Path
 
+from agent_core import live_db_guard
 from agent_core.main import _REBUILD_FAILED, _REBUILT_FROM_UNVERIFIED
 from agent_core.memory.store import Store
 from agent_core.policy import PolicyMode
@@ -530,6 +531,99 @@ def test_worker_answers_plainly_when_the_store_cannot_be_built(tmp_path):
         assert _error(h, Method.SKILL_LIST, request_id=1)["message"] == _STORE_UNAVAILABLE_MESSAGE
         # Still alive for the NEXT request — the point of the fix.
         assert _error(h, Method.WIDGET_LIST, request_id=2)["message"] == _STORE_UNAVAILABLE_MESSAGE
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+# --- the live-database guard, at the boundary (docs/KNOWN-GAPS.md, 2026-08-08) ---
+#
+# `LiveDatabaseBlocked` became a `BaseException` so the recovery paths' broad
+# handlers stop quietening it. These three tests are the verification pass that
+# change owed: the sentence reaches the RPC answer, and the worker thread — which a
+# BaseException would otherwise END, leaving every later request hanging with no
+# frame at all — survives it on both routes into `_ensure_built`.
+
+
+def _blocked_store_factory():
+    """A factory that fails the way the guard fails. The sentence is the guard's
+    own, verbatim, because what these tests measure is that it survives the trip
+    to the wire rather than being replaced by a generic one."""
+
+    def factory():
+        raise live_db_guard.LiveDatabaseBlocked(
+            "Something other than the Addison app tried to open the live database "
+            "at /pretend/.addison/addison.sqlite3. Point this at a temporary "
+            "directory instead — see agent_core/live_db_guard.py."
+        )
+
+    return factory
+
+
+def test_a_rebuild_blocked_by_the_live_database_guard_names_the_guard(tmp_path, monkeypatch):
+    # THE SCENARIO THE ENTRY NAMED. The store will not open, there ARE restore
+    # points, and the rebuild is refused by the live-database guard — which used to
+    # arrive as `_REBUILD_FAILED`, i.e. "your saved restore points wouldn't go back
+    # in". That is a false statement about the floor's own storage AND it hides the
+    # one fixable mistake actually in play, in the one place a loud message is the
+    # whole point.
+    #
+    # The sidecars are written BEFORE the live directory moves, because writing them
+    # needs a real Store at this very path.
+    _populate_sidecars(tmp_path)
+    monkeypatch.setattr(live_db_guard, "_LIVE_DATA_DIR", tmp_path)
+    h = build_server(tmp_path, register_tool=False, store_factory=_raising_store_factory())
+    try:
+        result = _call(h, Method.SNAPSHOT_RESTORE_LAST_WORKING, request_id=1)
+        assert result["ok"] is False
+        # It names itself and the file to read, rather than the floor's own copy.
+        assert "live database" in result["error"]
+        assert "live_db_guard.py" in result["error"]
+        assert result["error"] != _REBUILD_FAILED
+        assert result["error"] != _NOTHING_TO_REBUILD_FROM
+        # And the worker is still there afterwards: an escaping BaseException would
+        # have ended the thread and this request would get no frame at all.
+        assert _error(h, Method.SKILL_LIST, request_id=2)["message"] == _STORE_UNAVAILABLE_MESSAGE
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_worker_survives_a_startup_build_blocked_by_the_live_database_guard(tmp_path):
+    # §6.5's promise, against the one exception class that is not an `Exception`.
+    # The store build is the first thing the worker does; letting a BaseException
+    # out of it is how the thread dies before it dequeues anything.
+    h = build_server(tmp_path, register_tool=False, store_factory=_blocked_store_factory())
+    try:
+        first = _error(h, Method.SKILL_LIST, request_id=1)["message"]
+        assert "live database" in first
+        # NOT the generic copy: the whole change is that this path says which guard
+        # refused rather than "couldn't open its settings file".
+        assert first != _STORE_UNAVAILABLE_MESSAGE
+        # Still alive for the NEXT request — the point.
+        assert _error(h, Method.WIDGET_LIST, request_id=2)["message"] == first
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_job_that_reopens_a_blocked_database_answers_instead_of_killing_the_worker(
+    tmp_path, monkeypatch
+):
+    # The per-job half of the same rule. A dequeued job reaches `_ensure_built()` too
+    # (conversation.list does it inline, and so does every rpc/ mixin handler); today
+    # it cannot raise there only because a build failure short-circuits every job two
+    # branches earlier. That short-circuit is not a guarantee, and the last time this
+    # thread was allowed to die the symptom was every later request hanging forever.
+    #
+    # Driven by putting the server back into its pre-build state — the house's
+    # existing way of reaching a branch the happy path has already passed.
+    h = build_server(tmp_path, register_tool=False)
+    try:
+        _call(h, Method.SKILL_LIST, request_id=1)   # force the build
+        h.server._store = None
+        h.server._orchestrator = None
+        monkeypatch.setattr(live_db_guard, "_LIVE_DATA_DIR", tmp_path)
+
+        assert "live database" in _error(h, Method.CONVERSATION_LIST, request_id=2)["message"]
+        assert "live database" in _error(h, Method.CONVERSATION_LIST, request_id=3)["message"]
     finally:
         _shutdown(h.reader, h.thread)
 
