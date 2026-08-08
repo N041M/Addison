@@ -1011,9 +1011,19 @@ def test_a_file_replaced_between_two_writes_is_still_one_chain(tmp_path):
 
     bench.write(path, "v1\n")
     first = revert_key(path)
-    # The swap: a new file at the same name, exactly as an atomic save leaves it.
-    os.unlink(path)
-    (tmp_path / "x.txt").write_text("v1\n", encoding="utf-8")
+    # The swap: a new file at the same name, exactly as an atomic save leaves it —
+    # written ELSEWHERE and renamed over, which is what an atomic save actually does.
+    # It also has to be done that way for this test to mean anything: unlinking and
+    # re-creating FREES the inode, and ext4 hands the same one straight back, so on
+    # Linux the old fixture produced the SAME identity and the assertion below caught
+    # its own setup proving nothing (CI, 2026-08-08 — macOS cannot show it, because
+    # APFS allocates inode numbers from a monotonic counter). Renaming over allocates
+    # the new inode while the old file is still alive, so the two cannot collide on
+    # any filesystem. The reuse itself is recorded in docs/KNOWN-GAPS.md: it is a real
+    # limit of an inode-based identity, and it is not reachable on what Addison ships.
+    replacement = tmp_path / "x.txt.tmp"
+    replacement.write_text("v1\n", encoding="utf-8")
+    os.replace(replacement, path)
     assert revert_key(path) != first, "a new file at the same name, or this proves nothing"
     bench.write(path, "v2\n")
 
