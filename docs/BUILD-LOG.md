@@ -12,6 +12,72 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-08 (second) — five gaps closed, then an adversarial hunt over the day's own work
+
+PRs #80–#87. Five KNOWN-GAPS entries closed (the routine stamp, orphaned armed
+jobs, `LiveDatabaseBlocked`, empty `sendMessage`, the keychain clobber), then four
+hunters — core-Python, frontend-wire, Rust-shell, and docs/test-honesty — read the
+day's thirteen merges adversarially. **They found two floor breaks, a permanent
+wedge, a state-corruption bug the module claimed was impossible by construction, a
+security pin that let a remote host through, and a hook with no coverage at all.**
+What belongs here is what the hunt says about how the day was built:
+
+- **THE MODULE THAT SAYS "IMPOSSIBLE BY CONSTRUCTION" IS THE ONE TO READ HARDEST.**
+  `revert_key`'s comment argued that not casefolding was correct "on any
+  case-sensitive filesystem" — true, and irrelevant, because Addison ships on
+  macOS, whose default volume is case-INsensitive. `Notes.md` and `notes.md` were
+  one file with two revert chains, and reverting them in the wrong order resurrected
+  the content the person had just reverted away from: exactly the failure the chain
+  collapse was designed to make impossible. The fix asks the filesystem
+  (`st_dev:st_ino`) rather than reasoning about spellings. **A justification that
+  names a platform is a claim about YOUR platform; check which one you ship on.**
+- **A CONFINED VALUE IS NOT A CONFINED DESTINATION.** `readEditDiff` re-resolved the
+  stored path at read time, so a symlink planted at a written path after the write
+  moved every later call — the diff pane read the link's target and shipped a private
+  key to the webview. Passing the recorded path fixes half of it; the other half is
+  that the OS follows a shortcut planted at that recorded path too, so the handler
+  must ALSO refuse when a link stands there. Two independent halves, because either
+  alone still leaks.
+- **THE SAME BUG CLASS ARRIVED AT THE SHELL FLOOR FROM THREE DIRECTIONS.** A two-hop
+  dangling symlink walked past `refuse_addison_data_dir` (it read one hop); a FIFO
+  passed every size ceiling with `len = 0` and then blocked the stdout pump forever,
+  wedging the whole app; and `restore_workspace_path` had no data-dir floor at all.
+  Each ceiling this repo added was correct about the dimension it measured and blind
+  to the next one. **When you add a ceiling, ask what the file IS, not only how big.**
+- **A SECURITY PIN THAT INVITES RE-PINNING MUST SURVIVE AN HONEST RE-PIN.** The CSP
+  test's own failure message tells you to update the literal — and its structural
+  rules only caught scheme-prefixed sources, so `connect-src 'self'
+  telemetry.example.com` passed all nine tests in a local-first app. Replaced the
+  shape-blocklist with an allowlist vocabulary. **Blocklists fail on the shape nobody
+  imagined; allowlists fail closed.**
+- **TESTS THAT PIN THE BUG.** `test_the_grouping_key_never_casefolds` enshrined the
+  case-collision defect using a dict-keyed fake disk — Linux semantics on a
+  macOS-only product. Elsewhere, five load-bearing behaviours of `useCodeReview`
+  could each be deleted with the suite green, because every test hand-built the
+  hook's state instead of running it; `monacoTheme.test.ts` claimed its values came
+  from `styles.css` and transcribed them by hand, so the tokens and the converter
+  could diverge silently; and one theme test compared two values the test itself had
+  made equal. **A fake that models the wrong platform, and a fixture that stands in
+  for the code, both pass forever.**
+- **`doc_claims` ROWS CAN BE DEAD, AND A DEAD ROW LOOKS EXACTLY LIKE A SATISFIED
+  ONE.** `assert not reports` passes when a pattern matches nothing anywhere —
+  proven by registering a row for a string that cannot exist. Two live rows were
+  already dead (`[^.\n]` cannot cross the line wrap the real passages use), and one
+  leaked because an excuse token sat 96 characters away in an unrelated paragraph.
+  **This is the largest finding of the day and its repair is only started** — the
+  harness needs a mirror of its precision samples (a sample each row MUST flag), and
+  every existing row re-verified against it. Recorded in KNOWN-GAPS as owed.
+- **THIRTY DOCUMENTS WERE FALSIFIED BY THE SAME DAY'S MERGES**, including passages
+  written that morning by the docs-first wave and falsified hours later, and HANDOFF
+  contradicting itself three ways in the file whose job is to say where the project
+  stands. **A wave that ships docs first must sweep them again at the end** — the
+  order the rule demands is not the order that leaves them true.
+- **The orchestrator's own review missed a regression it had reviewed.** The
+  profile-switch staleness in the automations section was live in PR #69, survived
+  the post-merge review that fixed its sibling, and was found only by an adversarial
+  frontend pass. A review that fixes one instance of a shape should ask where else
+  that shape lives, in the same file, that same hour.
+
 ## What shipped 08-08 — the review-surface wave, prerequisites to Monaco in one day
 
 Nine merges (PRs #70–#78): the post-#69 review fixes, the plan's three prerequisites,
