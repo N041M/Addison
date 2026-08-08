@@ -285,6 +285,7 @@ def build_server(
     provider=None,
     tool=None,
     register_tool: bool = True,
+    registry: ToolRegistry | None = None,
     bridge: IpcShellBridge | None = None,
     cloud_catalog=None,
     connect_provider=None,
@@ -302,6 +303,10 @@ def build_server(
     - ``provider``: a ready-made provider instance to install as PRIMARY.
     - ``tool`` / ``register_tool``: which tool the registry carries. Defaults to a
       fresh ``_SpyTool``; pass ``register_tool=False`` for an empty registry.
+    - ``registry``: a whole ready-made ``ToolRegistry``, for the tests whose subject
+      is the SAFE/OPEN split of the real tool set — ``build_registry(DEVELOPER)``
+      registers ``read_project_file`` and friends ``open_only``, and that visibility
+      is exactly what those tests are about. Supersedes ``tool``/``register_tool``.
     - ``bridge``, ``cloud_catalog``, ``connect_provider``, ``provider_key_probe``,
       ``ollama_client``: forwarded straight to the server (each defaults to the
       server's own default when left as None).
@@ -318,10 +323,11 @@ def build_server(
     The caller owns teardown via :func:`_shutdown` (kept explicit because a few
     tests relaunch on the same database and must stop one server before the next).
     """
-    registry = ToolRegistry()
-    if register_tool:
-        tool = tool or _SpyTool()
-        registry.register(tool)
+    if registry is None:
+        registry = ToolRegistry()
+        if register_tool:
+            tool = tool or _SpyTool()
+            registry.register(tool)
     if provider is None:
         provider = _ScriptedProvider(responses or [])
     reader = _PipeReader()

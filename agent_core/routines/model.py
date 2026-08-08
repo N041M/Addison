@@ -64,9 +64,17 @@ class Routine:
 
 
 def routine_uses_dev_abilities(routine: Routine) -> bool:
-    """True iff the routine carries any OPEN-mode-only ability — i.e. a command
-    step. Such a routine may be saved only in OPEN/Developer mode and is hidden +
-    refused in SAFE mode (policy.py; enforced in builder.py / main.py)."""
+    """True iff the PLAN carries an OPEN-mode-only ability — i.e. a command step.
+    Such a routine may be saved only in OPEN/Developer mode (``builder.save``
+    raises otherwise).
+
+    This is HALF of "does this routine need Developer?", and the half a plan can
+    answer about itself. The other half is whether a step NAMES a tool the SAFE
+    view does not hold (``read_project_file``, an ``mcp:`` tool, ...), which needs
+    the registry — and the module-boundary rule (CLAUDE.md §2) keeps ``routines/``
+    from importing ``tools/``. So availability is decided one layer up, by
+    ``rpc/routines.py::_routine_needs_dev``, which asks this function AND the
+    registry. Do not use this one alone to decide what a profile may run."""
     return any(step.command is not None for step in routine.steps)
 
 

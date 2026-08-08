@@ -161,6 +161,11 @@ class ServerContext:
         # _resync_providers precedent — mcp_servers is captured, the registry
         # entries a checked server made are not.
         def _resync_mcp_after_restore(self) -> None: ...
+        # Owner decision 2026-08-08: "does this routine need Developer?", owned by
+        # rpc/routines.py and asked from rpc/widgets.py for a routine widget's
+        # look-through. Declared here so the rail can ask the library's question
+        # instead of inventing a second answer to it.
+        def _routine_id_needs_dev(self, routine_id: str) -> bool: ...
 
         # --- G3 hooks called from OTHER namespace mixins (profile/providers/
         #     skills/widgets/conversation) and from the worker loop. Declared here

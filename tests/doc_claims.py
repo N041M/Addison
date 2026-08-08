@@ -90,10 +90,18 @@ def markdown_files() -> list[Path]:
 # A one-directional check is not a check.
 G3_RESOLVED_IN_OPEN = True
 
-# Artifact disabling (owner decision 2026-08-06). Routines and widgets created in
-# OPEN are LISTED BUT DISABLED under SAFE, not hidden. They used to be hidden —
-# filtered out of `routine.list` / `widget.list` entirely — and the correction was
-# restated in six documents when the brief said two. `docs/SAFETY.md` owns why.
+# Artifact disabling (owner decision 2026-08-06). Routines and widgets that NEED
+# developer abilities are LISTED BUT DISABLED under SAFE, not hidden. They used to be
+# hidden — filtered out of `routine.list` / `widget.list` entirely — and the
+# correction was restated in six documents when the brief said two. `docs/SAFETY.md`
+# owns why.
+#
+# This row is about the LISTED-vs-HIDDEN polarity only. WHICH artifacts are disabled
+# is a second fact and it changed on 2026-08-08: it was "created in OPEN" (the stamp)
+# and is now "needs developer abilities" (asked of the artifact — widgets since
+# 2026-08-06, routines since 2026-08-08). No document asserted the stamp criterion in
+# a shape worth registering, so the wording above was amended rather than a second row
+# minted; if one ever does, that is the row to add.
 ARTIFACTS_LISTED_NOT_HIDDEN = True
 
 # MCP transport (owner decision 2026-08-06, step 7 phase 1). HTTP only for v1: an
@@ -392,12 +400,14 @@ CLAIMS: tuple[Claim, ...] = (
         owner="docs/SAFETY.md",
         holds=ARTIFACTS_LISTED_NOT_HIDDEN,
         true_state=(
-            "Routines and widgets created in OPEN are LISTED BUT DISABLED under SAFE "
-            "(display-only `unavailable` reason), never hidden — owner decision 2026-08-06."
+            "Routines and widgets that need developer abilities are LISTED BUT DISABLED "
+            "under SAFE (display-only `unavailable` reason), never hidden — owner decision "
+            "2026-08-06. Which ones need them is asked of the artifact, never of its "
+            "created_in_mode stamp (widgets 2026-08-06, routines 2026-08-08)."
         ),
         false_state=(
-            "Routines and widgets created in OPEN are filtered out of routine.list / "
-            "widget.list under SAFE."
+            "Routines and widgets that need developer abilities are filtered out of "
+            "routine.list / widget.list under SAFE."
         ),
         # Present tense only. The tree legitimately recounts the old behaviour
         # ("they were hidden outright until 2026-08-06", "as routines made in OPEN

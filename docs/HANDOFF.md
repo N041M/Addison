@@ -218,8 +218,9 @@ kills both mutations by name.
 
   - Phase 4's disabled marker is decided from what an automation IS (it runs a
     command, so always) via a literal `True` — NOT from `created_in_mode`. A branch
-    scan pins it. The routines half still reads the stamp and that remains the
-    tracked bug in KNOWN-GAPS; do not copy it here.
+    scan pins it. Routines were the cautionary case and were converted on
+    2026-08-08 (they ask `_routine_needs_dev`, a per-row question); this table has no
+    per-row question at all, so keep the literal.
   - The ceremony's requirement lives on the TOOL (`gate.tool_requires_arming`),
     never on whether a preview arrived. Keyed off the payload it failed OPEN —
     downgrading to an ordinary card, or under Custom's "never ask" to none.

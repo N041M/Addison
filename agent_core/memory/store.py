@@ -600,8 +600,9 @@ class Store:
         """Persist a confirmed Routine (§6.3 — only ever after explicit user
         confirmation). ``plan_json`` is the §6.2 declarative plan; it is stored
         as JSON text and never contains code by construction. ``created_in_mode``
-        records the policy mode it was saved under ('safe' | 'open') so SAFE mode
-        can hide dev-created routines (policy.py)."""
+        records the policy mode it was saved under ('safe' | 'open') as display
+        provenance; availability is decided from the plan, never from this column
+        (``rpc/routines.py::_routine_needs_dev``, owner decision 2026-08-08)."""
         self._conn.execute(
             "INSERT INTO routines "
             "(id, name, description, plan_json, created_from_conversation_id, "

@@ -119,9 +119,10 @@ used to mean editing thirteen files.
   again. They used to be hidden; owner decision 2026-08-06 changed that, and
   [docs/SAFETY.md](docs/SAFETY.md) owns why. Ask the **artifact**, never the
   `created_in_mode` stamp — that stamp is display-only provenance, and a checklist
-  made in Developer needs nothing developer about it. Widgets ask correctly
-  (`widget_uses_dev_abilities`); **routines still read the stamp** — a live gap in
-  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md). The marker is never the enforcement:
+  made in Developer needs nothing developer about it. Widgets
+  (`widget_uses_dev_abilities`) and routines (`_routine_needs_dev`, which asks the
+  plan AND the SAFE tool view — owner decision 2026-08-08) both ask correctly.
+  The marker is never the enforcement:
   dispatch (`routine.run` / `widget.run` / the engine's per-step check) refuses,
   and **wins** if the two ever disagree.
 - **Snapshots are NEVER hidden by mode (C6).** `created_in_mode` ships on
@@ -220,8 +221,9 @@ The one dependency that is not obvious from the list was inside 7:
   surface loads (never stored, so a restore can put a ROW back and never a JOB),
   and Simple lists automations as disabled rows that say why — decided from what
   an automation IS (it runs a command, so always) rather than from its
-  `created_in_mode` stamp, which is the routines bug this deliberately did not
-  copy. **Step 8 is COMPLETE, and with it the Phase-2 sequence.**
+  `created_in_mode` stamp — the routines mistake this deliberately did not copy,
+  and which is itself closed (2026-08-08). **Step 8 is COMPLETE, and with it the
+  Phase-2 sequence.**
   [`docs/step-8-automation-plan.md`](docs/step-8-automation-plan.md) owns the
   phases and decisions.
 
