@@ -1991,6 +1991,29 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_read_is_recorded_as_not_knowing_and_never_as_a_fact() {
+        // The half the test above cannot see (found by the orchestrating review,
+        // 2026-08-08): it hands the rollback its `None` directly, so nothing pinned
+        // that `replaced_from` PRODUCES `None` from a failed read. Mutate
+        // `Err(_) => None` into `Err(_) => Some(Replaced::Nothing)` and every
+        // rollback test stays green — while a locked keychain at save time would be
+        // recorded as "definitely nothing was there", and the rollback would then
+        // DELETE the new key, claim success, and suppress the disclosure that is the
+        // person's only warning their old key is gone. `NoEntry` is the one error
+        // that IS a fact; everything else is Addison not knowing.
+        assert_eq!(
+            replaced_from(Err(keyring::Error::Invalid("read".into(), "denied".into()))),
+            None,
+            "a failed read must be recorded as not-knowing, never as a fact"
+        );
+        assert_eq!(replaced_from(Err(keyring::Error::NoEntry)), Some(Replaced::Nothing));
+        assert_eq!(
+            replaced_from(Ok("sk-old".into())),
+            Some(Replaced::Held("sk-old".into()))
+        );
+    }
+
+    #[test]
     fn a_rollback_that_cannot_write_the_old_key_back_says_so_rather_than_pretending() {
         // A silent failed rollback is the same defect as the silent clobber: the
         // person's key is gone and nothing on screen says it. `Unavailable` is what
