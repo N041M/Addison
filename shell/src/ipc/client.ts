@@ -615,14 +615,14 @@ export const ipc = {
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
 
   // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
-  // NONE OF THESE THREE REACHES THE OPERATING SYSTEM, in either direction of
-  // effect. `listAutomations` reads saved rows, `removeAutomation` takes one away,
-  // and `getAutomationStatus` ASKS what is installed and changes nothing. Arming
+  // NOT ONE OF THESE CAN START ANYTHING. `listAutomations` reads saved rows,
+  // `removeAutomation` takes one away, `getAutomationStatus` ASKS what is installed
+  // and changes nothing, and `disarmOrphanAutomation` only ever STOPS a job. Arming
   // itself is a TOOL (`arm_automation`), gated by the typed code and performed by
   // the Rust shell — there is no arm method on this surface and no plist on any of
-  // these payloads. All three answer in every profile: a saved automation is
-  // configuration, not an ability, so a profile switch never hides one and never
-  // traps a removal.
+  // these payloads. All four answer in every profile: a saved automation is
+  // configuration, not an ability, so a profile switch never hides one, never traps
+  // a removal, and never leaves somebody unable to switch a job off.
   listAutomations: (): Promise<Automation[]> =>
     call(Method.AutomationList).then(parseAutomations),
   removeAutomation: (id: string): Promise<AutomationMutationResult> =>
@@ -633,6 +633,14 @@ export const ipc = {
   // operating system is the truth.
   getAutomationStatus: (): Promise<AutomationStatus> =>
     call(Method.AutomationStatus).then(parseAutomationStatus),
+  // The ORPHAN path: a job the operating system is holding under one of Addison's own
+  // labels with no saved row behind it, because a restore took the row away. It takes
+  // the LABEL, since a label is all that is left of such a job — there is no id, no
+  // name and no command to send. The core validates the label against the set Addison
+  // mints before it asks the shell anything, so this cannot reach somebody else's
+  // launchd job even if this side sent one.
+  disarmOrphanAutomation: (label: string): Promise<AutomationMutationResult> =>
+    call(Method.AutomationDisarmOrphan, { label }).then(parseAutomationMutation),
 };
 
 // ---------------------------------------------------------------------------
@@ -1712,7 +1720,11 @@ export interface AutomationMutationResult {
   error?: string;
 }
 
-function parseAutomationMutation(result: unknown): AutomationMutationResult {
+/** Exported for the generated-fixture suite, like `parseAutomations` beside it: the
+ * refusal sentence this pulls out is the whole of what a person sees when switching
+ * an orphaned job off does not land, and the only artifact both sides share is the
+ * payload the real handler produces. */
+export function parseAutomationMutation(result: unknown): AutomationMutationResult {
   const obj = asRecord(result);
   return {
     ok: obj?.ok === true,

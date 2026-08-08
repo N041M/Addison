@@ -17,15 +17,18 @@ reach ``launchctl``: those live in the highest-trust process (plan §2), behind 
 typed shell surface that builds the document itself.
 
 **It DOES cross the shell bridge, in exactly one direction** — ``list_armed`` and
-``disarm_automation``, and only from ``_disarm_before_forgetting`` (phase 3's
-review fix). That
-is a TIGHTENING and the reason is below: a removal that forgot an armed row would
-leave a job running with nothing on screen to name it. It can ask the OS to stop
-something and to say what it holds; it has no way to ask it to start anything, and
-the structural test in ``tests/test_automations.py`` is what keeps that true rather
-than merely intended.
+``disarm_automation``, from TWO callers and no others: ``_disarm_before_forgetting``
+(phase 3's review fix) and ``_automation_disarm_orphan`` (2026-08-08). Both are
+TIGHTENINGS, and each one's reason is at its own definition: a removal that forgot an
+armed row would leave a job running with nothing on screen to name it, and a job the
+OS holds with no row at all is that same shape arrived at through a G3 restore. It
+can ask the OS to stop something and to say what it holds; it has no way to ask it to
+start anything, and the structural test in ``tests/test_automations.py`` is what keeps
+that true rather than merely intended — it reads the bridge's own method set and pins
+that this module names exactly those two of them, so a ``bridge.arm_automation(...)``
+added here fails by NAME rather than by anyone noticing.
 
-**Both methods answer in EVERY profile.** A saved row is configuration, not a
+**Every method here answers in EVERY profile.** A saved row is configuration, not a
 capability: what an automation's shell command needs is Developer, and that belongs
 where the capability is — ``create_automation`` registers ``open_only`` (as the
 phase-3 arming tools will), absent from ``registry.visible_tools(SAFE)`` and refused
@@ -59,7 +62,12 @@ surface phase 3 adds.
 
 from __future__ import annotations
 
-from agent_core.automations import Automation, schedule_fields, schedule_sentence
+from agent_core.automations import (
+    Automation,
+    label_is_addisons_own,
+    schedule_fields,
+    schedule_sentence,
+)
 from agent_core.policy import PolicyMode
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
@@ -87,6 +95,31 @@ _COULDNT_DISARM_TO_REMOVE = (
     "Addison couldn't switch that automation off just now, so it left it in place — "
     "removing it while your computer was still running it would leave it running "
     "with nothing here to stop it. Try again in a moment."
+)
+
+# --- the orphan path's own copy (2026-08-08) ---------------------------------
+# Said for a label Addison did not mint. The person cannot reach this from the
+# Automations section — it only offers the labels the OS reported under Addison's own
+# prefix — so this answers a stale surface, a hand-written request, or a future build
+# that widened what it sends. Plain, and honest about the limit rather than about
+# permission: Addison is not refusing to help, it genuinely only knows its own files.
+_NOT_ADDISONS_OWN = (
+    "Addison can only switch off the automations it set up itself, so it didn't "
+    "switch that one off."
+)
+# Said when the label DOES have a saved automation again — a restore put the row back
+# between the surface reading it and somebody pressing the button. Not a failure: the
+# row is on screen with its own controls, and this path is only for jobs no row can
+# reach.
+_SAVED_AGAIN = (
+    "That automation is saved again, so switch it off from its own row in the list."
+)
+_NO_SHELL_TO_DISARM = (
+    "Addison can only switch an automation off from the desktop app, so it didn't "
+    "switch that one off."
+)
+_COULDNT_DISARM_ORPHAN = (
+    "Your computer wouldn't switch that off just now. Try again in a moment."
 )
 
 
@@ -253,6 +286,78 @@ class AutomationsMixin(ServerContext):
             return {"ok": False, "error": _COULDNT_DISARM_TO_REMOVE}
         self.store.delete_automation(automation_id)
         return {"ok": True}
+
+    def _automation_disarm_orphan(self, params: dict) -> dict:
+        """automation.disarmOrphan {label} -> {ok} | {ok:false, error}.
+
+        **Switch off a job the OS is holding that NO ROW can reach.** ``apply_config_state``
+        is REPLACE-ALL, so restoring a snapshot that predates an automation deletes its
+        row while ``<label>.plist`` stays installed and launchd goes on running it at
+        every login. Every other way out then refuses: ``disarm_automation`` (the tool)
+        and ``automation.remove`` both start by looking the row up, and the Settings
+        section renders armed-ness per row, so it could not even name the thing. A job
+        nobody can see and nobody can stop — the shape phase 3's review fixed for the
+        Remove path, arrived at through Restore instead
+        ([KNOWN-GAPS.md](../../docs/KNOWN-GAPS.md), closed 2026-08-08).
+
+        **RECONCILE-ON-RESTORE, and specifically not the two alternatives.** A restore is
+        never blocked and nothing is silently disarmed during one: arming decisions must
+        not live inside the one action G3 promises is always available. What reconciles is
+        the SURFACE — the section already asks the OS what it holds when it loads, and an
+        armed label matching no row is rendered as its own row with this method behind
+        its button. Addison changes nothing until the person presses it.
+
+        **It can only ever stop something, and every line below is that sentence.**
+
+          * **The label is validated against the set Addison MINTS**, before the store is
+            read and before the shell is asked (``automations.label_is_addisons_own`` —
+            the same rule ``automation.rs`` enforces on its own side, plan §5.8).
+            Somebody else's launchd job is not Addison's to touch, and the check that
+            says so costs nothing and reaches nothing.
+          * **A label that HAS a row is refused**, which is the narrowness rather than
+            an obstacle. A row-backed automation has its own controls; letting this
+            answer for one too would put a second, cardless disarm path beside the tool
+            that deliberately raises a card. The only way to see this refusal is a
+            restore landing between the surface's read and the press, and then the row
+            is on screen with its Disarm.
+          * **No card and no typed code.** The nonce gates ARMING (plan §5.2); a
+            ceremony in front of switching something OFF is a guard failing in the
+            direction where every failure is unsafe — ``disarm_automation``'s module
+            docstring owns that reasoning.
+          * **Every profile**, and no ``_mode()`` call anywhere: a tightening must never
+            be the thing a profile switch traps, and Simple keeping Remove is the
+            precedent (plan §4.4).
+          * **No snapshot**, because there is nothing captured to put back. ``remove``
+            mints one for the ROW it deletes; here there is no row, and what changes is
+            a file in the OS's own folder that no snapshot has ever held.
+
+        Not idempotent-by-silence: the shell's ``disarmAutomation`` answers ``ok`` for a
+        label it is not holding (its own contract), so a job somebody removed by hand
+        between the read and the press reports success, which is true — it is off."""
+        label = params.get("label")
+        if not label_is_addisons_own(label):
+            return {"ok": False, "error": _NOT_ADDISONS_OWN}
+        self._ensure_built()
+        if any(row.label == label for row in self.store.list_automations()):
+            return {"ok": False, "error": _SAVED_AGAIN}
+        bridge = self._shell_bridge
+        if bridge is None:
+            return {"ok": False, "error": _NO_SHELL_TO_DISARM}
+        try:
+            answer = bridge.disarm_automation(label)
+        except Exception:
+            # Including the shell's own plain-sentence RuntimeError: this path has a
+            # person watching a button, and "it didn't work, try again" is the whole of
+            # what they can act on either way.
+            return {"ok": False, "error": _COULDNT_DISARM_ORPHAN}
+        if isinstance(answer, dict) and answer.get("ok"):
+            return {"ok": True}
+        # The shell's own sentence when it sent one — it knows which of its refusals
+        # happened (not a Mac, no home folder, the scheduler would not answer) and this
+        # side would only be guessing.
+        error = answer.get("error") if isinstance(answer, dict) else None
+        said = str(error) if isinstance(error, str) and error.strip() else _COULDNT_DISARM_ORPHAN
+        return {"ok": False, "error": said}
 
     def _disarm_before_forgetting(self, label: str) -> bool:
         """Switch this automation off if the OS is holding it. True when it is safe

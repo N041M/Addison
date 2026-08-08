@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   parseAutomations,
+  parseAutomationMutation,
   parseCostPlan,
   parseEndpointProposal,
   parseSnapshotList,
@@ -36,6 +37,9 @@ import automationListFixture from "./fixtures/automation.list.json";
 // not a method name, because the payload has two shapes and no one call can show
 // both (tests/ipc_fixtures.py says why at the generator).
 import automationListSimpleFixture from "./fixtures/automation.list.simple.json";
+// The orphan path's REFUSAL (2026-08-08) — the success is `{ok:true}` and pins
+// nothing; this is the shape that carries a sentence somebody reads.
+import automationDisarmOrphanFixture from "./fixtures/automation.disarmOrphan.json";
 import costPlanFixture from "./fixtures/costPlan.propose.json";
 import endpointProposeFixture from "./fixtures/endpoint.proposeFromConversation.json";
 
@@ -421,6 +425,23 @@ describe("parseAutomations over the real automation.list payload", () => {
     expect(rows.map(({ unavailable: _unavailable, ...rest }) => rest)).toEqual(
       parseAutomations(automationListFixture),
     );
+  });
+
+  it("carries the core's own refusal when a switch-off is not Addison's to make", () => {
+    // `automation.disarmOrphan` is the one way to stop a job a G3 restore orphaned,
+    // and it refuses any label Addison did not mint. The SENTENCE is the payload's
+    // only content, and the section prints it verbatim in preference to anything it
+    // would say itself — so a core that stopped sending one would leave somebody
+    // pressing a button that appears to do nothing at all.
+    expect(parseAutomationMutation(automationDisarmOrphanFixture)).toEqual({
+      ok: false,
+      error:
+        "Addison can only switch off the automations it set up itself, so it didn't " +
+        "switch that one off.",
+    });
+    // And nothing else rides back: not the label that was sent, not what the OS holds.
+    // A refusal is an answer about one request, never a second listing surface.
+    expect(Object.keys(automationDisarmOrphanFixture).sort()).toEqual(["error", "ok"]);
   });
 });
 

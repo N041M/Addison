@@ -218,7 +218,7 @@ class Method:
     # schedules anything, and no phase ever will: the OS runs the job, Addison writes
     # the file it runs from (phase 3, through a typed shell surface).
     #
-    # THERE IS NO ADD METHOD, AND THAT IS THE POINT. The table exists and these two
+    # THERE IS NO ADD METHOD, AND THAT IS THE POINT. The table exists and these
     # methods answer over it; rows are written by the `create_automation` TOOL (phase
     # 2, `open_only`, gated and audited like every other), never by this namespace.
     # Arming is the `arm_automation` TOOL (phase 3), which goes through the ordinary
@@ -226,8 +226,8 @@ class Method:
     # then through the SHELL, which builds the plist itself — so no payload on this
     # namespace ever installs, starts or schedules anything.
     #
-    # BOTH answer in EVERY profile, deliberately. A saved row is configuration, not a
-    # capability — what an automation's shell command needs is Developer, and that is
+    # ALL OF THEM answer in EVERY profile, deliberately. A saved row is configuration,
+    # not a capability — what an automation's shell command needs is Developer, and that is
     # enforced where the capability is (the authoring/arming tools' `dev_only`
     # registration and their dispatch), never by hiding rows. Hiding somebody's saved
     # configuration on a profile switch is the failure the 2026-08-06 artifact
@@ -247,6 +247,24 @@ class Method:
     # in the OS, so a G3 restore can put a ROW back and can never put a JOB back).
     # `supported` is false off macOS, where arming does not exist at all.
     AUTOMATION_STATUS = "automation.status"
+    # {label} -> {ok} | {ok:false, error}. THE ORPHAN PATH (2026-08-08, closing the
+    # KNOWN-GAPS entry a G3 restore opened): a job the OS is holding under one of
+    # Addison's own labels with NO ROW behind it — because a REPLACE-ALL restore of a
+    # snapshot predating the automation took the row away while launchd went on
+    # running the file. `automation.remove` and the `disarm_automation` TOOL both
+    # refuse such a label ("that automation isn't saved any more"), which left the job
+    # unnameable and unstoppable from every surface. This is the one path that works
+    # with no row.
+    #
+    # IT ONLY EVER STOPS SOMETHING, and the whole shape follows from that. No card and
+    # no typed code (a tightening must never be what a guard blocks — `automation.remove`
+    # and `mcp.remove`'s rule), answered in every profile, and structurally incapable of
+    # the other direction: it takes a LABEL, validates it against the set Addison mints
+    # (`automations.label_is_addisons_own` — somebody else's launchd job is refused
+    # before anything is asked), and reaches the shell's `disarmAutomation` and nothing
+    # else. G2 is untouched: nothing here installs, starts or schedules anything, and
+    # there is still no `automation.arm` on this surface in any profile.
+    AUTOMATION_DISARM_ORPHAN = "automation.disarmOrphan"
     # <row> = {id, name, label, command, scheduleKind, schedule, scheduleSentence,
     #          createdInMode, createdAt, unavailable?}
     # `unavailable` is {reason, message} on a row the ACTIVE PROFILE cannot use, and
