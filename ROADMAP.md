@@ -43,7 +43,7 @@ single connected provider can contribute twenty-two models.
 
 ## Next
 
-**Nothing from this sequence is left. Step 8 finished on 2026-08-07, and with it
+**Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it
 the whole July-2026 scope change.** What comes next is Phase 3, and Phase 3 is two
 tracks rather than one. The first is the packaging track it has always been —
 packaging, signing, notarisation, the auto updater, going back to a previous app
@@ -60,7 +60,7 @@ See the note further down and
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
-2026-08-07 and step 8 for the rest of that day; all are finished. Their entries
+2026-08-07 and step 8 until the following morning; all are finished. Their entries
 stay below, in place, because they are recent enough that people still ask what
 they covered.
 
@@ -168,7 +168,7 @@ they covered.
    is trimmed to a size that fits, once for the whole answer rather than once per
    piece, and the trim now says how long the answer was and how much of it you are
    seeing.
-8. **The automation keyword gate — DONE 2026-08-07, all four phases.** Let Addison write automation that the operating
+8. **The automation keyword gate — DONE: phases 1–3 on 2026-08-07, phase 4 on 2026-08-08.** Let Addison write automation that the operating
    system runs, with a keyword you type yourself needed to arm it. Addison still
    never triggers itself. The keyword is a code Addison shows you and you retype,
    minted fresh for each arming — decided 2026-08-07, and what made a fixed prefix
@@ -239,8 +239,9 @@ has made that is still on disk, the before-and-after for one of them, and puttin
 file back to the state Addison found it in), and §§4–5 — the screen itself, a third
 sidebar entry that exists only under the Developer and Custom profiles, with Monaco
 skinned from the palette the app already had. Shipping the editor meant widening the
-webview's content-security policy by one directive (`style-src 'unsafe-inline'`, which
-Monaco cannot run without) while tightening four others; the policy is pinned by
+webview's content-security policy by two directives (`style-src 'unsafe-inline'`, which
+Monaco cannot run without, and `img-src 'self' data:`, which the previous
+`default-src 'self'` refused) while tightening four others; the policy is pinned by
 `tests/test_csp_is_pinned.py` and the one path by which markup the app did not author
 reaches the page has its CSS stripped before injection. **What remains is not code:**
 the §13c manual pass in [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md), which is

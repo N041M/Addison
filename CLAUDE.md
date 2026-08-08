@@ -265,8 +265,9 @@ legitimate free cloud tiers); new endpoints are extensible and addable by prompt
 Addison (reversible config, keys per G1). Gray-area aggregating routers
 (OmniRoute/LiteLLM) are the user's own choice — documented on GitHub only, never
 surfaced or endorsed in-app. **MCP is a *client* capability** (consume external
-tools through the existing registry + gate; SAFE admits only read-only/undo-able
-ones), never a server/gateway.
+tools through the existing registry + gate), never a server/gateway. MCP is
+**dev-only for v1**: no MCP tool enters `visible_tools(SAFE)`, and what SAFE would
+ever admit is deferred, not answered — see the step-7 entry above.
 
 ## Do NOT build yet
 

@@ -79,18 +79,23 @@ wired up, and auto-update is a **Phase-3** item (see G4 below, where this matter
 > previous-binary restore under G4 below — are packaging work and are both still
 > true. What they no longer describe is the *whole* phase.
 > [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) (approved
-> 2026-07-25, **not started**; its three prerequisites all closed 2026-08-08) adds a
+> 2026-07-25, prerequisites closed 2026-08-08, **BUILT the same day**) adds a
 > second track to it: a Developer/OPEN **review surface** — a file tree over the
 > trusted roots, a read-only viewer, a real diff of every edit Addison has made that
 > is still live on disk, and per-file revert. It belongs in *this* document because
-> it crosses the boundaries drawn here: read-only bridge methods added to
-> `shell/src-tauri/src/filesystem.rs` beside the step-5 block, driven from
-> `agent_core/rpc/workspace.py` and deliberately **not** from the tool registry — a
+> it crosses the boundaries drawn here, and the shipped shape is exactly the one
+> planned: read-only bridge methods sit in `shell/src-tauri/src/filesystem.rs`
+> beside the step-5 block (`shell.listWorkspaceDirectory`,
+> `shell.readWorkspaceFileForView`, `shell.restoreWorkspaceFile` and the two
+> predicates behind it), driven from `agent_core/rpc/workspace.py`'s
+> `workspace.listDirectory` / `readFile` / `listEdits` / `readEditDiff` /
+> `revertFile` and deliberately **not** from the tool registry — a
 > person clicking a folder open is not the model acting, and a registry route would
 > hand the model a directory-listing capability as a side effect and put a
 > permission card in front of a click the person just made. The three-process trust
-> model below is unchanged and no floor moves; the one cost the plan states plainly
-> is a widened webview CSP (`style-src 'unsafe-inline'`, globally, for one window).
+> model below is unchanged and no floor moved; the one cost the plan stated plainly
+> was a widened webview CSP, and it is now applied and pinned (`style-src
+> 'unsafe-inline'`, globally, for one window).
 > [`../ROADMAP.md`](../ROADMAP.md) owns status.
 
 What each process may and may not do:

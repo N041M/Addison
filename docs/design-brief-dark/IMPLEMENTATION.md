@@ -126,8 +126,12 @@ glyphs hover to `ink`.
   (`mask-image: linear-gradient(180deg, transparent, #000 32px, #000
   calc(100% - 20px), transparent)`), hidden scrollbars.
 - **Sidebar:** top "Workspace" block (2px rail + 11px label) with rows →
-  **Tools** (mono hint: trusted-root count or mode note) and **Snapshots**
-  (mono hint: restore-point count); then "＋ New chat" (accent, 12px); then
+  **Tools** (mono hint: trusted-root count or mode note), **Snapshots**
+  (mono hint: restore-point count) and — under the Developer and Custom profiles
+  only — **Code**, the review surface (no mono hint today; see the code-surface
+  section below). The Code row is rendered only when `App` hands `Sidebar` an
+  `onOpenCode` handler, so in Simple there is no disabled control inviting a
+  question about why. Then "＋ New chat" (accent, 12px); then
   chat groups **Today / Earlier** (real conversations bucketed by their
   timestamps): group header = 11px `faint` label + mono hint (`N chats` /
   `collapse`), click toggles; collapsed shows 3 rows + "N more…" ghost row;
@@ -356,10 +360,16 @@ it is written first for the reason the rest of this file exists: the brief above
 editor is the one component that arrives with somebody else's theme already attached —
 the place a second look leaks into an app that has exactly one.
 
-**It shipped as written**, in `shell/src/lib/monacoTheme.ts` and
-`shell/src/components/CodeSurface.tsx`: no new token entered `styles.css`, no new hue
-entered the app, and the editor reads the `--hl-*` variables the markdown code blocks
-already use. Three notes the mapping did not anticipate, none of which changes the
+**It shipped as written**, across five files: `shell/src/components/CodeSurface.tsx`
+(the screen — tree, changes list, viewer/diff pane, the put-it-back control),
+`shell/src/components/CodeEditor.tsx` (the two thin wrappers around Monaco's viewer
+and diff-viewer, holding the read-only narrowings and the plain-text fallback),
+`shell/src/lib/monaco.ts` (the ESM-only entry, imported lazily so nobody who avoids
+the screen downloads it), `shell/src/lib/monacoTheme.ts` (the mapping below), and
+`shell/src/hooks/useCodeReview.ts` (every `workspace.*` call the screen makes —
+[`../flows.md`](../flows.md) flow 16 draws them). No new token entered `styles.css`,
+no new hue entered the app, and the editor reads the `--hl-*` variables the markdown
+code blocks already use. Three notes the mapping did not anticipate, none of which changes the
 design language. `editor.foreground` had to be mapped as well (to `ink`) — with
 `inherit: false`, it is what every unmapped token falls to, so leaving it unset would
 have let Visual Studio's default through the one gap. `--hl-builtin` and `--hl-link`

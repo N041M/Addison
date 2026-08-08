@@ -598,36 +598,60 @@ under Developer is a floor-shaped failure, not a nit.
 `node_modules` are **listed** — collapsed, never auto-expanded, never hidden. A tree
 that hides them is lying about what is on disk, and telling the truth is this
 surface's whole value. A symlink is drawn as a symlink and not as a folder; one that
-points out of the trusted root is dimmed and says *"this points outside the folder
-you trusted"*. Click it anyway: it refuses. The label is honesty; the refusal is the
-boundary, and it is the refusal that has to hold.
+points out of the trusted root is dimmed, struck through, and says *"This points
+outside the folder you trusted."* **It is not a control — the row is a plain `div`
+with no click handler at all**, so there is nothing to click and nothing to refuse.
+That is the shipped design (plan §1: the label is the honesty, and the boundary is
+the core's refusal on the follow-up call, which every read goes through whatever the
+tree drew). What this step checks is therefore the label and the dimming; the refusal
+underneath it is covered by tests, not by a click nobody can make.
 
 **A diff of a change that is still there.** In Developer, have Addison edit two
 files, then open the surface: both are listed with a real before/after, the left pane
 showing the file as it was before Addison's **first** change. Ask Addison to edit one
 of them a second time — it stays **one** entry, still comparing against that original
-version, not against the intermediate one. Revert it: the file on disk becomes exactly
+version, not against the intermediate one. **The control is called "put it back"**
+(the confirm's is "Put it back") — this section used to call it "Revert", which is
+the word the plan and the code's own comments use for the mechanism, and never what
+the app says. Press it: the file on disk becomes exactly
 what the left pane was showing, and the entry leaves the list. Nothing partial is
 offered — there is no hunk-level revert, because a half-applied revert would put a
 combination of bytes on disk that never existed there.
 
 **The warning before a clobber.** Change one of those files yourself after Addison
-did, then revert it. The confirm must say so — *"You've changed this file since
+did, then put it back. The confirm must say so — *"You've changed this file since
 Addison did. Reverting will replace what's there now with the version from before
 Addison's first change."* — as a two-step inline confirm, never a browser dialog.
+(A third state exists and is a real answer, not an error: when the shell cannot
+judge whether the file moved, the confirm says *"Addison can't tell whether this
+file changed since."*)
 
 **The restart is the step people will skip, and the one that matters.** Quit, reopen,
-and look at an edit from the previous session. There must be **no Revert button that
+and look at an edit from the previous session. There must be **no "put it back" that
 fails**: the row is read-only, with *"Addison changed this before the app was last
 restarted, so it can't put it back for you. The earlier version is on the left; you
 can copy it."* The before text is right there, so the honest answer is still a useful
-one. "Undo last action" in the header must be equally honest about the same edits —
-a control that is offered and then refuses is worse than one that explains itself.
+one.
 
-**Consent follows you here.** With the code screen open, ask Addison to do something
-that needs approval. The permission card and the Activity Panel appear **on this
-screen**, not back in chat — a consent surface you have navigated away from is
-unanswerable, and two consent surfaces is the bug.
+*"Undo last action" cannot be checked on the same fresh window, and this is by
+construction rather than an oversight.* The header control renders only when
+`hasUndoableActions` is true, and that flag starts **false** on every launch and is
+set only by a live `tool.activityUpdate` — so immediately after a restart there is no
+control to be honest with. To check it, cause one tool action first (any Developer
+request that touches a file), which makes the control appear; it must then be equally
+honest about the **pre-restart** edits it cannot put back, refusing with a plain
+sentence rather than a failed write. A control that is offered and then fails silently
+is worse than one that explains itself.
+
+**Consent follows you here.** There is **no composer on the code screen** (it renders
+on the chat view only), so this cannot be started from here: ask Addison from **chat**
+for something that needs approval, then open the code screen while the turn is still
+in flight. The permission card and the Activity Panel must follow you and appear **on
+this screen**, not stay back in chat — a consent surface you have navigated away from
+is unanswerable, and two consent surfaces is the bug. (The expectation is the shipped
+one: `App` renders the consent layer over any surface and hands the Activity Panel to
+`CodeSurface`. Only the instruction was wrong here, and it was unperformable as
+written.)
 
 **Nothing new is offered to the model.** Open Tools in Developer: there is no
 "browse files" or "list directory" tool, and there must never be one — a person
@@ -648,8 +672,10 @@ look at a permission card again, on this screen and in chat, and confirm nothing
 overlays, hides or restyles it.
 
 **Ask the webview what the policy actually refused.** The one measurement no test can
-make: a CSP is enforced by a real webview and nothing else. In Developer, with raw
-diagnostics on, open **Settings → Diagnostics**, then use the code screen properly —
+make: a CSP is enforced by a real webview and nothing else. Raw diagnostics is **not
+a toggle** — it is a read-only profile flag (`raw_diagnostics`, on under Developer and
+Custom, off under Simple), so being in Developer is the whole of the setup. Open
+**Settings → Diagnostics**, then use the code screen properly —
 open a file, open a diff, resize the window so the diff flips between side-by-side and
 inline, and flip Appearance while an editor is on screen. The ring must hold **no**
 "The app's content policy blocked something" entry. One that names `worker-src` means
@@ -660,11 +686,17 @@ on **all three platforms**: Tauri parses the policy into a directive map and inj
 its own nonces and IPC sources, and now that explicit `script-src`/`connect-src` exist
 those additions retarget to them.
 
-**Narrow window.** Take it through both breakpoints from §14. The tree collapses to a
-rail and then to a drawer rather than squeezing the diff into two unreadable columns,
-and the diff falls back to a single-column (inline) view instead of side-by-side.
-Everything tappable — tree rows, file rows, Revert, both steps of its confirm — is
-**≥44px** tall. At 375px there is no horizontal scroll anywhere.
+**Narrow window.** This screen has **one** breakpoint, not §14's two: at **767.98px**
+the file tree stops being a column and becomes the same `MobileDrawer` the sidebar
+uses. There is no intermediate rail — the 1024px breakpoint moves the widget rail and
+this screen has none. Independently of that, the diff falls back to a single-column
+(inline) view instead of side-by-side; that switch is Monaco's own, on the diff
+container's width (700px), so it can happen while the tree is still a column.
+Everything tappable — tree rows, file rows, "put it back", both steps of its confirm —
+is **≥44px** tall. **The page must not scroll sideways at 375px**, but note the
+expectation stops at the page: the editor is configured with word wrap off and its own
+10px horizontal scrollbar, so a long line scrolls **inside** the editor pane, by
+design. A horizontal scrollbar on the window is the finding; one under the code is not.
 
 **Both themes.** Walk the tree, the viewer and a diff in **light and dark**:
 additions and deletions read as additions and deletions in both; the deletion tint is
