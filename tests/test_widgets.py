@@ -848,14 +848,25 @@ def test_setting_the_state_of_a_widget_that_needs_developer_abilities_is_refused
     the three kinds that keep state are all SAFE by construction, so no stateful
     widget can need Developer on its own. This spec is SAFE-legal by SHAPE and
     needs Developer anyway, because of what it points AT — which is the case the
-    look-through exists for, and the one a spec-only check would miss."""
+    look-through exists for, and the one a spec-only check would miss.
+
+    The routine it points at carries a COMMAND STEP, and that detail became
+    load-bearing on 2026-08-08. It had no steps at all and was 'dev' only by its
+    ``created_in_mode`` stamp, which was enough while the look-through read that
+    stamp; now that routines are judged by what they NEED (owner decision
+    2026-08-08, docs/KNOWN-GAPS.md), a stepless routine needs nothing developer and
+    this widget would be an ordinary Simple row. The fixture was fixed rather than
+    the assertion: what this test is about is a widget that genuinely has to wait."""
     store = Store(tmp_path / IPC_DB_NAME)
     store.insert_routine(
         id="r-dev",
         name="Tidy up",
         description="",
         plan_json={"id": "r-dev", "name": "Tidy up", "description": "",
-                   "variables": [], "steps": []},
+                   "variables": [],
+                   "steps": [{"step_id": "s1", "tool_id": "run_command",
+                              "args_template": {}, "depends_on": [],
+                              "command": "rm -rf ~/Downloads/tmp"}]},
         created_from_conversation_id=None,
         created_at=int(time.time()),
         created_in_mode="open",

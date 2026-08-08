@@ -187,8 +187,10 @@ sequenceDiagram
 A routine is a shortcut for re-issuing a sequence of tool calls. The engine runs on
 the same `ToolRegistry`, `PermissionGate`, and `UndoManager` instances as the live
 loop, so it can never gain permissions the user has not already granted live. The run
-carries the current policy mode (`policy.py`): a dev-created routine is refused before
-this flow starts when in SAFE mode; an OPEN-mode `command` step runs through the
+carries the current policy mode (`policy.py`): a routine that needs developer
+abilities is refused before this flow starts when in SAFE mode — asked of the plan
+and the SAFE tool view, never of its `created_in_mode` stamp
+([SAFETY.md](SAFETY.md)); an OPEN-mode `command` step runs through the
 `run_command` dev-only tool on those same instances, so it stops to ask **every time**.
 Two properties the engine shares with the live turn rather than reimplementing: the
 dev-only refusal and the confinement check both run at dispatch, *before* the gate and

@@ -74,9 +74,9 @@ are the one exception and it is not negotiable — see "Snapshots are never hidd
 by mode" below.**
 
 *"Needs developer abilities" is asked of the ARTIFACT, never of the
-`created_in_mode` stamp* — **widgets, since 2026-08-06;
-[KNOWN-GAPS.md](KNOWN-GAPS.md) holds the routine half, which still reads the
-stamp.** The stamp records where a thing was born, and the two answers part
+`created_in_mode` stamp* — **widgets since 2026-08-06, routines since 2026-08-08
+(owner decision; [KNOWN-GAPS.md](KNOWN-GAPS.md) holds the closed entry).** The
+stamp records where a thing was born, and the two answers part
 company for everything that is perfectly usable in Simple but happened to be made
 while Developer was active. Read off the stamp, a shopping-list widget arrived in
 Simple disabled, announcing that it "uses developer abilities" — about a widget
@@ -86,6 +86,18 @@ answer is derived from the validator (`widgets.widget_uses_dev_abilities`: OPEN
 accepts it and SAFE does not) plus a look-through for what a launcher POINTS AT,
 so a future OPEN-only kind is covered on the day it is added rather than the day
 someone remembers this paragraph.
+
+The routine answer is `rpc/routines.py::_routine_needs_dev` — **one function, used
+by the list marker AND by `routine.run`'s refusal**, true when the plan carries a
+command step *or* when a step names a tool the SAFE view does not hold
+(`read_project_file`, an `mcp:` tool, ...). It takes the registry as well as the
+plan, which is why it lives a layer above `routines/` (module boundary, CLAUDE.md
+§2), and the widget look-through above asks it rather than answering a second time.
+Loosening `routine.run`'s SAFE refusal to this question was an owner decision
+(2026-08-08): it is sound because the engine's per-step `dev_only` check is the
+enforcement and a command-free routine replays through `visible_tools(SAFE)` with
+the gate carding per invocation (invariant 3) — a routine still cannot out-permission
+the live user. What changed is which question is asked, not what may run.
 
 *They used to be hidden: filtered out of `routine.list` and `widget.list`
 entirely.* The refusal was never the problem — losing sight of the work was.

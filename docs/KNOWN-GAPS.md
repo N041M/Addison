@@ -360,29 +360,35 @@ questions were resolved during steps 1–3 and went with it):
   `registry.visible_tools(mode)` and never a second risk model. Code-backed widgets
   are still Developer-only and still unbuilt; when they land they are listed by the
   same `widget.list`, disabled in Simple like every other dev-made artifact.
-- **A routine's availability is still decided by its STAMP, not by what it needs.**
-  The widget half of this was fixed on 2026-08-06 (`widget_uses_dev_abilities`,
-  [SAFETY.md](SAFETY.md)); routines have the identical bug and it is **worse there,
-  because it reaches dispatch.** `builder.save` stamps `created_in_mode=mode.value`
-  unconditionally, so a routine of nothing but `web_search` steps, saved while
-  Developer was active, is stamped `open` — then listed disabled in Simple
-  (`rpc/routines.py`) *and refused outright* by `_handle_routine_run`, which tests
-  `created_in_mode(routine_id) == 'open'`. `routine_uses_dev_abilities` already
-  exists and is the right question; it is used only for the **save-time** refusal
-  in `builder.py`, never for availability.
-  Two things make this an owner call rather than a follow-on commit. **It loosens a
-  dispatch refusal in SAFE**, which is invariant-adjacent: the argument that it is
-  safe is that the engine's per-step `dev_only` check is the real enforcement and a
-  command-free routine replays through `visible_tools(SAFE)` with the gate carding
-  per invocation (invariant 3) — sound, but it should be *decided*, not inherited
-  from a widget fix. And **the correct test is not `routine_uses_dev_abilities`
-  alone**: that only looks for `step.command`, so a step naming an `open_only` tool
-  (`read_project_file` / `write_project_file`) needs Developer and would not be
-  caught. The real test needs the registry as well as the plan, so it belongs in
-  the RPC layer — the module boundary rule keeps `routines/` from importing
-  `tools/`. Until it lands, `rpc/widgets.py::_widget_needs_dev` deliberately reads
-  the routine's stamp for its look-through, so the rail and the library cannot
-  disagree about the same routine; that is the one line that follows this fix.
+- ~~**A routine's availability is still decided by its STAMP, not by what it needs.**~~
+  **CLOSED 2026-08-08 — owner decision, built exactly as this entry prescribed.**
+  Both surfaces — the `unavailable` marker on `routine.list` and
+  `_handle_routine_run`'s refusal — now ask **what the routine needs**, through ONE
+  function with one owner: `rpc/routines.py::_routine_needs_dev`, true when the plan
+  carries a command step (`routine_uses_dev_abilities`) **or** when a step names a
+  tool absent from `registry.visible_tools(SAFE)`. A routine of nothing but
+  `web_search` steps, saved while Developer was active, is an ordinary Simple row
+  again, and it runs. `created_in_mode` still ships as display provenance for the DEV
+  badge and decides nothing; `RoutineLibrary.created_in_mode` — the by-id accessor
+  that existed only to decide — is deleted, and a source-level test
+  (`test_availability_is_never_decided_from_where_a_routine_was_born`) pins that no
+  branch in either RPC module names the stamp.
+  **The dispatch refusal in SAFE was loosened, which is what made this an owner
+  call.** The argument now sits at the refusal itself (`rpc/routines.py`) rather than
+  in a document: the engine's per-step `dev_only` check is the real enforcement, and
+  a command-free routine replays through `visible_tools(SAFE)` with the gate carding
+  per invocation (invariant 3), so nothing widened. Dispatch still refuses a routine
+  that NEEDS developer abilities; it stopped refusing one for where it was born.
+  **The second half of the entry drove the design.** `routine_uses_dev_abilities`
+  alone sees only `step.command`, so a step naming an `open_only` tool
+  (`read_project_file` / `write_project_file`, and equally `create_automation`,
+  `arm_automation`, `disarm_automation`, `run_command`, every `mcp:` tool) would have
+  slipped through — the question needs the registry as well as the plan, and the
+  module boundary rule keeps `routines/` from importing `tools/`, so it lives in the
+  RPC layer. The one follow-on line landed in the same commit:
+  `rpc/widgets.py::_widget_needs_dev`'s look-through asks that same function, so the
+  rail and the library still cannot disagree about one routine — now about the right
+  answer. [SAFETY.md](SAFETY.md) owns the rule both halves implement.
 - **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
   shipped in step 3: escalate/degrade on unavailable, rate-limit or network
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain

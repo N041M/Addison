@@ -578,8 +578,8 @@ def test_simple_lists_every_automation_disabled_and_says_why(tmp_path):
     The third row is the load-bearing one. It is stamped ``safe`` — which no tool can
     produce, but a hand edit, an older build or a restored payload can — and it is
     marked exactly like the other two, because what decides this is what an automation
-    IS, not where it was born. Read off the stamp (the routines bug in
-    docs/KNOWN-GAPS.md) this row would arrive in Simple looking usable.
+    IS, not where it was born. Read off the stamp (the routines bug this file was
+    written beside, closed 2026-08-08) this row would arrive in Simple looking usable.
 
     Frozen copy, asserted as a literal rather than against the constant it is built
     from: a test that compares a payload to its own source passes whatever that source
@@ -685,9 +685,10 @@ def test_a_disabled_automation_is_still_removable_in_simple(tmp_path):
 
 def test_this_surface_never_asks_a_row_where_it_was_born():
     """THE STRUCTURAL HALF, and the reason this file has one: the behavioural tests
-    above are green today under the routines bug for two rows out of three, because a
-    row stamped ``open`` gets the right answer for the wrong reason. What must hold is
-    stronger than the payload — this module must not ASK the question at all.
+    above stay green under a stamp-reading implementation for two rows out of three,
+    because a row stamped ``open`` gets the right answer for the wrong reason. What
+    must hold is stronger than the payload — this module must not ASK the question at
+    all.
 
     So two pins. The decision handed to ``_unavailable_marker`` is a LITERAL ``True``:
     every automation runs a shell command, so there is nothing to ask a row, and a
@@ -696,9 +697,12 @@ def test_this_surface_never_asks_a_row_where_it_was_born():
     ``created_in_mode`` — the stamp reaches the wire as display provenance
     (``createdInMode``) and is read for nothing else.
 
-    ``rpc/routines.py`` is the module this one is being kept out of
-    (docs/KNOWN-GAPS.md: a search-only routine saved in Developer is listed disabled
-    in Simple and refused at dispatch, both wrongly).
+    ``rpc/routines.py`` is the module this one was written to stay out of: a
+    search-only routine saved in Developer was listed disabled in Simple and refused
+    at dispatch, both wrongly, until that was closed on 2026-08-08. Routines have a
+    genuine per-row question and now ask it of the routine
+    (``_routine_needs_dev``, pinned by its own scan in tests/test_routines.py); this
+    table has none, so the literal below is the stronger shape and stays.
 
     Mutations: pass ``row.created_in_mode == PolicyMode.OPEN.value`` as the decision —
     this fails on the literal-``True`` pin; or keep the ``True`` and clear the marker
@@ -741,7 +745,7 @@ def test_this_surface_never_asks_a_row_where_it_was_born():
             assert not named, (
                 f"rpc/automations.py branches on created_in_mode at line {node.lineno}: "
                 "the stamp records where a row was BORN and can never decide what it "
-                "NEEDS — that is the live routines bug in docs/KNOWN-GAPS.md"
+                "NEEDS — the mistake the routines half made, docs/KNOWN-GAPS.md"
             )
 
     # ...and it is read exactly once, where it becomes the display-only badge.
