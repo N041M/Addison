@@ -112,14 +112,34 @@ function Loading({ label }: { label: string }) {
  * person came for, and a blank pane with a spinner would be the app pretending it
  * still might work. Styled off the same tokens as the editor, so it is recognisably
  * the same surface.
+ *
+ * IT CARRIES THE ACCESSIBLE NAME TOO. Both callers accepted an `ariaLabel` and then
+ * dropped it on this path, so the failure of a lazy chunk quietly cost a screen
+ * reader the answer to "which file am I in?" — by this file's own header, a pane
+ * unusable by screen reader, and the one state nothing in the suite exercised
+ * (every test mocks a WORKING monaco module). A bare `<pre>` has no role, and an
+ * element with no role exposes no name, so the role comes with it: named region,
+ * not a labelled generic that AT is free to ignore.
  */
-function PlainText({ text }: { text: string }) {
+function PlainText({ text, ariaLabel }: { text: string; ariaLabel: string }) {
   return (
-    <pre className="no-scrollbar m-0 h-full overflow-auto bg-panel p-3 font-mono text-[12px] leading-[19px] text-ink">
+    <pre
+      role="region"
+      aria-label={ariaLabel}
+      className="no-scrollbar m-0 h-full overflow-auto bg-panel p-3 font-mono text-[12px] leading-[19px] text-ink"
+    >
       {text}
     </pre>
   );
 }
+
+/** The two halves of the fallback diff, named. The composed label ("app.py, before
+ * and after Addison's changes") describes the PAIR, so it names the group and these
+ * name the panes inside it — two regions with the same name would be two panes
+ * nobody can tell apart, which is the bug again in a different shape. Frozen copy,
+ * pinned by the tests like every other sentence on this screen. */
+const BEFORE_PANE_LABEL = "Before Addison's changes";
+const AFTER_PANE_LABEL = "After Addison's changes";
 
 interface ViewerProps {
   /** The resolved path. Drives the language, and nothing else. */
@@ -181,7 +201,7 @@ export function CodeViewer({ path, text, theme, ariaLabel }: ViewerProps) {
     if (mod) applyMonacoTheme(mod.default, theme);
   }, [mod, theme]);
 
-  if (failed) return <PlainText text={text} />;
+  if (failed) return <PlainText text={text} ariaLabel={ariaLabel} />;
   return (
     <div className="relative h-full w-full">
       {!mod && <Loading label="opening…" />}
@@ -256,13 +276,18 @@ export function CodeDiff({ path, before, after, theme, ariaLabel }: DiffProps) {
   if (failed) {
     // Two stacked plain panes rather than one: without Monaco there is no diff to
     // compute, and showing only "after" would hide the thing Revert lands on.
+    //
+    // The group carries the label the surface composed, because that label names the
+    // PAIR ("app.py, before and after Addison's changes"); each pane then says which
+    // half it is. Two panes, two names, one file — the same thing the sighted layout
+    // says with a hairline between them.
     return (
-      <div className="flex h-full min-h-0 flex-col">
+      <div role="group" aria-label={ariaLabel} className="flex h-full min-h-0 flex-col">
         <div className="min-h-0 flex-1 overflow-hidden border-b border-line">
-          <PlainText text={before} />
+          <PlainText text={before} ariaLabel={BEFORE_PANE_LABEL} />
         </div>
         <div className="min-h-0 flex-1 overflow-hidden">
-          <PlainText text={after} />
+          <PlainText text={after} ariaLabel={AFTER_PANE_LABEL} />
         </div>
       </div>
     );

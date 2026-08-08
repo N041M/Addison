@@ -754,6 +754,21 @@ are here because somebody will meet them, and because anything built on top of
   pass over that one endpoint, by name and with the reason written at the code. The
   violation is still real, still enforced, and still visible in devtools; what is
   suppressed is a diagnostic about a fallback the app was designed around.
+  **AMENDED 2026-08-08 — the macOS/Linux half was never narrow, and is now gone.**
+  CSP3 §5.4 strips a blocked URL for reporting and returns **the scheme alone** for a
+  non-http(s) URL, so `ipc://localhost/plugin:…` reaches a compliant engine's report
+  as the three characters `ipc` — no host, no path, nothing to name. The reporter's
+  `blockedURI === "ipc"` branch was therefore a filter on a SCHEME wearing a named
+  allowance's docstring: it dropped every `ipc:` `connect-src` violation there could
+  be, including page script calling `fetch("ipc://localhost/plugin:fs|remove")` — a
+  direct command invocation, and the one violation on that scheme that would mean
+  something. The two are byte-identical in a report, so they cannot be told apart;
+  the branch is removed and the scheme-only shape is REPORTED. **The accepted cost is
+  one benign diagnostic per launch on macOS and Linux**, which is the honest price of
+  never hiding the other one. What still suppresses is the host-bearing list
+  (`http(s)://ipc.localhost`, which is what Windows actually files, stripped to its
+  origin) — narrow not because it reads intent, which no report allows, but because
+  it can only ever hide a violation naming that one endpoint.
   **NOT taken, and this is the owner's call:** adding `ipc:` and
   `http://ipc.localhost` to `connect-src`. It would let the custom-protocol IPC path
   run for the first time in this app's life — a behaviour change nobody asked for, on
