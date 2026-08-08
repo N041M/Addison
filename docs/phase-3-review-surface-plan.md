@@ -144,12 +144,18 @@ than one it introduces.
    which file Addison touched. Fix: resolve first, then basename. Keeps the basename-only
    rule; no fixture churn.
 
-2. **`shell.readWorkspaceFile` has no size ceiling.** `filesystem.rs:261` `read_workspace_path`
-   does a bare `std::fs::read` — `UNDO_SIZE_BOUND` (256 KiB) guards only the write path's
-   prior capture at line 238. A 500 MB file is reachable *today* through the shipped
-   `read_project_file` tool and would wedge the line-delimited bridge. Fix it with a
-   refusal (not truncation) for the tool path. **This tightens a shipped tool — it is its
-   own PR, not a rider on this one.**
+2. ~~**`shell.readWorkspaceFile` has no size ceiling.**~~ **CLOSED 2026-08-08**, in its own
+   PR as this entry asked. `read_workspace_path` did a bare `std::fs::read` — `UNDO_SIZE_BOUND`
+   (256 KiB) guarded only the write path's prior capture — so a 500 MB file was reachable
+   *today* through the shipped `read_project_file` tool and would have wedged the
+   line-delimited bridge. `filesystem.rs` now carries its own `READ_SIZE_BOUND` (256 KiB,
+   deliberately a second constant: the undo bound asks what can round-trip as an undo
+   payload, this one asks what may cross the bridge and land whole in one model turn) and
+   **refuses** an oversized read in plain language — never truncates, because a harness that
+   reads half a file and then edits from it is worse than one that read nothing. The size is
+   judged from metadata *before* any bytes are read, so the refusal costs no memory; the write
+   path's prior capture got the same pre-check, with its own bound and its own message
+   unchanged, because it loaded the whole file before refusing it too.
 
 3. **`UndoManager.prune()` has zero call sites** (verified: the only `prune()` call in the
    tree is `snapshot_manager.py:620` calling its own). `action_snapshots` grows without

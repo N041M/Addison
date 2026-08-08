@@ -46,6 +46,32 @@ pub struct FileState {
 /// core-side bound; the value lives HERE because the shell is where the bytes are.
 const UNDO_SIZE_BOUND: usize = 256 * 1024;
 
+/// Worded once, because it is now raised from two places: before the bytes are
+/// read (from the file's size) and again after (metadata is a claim about a
+/// moment). The person must not be able to tell which one refused.
+const TOO_BIG_TO_EDIT: &str = "That file is too big for Addison to edit while keeping an undo.";
+
+/// A file larger than this refuses the READ (`shell.readWorkspaceFile`, i.e. the
+/// shipped `read_project_file` tool) rather than crossing the bridge.
+///
+/// ITS OWN CONSTANT, not a reuse of `UNDO_SIZE_BOUND`, because the two answer
+/// different questions: that one asks what can round-trip as an undo payload in
+/// the core's database, this one asks what may cross a LINE-DELIMITED stdio
+/// channel and land whole in a single model turn. Reusing it would mean a later
+/// change to how undo is stored silently changed what the harness may read.
+///
+/// They agree on 256 KiB today for two reasons that happen to coincide. Every
+/// `shell.*` handler is awaited INLINE on the core's stdout pump
+/// (`agent_process.rs`), so one oversized read stalls every frame in the app
+/// until it finishes — the same failure `dispatch_off_loop` exists to avoid for
+/// `run_command`. And 256 KiB of source is already tens of thousands of tokens:
+/// past that a file is a bundle, a lockfile or a log, and handing it whole to a
+/// turn is never what was wanted.
+///
+/// A REFUSAL, never truncation. A harness that reads half a file and then edits
+/// from it is worse than one that read nothing and said so.
+const READ_SIZE_BOUND: u64 = 256 * 1024;
+
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
 pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, RpcError> {
@@ -243,12 +269,19 @@ fn write_workspace_path(state: &FileState, path: PathBuf, content: &str) -> Resu
 // (existed, prior-text). Refuses a binary or oversize existing file so the undo
 // payload can always round-trip; a missing file is a clean create (false, null).
 fn capture_prior_text(path: &Path) -> Result<(bool, Option<String>), RpcError> {
+    // The same judgement as the length check below, made from the file's SIZE
+    // first: `fs::read` on a 500 MB file allocates 500 MB in this process before
+    // that check could refuse it, and this handler is awaited inline on the core's
+    // stdout pump — so the refusal would arrive having already stalled the app it
+    // was protecting. Same bound, same sentence, only earlier. The check below
+    // stays, because metadata is a claim about a moment and a file can grow.
+    if size_on_disk(path).is_some_and(|len| len > UNDO_SIZE_BOUND as u64) {
+        return Err(RpcError::app(TOO_BIG_TO_EDIT));
+    }
     match std::fs::read(path) {
         Ok(bytes) => {
             if bytes.len() > UNDO_SIZE_BOUND {
-                return Err(RpcError::app(
-                    "That file is too big for Addison to edit while keeping an undo.",
-                ));
+                return Err(RpcError::app(TOO_BIG_TO_EDIT));
             }
             match String::from_utf8(bytes) {
                 Ok(text) => Ok((true, Some(text))),
@@ -270,14 +303,47 @@ fn read_workspace_file(params: &Value) -> Result<Value, RpcError> {
 
 fn read_workspace_path(path: &Path) -> Result<Value, RpcError> {
     refuse_addison_data_dir(path)?;
+    // Judged from the file's SIZE, before a byte is read: a refusal that first
+    // allocates the 500 MB it is refusing has already done the damage it exists to
+    // prevent. A size the OS won't give us is not a refusal — fall through to the
+    // read, whose own error mapping says honestly what went wrong.
+    if let Some(len) = size_on_disk(path) {
+        refuse_oversize_read(len)?;
+    }
     let bytes = std::fs::read(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => RpcError::app("That file isn't there."),
         _ => RpcError::app("Addison couldn't read that file."),
     })?;
+    // A file that GREW between those two calls — or one metadata could not answer
+    // for at all — is caught here. It has already cost this process the memory; it
+    // does not also get to cross the bridge. The mirror of the write path's own
+    // post-read length check, and like it, a race backstop no test can reach:
+    // stated plainly rather than pinned by a test that would only be testing itself.
+    refuse_oversize_read(bytes.len() as u64)?;
     match String::from_utf8(bytes) {
         Ok(text) => Ok(json!({ "content": text })),
         Err(_) => Err(RpcError::app("That file isn't a text file, so Addison can't read it here.")),
     }
+}
+
+/// The read ceiling, refused in plain language. The size is named in the sentence
+/// and derived from the constant, so the two cannot drift apart.
+fn refuse_oversize_read(len: u64) -> Result<(), RpcError> {
+    if len > READ_SIZE_BOUND {
+        return Err(RpcError::app(format!(
+            "That file is too big for Addison to read — Addison can read files up to {} KB.",
+            READ_SIZE_BOUND / 1024
+        )));
+    }
+    Ok(())
+}
+
+/// What the OS says a file's size is, or `None` when it won't say — a path that
+/// isn't there, or one metadata is refused for. Follows symlinks, exactly as the
+/// `fs::read` that follows it does, so the size measured is the size that would be
+/// loaded. Callers treat `None` as "cannot judge yet", never as "small enough".
+fn size_on_disk(path: &Path) -> Option<u64> {
+    std::fs::metadata(path).ok().map(|m| m.len())
 }
 
 // shell.restoreWorkspaceFile {path, content?|delete} -> {}   (step 5, write undo)
@@ -922,6 +988,85 @@ mod tests {
             None => std::env::remove_var("ADDISON_DB_PATH"),
         }
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn read_workspace_reads_a_file_exactly_at_the_size_ceiling() {
+        // The ceiling is inclusive, and this is the half that keeps the refusal
+        // honest: a bound that also refused the largest legitimate file would be
+        // indistinguishable from one set too low, and every test below would pass
+        // under an always-refuse mutation.
+        let path = temp_path();
+        let at_ceiling = "a".repeat(READ_SIZE_BOUND as usize);
+        std::fs::write(&path, &at_ceiling).expect("seed a file at the ceiling");
+
+        let result = read_workspace_path(&path).unwrap();
+        assert_eq!(
+            result.get("content").and_then(Value::as_str).map(str::len),
+            Some(at_ceiling.len()),
+            "a file at the ceiling must come back whole, never truncated"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_workspace_refuses_a_file_one_byte_over_the_size_ceiling() {
+        // `read_project_file` is SHIPPED and its content lands whole in a model
+        // turn after crossing a line-delimited stdio channel, so an unbounded read
+        // was a 500 MB file away from wedging the bridge. Delete the size check in
+        // `read_workspace_path` and this returns Ok — the mutation that this test
+        // exists to catch.
+        let path = temp_path();
+        let over = "a".repeat(READ_SIZE_BOUND as usize + 1);
+        std::fs::write(&path, &over).expect("seed a file one byte over");
+
+        let err = read_workspace_path(&path).unwrap_err();
+        assert_eq!(err.code, -32000);
+        // A refusal, not a truncation, and worded for a person: no byte counts, no
+        // "exceeds", and it names the size they can act on.
+        assert_eq!(
+            err.message,
+            "That file is too big for Addison to read — Addison can read files up to 256 KB."
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap().len(),
+            over.len(),
+            "a refused read must leave the file exactly as it was"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn both_size_ceilings_are_judged_before_any_bytes_are_read() {
+        // THE POINT OF A CEILING IS THAT THE REFUSAL COSTS NOTHING. A check made
+        // after `fs::read` has already allocated the 500 MB it is about to refuse,
+        // and every `shell.*` handler is awaited inline on the core's stdout pump
+        // (agent_process.rs) — so a refusal decided too late still stalls every
+        // frame in the app, which is the harm, not the error message.
+        //
+        // No runtime assertion here can see the difference: both orders return the
+        // same error. So the ORDER is pinned at the source, the same way the bundle
+        // wiring above is — docs/HANDOFF.md trap 3.
+        let source = include_str!("filesystem.rs");
+        for name in ["fn read_workspace_path", "fn capture_prior_text"] {
+            let start = source.find(name).unwrap_or_else(|| panic!("{name} must exist"));
+            let rest = &source[start..];
+            let end = rest.find("\n}\n").unwrap_or_else(|| panic!("{name} must be closed"));
+            let body = &rest[..end];
+
+            let sized = body
+                .find("size_on_disk")
+                .unwrap_or_else(|| panic!("{name} must ask the file's size:\n{body}"));
+            let read = body
+                .find("std::fs::read(")
+                .unwrap_or_else(|| panic!("{name} must read the file:\n{body}"));
+            assert!(
+                sized < read,
+                "{name} must judge the size BEFORE reading the bytes:\n{body}"
+            );
+        }
     }
 
     #[test]
