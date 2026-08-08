@@ -428,6 +428,47 @@ def test_only_the_resolved_path_reaches_the_shell(tmp_path, project):
         harness.close()
 
 
+def test_a_name_that_ends_in_a_space_is_that_name_and_not_a_different_file(
+    tmp_path, project
+):
+    """``_browse_resolve`` decides EMPTINESS with ``strip()`` and resolves the argument
+    UNTOUCHED. It used to resolve the stripped value, so ``report.txt `` — a perfectly
+    legal filename, and one a real folder produces the moment somebody fat-fingers a
+    Save As — silently became ``report.txt``: a DIFFERENT file, whose bytes the viewer
+    then showed under the name the person had clicked.
+
+    Both files are real here, because the whole failure is that two names collide into
+    one, and a test with only one file on disk cannot see a collision.
+
+    The leading-space mirror is asserted too, and it lands where it should: `` /x`` is
+    not an absolute path, so it is refused rather than quietly turned into one.
+
+    Mutation: resolve ``raw.strip()`` again. The read comes back with the space gone
+    from ``path`` and the wrong file's text in ``content``."""
+    spaced = project / "report.txt "
+    plain = project / "report.txt"
+    spaced.write_text("the one they clicked\n", encoding="utf-8")
+    plain.write_text("a different file entirely\n", encoding="utf-8")
+    bridge = _FakeBrowseBridge(content="the one they clicked\n")
+    harness = _Harness(tmp_path, bridge)
+    try:
+        harness.trust(project)
+
+        read = harness.call("workspace.readFile", {"path": str(spaced)})
+        assert read["path"] == str(spaced), "the trailing space is part of the name"
+        assert read["path"] != str(plain)
+        assert read["path"].endswith("report.txt ")
+        assert bridge.read == [str(spaced)], "the shell must be asked for what was asked"
+
+        # And a leading space is still no path at all: refused, never completed.
+        refused = harness.call("workspace.readFile", {"path": " " + str(spaced)})
+        assert refused["ok"] is False
+        assert "full path to the file" in refused["error"]
+        assert bridge.read == [str(spaced)], "nothing more crossed"
+    finally:
+        harness.close()
+
+
 def test_a_path_the_os_cannot_resolve_is_refused_rather_than_raising(tmp_path, project):
     """A browse is a click, and a click must never be able to end a turn. ``realpath``
     raises ``ValueError`` on an embedded NUL and ``expanduser`` raises ``RuntimeError``

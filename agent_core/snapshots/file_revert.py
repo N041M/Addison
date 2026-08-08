@@ -75,6 +75,16 @@ _MARKED_NOTHING = (
     "Addison put the file back, but couldn't update its own record of the change. "
     "If it still shows as changed, try again."
 )
+#: Something else stands at the name Addison wrote. The diff's half of this refusal is
+#: worded in ``rpc/workspace.py`` beside the handler that produces it — two sentences
+#: rather than one shared, because they differ in the thing a person needs told: the
+#: viewer's says this is not the file they think they are looking at, and this one has
+#: to say that nothing was written, the same reassurance ``_COULD_NOT_PUT_BACK``
+#: carries and for the same reason.
+_LINK_STANDS_THERE_WRITE = (
+    "That file has been replaced by a shortcut to somewhere else, so Addison won't "
+    "put it back. Nothing was changed."
+)
 
 
 @dataclass(frozen=True)
@@ -83,9 +93,17 @@ class FileEdit:
     person can look at and act on. Frozen: this is a reading of the table at a moment,
     never a handle to mutate it through."""
 
-    #: The file, resolved (``normpath(realpath(...))``, never casefolded — see
-    #: ``revert_key``). This is the value every later call carries: the diff's
-    #: parameter, the ledger question, the path the shell is asked to write.
+    #: The file, AS RECORDED AT WRITE TIME — ``undo_payload["path"]`` of the oldest
+    #: unreverted row, which is the value confinement approved and the one whose
+    #: ``prior`` a revert restores. This is what every later call carries: the diff's
+    #: read, the ledger question, the digest, the path the shell is asked to write —
+    #: exactly as ``WriteProjectFileTool.undo()`` uses that same key of that same row.
+    #:
+    #: NEVER a fresh resolution of it. Re-resolving at read time moved this value off
+    #: the approved one the moment anything changed underneath the name — a symlink
+    #: appearing at a written path was enough to send the diff's read, and the webview's
+    #: AFTER pane, to a file nobody trusted. The grouping key (``revert_key``) is
+    #: derived and may move; what crosses to the shell is this.
     path: str
     #: The chain, NEWEST FIRST — the same order the table answers in, so "the newest
     #: write" is ``[0]`` and "the oldest still-unreverted write" is ``[-1]`` everywhere.
@@ -132,16 +150,44 @@ class FileRevertResult:
 
 
 def revert_key(raw: object) -> str | None:
-    """The identity two writes to the same file share: ``normpath(realpath(path))``.
+    """The identity two writes to the same file share — **asked of the filesystem,
+    never inferred from the spelling**. ``file:{st_dev}:{st_ino}`` when the OS can
+    still find something at that name, ``path:{normpath(realpath(...))}`` when it
+    cannot. GROUPING ONLY: this value never crosses to the shell (see ``FileEdit.path``).
 
-    **Never ``policy._canonical``**, whose casefold is unconditional. Here that would
-    merge ``Notes.md`` and ``notes.md`` — two genuinely different files on any
-    case-sensitive filesystem — into ONE revert target, and the revert writes bytes.
-    HANDOFF already flags that casefold; this is the call site where it would do harm.
+    That is ``os.path.samefile`` semantics, one path at a time so the answer can be a
+    dict key — and it is the only answer that is right on both kinds of volume, because
+    each of the two guesses is wrong on one of them:
 
-    ``realpath`` on top of the stored value costs nothing in the ordinary case (the
-    tool records an already-resolved path) and collapses two spellings of one file when
-    a symlink sat between them at different times.
+      * **Compare the resolved spelling** (what this did until 2026-08-08, over a
+        comment claiming two spellings are "two genuinely different files on any
+        case-sensitive filesystem"). Addison ships on macOS, whose default volume is
+        case-INSENSITIVE, so ``Notes.md`` and ``notes.md`` are ONE file with TWO chains:
+        write v0->v1 under one spelling and v1->v2 under the other, and reverting them
+        in the wrong order lands the file on v1 with v0 unreachable — the exact
+        resurrection the chain collapse at the top of this module exists to make
+        impossible by construction.
+      * **Casefold** (``policy._canonical``, unconditionally). On a case-sensitive
+        volume — APFS case-sensitive, an external or network mount — the two names ARE
+        two files, and merging them would write one file's prior bytes into the other.
+        KNOWN-GAPS flags that casefold; this is the call site where it would do harm.
+
+    Asking the OS is right in both: one inode reached twice collapses, two inodes stay
+    apart, and hard links to one file collapse for the same reason they should — writing
+    either name changes the same bytes.
+
+    ``lstat``, never ``stat``: the question is which directory entry this NAME reaches,
+    and following a symlink that appeared after the write would move the identity onto a
+    file confinement never saw. (What that same appearance must NOT move is the path
+    handed to the shell — that is ``FileEdit.path``, which is recorded, not resolved.)
+
+    WHEN THERE IS NOTHING TO ASK ABOUT — a file Addison created and the person deleted,
+    the ordinary case, and the reason this cannot simply be "stat or nothing" — the
+    stored path is the tiebreak and it is compared EXACTLY. Not casefolded: a wrong
+    merge writes bytes into a file nobody named, while a wrong split only leaves two
+    rows where one would do, and both are then reverted to real earlier states. The
+    residual (two spellings of a file that is no longer there stay two chains on a
+    case-insensitive volume) is recorded in docs/KNOWN-GAPS.md.
 
     Never raises, with ``call_affected_path``'s exception tuple and for its reason: a
     single unreadable row must not take a listing down with it. ``None`` means "no
@@ -149,9 +195,44 @@ def revert_key(raw: object) -> str | None:
     if not isinstance(raw, str) or not raw.strip():
         return None
     try:
-        return os.path.normpath(os.path.realpath(raw))
+        entry = os.lstat(raw)
+    except (OSError, ValueError):
+        entry = None
+    if entry is not None:
+        # BOTH numbers. An inode number is unique only within its device, so a path on
+        # a mounted volume could otherwise collide with an unrelated file on the boot
+        # disk — and this key decides which bytes a revert writes.
+        return f"file:{entry.st_dev}:{entry.st_ino}"
+    try:
+        # A prefix apiece, so a fallback key can never collide with a stat'd one.
+        return f"path:{os.path.normpath(os.path.realpath(raw))}"
     except (OSError, ValueError, RuntimeError):
         return None
+
+
+def replaced_by_a_link(path: str) -> bool:
+    """Is a SHORTCUT standing where Addison wrote a file? Then no read and no write of
+    ours may follow it.
+
+    DEFENCE IN DEPTH, and it is not redundant with handing the shell the recorded path.
+    The recorded value is confined; the DESTINATION of that value is not, because
+    ``shell.readWorkspaceFileForView`` opens the path and ``restore_workspace_path``
+    writes it, and the OS follows a symlink in both. So a link planted at a written path
+    turns a diff into a read of somebody's private file and a revert into a write
+    through to it — with the ledger check passing, because the ledger holds the NAME.
+
+    NO LEGITIMATE FALSE POSITIVE. ``write_project_file.affected_path`` resolves before
+    the write (``Path(raw).expanduser().resolve()`` — the final component included, and
+    a dangling link resolves to its target's name), so a recorded path is never a
+    symlink at write time. One standing there now appeared afterwards, and following it
+    is exactly what must not happen.
+
+    A path that is simply GONE is deliberately NOT this. ``os.path.islink`` answers
+    False for anything it cannot stat and never raises, which is the answer this wants:
+    a file Addison created and the person deleted must still revert (there is nothing
+    there to follow), and a deletion is a state the diff and the revert both already
+    describe honestly."""
+    return os.path.islink(path)
 
 
 class FileRevertManager:
@@ -165,19 +246,24 @@ class FileRevertManager:
     def __init__(self, store, shell_bridge=None) -> None:
         self._store = store
         # Used ONLY by revert_path, and only to write. The bridge is how every
-        # filesystem effect leaves this process (§1.3); this class never touches disk.
+        # filesystem EFFECT leaves this process (§1.3), and no effect and no file's
+        # contents are reachable from here without it. The one thing this module asks
+        # the OS directly is whether two names are one file (``revert_key``), which is
+        # metadata, changes nothing, and is the same class of question every
+        # ``realpath`` in the RPC layer already asks.
         self._shell_bridge = shell_bridge
 
     # --- reading -----------------------------------------------------------
     def pending_edits(self, limit: int = _MAX_EDITS) -> PendingEdits:
         """Every file Addison has changed that is STILL changed, newest first.
 
-        Metadata and the BEFORE text only — no AFTER, because this class never reads
-        disk. What is on disk now is the shell's answer, and the RPC layer asks for it.
+        Metadata and the BEFORE text only — no AFTER, because this class never reads a
+        file's contents. What is on disk now is the shell's answer, and the RPC layer
+        asks for it.
         """
         groups, truncated = self._grouped(limit)
         return PendingEdits(
-            edits=tuple(self._edit(path, chain) for path, chain in groups.items()),
+            edits=tuple(self._edit(chain) for chain in groups.values()),
             truncated=truncated,
         )
 
@@ -191,7 +277,7 @@ class FileRevertManager:
             return None
         groups, _truncated = self._grouped(_MAX_EDITS)
         chain = groups.get(key)
-        return self._edit(key, chain) if chain else None
+        return self._edit(chain) if chain else None
 
     # --- the write ---------------------------------------------------------
     def revert_path(self, path: str) -> FileRevertResult:
@@ -212,37 +298,46 @@ class FileRevertManager:
 
         The reverse order could mark a chain reverted for a file that never moved,
         which is the one failure this mechanism must not have: it would drop the rows
-        out of every list and leave the person no way back at all."""
+        out of every list and leave the person no way back at all.
+
+        THE PATH WRITTEN IS THE PATH RECORDED, never the argument and never a fresh
+        resolution of either: the row that supplies the bytes supplies the name they go
+        back to, which is precisely the pairing ``write_project_file.undo()`` uses."""
         key = revert_key(path)
         if key is None:
             return FileRevertResult(ok=False, path=str(path), detail=_NOTHING_TO_PUT_BACK)
         groups, _truncated = self._grouped(_MAX_EDITS)
         chain = groups.get(key)
         if not chain:
-            return FileRevertResult(ok=False, path=key, detail=_NOTHING_TO_PUT_BACK)
+            return FileRevertResult(ok=False, path=str(path), detail=_NOTHING_TO_PUT_BACK)
         if self._shell_bridge is None:
-            return FileRevertResult(ok=False, path=key, detail=_NO_SHELL)
+            return FileRevertResult(ok=False, path=str(path), detail=_NO_SHELL)
 
         oldest = chain[-1]
+        # The CONFINED value — see ``FileEdit.path``. ``_grouped`` admits no row whose
+        # payload path is not a string, so this is one.
+        target = oldest.undo_payload["path"]
+        if replaced_by_a_link(target):
+            return FileRevertResult(ok=False, path=target, detail=_LINK_STANDS_THERE_WRITE)
         existed = bool(oldest.undo_payload.get("existed"))
         # ``None`` means "there was nothing there", which the shell turns into a
         # delete — the same contract ``write_project_file.undo()`` uses, because it is
         # the same question asked of the same row.
         prior = (oldest.undo_payload.get("prior") or "") if existed else None
         try:
-            self._shell_bridge.restore_workspace_file(key, prior)
+            self._shell_bridge.restore_workspace_file(target, prior)
         except RuntimeError as exc:
             # The shell's own refusals are already plain sentences (CLAUDE.md), and
             # they say the useful thing — "Addison can only undo a file change it
             # made", for one.
-            return FileRevertResult(ok=False, path=key, detail=str(exc) or _NO_SHELL)
+            return FileRevertResult(ok=False, path=target, detail=str(exc) or _NO_SHELL)
         except Exception:
             # ANYTHING ELSE IS A BUG, and a bug's text is not a sentence for a person:
             # ``main._plain`` draws exactly this line for the same reason. The first
             # generated fixture of this payload caught the version that did not, and
             # what it put on the wire was "'_FixtureEditBridge' object has no attribute
             # 'restore_workspace_file'".
-            return FileRevertResult(ok=False, path=key, detail=_COULD_NOT_PUT_BACK)
+            return FileRevertResult(ok=False, path=target, detail=_COULD_NOT_PUT_BACK)
 
         ids = tuple(snapshot.id for snapshot in chain)
         try:
@@ -250,18 +345,18 @@ class FileRevertManager:
             # not leave half a chain marked while the file already sits at its prior.
             self._store.mark_snapshots_reverted(ids)
         except Exception:
-            return FileRevertResult(ok=False, path=key, detail=_MARKED_NOTHING)
+            return FileRevertResult(ok=False, path=target, detail=_MARKED_NOTHING)
         return FileRevertResult(
             ok=True,
-            path=key,
-            detail=_reverted_sentence(key, deleted=not existed),
+            path=target,
+            detail=_reverted_sentence(target, deleted=not existed),
             snapshot_ids=ids,
             deleted=not existed,
         )
 
     # --- internals ---------------------------------------------------------
     def _grouped(self, limit: int) -> tuple[dict[str, list[ActionSnapshot]], bool]:
-        """One read of the window, grouped by resolved path, each chain newest-first.
+        """One read of the window, grouped by ``revert_key``, each chain newest-first.
 
         ``limit + 1`` rows are asked for so "there are more" is a fact rather than a
         guess: a window that comes back exactly full is indistinguishable from a table
@@ -269,25 +364,42 @@ class FileRevertManager:
         rows = self._store.unreverted_snapshots_for_tool(WRITE_TOOL_ID, limit + 1)
         truncated = len(rows) > limit
         groups: dict[str, list[ActionSnapshot]] = {}
+        # ONE key per distinct spelling per read, and the memo is doing two jobs. It
+        # keeps 200 rows of one much-written file to a single syscall — but the reason
+        # it is not merely an optimisation is that ``revert_key`` asks the filesystem,
+        # and a file deleted between two lookups of the SAME string would otherwise
+        # answer differently for two rows of one chain and split it. A split chain
+        # leaves a row behind, which is the resurrection this module exists to prevent.
+        keys: dict[str, str | None] = {}
         for row in rows[:limit]:
-            key = revert_key(row.undo_payload.get("path"))
+            raw = row.undo_payload.get("path")
+            if not isinstance(raw, str):
+                continue
+            if raw not in keys:
+                keys[raw] = revert_key(raw)
+            key = keys[raw]
             if key is None:
                 continue
             groups.setdefault(key, []).append(row)
         return groups, truncated
 
     @staticmethod
-    def _edit(path: str, chain: list[ActionSnapshot]) -> FileEdit:
+    def _edit(chain: list[ActionSnapshot]) -> FileEdit:
         """N writes to one file collapse into ONE edit: the BEFORE is the oldest
         unreverted prior (where a revert lands) and the digest is the NEWEST write's
         (what should be on disk now if nobody else has touched it). Taking either from
         the other end would make the diff and the "changed since" warning describe two
-        different moments."""
+        different moments.
+
+        The PATH comes from the same oldest row, for the same reason its bytes do —
+        see ``FileEdit.path``. Where a chain holds two spellings of one file (a
+        case-insensitive volume), that is the spelling Addison recorded beside the
+        bytes a revert restores."""
         newest, oldest = chain[0], chain[-1]
         existed = bool(oldest.undo_payload.get("existed"))
         digest = newest.undo_payload.get("wrote_sha256")
         return FileEdit(
-            path=path,
+            path=oldest.undo_payload["path"],
             snapshot_ids=tuple(snapshot.id for snapshot in chain),
             writes=len(chain),
             created=not existed,

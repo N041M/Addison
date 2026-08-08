@@ -445,9 +445,10 @@ merge two genuinely different files into one revert target.
 Everything above, as written: `wrote_sha256` on the write's `undo_payload` (no migration,
 no dataclass change), both handlers on `WorkspaceMixin`, the `Edit` field list, the
 filesystem-not-conversation scope with `_MAX_EDITS = 200`, revoked-trust rows still listed
-with `root: null`, the N-writes collapse, and the casefold-free grouping key
-(`file_revert.revert_key`, which says at the code why `policy._canonical` is not it). The
-decisions that were not already written down:
+with `root: null`, the N-writes collapse, and the grouping key in
+`file_revert.revert_key` — **which no longer works the way the paragraph above says, and
+should not; see the two corrections at the end of this block.** The decisions that were
+not already written down:
 
 - **The mode gate applies to all three methods, and `readEditDiff`'s disk read is
   confined by MEMBERSHIP rather than by live trust.** §1's four steps hold with step 3
@@ -490,6 +491,43 @@ decisions that were not already written down:
   every open — the repo's existing evolution path for an index, and complete for one,
   since an index holds no row that is not already in the table. `EXPLAIN QUERY PLAN` in a
   test proves the query uses it and needs no temp B-tree for the ORDER BY.
+
+**CORRECTED 2026-08-08 — the grouping key asks the FILESYSTEM, and the instruction above
+that told it not to was wrong.** "Group by `os.path.normpath(os.path.realpath(path))`
+**without casefold**" is right about `policy._canonical` and wrong about the volume:
+Addison ships on macOS, whose default filesystem is case-INSENSITIVE, so `Notes.md` and
+`notes.md` are ONE file — and grouping by the spelling gave that one file TWO chains.
+Write v0→v1 under one spelling and v1→v2 under the other, revert them in the order the
+list offers, and the file lands on v1 with v0 unreachable: precisely the resurrection §3's
+chain collapse exists to make impossible by construction. Casefolding is the opposite
+error, and only on a case-sensitive volume (APFS case-sensitive, an external or network
+mount), where the two names *are* two files and a merge writes one's prior bytes into the
+other. Both guesses are wrong on one volume each, so the key now ASKS: `st_dev`+`st_ino`
+from an `lstat` of the recorded name — `os.path.samefile` semantics, one path at a time —
+with the exact stored path as the tiebreak when there is nothing at that name to ask
+about. The residual that tiebreak leaves is in [`KNOWN-GAPS.md`](KNOWN-GAPS.md). It is a
+GROUPING key only; the next correction owns what crosses to the shell.
+
+**CORRECTED 2026-08-08 — what crosses to the shell is the RECORDED path.** The membership
+bullet above is right that only a path matching a row ever reaches the filesystem, but the
+code took that path from a fresh `realpath` of the stored value at READ time. A shortcut
+appearing at a written path afterwards therefore moved every later call onto whatever it
+pointed at — the diff's shell read, the digest, the ledger question and the revert's write
+— and `readEditDiff` shipped the full text of a file outside every trusted folder to the
+webview. Membership had been decided on a re-resolution of the stored value rather than on
+the value that was confined, and those are not the same test. So: `FileEdit.path` is now
+`undo_payload["path"]` itself, exactly as `WriteProjectFileTool.undo()` uses that key of
+that row; the parameter is resolved by `_edit_resolve` (the folders it names, never its
+last component) so a click asks the question the rows answer; and because the shell
+follows a symlink on both the read and the write it is handed, `file_revert.replaced_by_a_link`
+refuses before either happens. The shell-side half of that is in KNOWN-GAPS.
+
+**CORRECTED 2026-08-08 — `listEdits` reads the trust rows once.** `revertable` and
+`onDiskChanged` were batched from the start; the third per-row question was not.
+`_edit_payload` asked `_trusted_root_for` per edit, which is a store round trip per row —
+up to 200 on the worker thread behind one click, each asking the identical question, in a
+method whose sibling `_browse_entries` states the opposite rule for its 500 entries. The
+roots are now read once by the caller and passed in.
 
 ### 3. Per-file revert — the sharp edge — **BUILT 2026-08-08**
 
@@ -616,6 +654,14 @@ matching honesty. The decisions that were not already written down:
   there is a pure query for: `save_file`'s undo has a session ledger of its own with no
   such query, and it keeps today's failure rather than being given a guess about a
   mechanism this code did not ask. Stated at the code.
+  **CORRECTED 2026-08-08:** it asked about a RE-RESOLVED path rather than the one the
+  attempt would use. Once a shortcut stood at the written path, the shell was asked about
+  a name its ledger had never held, answered no, and the person was told "Addison changed
+  that file before the app was last restarted" — false, with no restart anywhere in it,
+  and permanent, because a pre-check marks nothing and so the sentence came back every
+  time they pressed Undo. It now asks about `undo_payload["path"]`, the exact string
+  `undo()` hands the shell: a pre-check that does not ask about what the attempt will do
+  is not a pre-check.
 - **The refusals are two sentences, not one.** "Addison hasn't made a change to that file
   that's still in place" (the diff) and "Addison has no change of its own to put back for
   that file" (the revert). Neither is the not-trusted sentence, because neither is that

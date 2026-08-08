@@ -28,6 +28,7 @@ ones, in the order the plan raises them:
 from __future__ import annotations
 
 import hashlib
+import os
 import threading
 from dataclasses import replace
 from pathlib import Path
@@ -39,7 +40,7 @@ from agent_core.memory.store import Store
 from agent_core.profiles import DEVELOPER
 from agent_core.providers.base import ModelResponse, ModelRole, ProviderCapabilities
 from agent_core.providers.router import ModelRouter
-from agent_core.snapshots.file_revert import FileRevertManager
+from agent_core.snapshots.file_revert import FileRevertManager, revert_key
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import ExecutionContext
 from agent_core.tools.write_project_file import WriteProjectFileTool
@@ -61,48 +62,90 @@ class _FakeWorkspaceShell(ShellBridgeStubs):
     about — and which are separable here exactly as they are in the real shell.
 
     Separating them is the point: ``ledger`` can be emptied while ``disk`` stays full,
-    which is precisely what a restart does and is otherwise unreachable in a test."""
+    which is precisely what a restart does and is otherwise unreachable in a test.
 
-    def __init__(self, disk: dict[str, str] | None = None, ledger=None) -> None:
-        self.disk: dict[str, str] = dict(disk or {})
-        self.ledger: set[str] = set(self.disk if ledger is None else ledger)
+    ``case_insensitive`` MODELS THE VOLUME rather than assuming one. A dict keyed by the
+    exact string is a case-SENSITIVE disk, and that is not the disk this product ships
+    on: macOS's default volume is case-insensitive, so ``Notes.md`` and ``notes.md``
+    reach ONE file there. A fake that could not express that is how a state-corruption
+    bug survived a test suite that looked like it covered the case — the test asserted
+    two spellings stay two files against a fake where they always would. Off by default,
+    so every test written against distinct made-up paths is untouched; on for the ones
+    that are ABOUT two spellings of one file, where it is set from what the real
+    filesystem under ``tmp_path`` actually does."""
+
+    def __init__(
+        self,
+        disk: dict[str, str] | None = None,
+        ledger=None,
+        case_insensitive: bool = False,
+    ) -> None:
+        self._case_insensitive = case_insensitive
+        self.disk: dict[str, str] = {self._at(k): v for k, v in (disk or {}).items()}
+        self.ledger: set[str] = set(
+            self.disk if ledger is None else (self._at(path) for path in ledger)
+        )
         self.restored: list[tuple[str, str | None]] = []
         self.viewed: list[str] = []
         self.asked_to_restore: list[list[str]] = []
         self.digested: list[list[str]] = []
         self.write_failure: str | None = None
 
+    def _at(self, path: str) -> str:
+        """Which NAME this is — the ledger's question, and the ledger's answer is a set
+        lookup on the exact path it was given (``can_restore_workspace_paths`` "opens no
+        file, stats no path"). Case is the only thing normalised here, so the two
+        spellings of one file cannot get out of step the way two dict keys would."""
+        return path.casefold() if self._case_insensitive else path
+
+    def _on_disk(self, path: str) -> str:
+        """Which BYTES this reaches — and a shortcut is followed, because the real shell
+        follows one. ``read_workspace_view`` opens the path and ``restore_workspace_path``
+        writes it, and neither does anything about a symlink standing there. A fake that
+        treated a planted shortcut as an ordinary dict key would make the leak invisible:
+        the test would prove the core refused and prove nothing about what refusing is
+        FOR. Made-up paths (``/p/a.py``) are not links on any real filesystem, so every
+        other test in this file is untouched."""
+        return self._at(os.path.realpath(path) if os.path.islink(path) else path)
+
     # the write half (the tool's own path)
     def write_workspace_file(self, path: str, content: str) -> dict:
-        existed = path in self.disk
-        prior = self.disk.get(path)
-        self.disk[path] = content
-        self.ledger.add(path)
+        at = self._on_disk(path)
+        existed = at in self.disk
+        prior = self.disk.get(at)
+        self.disk[at] = content
+        self.ledger.add(self._at(path))
         return {"existed": existed, "prior": prior}
 
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
+        # Recorded AS ASKED, never normalised: what crossed the boundary is exactly
+        # what these tests are about.
         self.restored.append((path, prior_content))
         if self.write_failure is not None:
             raise RuntimeError(self.write_failure)
-        if path not in self.ledger:
+        # The NAME is what the ledger holds; the BYTES are wherever that name leads.
+        if self._at(path) not in self.ledger:
             raise RuntimeError(_NOT_TRUSTED_SHELL_REFUSAL)
+        at = self._on_disk(path)
         if prior_content is None:
-            self.disk.pop(path, None)
+            self.disk.pop(at, None)
         else:
-            self.disk[path] = prior_content
+            self.disk[at] = prior_content
 
     # the three questions the surface asks
     def can_restore_workspace_files(self, paths: list[str]) -> dict:
         self.asked_to_restore.append(list(paths))
-        return {"restorable": {path: path in self.ledger for path in paths}}
+        # Keyed by the path AS ASKED — the wire contract — and answered from the ledger,
+        # which is a set of names.
+        return {"restorable": {path: self._at(path) in self.ledger for path in paths}}
 
     def digest_workspace_files(self, paths: list[str]) -> dict:
         self.digested.append(list(paths))
         return {
             "digests": {
                 path: (
-                    {"sha256": _sha(self.disk[path]), "missing": False}
-                    if path in self.disk
+                    {"sha256": _sha(self.disk[self._on_disk(path)]), "missing": False}
+                    if self._on_disk(path) in self.disk
                     else {"sha256": None, "missing": True}
                 )
                 for path in paths
@@ -111,9 +154,9 @@ class _FakeWorkspaceShell(ShellBridgeStubs):
 
     def read_workspace_file_for_view(self, path: str) -> dict:
         self.viewed.append(path)
-        if path not in self.disk:
+        if self._on_disk(path) not in self.disk:
             raise RuntimeError("That file isn't there.")
-        content = self.disk[path]
+        content = self.disk[self._on_disk(path)]
         return {"content": content, "bytes": len(content.encode("utf-8")), "truncated": False}
 
 
@@ -203,6 +246,10 @@ class _Harness:
         self.reader = _PipeReader()
         self.writer = _FrameWriter()
         self.seeded: dict[str, str] = {}
+        #: How many times anything has asked the store for the trust rows. A handler
+        #: that answers about a LIST must ask once, not once per row — see
+        #: ``test_the_edits_list_reads_the_trust_rows_once``.
+        self.trust_reads = 0
 
         def factory() -> Store:
             # Seeded HERE, on the WORKER thread, because a sqlite3 connection belongs
@@ -210,6 +257,16 @@ class _Harness:
             # trust row in the factory. The writes go through the REAL tool, so every
             # payload these tests read is the one the app records.
             store = Store(db_path)
+            real_trust = store.list_workspace_trust
+
+            def counted():
+                self.trust_reads += 1
+                return real_trust()
+
+            # Counting the QUERY, not a call somewhere above it: the cost this guards
+            # against is a store round trip on the worker thread, and the only place
+            # that is observable is the store method itself.
+            store.list_workspace_trust = counted  # type: ignore[method-assign]
             for path, content, at in edits:
                 self.seeded[path] = self._seed(
                     store, path, content, at, legacy=path in legacy_paths
@@ -625,13 +682,119 @@ def test_the_list_is_bounded_and_says_when_it_is(tmp_path):
     assert bench.reverter.pending_edits(limit=50).truncated is False
 
 
-def test_the_grouping_key_never_casefolds(tmp_path):
-    """Two files whose names differ only in case are TWO revert targets.
-    ``policy._canonical`` casefolds unconditionally (HANDOFF flags it), and here that
-    would merge them into one — and a revert writes bytes.
+def test_the_grouping_key_is_whatever_the_filesystem_says_those_two_names_are(tmp_path):
+    """THE PROPERTY, stated once and true on either kind of volume: two paths share a
+    revert key exactly when the OS says they are the same file.
 
-    Mutation: casefold in ``revert_key``. The two edits collapse into one and reverting
-    either writes over the wrong file."""
+    Both guesses are wrong on one volume each, which is why neither is used:
+
+      * comparing the resolved SPELLING (what this did until 2026-08-08, under a comment
+        asserting the opposite) splits ONE file into two chains on the case-INSENSITIVE
+        volume this product ships on;
+      * CASEFOLDING (``policy._canonical``, which KNOWN-GAPS flags) merges TWO files
+        into one revert target on a case-sensitive one — and a revert writes bytes.
+
+    ``os.path.samefile`` is the assertion for the same reason it is the implementation:
+    it needs no knowledge of which volume ``tmp_path`` is on, so this runs unmodified on
+    a case-insensitive Mac and a case-sensitive CI box and asserts the true thing on
+    each.
+
+    Mutations, all killed here: casefold the key (fails wherever ``samefile`` is False);
+    compare the resolved path alone (fails wherever it is True); use ``stat`` on the
+    resolved path rather than the name (the hard link below stops being one file only if
+    the identity stops being the file's); drop ``st_dev`` (not killed here — that one is
+    argued at the code, since a second volume is not reachable from a test)."""
+    upper = tmp_path / "Notes.md"
+    lower = tmp_path / "notes.md"
+    upper.write_text("upper\n", encoding="utf-8")
+    lower.write_text("lower\n", encoding="utf-8")
+
+    one_file = os.path.samefile(upper, lower)
+    assert (revert_key(str(upper)) == revert_key(str(lower))) is one_file, (
+        "the key must say what the filesystem says"
+    )
+    # Two names that were never the same file stay apart on every volume.
+    other = tmp_path / "other.md"
+    other.write_text("other\n", encoding="utf-8")
+    assert revert_key(str(other)) != revert_key(str(upper))
+    # A HARD LINK is one file under two names, and writing either changes the same
+    # bytes — so one chain is the right answer, and it falls out of asking rather than
+    # having to be handled.
+    link = tmp_path / "linked.md"
+    os.link(other, link)
+    assert revert_key(str(link)) == revert_key(str(other))
+
+
+def test_two_spellings_of_one_file_are_one_chain_with_one_before(tmp_path):
+    """THE HAZARD BUG 1 IS, end to end, on the volume the test is running on.
+
+    ``Notes.md`` holds v0. Addison writes v1 under that spelling and v2 under
+    ``notes.md``. On a case-insensitive volume that is ONE file: two chains would list
+    two edits for it, and reverting them in the wrong order lands the file on v1 with v0
+    unreachable — the resurrection this module's chain collapse exists to make
+    impossible, arrived at through the front door.
+
+    The fake shell is told which volume it is standing on, so its dict models the same
+    file the real filesystem does. Real files exist here only because ``revert_key`` asks
+    the OS about them; the bytes the assertions read are the shell's, as everywhere else
+    in this suite.
+
+    Mutation: group by the resolved path again. The case-insensitive arm sees two edits,
+    the second revert writes v1, and the final assertion — that the file ends where the
+    diff said it would — fails."""
+    upper = str(tmp_path / "Notes.md")
+    lower = str(tmp_path / "notes.md")
+    (tmp_path / "Notes.md").write_text("v0\n", encoding="utf-8")
+    one_file = os.path.exists(lower) and os.path.samefile(upper, lower)
+    if not one_file:
+        # A case-sensitive volume: give the other name a file of its own, so the arm
+        # below is about two real files rather than one file and one absence.
+        (tmp_path / "notes.md").write_text("w0\n", encoding="utf-8")
+
+    shell = _FakeWorkspaceShell(
+        disk={upper: "v0\n"} if one_file else {upper: "v0\n", lower: "w0\n"},
+        case_insensitive=one_file,
+    )
+    bench = _Bench(tmp_path, shell)
+    bench.write(upper, "v1\n")
+    bench.write(lower, "v2\n")
+
+    edits = bench.reverter.pending_edits().edits
+    if one_file:
+        assert len(edits) == 1, "one file on disk is one edit, however it was spelled"
+        assert edits[0].writes == 2
+        assert edits[0].before == "v0\n", "the OLDEST prior, across both spellings"
+        # Either spelling names the same edit, because either spelling reaches the file.
+        assert bench.reverter.chain_for(lower) == edits[0]
+
+        assert bench.reverter.revert_path(lower).ok is True
+        assert shell.disk[upper.casefold()] == "v0\n"
+        # ZERO rows left: nothing survives to write v1 back over it.
+        assert bench.unreverted() == []
+        # And the second press has nothing to do rather than something wrong to do.
+        assert bench.reverter.revert_path(upper).ok is False
+        assert shell.disk[upper.casefold()] == "v0\n"
+    else:
+        # A case-sensitive volume: two files, two chains, and merging them would put
+        # one file's prior bytes into the other.
+        assert len(edits) == 2
+        assert {edit.before for edit in edits} == {"v0\n", "w0\n"}
+        assert bench.reverter.revert_path(upper).ok is True
+        assert shell.disk == {upper: "v0\n", lower: "v2\n"}
+
+
+def test_two_names_the_filesystem_cannot_answer_for_are_never_merged(tmp_path):
+    """The fallback, and the direction it errs in. Nothing is on disk at either name —
+    a file Addison created and the person deleted, the ordinary case — so there is
+    nothing to ask, and the stored path is the tiebreak. It is compared EXACTLY: a wrong
+    merge writes one file's bytes into another, a wrong split only leaves two rows where
+    one would do.
+
+    Mutation: casefold the fallback (or reach for ``policy._canonical``). These two
+    become one chain, and the second revert writes over a file nobody named.
+
+    KNOWN-GAPS records the residual this leaves: on a case-insensitive volume, two
+    spellings of a file that is no longer there stay two chains."""
     shell = _FakeWorkspaceShell(disk={"/p/Notes.md": "upper\n", "/p/notes.md": "lower\n"})
     bench = _Bench(tmp_path, shell)
     bench.write("/p/Notes.md", "upper edited\n")
@@ -955,6 +1118,130 @@ def test_the_diff_and_the_revert_resolve_once_and_only_the_resolved_path_crosses
         harness.close()
 
 
+# ============================================================================
+# THE PATH THAT CROSSES — recorded at write time, never re-resolved
+# ============================================================================
+_SECRET = "-----BEGIN PRIVATE KEY-----\nnever read this\n"
+
+
+def _plant_a_shortcut(at: str, pointing_at: str) -> None:
+    """Replace a written path with a symlink out of the project — the swap, done for
+    real rather than described. It needs no attacker to happen: moving a config file
+    into a dotfiles folder and linking it back is an ordinary Tuesday."""
+    Path(pointing_at).parent.mkdir(parents=True, exist_ok=True)
+    Path(pointing_at).write_text(_SECRET)
+    os.symlink(pointing_at, at)
+
+
+def test_a_shortcut_planted_at_a_written_path_never_moves_the_diff_or_the_revert(
+    tmp_path, project
+):
+    """MEMBERSHIP IS THE WHOLE CONFINEMENT on these three methods, so the value that
+    crosses has to be the value that was confined — ``undo_payload["path"]``, exactly as
+    ``WriteProjectFileTool.undo()`` uses it.
+
+    The group key was ``realpath``'d at READ time instead, so a shortcut appearing at a
+    written path afterwards moved every later call onto whatever it pointed at: the
+    diff's shell read landed outside every trusted folder and the file's full text went
+    to the webview. Membership had been decided on a fresh resolution of the stored
+    value rather than on the value that was confined, which is not the same test.
+
+    Mutations, one per assertion group:
+      * hand the bridge a re-resolution of the stored path (``revert_key(...)``, or
+        ``os.path.realpath``): ``path`` in the list becomes the file outside the
+        project, ``root`` goes null, ``revertable`` goes false because the shell's
+        ledger never held that name — and the diff ships the secret;
+      * drop the ``replaced_by_a_link`` check: the confined NAME crosses, and the shell
+        follows the shortcut on its own (``File::open`` does, ``fs::write`` does), so
+        the leak comes back through the one door closing the first mutation left open;
+      * resolve the PARAMETER fully in these two handlers (``_browse_resolve`` instead
+        of ``_edit_resolve``): the click keys off where the shortcut points while the
+        row keys off the name, so it finds no edit at all — the person is told Addison
+        has no change in that file, which is false, and the guard above is never
+        reached at all."""
+    path = str(project / "config.yml")
+    secret = str(tmp_path / "outside" / "id_rsa")
+    # The secret is ON the fake disk, and the fake follows a shortcut exactly as the
+    # shell does — so a mutation that reaches it does not merely skip a refusal, it puts
+    # the bytes in the answer, which is what this is really about.
+    shell = _FakeWorkspaceShell(disk={path: "v0\n", secret: _SECRET})
+    harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
+    try:
+        harness.trust(project)
+        assert harness.call("workspace.listEdits")["edits"][0]["path"] == path
+
+        _plant_a_shortcut(path, secret)
+
+        edit = harness.call("workspace.listEdits")["edits"][0]
+        assert edit["path"] == path, "the recorded path, never where it now points"
+        assert edit["revertable"] is True, "the shell's ledger holds the recorded name"
+        # ``root`` is DISPLAY ONLY and it does go null here, because the comparator it
+        # shares with the authorization path (``policy.path_is_within``) resolves both
+        # sides — which is right where it decides anything and merely cosmetic where it
+        # decides what to render. The row therefore shows its whole path, which for a
+        # file that is not there any more is the more useful of the two answers.
+        assert edit["root"] is None
+        assert edit["relativePath"] == path
+
+        diff = harness.call("workspace.readEditDiff", {"path": path})
+        assert diff["ok"] is False
+        assert diff["error"] == (
+            "That file has been replaced by a shortcut to somewhere else, so Addison "
+            "won't open it."
+        )
+        assert shell.viewed == [], "nothing was read, here or anywhere else"
+        assert "PRIVATE KEY" not in str(diff)
+
+        reverted = harness.call("workspace.revertFile", {"path": path})
+        assert reverted["ok"] is False
+        assert reverted["error"] == (
+            "That file has been replaced by a shortcut to somewhere else, so Addison "
+            "won't put it back. Nothing was changed."
+        )
+        assert shell.restored == [], "and nothing was written through it either"
+        assert shell.disk[secret] == _SECRET, "no bytes of Addison's went through it"
+        # The edit is still listed and settled by nothing: a refusal marks no rows.
+        assert len(harness.call("workspace.listEdits")["edits"]) == 1
+        assert Path(secret).read_text() == _SECRET
+    finally:
+        harness.close()
+
+
+def test_the_restart_question_is_asked_about_the_path_the_undo_would_use(
+    tmp_path, project
+):
+    """The same root cause on the chat header's Undo, where it produced a sentence that
+    was simply false.
+
+    ``_write_edit_lost_to_a_restart`` re-resolved the recorded path before asking the
+    shell whether it could still put it back. Once a shortcut stood at that path the
+    shell was asked about a name its ledger had never held, answered no, and the person
+    was told "Addison changed that file before the app was last restarted" — with no
+    restart anywhere in it. And it was permanent: the pre-check marks nothing, so the
+    row stayed and the sentence came back every time.
+
+    Mutation: resolve the path before asking (``revert_key(...)``). The answer below
+    becomes the restart refusal, the undo never runs, and the file keeps Addison's
+    version for ever."""
+    path = str(project / "config.yml")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
+    try:
+        harness.trust(project)
+        _plant_a_shortcut(path, str(tmp_path / "outside" / "id_rsa"))
+
+        answer = harness.call("undo.undoLastAction")
+        assert answer["ok"] is True, answer
+        assert "restarted" not in answer["detail"]
+        # The undo itself is the LIFO mechanism and writes through the shell's ledger
+        # exactly as it always has; what this test is about is which path was asked
+        # about. (That the shell would follow a shortcut on a write is the shell's own
+        # gap, and is recorded in KNOWN-GAPS rather than papered over here.)
+        assert shell.restored == [(path, "v0\n")]
+    finally:
+        harness.close()
+
+
 def test_an_edit_whose_trust_was_revoked_is_still_listed_and_still_revertable(
     tmp_path, project
 ):
@@ -1011,6 +1298,42 @@ def test_the_list_carries_metadata_only_and_the_relative_path_the_ui_renders(
         }
         assert edit["relativePath"] == "src/app.py"
         assert edit["root"] == str(project)
+    finally:
+        harness.close()
+
+
+def test_the_edits_list_reads_the_trust_rows_once_however_many_edits_there_are(
+    tmp_path, project
+):
+    """ONE store round trip for the whole list, not one per row. ``_browse_entries``
+    states this rule for its 500 entries — "a store round-trip per row would put 500
+    queries on the worker thread behind every click, and every one of them would be
+    asking the identical question" — and the edits list broke it for up to 200, on the
+    same thread, behind the same kind of click.
+
+    The count is the assertion because the count is the defect: nothing about the
+    PAYLOAD changes when this goes wrong, so a test of the answer cannot see it.
+
+    Mutation: call ``self._trusted_root_for(edit.path)`` inside ``_edit_payload`` again.
+    The delta below becomes one per edit."""
+    edits = tuple((str(project / f"f{index}.py"), "v1\n", 100 + index) for index in range(6))
+    shell = _FakeWorkspaceShell(disk={path: "v0\n" for path, *_rest in edits})
+    harness = _Harness(tmp_path, shell, edits=edits)
+    try:
+        harness.trust(project)
+
+        before = harness.trust_reads
+        listed = harness.call("workspace.listEdits")["edits"]
+        assert len(listed) == 6, "six files, so six chances to ask six times"
+        assert harness.trust_reads - before == 1, (
+            f"one read for the whole list, saw {harness.trust_reads - before}"
+        )
+        # And the answer is unchanged by reading them once — every row still names the
+        # root it sits under and renders relative to it.
+        assert {edit["root"] for edit in listed} == {str(project)}
+        assert sorted(edit["relativePath"] for edit in listed) == [
+            f"f{index}.py" for index in range(6)
+        ]
     finally:
         harness.close()
 
