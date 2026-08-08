@@ -147,26 +147,41 @@ and where it goes.
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
-- **A G3 restore can orphan an armed job, and nothing on any surface can then name
-  or stop it (found by the phase-4 review, 2026-08-07).** `apply_config_state` is
-  REPLACE-ALL, so restoring a snapshot that predates an automation deletes its row —
-  while `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on
-  running it at every login. After that: `disarm_automation` refuses ("that
-  automation isn't saved any more"), `automation.remove` refuses the same way before
-  it can reach `_disarm_before_forgetting`, and the Settings section renders
-  armed-ness per ROW so it shows nothing at all. Recovery is `launchctl` by hand.
-  **This is the same shape phase 3's review fixed for the Remove path** — a job
-  nobody can see and nobody can stop — reachable now through Restore instead.
-  Phase 4 made it *tidier and no better*: before, the stale row sat on screen doing
-  nothing useful; now it vanishes.
-  The plan's §5.6 says a restore "never arms", and `snapshots/scope.py` says it
-  "cannot arm, and cannot un-arm either" — both true, and both silent about a
-  restore that takes the ROW away from a job that is still running.
-  **The real fix is reconcile-on-restore**: after a restore, ask the OS what it
-  holds and surface any armed label with no row as its own row ("running, but not
-  saved here") with a Disarm on it. Until then this is recorded rather than closed,
-  because the alternative — blocking the restore, or silently disarming during one —
-  would put arming decisions inside the one action G3 promises is always available.
+- ~~**A G3 restore can orphan an armed job, and nothing on any surface can then name
+  or stop it.**~~ **CLOSED 2026-08-08 (owner-authorized), by reconcile-on-restore —
+  exactly the fix this entry prescribed and none of the ones it forbade.** The gap,
+  found by the phase-4 review 2026-08-07: `apply_config_state` is REPLACE-ALL, so
+  restoring a snapshot that predates an automation deletes its row — while
+  `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on running
+  it at every login. After that, `disarm_automation` refused ("that automation isn't
+  saved any more"), `automation.remove` refused the same way before it could reach
+  `_disarm_before_forgetting`, and the Settings section rendered armed-ness per ROW so
+  it showed nothing at all. Recovery was `launchctl` by hand. It was the same shape
+  phase 3's review fixed for the Remove path — a job nobody can see and nobody can
+  stop — reached through Restore instead.
+  **What closed it, in three pieces.** (1) DETECTION needed no new question: the
+  section already asks `automation.status` (armed LABELS) and `automation.list`
+  (rows) when it loads, so an orphan is an armed label matching no row, computed
+  where the two answers already meet and filtered to the labels Addison MINTS
+  (`com.addison.auto.[a-z0-9][a-z0-9-]{0,39}`) so somebody's unrelated launchd jobs
+  are never rendered. (2) THE ROW says *"Running, but not saved here"*, carries the
+  label — the only fact left — and says the honest limit out loud: there is no row, so
+  Addison cannot show what it runs, only switch it off. (3) STOPPING it is
+  `automation.disarmOrphan {label}`, a new RPC that works with NO row, validates the
+  label against the set Addison mints before it reads the store or reaches the shell,
+  refuses a label that HAS a row (that one has its own controls), and answers in EVERY
+  profile — a tightening is never profile-gated, and a Simple person who restored an
+  old point is precisely who this strands. G2 is untouched: it can only stop, and the
+  structural test now reads the shell bridge's own method set and pins that this
+  namespace names `list_armed` and `disarm_automation` and nothing else.
+  **The restore itself is unchanged** — never blocked, and nothing silently disarmed
+  during one, because an arming decision must not live inside the one action G3
+  promises is always available. **The accepted cost, stated where the code makes it
+  (`hooks/useAutomations.ts`):** a restore re-reads the ROWS and deliberately does not
+  re-ask the OS, so an orphan created while Settings is open appears on the NEXT
+  section load rather than at once. Re-asking on restore would be the check nobody
+  caused that plan §5.6 forbids, and wrong on its own terms — a restore cannot change
+  what launchd holds. Nothing polls.
 - **An armed automation may launch Addison itself, and nothing refuses it — an
   OWNER QUESTION, not a defect (raised by the phase-3 review, 2026-08-07).**
   `policy._ARMING_BINARIES` refuses `launchctl`/`crontab`/`at`/`batch` as a
@@ -362,29 +377,35 @@ questions were resolved during steps 1–3 and went with it):
   `registry.visible_tools(mode)` and never a second risk model. Code-backed widgets
   are still Developer-only and still unbuilt; when they land they are listed by the
   same `widget.list`, disabled in Simple like every other dev-made artifact.
-- **A routine's availability is still decided by its STAMP, not by what it needs.**
-  The widget half of this was fixed on 2026-08-06 (`widget_uses_dev_abilities`,
-  [SAFETY.md](SAFETY.md)); routines have the identical bug and it is **worse there,
-  because it reaches dispatch.** `builder.save` stamps `created_in_mode=mode.value`
-  unconditionally, so a routine of nothing but `web_search` steps, saved while
-  Developer was active, is stamped `open` — then listed disabled in Simple
-  (`rpc/routines.py`) *and refused outright* by `_handle_routine_run`, which tests
-  `created_in_mode(routine_id) == 'open'`. `routine_uses_dev_abilities` already
-  exists and is the right question; it is used only for the **save-time** refusal
-  in `builder.py`, never for availability.
-  Two things make this an owner call rather than a follow-on commit. **It loosens a
-  dispatch refusal in SAFE**, which is invariant-adjacent: the argument that it is
-  safe is that the engine's per-step `dev_only` check is the real enforcement and a
-  command-free routine replays through `visible_tools(SAFE)` with the gate carding
-  per invocation (invariant 3) — sound, but it should be *decided*, not inherited
-  from a widget fix. And **the correct test is not `routine_uses_dev_abilities`
-  alone**: that only looks for `step.command`, so a step naming an `open_only` tool
-  (`read_project_file` / `write_project_file`) needs Developer and would not be
-  caught. The real test needs the registry as well as the plan, so it belongs in
-  the RPC layer — the module boundary rule keeps `routines/` from importing
-  `tools/`. Until it lands, `rpc/widgets.py::_widget_needs_dev` deliberately reads
-  the routine's stamp for its look-through, so the rail and the library cannot
-  disagree about the same routine; that is the one line that follows this fix.
+- ~~**A routine's availability is still decided by its STAMP, not by what it needs.**~~
+  **CLOSED 2026-08-08 — owner decision, built exactly as this entry prescribed.**
+  Both surfaces — the `unavailable` marker on `routine.list` and
+  `_handle_routine_run`'s refusal — now ask **what the routine needs**, through ONE
+  function with one owner: `rpc/routines.py::_routine_needs_dev`, true when the plan
+  carries a command step (`routine_uses_dev_abilities`) **or** when a step names a
+  tool absent from `registry.visible_tools(SAFE)`. A routine of nothing but
+  `web_search` steps, saved while Developer was active, is an ordinary Simple row
+  again, and it runs. `created_in_mode` still ships as display provenance for the DEV
+  badge and decides nothing; `RoutineLibrary.created_in_mode` — the by-id accessor
+  that existed only to decide — is deleted, and a source-level test
+  (`test_availability_is_never_decided_from_where_a_routine_was_born`) pins that no
+  branch in either RPC module names the stamp.
+  **The dispatch refusal in SAFE was loosened, which is what made this an owner
+  call.** The argument now sits at the refusal itself (`rpc/routines.py`) rather than
+  in a document: the engine's per-step `dev_only` check is the real enforcement, and
+  a command-free routine replays through `visible_tools(SAFE)` with the gate carding
+  per invocation (invariant 3), so nothing widened. Dispatch still refuses a routine
+  that NEEDS developer abilities; it stopped refusing one for where it was born.
+  **The second half of the entry drove the design.** `routine_uses_dev_abilities`
+  alone sees only `step.command`, so a step naming an `open_only` tool
+  (`read_project_file` / `write_project_file`, and equally `create_automation`,
+  `arm_automation`, `disarm_automation`, `run_command`, every `mcp:` tool) would have
+  slipped through — the question needs the registry as well as the plan, and the
+  module boundary rule keeps `routines/` from importing `tools/`, so it lives in the
+  RPC layer. The one follow-on line landed in the same commit:
+  `rpc/widgets.py::_widget_needs_dev`'s look-through asks that same function, so the
+  rail and the library still cannot disagree about one routine — now about the right
+  answer. [SAFETY.md](SAFETY.md) owns the rule both halves implement.
 - **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
   shipped in step 3: escalate/degrade on unavailable, rate-limit or network
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain

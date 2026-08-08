@@ -77,8 +77,9 @@ _WIDGET_DEV_ABILITIES_MESSAGE = (
 # An automation's payload is a shell command, so EVERY automation needs Developer —
 # there is no such thing as one a Simple profile could arm. That uniformity is why
 # its caller passes a decided `True` rather than asking the row anything: with no
-# per-row question there is no stamp to be tempted into reading (step 8 phase 4;
-# the routines half above is the cautionary entry in KNOWN-GAPS).
+# per-row question there is no stamp to be tempted into reading (step 8 phase 4).
+# Routines DO have a per-row question, and since 2026-08-08 they ask it of the
+# routine (`rpc/routines.py::_routine_needs_dev`) rather than of its stamp.
 _AUTOMATION_DEV_ABILITIES_MESSAGE = (
     "That automation runs a command, so it's waiting in Developer profile."
 )
@@ -101,8 +102,9 @@ def _unavailable_marker(mode: PolicyMode, needs_dev: bool, message: str) -> dict
     born; the question here is what it ASKS FOR, and the two part company for
     every artifact that is perfectly usable in Simple but happened to be made
     while Developer was active. Callers derive it from the artifact itself —
-    ``widgets.widget_uses_dev_abilities`` — so a wrong answer has to be written
-    somewhere it can be read, rather than inherited from a stamp.
+    ``widgets.widget_uses_dev_abilities``, ``rpc/routines.py::_routine_needs_dev``
+    — so a wrong answer has to be written somewhere it can be read, rather than
+    inherited from a stamp.
 
     Returns ``{"reason": <slug>, "message": <plain sentence>}``; callers omit the
     key entirely when this is None, so an available row's shape is unchanged.

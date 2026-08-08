@@ -7,7 +7,7 @@ import threading
 
 from agent_core.policy import PolicyMode
 from agent_core.protocol import Method
-from agent_core.routines.model import RoutineStep
+from agent_core.routines.model import Routine, RoutineStep, routine_uses_dev_abilities
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
     _ROUTINE_DEV_ABILITIES_MESSAGE,
@@ -42,7 +42,8 @@ class RoutinesMixin(ServerContext):
         if params.get("description"):
             draft.description = str(params["description"])
         # Saved under the current mode; builder.save refuses a command-step routine
-        # in SAFE mode and stamps created_in_mode so SAFE can later hide it.
+        # in SAFE mode and stamps created_in_mode as DISPLAY PROVENANCE — what a
+        # profile may use is decided from the plan itself (_routine_needs_dev).
         try:
             self.routine_builder.save(
                 draft, conversation_id=self.conversation.id, mode=self._mode()
@@ -52,6 +53,75 @@ class RoutinesMixin(ServerContext):
             return
         self._draft_routine = None
         self._respond(request_id, {"ok": True, "routineId": draft.id})
+
+    # --- the ONE availability question (owner decision 2026-08-08) -------------
+
+    def _routine_needs_dev(self, routine: Routine) -> bool:
+        """Does this routine need the Developer profile? Asked of the PLAN and of
+        what the plan NAMES — never of the row's ``created_in_mode``.
+
+        **ONE function, one owner, three callers**: the list marker
+        (``_routine_rows``), the dispatch refusal (``_handle_routine_run``), and the
+        widget rail's look-through (``rpc/widgets.py::_widget_needs_dev``, via
+        ``_routine_id_needs_dev``). A marker and a refusal computed from two
+        expressions are two answers waiting to differ about the same routine, and the
+        person meets that disagreement as a row that offers a Run which is then
+        refused — or, worse, the other way round.
+
+        Two ways to need Developer, and the second is why this lives in the RPC layer
+        rather than beside the plan:
+
+          * **the plan carries an OPEN-only ability** — a command step
+            (``routines.model.routine_uses_dev_abilities``, which is the whole of what
+            a plan can say about itself);
+          * **a step NAMES a tool the SAFE view does not hold.**
+            ``read_project_file`` / ``write_project_file`` are the standing example
+            (registered ``open_only``), joined by ``create_automation``,
+            ``arm_automation``, ``disarm_automation``, ``run_command`` and every
+            ``mcp:`` tool. Only the REGISTRY knows that set, and the module-boundary
+            rule (CLAUDE.md §2) keeps ``routines/`` from importing ``tools/`` — so the
+            combined question can only be answered here, where both are in scope.
+            Asking ``routine_uses_dev_abilities`` alone would list a
+            ``read_project_file`` routine as usable in Simple and let it reach a
+            refusal one click later.
+
+        Absence from ``visible_tools(SAFE)`` is the test, rather than
+        ``registry.is_dev_only``, and the difference is a step naming a tool the
+        registry does not hold AT ALL: an ``mcp:`` step whose server is not connected
+        right now, a plan from a later build, a hand-edited row. ``is_dev_only``
+        answers False for every one of them — "not in the open-only set" — and Simple
+        would offer the row; the SAFE view answers "not something Simple can run",
+        which is true whichever of those it is. Dispatch refuses it either way (the
+        engine's ``refuse_if_dev_only_outside_open`` / ``refuse_if_not_callable``);
+        this only decides which sentence the person reads first, and the honest one
+        is the one that does not promise a run.
+
+        THIS IS NOT THE ENFORCEMENT. It decides what a list SAYS and gives dispatch
+        its early, plain refusal; the engine's per-step checks are what actually stop
+        a step, in both modes and whatever any surface believed."""
+        if routine_uses_dev_abilities(routine):
+            return True
+        safe_view = {tool.id for tool in self.tool_registry.visible_tools(PolicyMode.SAFE)}
+        return any(step.tool_id not in safe_view for step in routine.steps)
+
+    def _routine_id_needs_dev(self, routine_id: str) -> bool:
+        """``_routine_needs_dev`` by id, for the one caller that holds an id and not a
+        plan — the widget rail's look-through.
+
+        A LOOKUP, never a second answer: it loads the plan and asks the function
+        above, so the rail and the library cannot say different things about the same
+        routine. That property is what the widget half was protecting when it read the
+        routine's stamp (``rpc/widgets.py`` says so in its own words); it now holds
+        against the right answer instead of the same wrong one.
+
+        A routine that no longer exists answers False. A launcher pointing at nothing
+        is not "waiting in Developer profile" — pressing it should fail on the missing
+        routine, which is what ``routine.run`` says."""
+        try:
+            routine = self.routine_library.get(routine_id)
+        except KeyError:
+            return False
+        return self._routine_needs_dev(routine)
 
     def _routine_rows(self) -> list[dict]:
         # §4.7/§6.5: the Developer profile additionally sees a READ-ONLY view of the
@@ -63,31 +133,30 @@ class RoutinesMixin(ServerContext):
         mode = self._mode()
         rows = []
         for entry in self.routine_library.list():
-            # Dev-created routines are LISTED while the Simple profile is active,
-            # visibly disabled, instead of vanishing (owner decision 2026-08-06;
-            # docs/SAFETY.md owns the rule). They return untouched in Developer.
+            routine = entry["routine"]
+            # A routine that needs developer abilities is LISTED while the Simple
+            # profile is active, visibly disabled, instead of vanishing (owner
+            # decision 2026-08-06; docs/SAFETY.md owns the rule). It returns
+            # untouched in Developer.
+            #
+            # ASKED OF THE ROUTINE, never of where it was born (owner decision
+            # 2026-08-08, closing the routines half of docs/KNOWN-GAPS.md). Under
+            # the stamp, a routine of nothing but ``web_search`` steps that
+            # happened to be saved while Developer was active arrived here stamped
+            # 'open', was listed disabled, and said it "uses developer abilities" —
+            # about a routine Simple can run perfectly well. ``createdInMode``
+            # below still rides the wire; it is a badge, and nothing reads it to
+            # decide anything.
             #
             # DISPLAY ONLY — this marker is not what stops the routine running.
-            # _handle_routine_run refuses it below with this very sentence, and the
-            # engine refuses a dev_only step underneath that. If the flag and
-            # dispatch ever disagree, DISPATCH WINS.
-            # STILL PROVENANCE-BASED, and that is a known wrong answer kept
-            # deliberately rather than by oversight. Widgets were converted to ask
-            # what an artifact NEEDS (``rpc/widgets.py::_widget_needs_dev``);
-            # routines have the identical bug — a search-only routine saved while
-            # Developer was active is stamped 'open', listed disabled in Simple,
-            # and REFUSED by _handle_routine_run below — but fixing it here means
-            # loosening a dispatch refusal in SAFE, which is an owner call and not
-            # a drive-by. Registered in docs/KNOWN-GAPS.md. The correct test needs
-            # the registry as well as the plan (a step naming an ``open_only``
-            # tool needs Developer just as a command step does), so it belongs in
-            # this layer, where both are in reach.
+            # _handle_routine_run refuses it below with this very sentence, from
+            # this very function, and the engine refuses a dev_only step underneath
+            # that. If the flag and dispatch ever disagree, DISPATCH WINS.
             unavailable = _unavailable_marker(
                 mode,
-                entry.get("createdInMode") == PolicyMode.OPEN.value,
+                self._routine_needs_dev(routine),
                 _ROUTINE_DEV_ABILITIES_MESSAGE,
             )
-            routine = entry["routine"]
             row = {
                 "id": routine.id,
                 "name": routine.name,
@@ -129,16 +198,34 @@ class RoutinesMixin(ServerContext):
         except KeyError as exc:
             self._respond_error(request_id, _SERVER_ERROR, str(exc))
             return
-        # THE ENFORCEMENT. A dev-created routine is REFUSED in SAFE mode — it waits
+        # A routine that NEEDS developer abilities is REFUSED in SAFE mode — it waits
         # for Developer mode (policy.py). Switching modes is always allowed, so the
-        # routine isn't lost. The list marker above is display only and is computed
-        # from the same two facts; this refusal is what makes it true, and it holds
-        # whatever a stale frontend believes it may click.
+        # routine isn't lost. The list marker above is display only and asks THE SAME
+        # FUNCTION; this refusal is what makes it true, and it holds whatever a stale
+        # frontend believes it may click.
+        #
+        # THIS REFUSAL WAS LOOSENED ON 2026-08-08 (owner decision), and here is the
+        # argument, stated where the change is rather than in a document nobody reads
+        # at the moment they edit this line. It used to refuse any routine STAMPED
+        # 'open', which refused work Simple can do — a search-only routine that
+        # happened to be saved while Developer was active. What replaced it refuses
+        # any routine that NEEDS developer abilities, which is the question the person
+        # was always being told the answer to.
+        #
+        # It is sound because this is not the enforcement and never was. The engine's
+        # per-step ``refuse_if_dev_only_outside_open`` is what actually stops a
+        # dev-only step, at dispatch, before the gate and before execute — so a plan
+        # that slipped past this line still cannot run one. What a command-free
+        # routine replays through is ``visible_tools(SAFE)``, on the same registry and
+        # the same gate instance as the live loop, carding per invocation: SAFE
+        # invariant 3, which says a Routine never gets permissions beyond what the
+        # user granted live. Nothing here widens that.
+        #
+        # What changed is ONLY which question is asked. Dispatch still refuses a
+        # routine that needs developer abilities; it no longer refuses one for where
+        # it was born.
         mode = self._mode()
-        if (
-            mode is PolicyMode.SAFE
-            and self.routine_library.created_in_mode(routine_id) == PolicyMode.OPEN.value
-        ):
+        if mode is PolicyMode.SAFE and self._routine_needs_dev(routine):
             self._respond_error(request_id, _SERVER_ERROR, _ROUTINE_DEV_ABILITIES_MESSAGE)
             return
         result = self.routine_engine.run(routine, params.get("variables") or {}, mode=mode)

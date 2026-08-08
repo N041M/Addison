@@ -99,11 +99,14 @@ erDiagram
 - **routines** — saved declarative plans. `plan_json` holds the ordered, DAG-shaped
   step plan; by construction it never contains code. `run_count` and `last_run_at`
   track usage. `created_in_mode` (`safe` | `open`) records the policy mode the routine
-  was saved under: a routine created in OPEN is **listed but disabled** in
-  `routine.list` (the row carries a display-only `unavailable` reason) and refused
-  by `routine.run` while the Simple profile is active, and returns untouched in
-  Developer. It was hidden outright until 2026-08-06 — see
-  [SAFETY.md](SAFETY.md), which owns the rule.
+  was saved under, **for display only**: a routine that NEEDS developer abilities — a
+  command step in `plan_json`, or a step naming a tool outside `visible_tools(SAFE)` —
+  is **listed but disabled** in `routine.list` (the row carries a display-only
+  `unavailable` reason) and refused by `routine.run` while the Simple profile is
+  active, and returns untouched in Developer. That question is asked of the plan, not
+  of this column (`rpc/routines.py::_routine_needs_dev`); reading the column was the
+  KNOWN-GAPS bug closed 2026-08-08. Artifacts were hidden outright until 2026-08-06 —
+  see [SAFETY.md](SAFETY.md), which owns the rule.
 - **routine_runs** — the run log behind "show what you just did", one row per run with
   a `status` constrained to `running`, `completed`, `failed`, or `cancelled` and a
   JSON step log.
@@ -549,16 +552,17 @@ erDiagram
     job. It also means anything stored here is copied into every later snapshot
     payload and sidecar in plain text, which is why phase 2's authoring tool checks
     the stored text for secret shapes at the door.
-  - **Read in every profile.** `automation.list` and `automation.remove` answer in
-    Simple as well as Developer: a saved row is configuration, not a capability, and
-    hiding it on a profile switch is the failure the 2026-08-06 artifact decision
-    reversed — while a removal must never be the thing a switch traps. What needs
-    Developer is the shell command's *execution*, which belongs to
-    `create_automation`'s **`open_only`** registration (built — `open_only` rather
-    than `dev_only` deliberately, so its real `undo()` stays enforced at
-    registration) and to the phase-3 arming tools, which do not exist. So there is
-    still no path by which a stored command RUNS. `created_in_mode` is display-only
-    provenance and must never be read as the enforcement.
+  - **Read in every profile.** `automation.list`, `automation.remove` and
+    `automation.disarmOrphan` answer in Simple as well as Developer: a saved row is
+    configuration, not a capability, and hiding it on a profile switch is the failure
+    the 2026-08-06 artifact decision reversed — while a removal, or any other
+    tightening, must never be the thing a switch traps. What needs Developer is the
+    shell command's *execution*, which belongs to `create_automation`'s
+    **`open_only`** registration (`open_only` rather than `dev_only` deliberately, so
+    its real `undo()` stays enforced at registration) and to the arming tools, which
+    are `dev_only` and refused at dispatch outside OPEN. Nothing on the `automation.*`
+    namespace can make a stored command RUN, in any profile. `created_in_mode` is
+    display-only provenance and must never be read as the enforcement.
 
 ## Widgets and usage tables
 

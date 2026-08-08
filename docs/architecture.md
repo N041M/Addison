@@ -397,12 +397,15 @@ Component by component:
   a recent conversation, store and list saved routines, and replay a plan's steps
   through the shared gate and registry. Mode-scoped safety (`policy.py`): a plan step
   may carry an OPEN-mode-only `command` (run through the `run_command` dev-only tool,
-  same gate + registry, so a destructive command still prompts). A routine's
-  `created_in_mode` column records the mode it was saved under; routines created in
-  OPEN mode are listed by `routine.list` in SAFE mode carrying a display-only
-  `unavailable` reason, refused by `routine.run` there, and return untouched in
-  OPEN ([SAFETY.md](SAFETY.md) owns the rule — they were hidden outright until
-  2026-08-06). Command routines can only be saved in OPEN mode.
+  same gate + registry, so a destructive command still prompts). A routine that
+  **needs** developer abilities — a command step, or a step naming a tool outside
+  `visible_tools(SAFE)` — is listed by `routine.list` in SAFE mode carrying a
+  display-only `unavailable` reason, refused by `routine.run` there, and returns
+  untouched in OPEN. **What decides that is the plan, not the `created_in_mode`
+  column** (`rpc/routines.py::_routine_needs_dev`, one function for both surfaces);
+  the column is display provenance for the DEV badge ([SAFETY.md](SAFETY.md) owns the
+  rule — artifacts were hidden outright until 2026-08-06, and routines were judged by
+  the stamp until 2026-08-08). Command routines can only be saved in OPEN mode.
 - **Widgets and usage** — server/orchestrator machinery, not registry tools. After
   each provider call the orchestrator's `on_usage` hook records a `usage_log` row
   (tokens + latency) at that single choke point; `stats.get` derives the token meter

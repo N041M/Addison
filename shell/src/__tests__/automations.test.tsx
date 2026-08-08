@@ -145,6 +145,7 @@ vi.mock("../ipc/client", async (importOriginal) => {
       listAutomations: vi.fn(async () => [] as Automation[]),
       removeAutomation: vi.fn(async () => ({ ok: true })),
       getAutomationStatus: vi.fn(async () => ({ armed: [], supported: true }) as AutomationStatus),
+      disarmOrphanAutomation: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -753,6 +754,7 @@ function automationsState(over: Partial<AutomationsCardState> = {}): Automations
   return {
     automations: [],
     automationsLoaded: true,
+    automationsFailed: false,
     status: null,
     statusFailed: false,
     busy: false,
@@ -760,6 +762,7 @@ function automationsState(over: Partial<AutomationsCardState> = {}): Automations
     refreshAutomations: vi.fn(),
     refreshArmedState: vi.fn(),
     handleRemove: vi.fn(async () => {}),
+    handleDisarmOrphan: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -1215,6 +1218,220 @@ describe("the restore path", () => {
     // There is no armed column to restore and a one-action restore cannot perform
     // the keyword ceremony (plan §5.6), so what launchd holds is what it held a
     // moment ago. Asking again here would be a check nobody caused.
+    //
+    // THIS IS ALSO WHY AN ORPHAN APPEARS ON THE NEXT SECTION LOAD RATHER THAN AT
+    // ONCE, and the latency is the accepted cost (2026-08-08). A restore CAN orphan a
+    // job — the capture is REPLACE-ALL, so restoring a point from before an
+    // automation deletes its row while the job file stays installed — and with the
+    // rows re-read but the OS not re-asked, the section is holding a stale armed set
+    // for as long as it stays mounted. Closing that window would mean re-asking here,
+    // which is the check §5.6 forbids and which would be wrong on its own terms.
     expect(restoreBody()).not.toContain("refreshArmedState");
+    expect(restoreBody()).not.toContain("disarmOrphan");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (i) THE ORPHAN — a job the computer runs that no row can reach (2026-08-08)
+// ---------------------------------------------------------------------------
+// A G3 restore is REPLACE-ALL, so restoring a point from before an automation was
+// written deletes its row while `<label>.plist` stays installed and launchd goes on
+// running it at every login. The row was the only thing that could NAME that job or
+// reach it with a control, so it became invisible and unstoppable (KNOWN-GAPS, closed).
+//
+// RECONCILE-ON-RESTORE: the section already has both answers — what the OS says it is
+// running, and what is saved — so it compares them and renders what is left over. It
+// does that at LOAD, never on a timer and never during the restore itself; a restore is
+// never blocked and nothing is silently disarmed inside it.
+describe("an armed job the section has no row for", () => {
+  const ORPHAN = "com.addison.auto.older-cleanup";
+  /** The row's own words. Frozen here byte-for-byte, as every user-facing string on
+   * this surface is: the person reading it has no other source of truth about the job,
+   * because there is no row and therefore no name, schedule or command to show. */
+  const ORPHAN_NAME = "Running, but not saved here";
+  const ORPHAN_WHY =
+    "Your computer is running this on a schedule, but there's no saved copy of it " +
+    "here — going back to an earlier restore point can leave one behind. Addison " +
+    "can't show what it runs, only switch it off.";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function renderSection(
+    rows: Automation[],
+    status: AutomationStatus | "unreachable" = { armed: [], supported: true },
+    { developerSurface = true }: { developerSurface?: boolean } = {},
+  ) {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue(rows);
+    const statusMock = ipc.getAutomationStatus as ReturnType<typeof vi.fn>;
+    if (status === "unreachable") statusMock.mockRejectedValue(new Error("engine went away"));
+    else statusMock.mockResolvedValue(status);
+    render(<Section developerSurface={developerSurface} onAsk={vi.fn()} />);
+    // Every case here has SOMETHING to wait for: either the orphan row or the empty
+    // line. Waiting on the section's own first paint keeps a passing assertion from
+    // being one made before the fetches resolved.
+    await waitFor(() =>
+      expect(ipc.getAutomationStatus as ReturnType<typeof vi.fn>).toHaveBeenCalled(),
+    );
+    return ipc;
+  }
+
+  it("renders an armed label with no row as its own row, and says why in plain words", async () => {
+    await renderSection([], { armed: [ORPHAN], supported: true });
+    expect(await screen.findByText(ORPHAN_NAME)).toBeTruthy();
+    // The LABEL is on screen, because it is the only fact left about this job.
+    expect(screen.getByText(ORPHAN)).toBeTruthy();
+    expect(screen.getByText(ORPHAN_WHY)).toBeTruthy();
+    expect(screen.getByRole("button", { name: `Switch off ${ORPHAN}` })).toBeTruthy();
+    // NOT a saved row, and it must never read as one: there is no command to show and
+    // nothing here claims one.
+    expect(screen.queryByText(COMMAND)).toBeNull();
+  });
+
+  it("does not duplicate a label that HAS a row", async () => {
+    // The ordinary case — an armed automation the person can see — must be untouched
+    // by the reconciliation. It renders once, as a saved row with its own controls.
+    await renderSection([automation()], {
+      armed: ["com.addison.auto.tidy-downloads"],
+      supported: true,
+    });
+    await screen.findByText("Tidy up downloads");
+    expect(screen.getByText(ARMED)).toBeTruthy();
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+    expect(screen.getByRole("button", { name: "Disarm Tidy up downloads" })).toBeTruthy();
+  });
+
+  it("never renders a launchd job that isn't Addison's", async () => {
+    // Somebody's own scheduled jobs are their business. A person must not open
+    // Settings and find Addison listing — or offering to switch off — a job it did
+    // not set up. Filtered to the labels Addison MINTS, the same shape the core
+    // refuses anything outside of and the shell validates before it touches a file.
+    await renderSection([], {
+      armed: [
+        "com.apple.something",
+        "org.homebrew.autoupdate",
+        "com.addison.autotidy", // the prefix run into the stem: not one of Addison's
+        "com.addison.auto.Upper", // upper case: not a label Addison can mint
+        "com.addison.auto.tidy.plist", // a dot after the prefix
+      ],
+      supported: true,
+    });
+    await screen.findByText(EMPTY);
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Switch off / })).toBeNull();
+    const text = document.body.textContent ?? "";
+    expect(text).not.toContain("com.apple.something");
+    expect(text).not.toContain("org.homebrew.autoupdate");
+  });
+
+  it("takes two presses to switch off, and sends the label", async () => {
+    // The section's own idiom, for a reason of its own: with no row there is nothing
+    // to arm again, so an accidental press ENDS that job with no way back.
+    const ipc = await renderSection([], { armed: [ORPHAN], supported: true });
+    const button = await screen.findByRole("button", { name: `Switch off ${ORPHAN}` });
+    fireEvent.click(button);
+    expect(ipc.disarmOrphanAutomation).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: `Switch off ${ORPHAN}` }).textContent).toBe(
+      "Really switch off?",
+    );
+    fireEvent.click(screen.getByRole("button", { name: `Switch off ${ORPHAN}` }));
+    await waitFor(() => expect(ipc.disarmOrphanAutomation).toHaveBeenCalledWith(ORPHAN));
+    expect(ipc.disarmOrphanAutomation).toHaveBeenCalledTimes(1);
+    // Both answers are read again, because whether a label is an orphan is a fact
+    // about the rows AND the OS together — and this ask is one the person just caused.
+    await waitFor(() => expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(2));
+  });
+
+  it("renders a refusal as the core's own sentence", async () => {
+    const ipc = await renderSection([], { armed: [ORPHAN], supported: true });
+    (ipc.disarmOrphanAutomation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: "That automation is saved again, so switch it off from its own row in the list.",
+    });
+    const name = `Switch off ${ORPHAN}`;
+    fireEvent.click(await screen.findByRole("button", { name }));
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(
+      await screen.findByText(
+        "That automation is saved again, so switch it off from its own row in the list.",
+      ),
+    ).toBeTruthy();
+    expect(document.body.textContent ?? "").not.toContain("Traceback");
+  });
+
+  it("says something plain when the request cannot be sent at all", async () => {
+    const ipc = await renderSection([], { armed: [ORPHAN], supported: true });
+    (ipc.disarmOrphanAutomation as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("boom"),
+    );
+    const name = `Switch off ${ORPHAN}`;
+    fireEvent.click(await screen.findByRole("button", { name }));
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(await screen.findByText("Addison couldn't switch that off just now.")).toBeTruthy();
+    expect(document.body.textContent ?? "").not.toContain("boom");
+  });
+
+  it("invents no orphan when the SAVED ROWS could not be read", async () => {
+    // The other half of "both answers have to be answers", and the one that bites
+    // hardest: the hook keeps the last-known list when a fetch fails, which on a
+    // FIRST load is the empty list it started with. Read as "nothing is saved", every
+    // real automation this person has would render as "running, but not saved here" —
+    // a screen telling somebody their own work has been lost, produced by one failed
+    // request. (Found reviewing this change, before it landed.)
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("engine"));
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      armed: [ORPHAN, "com.addison.auto.tidy-downloads"],
+      supported: true,
+    });
+    render(<Section onAsk={vi.fn()} />);
+    await waitFor(() => expect(ipc.getAutomationStatus).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(LOADING)).toBeNull());
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+    expect(screen.queryByText(ORPHAN)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Switch off / })).toBeNull();
+  });
+
+  it("invents no orphan when the OS could not be asked", async () => {
+    // "Could not find out" is not "there is a job running". Guessing in EITHER
+    // direction is wrong here, and this is the direction that would put a row on
+    // screen naming a job that may not exist at all.
+    await renderSection([], "unreachable");
+    expect(await screen.findByText(STATUS_UNKNOWN)).toBeTruthy();
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+  });
+
+  it("invents no orphan from an ERROR beside an armed list", async () => {
+    // The third outcome the core keeps apart: a sentence beside a list. The list is
+    // not an answer, so nothing is reconciled against it.
+    await renderSection([], {
+      armed: [ORPHAN],
+      supported: true,
+      error: "Addison couldn't ask this computer just now.",
+    });
+    await screen.findByText("Addison couldn't ask this computer just now.");
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+  });
+
+  it("renders nothing where arming does not exist at all", async () => {
+    // Off macOS `supported` is false and nothing is installed, so there is nothing to
+    // reconcile — no orphan row, and no error either.
+    await renderSection([], { armed: [ORPHAN], supported: false });
+    expect(await screen.findByText(UNSUPPORTED)).toBeTruthy();
+    expect(screen.queryByText(ORPHAN_NAME)).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Switch off / })).toBeNull();
+  });
+
+  it("shows the orphan and its Switch off in SIMPLE too", async () => {
+    // A TIGHTENING IS NEVER PROFILE-GATED (Simple keeping Remove is the precedent),
+    // and here it is the difference between having a way to stop a job and not having
+    // one: every automation is armed from Developer, so a person who switches to
+    // Simple and then restores an old point is exactly the person this strands.
+    await renderSection([], { armed: [ORPHAN], supported: true }, { developerSurface: false });
+    expect(await screen.findByText(ORPHAN_NAME)).toBeTruthy();
+    expect(screen.getByText(ORPHAN_WHY)).toBeTruthy();
+    expect(screen.getByRole("button", { name: `Switch off ${ORPHAN}` })).toBeTruthy();
   });
 });

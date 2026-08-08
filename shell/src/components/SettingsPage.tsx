@@ -28,7 +28,7 @@
 //     description in between (Phase-2 step 2).
 
 import { useEffect, useState, type MouseEvent, type ReactNode } from "react";
-import type { Automation, ModelRole } from "../types/protocol";
+import type { Automation, AutomationStatus, ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import type { DiagnosticEntry, ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
@@ -1026,6 +1026,63 @@ const AUTOMATION_NOT_ARMED_SIMPLE = "Not running.";
  * until it has asked. */
 const AUTOMATIONS_LOADING = "Looking for your automations…";
 
+// --- THE ORPHAN: a job the computer runs that nothing here saved ------------
+// A G3 restore is REPLACE-ALL, so restoring a point from before an automation was
+// written deletes its row while the job file stays installed and the computer goes on
+// running it at every login. The row was the only thing that could name that job or
+// reach it with a control, so it became invisible AND unstoppable (KNOWN-GAPS, closed
+// 2026-08-08). RECONCILE-ON-RESTORE is the fix, and it lives here because here is
+// where the two answers already meet: the OS's armed labels and the saved rows.
+//
+// Never by blocking a restore and never by disarming during one — an arming decision
+// must not live inside the one action G3 promises is always available. Addison shows
+// the leftover and changes nothing until the person presses the button.
+
+/** `^com\.addison\.auto\.[a-z0-9][a-z0-9-]{0,39}$` — the labels Addison MINTS, and
+ * nothing else. The same rule the core (`automations.label_is_addisons_own`) and the
+ * Rust shell (`automation.rs::label_is_valid`) each enforce on their own side; the
+ * core refuses anything else outright, so this is not the enforcement — it is what
+ * keeps somebody's UNRELATED launchd job from being rendered as Addison's business in
+ * the first place. A person with their own scheduled jobs must not open Settings and find
+ * Addison listing them. */
+const ADDISON_AUTOMATION_LABEL = /^com\.addison\.auto\.[a-z0-9][a-z0-9-]{0,39}$/;
+
+/** The armed labels with no saved row behind them, in the order the OS reported.
+ *
+ * BOTH ANSWERS HAVE TO BE ANSWERS, and each one's ways of not being one are kept
+ * apart. On the OS side: `null` is "never asked" and an `error` is "could not find
+ * out" — inventing an orphan out of either would put a row on screen naming a job
+ * that may not exist; `supported:false` IS a real answer and says nothing is
+ * installed at all (arming does not exist off macOS), so there is nothing to
+ * reconcile. On the ROWS side: the hook keeps the last-known list when a fetch fails,
+ * so `rowsFailed` is the difference between "nothing is saved" and "Addison could not
+ * find out what is saved" — and reading the second as the first would render every
+ * one of somebody's real automations as an orphan on the first load after a failure.
+ * Neither direction of guess is available here. */
+function orphanedLabels(
+  status: AutomationStatus | null,
+  rows: Automation[],
+  rowsFailed: boolean,
+): string[] {
+  if (rowsFailed) return [];
+  if (!status || status.error || !status.supported) return [];
+  const saved = new Set(rows.map((row) => row.label));
+  return status.armed.filter(
+    (label) => ADDISON_AUTOMATION_LABEL.test(label) && !saved.has(label),
+  );
+}
+
+/** The orphan row's name. It states the two things that ARE known — the computer runs
+ * it, and Addison has no saved copy — and claims nothing else, because nothing else is
+ * left: without a row there is no name, no schedule and no command to show. */
+const ORPHAN_NAME = "Running, but not saved here";
+/** Why it is there and what can be done about it. Says the honest limit out loud
+ * rather than leaving a person to wonder where the details went. */
+const ORPHAN_EXPLANATION =
+  "Your computer is running this on a schedule, but there's no saved copy of it here — " +
+  "going back to an earlier restore point can leave one behind. Addison can't show what " +
+  "it runs, only switch it off.";
+
 // Exported for the step-8 tests (automations.test.tsx). It is still only rendered
 // from within this page.
 export function AutomationsSection({
@@ -1050,6 +1107,7 @@ export function AutomationsSection({
   const {
     automations: rows,
     automationsLoaded: loaded,
+    automationsFailed: rowsFailed,
     status,
     statusFailed,
     busy,
@@ -1057,6 +1115,7 @@ export function AutomationsSection({
     refreshAutomations,
     refreshArmedState,
     handleRemove,
+    handleDisarmOrphan,
   } = automations;
   // Which row is one press away from being removed. The two-press idiom the skills,
   // routine and tool-server rows use; never a browser confirm(). A removal takes
@@ -1065,6 +1124,13 @@ export function AutomationsSection({
   // stays in the SECTION, like the tool-server panel's, because it is a fact about
   // this screen and not about the configuration.
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
+  // The same idiom for the orphan rows, keyed by LABEL because that is all an orphan
+  // has. Two presses here for a reason of its own: switching one off is the END of
+  // that job — with no row there is nothing to arm again, so an accidental press is
+  // not recoverable the way a saved automation's Disarm is.
+  const [confirmingOrphan, setConfirmingOrphan] = useState<string | null>(null);
+  // The reconciliation, computed from the two answers this section already holds.
+  const orphans = orphanedLabels(status, rows, rowsFailed);
 
   useEffect(() => {
     if (!connected) return;
@@ -1091,6 +1157,15 @@ export function AutomationsSection({
     }
     setConfirmingRemove(null);
     await handleRemove(automation.id);
+  }
+
+  async function switchOffOrphan(label: string) {
+    if (confirmingOrphan !== label) {
+      setConfirmingOrphan(label);
+      return;
+    }
+    setConfirmingOrphan(null);
+    await handleDisarmOrphan(label);
   }
 
   if (!connected) {
@@ -1215,6 +1290,44 @@ export function AutomationsSection({
           );
         })
       )}
+
+      {/* WHAT THE COMPUTER IS RUNNING THAT NOTHING HERE SAVED. Rendered AFTER the
+          saved list, because it is not part of it: the person's own automations come
+          first, and this is the exception underneath them. It appears in EVERY
+          profile — a tightening is never profile-gated (Simple keeping Remove is the
+          precedent), and a Simple person is exactly the one who would otherwise have
+          no way at all to stop a job Developer armed. */}
+      {orphans.map((label) => (
+        <SurfaceRow
+          key={label}
+          wrap
+          name={ORPHAN_NAME}
+          actions={
+            // Named after the label — the only name this job has — so a screen reader
+            // never meets a column of identical "Switch off" buttons. `danger`,
+            // because with no row behind it this is the end of that job and there is
+            // nothing here that could start it again.
+            <RowAction
+              tone="danger"
+              disabled={busy}
+              ariaLabel={`Switch off ${label}`}
+              onClick={() => void switchOffOrphan(label)}
+            >
+              {confirmingOrphan === label ? "Really switch off?" : "Switch off"}
+            </RowAction>
+          }
+        >
+          {/* The label, whole. It is the one fact left about this job — the name of
+              the file the computer is running it from — and it is a machine fact, so
+              it reads in mono like a command does. NOT a command: there is no row, so
+              nothing on this side knows what it runs, and the sentence below says so
+              rather than leaving a blank where an answer should be. */}
+          <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">{label}</p>
+          <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+            {ORPHAN_EXPLANATION}
+          </p>
+        </SurfaceRow>
+      ))}
     </>
   );
 }

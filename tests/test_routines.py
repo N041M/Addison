@@ -5,18 +5,30 @@ each on_failure mode, and — the §8.5 invariant — a step needing an ungrante
 permission pauses rather than executes. The engine must share the live
 orchestrator's gate/registry instances, so a grant given in live conversation
 carries over and a Routine can never out-permission the user.
+
+The last section leaves the engine and drives ``routine.list`` / ``routine.run``
+through the real server, because that is where AVAILABILITY is decided (owner
+decision 2026-08-08, closing the routines half of docs/KNOWN-GAPS.md): a routine
+is judged by what it NEEDS, never by the ``created_in_mode`` stamp it was born
+with. Every test there seeds a stamp that disagrees with the plan, so a
+stamp-reading implementation gets each one wrong.
 """
 
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
 from urllib.parse import urlsplit
 
+from agent_core.main import build_registry
 from agent_core.memory.store import Store
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.profiles import DEVELOPER
+from agent_core.protocol import Method
 from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import (
     RoutineEngine,
@@ -24,7 +36,7 @@ from agent_core.routines.engine import (
     topologically_sorted,
 )
 from agent_core.routines.library import RoutineLibrary
-from agent_core.routines.model import Routine, RoutineStep, RoutineVariable
+from agent_core.routines.model import Routine, RoutineStep, RoutineVariable, routine_to_json
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ActionSnapshot,
@@ -34,6 +46,11 @@ from agent_core.tools.base import (
     ToolResult,
 )
 from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
+from tests.conftest import IPC_DB_NAME, _shutdown, build_server
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_ROUTINES_RPC_SRC = _REPO_ROOT / "agent_core" / "rpc" / "routines.py"
+_WIDGETS_RPC_SRC = _REPO_ROOT / "agent_core" / "rpc" / "widgets.py"
 
 
 class _Result:
@@ -576,3 +593,355 @@ def test_library_crud_round_trip(tmp_path):
     assert library.list() == []
     with pytest.raises(KeyError):
         library.get("r-1")
+
+
+# ===========================================================================
+# Availability — asked of the ROUTINE, never of its stamp (owner decision
+# 2026-08-08; docs/SAFETY.md owns the rule, docs/KNOWN-GAPS.md held the gap).
+#
+# Two surfaces have to agree: the `unavailable` marker `routine.list` puts on a
+# row, and the refusal `routine.run` gives. They used to be computed from two
+# copies of `created_in_mode == 'open'`, which is a question about where a
+# routine was BORN — so a routine of nothing but everyday steps, saved while
+# Developer happened to be active, arrived in Simple disabled and was refused,
+# announcing that it "uses developer abilities" about a plan that uses none.
+#
+# EVERY FIXTURE BELOW SEEDS A STAMP THAT DISAGREES WITH ITS PLAN. That is the
+# whole design of this section: a stamp-reading implementation gets each of
+# these wrong in a way the assertions name, rather than being right by accident
+# on the common case.
+#
+# These enter through the real JSON-RPC server with the REAL tool registry
+# (`build_registry(DEVELOPER)`), because half the question is which tools the
+# SAFE view holds — `read_project_file` is registered `open_only`, and no
+# hand-rolled test registry would reproduce that.
+# ===========================================================================
+
+# Frozen copy (rpc/constants.py holds it once, for both the marker and the
+# refusal), asserted as a literal: a test that compares a payload against the
+# constant it was built from passes whatever that constant says.
+_WAITING = "That routine uses developer abilities, so it's waiting in Developer profile."
+_WIDGET_WAITING = "That widget uses developer abilities, so it's waiting in Developer profile."
+_DISABLED = {"reason": "developer_abilities", "message": _WAITING}
+
+
+def _seeded(tmp_path, routines, widgets=(), profile_id="simple"):
+    """Seed routines (each as ``(Routine, created_in_mode)``) + optional widgets,
+    then start a server carrying the real Developer registry."""
+    store = Store(tmp_path / IPC_DB_NAME)
+    store.set_setting("widgets_seeded", "1")
+    store.set_setting("active_profile", profile_id)
+    for routine, mode in routines:
+        store.insert_routine(
+            id=routine.id,
+            name=routine.name,
+            description=routine.description,
+            plan_json=routine_to_json(routine),
+            created_from_conversation_id=None,
+            created_at=1,
+            created_in_mode=mode,
+        )
+    for position, (widget_id, spec) in enumerate(widgets):
+        store.insert_widget(
+            id=widget_id,
+            spec_json=json.dumps(spec),
+            pinned=True,
+            position=position,
+            created_at=1,
+            created_in_mode="safe",
+        )
+    store.close()
+    return build_server(tmp_path, responses=[], registry=build_registry(DEVELOPER))
+
+
+def _plan(routine_id: str, steps: list[RoutineStep]) -> Routine:
+    return Routine(id=routine_id, name=routine_id, description="", variables=[], steps=steps)
+
+
+def _call(h, request_id: int, method: str, params=None) -> dict:
+    frame = {"jsonrpc": "2.0", "id": request_id, "method": method}
+    if params is not None:
+        frame["params"] = params
+    h.reader.feed(frame)
+    return h.writer.wait_for(
+        lambda f: f.get("id") == request_id and ("result" in f or "error" in f)
+    )
+
+
+def _rows(h, request_id: int) -> dict:
+    return {r["id"]: r for r in _call(h, request_id, Method.ROUTINE_LIST)["result"]["routines"]}
+
+
+def test_a_routine_of_only_simple_steps_is_usable_in_simple_whatever_made_it(tmp_path):
+    """THE REGRESSION TEST, and the one the closed gap was named for.
+
+    A ``calculator`` routine needs nothing developer about it — the tool is in
+    ``visible_tools(SAFE)`` and the plan carries no command step. Saved while the
+    Developer profile happened to be active, it is stamped 'open', and under the
+    stamp that stamp was the whole answer: Simple listed it disabled and
+    ``routine.run`` refused it outright, telling the person their arithmetic
+    "uses developer abilities".
+
+    Both halves are asserted, because they were two separate wrong answers: the
+    row carries no marker, AND the routine actually RUNS — through the ordinary
+    SAFE gate, which cards for the tool exactly as a live call would (invariant 3:
+    a routine never gets permissions beyond what the user granted live). The card
+    is what makes the run meaningful; a run that skipped it would be a different
+    bug wearing this test's green.
+
+    The stamp still rides the wire, and the last line pins it: 'fixed' must not
+    mean 'stopped recording where it came from' — the frontend badges DEV with it.
+
+    Mutations: (a) restore ``entry.get("createdInMode") == 'open'`` as the marker
+    decision — this fails on the first assertion; (b) restore the stamp test in
+    ``_handle_routine_run`` — this fails on the run."""
+    h = _seeded(
+        tmp_path, [(_plan("calc", [RoutineStep("s1", "calculator", {"expression": "1+1"})]), "open")]
+    )
+    try:
+        row = _rows(h, 1)["calc"]
+        assert "unavailable" not in row
+
+        h.reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.ROUTINE_RUN,
+                       "params": {"routineId": "calc"}})
+        card = h.writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+        assert card["params"]["toolId"] == "calculator"
+        h.reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.PERMISSION_RESPOND,
+                       "params": {"toolId": "calculator", "allow": True}})
+        result = h.writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)["result"]
+        assert result["ok"] is True and result["status"] == "completed"
+
+        assert _rows(h, 4)["calc"]["createdInMode"] == "open"
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simple(tmp_path):
+    """THE CASE ``routine_uses_dev_abilities`` ALONE MISSES, and the reason the
+    question lives in the RPC layer at all.
+
+    ``read_project_file`` is registered ``open_only``: absent from
+    ``visible_tools(SAFE)`` and refused at dispatch outside OPEN. A routine naming
+    it carries NO command step, so the plan-only test answers "needs nothing" — and
+    the row would sit in Simple offering a Run that the engine refuses one click
+    later. Only the registry knows, and the module-boundary rule keeps
+    ``routines/`` from asking it, which is why ``_routine_needs_dev`` is where it
+    is.
+
+    Stamped 'safe' on purpose: this row is the one a stamp-reader calls usable.
+
+    That it is the PROFILE talking and not something permanent is pinned by the
+    second half — in Developer the same row is unmarked and the same call stops
+    being refused for this reason. An assertion on "refused" alone would prove
+    nothing; it is the sentence CHANGING that shows what drove the first refusal.
+
+    Mutations: (a) drop the ``visible_tools(SAFE)`` clause from
+    ``_routine_needs_dev``, leaving ``routine_uses_dev_abilities`` — this fails on
+    the marker and the refusal; (b) decide from the stamp — same failure, since
+    this row is stamped 'safe'."""
+    h = _seeded(
+        tmp_path,
+        [(_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "README.md"})]), "safe")],
+    )
+    try:
+        assert _rows(h, 1)["reader"]["unavailable"] == _DISABLED
+        refused = _call(h, 2, Method.ROUTINE_RUN, {"routineId": "reader"})["error"]
+        assert refused["message"] == _WAITING
+
+        assert _call(h, 3, Method.PROFILE_SET, {"profileId": "developer"})["result"]["mode"] == (
+            "open"
+        )
+        assert "unavailable" not in _rows(h, 4)["reader"]
+        in_open = _call(h, 5, Method.ROUTINE_RUN, {"routineId": "reader"})
+        assert _WAITING not in json.dumps(in_open)
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_command_routine_is_disabled_and_refused_in_simple_whatever_its_stamp(tmp_path):
+    """The reverse decoy. A hand-edited row, an older build or a restored payload
+    can carry a command step behind a 'safe' stamp — no tool can produce one, and
+    that is exactly why the stamp is worth nothing as an answer. Both rows here
+    carry the same plan and disagree about their provenance, and both are treated
+    the same, because what decides is the plan.
+
+    The 'open'-stamped row is the case the old code got right for the wrong
+    reason, kept beside it so a mutation that satisfies one row has to satisfy
+    both.
+
+    Mutation: decide from the stamp — this fails on ``cmd-safe`` alone, in both
+    the marker and the refusal, and that single-row failure is the point."""
+    command_step = [RoutineStep("s1", "run_command", {}, command="rm -rf ~/tmp")]
+    h = _seeded(
+        tmp_path,
+        [(_plan("cmd-open", command_step), "open"), (_plan("cmd-safe", command_step), "safe")],
+    )
+    try:
+        rows = _rows(h, 1)
+        assert rows["cmd-open"]["unavailable"] == _DISABLED
+        assert rows["cmd-safe"]["unavailable"] == _DISABLED
+        for request_id, routine_id in ((2, "cmd-open"), (3, "cmd-safe")):
+            refused = _call(h, request_id, Method.ROUTINE_RUN, {"routineId": routine_id})["error"]
+            assert refused["message"] == _WAITING, routine_id
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_the_rail_and_the_library_never_disagree_about_one_routine(tmp_path):
+    """The follow-on line the gap named. A ``{"kind": "routine"}`` widget is
+    SAFE-legal by SHAPE whatever it points at, so ``rpc/widgets.py`` looks THROUGH
+    the launcher at the routine — and until this landed it looked through at the
+    routine's STAMP, deliberately, so that the rail and the library could not
+    disagree about the same routine. They still cannot; they now agree on the right
+    answer, because there is one answer (``_routine_id_needs_dev`` asks
+    ``_routine_needs_dev``).
+
+    Both directions are pinned. The usable routine's Run pill stays LIVE in the
+    Simple rail — a rail that disabled it would be the same false sentence in a
+    second place — and the dev routine's pill is inert. The widget says it in the
+    WIDGET's words, which is the one thing that legitimately differs.
+
+    Mutation: point the look-through back at the stamp — this fails on ``w-calc``,
+    whose routine is stamped 'open' and needs nothing."""
+    h = _seeded(
+        tmp_path,
+        [
+            (_plan("calc", [RoutineStep("s1", "calculator", {"expression": "1+1"})]), "open"),
+            (_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "x"})]), "safe"),
+        ],
+        widgets=[
+            ("w-calc", {"kind": "routine", "routineId": "calc", "title": "Add up"}),
+            ("w-reader", {"kind": "routine", "routineId": "reader", "title": "Read it"}),
+        ],
+    )
+    try:
+        routines = _rows(h, 1)
+        widgets = {
+            w["id"]: w for w in _call(h, 2, Method.WIDGET_LIST)["result"]["widgets"]
+        }
+        assert "unavailable" not in widgets["w-calc"]
+        assert widgets["w-reader"]["unavailable"] == {
+            "reason": "developer_abilities", "message": _WIDGET_WAITING,
+        }
+        # The pairing, stated as the property rather than as four literals: for the
+        # same routine, the rail and the library are never in different states.
+        for widget_id, routine_id in (("w-calc", "calc"), ("w-reader", "reader")):
+            assert ("unavailable" in widgets[widget_id]) == (
+                "unavailable" in routines[routine_id]
+            ), widget_id
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_availability_is_never_decided_from_where_a_routine_was_born():
+    """THE STRUCTURAL HALF, and the reason this section has one: the round-trips
+    above are green on the payload, and a payload cannot show that the marker and
+    the refusal are ONE answer rather than two that currently match. Two
+    expressions that agree today are the shape the widget/routine split already
+    took once — widgets were converted on 2026-08-06 and routines were not, and the
+    two surfaces then said different things about the same artifact for two days.
+
+    So four pins, adapted from ``tests/test_automations.py``'s scan (whose module
+    hands ``_unavailable_marker`` a literal ``True`` — every automation runs a
+    command, so it has no per-row question at all). Routines DO have a per-row
+    question; what this pins is that it is asked ONCE, of the routine:
+
+      1. exactly one unavailability decision in ``rpc/routines.py``, and it is a
+         CALL to ``self._routine_needs_dev`` — not an expression, however correct;
+      2. ``_handle_routine_run`` asks that same function, and names the stamp
+         nowhere;
+      3. no branch, comparison or boolean operator ANYWHERE in the module names
+         ``created_in_mode``/``createdInMode`` — the stamp reaches the wire as
+         display provenance and is read for nothing else;
+      4. ``rpc/widgets.py``'s look-through asks the routines question rather than
+         re-answering it, and names no stamp either.
+
+    Mutations: inline ``routine_uses_dev_abilities(routine)`` at either call site
+    (pin 1 or 2 — one answer, not two); restore
+    ``created_in_mode(routine_id) == 'open'`` in dispatch (pins 2 and 3); clear the
+    marker behind ``if entry.get("createdInMode") == "safe"`` (pin 3, which is why
+    pin 1 alone was not enough); point ``_widget_needs_dev`` back at the stamp
+    (pin 4)."""
+    stamp = {"created_in_mode", "createdInMode"}
+
+    def names_stamp(node) -> bool:
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Attribute) and inner.attr in stamp:
+                return True
+            if isinstance(inner, ast.Name) and inner.id in stamp:
+                return True
+            # Exact match only: a docstring EXPLAINING the stamp is prose, and
+            # this scan is about what the code asks.
+            if isinstance(inner, ast.Constant) and inner.value in stamp:
+                return True
+        return False
+
+    def decisions(tree) -> list[ast.expr]:
+        found: list[ast.expr] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.If | ast.IfExp | ast.While):
+                found.append(node.test)
+            elif isinstance(node, ast.Compare | ast.BoolOp):
+                found.append(node)
+        return found
+
+    def function(tree, name: str) -> ast.FunctionDef:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+        raise AssertionError(f"{name} is gone — availability moved without this test moving")
+
+    def calls_to(node, method: str) -> list[ast.Call]:
+        return [
+            inner
+            for inner in ast.walk(node)
+            if isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Attribute)
+            and inner.func.attr == method
+        ]
+
+    routines = ast.parse(_ROUTINES_RPC_SRC.read_text(encoding="utf-8"))
+
+    # 1. One decision, and it is the shared function being CALLED.
+    markers = [
+        node
+        for node in ast.walk(routines)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_unavailable_marker"
+    ]
+    assert len(markers) == 1, "expected exactly one unavailability decision in this module"
+    decision = markers[0].args[1] if len(markers[0].args) > 1 else None
+    assert isinstance(decision, ast.Call) and isinstance(decision.func, ast.Attribute), (
+        "the list marker computes availability inline; it must ASK "
+        "_routine_needs_dev, so the marker and the run refusal cannot be two answers"
+    )
+    assert decision.func.attr == "_routine_needs_dev"
+
+    # 2. Dispatch asks the same function, and asks the stamp nothing.
+    run = function(routines, "_handle_routine_run")
+    assert calls_to(run, "_routine_needs_dev"), (
+        "routine.run decides for itself: the refusal and the marker must be the "
+        "same function, or a row can be listed usable and refused on click"
+    )
+    assert not names_stamp(run), (
+        "routine.run reads created_in_mode: the stamp records where a routine was "
+        "BORN and can never decide what it NEEDS (docs/KNOWN-GAPS.md, closed "
+        "2026-08-08)"
+    )
+
+    # 3. Nothing in the module BRANCHES on the stamp...
+    for node in decisions(routines):
+        assert not names_stamp(node), (
+            f"rpc/routines.py branches on created_in_mode at line {node.lineno}: it is "
+            "display provenance for a badge, and nothing may decide from it"
+        )
+
+    # 4. ...and neither does the widget rail's look-through.
+    widgets = ast.parse(_WIDGETS_RPC_SRC.read_text(encoding="utf-8"))
+    needs_dev = function(widgets, "_widget_needs_dev")
+    assert calls_to(needs_dev, "_routine_id_needs_dev"), (
+        "the rail answers the routine question itself again; it must ask "
+        "rpc/routines.py, or the rail and the library can disagree about one routine"
+    )
+    assert not names_stamp(needs_dev), "the look-through reads the routine's stamp again"
