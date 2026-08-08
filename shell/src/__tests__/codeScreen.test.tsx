@@ -831,6 +831,23 @@ describe("the tree, from the hook's side", () => {
     await waitFor(() => expect(result.current.listings["/p/src"]).toBeTruthy());
     expect(result.current.listingErrors["/p/src"]).toBeUndefined();
   });
+
+  it("keeps the sentence when the retry cannot even ask", async () => {
+    // The other half of the ordering, and the reason the clearing moved AFTER the
+    // call: `loadDirectory` declines silently with no engine, so clearing first
+    // would strip the row of its sentence AND its retry button and leave a
+    // permanent "Looking…" — the exact state the retry was added to abolish.
+    // Kills: clearing before the call, or ignoring what `loadDirectory` answers.
+    vi.mocked(ipc.listWorkspaceDirectory).mockRejectedValueOnce(new Error("engine went away"));
+    const { result } = mountHook();
+    act(() => result.current.toggleDirectory("/p/src"));
+    await waitFor(() => expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE));
+
+    engine.up = false;
+    act(() => result.current.retryDirectory("/p/src"));
+    expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE);
+    expect(result.current.listings["/p/src"]).toBeUndefined();
+  });
 });
 
 describe("the right pane's race guard", () => {
