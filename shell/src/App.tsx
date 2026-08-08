@@ -5,11 +5,17 @@
 // collapse by animating width/opacity/margin/translateX, so hiding one widens
 // the middle rather than leaving a hole.
 //
-// FOUR SURFACES — Settings, Tools, Snapshots, Build a widget — replace the chat
-// column (the rail hides entirely, the sidebar stays). `view` is the single
+// FIVE SURFACES — Settings, Tools, Snapshots, Build a widget, Code — replace the
+// chat column (the rail hides entirely, the sidebar stays). `view` is the single
 // state that says which one is showing; `changeView` owns the transition
 // (children fadeDrop, commit at ~240ms) and the header's ← and Escape both
 // route back to chat through it.
+//
+// "Code" is the odd one out and is the only view gated on the ACTIVE PROFILE:
+// the Developer review surface (Phase 3) shows what Addison has changed on disk
+// and lets one file be put back, so Simple gets no sidebar row for it and no
+// render of it. The core refuses every one of its calls independently — this
+// window just never offers the trip.
 //
 // This component owns the UI-chrome state and wires the Core → Frontend
 // notifications (streamed text, permission prompts, tool activity, local-setup
@@ -66,6 +72,7 @@ import { ModelPopup, type ModelPopupOption, type PopupAnchor } from "./component
 import { RestorePointsModal } from "./components/RestorePointsModal";
 import { ToolsSurface } from "./components/ToolsSurface";
 import { SnapshotsSurface } from "./components/SnapshotsSurface";
+import { CodeSurface } from "./components/CodeSurface";
 import { FirstRunBanner } from "./components/FirstRunBanner";
 import { Banner } from "./components/Banner";
 import { MobileDrawer } from "./components/MobileDrawer";
@@ -77,13 +84,19 @@ import { useSnapshots } from "./hooks/useSnapshots";
 import { useGuards } from "./hooks/useGuards";
 import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { useCodeReview } from "./hooks/useCodeReview";
 import { useMcpServers } from "./hooks/useMcpServers";
 import { useAutomations } from "./hooks/useAutomations";
 import { useOffers } from "./hooks/useOffers";
 import { useTurn } from "./hooks/useTurn";
 import { useConversations } from "./hooks/useConversations";
 import { asRecord, normalizeVariables, normalizeProfile } from "./lib/parse";
-import { type ThemeChoice, parseThemeChoice, resolveTheme } from "./lib/theme";
+import {
+  type ResolvedTheme,
+  type ThemeChoice,
+  parseThemeChoice,
+  resolveTheme,
+} from "./lib/theme";
 import {
   INITIAL_SCRAMBLE_SELECTOR,
   installScrambleClickHandler,
@@ -107,6 +120,7 @@ const SURFACE_TITLES: Record<Exclude<View, "chat">, string> = {
   tools: "Tools",
   snapshots: "Snapshots",
   widgets: "Build a widget",
+  code: "Code",
 };
 
 // Seeds for the Build-a-widget surface. These are PROMPTS, not widgets: "use"
@@ -171,6 +185,16 @@ export function App() {
   // keeps it in sync, persists the CHOICE, and (only while "system") follows the
   // OS live.
   const [themeChoice, setThemeChoiceState] = useState<ThemeChoice>(loadThemeChoice);
+  // The CONCRETE palette in effect, which `apply()` below has always computed and
+  // thrown away. It is lifted into state for one consumer that cannot ask the DOM
+  // for it: Monaco bakes its hex values at the moment a theme is DEFINED, so a
+  // persistent editor somebody is reading when they flip Appearance has to be told
+  // to redefine, not merely re-select. Prop-drilled to the code screen — NOT a
+  // MutationObserver on the `dark` class, which would be a second source of truth
+  // for a fact this component already knows and computes.
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    resolveTheme(loadThemeChoice(), prefersDark()),
+  );
   const [routineProposal, setRoutineProposal] = useState<RoutineProposal | null>(null);
 
   // First-run experience. `startedUnconfigured` latches once — true iff this
@@ -220,6 +244,17 @@ export function App() {
   // globally from client.ts regardless of profile; only rendered when the
   // raw-diagnostics flag is on, so Simple never sees it.
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
+
+  // The Developer/Custom gate, keyed off the ACTIVE PROFILE and never the policy
+  // mode. It answers two questions that must never diverge: whether the sidebar
+  // offers a way to the workspace surfaces at all, and whether the code screen
+  // renders. Trust rows outlive a profile switch core-side, so a Simple-profile
+  // person must not see a folder they trusted under Developer — the core refuses
+  // every call independently, and this keeps the window honest about it.
+  // Declared HERE, above the hooks and effects that read it, rather than beside
+  // the other render-time derivations further down.
+  const developerSurfaces =
+    profile?.activeProfile === "developer" || profile?.activeProfile === "custom";
 
   // --- The extracted state clusters ----------------------------------------
   const models = useModelSelection();
@@ -276,6 +311,15 @@ export function App() {
   // only on the Developer/Custom surfaces (SettingsPage keys that off the active
   // profile); the hook itself just owns the trusted roots + grant/revoke.
   const workspaceState = useWorkspace({ connected });
+  // The review surface (Phase 3): what Addison changed, what is on disk, and
+  // putting one file back. Nothing is fetched until the screen is actually open —
+  // this is a read of the person's own disk, and doing it because an app happened
+  // to start is a check nobody asked for.
+  const codeReview = useCodeReview({
+    connected,
+    active: view === "code",
+    roots: workspaceState.roots,
+  });
   // The MCP tool-server configuration (Phase-2 step 7, phase 1 of five). Same
   // Developer/Custom gate as workspace trust, applied in SettingsPage. Adding one
   // saves an address and nothing else — there is no MCP client yet.
@@ -376,6 +420,21 @@ export function App() {
       setRestorePointsOpen(false);
     }
   }, [view]);
+
+  // A profile can change UNDER an open screen — from Settings, or from a G3
+  // restore putting a whole configuration back. If the code screen loses its
+  // profile while somebody is standing on it, leave it. The render below refuses
+  // to draw it anyway (that is the protection); this is what stops the header
+  // saying "Code" over an empty middle column afterwards. `profile` must have
+  // loaded first: `null` means "not answered yet", not "Simple".
+  useEffect(() => {
+    if (view === "code" && profile && !developerSurfaces) {
+      changeView("chat");
+    }
+    // `changeView` is re-created every render (it closes over `view`), so it is
+    // deliberately not a dependency — this runs on the transition, not on identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, profile, developerSurfaces]);
 
   const isSurface = view !== "chat";
   const viewTitle =
@@ -540,6 +599,10 @@ export function App() {
       const resolved = resolveTheme(themeChoice, mql?.matches ?? false);
       root.classList.toggle("dark", resolved === "dark");
       root.style.backgroundColor = resolved === "dark" ? "#0C0C0D" : "#F7F7F5";
+      // The one new line: the answer this function has always computed is now
+      // also readable by React. Setting the same value twice is a no-op, so the
+      // OS-preference listener below can call `apply` freely.
+      setResolvedTheme(resolved);
     };
     apply();
     try {
@@ -870,9 +933,10 @@ export function App() {
   // Workspace trust is a Developer/Custom surface, keyed off the ACTIVE PROFILE
   // and never the policy mode (Phase-2 step 5). Trust rows outlive a profile
   // switch core-side, so a Simple-profile person must not see them here either —
-  // the Tools page is not a back door to a surface Settings hides.
-  const showTrustedFolders =
-    profile?.activeProfile === "developer" || profile?.activeProfile === "custom";
+  // the Tools page is not a back door to a surface Settings hides. The same
+  // predicate gates the code screen; it is computed once, above the hooks that
+  // read it, so the two can never answer differently.
+  const showTrustedFolders = developerSurfaces;
   const trustedRoots =
     showTrustedFolders && workspaceState.rootsLoaded ? workspaceState.roots : [];
   const connectedProviders = models.providers.filter((p) => p.connected);
@@ -995,6 +1059,11 @@ export function App() {
   // Clicking the workspace item that is already open goes back to chat — the
   // sidebar rows toggle rather than dead-end.
   const toggleSurface = (target: View) => changeView(view === target ? "chat" : target);
+  // The nav entry for the code screen EXISTS only under Developer/Custom: passing
+  // no handler is what removes the row (Sidebar renders it only when it has one),
+  // so Simple has no way to reach the screen rather than a disabled row inviting
+  // the question.
+  const openCodeFromNav = developerSurfaces ? () => toggleSurface("code") : undefined;
 
   const sidebarProps = {
     conversations: conversationsState.conversations,
@@ -1153,6 +1222,7 @@ export function App() {
               onOpenSettings={() => toggleSurface("settings")}
               onOpenTools={() => toggleSurface("tools")}
               onOpenSnapshots={() => toggleSurface("snapshots")}
+              onOpenCode={openCodeFromNav}
             />
           </div>
         )}
@@ -1265,6 +1335,28 @@ export function App() {
                 pinned={surfacePinned}
                 snapshots={snapshotsState}
               />
+            ) : view === "code" ? (
+              // Gated on the ACTIVE PROFILE, exactly like the workspace-trust card
+              // and the nav row above. Rendering nothing rather than falling through
+              // to the next branch: a profile that changes underneath an open screen
+              // must not leave a DIFFERENT surface drawn under the "Code" title. The
+              // effect above returns to chat on the next tick.
+              developerSurfaces ? (
+                <CodeSurface
+                  connected={connected}
+                  pinned={surfacePinned}
+                  roots={workspaceState.roots}
+                  rootsLoaded={workspaceState.rootsLoaded}
+                  review={codeReview}
+                  theme={resolvedTheme}
+                  turnWorking={turn.isWorking}
+                  // The Activity Panel FOLLOWS the person here (see the rail's
+                  // `work` prop below, which stands down on a surface). The consent
+                  // card follows too, on App's own fixed layer at the end of this
+                  // render — neither is ever in two places at once.
+                  work={workBlock}
+                />
+              ) : null
             ) : (
               <Surface
                 title="Build a widget"
@@ -1321,7 +1413,12 @@ export function App() {
             }}
           >
             <WidgetRail
-              work={workBlock}
+              // Same rule as the consent card below, and now it matters: the rail
+              // is collapsed to zero width and `inert` on a surface, so "Addison's
+              // work" was in the DOM and visible to nobody. The code screen renders
+              // it itself, so standing down here is what keeps it from being in two
+              // places at once.
+              work={isSurface ? null : workBlock}
               // On a surface the consent card is on its own fixed layer instead
               // (see the end of the render) — the rail is collapsed to zero
               // width there, so a card left in it would be a blocking question
@@ -1372,6 +1469,13 @@ export function App() {
               closeDrawer();
               toggleSurface("snapshots");
             }}
+            onOpenCode={
+              openCodeFromNav &&
+              (() => {
+                closeDrawer();
+                toggleSurface("code");
+              })
+            }
             onCloseDrawer={closeDrawer}
           />
         </MobileDrawer>
@@ -1474,6 +1578,18 @@ function loadThemeChoice(): ThemeChoice {
   } catch {
     /* localStorage may be unavailable; fall through to the default */
     return "system";
+  }
+}
+
+// The OS preference at the moment of the first render. Only used to seed
+// `resolvedTheme`; the effect that applies the theme immediately re-computes it
+// and keeps it in sync from then on. Guarded because jsdom and a design-review
+// browser can both be missing matchMedia.
+function prefersDark(): boolean {
+  try {
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+  } catch {
+    return false;
   }
 }
 

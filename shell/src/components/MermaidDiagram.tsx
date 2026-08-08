@@ -11,8 +11,20 @@
 //
 // A malformed diagram must never break a message row: any parse/render failure
 // falls back to showing the original fenced code as a plain <pre><code> block.
+//
+//   3. THE CSS IN THAT SVG IS STRIPPED BEFORE IT IS INJECTED (2026-08-08). The
+//      app's CSP now carries `style-src 'self' 'unsafe-inline'` so that Monaco can
+//      position its view lines (Phase-3 review surface), and this component is the
+//      app's ONLY path for markup it did not author. A diagram's `classDef` becomes
+//      a `<style>` block, which applies to the whole document and could therefore
+//      select the permission card; `style A fill:…` becomes a style attribute,
+//      which could pin one node over the window. Both were blocked by the old
+//      policy, so removing them keeps diagrams looking exactly as they do today
+//      while the widening changes nothing here — see lib/sanitizeSvg.ts, which owns
+//      the reasoning and what it does not cover.
 
 import { useEffect, useState } from "react";
+import { stripInjectedCss } from "../lib/sanitizeSvg";
 
 // Initialize mermaid exactly once per session, no matter how many diagrams
 // render. Guarded at module level so re-mounts don't re-initialize.
@@ -58,7 +70,11 @@ export function MermaidDiagram({ code }: Props) {
         }
         const id = `addison-mermaid-${(renderSeq += 1)}`;
         const { svg: out } = await mermaid.default.render(id, code);
-        if (!cancelled) setSvg(out);
+        // Sanitize on the way OUT of the render, not at the injection site: the
+        // component then holds only markup that is already safe to inject, so a
+        // second render path added later cannot forget the step by using the
+        // state directly.
+        if (!cancelled) setSvg(stripInjectedCss(out));
       } catch {
         // Parse failures are common and expected; degrade to plain code.
         if (!cancelled) setFailed(true);
@@ -84,8 +100,11 @@ export function MermaidDiagram({ code }: Props) {
   }
 
   // The SVG is mermaid's own output, sanitized by mermaid under
-  // securityLevel: "strict". We inject it display-only (no handlers, no links
-  // that navigate) — this is the one sanctioned dangerouslySetInnerHTML use.
+  // securityLevel: "strict" and then stripped of every stylesheet, style
+  // attribute and event handler by `stripInjectedCss` above. We inject it
+  // display-only (no handlers, no links that navigate) — this is the one
+  // sanctioned dangerouslySetInnerHTML use in the app, and a source-level test
+  // fails when a second one appears.
   return (
     <div className="mermaid-diagram" aria-label="Diagram" dangerouslySetInnerHTML={{ __html: svg }} />
   );

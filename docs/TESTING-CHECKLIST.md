@@ -574,12 +574,13 @@ acting."* — a recovery that lowers your protections says so.
 
 ## 13c. The Developer review surface (Phase 3 — the code screen)
 
-**Written before the build, and the surface does not exist yet — skip this section
-until it ships.** The repo's rule is authoritative docs before code, so this is here
-first on purpose; [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md)
-owns the build and [`../ROADMAP.md`](../ROADMAP.md) owns whether it has happened. The
-copy quoted below is the plan's, and quoting it **is** the assertion: if the app says
-something else, either the app is wrong or the plan changed and nobody amended this.
+**Written before the build; the surface shipped 2026-08-08, so this section is now
+LIVE and is the wave's outstanding work.** The repo's rule is authoritative docs
+before code, which is why it was here first;
+[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns the build and
+[`../ROADMAP.md`](../ROADMAP.md) owns whether it has happened. The copy quoted below is
+the plan's, and quoting it **is** the assertion: if the app says something else, either
+the app is wrong or the plan changed and nobody amended this.
 
 **This claims §13c, and names the debt it does not pay.** §13c was owed to **Phase-2
 step 5** — the coding harness and workspace trust shipped 2026-07-24 with no manual
@@ -634,13 +635,30 @@ clicking a folder open is not the model acting. The other half of the same rule:
 expanding a folder must **not** raise a permission card. A card in front of a click
 somebody just made teaches people to dismiss cards.
 
-**Diagrams, re-checked — this screen changes them.** It ships with a widened
+**Diagrams, re-checked — this screen reaches them.** It ships with a widened
 `style-src`, and that policy is global: a Simple user gets it too, for a screen they
 can never reach. The visible consequence is somewhere else entirely — mermaid's
-injected SVG carries a `<style>` block that today's policy silently drops. **Re-run
-§13's mermaid pass in both themes** and confirm diagrams still render as they did.
-Then look at a permission card again, on this screen and in chat, and confirm nothing
+injected SVG carries a `<style>` block, and style attributes, that the old policy
+silently dropped. Both are now **stripped before injection**
+(`shell/src/lib/sanitizeSvg.ts`), which is the spoofing mitigation shipped with the
+widening, so the expectation is that **nothing changes**: **re-run §13's mermaid pass
+in both themes** and confirm diagrams render exactly as they did before. A diagram
+that looks *different* is the finding here, not a diagram that looks the same. Then
+look at a permission card again, on this screen and in chat, and confirm nothing
 overlays, hides or restyles it.
+
+**Ask the webview what the policy actually refused.** The one measurement no test can
+make: a CSP is enforced by a real webview and nothing else. In Developer, with raw
+diagnostics on, open **Settings → Diagnostics**, then use the code screen properly —
+open a file, open a diff, resize the window so the diff flips between side-by-side and
+inline, and flip Appearance while an editor is on screen. The ring must hold **no**
+"The app's content policy blocked something" entry. One that names `worker-src` means
+the editor worker is not being served from the app itself (a `blob:` URL — see the
+plan's bright line); one that names `script-src` means Monaco is being asked for
+something `'self'` does not cover, and the answer is not to widen the policy. Do this
+on **all three platforms**: Tauri parses the policy into a directive map and injects
+its own nonces and IPC sources, and now that explicit `script-src`/`connect-src` exist
+those additions retarget to them.
 
 **Narrow window.** Take it through both breakpoints from §14. The tree collapses to a
 rail and then to a drawer rather than squeezing the diff into two unreadable columns,

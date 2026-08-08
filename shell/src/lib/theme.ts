@@ -11,7 +11,10 @@
 // import from here; keep the two in lockstep.
 
 export type ThemeChoice = "light" | "dark" | "system";
-type ResolvedTheme = "light" | "dark";
+/** The concrete palette in effect. Exported since the Monaco skin needs the same
+ * fact (its hex values are baked when a theme is DEFINED, so it must be told which
+ * one to bake) and two definitions of a two-member union is one too many. */
+export type ResolvedTheme = "light" | "dark";
 
 // Absent, empty, and unrecognised values all map to "system" — "Match this
 // computer" is the default as of the 2026-07-25 dark redesign, so a machine set
