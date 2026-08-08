@@ -302,8 +302,13 @@ def test_this_namespace_may_only_ask_the_shell_to_STOP_things():
     scan above gives — prose explaining why arming lives in the shell is exactly what
     belongs here, and this test reads ATTRIBUTES, which prose cannot be.
 
-    Mutation: add ``bridge.arm_automation(label, command, kind, schedule)`` anywhere
-    in rpc/automations.py — this fails, naming the method."""
+    Mutations: add ``bridge.arm_automation(label, command, kind, schedule)`` anywhere
+    in rpc/automations.py — this fails, naming the method. And the evasion shape:
+    ``getattr(self._shell_bridge, "arm_automation", None)`` — the attribute scan alone
+    let that one through (found by the orchestrating review, 2026-08-08), because a
+    string literal is not an ``ast.Attribute``. So non-docstring string constants are
+    scanned too, the way ``test_this_surface_never_asks_a_row_where_it_was_born``
+    scans for the stamp's name."""
     from agent_core.shell_bridge import ServerShellBridge
     from agent_core.tools.base import ShellBridge
 
@@ -313,15 +318,42 @@ def test_this_namespace_may_only_ask_the_shell_to_STOP_things():
         if not name.startswith("_")
     }
     assert "arm_automation" in bridge_methods, "the bridge no longer has an arm — did it move?"
+    allowed = {"list_armed", "disarm_automation"}
 
     tree = ast.parse(_AUTOMATIONS_SRC.read_text(encoding="utf-8"))
     named = {
         node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     } & bridge_methods
-    assert named == {"list_armed", "disarm_automation"}, (
+    assert named == allowed, (
         f"rpc/automations.py names {sorted(named)} on the shell bridge: this namespace "
         "may ask the operating system what it holds and ask it to STOP something, and "
         "nothing else — arming is a gated, audited TOOL behind a typed code (G2)"
+    )
+    # The evasion shape: a bridge method reached by its NAME AS A STRING (getattr, a
+    # dispatch dict, operator.methodcaller). Docstrings are prose, not reach — prose
+    # explaining that arming is a tool is exactly what belongs in this module — so
+    # only non-docstring string constants are scanned.
+    docstrings = {
+        node.body[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    }
+    strung = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node not in docstrings
+        and node.value in bridge_methods
+    } - allowed
+    assert not strung, (
+        f"rpc/automations.py holds bridge method name(s) {sorted(strung)} as string "
+        "literals: a getattr-by-string reaches the bridge exactly as an attribute "
+        "does, and this namespace may only ever stop things"
     )
 
 

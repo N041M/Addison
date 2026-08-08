@@ -7,12 +7,14 @@ the app a timer, a watcher, a scheduler or a callback of its own. This module is
 declarative: a dataclass mirroring the ``automations`` table and pure functions over
 a row. It starts nothing and reaches nothing.
 
-**Authoring exists; ARMING does not.** ``create_automation`` (phase 2, Developer
-only) writes a draft row through this module's pure functions; there is no arming
-surface anywhere in the tree, so nothing here has ever been handed to launchd —
-that is phase 3. What this module holds is the row shape, the closed schedule
-vocabulary, the two renderers (``schedule_sentence``, ``plist_text``) and the
-authoring door's validators.
+**Authoring AND arming both exist now (phases 2 and 3, 2026-08-07) — and neither
+lives here.** ``create_automation`` writes a draft row through this module's pure
+functions; ``arm_automation`` hands one to launchd through the SHELL's typed
+surface (``automation.rs``), behind the ordinary card plus the typed code. What
+this module holds is what it always held: the row shape, the closed schedule
+vocabulary, the two renderers (``schedule_sentence``, ``plist_text``), the
+authoring door's validators, and ``label_is_addisons_own`` — pure functions, no
+bridge, nothing that could itself start or stop anything.
 [docs/step-8-automation-plan.md](../docs/step-8-automation-plan.md) owns the phase
 order.
 
