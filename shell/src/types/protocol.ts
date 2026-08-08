@@ -138,6 +138,29 @@ export const Method = {
   WorkspaceListDirectory: "workspace.listDirectory",
   WorkspaceReadFile: "workspace.readFile",
 
+  // Seeing what Addison changed, and putting one file back (Phase 3). `listEdits`
+  // answers every file Addison has edited that is STILL edited — not the edits from
+  // this conversation, but the ones still standing on disk, whichever chat they were
+  // made in, because that is the one a person needs to find. It carries no file text:
+  // `readEditDiff` fetches the before and after for the one file you opened.
+  //
+  // Several changes to one file collapse into one entry. What you are shown, and what
+  // Revert produces, is the file as it was before the FIRST of those changes — a state
+  // that really existed. There is no way to put back part of a file, deliberately:
+  // that would write something that never existed on disk.
+  //
+  // `revertable` is your computer's answer, not a preference: Addison can only put back
+  // a file it changed since the app last started. For anything older the app says so
+  // plainly and leaves the earlier version on screen for you to copy. `onDiskChanged`
+  // has THREE answers — yes, no, and "Addison can't tell" — and the third is honest
+  // rather than a guess: reverting replaces whatever is there now, so a file you have
+  // edited yourself since is warned about before anything is written.
+  //
+  // Developer/Custom only, like the two above. Mirrored in protocol.py.
+  WorkspaceListEdits: "workspace.listEdits",
+  WorkspaceReadEditDiff: "workspace.readEditDiff",
+  WorkspaceRevertFile: "workspace.revertFile",
+
   // MCP servers — the external tool servers Addison consumes as a client (Phase-2
   // step 7, phases 1–4 of five). `refresh` connects, lists the server's tools, and
   // registers each one namespaced and Developer-only: absent from the SAFE view and
@@ -231,6 +254,12 @@ export const Method = {
   // `workspace.listDirectory` / `workspace.readFile`, never from here.
   ShellListWorkspaceDirectory: "shell.listWorkspaceDirectory",
   ShellReadWorkspaceFileForView: "shell.readWorkspaceFileForView",
+  // The review surface's revert half (Phase 3). The first asks which files the shell
+  // could still put back this session — a question, with no effect of any kind; the
+  // second hashes files on disk so the core can tell a file as Addison left it from
+  // one edited since. Reached only from the core, never from here.
+  ShellCanRestoreWorkspaceFiles: "shell.canRestoreWorkspaceFiles",
+  ShellDigestWorkspaceFiles: "shell.digestWorkspaceFiles",
   ShellRunCommand: "shell.runCommand",
   // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
   // from typed fields and never accepts a document (plan §5.8).
@@ -427,6 +456,98 @@ export interface WorkspaceFileView {
   bytes: number;
   /** True when `content` is the beginning of a larger file, cut on a character boundary. */
   truncated: boolean;
+}
+
+/**
+ * One file Addison has changed that is STILL changed — a row of `workspace.listEdits`
+ * (Phase-3 plan Build §2). HAND-SYNCED with `_edit_payload` in
+ * agent_core/rpc/workspace.py, and pinned against the generated
+ * shell/src/__tests__/fixtures/workspace.listEdits.json.
+ *
+ * METADATA ONLY: no before/after text rides this payload. `workspace.readEditDiff`
+ * fetches the two panes for the one file that was opened.
+ *
+ * TYPES ONLY for now — §2/§3 ship the data and the revert; the screen is §4.
+ */
+export interface WorkspaceEdit {
+  /** The file, resolved. Every later call about this edit carries this exact value. */
+  path: string;
+  /** The trusted root it sits under, or null when that trust has since been revoked. */
+  root: string | null;
+  /** What to render by default. The whole path when there is no root to be inside. */
+  relativePath: string;
+  /**
+   * The revert chain, NEWEST FIRST. Reverting settles all of them at once — the
+   * whole chain or nothing, so no row is left behind claiming a change that is no
+   * longer on disk.
+   */
+  snapshotIds: string[];
+  /** How many writes collapsed into this one entry. */
+  writes: number;
+  /** Addison CREATED the file: the before pane is empty and Revert removes it. */
+  created: boolean;
+  firstWrittenAt: number;
+  lastWrittenAt: number;
+  /**
+   * Whether Addison can actually put this file back — the SHELL's answer about the
+   * files it has written since the app started, not a permission and not a guess.
+   * False for every edit made before the last restart: render those read-only with a
+   * plain line rather than a button that fails.
+   */
+  revertable: boolean;
+  /**
+   * Whether what is on disk differs from what Addison wrote. THREE-VALUED: `null` is
+   * "Addison can't tell" (a change recorded before it started hashing, or a file it
+   * cannot judge) and must be shown as that, never treated as `false` — `false` is
+   * what lets a revert proceed without warning.
+   */
+  onDiskChanged: boolean | null;
+  /** The file is not there any more. Revert can still put it back. */
+  missing: boolean;
+}
+
+/** A `workspace.listEdits` answer. Newest first. */
+export interface WorkspaceEditList {
+  edits: WorkspaceEdit[];
+  /** More edits exist than this answer carries. Say so. */
+  truncated: boolean;
+}
+
+/** A `workspace.readEditDiff` answer — the two panes for ONE file. */
+export interface WorkspaceEditDiff {
+  path: string;
+  /** What was there before Addison's FIRST unreverted change — where Revert lands. */
+  before: string;
+  /** What is there NOW, including anything you have changed since. */
+  after: string;
+  /**
+   * Always false in this build: a stored before-state is whole by construction,
+   * because the shell refuses to overwrite a file too big to capture. On the wire so
+   * that can never change silently.
+   */
+  beforeTruncated: boolean;
+  /** The file on disk was longer than the viewer shows. */
+  afterTruncated: boolean;
+}
+
+/**
+ * A `workspace.revertFile` answer. `ok: true` carries the file it put back and one
+ * plain sentence to show; a refusal carries `ok: false` and `error` instead — the same
+ * shape `workspace.grantTrust` uses.
+ *
+ * There is no partial revert and never will be: putting back some of a file would mean
+ * writing a combination of bytes that never existed on disk. The whole chain of
+ * Addison's changes to that file goes back at once, to the state it was in before the
+ * first of them.
+ */
+export interface WorkspaceRevertResult {
+  ok: boolean;
+  /** The file, resolved. Absent on a refusal. */
+  path?: string;
+  /** Shown on success — names the file and what happened to it. */
+  detail?: string;
+  /** Shown on a refusal. */
+  error?: string;
 }
 
 export interface ActivityUpdate {

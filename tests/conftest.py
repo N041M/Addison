@@ -158,6 +158,12 @@ class ShellBridgeStubs:
     def read_workspace_file_for_view(self, path: str) -> dict:
         raise NotImplementedError
 
+    def can_restore_workspace_files(self, paths: list[str]) -> dict:
+        raise NotImplementedError
+
+    def digest_workspace_files(self, paths: list[str]) -> dict:
+        raise NotImplementedError
+
     def get_app_build_ref(self) -> dict:
         return {"version": "test", "identifier": "test"}
 

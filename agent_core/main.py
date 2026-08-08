@@ -103,6 +103,7 @@ from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.rpc.workspace import WorkspaceMixin
 from agent_core.secret_presence import SecretPresence
 from agent_core.shell_bridge import IpcShellBridge, ServerShellBridge
+from agent_core.snapshots.file_revert import FileRevertManager
 from agent_core.snapshots.snapshot_manager import (
     SnapshotManager,
     rebuild_rows_from_payloads,
@@ -670,6 +671,9 @@ class JsonRpcServer(
         self._store: Store | None = None
         self._snapshot_manager: SnapshotManager | None = None
         self._undo_manager: UndoManager | None = None
+        # The review surface's per-file revert (phase-3 plan Build §3) — a THIRD
+        # mechanism beside the two above, never a use of either. See file_revert.py.
+        self._file_revert_manager: FileRevertManager | None = None
         self._orchestrator: Orchestrator | None = None
         self._routine_builder: RoutineBuilder | None = None
         self._routine_library: RoutineLibrary | None = None
@@ -761,6 +765,17 @@ class JsonRpcServer(
     @undo_manager.setter
     def undo_manager(self, value: UndoManager) -> None:
         self._undo_manager = value
+
+    @property
+    def file_revert_manager(self) -> FileRevertManager:
+        assert self._file_revert_manager is not None, (
+            "file_revert_manager accessed before _ensure_built()"
+        )
+        return self._file_revert_manager
+
+    @file_revert_manager.setter
+    def file_revert_manager(self, value: FileRevertManager) -> None:
+        self._file_revert_manager = value
 
     @property
     def orchestrator(self) -> Orchestrator:
@@ -898,6 +913,15 @@ class JsonRpcServer(
             ),
         )
         self.undo_manager = UndoManager(store=self.store, tool_registry=self.tool_registry)
+        # BESIDE the UndoManager and sharing nothing with it but the table (phase-3
+        # plan Build §3). Per-path, out-of-order, chain-collapsing and
+        # write_project_file-only: a third mechanism, on the terms CLAUDE.md already
+        # sets for SnapshotManager — complementary, independent, never calling each
+        # other. It is handed no registry and no undo manager, so the redo stack is not
+        # reachable from it even by accident.
+        self.file_revert_manager = FileRevertManager(
+            store=self.store, shell_bridge=self._shell_bridge
+        )
         # §4.5 action-snapshot retention, and the ONLY call site: the spec asks for
         # this "on startup", and _ensure_built IS the startup — _worker_loop runs it
         # once before it dequeues its first job.
@@ -1325,6 +1349,12 @@ class JsonRpcServer(
                     self._respond(request_id, self._workspace_list_directory(params))
                 elif kind == "workspace_read_file":
                     self._respond(request_id, self._workspace_read_file(params))
+                elif kind == "workspace_list_edits":
+                    self._respond(request_id, self._workspace_list_edits())
+                elif kind == "workspace_read_edit_diff":
+                    self._respond(request_id, self._workspace_read_edit_diff(params))
+                elif kind == "workspace_revert_file":
+                    self._respond(request_id, self._workspace_revert_file(params))
                 elif kind == "mcp_list":
                     self._respond(request_id, self._mcp_list())
                 elif kind == "mcp_add":
@@ -2060,6 +2090,14 @@ _WORKSPACE_JOBS = {
     Method.WORKSPACE_PICK_DIRECTORY: "workspace_pick_directory",
     Method.WORKSPACE_LIST_DIRECTORY: "workspace_list_directory",
     Method.WORKSPACE_READ_FILE: "workspace_read_file",
+    # The diff and the revert (Build §2/§3) queue here for a THIRD reason on top of
+    # those two: `revertFile` WRITES a file, and running it on the worker is what makes
+    # it serialise behind an in-flight turn — a revert landing in the middle of a turn
+    # that is itself editing the file would be two writers and no lock. The queue is
+    # the lock, which is why no extra one exists.
+    Method.WORKSPACE_LIST_EDITS: "workspace_list_edits",
+    Method.WORKSPACE_READ_EDIT_DIFF: "workspace_read_edit_diff",
+    Method.WORKSPACE_REVERT_FILE: "workspace_revert_file",
 }
 
 # mcp.* read/write the `mcp_servers` table and mint an auto-snapshot through the

@@ -63,6 +63,13 @@ class ServerShellBridge(ShellBridge, Protocol):
 
     def read_workspace_file_for_view(self, path: str) -> dict: ...
 
+    # The review surface's revert half (Build §2/§3), declared here for the same
+    # reason: no tool may ask either question. One is about Addison's own session
+    # ledger and the other is about files the model never named.
+    def can_restore_workspace_files(self, paths: list[str]) -> dict: ...
+
+    def digest_workspace_files(self, paths: list[str]) -> dict: ...
+
 # How long a single Core -> Shell request may wait before we give up on it. The
 # shell answers a file/clipboard/draft call from its own process, so a stall this
 # long means the shell is wedged: surface a retry rather than hang the turn forever.
@@ -317,6 +324,37 @@ class IpcShellBridge:
         VIEWER truncates on a character boundary and says so. ``bytes`` is the file's
         size on disk, so a truncated view can say how much is not shown."""
         return self._call(Method.SHELL_READ_WORKSPACE_FILE_FOR_VIEW, {"path": path})
+
+    # --- the review surface's revert half (Phase-3 plan Build §2/§3) -------
+    # BOTH ARE BATCHES, and both answer a MAP keyed by the path rather than a list
+    # positioned against the one sent. A positional answer couples two processes to an
+    # ordering, and the failure when they stop agreeing is silent and precisely wrong:
+    # a Revert offered for a file that cannot take one. A path missing from either map
+    # reads as the cautious answer on this side (not restorable / cannot tell).
+
+    def can_restore_workspace_files(self, paths: list[str]) -> dict:
+        """Which of these paths the shell would let ``restore_workspace_file`` touch:
+        ``{"restorable": {path: bool}}``.
+
+        A PURE QUERY — it changes nothing and reads no file. It exists because the
+        shell's write ledger is SESSION-scoped while ``action_snapshots`` rows are not,
+        so after a restart every historic edit is describable and none is revertable.
+        Asking first is what turns a button that always fails into a plain sentence."""
+        return self._call(Method.SHELL_CAN_RESTORE_WORKSPACE_FILES, {"paths": list(paths)})
+
+    def digest_workspace_files(self, paths: list[str]) -> dict:
+        """What is on disk NOW, hashed: ``{"digests": {path: {"sha256", "missing"}}}``.
+
+        Compared against the ``wrote_sha256`` the write recorded, this is how the
+        surface tells "as Addison left it" from "edited since" — the difference between
+        a diff that is honest and a Revert that quietly discards somebody's own work.
+        ``sha256`` is ``None`` whenever the shell cannot judge (too big, unreadable,
+        Addison's own data dir), which the surface says out loud rather than guessing.
+
+        The bytes stay in the shell. Reading each file across this bridge to hash it
+        here would ship megabytes for a payload that carries none of them — the very
+        thing ``workspace.listEdits`` is metadata-only to avoid."""
+        return self._call(Method.SHELL_DIGEST_WORKSPACE_FILES, {"paths": list(paths)})
 
     # --- OPEN-mode command execution (step 5.5, item 1) --------------------
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:

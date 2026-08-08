@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -311,6 +312,70 @@ class Store:
             )
             for row in rows
         ]
+
+    def unreverted_snapshots_for_tool(self, tool_id: str, limit: int) -> list[ActionSnapshot]:
+        """``recent_unreverted_snapshots`` narrowed to ONE tool — the read behind the
+        Developer review surface (phase-3 plan Build §2/§3).
+
+        Same filter, same ordering, same tiebreaker as its sibling above, because the
+        two answer the same question about different subsets and a second ordering
+        would put the surface's "oldest unreverted prior" and the undo button's "most
+        recent action" in disagreement about which row is older.
+
+        The question it answers is a FILESYSTEM one — *what has Addison changed that is
+        still changed* — never a conversational one. ``action_snapshots`` has no
+        ``conversation_id`` to scope by anyway, but the deeper reason is that scoping
+        would hide an edit made in an earlier chat that is still live on disk, which is
+        exactly the edit somebody most needs to find.
+
+        ``limit`` is not optional and no caller may pass an unbounded one: retention
+        deletes REVERTED rows only (``prune_action_snapshots``), so the unreverted
+        subset this reads is bounded by nothing on disk and the bound has to live at
+        every read of it. ``idx_action_snapshots_tool_reverted`` (schema.sql) backs the
+        filter and the ordering — without it this is a full scan of a table that only
+        ever grows."""
+        rows = self._conn.execute(
+            "SELECT id, tool_call_id, tool_id, undo_payload, created_at, reverted "
+            "FROM action_snapshots WHERE tool_id = ? AND reverted = 0 "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (tool_id, limit),
+        ).fetchall()
+        return [
+            ActionSnapshot(
+                id=row["id"],
+                tool_call_id=row["tool_call_id"],
+                tool_id=row["tool_id"],
+                undo_payload=json.loads(row["undo_payload"]),
+                created_at=row["created_at"],
+                reverted=bool(row["reverted"]),
+            )
+            for row in rows
+        ]
+
+    def mark_snapshots_reverted(self, ids: Sequence[str]) -> None:
+        """Flag a WHOLE CHAIN reverted — ONE statement, ONE commit (phase-3 plan §3).
+
+        The plural is the point, and it is not a convenience wrapper around the
+        singular above. A per-file revert computes one target state for a path and
+        performs one write; the rows it settles must therefore stop being unreverted
+        together. Marking them one at a time would leave a window in which a crash
+        strands half a chain: the file already sits at its oldest prior while rows
+        still claim to describe changes live on disk, and the undo button would then
+        take one of them and write a state the person reverted away from — the exact
+        resurrection the chain semantics exist to make impossible.
+
+        An empty sequence executes nothing. That is not a guard against SQL syntax
+        (though ``IN ()`` is one) but the honest answer: a revert that settled no rows
+        must not commit anything."""
+        snapshot_ids = list(ids)
+        if not snapshot_ids:
+            return
+        placeholders = ",".join("?" for _ in snapshot_ids)
+        self._conn.execute(
+            f"UPDATE action_snapshots SET reverted = 1 WHERE id IN ({placeholders})",
+            snapshot_ids,
+        )
+        self._conn.commit()
 
     def mark_snapshot_reverted(self, snapshot_id: str) -> None:
         """Flag a snapshot reverted so a later ``undo_last`` can't revert it

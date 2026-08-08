@@ -8,12 +8,14 @@
 // a native dialog or scoped to a handle/path the shell itself minted this session.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use base64::Engine as _;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 use crate::ipc::{required_str, RpcError};
@@ -123,6 +125,28 @@ const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
 /// would leave them with an empty pane and no way to look).
 const VIEW_SIZE_BOUND: usize = UNDO_SIZE_BOUND;
 
+/// How much of one file the shell will read in order to HASH it
+/// (`shell.digestWorkspaceFiles`, the review surface's "has this changed since Addison
+/// wrote it?" — phase-3 plan Build §2).
+///
+/// ITS OWN CONSTANT, though it equals `UNDO_SIZE_BOUND` today, because it answers a
+/// third question: how much may be read for an answer that is ONE WORD LONG. Nothing
+/// crosses the bridge from this read — not a byte of the file — so the ceiling is not
+/// protecting the channel the way `READ_SIZE_BOUND` does. It is protecting the pump:
+/// this handler is awaited inline like every other, and it is asked about up to two
+/// hundred files at once.
+///
+/// The number is `UNDO_SIZE_BOUND` because that is the size class of file this can be
+/// asked about at all. A file Addison OVERWROTE was at most that big when it did (the
+/// write path refuses a larger prior), and a file Addison CREATED was written whole
+/// inside one model turn. A file now larger than this has changed by more than a
+/// digest was going to tell anyone.
+///
+/// OVER THE BOUND IS `null`, NEVER A REFUSAL and never a guess: "Addison can't tell
+/// whether this changed since" is a true sentence and an honest one to show, and it is
+/// the same answer this method gives for a row written before digests existed.
+const DIGEST_SIZE_BOUND: u64 = UNDO_SIZE_BOUND as u64;
+
 /// How many entries one directory listing may carry (`shell.listWorkspaceDirectory`).
 ///
 /// CAPPED HERE, in the shell, for `UNDO_SIZE_BOUND`'s reason: this is where the bytes
@@ -161,6 +185,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         // above, and the shell keeps its own independent floor underneath.
         "shell.listWorkspaceDirectory" => list_workspace_directory(params),
         "shell.readWorkspaceFileForView" => read_workspace_file_for_view(params),
+        // The review surface's REVERT half (phase-3 plan Build §3). Neither of these
+        // changes anything: the first is a pure question about this session's write
+        // ledger and touches no file at all, the second reads files only to hash them
+        // and answers one word per file. Together they are what lets the surface offer
+        // a Revert only where one would actually work, and warn before it clobbers.
+        "shell.canRestoreWorkspaceFiles" => can_restore_workspace_files(app, params),
+        "shell.digestWorkspaceFiles" => digest_workspace_files(params),
         // NOTE: `shell.runCommand` is deliberately NOT routed here. It is OPEN-mode
         // command execution (step 5.5, items 1+2) and it lands in the shell for the
         // same reason the workspace file methods do — this is the process with OS
@@ -617,6 +648,154 @@ fn restore_workspace_path(
             .map_err(|_| RpcError::app("Addison couldn't undo that file change."))?;
     }
     Ok(json!({}))
+}
+
+// shell.canRestoreWorkspaceFiles {paths} -> {restorable: {<path>: bool}}   (phase-3 §3)
+//
+// A PURE QUESTION ABOUT THIS SESSION'S LEDGER. It opens no file, stats no path and
+// changes nothing — it asks the same `workspace_written` set `restore_workspace_path`
+// asks, and answers what that call WOULD say without making it.
+//
+// WHY IT EXISTS. The ledger is session-scoped and `Default`-constructed at launch,
+// while `action_snapshots` rows survive indefinitely. So after any restart the core
+// holds a list of edits it can describe perfectly and cannot put back, and the review
+// surface — which reads the database, not the session — would render a Revert button
+// beside every one of them and every one would fail. Asking first turns a dead button
+// into an honest line of text.
+//
+// THE TWO THINGS IT MUST NOT BECOME, both of which would be easier than this:
+//   * PERSISTING the ledger. Its whole security property is that it is session-scoped
+//     and unsteerable — a restore path that survives restarts is a restore path that
+//     outlives the reason it was granted.
+//   * WIDENING `restore_workspace_path` to "inside a currently-trusted root". This
+//     file documents the opposite on purpose: the ledger is session, not trust.
+// This method is what makes both unnecessary, which is why it is a QUERY and not a
+// second door into the same set.
+fn can_restore_workspace_files(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    can_restore_workspace_paths(app.state::<FileState>().inner(), params)
+}
+
+fn can_restore_workspace_paths(state: &FileState, params: &Value) -> Result<Value, RpcError> {
+    let paths = params
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
+    let written = lock(&state.workspace_written);
+    // A MAP keyed by the path, never an array positioned against the caller's. An
+    // array couples the answer to an order two processes have to agree on, and the
+    // failure when they stop agreeing is silent and exactly wrong: a Revert offered
+    // for a file that cannot take one, or withheld from one that can. A key that is
+    // absent from this map is `false` on the other side, which is the safe direction.
+    let mut restorable = serde_json::Map::new();
+    for entry in paths {
+        if let Some(path) = entry.as_str() {
+            restorable.insert(path.to_string(), Value::Bool(written.contains(&PathBuf::from(path))));
+        }
+    }
+    Ok(json!({ "restorable": restorable }))
+}
+
+// shell.digestWorkspaceFiles {paths} -> {digests: {<path>: {sha256, missing}}}  (§2)
+//
+// WHAT IS ON DISK NOW, in one word per file. The core recorded the digest of what it
+// WROTE (`wrote_sha256`); comparing the two is how the surface tells "the file as
+// Addison left it" from "the file somebody has edited since" — and that difference is
+// the difference between a diff that is true and a Revert that silently throws away
+// somebody's own work.
+//
+// A HASH AND NEVER THE BYTES. Reading each file across the bridge to hash it core-side
+// would ship megabytes for a payload that carries none of it, on a channel where one
+// oversized line stalls every frame in the app — the very thing the plan refuses when
+// it makes `workspace.listEdits` metadata-only. So the hashing happens where the bytes
+// already are, and what crosses is 64 characters.
+//
+// ONE ROUND TRIP for the whole list, for the same reason `escapes` reads the trust
+// rows once: this answers a click, and a per-file round trip would put two hundred of
+// them behind it.
+fn digest_workspace_files(params: &Value) -> Result<Value, RpcError> {
+    let paths = params
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
+    let mut digests = serde_json::Map::new();
+    for entry in paths {
+        if let Some(path) = entry.as_str() {
+            digests.insert(path.to_string(), digest_workspace_path(Path::new(path)));
+        }
+    }
+    Ok(json!({ "digests": digests }))
+}
+
+/// One file's answer: `{sha256: <hex> | null, missing: bool}`.
+///
+/// NEVER AN ERROR, whatever happens. One unreadable file among two hundred must not
+/// take the other hundred and ninety-nine off the screen, and every failure here has
+/// the same honest reading anyway: `null` is "Addison can't tell", which is what the
+/// surface then says out loud rather than guessing.
+///
+/// `missing` is separated from `null` because the two mean different things to the
+/// person: a file that is GONE is a fact worth showing (Revert can still put it back),
+/// while a file that cannot be judged is a warning to withhold.
+fn digest_workspace_path(path: &Path) -> Value {
+    // The floor, first and unchanged: Addison's own data directory is not a place the
+    // harness may ask questions about either. A refusal is folded into the ordinary
+    // "can't tell" answer rather than raised, because this method never fails a batch.
+    if refuse_addison_data_dir(path).is_err() {
+        return unknowable_digest();
+    }
+    // THE SIZE BEFORE THE BYTES, this file's standing rule. Asked with `fs::metadata`
+    // rather than `size_on_disk` because this path needs the two answers that helper's
+    // `Option` collapses into one: a file that is NOT THERE and a file the OS will not
+    // describe are the same `None` to it, and they are different sentences here.
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return json!({ "sha256": Value::Null, "missing": true })
+        }
+        Err(_) => return unknowable_digest(),
+    };
+    if meta.len() > DIGEST_SIZE_BOUND {
+        return unknowable_digest();
+    }
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return json!({ "sha256": Value::Null, "missing": true })
+        }
+        Err(_) => return unknowable_digest(),
+    };
+    // BOUND + 1 and a fixed buffer: a file that grows between the metadata call and
+    // this read cannot cost this process more than one chunk, and one that crosses the
+    // bound while being read is answered "can't tell" rather than hashed in part — a
+    // hash of half a file is not a wrong answer, it is a confident one.
+    let mut reader = file.take(DIGEST_SIZE_BOUND + 1);
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                total += read as u64;
+                if total > DIGEST_SIZE_BOUND {
+                    return unknowable_digest();
+                }
+                hasher.update(&buffer[..read]);
+            }
+            Err(_) => return unknowable_digest(),
+        }
+    }
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        let _ = write!(hex, "{byte:02x}");
+    }
+    json!({ "sha256": hex, "missing": false })
+}
+
+/// "Addison can't tell" — the answer for every file this cannot judge, whatever the
+/// reason. Worded once so a caller can never learn WHICH reason from the shape.
+fn unknowable_digest() -> Value {
+    json!({ "sha256": Value::Null, "missing": false })
 }
 
 /// Addison's own data directories: the live store's parent (ADDISON_DB_PATH's parent
@@ -1364,12 +1543,21 @@ mod tests {
         // question of it (is the size consulted before the file is opened?), because the
         // answer it gets from metadata is what `bytes` reports, and a `bytes` computed
         // after a truncated read would quietly describe the truncation instead of the file.
+        //
+        // The DIGEST (`digest_workspace_path`) is the fifth, and it is why the size
+        // marker became a parameter rather than the literal `size_on_disk` this loop
+        // used to assume: that path asks `fs::metadata` directly, because it has to tell
+        // a file that is NOT THERE from one the OS will not describe and `size_on_disk`
+        // collapses both into `None`. Same judgement, same order, one fewer helper in
+        // the way — and the loop now says which spelling it is looking for instead of
+        // silently requiring one of them.
         let source = include_str!("filesystem.rs");
-        for (name, opens_with) in [
-            ("fn read_workspace_path", "std::fs::read("),
-            ("fn capture_prior_text", "std::fs::read("),
-            ("fn read_scoped_handle", "std::fs::read("),
-            ("fn read_workspace_view", "std::fs::File::open("),
+        for (name, sized_with, opens_with) in [
+            ("fn read_workspace_path", "size_on_disk", "std::fs::read("),
+            ("fn capture_prior_text", "size_on_disk", "std::fs::read("),
+            ("fn read_scoped_handle", "size_on_disk", "std::fs::read("),
+            ("fn read_workspace_view", "size_on_disk", "std::fs::File::open("),
+            ("fn digest_workspace_path", "std::fs::metadata(", "std::fs::File::open("),
         ] {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} must exist"));
             let rest = &source[start..];
@@ -1377,7 +1565,7 @@ mod tests {
             let body = &rest[..end];
 
             let sized = body
-                .find("size_on_disk")
+                .find(sized_with)
                 .unwrap_or_else(|| panic!("{name} must ask the file's size:\n{body}"));
             let read = body
                 .find(opens_with)
@@ -1701,5 +1889,147 @@ mod tests {
         let params = json!({ "path": path.to_string_lossy(), "delete": true });
         restore_workspace_path(&state, path.clone(), &params).unwrap();
         assert!(!path.exists(), "an undone create must be removed");
+    }
+
+    // --- The review surface's revert half (phase-3 plan Build §2/§3) -------------
+
+    #[test]
+    fn can_restore_answers_the_ledger_and_only_the_ledger() {
+        // THE WHOLE POINT of this method: it says what `restore_workspace_path` WOULD
+        // say, without doing anything. A path this session wrote is restorable; one it
+        // did not is not — and after a restart the ledger is empty, which is the case
+        // the surface has to render honestly instead of offering a button that fails.
+        let state = FileState::default();
+        let ledgered = temp_path();
+        let stranger = temp_path();
+        lock(&state.workspace_written).insert(ledgered.clone());
+
+        let params = json!({ "paths": [ledgered.to_string_lossy(), stranger.to_string_lossy()] });
+        let answer = can_restore_workspace_paths(&state, &params).unwrap();
+        let restorable = answer.get("restorable").and_then(Value::as_object).expect("a map");
+        assert_eq!(restorable.get(&ledgered.to_string_lossy().to_string()), Some(&json!(true)));
+        assert_eq!(restorable.get(&stranger.to_string_lossy().to_string()), Some(&json!(false)));
+        // KEYED BY PATH, never positional: an array would couple the answer to an order
+        // two processes must agree on, and disagreeing is silent in both directions.
+        assert_eq!(restorable.len(), 2);
+    }
+
+    #[test]
+    fn can_restore_never_touches_the_filesystem() {
+        // A PURE QUERY. Neither path below exists on disk at all: the ledgered one
+        // still answers true and the other still answers false, which no implementation
+        // that stats or opens anything could do. Add a `path.exists()` to the handler
+        // and the first assertion fails.
+        let state = FileState::default();
+        let ledgered_but_absent = temp_path();
+        let absent = temp_path();
+        lock(&state.workspace_written).insert(ledgered_but_absent.clone());
+        assert!(!ledgered_but_absent.exists() && !absent.exists());
+
+        let params =
+            json!({ "paths": [ledgered_but_absent.to_string_lossy(), absent.to_string_lossy()] });
+        let answer = can_restore_workspace_paths(&state, &params).unwrap();
+        let restorable = answer.get("restorable").and_then(Value::as_object).expect("a map");
+        assert_eq!(
+            restorable.get(&ledgered_but_absent.to_string_lossy().to_string()),
+            Some(&json!(true)),
+            "a file Addison created and the person then deleted is still restorable"
+        );
+        assert_eq!(restorable.get(&absent.to_string_lossy().to_string()), Some(&json!(false)));
+    }
+
+    #[test]
+    fn digest_hashes_what_is_on_disk_now() {
+        // The digest the core compares against `wrote_sha256`. The literal below is the
+        // SHA-256 of "hello\n" — written out rather than computed here, because a test
+        // that hashes the content with the same library it is testing asserts only that
+        // the library is deterministic.
+        let path = temp_path();
+        std::fs::write(&path, "hello\n").expect("seed");
+
+        let answer = digest_workspace_path(&path);
+        assert_eq!(
+            answer.get("sha256").and_then(Value::as_str),
+            Some("5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03")
+        );
+        assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn digest_says_missing_for_a_file_that_is_gone_and_cannot_tell_for_one_too_big() {
+        // Three answers, not two, and the surface says a different sentence for each.
+        // A file that is GONE is a fact (Revert can still put it back); a file too big
+        // to judge is a warning to withhold, and it is `null` rather than a guess.
+        let gone = temp_path();
+        let missing = digest_workspace_path(&gone);
+        assert_eq!(missing.get("missing").and_then(Value::as_bool), Some(true));
+        assert!(missing.get("sha256").expect("present").is_null());
+
+        let big = temp_path();
+        std::fs::write(&big, "a".repeat(DIGEST_SIZE_BOUND as usize + 1)).expect("seed oversize");
+        let over = digest_workspace_path(&big);
+        assert!(
+            over.get("sha256").expect("present").is_null(),
+            "a file past the bound is unjudgeable, never hashed in part"
+        );
+        assert_eq!(over.get("missing").and_then(Value::as_bool), Some(false));
+
+        // And exactly AT the bound it is still answered — the half that keeps the
+        // ceiling from silently becoming "never answers for anything real".
+        let at_bound = temp_path();
+        std::fs::write(&at_bound, "a".repeat(DIGEST_SIZE_BOUND as usize)).expect("seed at bound");
+        let judged = digest_workspace_path(&at_bound);
+        assert!(judged.get("sha256").and_then(Value::as_str).is_some());
+
+        let _ = std::fs::remove_file(&big);
+        let _ = std::fs::remove_file(&at_bound);
+    }
+
+    #[test]
+    fn digest_refuses_the_addison_data_dir_as_an_ordinary_cannot_tell() {
+        // The shell's own floor holds here too — and folds into the "can't tell"
+        // answer rather than raising, because this method must never fail a batch:
+        // one unjudgeable file among two hundred cannot take the rest off the screen.
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let data_dir = std::env::temp_dir().join(format!("addison-dg-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&data_dir).expect("seed data dir");
+        let secret = data_dir.join("addison.sqlite3");
+        std::fs::write(&secret, "secret db bytes").expect("seed db");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", &secret);
+
+        let answer = digest_workspace_path(&secret);
+        assert!(answer.get("sha256").expect("present").is_null());
+        assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
+
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    #[test]
+    fn digest_answers_every_path_it_was_asked_about() {
+        // ONE ROUND TRIP for the whole list, keyed by path for the same reason
+        // `canRestoreWorkspaceFiles` is: a batch that dropped an unreadable member
+        // would leave the caller unable to tell "unchanged" from "not answered".
+        let there = temp_path();
+        let gone = temp_path();
+        std::fs::write(&there, "x").expect("seed");
+
+        let params = json!({ "paths": [there.to_string_lossy(), gone.to_string_lossy()] });
+        let answer = digest_workspace_files(&params).unwrap();
+        let digests = answer.get("digests").and_then(Value::as_object).expect("a map");
+        assert_eq!(digests.len(), 2);
+        assert!(digests
+            .get(&there.to_string_lossy().to_string())
+            .and_then(|entry| entry.get("sha256"))
+            .and_then(Value::as_str)
+            .is_some());
+
+        let _ = std::fs::remove_file(&there);
     }
 }

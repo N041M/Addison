@@ -133,6 +133,44 @@ class Method:
     # {path} -> {path, root, content, bytes, truncated}. `bytes` is the file's size on
     # disk (never the excerpt's), so a truncated view can say how much is not shown.
     WORKSPACE_READ_FILE = "workspace.readFile"
+    # The review surface's DIFF and REVERT (Phase-3 plan Build §2/§3). Same mode gate
+    # as the two above, and for the same reason.
+    #
+    # SCOPE IS FILESYSTEM, NOT CONVERSATION: every unreverted `write_project_file`
+    # snapshot, newest first, capped. `action_snapshots` has no conversation_id anyway,
+    # but the deeper reason is that the question is "what has Addison changed that is
+    # still changed" — scoping to a chat would hide an edit from an earlier one that is
+    # still live on disk, which is the edit a person most needs to find. Rows whose
+    # trust has since been revoked are listed too, with `root: null`.
+    #
+    # N writes to one file collapse into ONE edit: the BEFORE is the prior of the
+    # OLDEST unreverted write (where a revert lands), and `onDiskChanged` compares the
+    # file now against the NEWEST `wrote_sha256`. Grouped by the resolved path WITHOUT
+    # casefolding — merging two genuinely different files into one revert target would
+    # be a wrong write, not a wrong listing.
+    #
+    # {} -> {edits: [<edit>], truncated}. METADATA ONLY, deliberately: pushing every
+    # before/after into one payload means a twenty-file turn ships ~10 MB across two
+    # process boundaries on a single JSON line.
+    # <edit> = {path, root, relativePath, snapshotIds, writes, created, firstWrittenAt,
+    #           lastWrittenAt, revertable, onDiskChanged, missing}
+    # `snapshotIds` is newest-first (the revert chain). `revertable` is the SHELL's
+    # answer about its session write ledger, not a permission: after a restart it is
+    # false for every historic edit, and the surface says so in a sentence instead of
+    # rendering a button that fails. `onDiskChanged` is TRI-STATE — true, false, or
+    # null for "Addison can't tell" (a row written before digests existed, or a file
+    # the shell cannot judge). `created` means Addison made the file, so BEFORE is
+    # empty and putting it back removes it.
+    WORKSPACE_LIST_EDITS = "workspace.listEdits"
+    # {path} -> {path, before, after, beforeTruncated, afterTruncated} | {ok:false, error}
+    # BEFORE comes from the database (the oldest unreverted prior) and AFTER from disk,
+    # through the same shell read the viewer uses.
+    WORKSPACE_READ_EDIT_DIFF = "workspace.readEditDiff"
+    # {path} -> {ok, path, detail} | {ok:false, error}. Reverts the WHOLE unreverted
+    # chain for that path in ONE write, landing the file on a state that actually
+    # existed on disk and leaving zero unreverted rows for it. Never a hunk, never part
+    # of a file. See agent_core/snapshots/file_revert.py, which owns the semantics.
+    WORKSPACE_REVERT_FILE = "workspace.revertFile"
     # External MCP servers Addison consumes as a CLIENT (step 7 phases 1–4; spec
     # §4.12). A discovered tool is registered namespaced (`mcp:<server>:<tool>`) and
     # dev-only, so it is absent from the SAFE view and refused outside OPEN at both
@@ -353,6 +391,23 @@ class Method:
     SHELL_LIST_WORKSPACE_DIRECTORY = "shell.listWorkspaceDirectory"
     # {path} -> {content, bytes, truncated}
     SHELL_READ_WORKSPACE_FILE_FOR_VIEW = "shell.readWorkspaceFileForView"
+    # The review surface's revert half (Build §2/§3), reached ONLY from
+    # `workspace.listEdits` / `workspace.revertFile`. Both are BATCHES and both answer a
+    # MAP keyed by path, never a list positioned against the one sent.
+    # {paths} -> {restorable: {<path>: bool}}. A PURE QUERY of the shell's SESSION write
+    # ledger — the set `shell.restoreWorkspaceFile` will touch — with no filesystem
+    # effect at all. It exists because that ledger dies with the process while
+    # `action_snapshots` rows do not, so after a restart the core can describe an edit
+    # perfectly and cannot put it back. The ledger is deliberately NOT persisted and the
+    # restore check is deliberately NOT widened to "inside a trusted root" (the ledger
+    # is session, not trust) — this query is what makes both unnecessary.
+    SHELL_CAN_RESTORE_WORKSPACE_FILES = "shell.canRestoreWorkspaceFiles"
+    # {paths} -> {digests: {<path>: {sha256: str|null, missing: bool}}}. What is on disk
+    # NOW, hashed where the bytes already are: 64 characters cross this seam and never a
+    # file. `sha256` is null wherever the shell cannot judge (too big, unreadable, or
+    # Addison's own data dir) — one honest "can't tell", never a guess and never an
+    # error that would take a whole listing down with it.
+    SHELL_DIGEST_WORKSPACE_FILES = "shell.digestWorkspaceFiles"
     # OPEN-mode command execution (step 5.5, item 1). The core does NOT run this
     # itself: run_command crosses the bridge like every other OS effect (§1.3), so
     # execution happens in the process that can apply a sandbox. `writeRoots` is the

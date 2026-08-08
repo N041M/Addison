@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from agent_core.routines.model import Routine
     from agent_core.secret_presence import SecretPresence
     from agent_core.shell_bridge import ServerShellBridge
+    from agent_core.snapshots.file_revert import FileRevertManager
     from agent_core.snapshots.snapshot_manager import SnapshotManager
     from agent_core.snapshots.undo_manager import UndoManager
     from agent_core.tools.registry import ToolRegistry
@@ -58,6 +59,8 @@ class ServerContext:
         def store(self) -> Store: ...
         @property
         def undo_manager(self) -> UndoManager: ...
+        @property
+        def file_revert_manager(self) -> FileRevertManager: ...
         @property
         def snapshot_manager(self) -> SnapshotManager: ...
         @property

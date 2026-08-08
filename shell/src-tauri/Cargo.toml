@@ -23,6 +23,14 @@ open = "5"                          # open http(s) links in the default browser 
 base64 = "0.22"                     # encode picked images for shell.readScopedFile
 uuid = { version = "1", features = ["v4"] }   # opaque file handles + device_id (§5)
 
+# SHA-256 of a file that is already on disk (shell.digestWorkspaceFiles, phase-3
+# review surface). The core records the digest of what it WROTE; the shell answers
+# what is there NOW, so the review surface can tell "as Addison left it" from "edited
+# since" without a byte of file content crossing the bridge. Already in the lockfile
+# as a transitive dependency of the Tauri stack, so declaring it adds no new code to
+# the build — only the right to call it.
+sha2 = "0.10"
+
 # SIGKILL for a command that overruns its budget (exec.rs, step 5.5). std::process
 # offers no timed wait and no signal, and a catchable signal is one a runaway shell
 # can ignore — so the one libc call is `kill(pid, SIGKILL)` and nothing more.

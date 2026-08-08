@@ -149,6 +149,13 @@ mod tests {
             // the trusted root before any of this is reached.
             "shell.listWorkspaceDirectory",
             "shell.readWorkspaceFileForView",
+            // The review surface's revert half (phase-3 plan Build §2/§3). The first
+            // is the only door onto this session's write ledger — the set that decides
+            // what `restore` may touch — and a window that could ask it directly could
+            // also learn which files Addison has written this session without going
+            // through the core's mode gate. The second reads files to hash them.
+            "shell.canRestoreWorkspaceFiles",
+            "shell.digestWorkspaceFiles",
         ] {
             let frame = json!({ "jsonrpc": "2.0", "method": m, "id": 1 });
             assert!(
