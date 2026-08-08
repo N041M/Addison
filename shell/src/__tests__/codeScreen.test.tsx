@@ -686,9 +686,9 @@ describe("the empty and disconnected states", () => {
  * like every other frozen string in this file. */
 const EDITS_UNREADABLE =
   "Addison couldn't check which files it has changed just now. Leaving this screen " +
-  "and coming back asks again.";
+  "and coming back will make Addison check again.";
 const DIRECTORY_UNREADABLE = "Addison couldn't look inside this folder just now.";
-const REVERT_FAILED = "Addison couldn't put that file back just now. You can try again.";
+const REVERT_FAILED = "Addison couldn't put this file back just now. You can try again.";
 const REVERT_DISCONNECTED =
   "Addison's engine isn't connected, so it can't put this file back. Try again in a moment.";
 
@@ -803,9 +803,50 @@ describe("the tree, from the hook's side", () => {
     act(() => result.current.toggleDirectory("/p/src"));
     await waitFor(() => expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE));
     expect(result.current.expanded).toContain("/p/src");
+
+    // THE SENTENCE GOES WHILE THE ANSWER IS STILL IN FLIGHT, which is the only
+    // moment the clearing is observable: on success the load clears it anyway, so
+    // asserting after the answer lands passes whether or not the retry cleared
+    // anything — this docstring named that mutation and did not kill it (found by
+    // re-running the claimed mutations, 2026-08-08). Hold the answer back and look
+    // in between.
+    type Listing = Awaited<ReturnType<typeof ipc.listWorkspaceDirectory>>;
+    let land: (answer: Listing) => void = () => {};
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementationOnce(
+      () =>
+        new Promise<Listing>((resolve) => {
+          land = resolve;
+        }),
+    );
     act(() => result.current.retryDirectory("/p/src"));
+    expect(result.current.listingErrors["/p/src"]).toBeUndefined();
+    expect(result.current.listings["/p/src"]).toBeUndefined();
+
+    await act(async () => {
+      land({
+        error: undefined,
+        value: { directory: "/p/src", root: "/p", entries: [], truncated: false },
+      });
+    });
     await waitFor(() => expect(result.current.listings["/p/src"]).toBeTruthy());
     expect(result.current.listingErrors["/p/src"]).toBeUndefined();
+  });
+
+  it("keeps the sentence when the retry cannot even ask", async () => {
+    // The other half of the ordering, and the reason the clearing moved AFTER the
+    // call: `loadDirectory` declines silently with no engine, so clearing first
+    // would strip the row of its sentence AND its retry button and leave a
+    // permanent "Looking…" — the exact state the retry was added to abolish.
+    // Kills: clearing before the call, or ignoring what `loadDirectory` answers.
+    vi.mocked(ipc.listWorkspaceDirectory).mockRejectedValueOnce(new Error("engine went away"));
+    const { result } = mountHook();
+    act(() => result.current.toggleDirectory("/p/src"));
+    await waitFor(() => expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE));
+
+    engine.up = false;
+    act(() => result.current.retryDirectory("/p/src"));
+    expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE);
+    expect(result.current.listings["/p/src"]).toBeUndefined();
   });
 });
 

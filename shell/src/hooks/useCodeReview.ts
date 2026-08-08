@@ -51,7 +51,7 @@ import { ipc, isEngineConnected } from "../ipc/client";
  * the came-back-to-the-screen re-read further down. */
 const EDITS_UNREADABLE =
   "Addison couldn't check which files it has changed just now. Leaving this screen " +
-  "and coming back asks again.";
+  "and coming back will make Addison check again.";
 
 /** One folder could not be listed. No next step in the sentence because there is
  * one on screen: the row renders a "try again" beside it. */
@@ -60,7 +60,7 @@ const DIRECTORY_UNREADABLE = "Addison couldn't look inside this folder just now.
 /** A Revert that did not come back. Every sibling in the app authors one of these
  * (`REMOVE_FAILED`, `DISARM_ORPHAN_FAILED`); this is the button where saying
  * nothing costs the most, because the person is watching for a file to change. */
-const REVERT_FAILED = "Addison couldn't put that file back just now. You can try again.";
+const REVERT_FAILED = "Addison couldn't put this file back just now. You can try again.";
 
 /** ...and a press made with no engine behind it. Kept apart from the one above
  * because it is a different fact and has a different next step. */
@@ -179,7 +179,11 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
 
   const loadDirectory = useCallback(
     (directory: string) => {
-      if (!isEngineConnected()) return;
+      // Answers whether it actually ASKED. `retryDirectory` clears the row's
+      // sentence only when a read is on its way — clearing regardless would leave
+      // the row with no sentence, no listing and no retry: a permanent "Looking…",
+      // the state the retry exists to abolish (found reviewing #85, 2026-08-08).
+      if (!isEngineConnected()) return false;
       ipc
         .listWorkspaceDirectory(directory)
         .then((answer) => {
@@ -198,17 +202,19 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
           // refusal would use, and let the row offer the retry.
           setListingErrors((prev) => ({ ...prev, [directory]: DIRECTORY_UNREADABLE }));
         });
+      return true;
     },
     [clearListingError],
   );
 
   const retryDirectory = useCallback(
     (directory: string) => {
-      // Clear FIRST: with no sentence and no listing the row reads "Looking…"
-      // again, which is the only honest thing to show between a press and an
-      // answer — and it is how the person can tell the press did something.
+      // Clear once a read is genuinely on its way: with no sentence and no listing
+      // the row reads "Looking…" again, which is the only honest thing to show
+      // between a press and an answer — and it is how the person can tell the press
+      // did something. See `loadDirectory` for why the order is this way round.
+      if (!loadDirectory(directory)) return;
       clearListingError(directory);
-      loadDirectory(directory);
     },
     [clearListingError, loadDirectory],
   );
@@ -368,8 +374,14 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
     const returning = live && !wasOnScreen.current;
     wasOnScreen.current = live;
     if (!returning) return;
+    // Last visit's revert notice goes with everything else that was answered before
+    // the person left. It renders when nothing is selected — exactly the state a
+    // successful revert leaves behind — so without this, coming back announces a
+    // thing you did and already walked away from: the same held-answer problem this
+    // effect exists to end (found reviewing #85, 2026-08-08).
+    setRevertNotice(null);
     refreshEdits();
-    onScreen.current.expanded.forEach(loadDirectory);
+    onScreen.current.expanded.forEach((directory) => loadDirectory(directory));
     // Re-opened through the ordinary path, so the pane goes busy and empties first:
     // "Opening…" under the right name is honest about not knowing yet, and the old
     // text under the right name is not.

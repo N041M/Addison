@@ -171,8 +171,8 @@ const diagnosticsHandlers = new Set<(entry: DiagnosticEntry) => void>();
 // precisely so a violation raised while the first chunk loads is captured — a
 // blocked worker or a blocked stylesheet is silent in the DOM and loud only in a
 // devtools console nobody has open in a packaged build. Its only subscriber is an
-// App effect gated on the engine being connected, which lands much later, and is
-// torn down and re-added on every disconnect. Fanning out to live handlers alone
+// App effect gated on the engine being connected, which lands much later. Fanning
+// out to live handlers alone
 // therefore DISCARDED exactly the violations the early install exists to catch, and
 // captured nothing at all on a machine where the engine never connects.
 //
