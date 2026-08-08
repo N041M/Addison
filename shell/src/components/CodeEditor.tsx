@@ -164,10 +164,11 @@ export function CodeViewer({ path, text, theme, ariaLabel }: ViewerProps) {
   // `mod` IS A DEPENDENCY, and it is the whole of this effect's correctness. On the
   // render where the lazy chunk arrives the label has not changed, so an effect
   // keyed on `[ariaLabel]` alone did not run — and the one before it had called
-  // `updateOptions` on a null ref. `BASE_OPTIONS` carries no `ariaLabel`, so the
-  // FIRST pane opened in a session announced Monaco's own "Editor content" instead
-  // of the file's name, which by this file's own header is a pane unusable by
-  // screen reader. The create effect above is declared first and therefore runs
+  // `updateOptions` on a null ref. `BASE_OPTIONS` carries no `ariaLabel`, so EVERY
+  // pane announced Monaco's own "Editor content" instead of the file's name — not
+  // only the first, because `paneBusy` unmounts the editor on each open, so each one
+  // is a fresh instance whose `mod` starts null. By this file's own header that is a
+  // pane unusable by screen reader. The create effect above is declared first and therefore runs
   // first, so the editor exists by the time this reads the ref.
   useEffect(() => {
     editorRef.current?.updateOptions({ ariaLabel });

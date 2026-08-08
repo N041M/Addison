@@ -225,12 +225,22 @@ function LeftColumn({
           <Quiet>{DISCONNECTED_LINE}</Quiet>
         ) : !review.editsLoaded ? (
           <Quiet>Looking…</Quiet>
-        ) : review.editsError ? (
+        ) : review.editsError && review.edits.length === 0 ? (
           <Quiet>{review.editsError}</Quiet>
         ) : review.edits.length === 0 ? (
           <Quiet>{NO_CHANGES_LINE}</Quiet>
         ) : (
           <>
+            {/* THE SENTENCE SITS ABOVE THE ROWS, never in place of them. The hook
+                keeps the last list it had when a refresh is refused — "a stale list
+                with a sentence over it is more use than an empty one" — and rendering
+                the error INSTEAD threw that list off the screen, which is exactly what
+                the hook went to the trouble of preventing. It bit hardest right after
+                a revert: the success path re-reads, that read is refused, and every
+                row the person was working through disappears. (Found reviewing #85,
+                2026-08-08.) With nothing listed there is nothing to sit above, so the
+                branch above answers that case on its own. */}
+            {review.editsError && <Quiet>{review.editsError}</Quiet>}
             {review.edits.map((edit) => (
               <EditRow
                 key={edit.path}
@@ -562,11 +572,17 @@ function RightPane({
   // actually an answer — before the first one arrives every diff would qualify.
   // It is the DIFF being on screen that makes this worth saying: with a refusal or
   // an "Opening…" in the pane there is nothing claiming to be current.
+  // ...and never off a list that is admittedly incomplete: `listEdits` caps at the
+  // 200 newest, so an open diff pushed past that cap by fresh writes is missing from
+  // the list while being entirely current. Remote — it takes 200 new edits during one
+  // visit — but the claim would be flatly wrong, and "not in the list" is only
+  // evidence when the list is the whole of it.
   const editIsGone =
     selection?.kind === "edit" &&
     Boolean(review.diff) &&
     review.editsLoaded &&
     !review.editsError &&
+    !review.editsTruncated &&
     !edit;
 
   return (
