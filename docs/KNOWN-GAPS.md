@@ -589,6 +589,34 @@ are here because somebody will meet them, and because anything built on top of
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
+- **Two spellings of a file that is NO LONGER THERE keep one revert chain each**
+  (opened 2026-08-08, deliberately). `file_revert.revert_key` asks the filesystem
+  which file two paths are — `st_dev`+`st_ino` from an `lstat` of the name — so
+  `Notes.md` and `notes.md` collapse into one chain on the case-insensitive volume
+  macOS ships with, and stay two on a case-sensitive one. A path with nothing at it
+  can no longer be asked, and then the stored path is the tiebreak and is compared
+  EXACTLY. That is the safe direction of a choice with no right answer: a wrong MERGE
+  writes one file's prior bytes into another, while a wrong SPLIT only leaves two rows
+  where one would do — and each still reverts to a state that actually existed on
+  disk. The state-corrupting half (two chains for a file that IS there, which let a
+  revert resurrect content the person had just reverted away from) is fixed.
+- **The shell follows a shortcut planted at a path it once wrote** (2026-08-08).
+  `restore_workspace_path` checks its session ledger against the NAME and then
+  `fs::write`s that name; `read_workspace_view` opens it. Neither asks whether a
+  symlink now stands there, so a path Addison legitimately wrote is a write-through to
+  wherever that name later points — and it takes no attacker to arrive, only somebody
+  moving a config file into a dotfiles folder and linking it back. The review surface
+  refuses first, core-side: `file_revert.replaced_by_a_link` guards the diff's read and
+  the revert's write, and what crosses is the RECORDED path rather than a re-resolution
+  of it. What is still open is everything that does not go through that surface — the
+  chat header's Undo (`WriteProjectFileTool.undo()`) still writes its prior bytes
+  through such a link. The complete fix belongs in `filesystem.rs`, which already makes
+  `symlink_metadata` the rule for listing and would need the same refusal on both these
+  methods; it is a shell change, so it is recorded here rather than half-done from the
+  core. **Cosmetic consequence of the same swap, not a second gap:** a row whose
+  recorded path is now a shortcut lists with `root: null` and its whole path, because
+  the display comparator (`policy.path_is_within`) resolves both sides. `root` permits
+  nothing — it decides only what the row renders as.
 - **The shell's file floor does not know the OS automation directories, and
   `exec.rs`'s does** (found by the 2026-08-08 adversarial pass; recorded, not
   closed). `filesystem.rs::refuse_addison_data_dir` guards every workspace read and

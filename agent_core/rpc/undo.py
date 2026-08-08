@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _SERVER_ERROR
-from agent_core.snapshots.file_revert import WRITE_TOOL_ID, revert_key
+from agent_core.snapshots.file_revert import WRITE_TOOL_ID
 
 # THE RESTART PROBLEM, answered honestly rather than worked around (phase-3 plan §3).
 #
@@ -41,15 +41,26 @@ class UndoMixin(ServerContext):
         ``save_file``'s undo has a session ledger of its own (`created`) with no such
         query, so a delete-after-restart still reports today's failure — stated here
         rather than papered over, because the sentence above would be a guess about a
-        mechanism this code did not ask."""
+        mechanism this code did not ask.
+
+        ASKED ABOUT THE VALUE THE ATTEMPT WOULD USE: ``undo_payload["path"]``, which is
+        the exact string ``WriteProjectFileTool.undo()`` hands the shell. It used to
+        re-resolve that value first, and a shortcut appearing at a written path
+        afterwards moved the question off its own answer — the shell was asked about a
+        path its ledger had never held, said no, and the person was told Addison had
+        changed the file before the last restart. False, and permanent: nothing marks
+        the row, so the sentence came back every time they pressed Undo. A pre-check
+        that does not ask about what the attempt will do is not a pre-check."""
         bridge = self._shell_bridge
         if bridge is None:
             return False
         pending = self.store.recent_unreverted_snapshots(limit=1)
         if not pending or pending[0].tool_id != WRITE_TOOL_ID:
             return False
-        path = revert_key(pending[0].undo_payload.get("path"))
-        if path is None:
+        path = pending[0].undo_payload.get("path")
+        if not isinstance(path, str) or not path.strip():
+            # No usable path recorded: there is nothing to ask about, so the attempt
+            # runs as it always did and reports what really happens.
             return False
         try:
             answer = bridge.can_restore_workspace_files([path])
