@@ -165,6 +165,27 @@ const statusHandlers = new Set<(text: string) => void>();
 const stateHandlers = new Set<(state: string) => void>();
 const diagnosticsHandlers = new Set<(entry: DiagnosticEntry) => void>();
 
+// --- diagnostics raised while nobody is listening --------------------------
+//
+// The CSP violation reporter is installed in `main.tsx` BEFORE the app renders,
+// precisely so a violation raised while the first chunk loads is captured — a
+// blocked worker or a blocked stylesheet is silent in the DOM and loud only in a
+// devtools console nobody has open in a packaged build. Its only subscriber is an
+// App effect gated on the engine being connected, which lands much later, and is
+// torn down and re-added on every disconnect. Fanning out to live handlers alone
+// therefore DISCARDED exactly the violations the early install exists to catch, and
+// captured nothing at all on a machine where the engine never connects.
+//
+// So an entry raised with nobody listening waits here and is replayed to the next
+// subscriber. The bound is 20: a page load raises one violation per blocked asset,
+// twenty is far more than a working build produces and more than the Settings panel
+// itself keeps (5), and a window that never connects cannot grow this without end.
+// Full means the OLDEST goes, which is the panel's own preference — it shows the
+// most recent — and a buffer that filled with the first twenty and ignored the rest
+// would replay a story that stopped being current.
+const EARLY_DIAGNOSTICS_LIMIT = 20;
+const earlyDiagnostics: DiagnosticEntry[] = [];
+
 let idCounter = 0;
 function nextId(): string {
   idCounter += 1;
@@ -212,9 +233,12 @@ function handleCoreMessage(frame: CoreFrame): void {
     if (typeof rawValue === "string" && rawValue) {
       err.raw = rawValue;
       // Named `diag`, not `entry`: the outer `entry` is the pending request we
-      // reject just below — shadowing it here would be a footgun.
+      // reject just below — shadowing it here would be a footgun. Pushed through
+      // the same function as the CSP reporter's, so both sources get the same
+      // treatment when nothing is listening yet; a second fan-out site here is how
+      // one of them would quietly stop getting it.
       const diag: DiagnosticEntry = { message, raw: rawValue, at: Date.now() };
-      diagnosticsHandlers.forEach((h) => h(diag));
+      pushDiagnostic(diag);
     }
     entry.reject(err);
   } else {
@@ -332,6 +356,14 @@ export function subscribeCoreState(handler: (state: string) => void): () => void
  */
 export function subscribeDiagnostics(handler: (entry: DiagnosticEntry) => void): () => void {
   diagnosticsHandlers.add(handler);
+  // Anything raised while nobody was listening is delivered now, oldest first, and
+  // then forgotten — see the buffer's own comment. Handed to THIS subscriber rather
+  // than fanned out: a later one is not owed a replay of what happened before the
+  // first reader took it.
+  if (earlyDiagnostics.length > 0) {
+    const waiting = earlyDiagnostics.splice(0, earlyDiagnostics.length);
+    waiting.forEach((entry) => handler(entry));
+  }
   return () => {
     diagnosticsHandlers.delete(handler);
   };
@@ -350,8 +382,18 @@ export function subscribeDiagnostics(handler: (entry: DiagnosticEntry) => void):
  * Deliberately not a second channel with a second subscriber list: two rings would
  * mean two places to look, and the one that nobody wired up would be the one
  * holding the answer.
+ *
+ * WITH NOBODY LISTENING THE ENTRY IS KEPT, not dropped: the reporter is installed
+ * before the app renders and its only subscriber arrives with the engine, so
+ * discarding here threw away precisely the load-time violations that install exists
+ * to catch. See `earlyDiagnostics` above for the bound and why it is that number.
  */
 export function pushDiagnostic(entry: DiagnosticEntry): void {
+  if (diagnosticsHandlers.size === 0) {
+    earlyDiagnostics.push(entry);
+    if (earlyDiagnostics.length > EARLY_DIAGNOSTICS_LIMIT) earlyDiagnostics.shift();
+    return;
+  }
   diagnosticsHandlers.forEach((h) => h(entry));
 }
 

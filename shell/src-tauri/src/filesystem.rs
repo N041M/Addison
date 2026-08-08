@@ -133,8 +133,9 @@ const VIEW_SIZE_BOUND: usize = UNDO_SIZE_BOUND;
 /// third question: how much may be read for an answer that is ONE WORD LONG. Nothing
 /// crosses the bridge from this read — not a byte of the file — so the ceiling is not
 /// protecting the channel the way `READ_SIZE_BOUND` does. It is protecting the pump:
-/// this handler is awaited inline like every other, and it is asked about up to two
-/// hundred files at once.
+/// this handler is awaited inline like every other, and it is asked about up to
+/// `MAX_BATCH_PATHS` files at once — a number this process now enforces rather than
+/// one the core was trusted to keep to.
 ///
 /// The number is `UNDO_SIZE_BOUND` because that is the size class of file this can be
 /// asked about at all. A file Addison OVERWROTE was at most that big when it did (the
@@ -160,6 +161,91 @@ const MAX_DIR_ENTRIES: usize = 500;
 /// person must not be able to tell which one refused, and neither of them can show a
 /// file that is not text.
 const NOT_TEXT_TO_READ: &str = "That file isn't a text file, so Addison can't read it here.";
+
+/// How many files ONE batch question may name (`shell.canRestoreWorkspaceFiles`,
+/// `shell.digestWorkspaceFiles`).
+///
+/// CAPPED HERE, in the shell, for `MAX_DIR_ENTRIES`'s reason and `UNDO_SIZE_BOUND`'s:
+/// this is where the bytes are, and the core's list is an INPUT to this boundary and
+/// never the boundary. `digest_workspace_files`'s own doc comment already says "up to
+/// two hundred files at once" — but two hundred was enforced only core-side, so the
+/// sentence described a convention rather than a limit, and every element of that
+/// array costs a `stat`, an open and up to `DIGEST_SIZE_BOUND` hashed, all of it
+/// awaited INLINE on the core's stdout pump (`agent_process.rs`). An array of fifty
+/// thousand paths is the same wedge every ceiling in this file exists to prevent,
+/// arriving through a list rather than through one big file.
+///
+/// TWO HUNDRED because that is the number the core's caller was written to send and
+/// the number this file already claims. A shell-side ceiling BELOW the core's would
+/// turn a working screen into a refused one for no reason a person could see.
+const MAX_BATCH_PATHS: usize = 200;
+
+/// Worded once because both batch methods raise it, and derived from the constant so
+/// the number in the sentence cannot drift from the number in the check.
+fn refuse_oversize_batch(paths: &[Value]) -> Result<(), RpcError> {
+    // A REFUSAL, not a truncation of the list, and this is the one place in this file
+    // where that decision needs arguing rather than restating. Both callers read a MAP
+    // keyed by path and treat an ABSENT key as the cautious answer ("Addison can't
+    // tell", "not restorable"), so silently answering the first two hundred would be
+    // SAFE — and that is exactly what makes it the wrong choice. It would be
+    // indistinguishable, on screen, from two hundred files Addison genuinely could not
+    // judge: a person would read "Addison can't tell" beside files it could tell about
+    // perfectly well, and nothing anywhere would say the question had been cut short.
+    // A caller past this bound is not the caller this was built for — it is a bug or a
+    // steered payload — and a total failure is a better one than a plausible-looking
+    // partial answer.
+    //
+    // SAID PLAINLY: the core folds a refusal from either of these into an empty map
+    // (`workspace._restorable_map` / `_digest_map` catch and return `{}`), so this does
+    // not reach a person as a sentence either way. What it buys is not a better error
+    // message, it is the boundary holding at all — and it costs nothing today, because
+    // the core's own list is capped at the same 200 (`file_revert._MAX_EDITS`, rows,
+    // which group to at most that many paths). This refusal is unreachable from the
+    // shipped caller by construction, which is exactly the condition under which a
+    // floor is cheap to keep.
+    if paths.len() > MAX_BATCH_PATHS {
+        return Err(RpcError::app(format!(
+            "Addison can only look at {MAX_BATCH_PATHS} files at once."
+        )));
+    }
+    Ok(())
+}
+
+/// Worded once because five paths raise it — the three reads, the write's capture of
+/// the prior text, and the digest. The person must not be able to tell which refused.
+const NOT_A_REGULAR_FILE: &str = "That isn't an ordinary file, so Addison won't open it.";
+
+/// A path that is not a REGULAR file, refused from metadata that has already been
+/// taken — before anything opens it.
+///
+/// THE WEDGE THIS CLOSES, and it is the sharpest one left in this file. A FIFO reports
+/// `len() == 0`, so EVERY size ceiling above waves it through; `fs::read` and
+/// `File::open` then BLOCK until somebody opens the other end, which on a named pipe
+/// nobody ever does (POSIX). Every `shell.*` handler is awaited INLINE on the core's
+/// stdout pump and none of these methods is in `dispatch_off_loop`, so that block is
+/// permanent and total: no core frame of any kind is relayed again, the core's bridge
+/// times out, and the app never recovers. `read_project_file` is SHIPPED, so this was
+/// one `mkfifo` inside a trusted root away from a model in OPEN mode.
+///
+/// THE CHECK IS THE METADATA, not a second syscall. Every caller already asks the OS
+/// about the path in order to judge its size; `stat_on_disk` hands back the whole
+/// answer so both questions are asked of ONE stat, at one moment. A separate
+/// `is_file()` call would be a second syscall and — worse — a second moment.
+///
+/// A DIRECTORY is refused here too. That is not new behaviour dressed up as a fix:
+/// `fs::read` on a directory already failed, with "Addison couldn't read that file"
+/// mapped from an errno. This says the true thing instead of the generic one.
+///
+/// NO `O_NONBLOCK` OPENER. It would work on the FIFO and buy nothing elsewhere: it is
+/// POSIX-only, it would have to be undone before the read to avoid short reads on a
+/// slow device, and the honest answer to "may Addison read this?" is decided by what
+/// the thing IS, not by whether opening it happened to return.
+fn refuse_non_regular_file(meta: &std::fs::Metadata) -> Result<(), RpcError> {
+    if !meta.is_file() {
+        return Err(RpcError::app(NOT_A_REGULAR_FILE));
+    }
+    Ok(())
+}
 
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
@@ -339,8 +425,12 @@ fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError
     // paths do it: a refusal that first allocates the 2 GB it is refusing has
     // already stalled the app it was protecting. A size the OS won't give us is not
     // a refusal — fall through to the read, whose own error mapping speaks.
-    if let Some(len) = size_on_disk(&path) {
-        refuse_oversize_pick(len)?;
+    //
+    // And from the same stat, WHAT IT IS: a person can pick a FIFO in an OS dialog by
+    // typing its name, and `fs::read` on one never returns (`refuse_non_regular_file`).
+    if let Some(meta) = stat_on_disk(&path) {
+        refuse_non_regular_file(&meta)?;
+        refuse_oversize_pick(meta.len())?;
     }
 
     let bytes = std::fs::read(&path).map_err(|_| RpcError::app("Addison couldn't read that file."))?;
@@ -392,8 +482,15 @@ fn capture_prior_text(path: &Path) -> Result<(bool, Option<String>), RpcError> {
     // stdout pump — so the refusal would arrive having already stalled the app it
     // was protecting. Same bound, same sentence, only earlier. The check below
     // stays, because metadata is a claim about a moment and a file can grow.
-    if size_on_disk(path).is_some_and(|len| len > UNDO_SIZE_BOUND as u64) {
-        return Err(RpcError::app(TOO_BIG_TO_EDIT));
+    //
+    // The SAME stat also answers what the path IS. A prior that is a FIFO reports
+    // length 0, passes the bound, and then blocks `fs::read` forever — the write path
+    // is a read path first, and it wedges identically (`refuse_non_regular_file`).
+    if let Some(meta) = stat_on_disk(path) {
+        refuse_non_regular_file(&meta)?;
+        if meta.len() > UNDO_SIZE_BOUND as u64 {
+            return Err(RpcError::app(TOO_BIG_TO_EDIT));
+        }
     }
     match std::fs::read(path) {
         Ok(bytes) => {
@@ -424,8 +521,14 @@ fn read_workspace_path(path: &Path) -> Result<Value, RpcError> {
     // allocates the 500 MB it is refusing has already done the damage it exists to
     // prevent. A size the OS won't give us is not a refusal — fall through to the
     // read, whose own error mapping says honestly what went wrong.
-    if let Some(len) = size_on_disk(path) {
-        refuse_oversize_read(len)?;
+    //
+    // And from the same stat, WHAT IT IS. This is the method behind the shipped
+    // `read_project_file`, so it is the one a model can point at a FIFO inside a
+    // trusted root — where the size ceiling is no protection at all, because a pipe's
+    // length is 0 and the read never returns (`refuse_non_regular_file`).
+    if let Some(meta) = stat_on_disk(path) {
+        refuse_non_regular_file(&meta)?;
+        refuse_oversize_read(meta.len())?;
     }
     let bytes = std::fs::read(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => RpcError::app("That file isn't there."),
@@ -533,7 +636,14 @@ fn read_workspace_view(path: &Path) -> Result<Value, RpcError> {
     // cannot cost this process more than one extra byte). What metadata buys is the
     // HONEST `bytes`: how big the file actually is, which a truncated read cannot say
     // and which is the number the person needs to know how much is not shown.
-    let on_disk = size_on_disk(path);
+    //
+    // WHAT IT IS, though, IS load-bearing here, and `take` does not help: `File::open`
+    // on a FIFO blocks before there is anything to bound (`refuse_non_regular_file`).
+    let stat = stat_on_disk(path);
+    if let Some(meta) = &stat {
+        refuse_non_regular_file(meta)?;
+    }
+    let on_disk = stat.map(|meta| meta.len());
     let file = std::fs::File::open(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => RpcError::app("That file isn't there."),
         _ => RpcError::app("Addison couldn't read that file."),
@@ -552,7 +662,14 @@ fn read_workspace_view(path: &Path) -> Result<Value, RpcError> {
     // What the file IS, not what came back — the two differ exactly when `truncated` is
     // true, which is when the difference is the thing worth saying. `None` means the OS
     // would not answer, and then the honest number is the one we hold.
-    let total = on_disk.unwrap_or(bytes.len() as u64);
+    //
+    // NEVER FEWER THAN WHAT WE ACTUALLY HOLD. `on_disk` is a claim about a moment that
+    // has passed, and a file that GREW between the stat and the read made the surface
+    // say "showing 256 KB of 100 bytes" — a sentence that is not merely wrong but
+    // self-evidently wrong, which is the kind that costs a person their trust in the
+    // whole pane. Re-statting would be another syscall and another stale moment; the
+    // floor below is free and cannot be stale, because the bytes are in hand.
+    let total = on_disk.unwrap_or(0).max(bytes.len() as u64);
     match String::from_utf8(bytes) {
         Ok(text) => Ok(json!({ "content": text, "bytes": total, "truncated": truncated })),
         // Binary detection needs no new code and no new sentence: the decode already
@@ -605,12 +722,19 @@ fn refuse_oversize_pick(len: u64) -> Result<(), RpcError> {
     Ok(())
 }
 
-/// What the OS says a file's size is, or `None` when it won't say — a path that
-/// isn't there, or one metadata is refused for. Follows symlinks, exactly as the
-/// `fs::read` that follows it does, so the size measured is the size that would be
-/// loaded. Callers treat `None` as "cannot judge yet", never as "small enough".
-fn size_on_disk(path: &Path) -> Option<u64> {
-    std::fs::metadata(path).ok().map(|m| m.len())
+/// What the OS says about the file at `path`, or `None` when it won't say — a path
+/// that isn't there, or one metadata is refused for. Follows symlinks, exactly as the
+/// `fs::read`/`File::open` that follows it does, so what is measured is what would be
+/// loaded. Callers treat `None` as "cannot judge yet", never as "fine".
+///
+/// HANDS BACK THE WHOLE ANSWER, where this used to be a `size_on_disk` that kept only
+/// `len()`. Every caller has to ask the OS about the path anyway, and it has TWO
+/// questions to ask of it — how big is this, and is it an ordinary FILE (see
+/// `refuse_non_regular_file`, and the FIFO that wedged the pump because `len()` on one
+/// is 0). Throwing the file type away here forced the second question to be a second
+/// syscall, at a second moment, or — as it was — not asked at all.
+fn stat_on_disk(path: &Path) -> Option<std::fs::Metadata> {
+    std::fs::metadata(path).ok()
 }
 
 // shell.restoreWorkspaceFile {path, content?|delete} -> {}   (step 5, write undo)
@@ -628,6 +752,17 @@ fn restore_workspace_path(
     path: PathBuf,
     params: &Value,
 ) -> Result<Value, RpcError> {
+    // THE FLOOR FIRST, exactly as every other path in this file takes it, and it was
+    // the ONE write path that did not. The ledger looked like enough — a path only
+    // reaches this set because a write already passed the floor — but the two checks
+    // happen at different MOMENTS, and `fs::write` follows symlinks: a ledgered file
+    // replaced by a link into the data dir between the write and its undo wrote
+    // straight through it. `workspace.revertFile` made that a second door, reachable
+    // from a click rather than only from an undo.
+    //
+    // It can only ever tighten. A path the write path accepted is a path this accepts,
+    // unless the ground moved underneath it — which is the case this is here for.
+    refuse_addison_data_dir(&path)?;
     {
         let written = lock(&state.workspace_written);
         if !written.contains(&path) {
@@ -680,6 +815,7 @@ fn can_restore_workspace_paths(state: &FileState, params: &Value) -> Result<Valu
         .get("paths")
         .and_then(Value::as_array)
         .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
+    refuse_oversize_batch(paths)?;
     let written = lock(&state.workspace_written);
     // A MAP keyed by the path, never an array positioned against the caller's. An
     // array couples the answer to an order two processes have to agree on, and the
@@ -717,6 +853,7 @@ fn digest_workspace_files(params: &Value) -> Result<Value, RpcError> {
         .get("paths")
         .and_then(Value::as_array)
         .ok_or_else(|| RpcError::app("A list of file paths is required."))?;
+    refuse_oversize_batch(paths)?;
     let mut digests = serde_json::Map::new();
     for entry in paths {
         if let Some(path) = entry.as_str() {
@@ -754,6 +891,15 @@ fn digest_workspace_path(path: &Path) -> Value {
         }
         Err(_) => return unknowable_digest(),
     };
+    // WHAT IT IS, from the stat already taken, and before the open — a FIFO's length is
+    // 0, so the bound below waves it through and `File::open` then blocks forever on
+    // the core's stdout pump (`refuse_non_regular_file`). Folded into the ordinary
+    // "can't tell" answer, like the floor above, because this method never fails a
+    // batch — and "Addison can't tell whether this changed" is the true thing to say
+    // about a pipe anyway.
+    if refuse_non_regular_file(&meta).is_err() {
+        return unknowable_digest();
+    }
     if meta.len() > DIGEST_SIZE_BOUND {
         return unknowable_digest();
     }
@@ -874,37 +1020,90 @@ fn data_dirs_with_bundle(bundle: Option<PathBuf>) -> Vec<PathBuf> {
     dirs
 }
 
+/// How many symlink hops the floor follows before it stops guessing and refuses.
+///
+/// `read_link` reads exactly ONE hop, and one hop was the whole of the previous fix.
+/// It closed `a -> <data dir>/x` and left `a -> b -> <data dir>/x` wide open: with `b`
+/// dangling, `canonical_lossy` stops at the nearest existing ancestor for BOTH the
+/// candidate and the one target it read, so both looked like harmless project files
+/// while `fs::write` followed the whole chain and planted a file in the G3 sidecar
+/// directory. A fixed number of hops is not a property; the CHAIN is.
+///
+/// FORTY, because that is the largest number of hops any kernel this app runs on will
+/// follow: Linux's `MAXSYMLINKS` is 40, macOS's is 32, and POSIX only promises 8. The
+/// floor must never stop resolving somewhere the kernel would keep going — that gap IS
+/// this bug, one link further along — so the bound is the highest of them, not the
+/// lowest. Past 40 the kernel itself answers `ELOOP`, so the write this refuses would
+/// have failed anyway; refusing it here costs nothing real and says so honestly.
+///
+/// A chain of EXACTLY 40 links spends the budget and is refused rather than resolved,
+/// which is an off-by-one on the safe side and stated rather than tuned away: this
+/// walk either resolves a chain completely or refuses it, and it never returns "safe"
+/// about a chain it has not finished reading. That is the only property that matters,
+/// and nothing a person or a project has ever built comes near forty.
+///
+/// A LOOP IS BOUNDED BY THE SAME COUNTER and needs no visited-set: `a -> b -> a`
+/// simply spends the budget. What must never happen is that this walk runs forever on
+/// the core's stdout pump, and a counter is the smallest thing that guarantees it.
+const MAX_SYMLINK_HOPS: usize = 40;
+
+/// Said when a path's symlink chain is longer than the floor will follow. Plain, and
+/// it does not pretend to know where the chain leads — because it does not.
+const UNRESOLVABLE_LINK: &str =
+    "Addison couldn't work out where that shortcut leads, so it left it alone.";
+
+/// Every location `path` could actually land on: the path itself, and each target
+/// along its symlink chain, all canonicalized. `Err(())` when the chain is still
+/// unresolved after `MAX_SYMLINK_HOPS` — a loop, or a chain past what any kernel here
+/// would follow.
+///
+/// WHY THE WHOLE CHAIN AND NOT THE END OF IT. `fs::canonicalize` already resolves a
+/// chain whose end EXISTS, and `canonical_lossy` falls back to the nearest existing
+/// ancestor when it does not — which is exactly the dangling case, and exactly where a
+/// not-yet-created file under Addison's data dir hides. So the intermediate hops have
+/// to be judged one at a time; only the walk sees them.
+fn link_chain(path: &Path) -> Result<Vec<PathBuf>, ()> {
+    let mut landing_places = vec![canonical_lossy(path)];
+    let mut cursor = path.to_path_buf();
+    for _ in 0..MAX_SYMLINK_HOPS {
+        // Not a link, or a link the OS will not read: either way the chain ends here,
+        // and what we have collected is every place it could reach.
+        let Ok(target) = std::fs::read_link(&cursor) else {
+            return Ok(landing_places);
+        };
+        let resolved = if target.is_absolute() {
+            target
+        } else {
+            cursor.parent().unwrap_or(Path::new("")).join(target)
+        };
+        landing_places.push(canonical_lossy(&resolved));
+        cursor = resolved;
+    }
+    Err(())
+}
+
 fn refuse_addison_data_dir(path: &Path) -> Result<(), RpcError> {
     let refused = || {
         Err(RpcError::app(
             "That location holds Addison's own memory, so Addison won't touch it there.",
         ))
     };
-    let candidate = canonical_lossy(path);
     // A DANGLING symlink resolves to nothing, so canonicalization stops at the link
     // itself and the containment test judges the link's own harmless location. But
-    // `std::fs::write` FOLLOWS the link and creates the file at its target — so a
-    // link inside a trusted project, pointing at a not-yet-existing file under
-    // Addison's data dir, planted a file in the G3 sidecar directory while this
-    // check said yes. Read the link's own target and judge that too.
-    let link_target = std::fs::read_link(path)
-        .ok()
-        .map(|target| {
-            if target.is_absolute() {
-                target
-            } else {
-                path.parent().unwrap_or(Path::new("")).join(target)
-            }
-        })
-        .map(|resolved| canonical_lossy(&resolved));
+    // `std::fs::write` FOLLOWS the link and creates the file at its target — so a link
+    // inside a trusted project, pointing at a not-yet-existing file under Addison's
+    // data dir, planted a file in the G3 sidecar directory while this check said yes.
+    // Every hop of the chain is therefore judged, not just the first one.
+    let Ok(landing_places) = link_chain(path) else {
+        // A chain we cannot see the end of is not a chain we may declare safe. This
+        // sits on the refusing side of the only question this function answers.
+        return Err(RpcError::app(UNRESOLVABLE_LINK));
+    };
     for dir in addison_data_dirs() {
         let protected = canonical_lossy(&dir);
-        // Refuse a path that IS, sits inside, or contains a protected directory.
-        if candidate.starts_with(&protected) || protected.starts_with(&candidate) {
-            return refused();
-        }
-        if let Some(target) = &link_target {
-            if target.starts_with(&protected) || protected.starts_with(target) {
+        for candidate in &landing_places {
+            // Refuse a path that IS, sits inside, or contains a protected directory.
+            if candidate.starts_with(&protected) || protected.starts_with(candidate) {
                 return refused();
             }
         }
@@ -1144,6 +1343,48 @@ mod tests {
 
     fn temp_path() -> PathBuf {
         std::env::temp_dir().join(format!("addison-fs-test-{}.txt", uuid::Uuid::new_v4()))
+    }
+
+    /// Run `f` on its own thread and give it two seconds to answer.
+    ///
+    /// EVERY WEDGE IN THIS FILE FAILS BY NOT FAILING. A guard that does not hold does
+    /// not return the wrong answer — it returns NO answer, forever, because that is
+    /// what `fs::read` on a FIFO and an unbounded walk of a symlink loop both do. A
+    /// plain `assert!` cannot catch that: the test never reaches it. So the deadline
+    /// has to belong to the test, exactly as `a_long_command_does_not_block_the_next_
+    /// request` puts the assertion on the clock rather than on a message.
+    ///
+    /// Two seconds is generous for work that should take one `stat`. A thread left
+    /// blocked outlives the test; that is the correct trade for a suite that reports
+    /// the failure instead of hanging with it.
+    fn within_two_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2)).expect(
+            "this call never returned — the guard that refuses it before the open is \
+             missing, and that is the permanent stall of the core's stdout pump",
+        )
+    }
+
+    /// A named pipe at a fresh temp path, or `None` when the platform has no `mkfifo`
+    /// on PATH.
+    ///
+    /// SPAWNED RATHER THAN LINKED. `nix`/`libc` are not dependencies of this crate and
+    /// adding one to the trusted process to make a test fixture would be a poor trade;
+    /// `mkfifo(1)` is POSIX and present on both platforms this repo builds on. No
+    /// `#[cfg]` guard, because this test module is ALREADY unix-only — it plants
+    /// symlinks with `std::os::unix::fs::symlink` in five places without one, and
+    /// guarding this one alone would imply the others are portable.
+    fn make_fifo() -> Option<PathBuf> {
+        let path = temp_path().with_extension("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .ok()
+            .is_some_and(|status| status.success());
+        made.then_some(path)
     }
 
     #[test]
@@ -1545,18 +1786,25 @@ mod tests {
         // after a truncated read would quietly describe the truncation instead of the file.
         //
         // The DIGEST (`digest_workspace_path`) is the fifth, and it is why the size
-        // marker became a parameter rather than the literal `size_on_disk` this loop
+        // marker became a parameter rather than the literal `stat_on_disk` this loop
         // used to assume: that path asks `fs::metadata` directly, because it has to tell
-        // a file that is NOT THERE from one the OS will not describe and `size_on_disk`
+        // a file that is NOT THERE from one the OS will not describe and `stat_on_disk`
         // collapses both into `None`. Same judgement, same order, one fewer helper in
         // the way — and the loop now says which spelling it is looking for instead of
         // silently requiring one of them.
+        //
+        // WHAT IT IS is pinned in the same place and for a sharper reason. A size
+        // ceiling judged early is a stall avoided; a KIND judged early is the only
+        // thing between this process and a permanent one, because `fs::read` and
+        // `File::open` on a FIFO never return at all and the size ceiling cannot see it
+        // (`len()` on a pipe is 0). No runtime assertion can tell an early check from a
+        // late one — a late one HANGS rather than failing — so the order is pinned here.
         let source = include_str!("filesystem.rs");
         for (name, sized_with, opens_with) in [
-            ("fn read_workspace_path", "size_on_disk", "std::fs::read("),
-            ("fn capture_prior_text", "size_on_disk", "std::fs::read("),
-            ("fn read_scoped_handle", "size_on_disk", "std::fs::read("),
-            ("fn read_workspace_view", "size_on_disk", "std::fs::File::open("),
+            ("fn read_workspace_path", "stat_on_disk", "std::fs::read("),
+            ("fn capture_prior_text", "stat_on_disk", "std::fs::read("),
+            ("fn read_scoped_handle", "stat_on_disk", "std::fs::read("),
+            ("fn read_workspace_view", "stat_on_disk", "std::fs::File::open("),
             ("fn digest_workspace_path", "std::fs::metadata(", "std::fs::File::open("),
         ] {
             let start = source.find(name).unwrap_or_else(|| panic!("{name} must exist"));
@@ -1573,6 +1821,15 @@ mod tests {
             assert!(
                 sized < read,
                 "{name} must judge the size BEFORE reading the bytes:\n{body}"
+            );
+
+            let kind = body.find("refuse_non_regular_file(").unwrap_or_else(|| {
+                panic!("{name} must refuse a non-regular file — a FIFO's length is 0, \
+                        so no size ceiling stops it and the open never returns:\n{body}")
+            });
+            assert!(
+                kind < read,
+                "{name} must judge WHAT the path is BEFORE opening it:\n{body}"
             );
         }
     }
@@ -1848,6 +2105,182 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
     }
 
+    /// A data dir, a project dir, and `ADDISON_DB_PATH` pointed at the first — the
+    /// fixture every symlink test below plants its links in. Returns both paths and a
+    /// restore for the environment variable, so each test says what it PLANTS rather
+    /// than repeating fifteen lines of setup around it.
+    fn data_dir_and_project(tag: &str) -> (PathBuf, PathBuf, Option<String>) {
+        let data_dir = std::env::temp_dir().join(format!("addison-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
+        let project = std::env::temp_dir().join(format!("addison-proj-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&project).expect("seed project");
+        let prev = std::env::var("ADDISON_DB_PATH").ok();
+        std::env::set_var("ADDISON_DB_PATH", data_dir.join("addison.sqlite3"));
+        (data_dir, project, prev)
+    }
+
+    fn restore_db_path(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
+            None => std::env::remove_var("ADDISON_DB_PATH"),
+        }
+    }
+
+    #[test]
+    fn write_workspace_refuses_a_two_hop_dangling_symlink_into_the_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // THE FIX ABOVE CLOSED ONE HOP AND CLAIMED THE CLASS. It did not: `read_link`
+        // reads exactly one link, so with `a -> b` and `b -> <data dir>/planted.json`
+        // (b dangling) BOTH the candidate and the single target canonicalized to
+        // harmless project paths, the containment loop found nothing — and `fs::write`
+        // followed the whole chain and planted the file anyway. Shorten
+        // `MAX_SYMLINK_HOPS` to 1 and this test writes into `snapshots/`.
+        let state = FileState::default();
+        let (data_dir, project, prev) = data_dir_and_project("dang2");
+
+        let victim = data_dir.join("snapshots").join("planted.json");
+        let hop_b = project.join("b.txt");
+        let hop_a = project.join("a.txt");
+        std::os::unix::fs::symlink(&victim, &hop_b).expect("plant the second hop");
+        std::os::unix::fs::symlink(&hop_b, &hop_a).expect("plant the first hop");
+
+        let err = write_workspace_path(&state, hop_a.clone(), "PLANTED").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!victim.exists(), "a two-hop chain must not plant a file in the data dir");
+
+        restore_db_path(prev);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn write_workspace_refuses_a_long_dangling_symlink_chain_into_the_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // TWO IS NOT THE CLASS EITHER, which is the lesson the one-hop fix taught: any
+        // bound short of the chain is a bound an attacker adds one link to. Eight hops
+        // is POSIX's own minimum `SYMLOOP_MAX` — the shortest chain every kernel is
+        // guaranteed to follow, so the shortest one that is definitely exploitable.
+        let state = FileState::default();
+        let (data_dir, project, prev) = data_dir_and_project("dangN");
+
+        let victim = data_dir.join("snapshots").join("planted.json");
+        let mut previous = victim.clone();
+        for hop in 0..8 {
+            let link = project.join(format!("hop{hop}.txt"));
+            std::os::unix::fs::symlink(&previous, &link).expect("plant a hop");
+            previous = link;
+        }
+
+        let err = write_workspace_path(&state, previous.clone(), "PLANTED").unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!victim.exists(), "an eight-hop chain must not plant a file in the data dir");
+
+        restore_db_path(prev);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn a_symlink_loop_is_refused_rather_than_walked_forever() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // THE COST OF WALKING THE CHAIN, paid for here. A `a -> b -> a` loop is what
+        // turns "follow every hop" into a handler that never returns — and this handler
+        // is awaited INLINE on the core's stdout pump, so never returning is the
+        // permanent wedge, not a slow answer. `MAX_SYMLINK_HOPS` is what stops it;
+        // delete the bound (a `while let` over `read_link`) and this test HANGS rather
+        // than failing, which is the bug faithfully reproduced.
+        //
+        // And the answer is a REFUSAL, not a shrug: a chain whose end we cannot see is
+        // not a chain we may declare safe.
+        let state = FileState::default();
+        let (data_dir, project, prev) = data_dir_and_project("loop");
+
+        let a = project.join("a.txt");
+        let b = project.join("b.txt");
+        std::os::unix::fs::symlink(&b, &a).expect("plant a -> b");
+        std::os::unix::fs::symlink(&a, &b).expect("plant b -> a");
+
+        let answered = within_two_seconds(move || write_workspace_path(&state, a, "PLANTED"));
+        let err = answered.unwrap_err();
+        assert_eq!(
+            err.message,
+            "Addison couldn't work out where that shortcut leads, so it left it alone."
+        );
+
+        restore_db_path(prev);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn an_ordinary_file_behind_a_short_chain_is_still_written() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // THE HALF THAT KEEPS THE THREE ABOVE HONEST. A floor that refused every
+        // symlink would pass all of them and break the ordinary case a coding harness
+        // meets constantly — a `src/config.json -> ../config.json` inside a project.
+        // The chain resolves, it lands nowhere protected, and the write goes through
+        // the link to the file at its end.
+        let state = FileState::default();
+        let (data_dir, project, prev) = data_dir_and_project("chain-ok");
+
+        let real = project.join("real.txt");
+        std::fs::write(&real, "before").expect("seed the real file");
+        let middle = project.join("middle.txt");
+        let entry = project.join("entry.txt");
+        std::os::unix::fs::symlink(&real, &middle).expect("plant the second hop");
+        std::os::unix::fs::symlink(&middle, &entry).expect("plant the first hop");
+
+        write_workspace_path(&state, entry, "after").expect("an ordinary chain must be written");
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "after");
+
+        restore_db_path(prev);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
+    #[test]
+    fn restore_workspace_refuses_a_ledgered_path_that_became_a_link_into_the_data_dir() {
+        let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        // THE ONE WRITE PATH WITH NO FLOOR. It relied entirely on the session ledger,
+        // on the reasoning that a path only gets into that ledger by passing the floor
+        // once — but the two checks happen at different MOMENTS and `fs::write` follows
+        // links, so a ledgered file swapped for a link into the data dir wrote straight
+        // through it. `workspace.revertFile` made that reachable from a click.
+        //
+        // Planted as TWO hops, so this also pins that restore gets the chain walk and
+        // not merely a copy of the old one-hop check. Delete the
+        // `refuse_addison_data_dir` call in `restore_workspace_path` and this plants a
+        // file in `snapshots/`.
+        let state = FileState::default();
+        let (data_dir, project, prev) = data_dir_and_project("revert");
+
+        let victim = data_dir.join("snapshots").join("planted.json");
+        let hop_b = project.join("b.txt");
+        let ledgered = project.join("edited.txt");
+        std::os::unix::fs::symlink(&victim, &hop_b).expect("plant the second hop");
+        std::os::unix::fs::symlink(&hop_b, &ledgered).expect("plant the first hop");
+        // The ledger says yes: this is a path Addison wrote this session.
+        lock(&state.workspace_written).insert(ledgered.clone());
+
+        let params = json!({ "path": ledgered.to_string_lossy(), "content": "PLANTED" });
+        let err = restore_workspace_path(&state, ledgered, &params).unwrap_err();
+        assert_eq!(
+            err.message,
+            "That location holds Addison's own memory, so Addison won't touch it there."
+        );
+        assert!(!victim.exists(), "undo must not plant a file in the data dir");
+
+        restore_db_path(prev);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        let _ = std::fs::remove_dir_all(&project);
+    }
+
     #[test]
     fn the_data_dir_floor_holds_when_an_intermediate_directory_is_missing() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2009,6 +2442,177 @@ mod tests {
             None => std::env::remove_var("ADDISON_DB_PATH"),
         }
         let _ = std::fs::remove_dir_all(&data_dir);
+    }
+
+    // --- Nothing in this file may open a path that is not an ordinary FILE ---------
+
+    #[test]
+    fn every_read_path_refuses_a_named_pipe_instead_of_blocking_on_it() {
+        // THE WEDGE, on every door that opens a file. A FIFO's `metadata().len()` is 0,
+        // so every size ceiling in this file passed it — and `fs::read`/`File::open`
+        // then block until somebody opens the other end, which nobody ever does. These
+        // handlers are awaited INLINE on the core's stdout pump (`agent_process.rs`)
+        // and none of them is in `dispatch_off_loop`, so the block is permanent: the
+        // pump stops relaying frames of any kind, the core's bridge times out, and the
+        // app never comes back. `read_project_file` is shipped, so this was one
+        // `mkfifo` inside a trusted root away from any model in OPEN mode; today's
+        // `readWorkspaceFileForView` and `digestWorkspaceFiles` are two more doors onto
+        // the same thing.
+        //
+        // Delete any one `refuse_non_regular_file` call and its case here does not go
+        // red — it HANGS, and `within_two_seconds` is what turns that back into a
+        // failure a person can read.
+        let Some(fifo) = make_fifo() else {
+            eprintln!("no mkfifo on PATH — skipping the named-pipe refusals");
+            return;
+        };
+
+        let path = fifo.clone();
+        let err = within_two_seconds(move || read_workspace_path(&path)).unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "readWorkspaceFile");
+
+        let path = fifo.clone();
+        let err = within_two_seconds(move || read_workspace_view(&path)).unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "readWorkspaceFileForView");
+
+        // The WRITE path is a read path first: it captures the prior text for the undo.
+        let path = fifo.clone();
+        let err = within_two_seconds(move || {
+            write_workspace_path(&FileState::default(), path, "x")
+        })
+        .unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "writeWorkspaceFile");
+
+        // The PICKED file: a person can type a pipe's name into an OS dialog.
+        let path = fifo.clone();
+        let err = within_two_seconds(move || {
+            let state = FileState::default();
+            let handle = uuid::Uuid::new_v4().to_string();
+            lock(&state.handles).insert(handle.clone(), path);
+            read_scoped_handle(&state, &handle)
+        })
+        .unwrap_err();
+        assert_eq!(err.message, NOT_A_REGULAR_FILE, "readScopedFile");
+
+        // The DIGEST never fails a batch, so its refusal is the ordinary "can't tell" —
+        // and `missing: false`, because a pipe is not a file that is gone.
+        let path = fifo.clone();
+        let answer = within_two_seconds(move || digest_workspace_path(&path));
+        assert!(answer.get("sha256").expect("present").is_null(), "digestWorkspaceFiles");
+        assert_eq!(answer.get("missing").and_then(Value::as_bool), Some(false));
+
+        let _ = std::fs::remove_file(&fifo);
+    }
+
+    #[test]
+    fn a_directory_is_refused_as_what_it_is_and_an_ordinary_file_is_untouched() {
+        // The other two thirds of the same guard. A DIRECTORY was already refused —
+        // by `fs::read` failing with an errno that mapped to "Addison couldn't read
+        // that file", which is true of everything and says nothing. And an ORDINARY
+        // file must still pass, or `is_file()` inverted would leave every test above
+        // green while the whole surface refused everything.
+        let dir = temp_dir_path();
+        assert_eq!(read_workspace_path(&dir).unwrap_err().message, NOT_A_REGULAR_FILE);
+        assert_eq!(read_workspace_view(&dir).unwrap_err().message, NOT_A_REGULAR_FILE);
+        assert!(digest_workspace_path(&dir).get("sha256").expect("present").is_null());
+
+        let plain = dir.join("ordinary.txt");
+        std::fs::write(&plain, "hello").expect("seed");
+        assert_eq!(
+            read_workspace_path(&plain).unwrap().get("content").and_then(Value::as_str),
+            Some("hello"),
+            "an ordinary file must be unaffected by the kind check"
+        );
+        assert!(digest_workspace_path(&plain).get("sha256").expect("present").is_string());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_viewer_never_reports_fewer_bytes_than_it_is_showing() {
+        // `bytes` is a claim metadata made BEFORE the file was opened, and the pane
+        // renders it as "showing 256 KB of N". When N is smaller than what is on screen
+        // the sentence is not merely wrong, it is visibly absurd — "showing 256 KB of
+        // 100 bytes" — and that is the kind of wrong that costs a person the whole
+        // surface rather than one number.
+        //
+        // THE RACE ITSELF (a file that grows between the stat and the read) is not
+        // reachable from a test, exactly like this file's other post-read backstops.
+        // But there is a deterministic instance of the same arithmetic on Linux, which
+        // is where CI runs: a `/proc` file is an ORDINARY file whose `len()` is 0 and
+        // whose contents are generated at read time. Drop the `.max(…)` and this
+        // reports `bytes: 0` beside a screenful of text.
+        let generated = Path::new("/proc/self/status");
+        let path = if generated.exists() {
+            generated.to_path_buf()
+        } else {
+            // macOS has no /proc. The ordinary case is still asserted — it is the
+            // positive control that keeps the rule from being vacuous — and the
+            // deterministic kill runs on the Linux gate.
+            eprintln!("no /proc on this platform — asserting the ordinary case only");
+            let path = temp_path();
+            std::fs::write(&path, "0123456789").expect("seed");
+            path
+        };
+
+        let result = read_workspace_view(&path).unwrap();
+        let shown = result.get("content").and_then(Value::as_str).expect("text").len() as u64;
+        assert!(shown > 0, "this fixture must actually show something, or it proves nothing");
+        assert!(
+            result.get("bytes").and_then(Value::as_u64).unwrap() >= shown,
+            "`bytes` must never be smaller than what the pane is actually showing"
+        );
+
+        if !generated.exists() {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    // --- Neither batch question may be asked about an unbounded list ---------------
+
+    #[test]
+    fn a_batch_at_the_cap_is_answered_and_one_over_it_is_refused() {
+        // THE CEILING THAT WAS ONLY A CONVENTION. `digest_workspace_files`'s own doc
+        // comment said "up to two hundred files", and 200 was enforced core-side only —
+        // so an array of fifty thousand paths cost fifty thousand stats, opens and
+        // hashes, all of it awaited INLINE on the core's stdout pump. Every other new
+        // surface got a shell-side ceiling for the reason `UNDO_SIZE_BOUND` gives: this
+        // is where the bytes are, and the core's number is an input to the boundary,
+        // never the boundary.
+        //
+        // A REFUSAL, not a truncated answer, and the choice matters because truncating
+        // would be SAFE: both callers read a map keyed by path and treat a missing key
+        // as the cautious answer. That is exactly what makes it wrong — the missing
+        // keys would render as "Addison can't tell" beside files it could tell about
+        // perfectly, with nothing anywhere saying the question was cut short.
+        let state = FileState::default();
+        let at_cap: Vec<Value> =
+            (0..MAX_BATCH_PATHS).map(|i| json!(format!("/tmp/addison-batch-{i}"))).collect();
+        let mut over_cap = at_cap.clone();
+        over_cap.push(json!("/tmp/addison-batch-one-too-many"));
+
+        // At the cap both answer, and answer about every path they were given.
+        let answered =
+            can_restore_workspace_paths(&state, &json!({ "paths": at_cap.clone() })).unwrap();
+        assert_eq!(
+            answered.get("restorable").and_then(Value::as_object).map(serde_json::Map::len),
+            Some(MAX_BATCH_PATHS)
+        );
+        let answered = digest_workspace_files(&json!({ "paths": at_cap })).unwrap();
+        assert_eq!(
+            answered.get("digests").and_then(Value::as_object).map(serde_json::Map::len),
+            Some(MAX_BATCH_PATHS)
+        );
+
+        // One over, and both refuse — with the number named in the sentence, derived
+        // from the constant so the two cannot drift.
+        for err in [
+            can_restore_workspace_paths(&state, &json!({ "paths": over_cap.clone() })).unwrap_err(),
+            digest_workspace_files(&json!({ "paths": over_cap })).unwrap_err(),
+        ] {
+            assert_eq!(err.code, -32000);
+            assert_eq!(err.message, "Addison can only look at 200 files at once.");
+        }
     }
 
     #[test]

@@ -34,6 +34,39 @@ import type {
 import type { WorkspaceRoot } from "../types/ui";
 import { ipc, isEngineConnected } from "../ipc/client";
 
+// ---------------------------------------------------------------------------
+// The four sentences this hook writes itself. Frozen — the tests pin them
+// byte-for-byte.
+//
+// Every refusal the CORE sends is forwarded whole, and none of those are here.
+// These cover the case where the core never answered at all: a rejected call, or a
+// press made while the engine is down. There is no sentence to forward then, and
+// the alternative — what each of these replaced — is a screen that says nothing
+// happened on the one surface whose whole job is to be exact about what did.
+// ---------------------------------------------------------------------------
+
+/** The CHANGES list could not be read. Says what is not known rather than letting
+ * the column fall through to "Addison hasn't changed any files", which states as
+ * fact the one thing a failed call cannot know. The next step is true because of
+ * the came-back-to-the-screen re-read further down. */
+const EDITS_UNREADABLE =
+  "Addison couldn't check which files it has changed just now. Leaving this screen " +
+  "and coming back asks again.";
+
+/** One folder could not be listed. No next step in the sentence because there is
+ * one on screen: the row renders a "try again" beside it. */
+const DIRECTORY_UNREADABLE = "Addison couldn't look inside this folder just now.";
+
+/** A Revert that did not come back. Every sibling in the app authors one of these
+ * (`REMOVE_FAILED`, `DISARM_ORPHAN_FAILED`); this is the button where saying
+ * nothing costs the most, because the person is watching for a file to change. */
+const REVERT_FAILED = "Addison couldn't put that file back just now. You can try again.";
+
+/** ...and a press made with no engine behind it. Kept apart from the one above
+ * because it is a different fact and has a different next step. */
+const REVERT_DISCONNECTED =
+  "Addison's engine isn't connected, so it can't put this file back. Try again in a moment.";
+
 /** What the right pane is showing. The PATH is held separately from the payload so
  * a header can name the file while its text is still arriving. */
 export interface CodeSelection {
@@ -54,6 +87,9 @@ export interface CodeReviewState {
   listingErrors: Record<string, string>;
   expanded: string[];
   toggleDirectory: (directory: string) => void;
+  /** Ask again for a folder that refused. Clears the sentence first, so the row
+   * goes back to "Looking…" and the press is visibly answered either way. */
+  retryDirectory: (directory: string) => void;
 
   // --- the right pane ---
   selection: CodeSelection | null;
@@ -121,30 +157,61 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
         setEditsTruncated(answer.value.truncated);
         setEditsLoaded(true);
       })
-      .catch(() => setEditsLoaded(true));
-  }, []);
-
-  const loadDirectory = useCallback((directory: string) => {
-    if (!isEngineConnected()) return;
-    ipc
-      .listWorkspaceDirectory(directory)
-      .then((answer) => {
-        if (answer.error !== undefined) {
-          setListingErrors((prev) => ({ ...prev, [directory]: answer.error }));
-          return;
-        }
-        setListingErrors((prev) => {
-          if (!(directory in prev)) return prev;
-          const next = { ...prev };
-          delete next[directory];
-          return next;
-        });
-        setListings((prev) => ({ ...prev, [directory]: answer.value }));
-      })
       .catch(() => {
-        /* a rejected call leaves the folder unopened; the row stays clickable */
+        // A REJECTION IS NOT AN EMPTY LIST. `editsLoaded` alone let the column fall
+        // through to "Addison hasn't changed any files that are still changed." —
+        // stating as fact the one thing a call that never came back cannot know. The
+        // resolved-refusal branch above forwards the core's own sentence; this is
+        // the same shape for the case where there is no sentence to forward.
+        setEditsError(EDITS_UNREADABLE);
+        setEditsLoaded(true);
       });
   }, []);
+
+  const clearListingError = useCallback((directory: string) => {
+    setListingErrors((prev) => {
+      if (!(directory in prev)) return prev;
+      const next = { ...prev };
+      delete next[directory];
+      return next;
+    });
+  }, []);
+
+  const loadDirectory = useCallback(
+    (directory: string) => {
+      if (!isEngineConnected()) return;
+      ipc
+        .listWorkspaceDirectory(directory)
+        .then((answer) => {
+          if (answer.error !== undefined) {
+            setListingErrors((prev) => ({ ...prev, [directory]: answer.error }));
+            return;
+          }
+          clearListingError(directory);
+          setListings((prev) => ({ ...prev, [directory]: answer.value }));
+        })
+        .catch(() => {
+          // The folder IS open — `toggleDirectory` expanded it before asking — so a
+          // silent catch left "Looking…" on screen for as long as the person stood
+          // there, and the next press on the row put the folder away rather than
+          // asking again. Say what happened instead, in the same slot the core's own
+          // refusal would use, and let the row offer the retry.
+          setListingErrors((prev) => ({ ...prev, [directory]: DIRECTORY_UNREADABLE }));
+        });
+    },
+    [clearListingError],
+  );
+
+  const retryDirectory = useCallback(
+    (directory: string) => {
+      // Clear FIRST: with no sentence and no listing the row reads "Looking…"
+      // again, which is the only honest thing to show between a press and an
+      // answer — and it is how the person can tell the press did something.
+      clearListingError(directory);
+      loadDirectory(directory);
+    },
+    [clearListingError, loadDirectory],
+  );
 
   const toggleDirectory = useCallback(
     (directory: string) => {
@@ -222,17 +289,29 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
    * reverted, so the row leaves the list, and the diff on screen describes a state
    * that no longer exists. Leaving either behind would offer a second Revert for a
    * change that is already back.
+   *
+   * A FAILURE ALWAYS SAYS SOMETHING. This is the one control on the screen whose
+   * purpose is to change a file, and every path out of it that used to set
+   * `revertError` to null left the confirm open with no sentence under it — the
+   * person pressed the button and Addison said nothing at all.
    */
   const revert = useCallback(
     async (path: string): Promise<boolean> => {
-      if (!isEngineConnected()) return false;
+      if (!isEngineConnected()) {
+        setRevertNotice(null);
+        setRevertError(REVERT_DISCONNECTED);
+        return false;
+      }
       setReverting(path);
       setRevertError(null);
       setRevertNotice(null);
       try {
         const result = await ipc.revertWorkspaceFile(path);
         if (!result.ok) {
-          setRevertError(result.error ?? null);
+          // The core's own sentence whenever it sent one — it knows which refusal
+          // happened. The fallback is for the resolved-but-wordless answer, which
+          // would otherwise render as nothing.
+          setRevertError(result.error ?? REVERT_FAILED);
           return false;
         }
         setRevertNotice(result.detail ?? null);
@@ -241,7 +320,12 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
         refreshEdits();
         return true;
       } catch {
-        setRevertError(null);
+        setRevertError(REVERT_FAILED);
+        // ...and re-read the list, because a rejected call is the one outcome where
+        // this side does not know whether the file was put back. A resolved refusal
+        // is the core saying nothing changed; this is nobody saying anything, and
+        // the list is what settles it.
+        refreshEdits();
         return false;
       } finally {
         setReverting(null);
@@ -250,13 +334,49 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
     [refreshEdits],
   );
 
-  // Read the changes when the screen opens, and again on each visit — this is a
-  // question about the disk right now, and the answer goes stale the moment
-  // Addison writes another file.
+  // What the screen is showing right now, held in a ref so the effect below can
+  // read it WITHOUT listing it as a dependency: `expanded` changes on every folder
+  // click and `selection` on every pick, and an effect that re-fetched the tree
+  // each time one did would be a poll with extra steps.
+  const onScreen = useRef<{ expanded: string[]; selection: CodeSelection | null }>({
+    expanded: [],
+    selection: null,
+  });
   useEffect(() => {
-    if (!active || !connected) return;
+    onScreen.current = { expanded, selection };
+  }, [expanded, selection]);
+
+  // COMING BACK TO THIS SCREEN IS A NEW QUESTION ABOUT THE DISK, and every answer
+  // held from last time is a claim about a moment that has passed.
+  //
+  // The hook lives in App, so nothing here is thrown away when the person leaves.
+  // Re-reading only the changes list therefore left the rest of the screen showing
+  // the previous visit: a tree still listing a file Addison had since deleted, and
+  // a right pane still showing pre-edit text under the correct filename, with no
+  // busy state to say either was old. That is exactly the failure `toggleDirectory`
+  // re-reads on every open to prevent, one navigation wider.
+  //
+  // ONCE PER VISIT, NEVER ON A TIMER. The trigger is the false→true edge of
+  // `active` — the person opening the screen and nothing else — so standing here
+  // re-reads nothing, and neither does a re-render. What it asks for is exactly
+  // what is on screen: the changes list, the folders they had open, and the one
+  // file or diff in the pane. Never the whole tree, and never a folder nobody
+  // opened.
+  const wasOnScreen = useRef(false);
+  useEffect(() => {
+    const live = active && connected;
+    const returning = live && !wasOnScreen.current;
+    wasOnScreen.current = live;
+    if (!returning) return;
     refreshEdits();
-  }, [active, connected, refreshEdits]);
+    onScreen.current.expanded.forEach(loadDirectory);
+    // Re-opened through the ordinary path, so the pane goes busy and empties first:
+    // "Opening…" under the right name is honest about not knowing yet, and the old
+    // text under the right name is not.
+    const open = onScreen.current.selection;
+    if (open?.kind === "file") openFile(open.path);
+    if (open?.kind === "edit") openEdit(open.path);
+  }, [active, connected, refreshEdits, loadDirectory, openFile, openEdit]);
 
   // Open each trusted root ONE level when the screen first shows them. Never
   // recursive, and `.git` / `node_modules` are listed like everything else and left
@@ -283,6 +403,7 @@ export function useCodeReview({ connected, active, roots }: Args): CodeReviewSta
     listingErrors,
     expanded,
     toggleDirectory,
+    retryDirectory,
     selection,
     fileView,
     diff,

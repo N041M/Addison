@@ -161,9 +161,17 @@ export function CodeViewer({ path, text, theme, ariaLabel }: ViewerProps) {
     previous?.dispose();
   }, [mod, path, text]);
 
+  // `mod` IS A DEPENDENCY, and it is the whole of this effect's correctness. On the
+  // render where the lazy chunk arrives the label has not changed, so an effect
+  // keyed on `[ariaLabel]` alone did not run — and the one before it had called
+  // `updateOptions` on a null ref. `BASE_OPTIONS` carries no `ariaLabel`, so the
+  // FIRST pane opened in a session announced Monaco's own "Editor content" instead
+  // of the file's name, which by this file's own header is a pane unusable by
+  // screen reader. The create effect above is declared first and therefore runs
+  // first, so the editor exists by the time this reads the ref.
   useEffect(() => {
     editorRef.current?.updateOptions({ ariaLabel });
-  }, [ariaLabel]);
+  }, [mod, ariaLabel]);
 
   // Redefined, not merely re-selected: the hex values are baked at define time, so
   // `setTheme` alone would leave somebody who flips Appearance reading the old
@@ -233,9 +241,12 @@ export function CodeDiff({ path, before, after, theme, ariaLabel }: DiffProps) {
     previous?.modified.dispose();
   }, [mod, path, before, after]);
 
+  // `mod` in the deps for the same reason as the viewer's: the render that brings
+  // the editor into existence does not change the label, so an effect keyed on the
+  // label alone never names the first pane of a session.
   useEffect(() => {
     editorRef.current?.updateOptions({ ariaLabel });
-  }, [ariaLabel]);
+  }, [mod, ariaLabel]);
 
   useEffect(() => {
     if (mod) applyMonacoTheme(mod.default, theme);

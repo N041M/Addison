@@ -607,6 +607,52 @@ are here because somebody will meet them, and because anything built on top of
 - **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
+- **Two spellings of a file that is NO LONGER THERE keep one revert chain each**
+  (opened 2026-08-08, deliberately). `file_revert.revert_key` asks the filesystem
+  which file two paths are — `st_dev`+`st_ino` from an `lstat` of the name — so
+  `Notes.md` and `notes.md` collapse into one chain on the case-insensitive volume
+  macOS ships with, and stay two on a case-sensitive one. A path with nothing at it
+  can no longer be asked, and then the stored path is the tiebreak and is compared
+  EXACTLY. That is the safe direction of a choice with no right answer: a wrong MERGE
+  writes one file's prior bytes into another, while a wrong SPLIT only leaves two rows
+  where one would do — and each still reverts to a state that actually existed on
+  disk. The state-corrupting half (two chains for a file that IS there, which let a
+  revert resurrect content the person had just reverted away from) is fixed.
+- **The shell follows a shortcut planted at a path it once wrote** (2026-08-08).
+  `restore_workspace_path` checks its session ledger against the NAME and then
+  `fs::write`s that name; `read_workspace_view` opens it. Neither asks whether a
+  symlink now stands there, so a path Addison legitimately wrote is a write-through to
+  wherever that name later points — and it takes no attacker to arrive, only somebody
+  moving a config file into a dotfiles folder and linking it back. The review surface
+  refuses first, core-side: `file_revert.replaced_by_a_link` guards the diff's read and
+  the revert's write, and what crosses is the RECORDED path rather than a re-resolution
+  of it. What is still open is everything that does not go through that surface — the
+  chat header's Undo (`WriteProjectFileTool.undo()`) still writes its prior bytes
+  through such a link. The complete fix belongs in `filesystem.rs`, which already makes
+  `symlink_metadata` the rule for listing and would need the same refusal on both these
+  methods; it is a shell change, so it is recorded here rather than half-done from the
+  core. **Cosmetic consequence of the same swap, not a second gap:** a row whose
+  recorded path is now a shortcut lists with `root: null` and its whole path, because
+  the display comparator (`policy.path_is_within`) resolves both sides. `root` permits
+  nothing — it decides only what the row renders as.
+- **The shell's file floor does not know the OS automation directories, and
+  `exec.rs`'s does** (found by the 2026-08-08 adversarial pass; recorded, not
+  closed). `filesystem.rs::refuse_addison_data_dir` guards every workspace read and
+  write against Addison's own data dirs and bundle. The step-8 fence
+  (`exec.rs::OS_AUTOMATION_DIRS`) guards a different set — `~/Library/LaunchAgents`
+  and the ten other places where writing a file IS arming a job — and only in the
+  seatbelt profile around `run_command`. So `write_project_file` naming a plist path
+  is refused by the CORE (twice: `policy.workspace_trust_allows` on the grant and
+  the pre-gate denylist on the call) and by nothing in the shell.
+  **Left open deliberately, with the cost stated.** Closing it means ungating
+  `OS_AUTOMATION_DIRS` from `#[cfg(target_os = "macos")]` and giving a hand-synced
+  three-consumer list a fourth consumer in a second module — while the fence's own
+  test pins the count precisely because that list drifts. The floor
+  `refuse_addison_data_dir` states is "Addison's own memory", and automation dirs are
+  a different floor (G2) with a different owner; folding them in would make one
+  refusal sentence answer for two unrelated properties. What it would BUY is defence
+  in depth for a path the core already refuses in two places — which is worth having,
+  and is the reason this is written down rather than dismissed. **Owner's call.**
 - ~~**The name on the card is resolved a SECOND time, so it can go stale between the
   label and the effect.**~~ **CLOSED 2026-08-08**, in the review surface's read-paths
   work as this entry scheduled it ([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md)
@@ -625,10 +671,64 @@ are here because somebody will meet them, and because anything built on top of
   which is stricter than the thing it stands in for. The live loop, the routine engine
   and the refused-before-the-gate branch each have their own test; the widget rail
   passes nothing and says why at the code (its only tool has no `affected_path`).
+- **`revertable` is ONE boolean carrying THREE different facts, and the surface can
+  only render the vaguest of them.** `_edit_payload` sends
+  `"revertable": bool(restorable)` (`agent_core/rpc/workspace.py`), and
+  `_restorable_map` returns `{}` — false for every listed edit — in three unrelated
+  situations: there is no shell bridge, the single batch
+  `shell.canRestoreWorkspaceFiles` call raised, or the shell genuinely does not hold
+  that path in its session write ledger. Only the third is the restart case. The
+  review surface's line asserted it for all three, so ONE failed batch call printed
+  *"Addison changed this before the app was last restarted, so it can't put it back
+  for you"* under every row on screen, including a file Addison had written a minute
+  earlier. **Mitigated frontend-only on 2026-08-08**: `NOT_REVERTABLE_LINE`
+  (`shell/src/components/CodeSurface.tsx`) now names no cause at all — it says only
+  what is true in all three cases, that Addison cannot put the file back and the
+  earlier version is on the left. That is honest and less useful, and it is where it
+  stays until the core can tell the three apart.
+  **The wire shape that would let the sentence come back**: make the field TRI-STATE
+  exactly as `onDiskChanged` already is on the same payload — `true` / `false` /
+  `null`, with `null` meaning "Addison could not find out" (no bridge, or the query
+  failed) and `false` reserved for the shell's real "not in my ledger". Then the
+  surface renders three sentences for three states, the way it already does for
+  `onDiskChanged === null` (*"Addison can't tell whether this file changed since."*).
+  It touches `_edit_payload`, `agent_core/protocol.py` and its hand-synced twin
+  `shell/src/types/protocol.ts` (`WorkspaceEdit.revertable: boolean` →
+  `boolean | null`), so it is a core + protocol change and was deliberately not made
+  from the frontend side.
 - **`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
   bridge's 60s ceiling; browse for longer and the timeout is swallowed into
   `{"directory": null}` with no explanation, while every other store RPC queues
   behind the open dialog.
+- **The CSP blocks Tauri's own custom-protocol IPC, and whether to admit it is an
+  OWNER DECISION** (found 2026-08-08, verified against tauri 2.11.5 — the version in
+  `Cargo.lock`). `connect-src 'self'` does not admit `ipc:` (macOS/Linux) or
+  `http://ipc.localhost` (Windows), and **Tauri does not inject them**:
+  `tauri::manager::set_csp` augments `script-src` and `style-src` with nonces and
+  hashes and touches nothing else — Tauri's own documentation has the app author
+  `connect-src ipc: http://ipc.localhost` by hand. So `scripts/ipc-protocol.js`'s
+  `fetch(convertFileSrc(cmd, 'ipc'))` is refused, Tauri catches it and falls back to
+  `window.ipc.postMessage`, and every invoke since has gone that way.
+  **This is not a regression and nothing is broken.** The policy that shipped before
+  was `default-src 'self'`, which blocked the same fetch identically; the app has
+  only ever run on the postMessage path.
+  **What changed is that it is now AUDIBLE.** `installCspViolationReporter` (shipped
+  2026-08-08) pushes a diagnostic for every violation, so the app's own IPC produces
+  one on each launch — exactly the recurring noise that would train a reader to
+  ignore the pane and mask a real Monaco or worker violation.
+  **Taken: the narrow half.** The policy is unchanged and the REPORTER is taught to
+  pass over that one endpoint, by name and with the reason written at the code. The
+  violation is still real, still enforced, and still visible in devtools; what is
+  suppressed is a diagnostic about a fallback the app was designed around.
+  **NOT taken, and this is the owner's call:** adding `ipc:` and
+  `http://ipc.localhost` to `connect-src`. It would let the custom-protocol IPC path
+  run for the first time in this app's life — a behaviour change nobody asked for, on
+  the highest-traffic seam there is — and it widens the one directive that governs
+  where a local-first app may talk to. It would also need a named exception in
+  `tests/test_csp_is_pinned.py`, whose vocabulary rule refuses `ipc:` and every
+  `http://…` on purpose. Worth doing only if the postMessage path is ever measured to
+  be the problem; the test refuses it today so that the decision has to be made out
+  loud rather than to quieten a warning.
 - ~~**A failed endpoint add still clobbers the keychain**~~ — **CLOSED 2026-08-08**
   (owner decision) **with the rollback, not just the disclosure.** The ordering is
   unchanged and unchangeable: the key is saved before the connect because the core

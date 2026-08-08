@@ -768,6 +768,10 @@ function automationsState(over: Partial<AutomationsCardState> = {}): Automations
 }
 
 function renderSettings(profile: ProfileState, automations = automationsState()) {
+  return render(settingsElement(profile, automations));
+}
+
+function settingsElement(profile: ProfileState, automations: AutomationsCardState) {
   const noop = vi.fn();
   const models = {
     roles: [],
@@ -815,7 +819,7 @@ function renderSettings(profile: ProfileState, automations = automationsState())
     handleRestoreSnapshot: vi.fn(async () => {}),
     handleDeleteSnapshot: vi.fn(async () => {}),
   };
-  render(
+  return (
     <SettingsPage
       connected={true}
       models={models as unknown as ModelSelection}
@@ -833,7 +837,7 @@ function renderSettings(profile: ProfileState, automations = automationsState())
       // (there is nowhere for them to lead), so a page test about which surface
       // offers them has to provide one.
       onAskAddison={noop}
-    />,
+    />
   );
 }
 
@@ -1095,6 +1099,112 @@ describe("the Automations section in Simple", () => {
     expect(screen.getByText(WAITING_MESSAGE)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /^Arm / })).toBeNull();
     expect(screen.getByRole("button", { name: "Remove Tidy up downloads" })).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f2) A PROFILE SWITCH RE-READS THE ROWS (2026-08-08)
+// ---------------------------------------------------------------------------
+// `unavailable` is computed CORE-SIDE from the mode at the moment of the fetch, and
+// the control that switches profile is on this very page. With the section's effect
+// keyed on `connected` alone, rows fetched under one profile kept the other one's
+// answer until something else happened to re-read the list:
+//
+//   Simple → Developer: every row still tagged "Waiting", still printing "…waiting
+//   in Developer profile" WHILE DEVELOPER WAS ACTIVE, still hiding the command and
+//   still offering no Arm.
+//   Developer → Simple: rows with no marker at all, so the controls and the command
+//   vanished with NO tag and NO explanation — "a row disabled with nothing to show
+//   for it", the shape SAFETY.md's artifact rule and this section's own fail-closed
+//   comment exist to prevent.
+//
+// The re-read is keyed off `developerSurface` — the prop the rows are DRAWN from —
+// rather than bolted to the profile-switch handler: it cannot drift from what the
+// row renders, and it covers every route by which the profile changes (this page's
+// control, a G3 restore, an engine restart), not only the button.
+describe("a profile switch under an open Settings page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const MARKED = automation({ unavailable: { reason: WAITING_REASON, message: WAITING_MESSAGE } });
+
+  it("re-reads the rows on Simple → Developer, so no row waits for the profile it is in", async () => {
+    // Kills: dropping `developerSurface` from the row-refresh effect's dependencies.
+    // The mock answers as the core does — marked in Simple, unmarked in Developer.
+    const { ipc } = await import("../ipc/client");
+    const list = ipc.listAutomations as ReturnType<typeof vi.fn>;
+    const status = ipc.getAutomationStatus as ReturnType<typeof vi.fn>;
+    list.mockResolvedValue([MARKED]);
+    status.mockResolvedValue({ armed: [], supported: true });
+
+    const { rerender } = render(<Section developerSurface={false} onAsk={vi.fn()} />);
+    await screen.findByText(WAITING_MESSAGE);
+
+    list.mockResolvedValue([automation()]);
+    rerender(<Section developerSurface={true} onAsk={vi.fn()} />);
+
+    await waitFor(() => expect(screen.queryByText(WAITING_MESSAGE)).toBeNull());
+    expect(screen.queryByText("Waiting")).toBeNull();
+    expect(screen.getByText(COMMAND)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Arm Tidy up downloads" })).toBeTruthy();
+  });
+
+  it("re-reads them on Developer → Simple, so no row is inert with nothing to show for it", async () => {
+    // The other direction, and the worse one: without the re-read the row keeps a
+    // marker it no longer has, so the page withdraws the command and the controls
+    // and says nothing whatsoever about why.
+    const { ipc } = await import("../ipc/client");
+    const list = ipc.listAutomations as ReturnType<typeof vi.fn>;
+    const status = ipc.getAutomationStatus as ReturnType<typeof vi.fn>;
+    list.mockResolvedValue([automation()]);
+    status.mockResolvedValue({ armed: [], supported: true });
+
+    const { rerender } = render(<Section developerSurface={true} onAsk={vi.fn()} />);
+    await screen.findByText(COMMAND);
+
+    list.mockResolvedValue([MARKED]);
+    rerender(<Section developerSurface={false} onAsk={vi.fn()} />);
+
+    await waitFor(() => expect(screen.getByText(WAITING_MESSAGE)).toBeTruthy());
+    expect(screen.getByText("Waiting")).toBeTruthy();
+    expect(screen.queryByText(COMMAND)).toBeNull();
+  });
+
+  it("does NOT re-ask the operating system, which a profile switch cannot have changed", async () => {
+    // Arming is a tool behind a typed code; switching profile arms and disarms
+    // nothing, so the answer already in hand stays true. Kills: folding the row
+    // re-read back into the effect that asks launchd — which would turn "asked when
+    // the surface loads" (plan §5.6) into "asked whenever anything changes".
+    const { ipc } = await import("../ipc/client");
+    (ipc.listAutomations as ReturnType<typeof vi.fn>).mockResolvedValue([MARKED]);
+    (ipc.getAutomationStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      armed: [],
+      supported: true,
+    });
+    const { rerender } = render(<Section developerSurface={false} onAsk={vi.fn()} />);
+    await screen.findByText(WAITING_MESSAGE);
+    const rowReads = (ipc.listAutomations as ReturnType<typeof vi.fn>).mock.calls.length;
+    rerender(<Section developerSurface={true} onAsk={vi.fn()} />);
+    await waitFor(() =>
+      expect((ipc.listAutomations as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+        rowReads + 1,
+      ),
+    );
+    expect(ipc.getAutomationStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads from the PAGE, which is where the profile control lives", async () => {
+    // The page half of the same wiring: `developerSurface` is derived from the
+    // active profile there, so this is the one assertion that fails if the section
+    // is handed something that does not change with the profile.
+    const state = automationsState({ automations: [MARKED] });
+    const { rerender } = renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" }, state);
+    await waitFor(() => expect(state.refreshAutomations).toHaveBeenCalledTimes(1));
+    rerender(
+      settingsElement({ ...PROFILE, activeProfile: "developer", mode: "open" }, state),
+    );
+    await waitFor(() => expect(state.refreshAutomations).toHaveBeenCalledTimes(2));
   });
 });
 

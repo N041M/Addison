@@ -49,20 +49,36 @@ fn key_cache() -> &'static Mutex<HashMap<String, String>> {
     KEY_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Take one of this module's in-memory session locks, recovering the guard if a
+/// previous holder panicked.
+///
+/// ONE POLICY, STATED ONCE, because there used to be two by accident. `os_guard`
+/// below recovered with `into_inner()`, and `filesystem.rs`'s `lock()` recovers for a
+/// reason it writes down — while every memory in THIS module failed open
+/// (`lock().ok()?`, `if let Ok(..)`), which turns a poisoned mutex into a silent
+/// permanent no-op rather than an error anybody sees.
+///
+/// Failing open is not the safe choice here, it is the invisible one. Nothing in this
+/// module holds one of these across anything that can panic — they see whole
+/// `insert`/`remove`/`contains`/`clone` operations and nothing else — so there is no
+/// half-updated invariant a poisoned lock could be protecting anyone from. What
+/// fail-open actually bought was the quiet loss of the property these caches exist
+/// for: "at most one OS password dialog per provider per launch" would become one per
+/// read, forever, with nothing anywhere saying why.
+fn session_lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 fn cache_get(provider: &str) -> Option<String> {
-    key_cache().lock().ok()?.get(provider).cloned()
+    session_lock(key_cache()).get(provider).cloned()
 }
 
 fn cache_put(provider: &str, key: &str) {
-    if let Ok(mut cache) = key_cache().lock() {
-        cache.insert(provider.to_string(), key.to_string());
-    }
+    session_lock(key_cache()).insert(provider.to_string(), key.to_string());
 }
 
 fn cache_evict(provider: &str) {
-    if let Ok(mut cache) = key_cache().lock() {
-        cache.remove(provider);
-    }
+    session_lock(key_cache()).remove(provider);
 }
 
 /// Provider ids whose last OS read FAILED for a reason other than "nothing saved" —
@@ -92,19 +108,15 @@ fn failed_reads() -> &'static Mutex<HashSet<String>> {
 }
 
 fn failure_remember(provider: &str) {
-    if let Ok(mut failures) = failed_reads().lock() {
-        failures.insert(provider.to_string());
-    }
+    session_lock(failed_reads()).insert(provider.to_string());
 }
 
 fn failure_recorded(provider: &str) -> bool {
-    failed_reads().lock().map(|failures| failures.contains(provider)).unwrap_or(false)
+    session_lock(failed_reads()).contains(provider)
 }
 
 fn failure_forget(provider: &str) {
-    if let Ok(mut failures) = failed_reads().lock() {
-        failures.remove(provider);
-    }
+    session_lock(failed_reads()).remove(provider);
 }
 
 /// Serializes every OS keychain access in this process. Keychain-bound requests run
@@ -115,9 +127,10 @@ fn failure_forget(provider: &str) {
 static OS_KEYCHAIN: Mutex<()> = Mutex::new(());
 
 /// Take the OS-access lock. A poisoned lock is recovered rather than propagated: a
-/// panic while holding it must not wedge every later keychain call.
+/// panic while holding it must not wedge every later keychain call. Through
+/// `session_lock`, so the recovery policy has exactly one definition in this module.
 fn os_guard() -> MutexGuard<'static, ()> {
-    OS_KEYCHAIN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    session_lock(&OS_KEYCHAIN)
 }
 
 // ===========================================================================
@@ -470,9 +483,16 @@ fn mint_record_vetoes_heal(ledger: &MintLedger, account: &str, elapsed: Duration
 ///
 /// It is consulted where it matters and nowhere else — when a later read finds NOTHING
 /// for a provider whose repair failed, that is not "no key saved" (which is a normal
-/// answer and the cue to onboard), it is a loss with a name. The session cache still
-/// holds the value, so nothing breaks until the app is relaunched; this is what makes
-/// the relaunch say why instead of silently offering to set the person up again.
+/// answer and the cue to onboard), it is a loss with a name.
+///
+/// TWO CALLERS RECORD HERE AND THEY LEAVE THE SESSION CACHE IN OPPOSITE STATES, on
+/// purpose, because they lost different things. `self_heal` destroyed the item holding
+/// the value it had just READ, so the cache still holds exactly that value and nothing
+/// breaks until the app is relaunched — the record is what makes the relaunch say why
+/// instead of silently offering to set the person up again. The SAVE path destroyed
+/// the old item while writing a NEW key, so the only thing the cache could still hold
+/// is the key the person was replacing; it evicts, and the session is as empty as the
+/// keychain is.
 static REPAIR_LOST: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn repair_lost() -> &'static Mutex<HashSet<String>> {
@@ -480,19 +500,15 @@ fn repair_lost() -> &'static Mutex<HashSet<String>> {
 }
 
 fn repair_lost_remember(provider: &str) {
-    if let Ok(mut lost) = repair_lost().lock() {
-        lost.insert(provider.to_string());
-    }
+    session_lock(repair_lost()).insert(provider.to_string());
 }
 
 fn repair_lost_recorded(provider: &str) -> bool {
-    repair_lost().lock().map(|lost| lost.contains(provider)).unwrap_or(false)
+    session_lock(repair_lost()).contains(provider)
 }
 
 fn repair_lost_forget(provider: &str) {
-    if let Ok(mut lost) = repair_lost().lock() {
-        lost.remove(provider);
-    }
+    session_lock(repair_lost()).remove(provider);
 }
 
 // ===========================================================================
@@ -543,18 +559,17 @@ fn replaced_keys() -> &'static Mutex<HashMap<String, Replaced>> {
 /// than leaving it: an unreadable previous state must not let a rollback put back
 /// something two saves old.
 fn replaced_remember(provider: &str, what: Option<Replaced>) {
-    if let Ok(mut replaced) = replaced_keys().lock() {
-        match what {
-            Some(previous) => replaced.insert(provider.to_string(), previous),
-            None => replaced.remove(provider),
-        };
-    }
+    let mut replaced = session_lock(replaced_keys());
+    match what {
+        Some(previous) => replaced.insert(provider.to_string(), previous),
+        None => replaced.remove(provider),
+    };
 }
 
 /// Read and consume the record. One save, one undo — a second press must not put
 /// the same value back over a key the person has since saved deliberately.
 fn replaced_take(provider: &str) -> Option<Replaced> {
-    replaced_keys().lock().ok()?.remove(provider)
+    session_lock(replaced_keys()).remove(provider)
 }
 
 /// Why a credential write did not complete. The distinction is the whole point: one
@@ -804,6 +819,16 @@ fn store_provider_key_blocking(provider: &str, key: &str) -> Result<(), String> 
             // The old item is gone and the new one would not stick. Say so plainly and
             // remember it, rather than letting a later read report "nothing saved".
             repair_lost_remember(provider);
+            // AND DROP THE OLD VALUE, which `self_heal`'s identical arm deliberately
+            // does NOT do — the difference is what was lost. There, the value in the
+            // cache IS the value that was destroyed, so keeping it is what lets the
+            // session carry on unharmed. HERE the cached value is the key this save was
+            // REPLACING: keeping it meant the person was told "it isn't stored any more,
+            // add it again" while every request for the rest of the session went on
+            // using the key they had just deliberately replaced — which is the one
+            // outcome that matters if they were replacing it because it leaked. The
+            // keychain now holds nothing, so holding nothing is also the honest state.
+            cache_evict(provider);
             trace!("save", &format!("provider={provider}"), "lost-in-write");
             return Err(KEY_LOST_MESSAGE.to_string());
         }
@@ -1463,13 +1488,11 @@ fn device_cache() -> &'static Mutex<Option<DeviceIdentity>> {
 /// global one so a test can exercise the semantics against its own slot — the global
 /// is a single shared cell, and parallel tests writing to it would collide.
 fn identity_cache_load(slot: &Mutex<Option<DeviceIdentity>>) -> Option<DeviceIdentity> {
-    slot.lock().ok()?.as_ref().cloned()
+    session_lock(slot).as_ref().cloned()
 }
 
 fn identity_cache_store(slot: &Mutex<Option<DeviceIdentity>>, identity: &DeviceIdentity) {
-    if let Ok(mut cache) = slot.lock() {
-        *cache = Some(identity.clone());
-    }
+    *session_lock(slot) = Some(identity.clone());
 }
 
 /// Load the device identity, generating and persisting it on first use. Idempotent:
@@ -2421,6 +2444,48 @@ mod tests {
             "the save path writes with set_password again — that is SecItemUpdate on a \
              duplicate, which preserves the old foreign ACL and heals nothing"
         );
+    }
+
+    #[test]
+    fn a_save_that_lost_the_key_stops_serving_the_one_it_replaced() {
+        // The person is told "it isn't stored any more. Add it again in Settings." —
+        // while the session cache still held the key that save was REPLACING, so every
+        // request for the rest of the session went on using it. If the reason for the
+        // replacement was that the old key leaked, that is the whole of the harm.
+        //
+        // Behaviour first, on the real helpers: eviction is what makes the next read
+        // miss the cache, reach the OS, find nothing and — because the loss is
+        // recorded — answer `LostInRepair` rather than "no key saved".
+        cache_put("lost-test", "sk-the-old-one");
+        assert!(cache_get("lost-test").is_some(), "the fixture must start with a cached key");
+        repair_lost_remember("lost-test");
+        cache_evict("lost-test");
+        assert!(
+            cached_answer("lost-test", false).is_none(),
+            "a lost write must leave nothing for the session to keep answering from"
+        );
+        repair_lost_forget("lost-test");
+
+        // And the WIRING, in this file's own idiom, because the behaviour above is
+        // reachable only through a `store_provider_key_blocking` that touches the real
+        // OS keychain — which `cargo test` must never do. Delete the `cache_evict` from
+        // the `Lost` arm and this is the assertion that goes red.
+        let save = item_source("fn store_provider_key_blocking");
+        let lost_arm = save
+            .find("Err(WriteFailure::Lost)")
+            .expect("the save path must still handle a lost write");
+        let evict = save[lost_arm..]
+            .find("cache_evict(provider)")
+            .map(|at| at + lost_arm)
+            .expect(
+                "the lost-write arm must evict the session cache — otherwise the session \
+                 keeps using the key it was told is gone",
+            );
+        let returned = save[lost_arm..]
+            .find("return Err(KEY_LOST_MESSAGE")
+            .map(|at| at + lost_arm)
+            .expect("the lost-write arm must still say so to the person");
+        assert!(evict < returned, "the eviction must happen before the arm returns:\n{save}");
     }
 
     #[test]
