@@ -1141,14 +1141,40 @@ export function AutomationsSection({
     // a removal happens to re-read the list (found by the post-merge review of
     // phase 4; phase 3's self-fetching section never had the gap). A local read,
     // which the hook's own header calls safe on any visit.
+    //
+    // ...AND AGAIN ON EVERY PROFILE CHANGE, which is what `developerSurface` is
+    // doing in the dependencies. `unavailable` is computed CORE-SIDE from the mode
+    // at the moment of the fetch, so rows fetched under one profile carry the other
+    // profile's answer until something asks again — and the control that switches
+    // profile is on THIS PAGE. Simple→Developer left every row tagged "Waiting" and
+    // printing "…waiting in Developer profile" while Developer was active, with the
+    // command hidden and no way to arm; Developer→Simple left rows with no marker
+    // at all, so the controls vanished with nothing to show for it — the shape
+    // SAFETY.md's artifact rule and this section's own fail-closed comment exist to
+    // prevent.
+    //
+    // Keyed off the PROP THE ROWS ARE DRAWN FROM rather than off a refresh bolted
+    // to the profile-switch handler: `developerSurface` is the same value that
+    // decides what every row renders, so the two cannot drift, and it re-reads no
+    // matter which route changed the profile — this page's control, a G3 restore
+    // putting a whole configuration back, or an engine restart. A refresh in the
+    // handler covers the button and silently misses the other two. It is also
+    // exactly the boolean the marker derives from (Simple→SAFE→marked,
+    // Developer/Custom→OPEN→unmarked), so a Developer↔Custom switch, which cannot
+    // change a single row, fetches nothing.
     refreshAutomations();
+  }, [connected, developerSurface, refreshAutomations]);
+
+  useEffect(() => {
+    if (!connected) return;
     // The OS ask stays ONCE, when the section loads — not on every list refresh,
-    // never on a timer and never at startup: removing a row does not change what
-    // launchd holds, and a surface that keeps asking is a surface taking an action
-    // nobody just caused (the MCP temperament). The hook owns the ANSWER; the ask
-    // belongs to the moment somebody opened the page.
+    // not on a profile change, never on a timer and never at startup: none of those
+    // change what launchd holds, and a surface that keeps asking is a surface taking
+    // an action nobody just caused (the MCP temperament). Its own effect, so that
+    // the row re-read above can be keyed on more than this one is. The hook owns the
+    // ANSWER; the ask belongs to the moment somebody opened the page.
     refreshArmedState();
-  }, [connected, refreshAutomations, refreshArmedState]);
+  }, [connected, refreshArmedState]);
 
   async function remove(automation: Automation) {
     if (confirmingRemove !== automation.id) {

@@ -56,12 +56,23 @@ const ON_DISK_CHANGED_LINE =
  * started hashing what it wrote, a file the shell cannot judge, or no shell. */
 const CANT_TELL_LINE = "Addison can't tell whether this file changed since.";
 
-/** The honest line for an edit the shell's session ledger no longer holds. The
- * earlier version is right there on the left, so this degrades into something
- * useful rather than into a button that could only fail. */
+/** The honest line for an edit Addison cannot put back. The earlier version is
+ * right there on the left, so this degrades into something useful rather than into
+ * a button that could only fail.
+ *
+ * IT NAMES NO CAUSE, and that is the fix rather than an omission. `revertable` is
+ * ONE boolean on the wire carrying three different facts — the file is not in the
+ * shell's session write ledger (the restart case), the shell could not be reached
+ * at all, or the one batch call that answers for every listed edit failed — and the
+ * sentence used to assert the first of them for all three. One failed batch printed
+ * "Addison changed this before the app was last restarted" under every row on the
+ * screen, including files it had changed a minute ago. Until the core can tell the
+ * three apart on the wire (docs/KNOWN-GAPS.md records the shape that would), this
+ * says only the part that is true in all three: it cannot, and here is what is
+ * left. */
 const NOT_REVERTABLE_LINE =
-  "Addison changed this before the app was last restarted, so it can't put it " +
-  "back for you. The earlier version is on the left; you can copy it.";
+  "Addison can't put this file back for you. The earlier version is on the left; " +
+  "you can copy it.";
 
 /** Revert is refused while a turn is in flight. It would serialise safely behind
  * the worker anyway — this is about not asking somebody to reason about two
@@ -78,6 +89,19 @@ const FILE_TRUNCATED_LINE =
   "This file is longer than Addison is showing. This is the beginning of it.";
 const NOTHING_PICKED_LINE = "Pick a change or a file to see it here.";
 const DISCONNECTED_LINE = "Addison's engine isn't connected, so there is nothing to show yet.";
+/** The same fact for the second column, in its own words. Two columns asking two
+ * questions get two answers: one sentence repeated verbatim under both labels
+ * reads like a rendering accident, and the second column's question ("which
+ * folders?") has an answer of its own that this one gives. */
+const DISCONNECTED_FOLDERS_LINE =
+  "Addison's engine isn't connected, so it can't say which folders it may work in.";
+/** A diff whose edit has left the changes list. The pane keeps rendering, because
+ * the text is still the last thing Addison actually did to that file and reading it
+ * is the point — but the Revert control is gone, and a diff with no control and no
+ * sentence would read as current. */
+const STALE_DIFF_LINE =
+  "This change isn't in Addison's list any more. What's below is how the file " +
+  "looked when you opened it.";
 
 interface Props {
   connected: boolean;
@@ -228,7 +252,13 @@ function LeftColumn({
       </ColumnSection>
 
       <ColumnSection label="Folders Addison may work in">
-        {!rootsLoaded ? (
+        {/* `connected` FIRST, exactly as the column above does it. Gated on
+            `rootsLoaded` alone, an engine that is down renders "isn't connected"
+            over one column and a permanent "Looking…" under the other — a
+            spinner for an answer nobody is coming back with. */}
+        {!connected ? (
+          <Quiet>{DISCONNECTED_FOLDERS_LINE}</Quiet>
+        ) : !rootsLoaded ? (
           <Quiet>Looking…</Quiet>
         ) : roots.length === 0 ? (
           <Quiet>{NO_FOLDERS_LINE}</Quiet>
@@ -345,7 +375,19 @@ function DirectoryNode({
       {open && (
         <div>
           {error ? (
-            <Quiet>{error}</Quiet>
+            // The refusal AND a way out of it. Without the retry the only route back
+            // is to close the folder and open it again — and the folder is already
+            // in `expanded`, so the next press CLOSES rather than asking again.
+            <div style={{ paddingLeft: 12 + depth * 14 }}>
+              <p className="m-0 py-1.5 text-[11.5px] leading-[1.55] text-muted">{error}</p>
+              <RowAction
+                tone="muted"
+                onClick={() => review.retryDirectory(directory)}
+                ariaLabel={`Look inside ${label} again`}
+              >
+                try again
+              </RowAction>
+            </div>
           ) : !listing ? (
             <Quiet>Looking…</Quiet>
           ) : (
@@ -419,17 +461,23 @@ function TreeEntry({
   // is, but is not opened from here: this side deliberately does not know whether
   // it points at a file or a folder, and guessing would put the wrong control on
   // screen. Its target is reachable through the tree by its own name.
+  //
+  // ...and anything else is labelled "other", not "shortcut". `parseEntryKind`
+  // fails closed to `other` for a socket, a device, and for any kind a later core
+  // sends that this build has never heard of — none of which is a shortcut, and the
+  // badge is the only thing on the row that says what the entry IS.
   if (entry.kind !== "file") {
+    const shortcut = entry.kind === "symlink";
     return (
       <div
         className="flex items-baseline gap-2 py-1.5 text-[12px] text-disabled"
         style={{ paddingLeft: 12 + depth * 14 }}
       >
         <span aria-hidden="true" className="w-3 shrink-0 text-center">
-          ↗
+          {shortcut ? "↗" : "·"}
         </span>
         <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-        <span className="shrink-0 font-mono text-[10px]">shortcut</span>
+        <span className="shrink-0 font-mono text-[10px]">{shortcut ? "shortcut" : "other"}</span>
       </div>
     );
   }
@@ -507,6 +555,19 @@ function RightPane({
     selection?.kind === "edit"
       ? review.edits.find((e) => e.path === selection.path)
       : undefined;
+  // A DIFF CAN OUTLIVE ITS EDIT. The list is re-read on a revert, on a return to
+  // the screen and whenever the core says something changed; when the row for the
+  // open diff leaves it, `RevertBlock` disappears and the pane goes on rendering
+  // the same before/after as if it were current. Only claimed once the list is
+  // actually an answer — before the first one arrives every diff would qualify.
+  // It is the DIFF being on screen that makes this worth saying: with a refusal or
+  // an "Opening…" in the pane there is nothing claiming to be current.
+  const editIsGone =
+    selection?.kind === "edit" &&
+    Boolean(review.diff) &&
+    review.editsLoaded &&
+    !review.editsError &&
+    !edit;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -534,6 +595,15 @@ function RightPane({
           error={review.revertError}
           onRevert={() => review.revert(edit.path)}
         />
+      )}
+
+      {editIsGone && (
+        <p
+          data-stale-diff=""
+          className="m-0 mb-3 shrink-0 text-[12px] leading-[1.55] text-muted"
+        >
+          {STALE_DIFF_LINE}
+        </p>
       )}
 
       {review.revertNotice && !selection && (

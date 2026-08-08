@@ -9,9 +9,17 @@
 // one thing jsdom does answer) and asserts against the values it put there. The
 // fallback path gets its own test, where it is the subject rather than an accident.
 //
-// Values used here are the real ones from `src/styles.css`, so a test that passes
-// is a test that agrees with the token file.
+// THE VALUES ARE READ OUT OF `src/styles.css` AT TEST TIME, which is what makes the
+// sentence above true. They used to be a hand transcription of that file sitting in
+// two dictionaries here — so the token file and this converter could diverge in
+// silence, the one thing this file claims to prevent: changing `--hl-keyword` to
+// `0 255 0` and dark `--c-danger` to `10 20 30` left the whole suite green
+// (2026-08-08). Parsing the real file also lets the "one accent plus danger" rules
+// below be asserted BETWEEN TOKENS as they actually stand, rather than between two
+// numbers a test wrote out equal by hand and then compared.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   CODE_FONT_FAMILY,
@@ -22,50 +30,104 @@ import {
   buildMonacoTheme,
 } from "../lib/monacoTheme";
 
-// Straight out of styles.css — `:root` and `.dark`.
-const LIGHT: Record<string, string> = {
-  "--hl-comment": "110 112 118",
-  "--hl-keyword": "109 91 208",
-  "--hl-string": "60 106 74",
-  "--hl-number": "138 96 40",
-  "--hl-title": "45 84 120",
-  "--hl-attr": "122 92 30",
-  "--hl-type": "90 84 140",
-  "--hl-name": "180 84 78",
-  "--hl-addition": "42 106 66",
-  "--hl-deletion": "180 84 78",
-  "--c-panel": "255 255 255",
-  "--c-line": "228 228 225",
-  "--c-rail": "214 214 210",
-  "--c-ink": "27 27 29",
-  "--c-muted": "91 93 99",
-  "--c-faint": "99 101 107",
-  "--c-ghost": "110 112 118",
-  "--c-accent": "109 91 208",
-  "--c-danger": "180 84 78",
-};
+const STYLES = readFileSync(join(process.cwd(), "src", "styles.css"), "utf8");
 
-const DARK: Record<string, string> = {
-  "--hl-comment": "144 147 152",
-  "--hl-keyword": "180 169 245",
-  "--hl-string": "143 191 159",
-  "--hl-number": "210 181 122",
-  "--hl-title": "138 178 220",
-  "--hl-attr": "208 176 122",
-  "--hl-type": "190 180 235",
-  "--hl-name": "226 166 166",
-  "--hl-addition": "143 191 159",
-  "--hl-deletion": "226 166 166",
-  "--c-panel": "20 21 24",
-  "--c-line": "30 31 34",
-  "--c-rail": "46 47 51",
-  "--c-ink": "233 233 231",
-  "--c-muted": "144 147 152",
-  "--c-faint": "110 112 118",
-  "--c-ghost": "60 62 66",
-  "--c-accent": "180 169 245",
-  "--c-danger": "226 166 166",
-};
+/**
+ * Every `R G B` custom property declared under one selector, merged across that
+ * selector's blocks in source order.
+ *
+ * `styles.css` declares the surface colours in one `:root` and the highlight
+ * palette in another (and the same for `.dark`), so both blocks have to be read —
+ * and a later declaration wins, exactly as the cascade says. Only channel triples
+ * are taken: the shadows and font stacks alongside them are not colours this
+ * converter ever reads.
+ */
+function tokensFor(selector: ":root" | ".dark"): Record<string, string> {
+  const out: Record<string, string> = {};
+  const blocks = new RegExp(`^${selector.replace(".", "\\.")}\\s*\\{([^}]*)\\}`, "gm");
+  for (const block of STYLES.matchAll(blocks)) {
+    for (const decl of block[1].matchAll(/(--[\w-]+):\s*(\d{1,3} \d{1,3} \d{1,3})\s*;/g)) {
+      out[decl[1]] = decl[2];
+    }
+  }
+  return out;
+}
+
+const LIGHT = tokensFor(":root");
+const DARK = tokensFor(".dark");
+
+/** `109 91 208` → `#6D5BD0`. Deliberately NOT the converter under test — see the
+ * test that anchors it on a value checkable by hand. */
+function hexOf(channels: string): string {
+  return (
+    "#" +
+    channels
+      .split(" ")
+      .map((n) => Number(n).toString(16).padStart(2, "0"))
+      .join("")
+      .toUpperCase()
+  );
+}
+
+/** Every variable `monacoTheme.ts` reads. A parse that quietly found nothing would
+ * make every assertion below vacuous, so the set is checked before anything else. */
+const READ_BY_THE_CONVERTER = [
+  "--hl-comment",
+  "--hl-keyword",
+  "--hl-string",
+  "--hl-number",
+  "--hl-title",
+  "--hl-attr",
+  "--hl-type",
+  "--hl-name",
+  "--hl-addition",
+  "--hl-deletion",
+  "--c-panel",
+  "--c-line",
+  "--c-rail",
+  "--c-ink",
+  "--c-muted",
+  "--c-faint",
+  "--c-ghost",
+  "--c-accent",
+  "--c-danger",
+];
+
+describe("the token file this whole skin reads", () => {
+  it("parses, and holds every variable the converter asks for", () => {
+    // Kills: a regex that matches nothing (or matches only the first `:root`), which
+    // would turn every assertion in this file into a comparison of two empty
+    // strings.
+    for (const variable of READ_BY_THE_CONVERTER) {
+      expect(LIGHT[variable], `light ${variable} missing from styles.css`).toMatch(
+        /^\d{1,3} \d{1,3} \d{1,3}$/,
+      );
+      expect(DARK[variable], `dark ${variable} missing from styles.css`).toMatch(
+        /^\d{1,3} \d{1,3} \d{1,3}$/,
+      );
+    }
+  });
+
+  it("converts channels to hex the way the app does", () => {
+    // The helper's own anchor, on a value checkable by hand and independent of the
+    // file: 109 91 208 → #6D5BD0. Without it, a test comparing the converter against
+    // `hexOf` would pass while both were wrong in the same way.
+    expect(hexOf("109 91 208")).toBe("#6D5BD0");
+    expect(hexOf("255 255 255")).toBe("#FFFFFF");
+  });
+
+  it("keeps the code palette on the accent, so no third hue enters", () => {
+    // The direction's rule, asserted between the tokens AS THEY STAND rather than
+    // against a number written here. `--hl-keyword` and `--hl-link` are the accent
+    // itself in both themes; a keyword that stopped being the accent is a second
+    // brand colour on the busiest screen in the app. Kills: a palette edit that
+    // drifts the editor away from the direction.
+    expect(LIGHT["--hl-keyword"]).toBe(LIGHT["--c-accent"]);
+    expect(DARK["--hl-keyword"]).toBe(DARK["--c-accent"]);
+    expect(LIGHT["--hl-link"]).toBe(LIGHT["--c-accent"]);
+    expect(DARK["--hl-link"]).toBe(DARK["--c-accent"]);
+  });
+});
 
 function paint(vars: Record<string, string>): HTMLElement {
   const root = document.documentElement;
@@ -89,12 +151,21 @@ function rule(theme: ReturnType<typeof buildMonacoTheme>, token: string) {
 
 describe("the palette actually comes from the --hl-* variables", () => {
   it("converts space-separated RGB channels to the hex Monaco takes", () => {
-    // The whole conversion, on one value whose hex is checkable by hand:
-    // 109 91 208 → #6D5BD0, which is `--c-accent` in the light theme.
+    // Against the values in `styles.css`, not against a transcription of them: a
+    // token edit that the converter did not follow fails here. Kills: reading the
+    // wrong variable for a token, and kills a converter that stops reading at all
+    // (every rule would fall to the ink fallback, which is not what these are).
     const theme = buildMonacoTheme("light", paint(LIGHT));
-    expect(rule(theme, "keyword")?.foreground).toBe("#6D5BD0");
-    expect(rule(theme, "string")?.foreground).toBe("#3C6A4A");
-    expect(theme.colors["editor.background"]).toBe("#FFFFFF");
+    expect(rule(theme, "keyword")?.foreground).toBe(hexOf(LIGHT["--hl-keyword"]));
+    expect(rule(theme, "string")?.foreground).toBe(hexOf(LIGHT["--hl-string"]));
+    expect(rule(theme, "comment")?.foreground).toBe(hexOf(LIGHT["--hl-comment"]));
+    expect(theme.colors["editor.background"]).toBe(hexOf(LIGHT["--c-panel"]));
+    expect(theme.colors["editor.foreground"]).toBe(hexOf(LIGHT["--c-ink"]));
+
+    const dark = buildMonacoTheme("dark", paint(DARK));
+    expect(rule(dark, "keyword")?.foreground).toBe(hexOf(DARK["--hl-keyword"]));
+    expect(rule(dark, "invalid")?.foreground).toBe(hexOf(DARK["--c-danger"]));
+    expect(dark.colors["editor.background"]).toBe(hexOf(DARK["--c-panel"]));
   });
 
   it("gives dark and light genuinely different values", () => {
@@ -137,18 +208,20 @@ describe("the direction's rules, as rules", () => {
 
   it("puts no box around the current line", () => {
     // Kills: adding `editor.lineHighlightBorder`, which is how Monaco draws a
-    // rectangle round the caret's line — chrome this direction does not own.
+    // rectangle round the caret's line — chrome this direction does not own. The
+    // line highlight is the hairline value, whatever that value currently is.
     const theme = buildMonacoTheme("dark", paint(DARK));
     expect(theme.colors["editor.lineHighlightBorder"]).toBeUndefined();
-    expect(theme.colors["editor.lineHighlightBackground"]).toBe("#1E1F22");
+    expect(theme.colors["editor.lineHighlightBackground"]).toBe(hexOf(DARK["--c-line"]));
   });
 
   it("tints the selection with the accent instead of filling it", () => {
     // The single place in the app where the 2px accent rail cannot be used: an
-    // editor has no row to hang one on. Kills: an opaque selection fill.
+    // editor has no row to hang one on. Kills: an opaque selection fill, and kills
+    // tinting it with anything but the accent the token file currently holds.
     const theme = buildMonacoTheme("dark", paint(DARK));
     const selection = theme.colors["editor.selectionBackground"];
-    expect(selection.startsWith("#B4A9F5")).toBe(true);
+    expect(selection.startsWith(hexOf(DARK["--c-accent"]))).toBe(true);
     expect(selection).toHaveLength(9); // #RRGGBBAA — an alpha is present
     expect(selection.slice(7)).not.toBe("FF");
   });
@@ -179,9 +252,13 @@ describe("the direction's rules, as rules", () => {
   });
 
   it("keeps the deletion tint on the danger colour, so no third hue enters", () => {
-    // `--hl-deletion` is byte-identical to `--c-danger` in both themes. If that
-    // ever stops being true this fails, which is the point: the "one accent plus
-    // danger" rule is what keeps this screen inside the direction.
+    // `--hl-deletion` is byte-identical to `--c-danger` in both themes, and THAT is
+    // the claim — asserted between the two tokens as `styles.css` holds them. The
+    // version of this test that painted both from dictionaries written equal by hand
+    // and then compared them could not fail; changing dark `--c-danger` alone left
+    // it green (2026-08-08). Kills: a third hue entering through either token.
+    expect(LIGHT["--hl-deletion"]).toBe(LIGHT["--c-danger"]);
+    expect(DARK["--hl-deletion"]).toBe(DARK["--c-danger"]);
     for (const [theme, vars] of [
       ["light", LIGHT],
       ["dark", DARK],
@@ -248,7 +325,7 @@ describe("re-theming on the appearance flip", () => {
     expect(selected).toEqual([MONACO_THEME_NAMES.dark, MONACO_THEME_NAMES.light]);
     // Defined AGAIN, against the palette that is live now — not merely re-selected.
     expect(defined).toHaveLength(4);
-    expect(defined[3].background).toBe("#FFFFFF");
+    expect(defined[3].background).toBe(hexOf(LIGHT["--c-panel"]));
   });
 });
 
