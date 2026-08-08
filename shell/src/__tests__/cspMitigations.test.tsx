@@ -39,7 +39,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { stripInjectedCss } from "../lib/sanitizeSvg";
 import { installCspViolationReporter } from "../lib/cspReport";
-import { subscribeDiagnostics } from "../ipc/client";
+import { pushDiagnostic, subscribeDiagnostics } from "../ipc/client";
 import { PermissionCard } from "../components/PermissionCard";
 import { ChatThread } from "../components/ChatThread";
 import type { DisplayMessage } from "../types/ui";
@@ -107,6 +107,24 @@ describe("stripInjectedCss", () => {
     expect(out).toContain('viewBox="0 0 10 10"');
     expect(out).toContain('transform="translate(2,3)"');
     expect(out).toContain('x="1"');
+  });
+
+  it("drops a link target that leaves the document, and keeps the one that does not", () => {
+    // Not a hole being closed: `script-src 'self'` refuses a `javascript:` URL and
+    // this webview opens no URLs at all. It is this file's stated stance — trust
+    // nothing upstream — applied to the last attribute class that was taken on
+    // trust. Kills: leaving `href`/`xlink:href` untouched, and kills the
+    // over-correction that strips the fragment references SVG draws itself with
+    // (`<use href="#arrow">` is how an arrowhead gets on screen).
+    const out = stripInjectedCss(
+      '<svg><a href="javascript:steal()"><text>hi</text></a>' +
+        '<image xlink:href="https://example.test/pixel.png"></image>' +
+        '<use href="#arrowhead"></use></svg>',
+    );
+    expect(out).not.toContain("javascript:");
+    expect(out).not.toContain("example.test");
+    expect(out).toContain('href="#arrowhead"');
+    expect(out).toContain("hi");
   });
 
   it("is not fooled by nesting or by a '>' inside an attribute", () => {
@@ -244,15 +262,61 @@ describe("the consent card's container", () => {
 // ===========================================================================
 
 describe("securitypolicyviolation reporting", () => {
+  /** Take whatever an earlier test left waiting for a subscriber, so each test below
+   * starts with an empty buffer. Subscribing IS the drain — see `pushDiagnostic`. */
+  beforeEach(() => {
+    subscribeDiagnostics(() => {})();
+  });
+
+  /** Fire one violation at the installed reporter and return what reached the ring. */
+  function report(blockedURI: string, violatedDirective: string) {
+    const seen: { message: string; raw: string }[] = [];
+    const stop = installCspViolationReporter();
+    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
+    const event = new Event("securitypolicyviolation", { bubbles: true });
+    Object.assign(event, { blockedURI, violatedDirective, sourceFile: "" });
+    document.dispatchEvent(event);
+    stop();
+    unsubscribe();
+    return seen;
+  }
+
+  it("says nothing about the app's own IPC, which the policy blocks by design", () => {
+    // Tauri invokes commands with fetch(convertFileSrc(cmd,'ipc')) and does NOT inject
+    // those sources into the CSP (set_csp augments only script-src and style-src), so
+    // `connect-src 'self'` blocks it, Tauri falls back to postMessage, and the app runs
+    // as it always has — the old `default-src 'self'` blocked it identically. What is
+    // new is that this reporter would file it on every launch, and the entry it would
+    // teach a reader to scroll past is the blocked worker this exists to surface.
+    //
+    // Kills: dropping the isTauriIpcViolation guard.
+    expect(report("ipc://localhost/plugin:event|listen", "connect-src 'self'")).toHaveLength(0);
+    expect(report("http://ipc.localhost/plugin:path|resolve", "connect-src")).toHaveLength(0);
+    expect(report("ipc", "connect-src 'self'")).toHaveLength(0);
+  });
+
+  it("still reports a real violation, a lookalike URI, and the same URI elsewhere", () => {
+    // The three ways a blanket filter would go wrong, each its own mutation: matching
+    // by substring (the lookalike), ignoring the directive (the third case), or
+    // suppressing connect-src wholesale (the first).
+    expect(report("https://cdn.example/x.js", "script-src 'self'")).toHaveLength(1);
+    expect(report("https://evil.example/?u=ipc://localhost", "connect-src 'self'")).toHaveLength(1);
+    expect(report("ipc://localhost", "img-src 'self' data:")).toHaveLength(1);
+  });
+
   it("puts the blocked URI, the directive and the source file into the diagnostics ring", () => {
     // Kills: deleting the listener once Monaco worked. A CSP is a floor the app
     // cannot see enforced from the inside any other way — a blocked stylesheet or
     // worker is silent in the DOM and loud only in a devtools console nobody has
     // open in a packaged build. Every relaxation the app would need announces
     // itself BY NAME here instead of being found as "it renders wrong on Windows".
+    //
+    // INSTALLED FIRST, SUBSCRIBED SECOND — the order `main.tsx` and App actually
+    // run in. Subscribing first is the one ordering in which a reporter that drops
+    // what it catches still passes, which is how the discard below survived review.
     const seen: { message: string; raw: string }[] = [];
-    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
     const stop = installCspViolationReporter();
+    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
 
     const event = new Event("securitypolicyviolation", { bubbles: true });
     Object.assign(event, {
@@ -279,12 +343,65 @@ describe("securitypolicyviolation reporting", () => {
     // neither. Kills: reading through `SecurityPolicyViolationEvent` and throwing
     // inside the reporter — a crash while reporting a crash.
     const seen: { raw: string }[] = [];
-    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
     const stop = installCspViolationReporter();
+    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
     document.dispatchEvent(new Event("securitypolicyviolation", { bubbles: true }));
     expect(seen).toHaveLength(1);
     expect(seen[0].raw).toContain("violatedDirective=?");
     stop();
+    unsubscribe();
+  });
+
+  it("keeps what it catches BEFORE anything is listening, and replays it", () => {
+    // The reporter is installed in `main.tsx` before the app renders, precisely so a
+    // violation raised while the first chunk loads is captured — and the ring's only
+    // subscriber is inside an App effect gated on the engine being connected, which
+    // lands much later. Fanning out to live handlers alone therefore DISCARDED
+    // exactly the class this exists to catch: the blocked worker and the blocked
+    // stylesheet at load. Kills: `pushDiagnostic` dropping an entry when nobody is
+    // subscribed, and kills a replay that fires before the subscriber is added.
+    const stop = installCspViolationReporter();
+    const event = new Event("securitypolicyviolation", { bubbles: true });
+    Object.assign(event, { blockedURI: "blob:", violatedDirective: "worker-src" });
+    document.dispatchEvent(event);
+
+    const seen: { message: string; raw: string }[] = [];
+    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
+    expect(seen).toHaveLength(1);
+    expect(seen[0].raw).toContain("blockedURI=blob:");
+    stop();
+    unsubscribe();
+  });
+
+  it("catches the gap on a disconnect too, not only the one at startup", () => {
+    // App tears its subscription down and re-adds it on every engine disconnect, so
+    // "nobody is listening" is a state this window enters again and again — not a
+    // startup special case. Kills: buffering only until the first subscriber ever
+    // appears.
+    const first: unknown[] = [];
+    const unsubscribeFirst = subscribeDiagnostics((entry) => first.push(entry));
+    unsubscribeFirst();
+    pushDiagnostic({ message: "while nobody was listening", raw: "raw", at: 1 });
+    const second: { message: string }[] = [];
+    const unsubscribeSecond = subscribeDiagnostics((entry) => second.push(entry));
+    expect(second.map((e) => e.message)).toEqual(["while nobody was listening"]);
+    expect(first).toHaveLength(0);
+    unsubscribeSecond();
+  });
+
+  it("cannot grow without end on a machine whose engine never connects", () => {
+    // The other half of the same decision: with no subscriber ever, every violation
+    // would otherwise accumulate for the life of the window. Twenty is far more than
+    // a working build produces and more than the Settings panel keeps; full means the
+    // OLDEST goes, which is the panel's own preference. Kills: an unbounded array.
+    for (let i = 0; i < 25; i += 1) {
+      pushDiagnostic({ message: `violation ${i}`, raw: "raw", at: i });
+    }
+    const seen: { message: string }[] = [];
+    const unsubscribe = subscribeDiagnostics((entry) => seen.push(entry));
+    expect(seen).toHaveLength(20);
+    expect(seen[0].message).toBe("violation 5");
+    expect(seen[19].message).toBe("violation 24");
     unsubscribe();
   });
 });

@@ -607,6 +607,31 @@ are here because somebody will meet them, and because anything built on top of
   which is stricter than the thing it stands in for. The live loop, the routine engine
   and the refused-before-the-gate branch each have their own test; the widget rail
   passes nothing and says why at the code (its only tool has no `affected_path`).
+- **`revertable` is ONE boolean carrying THREE different facts, and the surface can
+  only render the vaguest of them.** `_edit_payload` sends
+  `"revertable": bool(restorable)` (`agent_core/rpc/workspace.py`), and
+  `_restorable_map` returns `{}` — false for every listed edit — in three unrelated
+  situations: there is no shell bridge, the single batch
+  `shell.canRestoreWorkspaceFiles` call raised, or the shell genuinely does not hold
+  that path in its session write ledger. Only the third is the restart case. The
+  review surface's line asserted it for all three, so ONE failed batch call printed
+  *"Addison changed this before the app was last restarted, so it can't put it back
+  for you"* under every row on screen, including a file Addison had written a minute
+  earlier. **Mitigated frontend-only on 2026-08-08**: `NOT_REVERTABLE_LINE`
+  (`shell/src/components/CodeSurface.tsx`) now names no cause at all — it says only
+  what is true in all three cases, that Addison cannot put the file back and the
+  earlier version is on the left. That is honest and less useful, and it is where it
+  stays until the core can tell the three apart.
+  **The wire shape that would let the sentence come back**: make the field TRI-STATE
+  exactly as `onDiskChanged` already is on the same payload — `true` / `false` /
+  `null`, with `null` meaning "Addison could not find out" (no bridge, or the query
+  failed) and `false` reserved for the shell's real "not in my ledger". Then the
+  surface renders three sentences for three states, the way it already does for
+  `onDiskChanged === null` (*"Addison can't tell whether this file changed since."*).
+  It touches `_edit_payload`, `agent_core/protocol.py` and its hand-synced twin
+  `shell/src/types/protocol.ts` (`WorkspaceEdit.revertable: boolean` →
+  `boolean | null`), so it is a core + protocol change and was deliberately not made
+  from the frontend side.
 - **`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
   bridge's 60s ceiling; browse for longer and the timeout is swallowed into
   `{"directory": null}` with no explanation, while every other store RPC queues

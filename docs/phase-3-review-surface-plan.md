@@ -554,6 +554,14 @@ on the left; you can copy it."* The BEFORE text is right there, so it degrades i
 something useful rather than a dead button. Give `undo.undoLastAction` the same honesty in
 the same pass.
 
+> **Amended 2026-08-08 — the shipped sentence names no cause.** `revertable` came out
+> of the build as one boolean for three facts (no bridge / the batch query failed /
+> genuinely not in the ledger), so the restart clause above was asserted for all three
+> and one failed batch call printed it under every row on screen. The surface now says
+> only *"Addison can't put this file back for you. The earlier version is on the left;
+> you can copy it."* `docs/KNOWN-GAPS.md` owns the entry, and holds the tri-state wire
+> shape that would earn the cause back.
+
 *(Intended future path, not v1: `shell.adoptWorkspacePath {path, expectedSha256}` re-ledgers
 a path only if its current bytes hash to what the core recorded at write time — recovering
 the restart case without widening to arbitrary paths. This is the strongest argument for
