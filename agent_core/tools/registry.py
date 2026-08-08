@@ -54,6 +54,17 @@ discovered tool belongs to a server that can change its mind or be removed:
     through (``mcp_catalog.MCP_TOOLS_ARE_CALLABLE``) and the shape the next
     discovered-before-its-dispatch-exists tool inherits. It is not dead code with a
     test — it is a boundary whose current occupant graduated.
+
+A fifth arrived with step 8 phase 3, and it is about WHERE a call may start rather
+than about who wrote the tool:
+  * ``live_only`` — this tool may run from the live conversation and from nowhere
+    that replays a SAVED spec. ``refuse_if_live_only`` is checked by the routine
+    engine and the widget rail, above the gate. It exists because the arming card
+    carries a preview and a typed code, and a stored one-click spec that could raise
+    one invites answering it on autopilot — the reflex the code exists to break
+    (docs/step-8-automation-plan.md §5.10). Note this is a NARROWING of what a
+    routine may do relative to live chat, which is SAFE invariant 3's permitted
+    direction.
 """
 
 from __future__ import annotations
@@ -73,6 +84,20 @@ DEV_ONLY_REFUSAL = "That's only available in the Developer profile."
 # it is one fact told plainly, and a surface that ever prints it again should print
 # these exact words.
 NOT_CALLABLE_REFUSAL = "Addison can see this tool but can't use it yet."
+
+# Said when a STORED, REPLAYABLE spec — a routine step, a widget's Run pill — names
+# a tool that may only run where a person is present and reading (step 8 phase 3,
+# plan §5.10). Today that is arming and disarming an automation, whose card carries
+# a preview and a typed code: a saved spec that could raise one mid-run invites
+# answering it on autopilot, which is the reflex the ceremony exists to break.
+#
+# It says what to do instead, because a refusal with no next move is a dead end the
+# model reports back as a blocked task — and the next move is genuinely easy (ask
+# for it in the conversation). No jargon: not "live_only", not "dispatch site".
+LIVE_ONLY_REFUSAL = (
+    "Switching an automation on or off is something you do yourself — just ask for "
+    "it in the conversation, and Addison will show you exactly what will run."
+)
 
 # Said when a dispatch path is handed an id NOTHING is registered under. Both ways
 # that happens are ordinary rather than exceptional: a model naming a tool from
@@ -94,6 +119,7 @@ class ToolRegistry:
         self._open_only: set[str] = set()   # tool ids only visible/runnable in OPEN mode
         self._removable: set[str] = set()   # ids `unregister` may take out (MCP only)
         self._not_callable: set[str] = set()  # ids hidden from the model + refused at dispatch
+        self._live_only: set[str] = set()   # ids a stored/replayable spec may not name
 
     def register(
         self,
@@ -104,6 +130,7 @@ class ToolRegistry:
         allow_missing_undo: bool = False,
         removable: bool = False,
         not_callable: bool = False,
+        live_only: bool = False,
     ) -> None:
         """Register a tool along the two independent OPEN dimensions (R3).
 
@@ -120,7 +147,14 @@ class ToolRegistry:
 
         ``removable`` and ``not_callable`` are the two externally-sourced-tool
         dimensions (see the module docstring). Both default OFF, so every native
-        registration keeps exactly the properties it had before they existed."""
+        registration keeps exactly the properties it had before they existed.
+
+        ``live_only`` is the fifth and narrowest dimension (step 8 phase 3): the
+        tool may run from the LIVE conversation and from nowhere that replays a
+        saved spec. It is orthogonal to every other flag — the two arming tools are
+        ``live_only`` and one of them is undo-ENFORCED while the other takes the
+        undo waiver — and it is checked at the two stored-spec dispatch sites by
+        ``refuse_if_live_only``, above the gate."""
         open_only = open_only or dev_only
         allow_missing_undo = allow_missing_undo or dev_only
         if tool.definition.risk_tier != RiskTier.LOW and not allow_missing_undo:
@@ -154,6 +188,8 @@ class ToolRegistry:
             self._removable.add(tool.definition.id)
         if not_callable:
             self._not_callable.add(tool.definition.id)
+        if live_only:
+            self._live_only.add(tool.definition.id)
 
     def get(self, tool_id: str) -> Tool:
         try:
@@ -206,6 +242,7 @@ class ToolRegistry:
         self._tools.pop(tool_id, None)
         self._open_only.discard(tool_id)
         self._not_callable.discard(tool_id)
+        self._live_only.discard(tool_id)
         self._removable.discard(tool_id)
 
     def is_dev_only(self, tool_id: str) -> bool:
@@ -247,6 +284,28 @@ class ToolRegistry:
         a boundary only one path enforces is not a boundary."""
         if tool_id in self._not_callable:
             return NOT_CALLABLE_REFUSAL
+        return None
+
+    def refuse_if_live_only(self, tool_id: str) -> str | None:
+        """A plain refusal sentence when a STORED, REPLAYABLE spec names a tool that
+        may only run in the live conversation, else None (step 8 phase 3, §5.10).
+
+        Mode-independent, like its ``not_callable`` sibling and unlike the dev-only
+        one: this is not "wrong profile", it is "not from here". Called by the
+        routine engine and by the widget rail — the two places a saved spec starts a
+        tool call — BEFORE the gate, so the ceremony's card is never raised by a
+        one-click replay in the first place.
+
+        THE MARKER IS NEVER THE ENFORCEMENT (CLAUDE.md's artifact rule, applied to
+        dispatch): a routine listing this step, or a frontend offering it, changes
+        nothing — this refusal is what decides, and it wins.
+
+        Why a registration flag rather than a list of ids at each site: a boundary
+        spelled twice is a boundary that holds until the two spellings drift, and
+        the next tool that needs a person in the room should inherit this by saying
+        so at registration rather than by somebody remembering two call sites."""
+        if tool_id in self._live_only:
+            return LIVE_ONLY_REFUSAL
         return None
 
     def visible_tools(self, mode: PolicyMode) -> list[ToolDefinition]:

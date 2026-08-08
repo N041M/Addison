@@ -55,6 +55,9 @@ class Method:
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
+    # {toolId, allow, typed?} — `typed` carries the code the person retyped on an
+    # arming card (step 8 phase 3). It is compared in the CORE and never stored,
+    # logged, or put in a model's context; see agent_core/automation_nonce.py.
     # {toolId, label, detail?} -> notification only. `detail` is the tool's own
     # permission_detail for that call (read_web_page: the site it is about to reach)
     # and is OMITTED for the tools that have none. It is what tells the person WHERE
@@ -156,8 +159,10 @@ class Method:
     # THERE IS NO ADD METHOD, AND THAT IS THE POINT. The table exists and these two
     # methods answer over it; rows are written by the `create_automation` TOOL (phase
     # 2, `open_only`, gated and audited like every other), never by this namespace.
-    # Arming is phase 3 (behind a per-automation typed keyword) and exists nowhere,
-    # so a row these methods list has never been handed to the operating system.
+    # Arming is the `arm_automation` TOOL (phase 3), which goes through the ordinary
+    # gate PLUS a typed per-automation code (`agent_core/automation_nonce.py`) and
+    # then through the SHELL, which builds the plist itself — so no payload on this
+    # namespace ever installs, starts or schedules anything.
     #
     # BOTH answer in EVERY profile, deliberately. A saved row is configuration, not a
     # capability — what an automation's shell command needs is Developer, and that is
@@ -167,12 +172,19 @@ class Method:
     # decision reversed, and a REMOVAL must never be the thing a switch traps
     # (docs/SAFETY.md owns the rule; docs/step-8-automation-plan.md §4.1 the choice).
     #
-    # Nothing here carries whether an automation is ARMED, in either direction. That
-    # truth lives in the OS and is asked for when the surface loads (plan §5.6): a
-    # stored flag is what a one-action G3 restore would put back, and a restore can
-    # never perform the keyword ceremony arming requires.
+    # No ROW here carries whether an automation is armed, in either direction — the
+    # column does not exist. `automation.status` answers that question separately and
+    # from the OS, which is the whole design (plan §5.6): a stored flag is what a
+    # one-action G3 restore would put back, and a restore can never perform the
+    # keyword ceremony arming requires.
     AUTOMATION_LIST = "automation.list"      # {} -> {automations: [<row>]}, oldest first
     AUTOMATION_REMOVE = "automation.remove"  # {id} -> {ok} | {ok:false, error}
+    # {} -> {armed: [<label>], supported: bool, error?}. What the OPERATING SYSTEM
+    # says is installed right now, asked on demand when a surface loads — never
+    # stored, never polled, never checked at startup (plan §5.6: armed truth lives
+    # in the OS, so a G3 restore can put a ROW back and can never put a JOB back).
+    # `supported` is false off macOS, where arming does not exist at all.
+    AUTOMATION_STATUS = "automation.status"
     # <row> = {id, name, label, command, scheduleKind, schedule, scheduleSentence,
     #          createdInMode, createdAt}
     # `schedule` is the parsed CLOSED-FIELD object for this row's kind — interval:
@@ -307,6 +319,20 @@ class Method:
     # actually applied — NEVER silently false (design-doc §9).
     # {command, timeoutMs, writeRoots} -> {stdout, stderr, exitCode, sandboxed}
     SHELL_RUN_COMMAND = "shell.runCommand"
+    # ARMING (step 8 phase 3). The shell owns ~/Library/LaunchAgents and everything
+    # about the file in it: it validates the `com.addison.auto.` label prefix, BUILDS
+    # THE PLIST ITSELF from these typed fields, writes only `<label>.plist` in that
+    # one directory, and refuses everything else. THE CORE NEVER SENDS A DOCUMENT —
+    # a surface that accepted XML would be `run_command` with extra steps (plan §5.8),
+    # and a source test pins that no core payload carries one. `RunAtLoad` is never
+    # set, so arming never causes an immediate run (plan §5.7).
+    # {label, command, scheduleKind, schedule} -> {ok} | {ok:false, error}
+    SHELL_ARM_AUTOMATION = "shell.armAutomation"
+    # {label} -> {ok} | {ok:false, error}. Idempotent: a label that is not installed
+    # is already in the state this asks for.
+    SHELL_DISARM_AUTOMATION = "shell.disarmAutomation"
+    # {} -> {armed: [<label>], supported}. Reads what launchd holds; installs nothing.
+    SHELL_LIST_ARMED = "shell.listArmed"
     # {} -> {deviceId, publicKey}; the public half ONLY
     KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
     # {provider} -> {key}; read per-call at the moment of use, never cached (G1)

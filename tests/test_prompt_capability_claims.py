@@ -174,10 +174,20 @@ _READS_AS_SCHEDULING = re.compile(r"\bschedule|\bcron\b|\brecurring\b|\bevery da
 # `open_only`), and the exempted tool must still state its own limit — a description
 # that stopped saying what it cannot do would fail below.
 #
-# WHEN PHASE 3 LANDS THIS SET DOES NOT GROW. `arm_automation` genuinely makes the
-# sentence false, and the plan (docs/step-8-automation-plan.md §7) already registers
-# `primary.txt` among the things that change in that commit.
+# THE SET DID NOT GROW WHEN PHASE 3 LANDED (2026-08-07), exactly as this comment
+# promised: `arm_automation` genuinely makes "the app cannot schedule anything"
+# false, so `primary.txt`'s sentence changed instead — the plan
+# (docs/step-8-automation-plan.md §7) registers it among that commit's edits. This
+# set keeps its narrow meaning: a tool that WRITES a schedule down and can run
+# nothing, which is still exactly what `create_automation` is.
 _AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING = {"create_automation"}
+
+# The whole automation subsystem, and the ONLY tools allowed to read as scheduling
+# in the Developer view (step 8). The gate below is a subset check against this
+# rather than an exact one, so rewording a description cannot fail the build for no
+# reason while a NEW tool that reads as scheduling still does — and whoever adds one
+# has to come here and decide what the prompt should say about it.
+_THE_AUTOMATION_TOOLS = {"create_automation", "arm_automation", "disarm_automation"}
 
 
 def test_every_widget_kind_is_accounted_for():
@@ -380,43 +390,71 @@ def test_the_prompt_is_right_that_no_tool_makes_a_widget():
 
 
 def test_the_prompt_is_right_that_nothing_runs_by_itself():
-    """*"The app cannot schedule anything, run routines by itself, or send emails or
-    messages anywhere."* That is G2 (`CLAUDE.md`, floors) restated to the model, and
-    it is the claim step 8 will make false — the keyword gate lands with
-    author-OS-run automation, and this prompt sentence has to change in that commit.
+    """G2 (`CLAUDE.md`, floors) restated to the model — and STEP 8 PHASE 3 CHANGED
+    IT, which is what this comment block predicted for two phases running.
 
-    Step 8 phase 2 landed and the sentence SURVIVED, which is the distinction worth
-    keeping: `create_automation` writes a draft and nothing can run it, so "the app
-    cannot schedule anything" is still true — see
-    `_AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING` above for the exemption and its guards.
-    Phase 3 is the commit where the sentence really does change.
+    The sentence used to be *"The app cannot schedule anything, run routines by
+    itself, or send emails or messages anywhere."* Phase 2 left it true
+    (`create_automation` writes a draft and nothing could run it). Phase 3 makes the
+    "cannot schedule anything" half genuinely false: `arm_automation` hands a job to
+    launchd. So the sentence changed rather than the gate being widened — and it
+    split into the two claims that are now separately true:
+
+      * **Addison still never starts anything itself.** No timer, no watcher, no
+        routine on a clock. That is the floor and it does not move.
+      * **The person can hand the COMPUTER a job**, and the thing that makes that
+        safe is in the same sentence: they are shown what will run and type a short
+        code, which the model cannot type.
+
+    Both halves are asserted, because dropping either one produces a prompt that is
+    wrong in a different direction — one that under-claims (Addison declines what it
+    can do) and one that over-claims (Addison says it armed something).
 
     `tests/test_g2_no_self_trigger.py` owns the floor itself; this owns only the
     sentence, so the two cannot disagree without one of them going red.
     """
     prompt = load_primary_prompt()
-    assert "cannot schedule anything, run routines by itself" in prompt, (
+    assert "doesn't run routines on a timer" in prompt, (
         "primary.txt's no-self-trigger sentence was reworded. G2 is a global floor "
-        "(docs/SAFETY.md owns it) — if the floor still holds, restore a sentence "
-        "saying so and re-point this test; if step 8 has landed, this test and that "
-        "sentence change together."
+        "(docs/SAFETY.md owns it) and it did NOT move in step 8 — Addison authors, "
+        "the OS runs. Restore a sentence saying so and re-point this test."
+    )
+    assert "types a short code to confirm" in prompt, (
+        "primary.txt no longer tells the model that switching an automation on is "
+        "the PERSON's action, behind a typed code. Without that clause the prompt "
+        "either denies a capability that shipped or implies Addison can arm one "
+        "itself — and the second is the sentence a model repeats as 'done'."
     )
     registry = build_registry()
-    for mode in (PolicyMode.SAFE, PolicyMode.OPEN):
-        # SAFE is scanned with NO exemption: the prompt is written for Simple, and a
-        # tool that reads as scheduling must never reach that view at all.
-        exempt = _AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING if mode is PolicyMode.OPEN else set()
-        offenders = [
-            d.id
-            for d in registry.visible_tools(mode)
-            if (_READS_AS_SCHEDULING.search(d.id) or _READS_AS_SCHEDULING.search(d.description))
-            and d.id not in exempt
-        ]
-        assert not offenders, (
-            f"{mode.name} exposes {offenders}, which reads like scheduling, while "
-            "primary.txt tells the person the app cannot schedule anything. One of "
-            "the two is wrong — and G2 says it is not the prompt."
-        )
+    # SAFE is scanned with NO exemption: the prompt is written for Simple, and a
+    # tool that reads as scheduling must never reach that view at all. This is what
+    # keeps the whole automation subsystem — authoring AND arming — out of the
+    # profile the personas use.
+    safe_offenders = [
+        d.id
+        for d in registry.visible_tools(PolicyMode.SAFE)
+        if _READS_AS_SCHEDULING.search(d.id) or _READS_AS_SCHEDULING.search(d.description)
+    ]
+    assert not safe_offenders, (
+        f"SAFE exposes {safe_offenders}, which reads like scheduling. Simple has no "
+        "automation surface at all — one of the two is wrong, and G2 says it is not "
+        "the prompt."
+    )
+    # OPEN may speak of scheduling, but ONLY the automation tools may. Anything else
+    # that starts reading as scheduling is a new capability nobody has decided the
+    # prompt's wording for, which is exactly when this should go red.
+    open_offenders = {
+        d.id
+        for d in registry.visible_tools(PolicyMode.OPEN)
+        if _READS_AS_SCHEDULING.search(d.id) or _READS_AS_SCHEDULING.search(d.description)
+    }
+    assert open_offenders <= _THE_AUTOMATION_TOOLS, (
+        f"{sorted(open_offenders - _THE_AUTOMATION_TOOLS)} reads like scheduling in "
+        "the Developer view and is not part of the automation subsystem. Decide what "
+        "primary.txt should say about it before shipping it."
+    )
+    # ...and not vacuous: the two tools that really do speak of schedules are there.
+    assert {"create_automation", "arm_automation"} <= open_offenders
     # The exemption is not allowed to go stale or to grow quietly. Each id must be a
     # tool that really exists, must be absent from the Simple view, and must say in
     # its own description what it cannot do — an authoring tool that stopped saying

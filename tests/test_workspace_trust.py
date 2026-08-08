@@ -138,6 +138,14 @@ class _FakeWorkspaceBridge:
     def pick_directory(self) -> str:
         raise NotImplementedError
 
+    def arm_automation(
+        self, label: str, command: str, schedule_kind: str, schedule: dict
+    ) -> dict:
+        raise NotImplementedError
+
+    def disarm_automation(self, label: str) -> dict:
+        raise NotImplementedError
+
     # Step-5.5: execution crosses this Protocol now, so the fake carries it. The
     # command tests live in test_step_5_5_containment.py / test_run_command.py.
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:

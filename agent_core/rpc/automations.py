@@ -59,6 +59,13 @@ _NO_SNAPSHOT_ON_REMOVE = (
 # mcp.remove's cheerful idempotent ok:true because there is a surface behind this
 # one that should reload rather than tick a row off a list that has moved on.
 _NO_SUCH_AUTOMATION = "That automation isn't saved any more."
+# Removal is refused rather than half-done: the row is what makes a running job
+# nameable and its Disarm button reachable, so it stays until the job is off.
+_COULDNT_DISARM_TO_REMOVE = (
+    "Addison couldn't switch that automation off just now, so it left it in place — "
+    "removing it while your computer was still running it would leave it running "
+    "with nothing here to stop it. Try again in a moment."
+)
 
 
 class AutomationsMixin(ServerContext):
@@ -150,18 +157,60 @@ class AutomationsMixin(ServerContext):
         Allowed in EVERY profile: removing is a tightening, and a profile switch must
         never trap configuration somebody wants gone.
 
-        This removes the ROW. It does not, and structurally cannot, remove an
-        installed plist — that is the shell's, through the typed surface phase 3 adds,
-        and a phase that wires the two together will do it here in this order: the OS
-        first, the record second, so a failure can never leave a job running with
-        nothing on screen that names it."""
+        **THE OS FIRST, THE RECORD SECOND** — the order this docstring specified in
+        phase 1 and phase 3 now honours. Until it did, removing an ARMED automation
+        deleted the row and left the job running: `disarm_automation` then answered
+        *"that automation isn't saved any more, so there was nothing to turn off"*
+        while the computer ran it every hour, and the Automations surface — which
+        renders armed-ness per ROW — could not show it at all. A job nobody can see
+        and nobody can stop, produced by pressing Remove (adversarial review,
+        2026-08-07).
+
+        So a row that the OS is holding is disarmed BEFORE it is forgotten, and a
+        disarm that fails REFUSES the removal rather than proceeding: leaving the row
+        is what keeps the job nameable and the Disarm button reachable. On a machine
+        with no arming at all (not macOS, or the bridge is absent) there is nothing
+        to hold, so removal proceeds — that is the honest reading of "nothing is
+        armed here", not a bypass."""
         self._ensure_built()
         automation_id = params.get("id")
         if not isinstance(automation_id, str) or not automation_id:
             return {"ok": False, "error": _NO_SUCH_AUTOMATION}
-        if self.store.get_automation(automation_id) is None:
+        row = self.store.get_automation(automation_id)
+        if row is None:
             return {"ok": False, "error": _NO_SUCH_AUTOMATION}
+        if not self._disarm_before_forgetting(row.label):
+            return {"ok": False, "error": _COULDNT_DISARM_TO_REMOVE}
         if not self._snapshot_auto("automation_remove"):
             return {"ok": False, "error": _NO_SNAPSHOT_ON_REMOVE}
         self.store.delete_automation(automation_id)
         return {"ok": True}
+
+    def _disarm_before_forgetting(self, label: str) -> bool:
+        """Switch this automation off if the OS is holding it. True when it is safe
+        to forget the row — either nothing was armed, or the disarm succeeded.
+
+        Reads what launchd actually holds rather than trusting anything stored: there
+        IS no stored armed state (plan §5.6), which is exactly why this has to ask.
+        A shell that cannot answer is treated as "nothing armed here" only when it
+        says arming is unsupported; any other failure is a refusal, because
+        "I could not find out" and "there is nothing to switch off" are the two
+        answers that must never be collapsed."""
+        bridge = self._shell_bridge
+        if bridge is None:
+            return True
+        try:
+            status = bridge.list_armed()
+        except Exception:
+            return False
+        if not isinstance(status, dict):
+            return False
+        if not status.get("supported", False):
+            return True
+        if label not in (status.get("armed") or []):
+            return True
+        try:
+            answer = bridge.disarm_automation(label)
+        except Exception:
+            return False
+        return bool(isinstance(answer, dict) and answer.get("ok"))

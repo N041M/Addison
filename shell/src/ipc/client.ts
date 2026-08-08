@@ -12,7 +12,13 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { Method, type Automation, type ModelRole } from "../types/protocol";
+import {
+  Method,
+  type Automation,
+  type AutomationStatus,
+  type ModelRole,
+  type PermissionRequest,
+} from "../types/protocol";
 import { asRecord, normalizeUnavailable } from "../lib/parse";
 import {
   parseConversationSummaries,
@@ -340,8 +346,17 @@ export const ipc = {
     // dialog for up to the core's 600s before it even starts.
     call(Method.ConversationSendMessage, { text, role, modelId, effort }, TURN_TIMEOUT_MS),
 
-  respondToPermission: (toolId: string, allow: boolean) =>
-    call(Method.PermissionRespond, { toolId, allow }),
+  // `typed` is the ARMING card's code box (step 8 phase 3) and rides only that
+  // card's answer — every other card sends the exact payload it always did. It goes
+  // out VERBATIM: the core normalises (case, separators) and compares with
+  // `hmac.compare_digest`, and a second normaliser on this side would be a place
+  // where the two could one day disagree about a security decision. Nothing here
+  // ever compares it, and nothing here ever stores it.
+  respondToPermission: (toolId: string, allow: boolean, typed?: string) =>
+    call(
+      Method.PermissionRespond,
+      typed === undefined ? { toolId, allow } : { toolId, allow, typed },
+    ),
 
   undoLastAction: () => call(Method.UndoUndoLastAction),
   redoLastAction: () => call(Method.UndoRedoLastAction),
@@ -556,15 +571,24 @@ export const ipc = {
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
 
   // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
-  // NEITHER OF THESE REACHES THE OPERATING SYSTEM. `listAutomations` reads saved
-  // rows and `removeAutomation` takes one away; there is no arm here and no plist,
-  // because arming is phase 3 and belongs to the Rust shell. Both answer in every
-  // profile — a saved automation is configuration, not an ability, so a profile
-  // switch never hides one and never traps a removal.
+  // NONE OF THESE THREE REACHES THE OPERATING SYSTEM, in either direction of
+  // effect. `listAutomations` reads saved rows, `removeAutomation` takes one away,
+  // and `getAutomationStatus` ASKS what is installed and changes nothing. Arming
+  // itself is a TOOL (`arm_automation`), gated by the typed code and performed by
+  // the Rust shell — there is no arm method on this surface and no plist on any of
+  // these payloads. All three answer in every profile: a saved automation is
+  // configuration, not an ability, so a profile switch never hides one and never
+  // traps a removal.
   listAutomations: (): Promise<Automation[]> =>
     call(Method.AutomationList).then(parseAutomations),
   removeAutomation: (id: string): Promise<AutomationMutationResult> =>
     call(Method.AutomationRemove, { id }).then(parseAutomationMutation),
+  // Asked when the Automations section LOADS and at no other time: never stored,
+  // never polled, never checked at startup (plan §5.6). A G3 restore can put a row
+  // back and can never put a running job back, so the row is the record and the
+  // operating system is the truth.
+  getAutomationStatus: (): Promise<AutomationStatus> =>
+    call(Method.AutomationStatus).then(parseAutomationStatus),
 };
 
 // ---------------------------------------------------------------------------
@@ -1549,6 +1573,73 @@ export function parseAutomations(result: unknown): Automation[] {
     if (row) out.push(row);
   }
   return out;
+}
+
+/** `automation.status` → what the OPERATING SYSTEM says is installed right now.
+ *
+ * Fails closed on both fields, in the direction that cannot invent capability:
+ * `supported` is true only when the core said exactly `true`, so junk, an absent
+ * field or a string "true" all read as "arming isn't available here" and the
+ * surface offers no Arm. `armed` keeps only non-empty strings — a label is matched
+ * against a row's own label, so anything else could only ever match nothing.
+ *
+ * `error` is the core's own plain sentence when it has one; this side prefers it to
+ * anything it would say itself, exactly as the removal path does.
+ */
+export function parseAutomationStatus(result: unknown): AutomationStatus {
+  const obj = asRecord(result);
+  const armed = Array.isArray(obj?.armed) ? (obj.armed as unknown[]) : [];
+  return {
+    armed: armed.filter((label): label is string => typeof label === "string" && label !== ""),
+    supported: obj?.supported === true,
+    ...(typeof obj?.error === "string" && obj.error ? { error: obj.error } : {}),
+  };
+}
+
+/** The core's attempt budget (`agent_core/automation_nonce.MAX_ATTEMPTS`) — the
+ * value a first ask carries, and what an unusable `attemptsLeft` falls back to so a
+ * card that cannot count says nothing about counting. Mirrored in PermissionCard,
+ * which is where the decision to SHOW the line lives. */
+const ARMING_FIRST_ASK_ATTEMPTS = 3;
+
+/** The arming half of a `permission.requestGrant` frame (step 8 phase 3), or
+ * `undefined` when this is an ordinary card.
+ *
+ * Fail-closed here means keeping the CEREMONY, not dropping it: an arming payload
+ * missing a fact is still an arming request, and rendering it as a plain Allow card
+ * would show a one-press approval for the one action in the app that must never
+ * have one. So the ceremony survives whenever there is a `nonce` to type — and
+ * without a nonce there is nothing to type, so the field goes away and the core
+ * (which is the only thing that decides) refuses the answer for want of a match.
+ *
+ * The nonce is never stored, never logged and never put anywhere a model can read
+ * it: it lives in this object for as long as the card is on screen, and goes back
+ * to the core as the typed answer.
+ */
+export function parseArming(value: unknown): PermissionRequest["arming"] {
+  const obj = asRecord(value);
+  if (!obj) return undefined;
+  const nonce = typeof obj.nonce === "string" ? obj.nonce.trim() : "";
+  if (!nonce) return undefined;
+  const text = (field: unknown): string => (typeof field === "string" ? field : "");
+  const warnings = Array.isArray(obj.warnings) ? (obj.warnings as unknown[]) : [];
+  const attemptsLeft = obj.attemptsLeft;
+  return {
+    nonce,
+    automationName: text(obj.automationName),
+    // The core's sentence or the core's own "nothing saved" line — never one built
+    // here out of numbers this side does not even receive.
+    scheduleSentence: text(obj.scheduleSentence) || NO_SCHEDULE_SENTENCE,
+    command: text(obj.command),
+    installPath: text(obj.installPath),
+    // Verbatim, and only the strings: this side renders the core's warning copy and
+    // has none of its own to substitute.
+    warnings: warnings.filter((w): w is string => typeof w === "string" && w !== ""),
+    attemptsLeft:
+      typeof attemptsLeft === "number" && Number.isInteger(attemptsLeft) && attemptsLeft >= 0
+        ? attemptsLeft
+        : ARMING_FIRST_ASK_ATTEMPTS,
+  };
 }
 
 /** workspace.pickDirectory → the chosen absolute path, or `null` when the person

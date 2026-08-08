@@ -118,22 +118,23 @@ MCP_TRANSPORT_HTTP_ONLY = True
 # genuinely decided and built.
 MCP_IS_DEV_ONLY_IN_V1 = True
 
-#: Step 8 phase 2 (2026-08-07): Addison can AUTHOR an automation — `create_automation`
-#: writes a draft row — and can ARM nothing: there is no arming surface anywhere in
-#: the tree, and the phase-1 fence closed the generic paths (the OS-automation
-#: directories are un-trustable, un-writable under the seatbelt, and refused in
-#: commands, as is invoking launchctl/crontab/at/batch).
+#: Step 8 phase 3 (2026-08-07): Addison can AUTHOR an automation AND ARM one —
+#: `arm_automation` installs a launchd job through the shell — and arming requires a
+#: **per-automation code the person retypes** on top of the ordinary permission card
+#: (`agent_core/automation_nonce.py`). G2 is unchanged and still holds: the OS runs
+#: the job, Addison never fires it, and `RunAtLoad` is never set so arming itself
+#: causes no run.
 #:
-#: THIS ROW EARNED ITSELF. The phase-2 review found FOUR documents still saying
-#: "nothing in the tree can author automation" or "step 8: not started" — each one
-#: correct when written, each falsified by a change that never touched its file, and
-#: none of them mechanically catchable. That is exactly the drift this registry
-#: exists for, and phase 2 shipped without registering the fact.
+#: THIS ROW REPLACED ITS OWN PREDECESSOR, WHICH IS THE POINT OF THE MECHANISM. It was
+#: `AUTOMATION_AUTHORING_BUILT_ARMING_NOT` through phase 2 and earned its place then:
+#: the phase-2 review found four documents still saying "nothing in the tree can
+#: author automation", each correct when written and each falsified by a change that
+#: never touched its file. Phase 3 falsified the row's own second half, so the FACT
+#: changed and the row changed with it, in the same commit that changed the tree —
+#: which is exactly what CLAUDE.md asks for and what nobody did in phase 2.
 #:
-#: Flip this to False only if authoring is REMOVED. When phase 3 lands, arming
-#: becomes true as well and the false_state pattern below wants a second look —
-#: the plan's §7 lists that commit's edits.
-AUTOMATION_AUTHORING_BUILT_ARMING_NOT = True
+#: Flip to False only if arming is REMOVED from the tree.
+AUTOMATION_ARMING_BUILT = True
 
 # Redaction's strength (step 5.5 item 4, and load-bearing since step 7). It is a
 # pattern matcher over text: a secret in a format nobody has enumerated passes, and
@@ -742,81 +743,57 @@ CLAIMS: tuple[Claim, ...] = (
             in_code_fence=True,
         ),
     ),
-    # -- step 8: authoring exists, arming does not -------------------------
+    # -- step 8: arming exists, and it needs a typed code -------------------
     Claim(
-        id="automation-authoring-built-arming-not",
+        id="automation-arming-built",
         owner="docs/step-8-automation-plan.md",
-        holds=AUTOMATION_AUTHORING_BUILT_ARMING_NOT,
+        holds=AUTOMATION_ARMING_BUILT,
         true_state=(
-            "Addison CAN author an automation (create_automation, phase 2, "
-            "2026-08-07) and can arm nothing — arming is phase 3 and absent."
+            "Addison can arm an automation (arm_automation, phase 3, 2026-08-07), "
+            "behind a per-automation code the person retypes."
         ),
         false_state=(
-            "Nothing in the tree can author automation either — step 8 has not "
-            "shipped an authoring tool."
+            "Nothing in the tree can arm automation — the keyword gate and the "
+            "arming surface do not exist."
         ),
-        # Present-tense assertions that NOTHING can author one. Past tense is left
-        # alone on purpose: BUILD-LOG and the plan both recount the phase where it
-        # was true, and that recounting is their job.
+        # The phrasings that were true through phase 2 and are now false. Written
+        # against the sentences ACTUALLY in the tree before this commit, which is
+        # the lesson the previous row's first draft taught (it caught one of four).
+        # Past tense is left alone: BUILD-LOG and the plan recount those phases.
         while_true=Wrong(
             pattern=(
-                # Written against the phrasings that were ACTUALLY in the tree
-                # before phase 2 (all four are in this commit's diff), plus the
-                # near-rephrasings of each. The adversarial pass over the fix round
-                # measured the first draft: it caught ONE of the four.
-                r"nothing (?:\w+ ){0,3}can (?:author|write|create) (?:an? )?"
-                r"(?:or arm )?automation"
-                r"|no (?:tool|way|surface|path)[^.\n]{0,30}(?:author|write|create)"
-                r"[^.\n]{0,20}automation"
-                r"|neither author nor arm"
-                r"|no authoring tool"
-                # "nothing is built yet" / "not started", within reach of a step-8
-                # subject. `[^\n]` rather than `[^.\n]`: the real sentence was
-                # "…keyword gate + author-OS-run automation (§6). **Not started.**",
-                # whose intervening text carries a period.
-                r"|(?:step 8|automation keyword gate|author-OS-run automation)"
-                r"[^\n]{0,60}(?:\*\*)?not started"
-                r"|(?:step 8|keyword gate)[^\n]{0,60}nothing is built"
-                r"|nothing is built yet"
+                r"nothing (?:\w+ ){0,3}can (?:arm|run) (?:an? )?automation"
+                r"|no arming surface"
+                r"|arming (?:is|remains) (?:phase 3 and )?not built"
+                r"|(?:keyword gate|nonce)[^\n]{0,40}(?:does not exist|is not built)"
+                r"|there is no keyword-gate code"
+                r"|arming (?:does not exist|doesn't exist)"
             ),
-            # A document QUOTING the old claim to call it spent is doing its job —
-            # BUILD-LOG's phase-1 entry recounts "the tree's standing claim WAS
-            # ..." and the plan recounts the phase where it held. Past tense, and
-            # the words that mark a quotation of a retired claim, are the excuse.
-            # The excuse names QUOTATION, not tense. The first draft included bare
-            # `was|were` at window=240, which the adversarial pass measured as
-            # excusing ~48% of KNOWN-GAPS and ~55% of HANDOFF — a gate that would
-            # almost never fire, which is the failure mode this registry's own
-            # docstring calls decoration. These markers only appear when a document
-            # is recounting a retired claim rather than making one.
+            # A document RECOUNTING the phase where this was true is doing its job.
             excused_by=(
-                r"used to|standing claim|no longer|until (?:phase|authoring)|"
-                r"superseded|historical|before phase 2|at the time"
+                r"used to|until phase 3|before phase 3|through phase [12]|no longer|"
+                r"superseded|historical|standing claim|at the time|by absence|"
+                # `it said "…"` / `used to say` — a document QUOTING the retired
+                # sentence in order to record that it changed.
+                r"it said|used to say|it now says"
             ),
             window=120,
             fix=(
-                "Authoring shipped in step 8 phase 2 (create_automation writes an inert "
-                "draft); ARMING is what does not exist. Say that instead, and link to "
-                "docs/step-8-automation-plan.md, which owns the phase order. If the FACT "
-                "changed, flip AUTOMATION_AUTHORING_BUILT_ARMING_NOT in "
+                "Arming shipped in step 8 phase 3 (arm_automation installs a launchd "
+                "job through the shell, behind a typed per-automation code). Say that "
+                "instead, and link to docs/step-8-automation-plan.md, which owns the "
+                "phase order. If the FACT changed, flip AUTOMATION_ARMING_BUILT in "
                 "tests/doc_claims.py in the SAME commit."
             ),
         ),
-        # The mirror: a document claiming authoring exists while the constant says
-        # it does not.
         while_false=Wrong(
             pattern=(
-                # Anchored to CLAIMS of existence. A bare `create_automation`
-                # would fire on the true sentence "in Simple, Addison cannot author
-                # automation — create_automation is open_only", which is exactly
-                # the prose this row must stay silent on.
-                r"create_automation (?:writes|is registered|exists|shipped)"
-                r"|authoring (?:as inert drafts|shipped|exists|is built)"
+                r"arm_automation (?:installs|arms|exists|shipped)"
+                r"|arming (?:shipped|exists|is built)"
             ),
             fix=(
-                "Authoring does not exist in this tree. Remove the claim, or flip "
-                "AUTOMATION_AUTHORING_BUILT_ARMING_NOT in tests/doc_claims.py if it "
-                "shipped again."
+                "Arming does not exist in this tree. Remove the claim, or flip "
+                "AUTOMATION_ARMING_BUILT in tests/doc_claims.py if it shipped again."
             ),
         ),
         exempt=FROZEN,

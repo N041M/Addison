@@ -18,6 +18,10 @@
 
 mod agent_process;
 mod app_build;
+// OS-run automation (step 8 phase 3): the shell writes its own launchd plist and
+// asks launchd to load it. Reachable ONLY over the core's stdout, like every other
+// `shell.*` method — never from the window (`ipc::validate_outbound_frame`).
+mod automation;
 mod exec;
 mod filesystem;
 mod ipc;

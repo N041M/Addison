@@ -39,7 +39,8 @@ truth, there is no separately-persisted mode (`agent_core/policy.py`,
   is built, and the panel grows them **as those capabilities land, never before** —
   a toggle that controls nothing, in a safety panel, is a lie in the worst possible
   place. (Workspace trust today is granted and revoked per folder, not dialled; the
-  keyword gate is Phase-2 step 8 and does not exist.) Turning any guard OFF and
+  keyword gate shipped in step 8 phase 3 and is deliberately NOT tunable — plan
+  §5.9.) Turning any guard OFF and
   saving mints an **undeletable snapshot anchor** (which records the app build it
   was minted on — see G4), so weakening safety always leaves a guaranteed way back.
 
@@ -138,18 +139,21 @@ than working around it silently):
 - **G2 — Addison never triggers itself.** No autonomous self-triggering or
   self-scheduling, in any mode. Addison *may author* automation the OS runs (a
   launchd/cron entry, a watcher script) — like Claude Code scaffolding a cron job;
-  the OS runs it, Addison never fires itself. Running/arming a powerful action
-  **will require** a user-typed keyword — decided 2026-08-07 as a **per-automation
-  nonce** Addison shows and the person retypes
-  ([step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it) — designed,
-  and **not built**: it is step 8 phase 3 and there is no keyword-gate code in the
-  tree. What DOES exist (phases 1–2, 2026-08-07): Addison can *author* an
-  automation as an inert draft (`create_automation`, dev-only — a database row and
-  a preview, with no armed state anywhere), and **nothing in the tree can ARM
-  one** — there is no arming surface, and the phase-1 fence closed the generic
-  paths too (the OS-automation directories are un-trustable, un-writable under
-  the seatbelt, and refused in commands, as is invoking
-  `launchctl`/`crontab`/`at`/`batch`). Because the keyword is
+  the OS runs it, Addison never fires itself. Arming a powerful action
+  **requires** a user-typed keyword — a **per-automation nonce** Addison shows and
+  the person retypes ([step-8-automation-plan.md](step-8-automation-plan.md) §3
+  owns it) — **built in step 8 phase 3, 2026-08-07**
+  (`agent_core/automation_nonce.py`, `tools/arm_automation.py`, and the shell's
+  `automation.rs`, which is the only code that writes `~/Library/LaunchAgents` and
+  builds the plist itself from typed fields).
+  **G2 is untouched by arming existing**, and the three reasons are worth stating:
+  the OS runs the job on its own schedule; **`RunAtLoad` is never set**, so arming
+  itself causes no run; and the ceremony is a keystroke Addison cannot supply.
+  Alongside it: authoring (`create_automation`, phase 2) and the phase-1 fence,
+  which closed the generic paths (the OS-automation directories are un-trustable,
+  un-writable under the seatbelt, and refused in commands, as is invoking
+  `launchctl`/`crontab`/`at`/`batch`) — so the gated path is the ONLY path.
+  Because the keyword is
   user-typed, observed/injected content can never supply it, so the nonce is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
   "no scheduling in v1" wording.)

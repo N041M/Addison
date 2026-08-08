@@ -71,6 +71,18 @@ class FakeShellBridge:
     def read_scoped_file(self, file_handle: str) -> dict:
         return self.scoped.get(file_handle, {"content": "hello world", "kind": "text"})
 
+    # Arming (step 8 phase 3). Present so this fake still satisfies the whole
+    # ShellBridge Protocol, and RAISING because none of the v1 tools in this file
+    # arms anything — a fake that quietly answered a call the test did not intend is
+    # how a test passes while measuring nothing (conftest.ShellBridgeStubs' rule).
+    def arm_automation(
+        self, label: str, command: str, schedule_kind: str, schedule: dict
+    ) -> dict:
+        raise NotImplementedError
+
+    def disarm_automation(self, label: str) -> dict:
+        raise NotImplementedError
+
     # Step-5 workspace-trust surface — stubs so this fake still satisfies the
     # (widened) ShellBridge Protocol; these tools are exercised in
     # tests/test_workspace_trust.py, not here.

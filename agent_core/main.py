@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from agent_core import live_db_guard
+from agent_core import automation_nonce, live_db_guard
 from agent_core.mcp_catalog import McpCatalog
 from agent_core.mcp_client import call_tool as mcp_call_tool
 from agent_core.mcp_client import discover_tools
@@ -110,9 +110,11 @@ from agent_core.snapshots.snapshot_manager import (
     select_payload_to_restore,
 )
 from agent_core.snapshots.undo_manager import UndoManager
+from agent_core.tools.arm_automation import ArmAutomationTool
 from agent_core.tools.base import MAX_PERMISSION_DETAIL_CHARS, ActionSnapshot
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.create_automation import CreateAutomationTool
+from agent_core.tools.disarm_automation import DisarmAutomationTool
 from agent_core.tools.draft_message import DraftMessageTool
 from agent_core.tools.open_link import OpenLinkTool
 from agent_core.tools.read_clipboard import ReadClipboardTool
@@ -263,6 +265,34 @@ def build_registry(
     # wrote. ``dev_only`` would waive that check for a tool that does not need the
     # waiver. Its store is late-bound (see ``store_ref`` above).
     registry.register(CreateAutomationTool(store_ref=live_store_ref), open_only=True)
+    # Step 8 phase 3: SWITCHING one on, and switching it off again. Both are
+    # ``live_only`` — refused from a routine step and a widget's Run pill, because
+    # the ceremony belongs where a person is present and reading (plan §5.10) — and
+    # both are absent from the SAFE view.
+    #
+    # THE TWO REGISTRATIONS ARE DELIBERATELY DIFFERENT, and reading them as a typo
+    # is the mistake to avoid:
+    #
+    #   * ``arm_automation`` is ``open_only``, i.e. undo-ENFORCED. It is HIGH with a
+    #     REAL ``undo()`` — it disarms — so the single most important check in the
+    #     codebase must keep applying to it: an edit that drops the method has to
+    #     fail registration. Its ``shell_bridge`` is injected here because ``undo()``
+    #     gets no ExecutionContext (``save_file``'s pattern).
+    #   * ``disarm_automation`` is ``dev_only``, i.e. it TAKES the undo waiver, for
+    #     the one reason the waiver exists: it genuinely has no undo. Undoing a
+    #     disarm would be an ARM performed by the UndoManager with no card and no
+    #     typed code — the ceremony walked around from the inside. Registering it
+    #     LOW instead would be the cheaper dodge and a false statement about the
+    #     tier: LOW means read-only (RiskTier), and this changes what the operating
+    #     system is running.
+    registry.register(
+        ArmAutomationTool(store_ref=live_store_ref, shell_bridge=shell_bridge),
+        open_only=True,
+        live_only=True,
+    )
+    registry.register(
+        DisarmAutomationTool(store_ref=live_store_ref), dev_only=True, live_only=True
+    )
     return registry
 
 
@@ -330,7 +360,19 @@ def _terminal_permission_handler(registry: ToolRegistry):
     harness we print the tool's plain-language label + description (this app's
     users are non-technical — CLAUDE.md) and read a yes/no from the terminal."""
 
-    def handler(tool_id: str, detail: str | None = None) -> PermissionStatus:
+    def handler(
+        tool_id: str, detail: str | None = None, arming: dict | None = None
+    ) -> PermissionStatus:
+        if arming is not None:
+            # THE KEYWORD CARD HAS NO TERMINAL FORM, and inventing one here would be
+            # a second implementation of the ceremony — a second place for the
+            # comparison, the attempt budget and the preview to be subtly weaker
+            # than the real one. The CLI is a dev harness with no shell bridge, so
+            # arming could not reach the operating system from it anyway; saying so
+            # is the honest answer and it is also a refusal, which is the safe way
+            # to be wrong.
+            print("\nSwitching an automation on has to be done in the Addison app.")
+            return PermissionStatus.DENIED
         definition = registry.get(tool_id).definition
         print()
         print(f"Addison would like to: {definition.label}")
@@ -1266,6 +1308,8 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_list())
                 elif kind == "automation_remove":
                     self._respond(request_id, self._automation_remove(params))
+                elif kind == "automation_status":
+                    self._respond(request_id, self._automation_status())
             except RuntimeError as exc:
                 # Provider/tool errors already carry a plain, user-ready sentence.
                 self._respond_error(request_id, _SERVER_ERROR, str(exc), self._raw_detail(exc))
@@ -1299,6 +1343,47 @@ class JsonRpcServer(
         if isinstance(routine_id, str):
             self.routine_library.delete(routine_id)
         self._respond(request_id, {"ok": True})
+
+    # --- what the OS is actually running (step 8 phase 3) ------------------
+    def _automation_status(self) -> dict:
+        """automation.status -> ``{armed: [<label>], supported: bool, error?: str}``.
+
+        SERVER MACHINERY, not a mixin method, and that placement is the point:
+        ``rpc/automations.py`` is structurally forbidden from reaching the shell
+        bridge (``tests/test_automations.py`` pins that it cannot even import it),
+        because the module that owns automation CONFIGURATION must never be able to
+        touch the operating system. This answer comes from the shell, so it is
+        answered here, beside the other things that cross that boundary.
+
+        ASKED, NEVER REMEMBERED (plan §5.6). Armed truth lives in the OS: no column
+        stores it, nothing polls for it, and nothing checks at startup — a G3 restore
+        can put a ROW back and can never put a JOB back, so after a restore, a
+        reinstall, or somebody deleting the file by hand, the honest answer is
+        whatever launchd says right now.
+
+        THREE OUTCOMES, KEPT APART. No shell (the CLI, tests) answers "not
+        supported" with an empty list, which is true — there is nothing to ask. A
+        shell that FAILS answers with the sentence it gave, because "Addison could
+        not find out" is not the same as "nothing is running", and a surface that
+        collapsed the two would tell somebody their automation was off while it ran.
+        Only the shell decides ``supported``: this process does not test the
+        platform, it reports what the one that can says."""
+        bridge = self._shell_bridge
+        if bridge is None:
+            return {"armed": [], "supported": False}
+        try:
+            answer = bridge.list_armed()
+        except RuntimeError as exc:
+            return {"armed": [], "supported": False, "error": str(exc)}
+        except Exception:
+            return {"armed": [], "supported": False, "error": _GENERIC_TURN_ERROR}
+        armed = answer.get("armed")
+        return {
+            # Projected, never passed along: a list of strings is what the wire
+            # promises, and one malformed entry must not reach a surface.
+            "armed": [x for x in armed if isinstance(x, str)] if isinstance(armed, list) else [],
+            "supported": bool(answer.get("supported")),
+        }
 
     # --- G3 cold start: the database itself will not open ------------------
     def _handle_store_free_snapshot_job(self, kind: str, request_id) -> None:
@@ -1521,42 +1606,116 @@ class JsonRpcServer(
         )
 
     # --- permissions ------------------------------------------------------
-    def _on_permission_request(self, tool_id: str, detail: str | None = None) -> PermissionStatus:
+    def _on_permission_request(
+        self, tool_id: str, detail: str | None = None, arming: dict | None = None
+    ) -> PermissionStatus:
         """Runs on the worker thread: render the card, block for the answer.
 
         ``detail`` is set on the destructive-in-OPEN per-invocation path (the exact
         command text, already truncated by the tool) — the card's description then
         names precisely what is being approved this time, because that approval
-        never carries over to the next destructive call."""
+        never carries over to the next destructive call.
+
+        ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
+        by ``_ask_with_keyword`` below."""
         definition = self.tool_registry.get(tool_id).definition
         description = definition.description
         if detail:
             description = f"This time it wants to run: {detail}"
+        card = {
+            "toolId": tool_id,
+            "label": definition.label,
+            "description": description,
+            "riskTier": definition.risk_tier.value,
+        }
+        if arming is not None:
+            return self._ask_with_keyword(tool_id, card, arming)
+        allow, _ = self._ask_once(tool_id, card)
+        return PermissionStatus.GRANTED if allow else PermissionStatus.DENIED
+
+    def _ask_once(self, tool_id: str, card: dict) -> tuple[bool, object]:
+        """Emit ONE card and block the worker until ``permission.respond`` lands.
+
+        Returns ``(allowed, typed)`` — ``typed`` is whatever the person put in the
+        code field, untouched, and is ``None`` on every ordinary card. Factored out
+        of ``_on_permission_request`` because the keyword path asks up to
+        ``automation_nonce.MAX_ATTEMPTS`` times and the two must not drift into two
+        different round-trips."""
         event = threading.Event()
         with self._perm_lock:
-            self._permission_waiters[tool_id] = {"event": event, "allow": False}
-        self._notify(
-            Method.PERMISSION_REQUEST_GRANT,
-            {
-                "toolId": tool_id,
-                "label": definition.label,
-                "description": description,
-                "riskTier": definition.risk_tier.value,
-            },
-        )
+            self._permission_waiters[tool_id] = {"event": event, "allow": False, "typed": None}
+        self._notify(Method.PERMISSION_REQUEST_GRANT, card)
         event.wait()
         with self._perm_lock:
             waiter = self._permission_waiters.pop(tool_id, None)
-        allow = bool(waiter and waiter["allow"])
-        return PermissionStatus.GRANTED if allow else PermissionStatus.DENIED
+        if waiter is None:
+            return False, None
+        return bool(waiter["allow"]), waiter["typed"]
+
+    def _ask_with_keyword(self, tool_id: str, card: dict, arming: dict) -> PermissionStatus:
+        """THE KEYWORD GATE (step 8 phase 3, GLOBAL FLOOR G2) — the caller half.
+
+        ``agent_core/automation_nonce.py`` is pure: it mints, normalises and
+        compares. The BUDGET and the pending-request bookkeeping are here, because
+        they are facts about one request's lifetime rather than arithmetic — and
+        because this is the one place that owns the card round-trip.
+
+        **THE CODE NEVER LEAVES THIS PROCESS EXCEPT TOWARD THE WEBVIEW.** It is
+        minted here, put on the card, and compared here. It is not returned to the
+        gate, not handed to a tool, not written to ``tool_audit``, not put in the
+        transcript, and not in any tool_result — a nonce a model can read is a nonce
+        a model can type, which is the whole of what this prevents. That property is
+        structural rather than careful: nothing outside this method has a reference
+        to the value.
+
+        ONE CODE PER REQUEST, up to three tries at it (plan §3). A wrong answer
+        re-emits the SAME card with ``attemptsLeft`` decremented rather than failing
+        silently — somebody who mistyped needs to be told they mistyped, and a
+        ceremony that fails without saying why is one people stop trusting. Running
+        out DENIES the request; starting over is a new call, which mints a new code,
+        which is what makes guessing pointless rather than merely slow.
+
+        IT TERMINATES, and here is the whole argument: ``attempts_left`` starts at
+        ``MAX_ATTEMPTS``, strictly decreases on the only branch that loops, and the
+        loop exits at zero — so at most three cards are emitted. Every iteration
+        blocks on ``_ask_once``, which returns only when an inbound
+        ``permission.respond`` frame sets its event, so no iteration can spin. A
+        "no" answer returns immediately, whatever is in the code field."""
+        nonce = automation_nonce.mint()
+        attempts_left = automation_nonce.MAX_ATTEMPTS
+        while True:
+            allow, typed = self._ask_once(
+                tool_id,
+                {**card, "arming": {**arming, "nonce": nonce, "attemptsLeft": attempts_left}},
+            )
+            if not allow:
+                # "Not now" is an answer, not a wrong code. It ends the request at
+                # once — the remaining attempts are for somebody who is trying to
+                # say yes.
+                return PermissionStatus.DENIED
+            if automation_nonce.matches(typed, nonce):
+                return PermissionStatus.GRANTED
+            attempts_left -= 1
+            if attempts_left <= 0:
+                return PermissionStatus.DENIED
 
     def _handle_permission_respond(self, params: dict, request_id) -> None:
+        """permission.respond {toolId, allow, typed?} — answered INLINE on the read
+        loop, which is what lets it wake a worker blocked in ``_ask_once``.
+
+        ``typed`` is the code the person retyped on an arming card. It is stashed on
+        the waiter and compared in ``_ask_with_keyword``; it is never persisted,
+        never logged, and never echoed back — this handler's whole job is to carry
+        it the last few feet. It arrives as whatever the webview sent, including not
+        a string at all, and ``automation_nonce.normalise`` turns anything that is
+        not one into a wrong answer rather than an exception."""
         tool_id = params.get("toolId")
         allow = bool(params.get("allow"))
         with self._perm_lock:
             waiter = self._permission_waiters.get(tool_id) if isinstance(tool_id, str) else None
             if waiter is not None:
                 waiter["allow"] = allow
+                waiter["typed"] = params.get("typed")
                 waiter["event"].set()
         self._respond(request_id, {"ok": True})
 
@@ -1888,9 +2047,16 @@ _MCP_JOBS = {
 # job kind, and this table is the ONLY place main.py may name an automation.* method:
 # answering one inline on the read loop would put a store read on the wrong thread
 # and a snapshot capture beside an in-flight turn. Step 8 phase 1.
+#
+# `automation.status` (phase 3) does NOT read the store — it asks the shell what
+# launchd currently holds — but it queues here for the other half of the same
+# reason: a Core -> Shell round-trip blocks whichever thread makes it, and the read
+# loop is the thread that has to deliver the ANSWER. Parking it on the worker is
+# `provider.connect`'s lesson, and the shell bridge's own docstring says so.
 _AUTOMATION_JOBS = {
     Method.AUTOMATION_LIST: "automation_list",
     Method.AUTOMATION_REMOVE: "automation_remove",
+    Method.AUTOMATION_STATUS: "automation_status",
 }
 
 

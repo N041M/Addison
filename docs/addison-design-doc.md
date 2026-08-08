@@ -766,7 +766,8 @@ amendment sharpens the two surfaces and adds a third:
   > tunable, not four: the destructive card (`per_invocation` > `session`) and the
   > auto-grant scope (`none` > `non_destructive` > `everything`). The other two are
   > not dials — workspace trust is granted and revoked per directory, and the
-  > keyword gate is Phase-2 step 8 and does not exist yet. The anchor is minted
+  > keyword gate shipped in step 8 phase 3 and is deliberately not tunable
+  > (plan §5.9). The anchor is minted
   > **before** the weakening is applied, and the change is **refused** if the anchor
   > cannot mint. Guards are effective only under Custom; Simple and Developer stay
   > byte-for-byte as before. **§14's open question about Custom's reachability is

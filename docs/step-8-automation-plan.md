@@ -1,7 +1,7 @@
 # Step 8 — OS-run automation and the keyword gate
 
-**Status: PHASES 1 AND 2 OF FOUR ARE BUILT (2026-08-07, the day this plan was
-written). Phases 3–4 are not started.** This plan turns the recorded decisions into a build
+**Status: PHASES 1, 2 AND 3 OF FOUR ARE BUILT (2026-08-07, the day this plan was
+written). Phase 4 — state honesty and the Simple profile — is not started.** This plan turns the recorded decisions into a build
 order and settles the engineering decisions those left open. The principle is the
 scope amendment's §9 sentence, unchanged since 2026-07-20:
 
@@ -9,8 +9,8 @@ scope amendment's §9 sentence, unchanged since 2026-07-20:
 > actions require a user-typed keyword.**
 
 `ROADMAP.md` owns scheduling. G2's full text lives in [SAFETY.md](SAFETY.md);
-this step is the one that turns its "designed, **not built**" clause into code,
-and §7 below names every document line that flips when it does.
+this step is the one that turned its "designed, not built" clause into code, and
+§7 below is the record of every document line that changed when it did.
 
 ---
 
@@ -237,7 +237,7 @@ the whole truth rather than a summary.
    `automation.list` fixture joining the generated-parity machinery, and
    `shell/src/__tests__/automations.test.tsx` (the section, the parser, the
    profile gate — 20 tests).
-3. **The keyword gate + arming. The step's claim becomes true.**
+3. **The keyword gate + arming. The step's claim becomes true — BUILT 2026-08-07.**
    - The shell surface: `automation.install {label, command, schedule}` /
      `automation.remove {label}` / `automation.status {label}` — the shell
      validates the `com.addison.auto.` prefix, builds the XML itself, writes
@@ -361,54 +361,44 @@ the whole truth rather than a summary.
 - No import/export or sharing of automations (the routine-sharing deferral
   covers the shape).
 
-## 7. What flips when phase 3 lands
+## 7. What flipped when phase 3 landed (2026-08-07)
 
-Registered here so the landing diff is a checklist rather than an archaeology
-dig. Each is one sentence today and each currently says "designed, not built"
-in some spelling:
+Registered before the fact as a checklist, and kept afterwards as the record —
+because the value was never the list, it was that a landing diff had one at all.
+**Every item below is done**, in the commit that made arming real:
 
-**The list was incomplete until the phase-2 review swept for it (2026-08-07), which
-is worth one line of its own: a checklist that misses files is the archaeology dig
-it was written to prevent.** The sweep also retired the superseded `!run` prefix
-sketch everywhere it survived — `architecture.md`, `addison-engineering-spec.md`
-(×2 plus its own status line), `addison-design-doc.md` (×3, including its open-
-questions entry) — none of which this section had named. The scope amendment keeps
-its prefix wording on purpose: it is a historical record, not law.
-
-- `CLAUDE.md` — G2's parenthetical "(designed, **not built**: step 8 phase 3)".
-- [SAFETY.md](SAFETY.md) — G2's "designed, and **not built**: it is Phase-2
-  step 8 and there is no keyword-gate code in the tree", and the §Custom note
-  "(the keyword gate is Phase-2 step 8 and does not exist)". The `!run` example
-  in G2's text is the superseded sketch and goes with it.
-- [flows.md](flows.md) — flow 12's *"Not built (step 8)"* paragraph, which
-  still describes the prefix sketch.
-- [KNOWN-GAPS.md](KNOWN-GAPS.md) — the "Keyword-gate syntax (blocks step 8)"
-  open question closes (the syntax half is answered by §1; the scope half by
-  §5.2).
-- `ROADMAP.md` — item 8 moves to Built, and the review-surface plan's
-  "blocked on step 8 alone" clause unblocks.
-- The two not-armed copy lines (phase 2): the tool answer's "arming doesn't
-  exist yet" (`create_automation.NOT_ARMED_LINE`) and the Settings row's "once
-  you arm it" — both become true in a new way and must be reworded in the same
-  commit, with their byte-pinning tests.
-- `primary.txt`'s "the app cannot schedule anything" sentence, and the
+- `CLAUDE.md` — G2's parenthetical, and the step-8 status line (phases 1–3).
+- [SAFETY.md](SAFETY.md) — G2's "designed, and **not built**" clause is gone; the
+  floor now states the three reasons arming does not touch it (the OS runs the
+  job; `RunAtLoad` is never set so arming causes no run; the ceremony is a
+  keystroke Addison cannot supply). The §Custom note says the gate shipped and is
+  deliberately not tunable (§5.9). The `!run` sketch went in the phase-2 sweep.
+- [flows.md](flows.md) — flow 12's *"Not built (step 8)"* paragraph.
+- [KNOWN-GAPS.md](KNOWN-GAPS.md) — the keyword-syntax question was already
+  answered; its "not built" clause is now the phase-4 remainder.
+- `ROADMAP.md` — item 8's status, and what phase 3 shipped in plain words.
+- `docs/architecture.md` — the Rust module list gains `automation.rs` (a
+  test-enforced closed set), described as the only writer of
+  `~/Library/LaunchAgents`.
+- `docs/data-model.md` — the `automations` bullet: `arm_automation` is what hands
+  a row to launchd, and the table still has no armed column.
+- `docs/addison-engineering-spec.md` and `docs/addison-design-doc.md` — the
+  G2/keyword sentences each carries, and the design doc's Custom-panel note.
+- **`create_automation.NOT_ARMED_LINE`** — it said "arming doesn't exist yet";
+  it now says what the person does next and that a code will be asked for.
+  (`SettingsPage`'s "once you arm it" half flipped with it.)
+- **`primary.txt`'s "the app cannot schedule anything"** and the
   `_AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING` exemption in
-  `tests/test_prompt_capability_claims.py` — the exemption does NOT grow to
-  cover `arm_automation`; the sentence changes instead (the exemption's own
-  comment says so).
-- `docs/architecture.md`, `docs/addison-engineering-spec.md` (the invariants
-  summary §, the §9 blockquote, and its own step-8 status line) and
-  `docs/addison-design-doc.md` (§6's automation note, §9's keyword paragraph,
-  and open question 9) — each carries a G2/keyword sentence of its own. Added
-  after the phase-2 sweep found them missing here.
-- `docs/data-model.md` — the `automations` bullet's "no arming surface exists"
-  and the "no path by which a stored command RUNS" clause.
-- `HANDOFF.md` — rewritten as always.
+  `tests/test_prompt_capability_claims.py` — the sentence changed rather than the
+  exemption growing, exactly as the phase-2 entry said it must.
+- **`tests/doc_claims.py`** — the phase-2 row
+  (`AUTOMATION_AUTHORING_BUILT_ARMING_NOT`) had its own second half falsified, so
+  the row was REPLACED by `automation-arming-built` rather than flipped. It named
+  eight stale lines across six files on its first run, which is the whole argument
+  for registering a fact in the commit that makes it true.
 
-New load-bearing facts this step creates (the nonce is per-automation and
-single-use; a restore never arms; the shell writes only its own prefix) get
-rows in `tests/doc_claims.py` in the phase that makes each true. **One is
-already true and now has its row** (2026-08-07): *authoring exists and arming
-does not*, which is what the phase-2 review found four documents still
-contradicting — precisely the drift a row exists to catch mechanically rather
-than by re-reading sixteen files.
+New load-bearing facts this step created now have their rows: *arming exists and
+needs a typed code* is registered above. **A restore never arms** is structural
+(no armed column) and pinned by name in `tests/test_automations.py`; **the shell
+writes only its own prefix** is pinned in `automation.rs`'s own tests plus the
+cross-language plist lockstep in `tests/test_automations.py`.

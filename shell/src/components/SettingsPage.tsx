@@ -27,7 +27,7 @@
 //     description in between (Phase-2 step 2).
 
 import { useCallback, useEffect, useState, type MouseEvent, type ReactNode } from "react";
-import type { Automation, ModelRole } from "../types/protocol";
+import type { Automation, AutomationStatus, ModelRole } from "../types/protocol";
 import type { CloudModel, ProfileState, RoleOption } from "../types/ui";
 import { ipc, type DiagnosticEntry, type ProviderInfo } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
@@ -103,6 +103,15 @@ interface Props {
   /** The point the panel opens at, and the button it opens FROM — which is where
    * focus goes back to when the panel is done with (App wires the return). */
   onOpenModelPopup?: (anchor: PopupAnchor, trigger: HTMLElement) => void;
+  /**
+   * Writes one sentence into the composer and returns to chat — the person still
+   * presses Send (App's `seedAsk`, the widgets surface's "use this idea" idiom).
+   * The Automations section's Arm / Disarm actions are its other caller, and the
+   * only route from this page to the arming ceremony: arming is a TOOL the gate
+   * cards, never an RPC this webview can invoke. Optional, so a partial caller
+   * (older tests) still renders — the actions are simply absent then.
+   */
+  onAskAddison?: (text: string) => void;
   /** Opens the Restore points modal ("All restore points" → "open"). */
   onOpenRestorePoints?: () => void;
   /**
@@ -228,6 +237,7 @@ export function SettingsPage({
   theme,
   onSetTheme,
   onOpenModelPopup,
+  onAskAddison,
   onOpenRestorePoints,
   scrollTarget,
   onScrolled,
@@ -351,11 +361,11 @@ export function SettingsPage({
           the tool that writes one is `dev_only` and refused at dispatch outside OPEN
           independently of this gate. Phase 4 replaces the gate with a
           listed-but-disabled treatment, so a Simple person sees their saved rows and
-          cannot use them — the artifact rule. Nothing here is armed; nothing here
-          reaches the operating system. */}
+          cannot use them — the artifact rule. What is armed here is what the
+          OPERATING SYSTEM says is armed, asked when the section loads. */}
       {developerSurface && (
         <SurfaceSection label="Automations">
-          <AutomationsSection connected={connected} />
+          <AutomationsSection connected={connected} onAsk={onAskAddison} />
         </SurfaceSection>
       )}
 
@@ -881,18 +891,28 @@ export function ProfileCard({
 
 // --- Automations -----------------------------------------------------------
 // The work Addison has written down for THIS COMPUTER to run on a schedule
-// (Phase-2 step 8, phase 2 of four). Rendered on the Developer/Custom surfaces
+// (Phase-2 step 8, phase 3 of four). Rendered on the Developer/Custom surfaces
 // only — the page-level gate above decides that, on the active profile and never
 // the policy mode, exactly as tool servers and trusted folders do.
 //
-// EVERY ROW SAYS IT IS NOT ARMED, AND THAT IS THE FEATURE. A draft is a name, a
-// schedule in plain words and a command that is not running: nothing on this
-// surface has been handed to the operating system, because handing one over is
-// phase 3 and asks the person to type a short code first. The line is per ROW
-// rather than per section on purpose — it is a statement about that automation's
-// state, and phase 4 replaces it with what the OS actually answers. A section-wide
-// banner would have to be rewritten into rows on the day the rows start differing,
-// which is the day the sentence stops being a decoration and starts being a fact.
+// EVERY ROW SAYS WHETHER IT IS ARMED, AND THE OPERATING SYSTEM IS WHAT SAYS SO.
+// `automation.status` is asked once when the section loads and never again: not
+// stored, not polled, not checked at startup (plan §5.6). A row is the record; the
+// OS holds the truth, so a G3 restore, a reinstall or somebody deleting the job
+// file by hand all converge on the honest answer with no special case. When the
+// answer never came, the rows say NOTHING about armed-ness rather than guessing the
+// friendlier of the two — a surface that quietly claims "not armed" about a job
+// that is running is the one failure this section cannot afford.
+//
+// The line is per ROW rather than per section on purpose: it is a statement about
+// that automation's state, and two rows may now genuinely differ.
+//
+// ARM AND DISARM ARE ASKS, NOT CALLS. Arming is a TOOL (`arm_automation`) that goes
+// through the ordinary gate plus the typed code; there is no `automation.arm` on
+// the Frontend→Core surface and there deliberately never was one, because a button
+// that installs a recurring job is exactly the reflex the ceremony exists to break.
+// So these actions write a sentence into the composer and hand the person back to
+// chat, where they press Send and answer the card that comes back.
 //
 // The schedule sentence comes from the CORE and is printed as it arrives. This
 // component has the numbers (`schedule`) and deliberately does not use them: a
@@ -900,16 +920,40 @@ export function ProfileCard({
 // on the one line somebody reads before letting a command run while they sleep.
 //
 // Self-fetching, like RoutineLibrary and unlike the tool-server panel — there is no
-// state here for App to own and nothing else in the app reads this list yet. When
-// phase 4 reconciles armed-ness against the OS this becomes a hook, and the fetch
-// moves with it.
+// state here for App to own and nothing else in the app reads this list yet. Phase
+// 4 moves the fetch into a hook so a G3 restore can re-read it while Settings is
+// open; the armed-ness ask moves with it.
 
-/** What a row says about its state, until phase 3 can arm one. Frozen copy — the
- * frontend test pins it byte-for-byte, because "not armed" is the whole of what
- * this surface currently promises and a softened version of it would be the app
- * implying it had scheduled something it has not. */
-const AUTOMATION_NOT_ARMED =
-  "Not armed — Addison can write this for the OS to run, once you arm it.";
+/** What a row says when the OS is not running it. Frozen copy — the frontend test
+ * pins it byte-for-byte. Phase 2 said "…once you arm it" while arming did not
+ * exist; the sentence flips here, in the commit that makes arming real (plan §7),
+ * and it still promises nothing: nothing runs until the person arms it. */
+const AUTOMATION_NOT_ARMED = "Not armed — nothing runs until you arm it.";
+
+/** What a row says when the OS IS running it. The same truth, in the same words, as
+ * the arming card's own warning — somebody who armed it yesterday should recognise
+ * the sentence they agreed to. */
+const AUTOMATION_ARMED =
+  "Armed — your computer runs this on its own schedule, even when Addison is closed.";
+
+/** Off macOS. One plain sentence, the same temperament as the seatbelt's non-mac
+ * disclosure: it says what this computer can and cannot do, and the section then
+ * offers no Arm action at all rather than a control that would only ever refuse. */
+const AUTOMATION_ARMING_UNSUPPORTED =
+  "Arming isn't available on this computer, so these stay written down and never run.";
+
+/** When the OS could not be asked at all — the call itself failed. Says the honest
+ * thing (that Addison does not know), and the rows stay silent about armed-ness
+ * rather than claiming the comfortable half of an answer nobody got. The core's own
+ * sentence is preferred whenever it managed to send one. */
+const AUTOMATION_STATUS_UNKNOWN =
+  "Addison couldn't check which of these your computer is running.";
+
+/** The sentences the Arm / Disarm actions write into the composer. The person reads
+ * them, presses Send, and answers the card that comes back — the ceremony is on the
+ * card, and this is only how somebody gets there from a settings row. */
+const ARM_REQUEST = (name: string) => `Arm the automation "${name}".`;
+const DISARM_REQUEST = (name: string) => `Disarm the automation "${name}".`;
 
 /** Said when there are none. It names the way to get one — asking — because there
  * is deliberately no "New automation" button: an automation is written by talking
@@ -925,10 +969,24 @@ const AUTOMATIONS_LOADING = "Looking for your automations…";
  * core's own sentence is preferred whenever there is one. */
 const AUTOMATION_REMOVE_FAILED = "Addison couldn't remove that automation just now.";
 
-// Exported for the step-8 phase-2 tests (automations.test.tsx). It is still only
-// rendered from within this page.
-export function AutomationsSection({ connected }: { connected: boolean }) {
+// Exported for the step-8 tests (automations.test.tsx). It is still only rendered
+// from within this page.
+export function AutomationsSection({
+  connected,
+  onAsk,
+}: {
+  connected: boolean;
+  /** Writes a sentence into the composer and returns to chat (App's `seedAsk`).
+   * Absent for a partial caller — the Arm / Disarm actions are then simply not
+   * offered, which is honest: there is nowhere for them to lead. */
+  onAsk?: (text: string) => void;
+}) {
   const [automations, setAutomations] = useState<Automation[]>([]);
+  // What the OPERATING SYSTEM said when this section loaded. `null` is "no answer" —
+  // never "nothing armed", which is the guess that would let a running job render as
+  // a quiet draft.
+  const [status, setStatus] = useState<AutomationStatus | null>(null);
+  const [statusFailed, setStatusFailed] = useState(false);
   // "not asked yet" vs "asked" — see AUTOMATIONS_LOADING.
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -956,6 +1014,19 @@ export function AutomationsSection({ connected }: { connected: boolean }) {
   useEffect(() => {
     if (!connected) return;
     refresh();
+    // ONCE, when the section loads. Not on every list refresh and never on a timer:
+    // removing a row does not change what launchd holds, and a surface that keeps
+    // asking is a surface taking an action nobody just caused (the MCP temperament).
+    ipc
+      .getAutomationStatus()
+      .then((next) => {
+        setStatus(next);
+        setStatusFailed(false);
+      })
+      .catch(() => {
+        setStatus(null);
+        setStatusFailed(true);
+      });
   }, [connected, refresh]);
 
   async function remove(automation: Automation) {
@@ -993,39 +1064,80 @@ export function AutomationsSection({ connected }: { connected: boolean }) {
     <>
       {error && <SurfaceRow wrap name={error} />}
 
+      {/* What this computer can do about arming, said once. The core's own sentence
+          is preferred whenever it sent one — the same rule the removal path follows. */}
+      {status?.error && <SurfaceRow wrap name={status.error} />}
+      {status && !status.supported && !status.error && (
+        <SurfaceRow wrap name={AUTOMATION_ARMING_UNSUPPORTED} />
+      )}
+      {statusFailed && <SurfaceRow wrap name={AUTOMATION_STATUS_UNKNOWN} />}
+
       {automations.length === 0 ? (
         <SurfaceRow wrap name={AUTOMATIONS_EMPTY} />
       ) : (
-        automations.map((automation) => (
-          <SurfaceRow
-            key={automation.id}
-            name={automation.name}
-            // The schedule in the machine-fact slot, in the core's words. Mono,
-            // because when a job runs is a fact and not prose.
-            value={automation.scheduleSentence}
-            actions={
-              // Named after its own automation: a column of identical "Remove"
-              // buttons is the shape in which somebody removes the wrong one.
-              <RowAction
-                tone="danger"
-                disabled={busy}
-                ariaLabel={`Remove ${automation.name}`}
-                onClick={() => void remove(automation)}
-              >
-                {confirmingRemove === automation.id ? "Really remove?" : "Remove"}
-              </RowAction>
-            }
-          >
-            {/* The exact text that would run, whole and unshortened — reading it is
-                the point, and phase 3's typed keyword exists to make them read it. */}
-            <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">
-              {automation.command}
-            </p>
-            <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
-              {AUTOMATION_NOT_ARMED}
-            </p>
-          </SurfaceRow>
-        ))
+        automations.map((automation) => {
+          // The OS's answer, or nothing at all. `null` is a third state and not a
+          // falsy "not armed": it is the difference between knowing a job is idle
+          // and never having asked.
+          //
+          // AN `error` IS NOT AN ANSWER. The core keeps three outcomes apart — this
+          // computer cannot arm (`supported:false`, and then nothing IS armed, so
+          // the rows may say so), the OS answered, and Addison could not find out
+          // (an `error` beside an empty list). Reading that third one as "nothing is
+          // armed" would tell somebody their automation was off while it ran.
+          const armed = status && !status.error ? status.armed.includes(automation.label) : null;
+          return (
+            <SurfaceRow
+              key={automation.id}
+              name={automation.name}
+              // The schedule in the machine-fact slot, in the core's words. Mono,
+              // because when a job runs is a fact and not prose.
+              value={automation.scheduleSentence}
+              actions={
+                // Every control here is named after its own automation: a column of
+                // identical buttons is the shape in which somebody arms the wrong one.
+                <>
+                  {onAsk && armed === true && (
+                    <RowAction
+                      tone="muted"
+                      ariaLabel={`Disarm ${automation.name}`}
+                      onClick={() => onAsk(DISARM_REQUEST(automation.name))}
+                    >
+                      Disarm…
+                    </RowAction>
+                  )}
+                  {onAsk && armed === false && status?.supported && (
+                    <RowAction
+                      ariaLabel={`Arm ${automation.name}`}
+                      onClick={() => onAsk(ARM_REQUEST(automation.name))}
+                    >
+                      Arm…
+                    </RowAction>
+                  )}
+                  <RowAction
+                    tone="danger"
+                    disabled={busy}
+                    ariaLabel={`Remove ${automation.name}`}
+                    onClick={() => void remove(automation)}
+                  >
+                    {confirmingRemove === automation.id ? "Really remove?" : "Remove"}
+                  </RowAction>
+                </>
+              }
+            >
+              {/* The exact text that would run, whole and unshortened — reading it is
+                  the point, and the typed code exists to make them read it. */}
+              <p className="m-0 mt-1 break-all font-mono text-[11px] text-muted">
+                {automation.command}
+              </p>
+              {armed !== null && (
+                <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+                  {armed ? AUTOMATION_ARMED : AUTOMATION_NOT_ARMED}
+                </p>
+              )}
+            </SurfaceRow>
+          );
+        })
       )}
     </>
   );

@@ -12,7 +12,66 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
-## What shipped 08-07 (last) — the review of step 8 phases 1–2, and of its own fixes
+## What shipped 08-07 (last) — step 8 phase 3: the keyword gate, and what its review found
+
+Arming exists. `arm_automation` installs a launchd job through the shell, behind the
+ordinary card PLUS a six-character code the person retypes. The plan owns the
+decisions; what belongs here is what the adversarial pass found afterwards — **five
+real defects in code that was already green on 1534 tests**, and three mistakes I
+made while fixing them.
+
+- **THE CEREMONY WAS OPT-IN PER CALL, AND ITS ABSENCE FAILED OPEN.** The gate took
+  the arming path iff a preview ARRIVED. `arming_card` returns None whenever the row
+  cannot be read, and `_row` swallows every store error — so a transient SQLite
+  failure silently downgraded arming to an ordinary destructive card, and under
+  Custom's `auto_grant_scope='everything'` to **no card at all**. That is verbatim
+  the failure `authorize`'s own docstring says the arming ordering exists to prevent;
+  the ordering was right and its trigger was wrong. **A requirement that lives on the
+  payload is a requirement the payload can lose** — it now lives on the tool
+  (`tool_requires_arming`), and a missing preview denies.
+- **THE TEST GUARDING IT ASSERTED THE OPPOSITE OF ITS OWN NAME.**
+  `test_a_tool_whose_door_or_preview_explodes_is_refused_rather_than_escalated`
+  asserted only that the two helpers return None without raising — which is the
+  MECHANISM by which the call was not refused. Instance #6 of this shape.
+- **REMOVING AN ARMED AUTOMATION ORPHANED THE JOB, PERMANENTLY.** `automation.remove`
+  deleted the row and left launchd running it. Afterwards `disarm_automation` said
+  *"that automation isn't saved any more, so there was nothing to turn off"* while the
+  computer ran it hourly, and the surface renders armed-ness per ROW — so there was
+  nothing to render. A running job nobody could see or stop, from pressing Remove.
+  Phase 1's own docstring had specified the fix ("the OS first, the record second")
+  and phase 3 shipped without honouring it. **A deferral written as a docstring is a
+  deferral nothing enforces.**
+- **THE CORE MINTED LABELS THE SHELL REFUSED.** `_slug` caps the stem at 40;
+  `derive_label` appended `-2` on top, making 41–43. The shell validates labels
+  itself — deliberately not trusting the core — and refused. So a second automation
+  with a long name authored, previewed, showed its code, and failed the instant the
+  person typed it, blaming Addison's own naming. The plist lockstep could not see it:
+  it compares documents, and this was the label. **Two implementations of one
+  contract need every dimension pinned, not the obvious one.**
+- **DISARM REPORTED SUCCESS WHEN IT COULD NOT ASK.** `let _ = launchctl(bootout)`
+  discarded spawn failures and timeouts, not just the ordinary "no such process", and
+  the file was removed regardless — so the person was told *"your computer won't run
+  it any more"* while launchd held the job, and `list_armed` (a directory read) could
+  not contradict it. Now an unanswered scheduler refuses and keeps the file, because
+  the file is the only thing that can name the job later.
+- **A FAILED RE-ARM SILENTLY DISARMED THE WORKING JOB** while both failure sentences
+  promised "nothing was set up" — true of the new job, false about the old one it had
+  already unloaded.
+
+**Three mistakes in the fixing, all mine, all worth more than the fixes:**
+
+- My first control-character screen made the CORE stricter than the shell, refusing
+  newlines the shell accepts — breaking a legitimate multi-line command and one of my
+  own tests. Fixed by mirroring `command_from`'s rule exactly rather than inventing
+  one. **In a two-sided contract, match the other side; do not out-guess it.**
+- My source-level assertion that `arm_inner` routes through `arm_failure` **matched
+  its own text** (the search ran to end-of-file and found the assertion), then matched
+  the function's own SIGNATURE. Two surviving mutations before it matched the CALL.
+  Trap 3 in HANDOFF says exactly this, and I hit it twice in one afternoon.
+- A guard I added was unreachable from its real caller, so no mutation killed it,
+  until the choice was extracted as a pure function and tested at its own boundary.
+
+## What shipped 08-07 (second-last) — the review of step 8 phases 1–2, and of its own fixes
 
 Four read-only reviewers over disjoint scopes (Python correctness, Rust+frontend,
 cleanup, doc currency), then an adversarial pass over the FIXES. The fix pass is

@@ -209,6 +209,17 @@ _BRIDGE_CALLS = (
     ("get_device_key", ()),
     ("sign_relay_request", ({"messages": []},)),
     ("run_command", ("ls", 30_000, [])),
+    # Arming (step 8 phase 3). All three sit on the DEFAULT budget deliberately:
+    # each is the shell answering out of its own process — write a file, remove a
+    # file, ask launchd what it holds — with no person and no child process in the
+    # way, so a minute of silence means the shell is wedged and the turn should say
+    # so rather than hang.
+    (
+        "arm_automation",
+        ("com.addison.auto.tidy", "echo hi", "interval", {"minutes": 30}),
+    ),
+    ("disarm_automation", ("com.addison.auto.tidy",)),
+    ("list_armed", ()),
 )
 
 # The one call whose budget is neither the default nor the person-paced one: a

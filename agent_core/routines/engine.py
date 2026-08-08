@@ -348,6 +348,39 @@ class RoutineEngine:
                             step_log,
                         )
                 continue
+            # NOT FROM A SAVED SPEC (step 8 phase 3, plan §5.10). Switching an
+            # automation on or off asks a person to read a preview and retype a
+            # short code; a stored, one-click, model-authorable routine that could
+            # raise that card mid-run invites answering it on autopilot, which is
+            # the exact reflex the code exists to break. Refused HERE rather than at
+            # the gate, so the card is never raised at all.
+            #
+            # SAFE-3 note: this NARROWS what a routine may do relative to live chat,
+            # which is the permitted direction — a routine never gains anything, and
+            # a person who wants this asks for it in the conversation.
+            #
+            # `not_callable` is the audit outcome, the vocabulary's value for "the
+            # request named something that could not run, and nothing about it was
+            # examined, approved or reached" (schema.sql) — true of this word for
+            # word. Widening that CHECK to a dedicated value is a migration, and
+            # this refusal does not earn one.
+            live_only_refusal = self.tool_registry.refuse_if_live_only(tool_id)
+            if live_only_refusal is not None:
+                self._audit(routine, tool_id, None, mode, destructive, "not_callable")
+                result = ToolResult(success=False, content=live_only_refusal)
+                step_results[step.step_id] = result
+                step_log.append(self._log_entry(index, step, live_only_refusal))
+                if step.on_failure == "abort":
+                    return self._finish(
+                        run_id, "failed", step_results, live_only_refusal, step_log
+                    )
+                if step.on_failure == "ask_user" and not self._on_ask_user(
+                    step, run_id, live_only_refusal
+                ):
+                    return self._finish(
+                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                    )
+                continue
             # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
             # naming Addison's own restore storage or the user's credential stores
             # does not run, and is never offered as a card. A routine is persisted,

@@ -185,6 +185,30 @@ class ShellBridge(Protocol):
         elsewhere it runs and answers False, and the tool says so in its output."""
         ...
 
+    # --- arming (step 8 phase 3, OPEN-only, macOS-only) --------------------
+    # The narrowest surface in this Protocol, and deliberately so: TYPED FIELDS,
+    # never a document (plan §5.8). The shell owns ~/Library/LaunchAgents — it
+    # validates the `com.addison.auto.` label prefix, builds the plist itself from
+    # these fields, writes only `<label>.plist` there, and refuses everything else.
+    # A method that accepted XML would be `run_command` with extra steps, in the one
+    # directory where writing a file IS arming.
+
+    def arm_automation(
+        self, label: str, command: str, schedule_kind: str, schedule: dict
+    ) -> dict:
+        """Hand one job to launchd; returns ``{"ok": bool, "error"?: str}``.
+
+        ``schedule`` is the closed numeric field set of ``schedule_kind``
+        (``automations.schedule_fields``). ``RunAtLoad`` is never set, so arming
+        never causes an immediate run (plan §5.7)."""
+        ...
+
+    def disarm_automation(self, label: str) -> dict:
+        """Take one job back out; returns ``{"ok": bool, "error"?: str}``.
+        IDEMPOTENT — a label that is not installed is already in the asked-for
+        state, so it answers ok rather than an error."""
+        ...
+
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         """Undo-time restore for ``write_project_file``: put ``prior_content`` back at
         ``path`` (the bytes it overwrote), or DELETE the file when ``prior_content``
