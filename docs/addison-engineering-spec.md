@@ -887,6 +887,25 @@ Profile-to-behaviour in v1:
 
 The Developer profile deliberately reuses surfaces that already exist for other reasons: the "headless/CLI entry point" is the same JSON-RPC server the shell drives (§7) and the same loop built CLI-only in build step 4 — exposing it is a packaging decision, not new capability. Likewise "view the routine plan" is safe to expose precisely because the plan is declarative with no code field (§6.1).
 
+*(**A departure from that sentence, named here rather than left to be discovered —
+2026-07-25.** It describes every Developer surface built so far and stops describing
+the next one. The **review surface** in
+[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) — a file tree over
+the trusted roots, a read-only viewer, a diff of Addison's still-live edits, per-file
+revert — is the **first Developer surface that is not a reuse**. Nothing in the app
+renders a file tree or a diff today, so it is new frontend, new handlers in
+`agent_core/rpc/workspace.py`, and new read-only bridge methods in the shell:
+"packaging decision" does not cover it, and pretending otherwise would be the more
+expensive answer. What the sentence was *protecting* is intact, which is what makes
+the departure affordable — the surface adds **zero new model capability** and **zero
+new execution surface**. The browse and the diff are RPC paths and never registry
+tools, so the model gains no `list_directory` as a side effect and the person gets no
+permission card in front of a click they just made; there is no typing into files, no
+save, no terminal and no run button. Developer still exposes nothing SAFE forbids —
+it now also *shows* what OPEN was already doing. The one real cost the plan states is
+not capability either: Monaco needs the webview CSP widened with `style-src
+'unsafe-inline'`, globally, for one window.)*
+
 ### 4.8 Context budget & long-conversation continuation — planned for v2; v1 ships the substrate
 
 **The problem.** A model's context window is a *per-request* token budget, not a per-session resource: every `provider.send()` replays the conversation, so long chats get linearly more expensive and slower each turn, degrade model attention, and eventually exceed the window outright. "Migrating to a new session" cannot escape this — a fresh conversation carrying the full transcript hits the same wall on its first request. The only real mechanisms are (a) summarize, (b) store externally and retrieve selectively, or (c) truncate. v2's continuation feature is a deliberate combination of all three; there is no fourth option, so nothing in v1 should pretend otherwise.

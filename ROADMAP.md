@@ -44,10 +44,15 @@ single connected provider can contribute twenty-two models.
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-07, and with it
-the whole July-2026 scope change.** What comes next is Phase 3 — packaging,
-signing, notarisation, the auto updater, going back to a previous app binary, and
-Secure Enclave identity. `updater.rs` is still a nine-line stub and is the only
-`TODO(step N)` marker in the tree.
+the whole July-2026 scope change.** What comes next is Phase 3, and Phase 3 is two
+tracks rather than one. The first is the packaging track it has always been —
+packaging, signing, notarisation, the auto updater, going back to a previous app
+binary, and Secure Enclave identity; `updater.rs` is still a nine-line stub and is
+the only `TODO(step N)` marker in the tree. The second was added to the phase on
+2026-07-25: the **Developer review surface** — a file tree over the trusted folders,
+a read-only viewer, a diff of every edit Addison has made that is still on disk, and
+a way to put one file back. It is approved, unblocked and unstarted; see the note
+further down and [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 for the rest of that day; all are finished. Their entries
@@ -218,9 +223,13 @@ they covered.
 
 After that comes Phase 3: packaging, signing, notarisation, the auto updater, going
 back to a previous app binary, and Secure Enclave identity. `updater.rs` is a nine
-line stub today. There is also an approved plan for a Developer review surface in
-[docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md), which is
-blocked on step 8 alone now that 6 and 7 have landed, and has not been started.
+line stub today. **Phase 3 also carries a second track**, added to it on 2026-07-25 —
+the Developer review surface in
+[docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md). It waited
+on steps 6, 7 and 8, and all three landed on 2026-08-06 and 2026-08-07; the three
+fixes the plan asked for first closed on 2026-08-08, each in its own change. So it is
+**unblocked and unstarted**, and nothing is waiting on anything — it waits only on
+somebody starting it.
 
 ## Deliberately not being built
 

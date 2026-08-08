@@ -572,6 +572,90 @@ tighten the guards, then restore that point. The result notice must include
 *"Going back to this setup also turned down how often Addison asks before
 acting."* — a recovery that lowers your protections says so.
 
+## 13c. The Developer review surface (Phase 3 — the code screen)
+
+**Written before the build, and the surface does not exist yet — skip this section
+until it ships.** The repo's rule is authoritative docs before code, so this is here
+first on purpose; [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md)
+owns the build and [`../ROADMAP.md`](../ROADMAP.md) owns whether it has happened. The
+copy quoted below is the plan's, and quoting it **is** the assertion: if the app says
+something else, either the app is wrong or the plan changed and nobody amended this.
+
+**This claims §13c, and names the debt it does not pay.** §13c was owed to **Phase-2
+step 5** — the coding harness and workspace trust shipped 2026-07-24 with no manual
+section at all — and that debt is **still unpaid**. The plan asked for the next free
+letter at build time rather than a hardcoded one, and the next free letter was this
+one; the harness's own section now takes **§13d**.
+
+**Reaching it.** In Simple there is no code screen and no route to one — no sidebar
+entry, no keyboard path. Switch to Developer (or Custom) and the entry appears. The
+gate is on the **profile**, not the mode, and it is not decoration: trusted folders
+survive a profile switch, so a Simple window that can still browse a folder trusted
+under Developer is a floor-shaped failure, not a nit.
+
+**The tree tells the truth about the disk.** With a folder trusted, `.git` and
+`node_modules` are **listed** — collapsed, never auto-expanded, never hidden. A tree
+that hides them is lying about what is on disk, and telling the truth is this
+surface's whole value. A symlink is drawn as a symlink and not as a folder; one that
+points out of the trusted root is dimmed and says *"this points outside the folder
+you trusted"*. Click it anyway: it refuses. The label is honesty; the refusal is the
+boundary, and it is the refusal that has to hold.
+
+**A diff of a change that is still there.** In Developer, have Addison edit two
+files, then open the surface: both are listed with a real before/after, the left pane
+showing the file as it was before Addison's **first** change. Ask Addison to edit one
+of them a second time — it stays **one** entry, still comparing against that original
+version, not against the intermediate one. Revert it: the file on disk becomes exactly
+what the left pane was showing, and the entry leaves the list. Nothing partial is
+offered — there is no hunk-level revert, because a half-applied revert would put a
+combination of bytes on disk that never existed there.
+
+**The warning before a clobber.** Change one of those files yourself after Addison
+did, then revert it. The confirm must say so — *"You've changed this file since
+Addison did. Reverting will replace what's there now with the version from before
+Addison's first change."* — as a two-step inline confirm, never a browser dialog.
+
+**The restart is the step people will skip, and the one that matters.** Quit, reopen,
+and look at an edit from the previous session. There must be **no Revert button that
+fails**: the row is read-only, with *"Addison changed this before the app was last
+restarted, so it can't put it back for you. The earlier version is on the left; you
+can copy it."* The before text is right there, so the honest answer is still a useful
+one. "Undo last action" in the header must be equally honest about the same edits —
+a control that is offered and then refuses is worse than one that explains itself.
+
+**Consent follows you here.** With the code screen open, ask Addison to do something
+that needs approval. The permission card and the Activity Panel appear **on this
+screen**, not back in chat — a consent surface you have navigated away from is
+unanswerable, and two consent surfaces is the bug.
+
+**Nothing new is offered to the model.** Open Tools in Developer: there is no
+"browse files" or "list directory" tool, and there must never be one — a person
+clicking a folder open is not the model acting. The other half of the same rule:
+expanding a folder must **not** raise a permission card. A card in front of a click
+somebody just made teaches people to dismiss cards.
+
+**Diagrams, re-checked — this screen changes them.** It ships with a widened
+`style-src`, and that policy is global: a Simple user gets it too, for a screen they
+can never reach. The visible consequence is somewhere else entirely — mermaid's
+injected SVG carries a `<style>` block that today's policy silently drops. **Re-run
+§13's mermaid pass in both themes** and confirm diagrams still render as they did.
+Then look at a permission card again, on this screen and in chat, and confirm nothing
+overlays, hides or restyles it.
+
+**Narrow window.** Take it through both breakpoints from §14. The tree collapses to a
+rail and then to a drawer rather than squeezing the diff into two unreadable columns,
+and the diff falls back to a single-column (inline) view instead of side-by-side.
+Everything tappable — tree rows, file rows, Revert, both steps of its confirm — is
+**≥44px** tall. At 375px there is no horizontal scroll anywhere.
+
+**Both themes.** Walk the tree, the viewer and a diff in **light and dark**:
+additions and deletions read as additions and deletions in both; the deletion tint is
+the same rose the app already uses for destructive actions, and no fourth colour has
+appeared; code tokens match what a fenced code block inside a message already looks
+like. Then flip Appearance **while the viewer is open** — it re-themes immediately. A
+viewer still showing the old theme until you navigate away is exactly what this step
+exists to catch.
+
 ---
 
 ## 14. Narrow window / mobile layout

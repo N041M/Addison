@@ -13,10 +13,18 @@ detail, the read ceiling, and the prune wiring, each in its own PR.
 > signing / notarisation / auto-updater / binary restore / Secure-Enclave identity, and
 > four documents scoped it that way (`addison-design-doc.md` §11, `architecture.md`,
 > `addison-engineering-spec.md` §11's Phase-3 note, `HANDOFF.md`). This plan adds a
-> Developer *surface* to that phase. **That redefinition has since been written into
-> those documents** (`ee38dbe`, 2026-07-25 — see [`BUILD-LOG.md`](BUILD-LOG.md)), so
-> amendment §14's authoritative-docs-first rule is already discharged for it; the line
-> numbers this paragraph used to carry are gone because they were stale within a week.
+> Developer *surface* to that phase, and **the redefinition is now written into every
+> document that defines the phase** — completed 2026-08-08, which discharges amendment
+> §14's authoritative-docs-first rule for it.
+>
+> It took three passes, not the one this paragraph used to claim, and that is why the
+> fact is now a row in [`../tests/doc_claims.py`](../tests/doc_claims.py) rather than a
+> promise: `ee38dbe` (2026-07-25 — see [`BUILD-LOG.md`](BUILD-LOG.md)) reached the
+> design doc and `HANDOFF.md`, a later docs pass reached the engineering spec,
+> `architecture.md` was missed entirely for two weeks, and `ROADMAP.md` — which owns
+> status — grew a *fifth* packaging-only definition after this plan was written. No line
+> numbers are given for those documents: the ones this paragraph used to carry were
+> stale within a week.
 
 ## Context
 
@@ -188,37 +196,59 @@ than one it introduces.
 
 ---
 
-## Docs first — Phase 1 before Phase 2, per amendment §14
+## Docs first — Phase 1 before Phase 2, per amendment §14 — **DONE 2026-08-08**
 
-The repo's own rule is authoritative docs before code, and this wave needs it more than
-most: **"Phase 3" is currently defined as packaging / signing / notarisation / auto-updater
-/ binary restore / Secure-Enclave identity** in four places (`docs/addison-design-doc.md`
-§11, `docs/architecture.md:126–129`, `docs/addison-engineering-spec.md:1285`,
-`docs/HANDOFF.md:1137`). Adding a Developer surface to Phase 3 is a redefinition and must
-be written as one, in the style of the 2026-07-20 amendment inserts.
+The repo's own rule is authoritative docs before code, and this wave needed it more than
+most: **"Phase 3" was defined as packaging / signing / notarisation / auto-updater /
+binary restore / Secure-Enclave identity** in every document that scoped the phase, and
+adding a Developer review surface to it is a redefinition that has to be written as one,
+in the style of the 2026-07-20 amendment inserts. That is now done, ahead of any surface code.
+What follows is the record of what each deliverable was and where it landed, kept because
+the next Phase-3 reader needs to know the redefinition exists and where it is stated.
 
-Also required, because these are the two sentences this wave most strains:
+**The redefinition** is in `docs/addison-design-doc.md` §11, `docs/architecture.md`,
+`docs/addison-engineering-spec.md` §11's Phase-3 note, `docs/HANDOFF.md`, and
+[`../ROADMAP.md`](../ROADMAP.md), which owns status. `architecture.md` and `ROADMAP.md`
+were written from scratch on 2026-08-08 — the first had never received the redefinition
+at all, the second had grown its own packaging-only definition since this plan was
+written — and the other three were amended where they had gone stale about sequencing.
+`phase-3-includes-the-review-surface` in
+[`../tests/doc_claims.py`](../tests/doc_claims.py) now holds the line, so the sixth
+document to define the phase fails the suite instead of drifting quietly.
 
-- `docs/addison-engineering-spec.md:840` — *"The Developer profile deliberately reuses
+The two sentences this wave most strains, both now answered where they live:
+
+- `addison-engineering-spec.md` §4.7 — *"The Developer profile deliberately reuses
   surfaces that already exist for other reasons… exposing it is a packaging decision, not
-  new capability."* The code screen is the **first Developer surface that is not a reuse**.
-  Name the departure explicitly, in the style of the step-5 owner-decision notes.
-- `docs/addison-design-doc.md:310` — *"Developer mode adds surfaces, never a different
-  skin."* Honored: the screen is in the same dark direction throughout and Monaco is themed
-  from the repo's existing palette (below). Say so, so it reads as deliberate.
+  new capability."* The code screen is the **first Developer surface that is not a reuse**,
+  and the departure is now named beneath that sentence in the style of the step-5
+  owner-decision notes: what the sentence protected (zero new model capability, zero new
+  execution surface) survives, which is what makes the departure affordable.
+- `addison-design-doc.md` §7.1 — *"Developer mode adds surfaces, never a different
+  skin."* Honored, and said so beneath the sentence: the screen is the dark direction
+  throughout and Monaco is themed from the repo's existing palette (§5 below), so no
+  second look and no new hue enters the app for a Developer-only screen.
 
-Doc deliverables: a Phase-3 scope note; updates to design-doc §11 / architecture.md /
-engineering-spec §1.4-style entry / HANDOFF; a **code-surface addendum to
-`docs/design-brief-dark/IMPLEMENTATION.md`** (mono at 12px for a document surface, the diff alpha ladder,
-the accessibility tension below); and a new `docs/TESTING-CHECKLIST.md` §13x section.
+**The code-surface addendum** is the last section of
+[`design-brief-dark/IMPLEMENTATION.md`](design-brief-dark/IMPLEMENTATION.md) — one
+palette and zero new tokens, the diff alpha ladder, the re-theme-on-flip rule, and the
+12px tension recorded rather than settled. It corrects one number in §5 below while it is
+at it: `.markdown-body pre code` is **11.5px** in the tree, not 12px, so 12px is a
+deliberate step up from the nearest precedent rather than a match to it.
 
-> Note §13c is currently **owed to Phase-2 step 5** — the harness shipped without one.
-> Claim the next free letter at build time rather than hardcoding it now.
+**The manual pass** is `docs/TESTING-CHECKLIST.md` **§13c**, which was the next free
+letter (13a is the G3 restore floor, 13b the Custom guards). The note this paragraph used
+to carry still stands and is repeated there: **§13c was owed to Phase-2 step 5** — the
+harness shipped with no manual section at all — and that debt is **still unpaid**. The
+harness's section now takes §13d.
 
-Two adjacent drifts worth fixing while in these files (small, optional): design-doc §9's
-floors table at line 792 still calls the G4 anchor *"binary-capturing"*, contradicting the
-owner-decision note 24 lines above it; and design-doc §11 item 4 still routes
-"folder-scoped workspace grant" to Phase 3 though it shipped in Phase-2 step 5.
+The two adjacent drifts this section listed as optional were **both already fixed before
+this wave** and are recorded here so nobody hunts them again: design-doc §9's floors table
+stopped calling the G4 anchor *"binary-capturing"* on 2026-07-26, and §11 item 4 already
+routes "folder-scoped workspace grant" to Phase-2 step 5. Two others were found in their
+place and fixed instead — design-doc §11 was still describing step 8's arming as unbuilt
+in two passages, and both the design doc's and ROADMAP's Phase-3 notes still called the
+surface blocked on a step that had landed.
 
 ---
 
@@ -528,10 +558,13 @@ covers the `"system"` case of the OS flipping while the app is open.
 
 **Font size — a real tension, recorded not hidden.** The brief caps mono at 10–12px for
 "machine facts, never prose," and a code viewer *is* machine facts — but 12px is small for
-a full-file surface read by personas aged 54 and 68. Ship `fontSize: 12, lineHeight: 19`,
-matching `.markdown-body pre code`'s existing 12px (consistency with how code already looks
-here beats inventing a size token), and put an **editor zoom control on the follow-up
-list** rather than pretending 12px settles it.
+a full-file surface read by personas aged 54 and 68. Ship `fontSize: 12, lineHeight: 19`
+and put an **editor zoom control on the follow-up list** rather than pretending 12px
+settles it. *(This line justified 12px as "matching `.markdown-body pre code`'s existing
+12px" until 2026-08-08; that rule is **11.5px** in the tree. So 12px is a deliberate step
+up from the nearest precedent rather than a match to it — defensible for a surface read
+as a document instead of as an excerpt inside a message, and still better than inventing
+a size token.)*
 
 ---
 
