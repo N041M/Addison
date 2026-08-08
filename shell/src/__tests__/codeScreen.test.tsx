@@ -848,6 +848,59 @@ describe("the tree, from the hook's side", () => {
     expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE);
     expect(result.current.listings["/p/src"]).toBeUndefined();
   });
+
+  it("clears the refusal when the folder is simply opened again", async () => {
+    // The retry is not the only way back to a folder that refused: close it and open
+    // it again and you are asking the same question by the longer route. That press
+    // re-read for real, but `toggleDirectory` never cleared the sentence, so the row
+    // answered with the OLD refusal while the fresh listing was already in flight —
+    // stating as fact a refusal nobody had repeated, which is the exact thing
+    // `retryDirectory` argues against three lines above it. Kills: dropping the
+    // clear from the open path. The test below holds the other half of the ordering.
+    vi.mocked(ipc.listWorkspaceDirectory).mockRejectedValueOnce(new Error("engine went away"));
+    const { result } = mountHook();
+    act(() => result.current.toggleDirectory("/p/src"));
+    await waitFor(() => expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE));
+    act(() => result.current.toggleDirectory("/p/src")); // put away
+    expect(result.current.expanded).not.toContain("/p/src");
+
+    // Held back, because the moment the clearing is observable is the one BETWEEN
+    // the press and the answer — on success the load clears it anyway.
+    type Listing = Awaited<ReturnType<typeof ipc.listWorkspaceDirectory>>;
+    let land: (answer: Listing) => void = () => {};
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementationOnce(
+      () =>
+        new Promise<Listing>((resolve) => {
+          land = resolve;
+        }),
+    );
+    act(() => result.current.toggleDirectory("/p/src")); // ...and open again
+    expect(result.current.listingErrors["/p/src"]).toBeUndefined();
+    expect(result.current.listings["/p/src"]).toBeUndefined();
+
+    await act(async () => {
+      land({ value: { directory: "/p/src", root: "/p", entries: [], truncated: false } });
+    });
+    await waitFor(() => expect(result.current.listings["/p/src"]).toBeTruthy());
+  });
+
+  it("keeps the refusal when reopening cannot even ask", async () => {
+    // The same ordering `retryDirectory` has, and the reason the clear goes AFTER the
+    // call rather than before it: with no engine `loadDirectory` declines silently, so
+    // clearing anyway would strip the row of its sentence AND its retry and leave a
+    // permanent "Looking…" — the state both of these exist to abolish. Kills: clearing
+    // on the way in, before anything has been asked.
+    vi.mocked(ipc.listWorkspaceDirectory).mockRejectedValueOnce(new Error("engine went away"));
+    const { result } = mountHook();
+    act(() => result.current.toggleDirectory("/p/src"));
+    await waitFor(() => expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE));
+    act(() => result.current.toggleDirectory("/p/src")); // put away
+
+    engine.up = false;
+    act(() => result.current.toggleDirectory("/p/src")); // ...and open again
+    expect(result.current.listingErrors["/p/src"]).toBe(DIRECTORY_UNREADABLE);
+    expect(result.current.listings["/p/src"]).toBeUndefined();
+  });
 });
 
 describe("the right pane's race guard", () => {
@@ -984,10 +1037,19 @@ describe("coming back to the screen", () => {
     await waitFor(() => expect(result.current.paneBusy).toBe(false));
   });
 
-  it("re-reads nothing while the person simply stands there", async () => {
+  it("re-reads nothing while the person simply stands there, or WORKS here", async () => {
     // Kills: turning the visit re-read into a poll — an effect keyed on `expanded`
     // or `selection` re-fetches the whole tree on every click, which is a poll with
     // extra steps.
+    //
+    // A RE-RENDER IS NOT ENOUGH TO SHOW THAT, which is why this test does the work
+    // as well: with the deps as they are, a plain re-render re-runs nothing whether
+    // the edge guard is there or not, so the two halves of that mutation each
+    // survived the re-render-only version of this test and only failed together
+    // (found re-running the claimed mutations, 2026-08-08). Opening a folder and
+    // picking a file are what MOVE `expanded` and `selection`; each must ask for the
+    // one thing it is about and nothing else. Either half of the mutation on its own
+    // is unobservable from out here and is pinned at source instead — see below.
     const roots = [{ directory: "/p" }];
     const { result, rerender } = mountHook({ roots });
     await waitFor(() => expect(result.current.expanded).toContain("/p"));
@@ -996,6 +1058,49 @@ describe("coming back to the screen", () => {
     rerender({ active: true, connected: true, roots });
     expect(vi.mocked(ipc.listWorkspaceDirectory).mock.calls.length).toBe(before);
     expect(ipc.listWorkspaceEdits).toHaveBeenCalledTimes(1);
+
+    // Opening a folder asks for THAT folder — never for `/p` again, and never for
+    // the changes list.
+    act(() => result.current.toggleDirectory("/p/src"));
+    await waitFor(() => expect(result.current.listings["/p/src"]).toBeTruthy());
+    expect(vi.mocked(ipc.listWorkspaceDirectory).mock.calls.length).toBe(before + 1);
+    expect(ipc.listWorkspaceEdits).toHaveBeenCalledTimes(1);
+
+    // ...and picking a file asks for that file, and touches neither the tree nor the
+    // list.
+    act(() => result.current.openFile("/p/a.py"));
+    await waitFor(() => expect(result.current.fileView?.path).toBe("/p/a.py"));
+    expect(vi.mocked(ipc.listWorkspaceDirectory).mock.calls.length).toBe(before + 1);
+    expect(ipc.listWorkspaceEdits).toHaveBeenCalledTimes(1);
+  });
+
+  it("cannot become a poll — and neither half of that mutation survives", () => {
+    // The source-level half, read the way the CSP injection-site count and the
+    // escaping-row branch are read. It is here because the two halves of the poll
+    // mutation are each INVISIBLE from behaviour: keying the effect on `expanded`
+    // while the edge guard still returns early fetches nothing, and dropping the
+    // guard while the deps are still `[active, connected, …stable callbacks]` re-runs
+    // on exactly the transitions it ran on before. Only the pair is observable, so
+    // only the pair is killable behaviourally — and a mutation nothing catches is a
+    // rule nothing holds.
+    //
+    // Kills, separately: adding `expanded` or `selection` to the dependency array,
+    // and deleting the false→true edge guard that makes this once-per-visit.
+    const source = readFileSync(join(process.cwd(), "src", "hooks", "useCodeReview.ts"), "utf8");
+    const effect =
+      /const wasOnScreen = useRef\(false\);\s*useEffect\(\(\) => \{([\s\S]*?)\n {2}\}, \[([^\]]*)\]\);/.exec(
+        source,
+      );
+    expect(effect, "the come-back effect has moved — re-point this pin").toBeTruthy();
+    const [, body, deps] = effect!;
+    // The edge, both halves of it: the read that makes it an edge and the write that
+    // arms it for next time.
+    expect(body).toContain("!wasOnScreen.current");
+    expect(body).toMatch(/wasOnScreen\.current = /);
+    expect(body).toMatch(/return;/);
+    // ...and the deps that keep it a visit rather than a subscription to the screen.
+    expect(deps).not.toMatch(/\bexpanded\b/);
+    expect(deps).not.toMatch(/\bselection\b/);
   });
 
   it("reads nothing at all while the screen is not the one on show", async () => {
@@ -1005,5 +1110,289 @@ describe("coming back to the screen", () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(ipc.listWorkspaceEdits).not.toHaveBeenCalled();
     expect(ipc.listWorkspaceDirectory).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The OTHER race, and the one the come-back re-read created. `paneSeq` guards which
+// PICK the pane is showing; nothing guarded which VISIT asked, so the list and the
+// listings gained two more concurrent writers with no discipline at all. Leaving the
+// screen cancels nothing, so every answer visit N is still waiting on lands during
+// visit N+1 and overwrites what visit N+1 just found out. All three shapes below
+// were reproduced before the counter existed.
+// ---------------------------------------------------------------------------
+
+describe("an answer from the visit before", () => {
+  beforeEach(resetIpc);
+
+  const roots = [{ directory: "/p" }];
+  type Listing = Awaited<ReturnType<typeof ipc.listWorkspaceDirectory>>;
+  type Edits = Awaited<ReturnType<typeof ipc.listWorkspaceEdits>>;
+
+  /** Off the screen and back on: the false→true edge of `active`, which is the one
+   * thing that starts a new visit. */
+  function leaveAndReturn(rerender: (props: HookProps) => void) {
+    rerender({ active: false, connected: true, roots });
+    rerender({ active: true, connected: true, roots });
+  }
+
+  it("does not walk a deleted file back into the tree", async () => {
+    // Visit 1 asked what is in `/p` and never got an answer. Visit 2 asked again and
+    // was told the file is gone — which is WHY the person is on this screen. Then
+    // visit 1's answer arrives and puts the file back in the tree, with a row that
+    // opens it. Kills: applying a listing without checking which visit asked for it.
+    let landVisitOne: (answer: Listing) => void = () => {};
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementationOnce(
+      () =>
+        new Promise<Listing>((resolve) => {
+          landVisitOne = resolve;
+        }),
+    );
+    const { result, rerender } = mountHook({ roots });
+    await waitFor(() => expect(result.current.expanded).toContain("/p"));
+
+    leaveAndReturn(rerender);
+    await waitFor(() => expect(result.current.listings["/p"]).toBeTruthy());
+    expect(result.current.listings["/p"].entries).toHaveLength(0);
+
+    await act(async () => {
+      landVisitOne({
+        value: {
+          directory: "/p",
+          root: "/p",
+          entries: [{ name: "gone.py", kind: "file", size: 12, escapes: false }],
+          truncated: false,
+        },
+      });
+    });
+    expect(result.current.listings["/p"].entries).toHaveLength(0);
+  });
+
+  it("does not put last visit's refusal over a listing that arrived and is good", async () => {
+    // The nastier direction, because `DirectoryNode` renders an error BEFORE it
+    // renders entries: a rejection left over from a visit the person has already left
+    // hides a listing that is on screen, correct and current, behind "Addison couldn't
+    // look inside this folder just now." and a "try again" for a question that has
+    // already been answered. Kills: a catch that files a sentence without checking
+    // which visit was asking.
+    let failVisitOne: (reason: Error) => void = () => {};
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementationOnce(
+      () =>
+        new Promise<Listing>((_resolve, reject) => {
+          failVisitOne = reject;
+        }),
+    );
+    const { result, rerender } = mountHook({ roots });
+    await waitFor(() => expect(result.current.expanded).toContain("/p"));
+
+    leaveAndReturn(rerender);
+    await waitFor(() => expect(result.current.listings["/p"]).toBeTruthy());
+
+    await act(async () => {
+      failVisitOne(new Error("engine went away"));
+    });
+    expect(result.current.listingErrors["/p"]).toBeUndefined();
+    expect(result.current.listings["/p"]).toBeTruthy();
+  });
+
+  it("does not bring a reverted row back with a live 'put it back' beside it", async () => {
+    // The changes list is the third writer. Visit 1's list is still in flight when the
+    // person leaves; they come back to a list that no longer holds the row they
+    // reverted, and then visit 1's answer restores it — a Revert control for a change
+    // that is already back, on the one screen whose job is to be exact about what
+    // Addison has done. Kills: applying a changes list without checking the visit.
+    let landVisitOne: (answer: Edits) => void = () => {};
+    vi.mocked(ipc.listWorkspaceEdits).mockImplementationOnce(
+      () =>
+        new Promise<Edits>((resolve) => {
+          landVisitOne = resolve;
+        }),
+    );
+    const { result, rerender } = mountHook({ roots });
+    await waitFor(() => expect(ipc.listWorkspaceEdits).toHaveBeenCalledTimes(1));
+
+    leaveAndReturn(rerender);
+    await waitFor(() => expect(result.current.editsLoaded).toBe(true));
+    expect(result.current.edits).toHaveLength(0);
+
+    await act(async () => {
+      landVisitOne({ value: { edits: [EDIT], truncated: false } });
+    });
+    expect(result.current.edits).toHaveLength(0);
+  });
+
+  it("keeps the answers the CURRENT visit is waiting on", async () => {
+    // The other direction, and the one an over-eager guard breaks: a counter bumped
+    // on anything other than arriving at the screen — a pick, a folder, a re-render —
+    // would drop the visit's own answers and leave the screen on "Looking…" forever.
+    // Kills: bumping the visit number anywhere but the false→true edge.
+    let landCurrent: (answer: Listing) => void = () => {};
+    const { result, rerender } = mountHook({ roots });
+    await waitFor(() => expect(result.current.listings["/p"]).toBeTruthy());
+
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementationOnce(
+      () =>
+        new Promise<Listing>((resolve) => {
+          landCurrent = resolve;
+        }),
+    );
+    act(() => result.current.toggleDirectory("/p/src"));
+    act(() => result.current.openFile("/p/a.py"));
+    rerender({ active: true, connected: true, roots });
+    await act(async () => {
+      landCurrent({
+        value: {
+          directory: "/p/src",
+          root: "/p",
+          entries: [{ name: "app.py", kind: "file", size: 12, escapes: false }],
+          truncated: false,
+        },
+      });
+    });
+    expect(result.current.listings["/p/src"]?.entries).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// (D) The hook and the surface together
+// ===========================================================================
+// (B) renders the surface over a hand-built state and (C) reads the hook's state
+// without rendering anything. Neither can see the failure that needs both: a
+// sentence written into state that nothing on screen is left to render.
+//
+// That is exactly what happened to the one control on this screen whose purpose is
+// to change a file. A failed Revert sets `revertError` AND re-reads the changes
+// list, and the sentence used to render at a single site two conditionals deep
+// inside `RevertBlock` — which that re-read can take away underneath it. (C)'s test
+// asserted the hook state and passed while the person saw nothing.
+
+const LIVE_ROOTS = [{ directory: "/p" }];
+
+/** The real hook, driven through the real surface and the same ipc mock. */
+function LiveCodeScreen() {
+  const review = useCodeReview({ connected: true, active: true, roots: LIVE_ROOTS });
+  return (
+    <CodeSurface
+      connected
+      roots={LIVE_ROOTS}
+      rootsLoaded
+      review={review}
+      theme="dark"
+      turnWorking={false}
+    />
+  );
+}
+
+describe("a Revert that failed says so ON SCREEN", () => {
+  beforeEach(resetIpc);
+
+  const NOT_REVERTABLE =
+    "Addison can't put this file back for you. The earlier version is on the left; " +
+    "you can copy it.";
+  const STALE =
+    "This change isn't in Addison's list any more. What's below is how the file " +
+    "looked when you opened it.";
+
+  /** Open the one changed file and press through the two-step confirm. */
+  async function pressPutItBack() {
+    render(<LiveCodeScreen />);
+    fireEvent.click(await screen.findByText("src/app.py"));
+    fireEvent.click(await screen.findByText("put it back"));
+    fireEvent.click(screen.getByText("Put it back"));
+  }
+
+  // EVERY ASSERTION BELOW WAITS FOR THE RE-READ TO LAND FIRST, and that ordering is
+  // the whole test. A sentence rendered inside `RevertBlock` IS on screen for the
+  // microtask between `setRevertError` and the list answer coming back, so a
+  // `findByText` fired straight after the press passes against the broken code and
+  // proves nothing (this test did, until 2026-08-08). What the person gets to READ
+  // is whatever is there once everything has settled.
+
+  it("when the failure's own re-read takes the row out of the list", async () => {
+    // Reproduced 2026-08-08: the catch re-reads the changes list (a rejected call is
+    // the one outcome where this side does not know whether the file was put back),
+    // the row is gone from the answer, `RevertBlock` unmounts — and it was holding
+    // the only render of `revertError`. The person pressed a button that failed and
+    // was told "This change isn't in Addison's list any more", which is a different
+    // fact and reads like success. Kills: putting the sentence back inside
+    // `RevertBlock`, where a row that leaves the list deletes it.
+    vi.mocked(ipc.listWorkspaceEdits)
+      .mockResolvedValueOnce({ value: { edits: [EDIT], truncated: false } })
+      .mockResolvedValue({ value: { edits: [], truncated: false } });
+    vi.mocked(ipc.revertWorkspaceFile).mockRejectedValueOnce(new Error("engine went away"));
+
+    await pressPutItBack();
+
+    // The row really did go — this is the shape, not a version of it where the block
+    // happened to survive.
+    await waitFor(() => expect(screen.queryByText("put it back")).toBeNull());
+    // The stale-diff sentence is what used to stand in the failure's place. Both are
+    // true; the failure is no longer the one missing.
+    expect(screen.getByText(STALE)).toBeTruthy();
+    expect(screen.getByText(REVERT_FAILED)).toBeTruthy();
+  });
+
+  it("when the row comes back with no Revert on it", async () => {
+    // The second shape, and it does not need the row to leave at all: the re-read
+    // answers with `revertable: false` (the shell's write ledger is session-scoped,
+    // and a core that has just restarted says exactly this), `RevertBlock` takes its
+    // early return, and the person gets the read-only line instead of the failure.
+    // Kills: rendering the sentence after any early return in that block.
+    vi.mocked(ipc.listWorkspaceEdits)
+      .mockResolvedValueOnce({ value: { edits: [EDIT], truncated: false } })
+      .mockResolvedValue({
+        value: { edits: [{ ...EDIT, revertable: false }], truncated: false },
+      });
+    vi.mocked(ipc.revertWorkspaceFile).mockRejectedValueOnce(new Error("engine went away"));
+
+    await pressPutItBack();
+
+    await waitFor(() => expect(screen.getByText(NOT_REVERTABLE)).toBeTruthy());
+    expect(screen.getByText(REVERT_FAILED)).toBeTruthy();
+  });
+
+  it("and the core's own refusal renders too, with the row still in place", async () => {
+    // The ordinary shape, kept so the move cannot be "delete the site and pass": a
+    // resolved refusal leaves the row alone, and its sentence — the core's own, never
+    // this side's — belongs under the control that was pressed.
+    vi.mocked(ipc.listWorkspaceEdits).mockResolvedValue({
+      value: { edits: [EDIT], truncated: false },
+    });
+    vi.mocked(ipc.revertWorkspaceFile).mockResolvedValueOnce({
+      ok: false,
+      path: EDIT.path,
+      error: "That file has moved since Addison changed it.",
+    });
+
+    await pressPutItBack();
+
+    expect(await screen.findByText("That file has moved since Addison changed it.")).toBeTruthy();
+    expect(screen.getByText("put it back")).toBeTruthy();
+  });
+
+  it("and it goes when the person picks something else", async () => {
+    // The other side of taking the sentence out of `RevertBlock`: it used to be
+    // removed for free by whatever unmounted that block, and now it has to be
+    // removed on purpose. A failure about `app.py` left standing over `README.md` is
+    // the same class of wrong as no failure at all — a sentence about a file the
+    // pane is not showing. Kills: dropping the clear from `openFile`.
+    vi.mocked(ipc.listWorkspaceEdits).mockResolvedValue({
+      value: { edits: [EDIT], truncated: false },
+    });
+    vi.mocked(ipc.listWorkspaceDirectory).mockImplementation(async (directory: string) => ({
+      value: {
+        directory,
+        root: "/p",
+        entries: [{ name: "README.md", kind: "file" as const, size: 10, escapes: false }],
+        truncated: false,
+      },
+    }));
+    vi.mocked(ipc.revertWorkspaceFile).mockRejectedValueOnce(new Error("engine went away"));
+
+    await pressPutItBack();
+    expect(await screen.findByText(REVERT_FAILED)).toBeTruthy();
+
+    fireEvent.click(screen.getByText("README.md"));
+    await waitFor(() => expect(screen.queryByText(REVERT_FAILED)).toBeNull());
   });
 });

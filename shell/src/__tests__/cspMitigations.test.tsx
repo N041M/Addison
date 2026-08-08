@@ -281,7 +281,7 @@ describe("securitypolicyviolation reporting", () => {
     return seen;
   }
 
-  it("says nothing about the app's own IPC, which the policy blocks by design", () => {
+  it("says nothing about the app's own IPC ENDPOINT, which the policy blocks by design", () => {
     // Tauri invokes commands with fetch(convertFileSrc(cmd,'ipc')) and does NOT inject
     // those sources into the CSP (set_csp augments only script-src and style-src), so
     // `connect-src 'self'` blocks it, Tauri falls back to postMessage, and the app runs
@@ -289,19 +289,46 @@ describe("securitypolicyviolation reporting", () => {
     // new is that this reporter would file it on every launch, and the entry it would
     // teach a reader to scroll past is the blocked worker this exists to surface.
     //
+    // Every shape here NAMES A HOST. The Windows origin is the one a compliant engine
+    // actually files (CSP3 §5.4 strips a cross-origin http URL to its origin), and the
+    // path-bearing pair is what an engine that reports the whole URL sends.
+    //
     // Kills: dropping the isTauriIpcViolation guard.
+    expect(report("http://ipc.localhost", "connect-src 'self'")).toHaveLength(0);
     expect(report("ipc://localhost/plugin:event|listen", "connect-src 'self'")).toHaveLength(0);
     expect(report("http://ipc.localhost/plugin:path|resolve", "connect-src")).toHaveLength(0);
-    expect(report("ipc", "connect-src 'self'")).toHaveLength(0);
+  });
+
+  it("REPORTS the scheme-only shape, which names no endpoint at all", () => {
+    // The correction (2026-08-08). CSP3 §5.4 returns THE SCHEME ALONE for a
+    // non-http(s) URL, so `ipc` is the whole report a compliant engine files for the
+    // macOS/Linux endpoint — and it is byte-identical to what page script calling
+    // fetch("ipc://localhost/plugin:fs|remove") would file. `blockedURI === "ipc"`
+    // therefore suppressed a SCHEME, not an endpoint, while the docstring above it
+    // claimed a named allowance: every `ipc:` connect-src violation was dropped,
+    // including the direct command invocation that is the one thing on this scheme
+    // worth seeing.
+    //
+    // The two cannot be told apart, so this fails in the direction of showing too
+    // much and accepts one benign entry per launch on macOS/Linux (docs/KNOWN-GAPS.md).
+    // Kills: putting the scheme test back, in this or any spelling.
+    expect(report("ipc", "connect-src 'self'")).toHaveLength(1);
+    expect(report("ipc", "connect-src")).toHaveLength(1);
   });
 
   it("still reports a real violation, a lookalike URI, and the same URI elsewhere", () => {
-    // The three ways a blanket filter would go wrong, each its own mutation: matching
-    // by substring (the lookalike), ignoring the directive (the third case), or
+    // The ways a blanket filter would go wrong, each its own mutation: matching by
+    // substring (the lookalikes), ignoring the directive (the last case), or
     // suppressing connect-src wholesale (the first).
     expect(report("https://cdn.example/x.js", "script-src 'self'")).toHaveLength(1);
     expect(report("https://evil.example/?u=ipc://localhost", "connect-src 'self'")).toHaveLength(1);
+    expect(report("https://evil.example/?u=http://ipc.localhost", "connect-src")).toHaveLength(1);
+    // The boundary itself: a host that merely STARTS with the endpoint's is a
+    // different host. Kills: relaxing the match to a bare `startsWith(endpoint)`.
+    expect(report("ipc://localhost.evil.test/plugin:fs|remove", "connect-src")).toHaveLength(1);
+    expect(report("http://ipc.localhost.evil.test/x", "connect-src")).toHaveLength(1);
     expect(report("ipc://localhost", "img-src 'self' data:")).toHaveLength(1);
+    expect(report("http://ipc.localhost", "img-src 'self' data:")).toHaveLength(1);
   });
 
   it("puts the blocked URI, the directive and the source file into the diagnostics ring", () => {

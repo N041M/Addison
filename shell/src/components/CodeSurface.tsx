@@ -608,9 +608,24 @@ function RightPane({
           edit={edit}
           busy={review.reverting === edit.path}
           turnWorking={turnWorking}
-          error={review.revertError}
           onRevert={() => review.revert(edit.path)}
         />
+      )}
+
+      {/* A REVERT THAT FAILED SAYS SO HERE, not inside `RevertBlock` — and this is
+          the whole of the fix, because the failure path RE-READS THE CHANGES LIST
+          (the one outcome where this side does not know whether the file was put
+          back). That re-read can take the block away underneath its own sentence:
+          the row leaves the list and the person gets "This change isn't in Addison's
+          list any more" where the failure should be, or it comes back
+          `revertable: false` and the block's early return prints the read-only line
+          instead. Both were reproduced (2026-08-08). Rendered off `revertError`
+          alone — no selection, no row, no tier — because a press that failed is a
+          fact about the press. */}
+      {review.revertError && (
+        <p data-revert-error="" className="m-0 mb-3 shrink-0 text-[12px] leading-[1.55] text-muted">
+          {review.revertError}
+        </p>
       )}
 
       {editIsGone && (
@@ -695,18 +710,20 @@ function Centered({ children }: { children: ReactNode }) {
  * the LIFO undo stack able to resurrect content somebody deliberately reverted away
  * from. The core owns that semantics; this screen just never implies otherwise,
  * which is why there is no per-write control anywhere on it.
+ *
+ * IT DOES NOT HOLD THE FAILURE SENTENCE, and deliberately so: this block is
+ * conditional on a row that the failure path's own re-read can remove. `RightPane`
+ * renders that sentence — see the comment at the site.
  */
 function RevertBlock({
   edit,
   busy,
   turnWorking,
-  error,
   onRevert,
 }: {
   edit: WorkspaceEdit;
   busy: boolean;
   turnWorking: boolean;
-  error: string | null;
   onRevert: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -771,7 +788,6 @@ function RevertBlock({
           )}
         </RowConfirm>
       )}
-      {error && <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">{error}</p>}
     </div>
   );
 }
