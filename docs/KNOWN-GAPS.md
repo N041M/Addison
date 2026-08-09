@@ -7,7 +7,10 @@ drifted from this one.
 
 Nothing here is a bug report against shipped behaviour: these are tracked gaps,
 deliberate deferrals and decisions waiting on the owner. A green test run does not
-close any of them.
+close any of them. Defects with a known wrong behaviour live in
+[`KNOWN-BUGS.md`](../KNOWN-BUGS.md) (added 2026-08-09, from the whole-app test
+pass) — that file holds the repros, this one keeps the design questions a defect
+sometimes raises.
 
 *(Extracted from `HANDOFF.md` on 2026-07-27, unchanged.)*
 

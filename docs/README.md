@@ -28,7 +28,8 @@ a run prints a work order per offender — file, line, what is wrong, what to wr
 | [`addison-engineering-spec.md`](addison-engineering-spec.md) | Build brief — schema, IPC, subsystem design. |
 | [`addison-design-doc.md`](addison-design-doc.md) | Product and UX rationale: *why* it is shaped this way, and who for. |
 | [`../ROADMAP.md`](../ROADMAP.md) | Status, and **only** status. What is built, next, and deliberately not being built. |
-| [`KNOWN-GAPS.md`](KNOWN-GAPS.md) | Every live issue, deferral and open design question. Nothing else keeps a list. |
+| [`KNOWN-GAPS.md`](KNOWN-GAPS.md) | Every live gap, deferral and open design question. Nothing else keeps that list. |
+| [`../KNOWN-BUGS.md`](../KNOWN-BUGS.md) | Defects with a known wrong behaviour — the working fix-list from the 8–9 Aug 2026 whole-app test pass, struck only after the QA artifact's check re-runs green. Gaps and design questions stay in `KNOWN-GAPS.md`; the boundary is stated in both files. |
 | [`CONVENTIONS.md`](CONVENTIONS.md) | How work is done here: the standard, the conventions, the environment. |
 
 ## Process
