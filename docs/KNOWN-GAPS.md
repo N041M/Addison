@@ -7,7 +7,10 @@ drifted from this one.
 
 Nothing here is a bug report against shipped behaviour: these are tracked gaps,
 deliberate deferrals and decisions waiting on the owner. A green test run does not
-close any of them.
+close any of them. Defects with a known wrong behaviour live in
+[`KNOWN-BUGS.md`](../KNOWN-BUGS.md) (added 2026-08-09, from the whole-app test
+pass) — that file holds the repros, this one keeps the design questions a defect
+sometimes raises.
 
 *(Extracted from `HANDOFF.md` on 2026-07-27, unchanged.)*
 
@@ -843,3 +846,68 @@ are here because somebody will meet them, and because anything built on top of
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
+
+**Feature suggestions judged 2026-08-09 (owner-reviewed) — recorded in their
+judged shapes so the raw suggestions are not re-litigated later:**
+
+An outside list of features was propped against what exists. Two were already
+covered or contradicted by recorded decisions and are NOT open: copy-and-regenerate
+is design-doc §7.9.1's Retry, and a web-search / code-execution on-off pair exists
+in a stronger shape than toggles — consent cards for search, and code execution is
+a profile rather than a switch (`run_command` is absent from `visible_tools(SAFE)`;
+a Simple-profile toggle for it would break SAFE invariant 1). The rest survive, as
+follows. None is scheduled and none blocks anything.
+
+- **Highlight → Ask / Explain — the one worth building first.** Selecting text in a
+  past message offers Ask (type a question about the selection) and Explain (the
+  same mechanism with a canned prompt — one feature, two labels). The judged shape:
+  a selection popover — floating chrome, the sanctioned bordered-panel element in
+  the v4 direction — that inserts the selection as a QUOTE plus the question into
+  the main thread. Deliberately NOT the suggested "small window with the AI
+  responding in it": a second parallel chat surface forks the single-thread
+  correspondence UI and mints new state to manage, restore and explain. Read-only,
+  frontend-only, no new tool, no gate or registry work, works in every profile —
+  and the best persona fit on the list, because an unclear sentence is exactly what
+  a non-technical person cannot phrase a follow-up about.
+- **Continue — truncation-aware only.** A button beside Retry that appears when the
+  provider's stop reason says the response hit its output cap, and asks the model
+  to resume. Per-provider spellings of that fact belong on `ProviderCapabilities`,
+  never an `isinstance`. Deliberately NOT an always-present "make it longer":
+  §7.9.1 keeps the command set short on purpose, and a generic Continue invites
+  padding rather than completing a cut-off answer.
+- **Knowledge — retrieval over person-attached files. v2, and it must land WITH
+  untrusted-content screening, not before it.** The suggestion is right that
+  "search the file" beats "read the whole file", and nothing on any roadmap does
+  retrieval. The clean shape when it comes: files enter through the existing picker
+  consent; indexing is local-only (an embedding model through the Ollama path that
+  already exists — cloud embeddings would ship file contents to a provider, a new
+  privacy surface needing its own plain sentence); the index lives in SQLite; and
+  retrieved passages enter context marked with their source. A knowledge base is a
+  standing channel for a poisoned document to speak in every session, which makes
+  this the FOURTH trigger for the screening deferral (three are recorded above).
+  One structural note so it is not rediscovered: a retrieval TOOL must not import
+  `providers/` (module boundary rule), so indexing belongs to an
+  orchestrator-owned service and the tool only queries the index it left behind.
+- **Per-task model assignment — Developer-only, not v1 (owner, 2026-08-09).** The
+  raw suggestion was "models casually on the sidebar"; rejected for Simple (model
+  choice is a power-user surface — design-doc §7.3.3 — and the companion keeps its
+  one prefer-quality/prefer-free toggle), it grew into something better in review:
+  assigning different models to different KINDS of work — one model drives tool use
+  such as search, a different one interprets what came back — with a possible
+  drag-and-drop rail of chosen models as the Developer surface. It is also the
+  MANUAL half of the auto-routing question above ("Auto-routing depth — v2 or
+  now?"), so the two are designed as one thing, with the automatic chooser
+  arriving later rather than beside it. **The design now has an owner:**
+  [`model-assignments-plan.md`](model-assignments-plan.md) (2026-08-09, proposed,
+  not scheduled) — closed duty set decided structurally, byte-identical behaviour
+  when nothing is assigned, and the mid-turn provider boundary stated rather than
+  discovered.
+- **Notes — no standalone application; add the pieces where they fit (owner,
+  2026-08-09).** A notes app inside Addison is a second product, and the two jobs
+  it would do are owned already: "a thing I edit and keep" is the `note` widget
+  kind, and "things Addison should know" is long-term memory (design-doc §7.6),
+  which has a consent-and-deletion story a free-form pile would not. What survives
+  of the suggestion is attachment — "this note is context for this conversation" —
+  and that is the Knowledge entry above wearing a smaller hat: once retrieval
+  lands, a note is a small attachable document that is already local and already
+  trusted. Until then, nothing to build.
