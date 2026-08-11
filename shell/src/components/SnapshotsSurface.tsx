@@ -1,5 +1,6 @@
-// The Snapshots surface — the sidebar's Workspace → Snapshots entry
-// (docs/design-brief-dark, "Snapshots surface").
+// The Restore points surface — the sidebar's Workspace → Restore points entry
+// (docs/design-brief-dark, "Snapshots surface"; the code and the brief keep the
+// internal name, the UI says "Restore points" everywhere — plain-language rule).
 //
 // The same real restore points as the modal, in the surface idiom, grouped by
 // when they were saved. It shares `SnapshotRows` with the modal by construction,
@@ -24,6 +25,12 @@ import type { ReactNode } from "react";
 
 const SNAPSHOTS_DESCRIPTION =
   "Addison saves a restore point before anything risky, so you can always go back to a setup that worked.";
+
+/** Stands in for the recency groups when there are none. Neutral on purpose:
+ * the surface is titled "Restore points", so repeating that here would be a
+ * heading under an identical heading; and it has to stay true in the
+ * not-connected case, where "Nothing saved yet" is a claim we cannot make. */
+const EMPTY_SECTION_LABEL = "Saved so far";
 
 /** Today / This week / Older — in that order, and only the ones with rows. */
 export function groupSnapshotsByRecency(
@@ -69,7 +76,7 @@ export function SnapshotsSurface({
 }) {
   const groups = groupSnapshotsByRecency(state.snapshots);
   return (
-    <Surface title="Snapshots" description={SNAPSHOTS_DESCRIPTION} pinned={pinned}>
+    <Surface title="Restore points" description={SNAPSHOTS_DESCRIPTION} pinned={pinned}>
       {state.warning && (
         <SurfaceSection label="Worth knowing">
           <SurfaceRow wrap name={state.warning} />
@@ -81,7 +88,7 @@ export function SnapshotsSurface({
         </SurfaceSection>
       )}
       {groups.length === 0 ? (
-        <SurfaceSection label="Restore points">
+        <SurfaceSection label={EMPTY_SECTION_LABEL}>
           <SurfaceRow wrap name={snapshotsEmptyLine(connected, state.snapshotsLoaded)} />
         </SurfaceSection>
       ) : (

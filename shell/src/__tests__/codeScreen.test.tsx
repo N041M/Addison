@@ -174,7 +174,7 @@ describe("who can reach the code screen at all", () => {
     // browsing a folder trusted under a profile that is no longer on.
     render(<App />);
     await waitFor(() => expect(ipc.getProfile).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText("Snapshots")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Restore points")).toBeTruthy());
     expect(screen.queryByText("Code")).toBeNull();
   });
 
