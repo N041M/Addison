@@ -45,8 +45,11 @@ wired. A refused call is not a card anybody may approve:
 
   1. **A Mac.** Arming is launchd and nothing else (plan §5.4). Elsewhere one plain
      sentence, the same temperament as the seatbelt's non-mac disclosure.
-  2. **The row must exist.** The id comes from a model reading a list that may have
-     moved on; a card for an automation nobody can name is a card about nothing.
+  2. **The row must exist, and exactly one of it.** What the call names is resolved
+     by ``resolve_automation`` — the id first, then an exact name — because the id
+     comes from a model reading a list that may have moved on, and a person types the
+     name they can see. A card for an automation nobody can name is a card about
+     nothing; a card for a name TWO rows answer to is worse, so that refuses too.
   3. **The row's command must STILL pass the denylist.** Carried by
      ``command_text``, so the check that refuses ``crontab -e`` at authoring
      refuses it again HERE, at every dispatch site, above the gate — a row written
@@ -76,6 +79,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from agent_core.automations import (
@@ -166,7 +170,26 @@ _ONLY_ON_A_MAC = (
     "Addison can only switch automations on for your computer to run on a Mac. "
     "The automation stays saved, and nothing was switched on."
 )
-_NO_SUCH_AUTOMATION = "That automation isn't saved any more, so there was nothing to turn on."
+# WHAT THIS SENTENCE USED TO SAY, AND WHY IT DOESN'T ANY MORE. It read *"That
+# automation isn't saved any more, so there was nothing to turn on."* — a claim about
+# a DELETION, made in the one situation where a deletion is exactly what did not
+# happen. Every failed lookup said it: an id nobody recognised, a name typed instead
+# of an id, a store that answered nothing. So the row sat in Settings while Addison
+# told the person it was gone (KNOWN-BUGS P1 #1). Addison only knows that it could
+# not find a match, so that is all it says, plus the one place the real name is
+# written down.
+_NO_SUCH_AUTOMATION = (
+    "Addison couldn't find a saved automation with that name or id, so nothing was "
+    "switched on. Check the Automations list in Settings for the exact name."
+)
+# Names are not unique — ``derive_label`` gives the second "Back up notes" a label of
+# its own precisely so both rows can exist. Picking one of them would be arming a
+# command the person did not choose, so this asks instead. It names no command, no
+# label and no id: the list is where those live.
+_AMBIGUOUS_NAME = (
+    "More than one saved automation has that name, so Addison didn't switch anything "
+    "on. Open the Automations list in Settings and say which id you mean."
+)
 # A row whose schedule the vocabulary cannot read. It would install a job with no
 # trigger — loaded and never fired — so the honest answer is to write it again.
 _NO_USABLE_SCHEDULE = (
@@ -182,6 +205,60 @@ _COULDNT_ARM = (
     "on. Try again in a moment."
 )
 _UNDO_NOT_READY = "Can't switch that automation back off just now — try again in a moment."
+
+
+@dataclass(frozen=True)
+class AutomationLookup:
+    """What "which automation did this call name?" answers — one of three things.
+
+    A bare ``Automation | None`` cannot express the third: several rows share the
+    name, which is not "found" and is not "there is nothing there" either. Both
+    tools' refusals need to tell those two apart, so the answer carries the
+    distinction instead of each caller re-deriving it."""
+
+    row: Automation | None = None
+    ambiguous: bool = False
+
+
+def resolve_automation(store: Store, given: object) -> AutomationLookup:
+    """The ONE way this subsystem turns what a call said into a row. Never raises.
+
+    ID FIRST, THEN THE NAME, and the second half is the point. The id is the only
+    thing that is guaranteed unique, so it is asked first and a hit ends the
+    question. But an id only ever reaches a conversation because something put it
+    there, and until 2026-08-11 nothing did: ``create_automation`` handed back a
+    schedule and a preview with no id in them, and the Settings "Arm…" button seeds
+    a sentence carrying the NAME. So every arm-from-chat resolved nothing and was
+    answered with a sentence claiming the row had been deleted (KNOWN-BUGS P1 #1).
+    Surfacing the id fixed the model's half; this fixes the person's half, because
+    what somebody types is the name they can see.
+
+    A name matches EXACTLY, after stripping — never a prefix, never case-folded.
+    Arming runs a command unattended and unconfined; "closest match" is not a
+    standard this door gets to use, and a near-miss that refuses costs one sentence
+    while a near-miss that resolves costs the wrong job on somebody's computer.
+
+    Several rows with that name is a REFUSAL, not a pick (see ``_AMBIGUOUS_NAME``).
+
+    Shared with ``disarm_automation`` by import rather than copied, so the two
+    directions can never disagree about which row a person meant — a mismatch
+    would mean somebody switching off a different automation from the one they just
+    switched on."""
+    if not isinstance(given, str) or not given.strip():
+        return AutomationLookup()
+    try:
+        row = store.get_automation(given)
+        if row is not None:
+            return AutomationLookup(row=row)
+        wanted = given.strip()
+        matches = [item for item in store.list_automations() if item.name.strip() == wanted]
+    except Exception:
+        return AutomationLookup()
+    if len(matches) == 1:
+        return AutomationLookup(row=matches[0])
+    if len(matches) > 1:
+        return AutomationLookup(ambiguous=True)
+    return AutomationLookup()
 
 
 def _armed_text(row: Automation, sentence: str) -> str:
@@ -217,7 +294,8 @@ class ArmAutomationTool:
                     "type": "string",
                     "description": (
                         "Which saved automation to switch on — the id from the list "
-                        "of automations."
+                        "of automations, or its exact name if that is all you have. "
+                        "If two automations share a name, only the id will do."
                     ),
                 }
             },
@@ -295,22 +373,23 @@ class ArmAutomationTool:
 
     # --- the door ------------------------------------------------------------
 
-    def _row(self, args: dict) -> Automation | None:
-        """The automation this call names, or None. Never raises.
+    def _lookup(self, args: dict) -> AutomationLookup:
+        """Which automation this call named — the one place this tool asks.
 
-        Asked by four different questions (the denylist, the panel detail, the
-        card, ``execute``), each of which must survive a store that is not up yet,
-        an id that is not a string, and a row somebody removed in another window."""
+        Asked by five different questions (the denylist, the panel detail, the card,
+        the door, ``execute``), each of which must survive a store that is not up
+        yet, an id that is not a string, and a row somebody removed in another
+        window. They all come through here, so a card, a denylist check and an
+        ``execute`` can never be about three different rows."""
         store = self._store_ref()
         if store is None:
-            return None
-        automation_id = args.get("id")
-        if not isinstance(automation_id, str) or not automation_id:
-            return None
-        try:
-            return store.get_automation(automation_id)
-        except Exception:
-            return None
+            return AutomationLookup()
+        return resolve_automation(store, args.get("id"))
+
+    def _row(self, args: dict) -> Automation | None:
+        """The automation this call names, or None — ``_lookup`` with the
+        ambiguity flattened away, for the four askers that only need the row."""
+        return self._lookup(args).row
 
     def _data_dir(self, store: Store) -> str:
         """The live data directory, derived from the RUNNING store's own path.
@@ -337,7 +416,10 @@ class ArmAutomationTool:
             return _NOT_READY
         if not arming_is_supported():
             return _ONLY_ON_A_MAC
-        row = self._row(args)
+        found = self._lookup(args)
+        if found.ambiguous:
+            return _AMBIGUOUS_NAME
+        row = found.row
         if row is None:
             return _NO_SUCH_AUTOMATION
         if not schedule_is_readable(row.schedule_kind, schedule_fields(
