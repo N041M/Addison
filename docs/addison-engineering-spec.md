@@ -1305,9 +1305,10 @@ class RoutineBuilder:
     def propose_from_recent_actions(self, conversation: Conversation, n_messages: int = 10) -> Routine:
         """Triggered when the user says something like 'can you do this
         automatically next time' or 'save this as a routine'. Looks back
-        over the last n_messages, extracts the tool calls that were made
-        (NOT the model's prose), and generalizes literal values into
-        {{variables}} where they look like per-run inputs (e.g. a specific
+        over the LAST TURN — everything after the last user message, which
+        is exactly what the work panel is showing — extracts the tool calls
+        that were made (NOT the model's prose), and generalizes literal
+        values into {{variables}} where they look like per-run inputs (e.g. a specific
         filename becomes {{output_filename}}, a specific file path the
         user dropped in becomes {{dropped_file_path}}).
         Returns a draft Routine — NOT yet saved."""
