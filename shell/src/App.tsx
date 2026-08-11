@@ -920,12 +920,19 @@ export function App() {
     />
   ) : null;
 
+  // UNTIL THE ENGINE HAS ANSWERED, THIS IS UNDEFINED and the footer says nothing.
+  // It used to fall through to "Simple profile", so every launch asserted a
+  // default as fact for the first seconds and then corrected itself in front of
+  // the person — and a Developer-profile user watched their window claim Simple.
+  // Same idiom as `snapshotsHint`: an unknown fact is omitted, never guessed.
   const profileLabel =
-    profile?.activeProfile === "developer"
-      ? "Developer profile"
-      : profile?.activeProfile === "custom"
-        ? "Custom profile"
-        : "Simple profile";
+    profile === null
+      ? undefined
+      : profile.activeProfile === "developer"
+        ? "Developer profile"
+        : profile.activeProfile === "custom"
+          ? "Custom profile"
+          : "Simple profile";
   // In OPEN mode the sidebar appends a dim, mono " · open" — the one quiet
   // acknowledgement that the safety posture is different. Nothing louder.
   const profileModeNote = profile?.mode === "open" ? "open" : undefined;

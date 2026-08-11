@@ -55,8 +55,12 @@ interface Props {
   toolsHint?: string;
   /** Mono hint beside "Snapshots" — how many restore points exist. */
   snapshotsHint?: string;
-  /** Plain label for the active profile, e.g. "Simple profile". */
-  profileLabel: string;
+  /**
+   * Plain label for the active profile, e.g. "Simple profile" — or UNDEFINED
+   * while the engine has not answered yet, in which case the footer note is not
+   * rendered at all. Silence is correct here; a default asserted as fact is not.
+   */
+  profileLabel?: string;
   /**
    * OPEN mode only: a dim suffix ("open") appended to the profile note — the one
    * quiet acknowledgement that the safety posture is different. Nothing louder.
@@ -222,8 +226,10 @@ export function Sidebar({
     // read refs, so the lint rule is satisfied without a disable.)
   }, [expanded]);
 
-  const profileNote =
-    `${profileLabel} · local` + (modeNote ? ` · ${modeNote}` : "");
+  // Nothing is claimed until the profile is known — see `profileLabel` above.
+  const profileNote = profileLabel
+    ? `${profileLabel} · local` + (modeNote ? ` · ${modeNote}` : "")
+    : null;
 
   return (
     <div
@@ -361,7 +367,16 @@ export function Sidebar({
         >
           Settings
         </button>
-        <p className="pl-3.5 font-mono text-[10px] text-disabled">{profileNote}</p>
+        {/* Empty until the profile is known: the line keeps its height (so the
+            footer does not jump when the answer lands) but says nothing, and is
+            hidden from assistive tech while it holds only the spacer. */}
+        <p
+          className="pl-3.5 font-mono text-[10px] text-disabled"
+          data-testid="profile-note"
+          aria-hidden={profileNote === null || undefined}
+        >
+          {profileNote ?? "\u00a0"}
+        </p>
       </div>
     </div>
   );
