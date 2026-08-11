@@ -419,6 +419,11 @@ export const ipc = {
   // `hmac.compare_digest`, and a second normaliser on this side would be a place
   // where the two could one day disagree about a security decision. Nothing here
   // ever compares it, and nothing here ever stores it.
+  // What is the engine waiting for RIGHT NOW? Asked by App's re-sync watchdog when
+  // a turn has been working with no card on screen (see PENDING_RESYNC_MS there).
+  // A read: it answers no card and costs an arming card no attempt.
+  pendingPermission: () => call(Method.PermissionPending),
+
   respondToPermission: (toolId: string, allow: boolean, typed?: string) =>
     call(
       Method.PermissionRespond,

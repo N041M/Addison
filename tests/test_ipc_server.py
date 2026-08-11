@@ -607,6 +607,61 @@ def test_tool_turn_blocks_on_permission_then_runs(tmp_path):
         _shutdown(reader, thread)
 
 
+def test_permission_pending_answers_while_the_worker_is_blocked(tmp_path):
+    """KNOWN-BUGS P2 #3 — the re-sync query, and the two properties that make it
+    worth having.
+
+    ``permission.requestGrant`` is a notification, so a webview that never received
+    it (or cleared the card it made) leaves the engine blocked with nothing on screen
+    and nothing that expires. ``permission.pending`` is how the surface asks.
+
+    IT MUST ANSWER WHILE THE WORKER IS BLOCKED, which is the whole reason it is on
+    the read loop: the worker thread is sitting inside ``_ask_once`` waiting for the
+    very answer this method is asking about, so a handler queued behind it could only
+    reply once the question no longer existed. That is what the middle of this test
+    proves — the reply arrives with the turn still unfinished and the tool unrun.
+    """
+    responses = [_tool_call_response(), ModelResponse(text="Done.", tool_calls=[])]
+    server, reader, writer, tool, thread = _server(tmp_path, responses)
+    try:
+        # Nothing running: the honest answer is "nothing".
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.PERMISSION_PENDING})
+        idle = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        assert idle["result"] == {"request": None}
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "go"}}
+        )
+        card = writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+
+        reader.feed({"jsonrpc": "2.0", "id": 3, "method": Method.PERMISSION_PENDING})
+        pending = writer.wait_for(lambda f: f.get("id") == 3 and "result" in f)
+        # The card that was emitted, not a second one composed here: a re-sync that
+        # rebuilt the card could put different words in front of the person from the
+        # ones the engine is blocked on.
+        assert pending["result"]["request"] == card["params"]
+        # ...and the turn really is still blocked, so this reply came off the read
+        # loop rather than from a worker that had moved on.
+        assert _spy(tool).calls == []
+        assert not any(f.get("id") == 2 for f in writer.frames)
+
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 4, "method": Method.PERMISSION_RESPOND,
+             "params": {"toolId": "spy_tool", "allow": True}}
+        )
+        writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+
+        # Answered: the query must stop offering it. Otherwise a poll landing in the
+        # gap between the answer and the worker popping its waiter would put a card
+        # the person just dealt with back in front of them.
+        reader.feed({"jsonrpc": "2.0", "id": 5, "method": Method.PERMISSION_PENDING})
+        after = writer.wait_for(lambda f: f.get("id") == 5 and "result" in f)
+        assert after["result"] == {"request": None}
+    finally:
+        _shutdown(reader, thread)
+
+
 class _DestinationTool:
     """A LOW tool that can name what it is about to reach — read_web_page's shape.
 

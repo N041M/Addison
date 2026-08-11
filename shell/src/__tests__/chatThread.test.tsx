@@ -248,6 +248,105 @@ describe("keeping the newest content in view", () => {
     rerender(<ChatThread {...props} streamDisplay="# Tid%&d\n\nI m" />);
     expect(scrollIntoView).toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // KNOWN-BUGS P2 #3 — a pending approval card invisible behind "Working…".
+  //
+  // The consent card renders in the thread's FOOTER whenever the widget rail is
+  // hidden, and the effect above deliberately ignores footer changes (a fresh
+  // fragment every render). So the card was appended below the fold of a
+  // container whose scrollbar is hidden, with nothing on screen to say it was
+  // there — and since a blocked turn sends no further messages and no chunks,
+  // nothing scrolled again. The sighting fits exactly: four minutes of
+  // "Working…", no card, no timeout, and Stop revealed it because Stop rewrites
+  // `messages` (pending → settled), which IS in the dependency list.
+  //
+  // `attention` is the narrow signal that fixes it without giving the rest of
+  // the footer the same power — which is what the test below it holds.
+  // -------------------------------------------------------------------------
+  const consentProps = {
+    messages: ROWS,
+    onRetry() {},
+    retryAvailable: false,
+    onRewindTo() {},
+  };
+
+  it("scrolls the consent card itself into view when one arrives", () => {
+    const { container, rerender } = render(
+      <ChatThread {...consentProps} footer={<div>work</div>} attention={null} />,
+    );
+    scrollTo(list(container), 4);
+    scrollIntoView.mockClear();
+
+    rerender(
+      <ChatThread
+        {...consentProps}
+        footer={
+          <>
+            <div>work</div>
+            {/* PermissionCard's own container attribute. */}
+            <div data-consent-card="">Allow</div>
+            {/* What can follow it: with the rail open inline, the card rides at the
+                TOP and the widget list runs on below. Scrolling to the FOOT of the
+                thread would push the question off the top of the viewport. */}
+            <div style={{ height: 4000 }}>widgets</div>
+          </>
+        }
+        attention="arm_automation:"
+      />,
+    );
+    expect(scrollIntoView).toHaveBeenCalled();
+    const target = scrollIntoView.mock.instances[0] as HTMLElement;
+    expect(target.hasAttribute("data-consent-card")).toBe(true);
+  });
+
+  it("brings a reader who has scrolled up back to the card", () => {
+    // Being scrolled up is not consent to miss a blocking question — the one
+    // exception to "never jail the reader", alongside a message they just sent.
+    const { container, rerender } = render(<ChatThread {...consentProps} attention={null} />);
+    scrollTo(list(container), 900);
+    scrollIntoView.mockClear();
+
+    rerender(<ChatThread {...consentProps} attention="spy_tool:" />);
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("does not re-scroll while the same card stays up", () => {
+    const { container, rerender } = render(
+      <ChatThread {...consentProps} attention="spy_tool:" />,
+    );
+    scrollTo(list(container), 900); // they scrolled away deliberately, card in view
+    scrollIntoView.mockClear();
+
+    // Unrelated re-renders with the SAME question on screen must leave them be.
+    rerender(<ChatThread {...consentProps} attention="spy_tool:" footer={<div>a</div>} />);
+    rerender(<ChatThread {...consentProps} attention="spy_tool:" footer={<div>b</div>} />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("scrolls again when a keyword card is re-asked after a mistyped code", () => {
+    // Same tool, new ask: the attempts count is in the key precisely so this
+    // counts as an arrival rather than the same card re-rendering.
+    const { container, rerender } = render(
+      <ChatThread {...consentProps} attention="arm_automation:3" />,
+    );
+    scrollTo(list(container), 900);
+    scrollIntoView.mockClear();
+
+    rerender(<ChatThread {...consentProps} attention="arm_automation:2" />);
+    expect(scrollIntoView).toHaveBeenCalled();
+  });
+
+  it("still ignores an ordinary footer rebuild", () => {
+    // The guard the fix must not cost: App rebuilds the footer on every render.
+    const { rerender } = render(
+      <ChatThread {...consentProps} footer={<div>one</div>} attention={null} />,
+    );
+    scrollIntoView.mockClear();
+
+    rerender(<ChatThread {...consentProps} footer={<div>two</div>} attention={null} />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

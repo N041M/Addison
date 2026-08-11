@@ -73,6 +73,21 @@ interface Props {
   header?: ReactNode;
   /** Rendered after the last message, inside the scroll (consent + work inline). */
   footer?: ReactNode;
+  /**
+   * A key naming footer content the reader MUST be shown — today, the pending
+   * consent card. `null` when there is none; a different string means a different
+   * question. When it turns non-null the thread scrolls to the foot, once.
+   *
+   * A key rather than the footer node itself, and that is the whole design: App
+   * rebuilds `footer` on every render, so the follow effect below deliberately
+   * leaves it out of its dependencies — which is exactly why a card appended to it
+   * used to arrive BELOW THE FOLD of a container whose scrollbar is hidden, with
+   * nothing to say it was there (KNOWN-BUGS P2 #3: "Working…" for four minutes and
+   * a card revealed only by Stop — Stop changes `messages`, which is what finally
+   * scrolled). This is the narrow signal that says "this particular footer change
+   * is worth moving the reader for", so the rest of the footer still cannot.
+   */
+  attention?: string | null;
 }
 
 const SENDER_LABEL: Record<string, string> = {
@@ -144,6 +159,7 @@ export function ChatThread({
   onSuggestion,
   header,
   footer,
+  attention = null,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
@@ -362,6 +378,33 @@ export function ChatThread({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages, streamDisplay]);
 
+  // A question the reader has to answer arrived in the footer. Bring them to it.
+  //
+  // This is the ONE footer change allowed to move the thread, and it is allowed for
+  // the same reason a message the person just sent is: the turn is now blocked on
+  // them. It fires on ARRIVAL only — a card whose key is unchanged never re-scrolls,
+  // so someone reading back through the thread with a card already on screen is left
+  // alone — and it forces `followingRef` true, because a consent card that cannot be
+  // seen is a safety failure and being scrolled up is not consent to miss it.
+  // Seeded null rather than with the first `attention`: a thread MOUNTING with a
+  // card already pending (coming back to chat from a surface) is an arrival too.
+  const lastAttentionRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = attention ?? null;
+    const arrived = key !== null && key !== lastAttentionRef.current;
+    lastAttentionRef.current = key;
+    if (!arrived) return;
+    followingRef.current = true;
+    // THE CARD, when it can be found, and the foot of the thread otherwise. The
+    // difference is not cosmetic: with the widget rail open inline, the card rides
+    // at the TOP of a rail whose widget list follows it, so scrolling to the foot
+    // can leave the question above the viewport instead of below it. The handle is
+    // the one PermissionCard already carries for exactly this kind of structural
+    // claim (`data-consent-card`), scoped to this thread's own subtree.
+    const card = listRef.current?.querySelector("[data-consent-card]") ?? null;
+    (card ?? bottomRef.current)?.scrollIntoView({ block: "end" });
+  }, [attention]);
+
   // Opening another conversation: the rows rise in one after another and their
   // labels/bodies resolve out of the scramble behind them. The session's very
   // first paint is skipped — App's initial pass owns it (module-scope key above,
@@ -436,6 +479,11 @@ export function ChatThread({
       <div className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col overflow-y-auto">
         <EmptyState header={header} onSuggestion={onSuggestion} />
         {footer && <div className="shrink-0 pb-6">{footer}</div>}
+        {/* The scroll anchor lives here too. A consent card can arrive before the
+            first answer does — the greeting stack is tall, and without this the
+            attention effect above had nothing to scroll to on the one screen where
+            the card is most likely to be pushed out of sight. */}
+        <div ref={bottomRef} />
       </div>
     );
   }

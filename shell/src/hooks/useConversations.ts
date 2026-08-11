@@ -11,6 +11,15 @@ interface UseConversationsArgs {
   connected: boolean;
   /** True while a turn runs or a permission prompt is open (App's controlsBusy). */
   controlsBusy: boolean;
+  /**
+   * True while the engine is BLOCKED on a consent card. Separate from
+   * `controlsBusy`, which it is one half of: leaving a running turn merely strands
+   * its result (the turn ref drops it), but leaving a pending CARD destroys the
+   * only copy of a question the engine is still waiting on — `resetTransientState`
+   * clears it, nothing re-sends it, and nothing times out. The worker is blocked,
+   * so the next message queues behind it and the app looks dead.
+   */
+  permissionPending: boolean;
   /** App's resetTransientState — clears per-turn/per-conversation transients. */
   resetTransientState: () => void;
   /** The thread setter, from useTurn. */
@@ -22,6 +31,7 @@ interface UseConversationsArgs {
 export function useConversations({
   connected,
   controlsBusy,
+  permissionPending,
   resetTransientState,
   setMessages,
   setScreen,
@@ -90,7 +100,20 @@ export function useConversations({
       .catch(() => setStatusBanner("Couldn't start a new conversation."));
   }
 
+  /** The one thing that must not be thrown away by a navigation. Says so plainly,
+   * in the card's own terms, rather than dead-ending the click. */
+  const ANSWER_FIRST = "Answer Addison's question first — it's still waiting for you.";
+
   function handleOpenConversation(id: string) {
+    // `handleNewChat` has always refused while `controlsBusy`; opening another chat
+    // never did, and the difference was invisible because the sidebar only disables
+    // the New-chat control. Refusing on the PENDING CARD alone rather than on
+    // `controlsBusy`: leaving a running turn is an ordinary, recoverable thing to
+    // do, and leaving a card is not (see `permissionPending` above).
+    if (permissionPending) {
+      setStatusBanner(ANSWER_FIRST);
+      return;
+    }
     ipc
       .loadConversation(id)
       .then((loaded) => {
