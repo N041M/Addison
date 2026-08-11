@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Method,
+  type ActivityUpdate,
   type Automation,
   type AutomationStatus,
   type ModelRole,
@@ -699,6 +700,13 @@ export interface LoadedConversation {
   conversationId: string;
   title: string | null;
   messages: LoadedConversationRow[];
+  /**
+   * The steps of the reopened chat's LAST turn — the same {toolId, label, detail?}
+   * shape a live `tool.activityUpdate` carries, so "Addison's work" is one panel
+   * fed from two places rather than two panels (KNOWN-BUGS #5: it used to vanish on
+   * reload, taking "Save as routine" with it). Empty when that turn did no work.
+   */
+  work: ActivityUpdate[];
 }
 
 export interface ConversationRenameResult {
@@ -762,7 +770,7 @@ function parseConversationId(result: unknown): string {
   return id;
 }
 
-function parseLoadedConversation(result: unknown): LoadedConversation {
+export function parseLoadedConversation(result: unknown): LoadedConversation {
   const obj = asRecord(result);
   if (!obj) throw new Error("Couldn't open that conversation.");
   const conversationId =
@@ -782,10 +790,26 @@ function parseLoadedConversation(result: unknown): LoadedConversation {
       content: typeof row.content === "string" ? row.content : "",
     });
   }
+  // Fails closed, like every parser here: a garbled step is dropped rather than
+  // rendered as "undefined", and a missing `work` key (an older core, or a last
+  // turn that used no tools) is simply no steps.
+  const rawWork = Array.isArray(obj.work) ? obj.work : [];
+  const work: ActivityUpdate[] = [];
+  for (const item of rawWork) {
+    const step = asRecord(item);
+    if (!step || typeof step.label !== "string" || !step.label) continue;
+    const detail = typeof step.detail === "string" ? step.detail.trim() : "";
+    work.push({
+      label: step.label,
+      toolId: typeof step.toolId === "string" ? step.toolId : "",
+      ...(detail ? { detail } : {}),
+    });
+  }
   return {
     conversationId,
     title: typeof obj.title === "string" ? obj.title : null,
     messages,
+    work,
   };
 }
 

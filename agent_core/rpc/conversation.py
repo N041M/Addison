@@ -3,11 +3,12 @@ new/load/list history surface (engineering-spec §7, §4.8)."""
 
 from __future__ import annotations
 
+import json
 import time
 from uuid import uuid4
 
 from agent_core.orchestrator import Conversation
-from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.base import Message, ModelRole, ToolCallRequest
 from agent_core.providers.router import LOCAL_ONLY
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
@@ -42,6 +43,75 @@ _LOCAL_ONLY_EMPTY_POOL = (
 # somebody's transcript. A guard whose only proof is "nothing calls it wrongly" is
 # not a guard.
 _NOTHING_TO_SEND = "There's nothing to send yet — write a message first."
+
+
+def _encode_tool_calls(message: Message, shown_steps: dict[str, str | None]) -> str | None:
+    """One assistant turn's tool calls, as the JSON ``messages.tool_calls_json``
+    holds (schema.sql owns why the column exists).
+
+    ``shown_steps`` is the orchestrator's record of which calls actually ran and
+    how the panel described each one, so ``ran`` and ``detail`` are observations
+    rather than guesses. Returns None — never "[]" — when the message asked for
+    nothing, so the column stays NULL on the rows it says nothing about.
+
+    Anything that will not serialize is dropped rather than raising: this runs
+    inside the persist loop of a turn that has already succeeded, and a routine
+    the person cannot save afterwards is a far smaller loss than an answer that
+    disappears with an exception on its way to disk."""
+    calls = getattr(message, "tool_calls", None)
+    if not calls:
+        return None
+    rows = []
+    for call in calls:
+        rows.append(
+            {
+                "id": call.id,
+                "tool_id": call.tool_id,
+                "args": call.args,
+                "ran": call.id in shown_steps,
+                "detail": shown_steps.get(call.id),
+            }
+        )
+    try:
+        return json.dumps(rows, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return None
+
+
+def _decode_tool_calls(raw) -> list[tuple[ToolCallRequest, bool, str | None]]:
+    """The inverse, defensively: (call, ran, detail) per entry.
+
+    A row whose JSON is missing, malformed or the wrong shape yields NOTHING, and
+    that is the honest answer — an unreadable record of a turn is not evidence
+    that the turn did anything. Nobody writes this column but the encoder above,
+    so a bad value means a hand-edited database or a future shape, neither of
+    which may take a conversation down on open."""
+    if not isinstance(raw, str) or not raw:
+        return []
+    try:
+        rows = json.loads(raw)
+    except ValueError:
+        return []
+    if not isinstance(rows, list):
+        return []
+    out: list[tuple[ToolCallRequest, bool, str | None]] = []
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("tool_id"), str):
+            continue
+        args = row.get("args")
+        detail = row.get("detail")
+        out.append(
+            (
+                ToolCallRequest(
+                    id=str(row.get("id") or ""),
+                    tool_id=row["tool_id"],
+                    args=args if isinstance(args, dict) else {},
+                ),
+                row.get("ran") is True,
+                detail if isinstance(detail, str) and detail else None,
+            )
+        )
+    return out
 
 
 def _auto_title(text: str) -> str | None:
@@ -304,6 +374,8 @@ class ConversationMixin(ServerContext):
             content=str(message.content),
             created_at=int(time.time()),
             tool_call_id=message.tool_call_id,
+            # NULL for every row but an assistant turn that asked for tools.
+            tool_calls_json=_encode_tool_calls(message, self.conversation.shown_steps),
         )
         self._message_ids.append(message_id)
         return message_id
@@ -326,13 +398,24 @@ class ConversationMixin(ServerContext):
         The in-memory state is rebuilt from the persisted transcript in one
         filtered pass that keeps user messages and non-empty assistant messages.
         Persisted ``tool`` rows (and the empty assistant stubs that requested the
-        tools) are SKIPPED on purpose: ``insert_message`` never persists assistant
-        ``tool_calls``, so replaying persisted tool rows would send unpaired
-        tool_results and the provider would 400 on every subsequent turn — a
-        resumed conversation keeps the assistant's final prose only. Each kept row
+        tools) are SKIPPED on purpose: replaying them would send tool_results whose
+        tool_use is not in the request, and the provider then 400s on every
+        subsequent turn — a resumed conversation keeps the assistant's final prose
+        only. (The calls ARE stored now, in ``messages.tool_calls_json``; that is
+        history, and the paragraph below is about where history is allowed to go.) Each kept row
         appends to BOTH the fresh Conversation and the fresh ``_message_ids`` list
         in the same pass; that 1:1 alignment is the rewind-anchoring invariant
-        (``_handle_rewind`` indexes one list with the other's position)."""
+        (``_handle_rewind`` indexes one list with the other's position).
+
+        The same pass rebuilds what the SKIPPED rows are still good for
+        (KNOWN-BUGS #5). Persisted tool calls do not go back into ``tool_calls`` —
+        see the paragraph above, which is unchanged — they go onto
+        ``Message.past_tool_calls``, which no provider reads and the routine
+        builder does, so "Save as routine" works on a reopened chat. The response
+        also carries ``work``: the LAST turn's steps, which is exactly what the
+        live panel shows (it is cleared at the start of every turn), so reopening
+        a chat redraws the panel it had instead of an accumulation of everything
+        the conversation ever did."""
         self._ensure_built()
         conversation_id = params.get("conversationId")
         header = (
@@ -346,26 +429,81 @@ class ConversationMixin(ServerContext):
         conversation = Conversation(id=conversation_id)
         message_ids: list[str] = []
         wire_messages: list[dict] = []
+        # Calls belonging to rows that are NOT kept in the transcript (the empty
+        # assistant stub that requested the tools is the usual one). They are held
+        # until the next kept assistant message and ride on that — the same turn's
+        # own prose — so nothing is attributed to a message from a different turn.
+        pending: list[ToolCallRequest] = []
+        # Per-turn steps for the panel: a new bucket at every user message, which is
+        # where a turn starts. Only calls that RAN go in; a denied step is history,
+        # not work Addison did.
+        turns: list[list[dict]] = [[]]
         for row in self.store.messages_for_conversation(conversation_id):
+            decoded = _decode_tool_calls(row.get("tool_calls_json"))
+            if row["role"] == "user":
+                turns.append([])
+            for call, ran, detail in decoded:
+                if ran:
+                    turns[-1].append(self._work_step(call, detail))
             keep = row["role"] == "user" or (row["role"] == "assistant" and row["content"])
             if not keep:
+                pending.extend(call for call, _ran, _detail in decoded)
                 continue
-            conversation.messages.append(Message(role=row["role"], content=row["content"]))
+            message = Message(role=row["role"], content=row["content"])
+            if row["role"] == "assistant":
+                message.past_tool_calls = pending + [c for c, _r, _d in decoded]
+                pending = []
+            conversation.messages.append(message)
             message_ids.append(row["id"])
             wire_messages.append({"id": row["id"], "role": row["role"], "content": row["content"]})
+        if pending:
+            # A conversation that ends on a tool-only turn (stopped mid-answer, say)
+            # has calls with no prose of their own to sit on. They stay with the
+            # nearest kept assistant message rather than being dropped, because
+            # dropping them is the defect: steps that exist and cannot be saved. The
+            # builder's window is the conversation's recent messages either way, so
+            # this changes which message carries them and not which conversation.
+            for message in reversed(conversation.messages):
+                if message.role == "assistant":
+                    message.past_tool_calls = message.past_tool_calls + pending
+                    break
         self.conversation = conversation
         self._message_ids = message_ids
         self._conversation_created = True
         self._conversation_titled = header["title"] is not None
         self._draft_routine = None
-        self._respond(
-            request_id,
-            {
-                "conversationId": conversation_id,
-                "title": header["title"],
-                "messages": wire_messages,
-            },
-        )
+        result = {
+            "conversationId": conversation_id,
+            "title": header["title"],
+            "messages": wire_messages,
+        }
+        # Same three fields as a live tool.activityUpdate, so the frontend renders
+        # one shape through one component. Omitted entirely when the last turn did
+        # no work — an absent key is what the panel already treats as "no steps".
+        if turns[-1]:
+            result["work"] = turns[-1]
+        self._respond(request_id, result)
+
+    def _work_step(self, call: ToolCallRequest, detail: str | None) -> dict:
+        """One redrawn panel line: the same {toolId, label, detail?} an activity
+        update carries.
+
+        The label comes from the registry, which owns what a tool is CALLED, so a
+        relabelled tool reads correctly in an old chat. An id nothing is registered
+        under falls back to the id — ``RoutineBuilder.preview`` has always done
+        exactly this for the same situation (a tool server's tool this session has
+        not rediscovered), and a plain invented sentence would be a worse answer
+        than the machine name the rest of the app also shows.
+
+        The detail is the stored one and is never recomputed: a path resolved again
+        today could describe the step differently from the way it was described when
+        it ran, and this line is a record, not a fresh claim."""
+        tool = self.tool_registry.find(call.tool_id)
+        label = tool.definition.label if tool is not None else call.tool_id
+        step: dict = {"toolId": call.tool_id, "label": label}
+        if detail:
+            step["detail"] = detail
+        return step
 
     def _handle_rename_conversation(self, params: dict, request_id) -> None:
         """conversation.rename — the person renamed a chat (double-click its title).
