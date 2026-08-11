@@ -146,6 +146,40 @@ def _diff_payload(edit: FileEdit, *, after: str, truncated: bool) -> dict:
     }
 
 
+#: WHAT STANDS AT THE NAME NOW, when it is not the file Addison wrote — the two
+#: values ``replacedBy`` may carry, and ``None`` for the ordinary case. Two kinds
+#: rather than one boolean because the two are not one fact to a person: a shortcut
+#: leads somewhere else, and a hard link (or a replaced file) is a different file at
+#: the same name. The surface has a sentence for each.
+REPLACED_BY_SHORTCUT = "shortcut"
+REPLACED_BY_ANOTHER_FILE = "other-file"
+
+
+def _replaced_by(edit: FileEdit) -> str | None:
+    """Has the file been swapped since Addison wrote it? (KNOWN-BUGS P3 #10.)
+
+    THE SAME TWO QUESTIONS THE DIFF AND THE REVERT ALREADY ASK, asked one step
+    earlier so the answer reaches the LIST. Both refuse a swapped file — the diff
+    will not read it, the revert will not write it — but the list said nothing, so
+    the first press of "put it back" showed the generic "you've changed this file"
+    confirm and offered a revert the engine then correctly refused. The confirm has
+    to tell the truth first.
+
+    A MARKER, NEVER THE ENFORCEMENT (CLAUDE.md's rule for exactly this shape).
+    ``file_revert.revert_path`` asks again at the moment it would write and refuses
+    on its own answer; this field only decides what a person is shown. If the two
+    ever disagree — the swap happens between the list and the press — the refusal
+    wins and nothing is written.
+
+    Asked in the same order the revert asks it, so the two cannot describe one file
+    two ways."""
+    if replaced_by_a_link(edit.path):
+        return REPLACED_BY_SHORTCUT
+    if another_file_stands_there(edit.path, edit.identities):
+        return REPLACED_BY_ANOTHER_FILE
+    return None
+
+
 def _disk_state(wrote_sha256: str | None, digest) -> dict:
     """``onDiskChanged`` + ``missing``, from what Addison recorded and what the shell
     found. THREE ANSWERS, not two:
@@ -616,6 +650,12 @@ class WorkspaceMixin(ServerContext):
             # never an inference: false here means "Addison cannot put this back", which
             # after a restart is true of every historic edit.
             "revertable": bool(restorable),
+            # Something else at the name Addison wrote, named — see ``_replaced_by``.
+            # Its own field rather than a fourth value of ``onDiskChanged``: that one
+            # is about the file's CONTENTS and this one is about which file it is,
+            # and folding them together would make "changed since" answer a question
+            # it was never asked.
+            "replacedBy": _replaced_by(edit),
             **_disk_state(edit.wrote_sha256, digest),
         }
 

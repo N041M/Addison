@@ -18,7 +18,8 @@ CONFINEMENT is the caller's job (D3) — see ``read_project_file``. ``execute`` 
 never a re-read of ``args["path"]`` (R6, TOCTOU).
 
 Undo soundness (R5): the write is TEXT-ONLY. The shell captures the prior state
-ATOMICALLY (``write_workspace_file`` returns ``{"existed", "prior"}``) and refuses,
+ATOMICALLY (``write_workspace_file`` returns ``{"existed", "prior", "newlineRestored"}``)
+and refuses,
 writing nothing, if the existing file is binary (can't round-trip as text) or its
 prior content exceeds the shell's size bound (would bloat ``action_snapshots``).
 Every effect crosses the Rust shell (§1.3); ``undo()`` gets no ExecutionContext, so
@@ -155,6 +156,15 @@ class WriteProjectFileTool:
         # nothing) a binary/oversize existing file so undo always round-trips. A
         # refusal arrives as RuntimeError (a failed step).
         prior = context.shell_bridge.write_workspace_file(resolved, content)
+        # WHAT ACTUALLY LANDED, which is not always what was sent (KNOWN-BUGS P3 #7).
+        # A model asked to append a line hands back the whole file without the trailing
+        # newline it had, so the next writer's line fuses onto it; the shell puts that
+        # one byte back — and ONLY that one, only when the file had it before, which
+        # ``needs_trailing_newline`` owns. The digest below has to be the digest of the
+        # BYTES ON DISK or the review surface reads the file as edited-by-somebody-else
+        # from the moment Addison wrote it. A shell that does not send the flag wrote
+        # exactly what was sent, so the fallback is right for it too.
+        written = content + "\n" if prior.get("newlineRestored") else content
         snapshot = ActionSnapshot(
             id=str(uuid.uuid4()),
             tool_call_id="",  # filled by the orchestrator
@@ -176,7 +186,7 @@ class WriteProjectFileTool:
                 # NEVER read by ``undo()``: undo restores ``prior`` unconditionally,
                 # exactly as it did before this key existed. This is evidence for a
                 # person deciding, not a precondition for putting a file back.
-                "wrote_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                "wrote_sha256": hashlib.sha256(written.encode("utf-8")).hexdigest(),
                 # WHICH FILE those bytes went to, asked while the answer is still the
                 # truth about this write. Read only by the reverting side, and only ever
                 # to compare — never to decide where to write, which stays ``path``

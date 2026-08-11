@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Callable, Protocol, runtime_checkable
 
 import httpx
 
+from agent_core.redaction import redact
+
 if TYPE_CHECKING:
     # Type-only, erased at runtime — the module-boundary rule (no runtime
     # providers -> tools import; tests/test_module_boundaries.py) still holds,
@@ -219,6 +221,85 @@ def server_detail_of(exc: BaseException) -> str | None:
         return None
     detail = detail.strip()
     return detail[:_MAX_SERVER_DETAIL] or None
+
+
+def note_candidate(exc: BaseException, provider_id: str | None, model_id: str | None) -> None:
+    """Stamp WHICH CANDIDATE failed onto the exception it raised.
+
+    The status and the server's own sentence are attached where they are learned
+    (``exception_for_http_status``, inside one provider's ``send``). The provider
+    and model are not knowable there — a provider object does not carry the routing
+    identity the chain resolved it under — so they are stamped by the only code that
+    holds both at once: the attempt loop, at the moment it handles the failure.
+
+    Best-effort and never raising: this runs on a path that is already handling a
+    failure, and a diagnostic that can break the error it describes is worse than no
+    diagnostic. Attributes only — the exception's TYPE and its plain ``str`` (what
+    the person reads) are untouched, so nothing about control flow or the message
+    changes."""
+    try:
+        if provider_id:
+            exc.provider_id = provider_id  # type: ignore[attr-defined]
+        if model_id:
+            exc.model_id = model_id  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover — an exception that refuses attributes
+        pass
+
+
+def provider_of(exc: BaseException) -> str | None:
+    """The provider id behind a failure, or None when nobody stamped one."""
+    value = getattr(exc, "provider_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def model_of(exc: BaseException) -> str | None:
+    """The model id behind a failure, or None when nobody stamped one."""
+    value = getattr(exc, "model_id", None)
+    return value if isinstance(value, str) and value else None
+
+
+def technical_detail(exc: BaseException) -> str:
+    """The Developer profile's "Technical details" fold, in full (§4.7).
+
+    THE PLAIN SENTENCE ABOVE THE FOLD IS UNCHANGED and is not composed here — the
+    house rule keeps jargon out of it (CLAUDE.md), and this is the one place where
+    jargon is the point. What the fold used to hold was ``repr(exc)`` alone, i.e.
+    that same plain sentence wrapped in a class name: it named no provider, no
+    status and nothing the server said, so a misattributed 400 read exactly like a
+    genuine bad key.
+
+    Four facts, each omitted when it is not known rather than guessed at:
+
+      * which provider (and model) the chain was talking to — stamped by
+        ``note_candidate``;
+      * the HTTP status, when a server answered at all. None is the honest answer
+        for a timeout, and ``status_code_of`` owns why;
+      * the provider's OWN error sentence, which is the one that ends an
+        investigation (``server_detail_of``);
+      * the exception itself, last, because it is the least informative of the four
+        and it is what the other three exist to supplement.
+
+    REDACTED ON THE WAY OUT (G1's neighbourhood, ``redaction``): a provider's error
+    body and a stray exception repr are both text nobody vetted, and both have been
+    seen carrying an URL with a token in it. This text goes to the WEBVIEW, which is
+    the one process that may never see a key — so the same backstop that guards the
+    model send guards this. It stays a backstop, not a boundary.
+
+    With none of the three extra facts known, the answer is ``repr(exc)`` exactly as
+    before, so every non-provider error's fold is byte-for-byte unchanged."""
+    lines: list[str] = []
+    provider = provider_of(exc)
+    if provider:
+        model = model_of(exc)
+        lines.append(f"provider: {provider}" + (f" · {model}" if model else ""))
+    status = status_code_of(exc)
+    if status is not None:
+        lines.append(f"http status: {status}")
+    said = server_detail_of(exc)
+    if said:
+        lines.append(f"provider said: {said}")
+    lines.append(repr(exc))
+    return redact("\n".join(lines)).text
 
 
 def error_message_from_body(response: httpx.Response) -> str | None:

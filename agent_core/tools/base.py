@@ -139,8 +139,13 @@ class ShellBridge(Protocol):
     def write_workspace_file(self, path: str, content: str) -> dict:
         """Create-or-OVERWRITE ``path`` with ``content`` (an editor needs both),
         capturing the prior state ATOMICALLY so undo is exact. Returns
-        ``{"existed": bool, "prior": str | None}`` — ``prior`` is the previous text
-        content (None when the write created the file). REFUSES, writing nothing,
+        ``{"existed": bool, "prior": str | None, "newlineRestored": bool}`` — ``prior``
+        is the previous text content (None when the write created the file), and
+        ``newlineRestored`` says the shell put back a trailing newline this edit
+        dropped, so what landed is ``content + "\\n"`` (the shell's
+        ``needs_trailing_newline`` owns the narrow rule for when that happens, and
+        ``write_project_file`` is the one caller that has to care — it hashes what
+        landed). REFUSES, writing nothing,
         when the existing file is not valid UTF-8 text or its prior content exceeds
         the undo size bound (so undo can always round-trip it), and refuses any path
         under Addison's own data directory. The path is recorded so a later

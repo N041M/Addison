@@ -457,7 +457,7 @@ fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError
     }
 }
 
-// shell.writeWorkspaceFile {path, content} -> {existed, prior}   (step 5)
+// shell.writeWorkspaceFile {path, content} -> {existed, prior, newlineRestored}  (step 5)
 //
 // Create-or-OVERWRITE, capturing the prior state ATOMICALLY so undo is exact.
 // Refuses (writing nothing) a binary or oversize existing file — so undo can always
@@ -473,10 +473,50 @@ fn write_workspace_file(app: &AppHandle, params: &Value) -> Result<Value, RpcErr
 fn write_workspace_path(state: &FileState, path: PathBuf, content: &str) -> Result<Value, RpcError> {
     refuse_addison_data_dir(&path)?;
     let (existed, prior) = capture_prior_text(&path)?;
-    std::fs::write(&path, content).map_err(|_| RpcError::app("Addison couldn't save that file."))?;
+    let restored = needs_trailing_newline(prior.as_deref(), content);
+    // ONE write, of the bytes that actually land — never a write followed by a fixing
+    // second write, which would put an intermediate state on disk and give the file's
+    // watchers two events for one edit.
+    let effective = if restored { format!("{content}\n") } else { content.to_string() };
+    std::fs::write(&path, &effective)
+        .map_err(|_| RpcError::app("Addison couldn't save that file."))?;
     // Ledger the path so restore_workspace_file may target it — and ONLY it.
     lock(&state.workspace_written).insert(path);
-    Ok(json!({ "existed": existed, "prior": prior }))
+    // `newlineRestored` tells the core WHAT WAS WRITTEN when it is not what was sent,
+    // and it exists for exactly one reader: the digest `write_project_file` records of
+    // "the file as Addison left it". A digest of the sent text after writing one more
+    // byte would report the file as edited-by-somebody-else the moment it was written.
+    Ok(json!({ "existed": existed, "prior": prior, "newlineRestored": restored }))
+}
+
+/// Did this edit LOSE the file's trailing newline? (KNOWN-BUGS P3 #7.)
+///
+/// A model asked to append a line hands back the whole file with the new line at the
+/// end and no `\n` after it, so the next thing appended fuses onto it —
+/// `edited: yesmy own edit`. The lost byte is real and the fix belongs on the write.
+///
+/// THE RULE IS DELIBERATELY NARROW, and each half of it is a file this must not
+/// touch:
+///
+///   * the file ENDED WITH A NEWLINE BEFORE and does not now → restore it. The
+///     newline was there; this edit dropped it; nobody asked for that.
+///   * the file is NEW, or ended WITHOUT one → leave the content exactly as sent. A
+///     file deliberately kept without a trailing newline (plenty exist — a one-line
+///     `.env` value, a fixture pinned byte-for-byte, a generated file whose generator
+///     writes none) must not acquire one because Addison rewrote it, and a new file
+///     is the model's to shape.
+///   * EMPTY new content is left alone too: truncating a file to nothing is a
+///     deliberate act with a deliberate result, and "" is not a line missing its
+///     newline.
+///
+/// So this can only ever put back a byte that was there before. It cannot invent a
+/// convention for a file that did not have one, which is the version of this fix that
+/// would quietly rewrite files nobody asked it to.
+fn needs_trailing_newline(prior: Option<&str>, content: &str) -> bool {
+    match prior {
+        Some(prior) => prior.ends_with('\n') && !content.is_empty() && !content.ends_with('\n'),
+        None => false,
+    }
 }
 
 // (existed, prior-text). Refuses a binary or oversize existing file so the undo
@@ -1657,6 +1697,61 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "after");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_puts_back_a_trailing_newline_the_edit_dropped() {
+        // KNOWN-BUGS P3 #7. A model asked to append a line hands back the whole file
+        // with the new line last and no `\n` after it, so the NEXT thing appended
+        // fuses onto it — `edited: yesmy own edit`. The file had the byte; this edit
+        // lost it; the write puts it back and says it did, because the core hashes
+        // what landed.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "one\ntwo\n").expect("seed");
+
+        let result = write_workspace_path(&state, path.clone(), "one\ntwo\nthree").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\ntwo\nthree\n");
+        assert_eq!(result.get("newlineRestored").and_then(Value::as_bool), Some(true));
+        // The PRIOR is what was there, untouched by any of this — undo is exact.
+        assert_eq!(result.get("prior").and_then(Value::as_str), Some("one\ntwo\n"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn write_workspace_never_invents_a_trailing_newline() {
+        // The other half of the rule, and the reason it is not "always end with \n":
+        // a file deliberately kept without one must not acquire one because Addison
+        // rewrote it, a NEW file is the model's to shape, and truncating to empty is
+        // a deliberate act with a deliberate result. Each case is one mutation of
+        // `needs_trailing_newline`.
+        let state = FileState::default();
+
+        let had_none = temp_path();
+        std::fs::write(&had_none, "no newline").expect("seed");
+        let result = write_workspace_path(&state, had_none.clone(), "still none").unwrap();
+        assert_eq!(std::fs::read_to_string(&had_none).unwrap(), "still none");
+        assert_eq!(result.get("newlineRestored").and_then(Value::as_bool), Some(false));
+
+        let fresh = temp_path();
+        write_workspace_path(&state, fresh.clone(), "brand new").unwrap();
+        assert_eq!(std::fs::read_to_string(&fresh).unwrap(), "brand new");
+
+        let emptied = temp_path();
+        std::fs::write(&emptied, "gone soon\n").expect("seed");
+        write_workspace_path(&state, emptied.clone(), "").unwrap();
+        assert_eq!(std::fs::read_to_string(&emptied).unwrap(), "");
+
+        let already = temp_path();
+        std::fs::write(&already, "a\n").expect("seed");
+        let result = write_workspace_path(&state, already.clone(), "a\nb\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&already).unwrap(), "a\nb\n", "no second newline");
+        assert_eq!(result.get("newlineRestored").and_then(Value::as_bool), Some(false));
+
+        for path in [had_none, fresh, emptied, already] {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 
     #[test]

@@ -272,7 +272,9 @@ class IpcShellBridge:
     # --- workspace-trust file surface (step 5, OPEN harness) ---------------
     def write_workspace_file(self, path: str, content: str) -> dict:
         # The shell captures prior state atomically and refuses binary/oversize/data
-        # dir, so undo always round-trips: returns {"existed", "prior"}.
+        # dir, so undo always round-trips: returns {"existed", "prior",
+        # "newlineRestored"} — the last of which says the bytes on disk are `content`
+        # plus the trailing newline this edit had dropped (tools/base.py's contract).
         return self._call(
             Method.SHELL_WRITE_WORKSPACE_FILE, {"path": path, "content": content}
         )

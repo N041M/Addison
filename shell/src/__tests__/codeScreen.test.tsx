@@ -281,6 +281,7 @@ const EDIT: WorkspaceEdit = {
   revertable: true,
   onDiskChanged: false,
   missing: false,
+  replacedBy: null,
 };
 
 const LISTING: WorkspaceListing = {
@@ -407,6 +408,52 @@ describe("the warn-before-clobber", () => {
     expect(
       screen.getByText("Addison created app.py. Putting it back removes the file."),
     ).toBeTruthy();
+  });
+});
+
+describe("a file that has been swapped since Addison wrote it", () => {
+  // KNOWN-BUGS P3 #10. The core refuses to write to a name that no longer reaches
+  // the file it wrote — but the list said nothing, so the FIRST press showed the
+  // generic "you've changed this file since Addison did" confirm and offered a
+  // revert the engine then correctly refused. The confirm has to tell the truth
+  // first, and the truth is that there is no press to make.
+  const SHORTCUT =
+    "That file has been replaced by a shortcut to somewhere else, so Addison won't " +
+    "put it back. The earlier version is on the left; you can copy it.";
+  const OTHER_FILE =
+    "A different file is at that name now, so Addison won't put the old text there. " +
+    "The earlier version is on the left; you can copy it.";
+  const CLOBBER =
+    "You've changed this file since Addison did. Reverting will replace what's " +
+    "there now with the version from before Addison's first change.";
+
+  it("says a shortcut stands there, and offers no revert at all", () => {
+    const revert = vi.fn(async () => true);
+    renderSurface(reviewState({ edits: [{ ...EDIT, replacedBy: "shortcut" }], revert }));
+    expect(screen.getByText(SHORTCUT)).toBeTruthy();
+    // Kills: keeping the two-press flow and merely adding a line to the confirm.
+    expect(screen.queryByText("put it back")).toBeNull();
+    expect(screen.queryByText(CLOBBER)).toBeNull();
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  it("names the OTHER swap in its own words — a hard link is not a shortcut", () => {
+    // Two sentences rather than one: what a person needs told here is not "a
+    // shortcut" but that this is no longer the file Addison changed.
+    renderSurface(reviewState({ edits: [{ ...EDIT, replacedBy: "other-file" }] }));
+    expect(screen.getByText(OTHER_FILE)).toBeTruthy();
+    expect(screen.queryByText(SHORTCUT)).toBeNull();
+    expect(screen.queryByText("put it back")).toBeNull();
+  });
+
+  it("wins over the on-disk-changed warning, which describes a different event", () => {
+    // A swapped file has almost always "changed on disk" too. Saying somebody
+    // edited it would be a true-sounding sentence about the wrong thing.
+    renderSurface(
+      reviewState({ edits: [{ ...EDIT, replacedBy: "other-file", onDiskChanged: true }] }),
+    );
+    expect(screen.getByText(OTHER_FILE)).toBeTruthy();
+    expect(screen.queryByText(CLOBBER)).toBeNull();
   });
 });
 

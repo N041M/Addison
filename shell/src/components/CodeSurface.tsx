@@ -74,6 +74,26 @@ const NOT_REVERTABLE_LINE =
   "Addison can't put this file back for you. The earlier version is on the left; " +
   "you can copy it.";
 
+/** THE FILE ITSELF HAS BEEN SWAPPED — a shortcut now stands where Addison wrote a
+ * file. Its own sentence, and it replaces the whole two-press flow rather than
+ * riding inside the confirm: the core refuses this revert, so offering the press
+ * and then failing it tells somebody the opposite of the truth twice (a generic
+ * "you've changed this file", then a refusal that finally names what happened).
+ *
+ * It ends where `NOT_REVERTABLE_LINE` ends, because what is left is the same thing:
+ * the earlier version is on the left, and copying it is the way out. */
+const REPLACED_BY_SHORTCUT_LINE =
+  "That file has been replaced by a shortcut to somewhere else, so Addison won't " +
+  "put it back. The earlier version is on the left; you can copy it.";
+
+/** ...and the swap a shortcut check cannot see: a different file at the same name
+ * (a hard link, an editor that saved by rename, a branch checkout). A separate
+ * sentence because what a person needs told is not "a shortcut" but that this is no
+ * longer the file Addison changed. */
+const REPLACED_BY_OTHER_FILE_LINE =
+  "A different file is at that name now, so Addison won't put the old text there. " +
+  "The earlier version is on the left; you can copy it.";
+
 /** Revert is refused while a turn is in flight. It would serialise safely behind
  * the worker anyway — this is about not asking somebody to reason about two
  * things changing the same file at once. */
@@ -695,7 +715,11 @@ function Centered({ children }: { children: ReactNode }) {
 /**
  * The Revert control and everything that has to be true before somebody presses it.
  *
- * Three states, and only the first has a button:
+ * Four states, and only the first has a button:
+ *   * the file has been SWAPPED since Addison wrote it (a shortcut, or a different
+ *     file at the same name) → the sentence that says so, and no press. The core
+ *     refuses this revert; a confirm here would promise something that cannot
+ *     happen, which is the bug this ordering fixes (KNOWN-BUGS P3 #10).
  *   * revertable → a two-step inline confirm (never `window.confirm()`, which
  *     cannot carry the consequence copy — and the copy is the point). The confirm
  *     is where the warn-before-clobber sentence lives, because a warning after the
@@ -733,6 +757,20 @@ function RevertBlock({
   // while a confirm was open would show the first file's confirm over the second
   // file's diff.
   useEffect(() => setConfirming(false), [edit.path]);
+
+  // FIRST, because it is the most specific true thing about this row and the only
+  // one that changes what a press would do. A swapped file is refused by the core
+  // at the moment it would write, so there is no press to offer — and the confirm
+  // that used to appear said "you've changed this file since Addison did", which is
+  // a different event and not what happened. The marker is never the enforcement
+  // (the core asks again and wins); this is only what a person is shown.
+  if (edit.replacedBy) {
+    return (
+      <p data-replaced={edit.replacedBy} className="m-0 mb-3 shrink-0 text-[12px] leading-[1.55] text-muted">
+        {edit.replacedBy === "shortcut" ? REPLACED_BY_SHORTCUT_LINE : REPLACED_BY_OTHER_FILE_LINE}
+      </p>
+    );
+  }
 
   if (!edit.revertable) {
     return (
