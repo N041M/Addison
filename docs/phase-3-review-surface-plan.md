@@ -30,8 +30,8 @@ prune wiring. [`../ROADMAP.md`](../ROADMAP.md) owns status — trust it over thi
 
 ## Context
 
-Phase-2 step 5 shipped the coding harness: two OPEN-only, path-bounded file tools
-(`read_project_file`, `write_project_file`), a `workspace_trust` table, and a
+Phase-2 step 5 shipped the coding harness: two path-bounded file tools
+(`read_project_file`, `write_project_file`; OPEN-only until 2026-08-11), a `workspace_trust` table, and a
 `workspace.*` RPC. Addison can now read and edit a real project directory.
 
 What it cannot do is **show you what it did**. Today the only evidence of an edit is

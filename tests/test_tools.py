@@ -27,6 +27,13 @@ _V1_TABLE = {
     "draft_message": RiskTier.MEDIUM,
     "open_link": RiskTier.LOW,
     "snapshot_now": RiskTier.LOW,    # capture-only, so LOW and no undo (invariant 2)
+    # The coding harness's file tools, in the SAFE view since 2026-08-11 (Simple can
+    # change an existing file behind a card — docs/SAFETY.md). The tiers are the
+    # point of listing them here: the read is LOW and read-only, and the write is
+    # MEDIUM with a REAL undo(), which is why it can be in this view at all — it
+    # never took the undo waiver, so invariant 2 applies to it unchanged.
+    "read_project_file": RiskTier.LOW,
+    "write_project_file": RiskTier.MEDIUM,
 }
 
 

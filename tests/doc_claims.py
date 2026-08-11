@@ -232,6 +232,27 @@ PHASE_3_INCLUDES_THE_REVIEW_SURFACE = True
 # two directions. Both are worth catching, which is why the row is two-sided.
 MCP_TOOLS_ARE_NOT_CALLABLE = False
 
+# The coding harness's two file tools (owner decision 2026-08-11). They are IN
+# `visible_tools(SAFE)`: the Simple profile can read and change a file inside a
+# folder that has been trusted, behind a permission card that names the file. They
+# were `open_only` from step 5 until that day, and the effect was the defect the
+# owner ruled on — asked to fix a line in an existing document, Simple refused and
+# offered to save a NEW file beside it.
+#
+# Registered because this is the most expensive shape of stale sentence there is:
+# one that tells an agent a capability does not exist. An agent reading "the two
+# `open_only` file tools are absent from the SAFE view" DECLINES the edit and
+# proposes the workaround the bug report is about — no error, no red test, just the
+# defect performed again. Twelve documents carried the old fact when it changed.
+#
+# The row is narrow on purpose. The tree legitimately recounts the old position in
+# the past tense ("they were `open_only` until 2026-08-11", "OPEN-only when this was
+# written"), and rewriting those would delete the reasoning — so the patterns want a
+# PRESENT-TENSE assertion, and the history walks past them.
+#
+# Flip this only if the tools genuinely go back to being Developer-only.
+FILE_TOOLS_ARE_IN_THE_SAFE_VIEW = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -721,6 +742,69 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "stdio has shipped — this line still says the transport is HTTP only. Amend "
                 "it, or link to docs/step-7-mcp-plan.md §5, which owns the transport decision."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    # -- The coding harness's file tools are in the SAFE view --------------
+    Claim(
+        id="file-tools-are-in-the-safe-view",
+        owner="docs/SAFETY.md",
+        holds=FILE_TOOLS_ARE_IN_THE_SAFE_VIEW,
+        true_state=(
+            "`read_project_file` / `write_project_file` are IN `visible_tools(SAFE)` "
+            "since 2026-08-11 (owner decision): Simple reads and changes a file inside a "
+            "trusted folder, behind a card that names it. Confinement, the size/binary "
+            "refusals and the guaranteed undo are unchanged; a destructive call in SAFE "
+            "cards per invocation."
+        ),
+        false_state=(
+            "The two file tools are `open_only` again, so Simple cannot change an "
+            "existing file and can only save a new one."
+        ),
+        # Anchored on a PRESENT-TENSE claim that these two tools are kept out of SAFE,
+        # in the three shapes the tree actually carried: the tool names beside
+        # "absent/hidden from the SAFE view", CLAUDE.md's "the two `open_only` file
+        # tools", and the tools' own shipped description sentence ("Available only in
+        # the Developer profile") quoted into a document. The last arm is the one worth
+        # keeping even though the strings now differ in the tree: a document quoting a
+        # tool description is how this fact spread the first time.
+        while_true=Wrong(
+            pattern=(
+                # The span between the verb and the preposition is `[^.]`, not
+                # `(?:\w+\s+){0,3}`: the sentence this arm was written against reads
+                # "are `open_only` too: also absent from the SAFE view", and backticks,
+                # a colon and a line wrap all sit inside it.
+                r"`?(?:read|write)_project_file`?[^.]{0,90}?\b(?:is|are|stays?|remains?)\s+"
+                r"[^.]{0,40}?\b(?:absent from|hidden from|out of|outside|Developer-only|"
+                r"dev-only)"
+                r"|\bthe two `?open_only`? file tools\b"
+                # The tools' own shipped description, quoted into a document. `[\s\S]`
+                # crosses the sentence end deliberately — the claim IS the second
+                # sentence, and the tool name is in the first.
+                r"|`?(?:read|write)_project_file`?[\s\S]{0,140}?"
+                r"\bavailable only in the Developer profile"
+                r"|\b(?:two|both) (?:OPEN-only|open_only|Developer-only)[^.]{0,20}file tools\b"
+            ),
+            fix=(
+                "The two path-bounded file tools joined the SAFE view on 2026-08-11 — "
+                "Simple can change an existing file behind a card that names it. Put the "
+                "sentence in the past tense if it is history, or delete it and link to "
+                "docs/SAFETY.md invariant 1, which owns the decision and its terms. If "
+                "they have genuinely gone back to being Developer-only, flip "
+                "FILE_TOOLS_ARE_IN_THE_SAFE_VIEW in tests/doc_claims.py in the SAME commit."
+            ),
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"`?(?:read|write)_project_file`?[^.]{0,90}?\b(?:is|are)\s+(?:\w+\s+){0,3}"
+                r"in (?:the )?(?:SAFE view|`?visible_tools\(SAFE\)`?)"
+                r"|Simple[^.]{0,80}?\b(?:can|may)\s+(?:\w+\s+){0,2}(?:edit|change)\s+"
+                r"(?:an?\s+)?existing file"
+            ),
+            fix=(
+                "The file tools are Developer-only again — this line says Simple has "
+                "them. Amend it, or link to docs/SAFETY.md invariant 1."
             ),
         ),
         exempt=FROZEN,

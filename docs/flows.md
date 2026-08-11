@@ -487,7 +487,10 @@ saw) the card SAYS the previous key was replaced. Closed 2026-08-08; see
 ## 12. Workspace-trust grant and a keyword-gated powerful action
 
 The harness (Developer/OPEN) reconciles the agentic loop with the per-invocation card
-(amendment §8.2, §9). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
+(amendment §8.2, §9). The diagram below is the OPEN path, where the `trusted` flag
+suppresses the card; **since 2026-08-11 the same two file tools are reachable from
+Simple/SAFE**, where confinement is identical and the card is never suppressed —
+each edit cards and names the file ([SAFETY.md](SAFETY.md) invariant 1). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
 step 8 phase 3 (2026-08-07). The essential correction to the amendment's framing: trust is
 **two** predicates, not one.
 

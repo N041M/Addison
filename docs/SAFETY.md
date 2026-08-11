@@ -22,8 +22,12 @@ The safety model is **mode-scoped**. There are two policy modes, and the mode is
 truth, there is no separately-persisted mode (`agent_core/policy.py`,
 `mode_for_profile`):
 
-- **Simple profile → SAFE mode** — today's behaviour, **byte-for-byte**. Every
-  SAFE-MODE invariant below holds.
+- **Simple profile → SAFE mode** — every SAFE-MODE invariant below holds. It was
+  the v1 behaviour byte-for-byte until 2026-08-11, when Simple gained the two
+  path-bounded file tools and, with them, one gate change in the strict direction:
+  a **destructive** call in SAFE takes the per-invocation card instead of the
+  coarse ask-once flow. Everything non-destructive is untouched. Invariant 1 owns
+  that decision and its terms.
 - **Developer profile → OPEN mode** — "nearly completely open." OPEN mode
   **relaxes** the SAFE-mode invariants as follows: real command execution exists
   (the `run_command` **dev-only** tool, `tools/run_command.py`); a `dev_only` tool
@@ -62,9 +66,12 @@ turn (don't-nag), then cleared. Destructiveness is per-call
 (`tools/base.call_is_destructive`): `run_command` reports **destructive
 unconditionally** — the read-only allowlist that used to classify it was DELETED in
 #48 after being defeated three ways, so every command cards, `ls` included (see its
-docstring); any other tool is destructive iff its tier is HIGH. Normal (non-dev) tools keep the coarse
-session-grant model in both modes — per-invocation is specific to destructive dev
-actions.
+docstring); `write_project_file` reports it too (an overwrite is data loss); any
+other tool is destructive iff its tier is HIGH. **Non-destructive** tools keep the
+coarse session-grant model in both modes; the per-invocation card belongs to
+destructive calls, and since 2026-08-11 that is true **in SAFE as well as OPEN**
+(invariant 1's terms — the one SAFE-visible destructive tool is the file write, and
+one Allow must not cover every later file).
 
 **Artifact disabling** *(renamed from "artifact hiding"; owner decision
 2026-08-06).* Routines/widgets that **need** developer abilities are **listed but
@@ -90,7 +97,10 @@ someone remembers this paragraph.
 The routine answer is `rpc/routines.py::_routine_needs_dev` — **one function, used
 by the list marker AND by `routine.run`'s refusal**, true when the plan carries a
 command step *or* when a step names a tool the SAFE view does not hold
-(`read_project_file`, an `mcp:` tool, ...). It takes the registry as well as the
+(`create_automation`, an `mcp:` tool, ...). The two file tools were the standing
+example of that set until 2026-08-11, when they joined the SAFE view — so a
+routine that reads or edits a file in a trusted folder now RUNS in Simple, with
+the ordinary card per step, instead of waiting for Developer. It takes the registry as well as the
 plan, which is why it lives a layer above `routines/` (module boundary, CLAUDE.md
 §2), and the widget look-through above asks it rather than answering a second time.
 Loosening `routine.run`'s SAFE refusal to this question was an owner decision
@@ -393,14 +403,47 @@ relaxes exactly these four, and only as spelled out above.
    not scripts. Do not add `eval`, a Lua sandbox, or a raw-code field. (OPEN mode's
    `run_command` is a single **dev-only** tool, absent from the SAFE registry view
    — `registry.visible_tools(SAFE)` — and it refuses to run under SAFE as a belt.
-   Step 5's `read_project_file` / `write_project_file` are `open_only` too: also
-   absent from the SAFE view, also refused at dispatch outside OPEN. They are
-   typed path-bounded functions, not a shell, so this invariant is unaffected —
-   and the SAFE file tools keep design-doc §9's picker scoping unchanged. Step 7's
-   discovered tool-server tools register the same way and are therefore in the same
-   position: `open_only`, so `visible_tools(SAFE)` has never held one, and refused
-   at both dispatch sites outside OPEN. Addison calls a tool server over HTTP and
-   never launches one, so nothing in that step starts a process either.)
+   The automation tools (`create_automation`, `arm_automation`,
+   `disarm_automation`) are `open_only` too: also absent from the SAFE view, also
+   refused at dispatch outside OPEN. Step 7's discovered tool-server tools register
+   the same way and are therefore in the same position: `open_only`, so
+   `visible_tools(SAFE)` has never held one, and refused at both dispatch sites
+   outside OPEN. Addison calls a tool server over HTTP and never launches one, so
+   nothing in that step starts a process either.)
+
+   **Step 5's `read_project_file` / `write_project_file` are IN the SAFE view since
+   2026-08-11, and this invariant is unaffected** — they are typed, path-bounded
+   functions, not a shell. **Owner decision, 2026-08-11.** They were `open_only`
+   until then, and the effect on the profile the personas use was that Addison
+   could not change an existing file at all: asked to fix a line in a document, it
+   refused and offered to save a *new* file beside it. That is the defect, not the
+   safety model, so Simple gained the capability on the terms the safety model
+   already had for it:
+
+   - **the card comes first, every time.** A write is destructive
+     (`is_destructive` → True unconditionally), and in SAFE a destructive call now
+     takes the **per-invocation** card rather than the coarse ask-once flow
+     (`permissions/gate.py`) — so each edit is announced by name and no approval
+     carries over to the next one. The wording is the tool's own
+     (`permission_sentence`): it names the file and says the change can be undone.
+     This is a **tightening** of the SAFE gate: nothing that used to card stopped
+     carding, and every non-destructive SAFE call runs the coarse flow exactly as
+     before;
+   - **nothing else moved.** Confinement to a currently-trusted root is unchanged
+     and still refuses *before* the gate, so there is no card that can approve a
+     path outside one; the shell still refuses Addison's own data directory,
+     binary files and oversize prior content; the symlink/hard-link identity checks
+     are untouched; and the write is undoable, which is what lets it sit in a view
+     where invariant 2 applies in full (it never took the `allow_missing_undo`
+     waiver — see invariant 2).
+
+   **What this costs, said plainly:** design-doc §9's *"filesystem scope by picker,
+   not by path"* no longer describes the whole of Simple. Simple's own tools still
+   scope by picker (`read_file`, `save_file`); these two scope by **trusted root**,
+   and a Simple person has no surface for granting one today — the workspace-trust
+   panel is Developer/Custom only, so in practice this reaches a Simple person only
+   for folders trusted while Developer was active. Giving Simple its own way to
+   trust a folder is a UX decision that has not been taken.
 2. **Every `risk_tier != LOW` tool must have a real `undo()`**, enforced at
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()` — a tool that genuinely can't be undone stays LOW and

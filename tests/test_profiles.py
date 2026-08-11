@@ -4,12 +4,18 @@ The Simple profile is the default and must expose exactly the v1 tool set.
 
 Since the mode-scoped model (owner decision 2026-07-19) the Developer profile
 DOES bring real new capability — its OPEN mode surfaces ``run_command`` and the
-two ``read``/``write_project_file`` tools. What these tests pin is WHERE that
-widening is allowed to happen: not in the Profile dataclass, which carries the
-same ``tool_ids`` either way, but in mode-scoped registration
-(``main.build_registry``) behind the registry's SAFE/OPEN filtered view. Those
-tools' visibility and dispatch rules belong to tests/test_tool_registry.py and
-tests/test_policy_modes.py; a profile still never widens anything by itself.
+automation tools. What these tests pin is WHERE that widening is allowed to
+happen: not in the Profile dataclass, which carries the same ``tool_ids`` either
+way, but in mode-scoped registration (``main.build_registry``) behind the
+registry's SAFE/OPEN filtered view. Those tools' visibility and dispatch rules
+belong to tests/test_tool_registry.py and tests/test_policy_modes.py; a profile
+still never widens anything by itself.
+
+``read_project_file`` / ``write_project_file`` were on the Developer side of that
+line until 2026-08-11 and are now in the SAFE set below — the owner decided
+Simple's inability to change an existing file was a bug, and the two tools
+register with no flags (docs/SAFETY.md owns the decision; the card, confinement
+and undo are what keep them safe there, tests/test_workspace_trust.py §5).
 """
 
 from agent_core.main import build_registry
@@ -21,10 +27,12 @@ _V1_TOOLS = [
     "open_link",
     "read_clipboard",
     "read_file",
+    "read_project_file",
     "read_web_page",
     "save_file",
     "snapshot_now",
     "web_search",
+    "write_project_file",
 ]
 
 
@@ -48,7 +56,7 @@ def test_developer_profile_dataclass_carries_no_extra_tools_of_its_own():
     Developer unlocks surfaces here (CLI, raw diagnostics, plan view) and its
     ``tool_ids`` stay identical to Simple's. That is not the old "surface only, no
     new capability" claim — Developer maps to OPEN, and OPEN really does surface
-    ``run_command`` and the two project-file tools. But they arrive by
+    ``run_command`` and the automation tools. But they arrive by
     ``build_registry`` registering them ``dev_only``/``open_only``, so the registry's
     SAFE view and ``refuse_if_dev_only_outside_open`` are what hold the line
     (tests/test_tool_registry.py, tests/test_policy_modes.py).

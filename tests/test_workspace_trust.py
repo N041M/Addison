@@ -6,15 +6,25 @@ guards is reverted (mutation-proven; see docs/HANDOFF.md "How step 1 was verifie
   (1) the data-dir floor (also in test_ipc_snapshots.py) + grantTrust refusing ~;
   (2) read_project_file{path:"/etc/passwd"} hard-refused (confinement) + a symlink
       inside a trusted root pointing out is refused (resolve-once);
-  (3) write_project_file inside trust: no card, undoable (round-trip / created-file
-      delete / binary refused / oversize refused); outside trust: refused, no write;
+  (3) write_project_file inside trust (OPEN): no card, undoable (round-trip /
+      created-file delete / binary refused / oversize refused); outside trust:
+      refused, no write;
   (4) run_command inside a trusted cwd STILL cards with the command text;
-  (5) write_project_file's undo is REGISTRATION-ENFORCED despite being OPEN-only;
+  (5) write_project_file is IN the SAFE view and its undo is REGISTRATION-ENFORCED
+      there (2026-08-11: it was open_only, and the SAFE view is where this line
+      changed — see item 11);
   (6) a planted trust row for the data dir never confines (floor beats root);
-  (7) SAFE untouched + ignores a supplied trusted bool;
+  (7) SAFE ignores a supplied trusted bool, and is otherwise untouched except for
+      the destructive per-invocation card item 11 brought with it;
   (8) a routine step / command widget always cards under trust;
   (9) restore never resurrects a revoked trust (excluded from snapshots).
 Item (10) — read_web_page's SSRF suite — is unchanged here; no net-vet code moved.
+
+  (11) THE SIMPLE PROFILE EDITS AN EXISTING FILE (owner decision 2026-08-11, the
+       fix for the "Simple can only save a new file" defect): in SAFE the write is
+       not refused, it raises one card naming the file, the edit lands only after
+       the answer, a denial writes nothing, and confinement still refuses a path
+       outside every trusted root before the gate is consulted at all.
 """
 
 from __future__ import annotations
@@ -61,6 +71,7 @@ from agent_core.tools.base import (
     RiskTier,
     ToolDefinition,
     ToolResult,
+    call_affected_path,
     call_permission_detail,
 )
 from agent_core.tools.read_project_file import ReadProjectFileTool
@@ -271,10 +282,15 @@ def _run_routine_step(tmp_path, registry, gate, bridge, trust_check, tool_id, ar
 
 
 def _harness_registry(bridge):
+    """The two file tools registered exactly as ``main.build_registry`` registers
+    them — NO FLAGS since 2026-08-11, so they are in the SAFE view and Simple can
+    reach them behind a card (docs/SAFETY.md owns the decision). Registering them
+    ``open_only`` here would make every test below assert against a registry the app
+    does not build."""
     registry = ToolRegistry()
-    registry.register(ReadProjectFileTool(), open_only=True)
+    registry.register(ReadProjectFileTool())
     write = WriteProjectFileTool(shell_bridge=bridge)
-    registry.register(write, open_only=True)
+    registry.register(write)
     return registry, write
 
 
@@ -478,7 +494,7 @@ def test_run_command_still_cards_inside_a_trusted_workspace(tmp_path):
 
 
 # ============================================================================
-# (5) — write_project_file's undo is REGISTRATION-ENFORCED despite open_only
+# (5) — write_project_file is IN THE SAFE VIEW, and undo-ENFORCED there
 # ============================================================================
 class _MediumNoUndo:
     definition = ToolDefinition(
@@ -490,14 +506,46 @@ class _MediumNoUndo:
         return ToolResult(success=True, content="")
 
 
-def test_write_project_file_registers_open_only_and_hidden_from_safe():
-    registry = ToolRegistry()
-    registry.register(WriteProjectFileTool(), open_only=True)
-    assert registry.is_dev_only("write_project_file") is True
+def test_write_project_file_is_in_the_safe_view_and_stays_undo_enforced():
+    """THE 2026-08-11 FLIP, pinned as the app actually builds it.
+
+    Until that day this test asserted the opposite — ``open_only``, absent from
+    ``visible_tools(SAFE)`` — and the consequence was the defect the owner ruled
+    on: the Simple profile could not change an existing file at all and could only
+    offer to save a new one. What made the flip legal is the second half here, and
+    it is the half that must never be quietly dropped: this tool is MEDIUM with a
+    REAL ``undo()``, so SAFE invariant 2 applies to it in full. It never took the
+    ``allow_missing_undo`` waiver, which is exactly why it may sit in this view —
+    and a future edit removing ``undo()`` must fail registration rather than
+    leaving an un-undoable MEDIUM tool in front of Mira and Petr.
+
+    Read with ``test_open_only_alone_does_not_exempt_the_undo_check`` below: that
+    one still pins the flag split itself, which is live for
+    ``create_automation``/``arm_automation``.
+
+    Mutations: (a) put ``open_only=True`` back on either registration in
+    ``main.build_registry`` — the SAFE assertions fail; (b) delete
+    ``WriteProjectFileTool.undo`` — the registration at the top raises instead."""
+    bridge = _FakeWorkspaceBridge()
+    # The app's own wiring, not a hand-rolled one: the point is what SIMPLE gets.
+    registry = build_registry(shell_bridge=bridge)
     safe_ids = {d.id for d in registry.visible_tools(PolicyMode.SAFE)}
     open_ids = {d.id for d in registry.visible_tools(PolicyMode.OPEN)}
-    assert "write_project_file" not in safe_ids
-    assert "write_project_file" in open_ids
+    for tool_id in ("write_project_file", "read_project_file"):
+        assert tool_id in safe_ids, f"{tool_id} must be reachable from Simple"
+        assert tool_id in open_ids
+        assert registry.is_dev_only(tool_id) is False
+    write = registry.get("write_project_file")
+    assert write.definition.risk_tier is RiskTier.MEDIUM
+    assert registry.get("read_project_file").definition.risk_tier is RiskTier.LOW
+    # Undo-ENFORCED in that view: the check that would have raised had the method
+    # been missing is the same one every SAFE tool passes (invariant 2).
+    assert callable(getattr(type(write), "undo", None))
+    with pytest.raises(ValueError, match="no undo"):
+        ToolRegistry().register(_MediumNoUndo())
+    # Still path-bounded, so confinement governs it in BOTH modes — the card is not
+    # what keeps it inside a trusted folder, and the flip did not move that line.
+    assert call_affected_path(write, {"path": "~/nowhere/f.txt"}) is not None
 
 
 def test_open_only_alone_does_not_exempt_the_undo_check():
@@ -515,15 +563,48 @@ def test_open_only_alone_does_not_exempt_the_undo_check():
 # ============================================================================
 # (7) — SAFE ignores the trusted bool; the gate stays store-free
 # ============================================================================
-def test_safe_mode_ignores_trusted_and_runs_the_coarse_flow():
+def test_safe_mode_ignores_trusted_and_cards_every_destructive_call():
+    """SAFE ignores ``trusted`` (F7) — asserted here for a DESTRUCTIVE call, which
+    is the only kind trust could ever have suppressed.
+
+    Since 2026-08-11 that call takes the per-invocation card rather than the coarse
+    ask-once flow, so the second assertion is the one that changed: a SAFE
+    destructive call asks EVERY time and remembers no grant. That is what makes
+    "Simple can edit a file" mean "Simple is asked about each file" rather than
+    "Simple is asked once, then Addison edits whatever it likes".
+
+    Mutation: route SAFE+destructive back into ``_safe_flow`` — the second ask
+    disappears and this fails."""
+    asked: list[tuple[str, str | None]] = []
+
+    def on_request(tool_id, detail=None):
+        asked.append((tool_id, detail))
+        return PermissionStatus.GRANTED
+
+    gate = PermissionGate(on_request=on_request)
+    # trusted=True must NOT auto-grant in SAFE — it cards, and it names the file.
+    status = gate.authorize(
+        "t", mode=PolicyMode.SAFE, trusted=True, destructive=True, detail="f.txt"
+    )
+    assert status == PermissionStatus.GRANTED
+    assert gate.auto_grants == []                 # it asked; nothing was auto-granted
+    # A SECOND destructive call asks again — no coarse grant was kept.
+    gate.authorize("t", mode=PolicyMode.SAFE, trusted=True, destructive=True, detail="g.txt")
+    assert asked == [("t", "f.txt"), ("t", "g.txt")]
+
+
+def test_safe_mode_non_destructive_calls_still_run_the_coarse_flow():
+    """The precision half of the change above: the SAFE gate is otherwise
+    untouched. A non-destructive tool asks ONCE and the grant is remembered — the
+    historical behaviour every other Simple tool depends on, and the freeze the
+    2026-08-11 tightening was written to keep."""
     asked: list[str] = []
     gate = PermissionGate(
         on_request=lambda tid: (asked.append(tid), PermissionStatus.GRANTED)[1]
     )
-    # trusted=True must NOT auto-grant in SAFE — SAFE runs the coarse ask/grant flow.
-    status = gate.authorize("t", mode=PolicyMode.SAFE, trusted=True, destructive=True)
-    assert status == PermissionStatus.GRANTED
-    assert asked == ["t"]                 # it asked (safe flow), did not auto-grant
+    for _ in range(2):
+        assert gate.authorize("t", mode=PolicyMode.SAFE) == PermissionStatus.GRANTED
+    assert asked == ["t"]                 # asked once, then remembered
     assert gate.auto_grants == []
 
 
@@ -534,6 +615,120 @@ def test_open_mode_trusted_destructive_auto_grants():
     status = gate.authorize("write_project_file", mode=PolicyMode.OPEN, trusted=True, destructive=True)
     assert status == PermissionStatus.GRANTED
     assert gate.auto_grants == ["write_project_file"]
+
+
+# ============================================================================
+# (11) — SIMPLE EDITS A FILE, behind a card that names it (owner decision
+#        2026-08-11). Through the real orchestrator in SAFE mode, because the
+#        claim is about the whole path — visibility, confinement, gate, effect —
+#        and every one of those is a separate place the old answer lived.
+# ============================================================================
+def test_simple_edits_an_existing_file_behind_a_card_that_names_it(tmp_path):
+    """THE FIX, end to end. In SAFE mode the write is not refused for being a
+    developer affordance; it raises ONE card carrying the file's name, and the
+    edit lands only after the answer.
+
+    Three things are asserted together because the bug could come back through any
+    of them: the call is not refused (visibility), a card was raised BEFORE the
+    write (order — ``bridge.writes`` is empty when the handler runs), and the
+    change is undoable (a snapshot was recorded, which is what makes the card an
+    honest one).
+
+    Mutations: (a) register the tool ``open_only`` again — the tool result is the
+    dev-only refusal; (b) hand SAFE's destructive call to ``_safe_flow`` — the
+    detail is lost and the file name assertion fails."""
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    target = tmp_path / "project" / "f.txt"
+    target.parent.mkdir()
+    target.write_text("before", encoding="utf-8")
+    resolved = str(target.resolve())
+
+    asked: list[tuple[str, str | None]] = []
+
+    def on_request(tool_id, detail=None):
+        # The card is shown BEFORE anything is written — that ordering IS the
+        # decision ("show the permission card first and then do the edit").
+        assert bridge.writes == []
+        asked.append((tool_id, detail))
+        return PermissionStatus.GRANTED
+
+    _, tool_result, store = _run_single_tool_call(
+        registry, PermissionGate(on_request=on_request), bridge, lambda p: p == resolved,
+        "write_project_file", {"path": str(target), "content": "after"},
+        mode=PolicyMode.SAFE,
+    )
+    assert asked == [("write_project_file", "f.txt")]
+    assert tool_result.content == "Wrote f.txt."
+    assert target.read_text(encoding="utf-8") == "after"
+    # Undoable: the snapshot carrying the prior bytes was recorded in SAFE too.
+    assert store.inserted and store.inserted[0].undo_payload["prior"] == "before"
+
+
+def test_a_denied_card_in_simple_writes_nothing(tmp_path):
+    """"Not now" means the file is untouched — the other half of the card being
+    real. A gate answer that arrived after the write would make the card a
+    notification."""
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    target = tmp_path / "project" / "f.txt"
+    target.parent.mkdir()
+    target.write_text("before", encoding="utf-8")
+    resolved = str(target.resolve())
+
+    gate = PermissionGate(on_request=lambda tool_id, detail=None: PermissionStatus.DENIED)
+    _, tool_result, store = _run_single_tool_call(
+        registry, gate, bridge, lambda p: p == resolved,
+        "write_project_file", {"path": str(target), "content": "after"},
+        mode=PolicyMode.SAFE,
+    )
+    assert "declined" in tool_result.content
+    assert bridge.writes == []
+    assert target.read_text(encoding="utf-8") == "before"
+    assert store.inserted == []
+
+
+def test_simple_is_still_confined_to_trusted_folders(tmp_path):
+    """Confinement did not move with the visibility. In SAFE, a path outside every
+    trusted root is hard-refused BEFORE the gate — so there is no card to approve
+    it with, which is the whole difference between confinement and consent."""
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    outside = tmp_path / "elsewhere.txt"
+    outside.write_text("before", encoding="utf-8")
+    gate = PermissionGate(on_request=lambda *a, **k: pytest.fail("must never reach the gate"))
+    _, tool_result, _ = _run_single_tool_call(
+        registry, gate, bridge, lambda p: False,
+        "write_project_file", {"path": str(outside), "content": "after"},
+        mode=PolicyMode.SAFE,
+    )
+    assert tool_result.content == _OUTSIDE_TRUST
+    assert bridge.writes == []
+    assert outside.read_text(encoding="utf-8") == "before"
+
+
+def test_the_simple_card_says_which_file_and_never_reads_as_a_command():
+    """The sentence Mira and Petr read. It names the file and says the change can
+    be undone — and it must NOT contain ``run: ``, which the frontend splits on to
+    render what follows as a command (``PermissionCard.tsx``): a card announcing
+    "wants to run: shopping.txt" is a lie about what is about to happen, and the
+    reason the wording belongs to the tool rather than to the server's one idiom.
+
+    ``run_command``'s card is asserted beside it, because the change had to leave
+    that idiom exactly where it was."""
+    from agent_core.main import _card_consequence
+
+    write = WriteProjectFileTool()
+    sentence = _card_consequence(write, "shopping.txt")
+    assert "shopping.txt" in sentence
+    assert "undo" in sentence
+    assert "run: " not in sentence
+    # No detail (a SAFE coarse card) still falls back to the standing description.
+    assert _card_consequence(write, None) == write.definition.description
+    # The historical idiom, untouched, for the tool it was written for.
+    assert _card_consequence(_FakeRunCommand(), "rm -rf /tmp/x") == (
+        "This time it wants to run: rm -rf /tmp/x"
+    )
 
 
 # ============================================================================
@@ -579,6 +774,57 @@ def test_a_routine_path_tool_step_still_cards_under_trust(tmp_path):
     result = engine.run(routine, {}, mode=PolicyMode.OPEN)
     assert result.status == "completed"
     # It ran (confinement passed) but it CARDED (trusted=False) — no auto-grant.
+    assert asked == [("write_project_file", "f.txt")]
+    assert target.read_text(encoding="utf-8") == "x"
+
+
+def test_a_file_routine_now_runs_in_simple_with_the_ordinary_card(tmp_path):
+    """THE INTENDED CONSEQUENCE of the 2026-08-11 flip, on the routine path.
+
+    Availability is asked of the ARTIFACT — the plan AND the SAFE tool view
+    (``rpc/routines.py::_routine_needs_dev``) — so a routine whose only step edits a
+    file stopped "waiting in Developer profile" the moment that tool entered the SAFE
+    view, and RUNS in Simple instead. It runs on exactly the live terms: confinement
+    first, then a card per step (a stored spec never passes ``trusted``, D5), which is
+    invariant 3 — a routine gets nothing the person could not have granted live.
+
+    Mutation: register the tool ``open_only`` again — the engine's per-step dev-only
+    check refuses the step and the file is untouched."""
+    from agent_core.routines.engine import RoutineEngine
+    from agent_core.routines.model import Routine, RoutineStep
+
+    bridge = _FakeWorkspaceBridge()
+    registry, _ = _harness_registry(bridge)
+    store = Store(tmp_path / "r.sqlite3")
+    store.insert_routine(
+        id="r-1", name="T", description="", plan_json={},
+        created_from_conversation_id=None, created_at=1, created_in_mode="open",
+    )
+    target = tmp_path / "project" / "f.txt"
+    target.parent.mkdir()
+    target.write_text("before", encoding="utf-8")
+    resolved = str(target.resolve())
+
+    asked: list[tuple[str, str | None]] = []
+
+    def on_request(tool_id, detail=None):
+        asked.append((tool_id, detail))
+        return PermissionStatus.GRANTED
+
+    engine = RoutineEngine(
+        tool_registry=registry,
+        permission_gate=PermissionGate(on_request=on_request),
+        undo_manager=UndoManager(store=store, tool_registry=registry),
+        shell_bridge=bridge,
+        store=store,
+        trust_check=lambda p: p == resolved,
+    )
+    routine = Routine(
+        id="r-1", name="T", description="", variables=[],
+        steps=[RoutineStep("s1", "write_project_file", {"path": str(target), "content": "x"})],
+    )
+    result = engine.run(routine, {}, mode=PolicyMode.SAFE)
+    assert result.status == "completed"
     assert asked == [("write_project_file", "f.txt")]
     assert target.read_text(encoding="utf-8") == "x"
 

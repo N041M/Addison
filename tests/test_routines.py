@@ -613,8 +613,10 @@ def test_library_crud_round_trip(tmp_path):
 #
 # These enter through the real JSON-RPC server with the REAL tool registry
 # (`build_registry(DEVELOPER)`), because half the question is which tools the
-# SAFE view holds — `read_project_file` is registered `open_only`, and no
-# hand-rolled test registry would reproduce that.
+# SAFE view holds — `create_automation` is registered `open_only`, and no
+# hand-rolled test registry would reproduce that. (It was `read_project_file`
+# until 2026-08-11, when the file tools joined the SAFE view and stopped being an
+# example of anything Simple cannot reach — docs/SAFETY.md owns that decision.)
 # ===========================================================================
 
 # Frozen copy (rpc/constants.py holds it once, for both the marker and the
@@ -720,7 +722,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     """THE CASE ``routine_uses_dev_abilities`` ALONE MISSES, and the reason the
     question lives in the RPC layer at all.
 
-    ``read_project_file`` is registered ``open_only``: absent from
+    ``create_automation`` is registered ``open_only``: absent from
     ``visible_tools(SAFE)`` and refused at dispatch outside OPEN. A routine naming
     it carries NO command step, so the plan-only test answers "needs nothing" — and
     the row would sit in Simple offering a Run that the engine refuses one click
@@ -741,7 +743,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     this row is stamped 'safe'."""
     h = _seeded(
         tmp_path,
-        [(_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "README.md"})]), "safe")],
+        [(_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe")],
     )
     try:
         assert _rows(h, 1)["reader"]["unavailable"] == _DISABLED
@@ -807,7 +809,7 @@ def test_the_rail_and_the_library_never_disagree_about_one_routine(tmp_path):
         tmp_path,
         [
             (_plan("calc", [RoutineStep("s1", "calculator", {"expression": "1+1"})]), "open"),
-            (_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "x"})]), "safe"),
+            (_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe"),
         ],
         widgets=[
             ("w-calc", {"kind": "routine", "routineId": "calc", "title": "Add up"}),

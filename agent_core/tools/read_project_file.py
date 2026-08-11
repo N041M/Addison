@@ -1,9 +1,22 @@
-"""read_project_file — read a text file by absolute path, OPEN-only (step 5).
+"""read_project_file — read a text file by absolute path (step 5; in SAFE since 2026-08-11).
 
 The read half of the coding harness (scope amendment 2026-07-20, §8; contract §2).
-LOW and read-only: no ``undo()`` needed. ``open_only`` (registry, R3) so it is
-absent from the SAFE view and refused at dispatch outside OPEN — the Simple
-companion never edits a project by raw path; that is a Developer affordance.
+LOW and read-only: no ``undo()`` needed, and no flags at registration — it is in
+``visible_tools(SAFE)`` like every other tool Simple can use.
+
+**IT WAS ``open_only`` UNTIL 2026-08-11**, absent from the SAFE view and refused
+at dispatch outside OPEN. It followed its write half out of that position on the
+day Simple gained the ability to change an existing file (docs/SAFETY.md owns the
+decision), because the alternative was the absurdity: Simple could OVERWRITE a
+file in a trusted folder and could not READ the one it was about to overwrite, so
+every edit would have been a blind one. The Simple companion's other read tool
+(``read_file``) takes a PICKER HANDLE and cannot be pointed at a path at all, so
+it cannot answer "what does this file say now" for a file the person named.
+
+Nothing about the boundary moved with it: confinement to a trusted root is the
+caller's job and unchanged, the shell still refuses Addison's own data directory
+and binary content, and the read costs a permission card in SAFE like every other
+not-yet-granted tool.
 
 CONFINEMENT is not this tool's job and cannot be — ``tools/`` may not import the
 store (module-boundary rule), and confinement needs the trust rows. The CALLER
@@ -42,8 +55,8 @@ class ReadProjectFileTool:
         id="read_project_file",
         label="Read a project file",
         description=(
-            "Reads a text file from a folder you've trusted, so Addison can work "
-            "with your project. Available only in the Developer profile."
+            "Reads a text file from a folder you've trusted, so Addison can see "
+            "what it says before changing anything."
         ),
         risk_tier=RiskTier.LOW,
         parameters_schema={

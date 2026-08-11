@@ -1089,6 +1089,30 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "stdio is not rejected, it is scheduled — phase 5, behind containment."
         ),
     },
+    "file-tools-are-in-the-safe-view": {
+        "the history, in the past tense, which is the reasoning and must survive": (
+            "They were `open_only` until 2026-08-11: absent from the SAFE view and "
+            "refused at dispatch outside OPEN."
+        ),
+        "the design-doc bullet dating its own claim rather than restating it": (
+            "So the two path-bounded file tools (`read_project_file`, "
+            "`write_project_file` — OPEN-only when this was written) scope by trusted "
+            "root instead."
+        ),
+        "the tools that ARE still kept out of SAFE, which is a different fact": (
+            "`create_automation`, `arm_automation` and `disarm_automation` are "
+            "`open_only`: absent from the SAFE view and refused at dispatch outside "
+            "OPEN."
+        ),
+        "today's fact stated plainly, which is the point of the row": (
+            "Simple reads and changes a file inside a folder you have trusted, behind "
+            "a card that names the file, and every change can be undone."
+        ),
+        "the honest limit that remains, which names Simple and a folder": (
+            "A Simple person still has no surface for granting a trusted folder, so "
+            "in practice this reaches them only for folders trusted under Developer."
+        ),
+    },
     "mcp-is-dev-only-in-v1": {
         "the WIDGET vocabulary sentence, which is true and about something else": (
             "SAFE admits only the non-destructive set of widget kinds, and that set is "
@@ -1417,6 +1441,36 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the HTTP-only decision asserted after stdio ships": (
                 "A server row stores a URL and never a command, and nothing in step 7 "
                 "launches a program."
+            ),
+        },
+    },
+    "file-tools-are-in-the-safe-view": {
+        "while_true": {
+            # Transcribed from CLAUDE.md's invariant 1 as it stood until 2026-08-11 —
+            # wraps included, because that is how the sentence sits in the file.
+            "invariant 1's old wording, which is what an agent reads and obeys": (
+                "OPEN's `run_command`, the two `open_only` file tools and every tool\n"
+                "   discovered from an outside tool server are absent from\n"
+                "   `registry.visible_tools(SAFE)` and refused at dispatch outside OPEN."
+            ),
+            "SAFETY.md's old sentence about step 5's pair, in the present tense": (
+                "Step 5's `read_project_file` / `write_project_file` are `open_only` "
+                "too: also absent from the SAFE view, also refused at dispatch outside "
+                "OPEN."
+            ),
+            "a tool description quoted into a document, which is how this spread": (
+                "`write_project_file` — creates or updates a text file in a folder "
+                "you've trusted. Available only in the Developer profile."
+            ),
+        },
+        "while_false": {
+            "the capability asserted after it has been taken back": (
+                "Simple can edit an existing file in a trusted folder, behind a card "
+                "that names it."
+            ),
+            "the registry fact asserted after the tools are open_only again": (
+                "`write_project_file` is in the SAFE view, so the Simple profile can "
+                "reach it."
             ),
         },
     },
