@@ -53,6 +53,14 @@ class Method:
     CONVERSATION_LIST = "conversation.list"  # {} -> {conversations}
     CONVERSATION_RENAME = "conversation.rename"  # {conversationId, title} -> {ok, title?, error?}
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
+    # {} -> {ok, endedRequests}. The person pressed Stop. The v1 contract still has
+    # no way to interrupt a turn MID-STEP (the worker finishes what it started), and
+    # this method deliberately does not pretend otherwise — what it ends is the
+    # turn's CONSENT: every card waiting for an answer is resolved as "no", and no
+    # further card is raised for that turn. A permission answer arriving afterwards
+    # is refused by the core (main.py, ``_handle_permission_respond``); the webview
+    # showing the card as expired is presentation, this is the enforcement.
+    CONVERSATION_STOP = "conversation.stop"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
     # {toolId, allow, typed?} — `typed` carries the code the person retyped on an

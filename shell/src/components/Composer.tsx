@@ -25,9 +25,12 @@
 // (16px below md), and doubling it was the misalignment phase 1 flagged — the
 // composer row and the thread above it must share one left edge.
 //
-// The Stop control is not in the prototype and is not decoration: the v1 IPC
-// contract has no core-side cancel, so Stop is what lets a person end a turn
-// that is taking too long (useTurn.handleStop). It keeps its aria-label.
+// The Stop control is not in the prototype and is not decoration: it is what lets
+// a person end a turn that is taking too long (useTurn.handleStop). The v1 IPC
+// contract still has no way to interrupt the core MID-STEP — the tool call it
+// started finishes — so what Stop ends is the webview's turn and the turn's
+// CONSENT: `conversation.stop` refuses every pending permission card and forbids
+// another (KNOWN-BUGS #4). It keeps its aria-label.
 
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelSelection } from "../hooks/useModelSelection";

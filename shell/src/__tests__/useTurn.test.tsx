@@ -27,8 +27,12 @@ beforeAll(() => {
 // module so no Tauri context is needed (RawError is a type — erased at build).
 // `parseAnsweredWith` is also imported by the hook (Phase-2 step 3) — stub it to
 // the fail-closed default (no chip) so these race-guard tests stay focused.
+// `stopTurn` is here because Stop is no longer purely local: it tells the core to
+// end the turn's consent (KNOWN-BUGS #4). These tests are about the race guard, so
+// it resolves and is otherwise ignored — stopTurn's own behaviour is pinned in
+// stoppedTurnCard.test.tsx.
 vi.mock("../ipc/client", () => ({
-  ipc: { sendMessage: vi.fn() },
+  ipc: { sendMessage: vi.fn(), stopTurn: vi.fn(() => Promise.resolve({ ok: true })) },
   parseAnsweredWith: () => undefined,
 }));
 
