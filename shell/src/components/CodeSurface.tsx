@@ -36,6 +36,7 @@ import { CodeDiff, CodeViewer } from "./CodeEditor";
 import { MobileDrawer } from "./MobileDrawer";
 import { RowAction, RowConfirm, SURFACE_ID } from "./Surface";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { formatRowTime } from "../lib/time";
 
 // ---------------------------------------------------------------------------
 // Frozen copy. Every sentence here is one somebody reads before deciding whether
@@ -313,7 +314,15 @@ function Quiet({ children }: { children: ReactNode }) {
 /** One file Addison changed that is still changed. `relativePath` by default —
  * the whole path only when there is no root for it to be relative to (trust
  * revoked since the write), because a bare basename for a file nobody can place
- * is less useful than the long answer, and the long answer is true. */
+ * is less useful than the long answer, and the long answer is true.
+ *
+ * NAME AND TIME, in that order. The list is newest first, and a list ordered by a
+ * fact it does not show asks somebody to take the order on trust — with several
+ * files changed in one session, "which of these did it just touch?" was
+ * unanswerable from the screen. The time is `lastWrittenAt` (the most recent write
+ * of the collapsed chain, the one the order is by, epoch seconds) in the chat
+ * list's shape and idiom: mono, muted, and out of the accessible name, because it
+ * is a machine fact rather than part of what the row is called. */
 function EditRow({
   edit,
   selected,
@@ -324,6 +333,7 @@ function EditRow({
   onOpen: () => void;
 }) {
   const note = edit.missing ? "gone" : edit.created ? "new" : edit.writes > 1 ? `${edit.writes}×` : "";
+  const when = formatRowTime(edit.lastWrittenAt);
   return (
     <button
       type="button"
@@ -338,6 +348,11 @@ function EditRow({
     >
       <span className="min-w-0 flex-1 truncate">{edit.relativePath}</span>
       {note && <span className="shrink-0 font-mono text-[10px] text-disabled">{note}</span>}
+      {when && (
+        <span data-edit-time="" className="shrink-0 font-mono text-[10px] text-disabled">
+          {when}
+        </span>
+      )}
     </button>
   );
 }
