@@ -358,6 +358,14 @@ class ToolCallRequest:
     id: str
     tool_id: str
     args: dict
+    # Opaque per-provider crumbs captured off the wire and echoed back verbatim
+    # when this call is replayed in history. Adapter-agnostic on purpose: the
+    # ONLY code allowed to read a key is the adapter that wrote it, and every
+    # other adapter ignores the dict entirely. Gemini 3 is why it exists — its
+    # ``thoughtSignature`` must return unchanged with the functionCall part or
+    # the next request is refused with a 400 — but nothing here is Google-shaped,
+    # so a second provider with the same requirement needs no new field.
+    provider_meta: dict = field(default_factory=dict)
 
 
 @dataclass
