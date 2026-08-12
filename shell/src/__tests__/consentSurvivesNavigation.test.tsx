@@ -48,6 +48,7 @@ function setup(permissionPending: boolean) {
       controlsBusy: true, // a turn is running either way
       permissionPending,
       resetTransientState,
+      setActivities: vi.fn(),
       setMessages: vi.fn(),
       setScreen: vi.fn(),
       setStatusBanner,
