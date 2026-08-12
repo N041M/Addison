@@ -3,7 +3,7 @@
 > **Amended 2026-07-20** by the scope amendment, which was folded into the
 > authoritative docs and **retired 2026-07-27**. Floors, modes and guards are
 > owned by [`SAFETY.md`](SAFETY.md); status by [`../ROADMAP.md`](../ROADMAP.md).
-> Do not consult the amendment to settle a question — it is a historical record.
+> Do not consult the amendment to settle a question; it is a historical record.
 > Adds the `SnapshotManager` (global floor **G3**, guaranteed rollback), the
 > Simple/Developer/**Custom** mode-and-guard model with capability tiers, a
 > `RoutingStrategy` abstraction (the amendment listed four named strategies + custom;
@@ -146,17 +146,17 @@ byte for byte by the orchestrator turn path and the routine step path:
 
 1. **The dev-only refusal happens at dispatch, before the gate and before
    `execute`.** `visible_tools` hides an `open_only` tool from the *model*, but hiding
-   is not enforcing — a `tool_use` naming a hidden id still reaches `get()`, and the
+   is not enforcing: a `tool_use` naming a hidden id still reaches `get()`, and the
    gate does not check dev-ness. `refuse_if_dev_only_outside_open` is what closes it.
 2. **Confinement is a separate predicate from prompting.** `call_affected_path`
    resolves a path-bounded tool's path **once**; if that path is outside every trusted
    root the call is hard-refused there and then, LOW and MEDIUM alike. The resolved
    value rides to `execute` on `ExecutionContext.resolved_path` and is never re-read
-   from `args` — resolving twice would let confinement approve one path while the write
+   from `args`. Resolving twice would let confinement approve one path while the write
    lands on another.
 3. **Destructiveness and the card's text are per call**, from
    `tools/base.call_is_destructive` and `call_permission_detail`. The latter is asked
-   once and used twice — for the permission card and for the Activity Panel — so the
+   once and used twice (for the permission card and for the Activity Panel), so the
    two can never describe different calls.
 
 ## Modes, guards, and snapshots
@@ -166,15 +166,15 @@ The scope amendment layers three things onto the safety machinery above: a third
 gate what a tool or widget may do per mode, and the **SnapshotManager** that makes
 global floor **G3** (guaranteed rollback) real. The mode is still derived from the
 active profile; Custom is a tuned overlay whose *floors* are fixed. The
-`SnapshotManager` captures app-state snapshots (config/DB rows — never keys, so G1
+`SnapshotManager` captures app-state snapshots (config/DB rows, never keys, so G1
 holds), marks a configuration verified-working after a turn completes, and restores to
 the last verified-working state. Turning a guard off in Custom mode mints an
 **undeletable anchor** that records the app build it was minted on (a reference, not
-the binary — owner decision 2026-07-20; see `data-model.md`).
+the binary; owner decision 2026-07-20; see `data-model.md`).
 
 **Workspace trust is not a class.** It is a two-column table (`workspace_trust`) plus
 two pure predicates and an RPC namespace, and it is drawn above only as the row shape
-it actually is. `policy.workspace_trust_allows(path, data_dir)` is the *floor* —
+it actually is. `policy.workspace_trust_allows(path, data_dir)` is the *floor*:
 Addison's own data directory and its sidecar, and (since step 8 phase 1) every
 OS-automation directory in `policy.OS_AUTOMATION_DIRS`, can never be, contain, or be
 contained by a trusted root, checked realpath-and-casefold in **both** directions so
@@ -183,11 +183,11 @@ neither a symlink nor an ancestor gets around it. The bool delegates to
 sentence can be true. `rpc/workspace.is_trusted(resolved_path,
 roots, data_dir)` is the *confinement* predicate: match a granted root **then** apply
 the floor, so a root somehow planted over the data dir still confines nothing. Both
-are store-free by construction — the caller supplies the roots — which is what keeps
+are store-free by construction (the caller supplies the roots), which is what keeps
 the gate store-free. `WorkspaceMixin` wires the same resolver into the orchestrator and
 the routine engine as `trust_check` (`main.py`), so grant time and authorize time can
 never drift. Those are the only two wirings: the widget command path consults no
-resolver at all, because it passes `trusted=False` unconditionally — a Run pill must
+resolver at all, because it passes `trusted=False` unconditionally: a Run pill must
 always card, so it is strictly stricter and needs no answer from the resolver. (The
 docstring on `rpc/workspace._is_trusted_path` says "orchestrator / routine engine /
 widget rail"; the third is not wired.)
@@ -198,19 +198,19 @@ the earlier sketch were wrong and are corrected here: `snapshot(reason)` is
 **`capture(...)`** (the verb set is capture / restore / mint_anchor / prune, never
 record / undo_last, so it can never be confused with `UndoManager`);
 `mark_verified_working(config_id)` takes **no argument** (there is no config-identity
-concept in the data model — it captures the *current* config as a new verified row,
+concept in the data model; it captures the *current* config as a new verified row,
 deduped by fingerprint); and `Snapshot.payload` is **`ConfigSnapshot.state_blob`**,
 because dataclasses mirror their table 1:1 and the column is `state_blob`.
 `restore(snapshot_id)` and `restore_last_working()` **both** exist: the second is the
-G3 floor — the one-action button, which cannot take an argument — and is implemented
+G3 floor (the one-action button, which cannot take an argument), and is implemented
 as the first, so there is one code path. `mint_anchor()` got its caller in Phase-2
 step 2: `guards.set` mints the anchor before persisting any weakening, deduped by
 fingerprint so repeated toggling cannot grow an unbounded permanent list.
 
 ```mermaid
 classDiagram
-    %% not-in-code: CapabilityTier — retired rather than built (owner decision 2026-08-06, step 6); the closed list of widget kinds is the gate, so there is nothing to declare
-    %% not-in-code: WorkspaceTrustRow — not a class: a two-column `workspace_trust` table plus two pure predicates, drawn here as the row shape it is
+    %% not-in-code: CapabilityTier, retired rather than built (owner decision 2026-08-06, step 6); the closed list of widget kinds is the gate, so there is nothing to declare
+    %% not-in-code: WorkspaceTrustRow, not a class: a two-column `workspace_trust` table plus two pure predicates, drawn here as the row shape it is
     class Profile {
         <<enumeration>>
         SIMPLE
@@ -308,71 +308,71 @@ overlay on the OPEN gate. `GuardConfig` has **exactly two fields**, both
 settings-backed and both a closed vocabulary with a total strictness order:
 `destructive_card` (`per_invocation` > `session`) and `auto_grant_scope` (`none` >
 `non_destructive` > `everything`). The defaults are today's OPEN gate byte for byte, so
-`GuardConfig()` is indistinguishable from the unguarded gate — that equivalence is what
+`GuardConfig()` is indistinguishable from the unguarded gate; that equivalence is what
 lets Simple and Developer keep passing `None`. `weakenings_between(old, new)` is the
 module function that decides whether a save *lowered* a guard; only a lowering mints the
 G4 anchor, and `guards.set` mints it **first**, refusing the change if it cannot.
-Neither the anchor nor the four floors (G1, G2, G3, the anchor rule — **G4** in code and
-in `CLAUDE.md`; the two names are the same rule) are reachable from `GuardConfig`.
+Neither the anchor nor the four floors (G1, G2, G3, the anchor rule, i.e. **G4** in code
+and in `CLAUDE.md`; the two names are the same rule) are reachable from `GuardConfig`.
 `SnapshotManager`, `ConfigSnapshot`, the `CUSTOM` profile and `GuardConfig` are
 **shipped** and their names are fixed. `CapabilityTier` is the one *(Phase-2)* sketch
 left in this diagram, and step 6 **retired it rather than building it** (owner
-decision 2026-08-06): the widget vocabulary is a closed, hard-coded set of kinds, so
+decision 2026-08-06). The widget vocabulary is a closed, hard-coded set of kinds, so
 there is nothing for a widget to declare and nothing to map. The widget validator
 takes the `PolicyMode` itself, and where a widget invokes a tool the tier check is
-`registry.visible_tools(mode)` — never a second risk model. Keep the box only as a
+`registry.visible_tools(mode)`, never a second risk model. Keep the box only as a
 record of the design that was considered.
 
 **`FileRevertManager` is the THIRD reversal mechanism**, beside `UndoManager` (§ Core
 orchestration) and `SnapshotManager` above, and it is drawn as its own cluster because
-that is what it is — `agent_core/snapshots/file_revert.py`, shipped with the Phase-3
+that is what it is: `agent_core/snapshots/file_revert.py`, shipped with the Phase-3
 review surface on 2026-08-08. The division: `UndoManager` is **LIFO and per action**,
 `SnapshotManager` is **whole-config and point-in-time**, and this is **per file and
-out of order** — "put *this* file back", which neither of the other two can express.
+out of order**: "put *this* file back", which neither of the other two can express.
 It reads unreverted `write_project_file` rows from `action_snapshots`, collapses the
 chain for one file into a single `FileEdit`, and puts that file back in **one** shell
 write computed from the oldest row (never N replayed undos, which would put
 intermediate states on disk and could strand the file mid-chain). It holds a `Store`
-and a shell bridge and **nothing else** — no registry, no `UndoManager`, no policy —
+and a shell bridge and **nothing else** (no registry, no `UndoManager`, no policy),
 so "never touch the redo stack" is structural rather than remembered, and confinement
 and the mode gate stay where every other filesystem path has them, at the RPC layer
 (`rpc/workspace.py`; [`flows.md`](flows.md) flow 16 draws the round trip).
 `revert_key` is a module function, not a member, and it asks the OS which file a name
 reaches (`st_dev`+`st_ino` from an `lstat`, the stored spelling when there is nothing to
-ask about) — deliberately **not** `policy._canonical`, whose unconditional casefold would
+ask about), deliberately **not** `policy._canonical`, whose unconditional casefold would
 merge two spellings that are genuinely two files on a case-sensitive volume, and equally
 not the resolved spelling, which splits ONE file into two chains on the case-insensitive
 volume macOS ships with. This path writes bytes. What GROUPS two rows is not that answer
 taken now, though: each write records it (`wrote_ident`), and a chain is the rows joined by
 the same recorded name or the same recorded file, so a hard link planted at a written path
 cannot join two chains and deleting a file cannot split one. `revert_key` taken now answers
-a different question — what stands at that name today — which
+a different question (what stands at that name today), which
 `another_file_stands_there` compares against `FileEdit.identities` before the diff reads or
 the revert writes.
 
-`SnapshotManager` depends on `Store` and nothing else in this diagram — deliberately.
+`SnapshotManager` depends on `Store` and nothing else in this diagram, deliberately.
 It reaches no provider, router, profile, policy mode, registry, or gate, because the
 restore path has to work when any of those is broken. For the same reason **restore is
 never a registry tool and never passes the `PermissionGate`**: a gate that could deny a
 restore would make "the restore path is itself unbreakable" false
 ([`SAFETY.md`](SAFETY.md) owns that claim and its scope). The only
 model-facing snapshot surface is a **LOW, capture-only** `snapshot_now` tool
-(`agent_core/tools/snapshot_now.py`, in all three profiles — Simple, Developer and
+(`agent_core/tools/snapshot_now.py`, in all three profiles: Simple, Developer and
 Custom all carry `_V1_TOOL_IDS`) that may add a row and
-nothing else — it reaches the `SnapshotManager` through a **late-bound** ref (the
+nothing else. It reaches the `SnapshotManager` through a **late-bound** ref (the
 registry is built before the manager exists, so it answers "can't save yet" until the
 store is up) and calls only `capture(...)`, never restore/delete/prune.
 
 ## External tools via MCP
 
-Addison is an MCP **client** — it consumes external MCP servers — never a server or
+Addison is an MCP **client** (it consumes external MCP servers), never a server or
 gateway. Each remote tool is adapted into the *existing* `ToolRegistry`, so an
 MCP tool is registered, gated, logged, and undo-checked exactly like a native tool
 (§ Core orchestration). Because a mutating tool with no `undo()` cannot be LOW-risk,
 invariant 2 automatically keeps such an MCP tool out of the SAFE view. Connecting a
 server is reversible, snapshotted config, sharing the add-an-endpoint plumbing.
 
-**The diagram below is the SHAPE, and the shape is what shipped — under different
+**The diagram below is the SHAPE, and the shape is what shipped, under different
 names.** Step 7 (phases 1–4, 2026-08-06 to 2026-08-07) built it as
 `agent_core/mcp_client.py` (module-level protocol functions and a private
 `_Session`, not a client object anybody holds), `mcp_catalog.McpCatalog` (admission
@@ -383,9 +383,9 @@ subsystem is *arranged*; the markers name what to grep for.
 
 ```mermaid
 classDiagram
-    %% not-in-code: McpClient — the role, not a class: agent_core/mcp_client.py is module-level functions over a private _Session, because one call is one session and nothing outlives it
-    %% not-in-code: McpConnection — the role, not a class: what a refresh found lives in mcp_catalog.ServerCatalog, in memory only, and there is no open connection to model
-    %% not-in-code: McpToolAdapter — drawn under its role name; the class is mcp_catalog.McpTool, one registry entry per discovered tool
+    %% not-in-code: McpClient, a role rather than a class: agent_core/mcp_client.py is module-level functions over a private _Session, because one call is one session and nothing outlives it
+    %% not-in-code: McpConnection, a role rather than a class: what a refresh found lives in mcp_catalog.ServerCatalog, in memory only, and there is no open connection to model
+    %% not-in-code: McpToolAdapter, drawn under its role name; the class is mcp_catalog.McpTool, one registry entry per discovered tool
     class McpClient {
         +connect(server_config) McpConnection
         +disconnect(server_id)
@@ -411,7 +411,7 @@ classDiagram
     McpClient ..> ToolRegistry
 ```
 
-`McpToolAdapter` — `mcp_catalog.McpTool` in the tree — satisfies the same `Tool`
+`McpToolAdapter` (`mcp_catalog.McpTool` in the tree) satisfies the same `Tool`
 protocol as native tools, which is what lets it flow through the one shared registry +
 gate. It registers `dev_only=True`, HIGH and destructive unconditionally, so a
 stranger's tool reaches the gate as the strongest thing a tool can declare itself to
@@ -430,18 +430,18 @@ model name, with several models reachable per role.
 Phase-2 step 3 **shipped** the bounded routing layer. A routing strategy orders the
 fallback chain behind the user's standing default model, which always heads the chain:
 **quality-first** (default), **cost-first**, **local-only** (no model call leaves the
-machine — the Setup Assistant relay included), plus a Developer-only **custom** ordered
+machine, the Setup Assistant relay included), plus a Developer-only **custom** ordered
 list. **Balanced was cut from v1 by owner decision** (amendment §10.1): the drafted
 version was indistinguishable from cost-first at two-model pools. The companion surface
 is a single "prefer quality / prefer free" toggle. On failure the turn falls forward
 gracefully: only on a provider-unavailable failure (a rejected request or bad key ends
 the turn instead), with a plain note ("[X] was busy, so Addison used [Y]."), an
 in-memory per-provider cooldown, a per-attempt deadline, and an "Answered with a free
-model." chip whenever routing — not an explicit pick — chose a free model.
+model." chip whenever routing (not an explicit pick) chose a free model.
 
 ```mermaid
 classDiagram
-    %% not-in-code: RoutingStrategy — drawn as an enumeration for readability; in code it is four module-level string constants in providers/router.py, with no Enum
+    %% not-in-code: RoutingStrategy, drawn as an enumeration for readability; in code it is four module-level string constants in providers/router.py, with no Enum
     class ModelProvider {
         <<interface>>
         +capabilities() ProviderCapabilities
@@ -553,16 +553,16 @@ classDiagram
 All members are shipped code. Two shape notes. `RoutingStrategy` is drawn as an
 enumeration for readability, but in code it is four module-level string constants in
 `providers/router.py` (`QUALITY_FIRST`, `COST_FIRST`, `LOCAL_ONLY`, `CUSTOM`) plus the
-`ROUTING_STRATEGIES` tuple and `DEFAULT_ROUTING_STRATEGY` — there is no `Enum`, and
+`ROUTING_STRATEGIES` tuple and `DEFAULT_ROUTING_STRATEGY`. There is no `Enum`, and
 there is no `BALANCED` (cut from v1, amendment §10.1). The three provider exceptions
 all subclass `RuntimeError`, so every pre-existing `except RuntimeError` still catches
 them and each carries byte-identical user-facing wording to what the provider raised
 before the split; the type is the only new thing, and the attempt loop branches on it
-for one question — *may I try the next candidate?* Only `ProviderUnavailable` says yes.
+for one question: *may I try the next candidate?* Only `ProviderUnavailable` says yes.
 
 The strategy layer lives beside the router, not on it:
 `resolve_chain(strategy, candidates, head_model_id, *, custom_order)` is a pure
-function — store-free, holding no cooldown state — that orders `RoutingCandidate`s,
+function (store-free, holding no cooldown state) that orders `RoutingCandidate`s,
 while the attempt loop (per-send continuation, cooldown, the per-attempt deadline) is
 orchestrator machinery. The router itself still answers one question: which provider
 instance serves this role and model name. `DirectAPIProvider`
@@ -581,7 +581,7 @@ routines are declarative artifacts, so they are part of the app state the
 `SnapshotManager` captures (§ Modes, guards, and snapshots) and are restored with a
 rollback. An OPEN-mode `command` step **always** raises the gate's per-invocation
 destructive card: it runs through `run_command`, whose `affected_path` is `None`, and
-the engine passes `trusted=False` unconditionally for stored, replayable steps — so a
+the engine passes `trusted=False` unconditionally for stored, replayable steps, so a
 trusted workspace never makes a saved routine's command card-free. The keyword gate for
 OS-run automation shipped in step 8 phase 3 (2026-08-07):
 `agent_core/automation_nonce.py` mints it, the gate raises it, and the shell's

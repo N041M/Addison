@@ -1,7 +1,7 @@
 # Known gaps and open design questions
 
 **This file owns the live-issue register.** Everything Addison knows to be
-incomplete, undecided, or deliberately deferred is here — nothing else in the tree
+incomplete, undecided, or deliberately deferred is here; nothing else in the tree
 keeps a second list. `VERIFICATION.md` and `HANDOFF.md` both used to, and both
 drifted from this one.
 
@@ -9,7 +9,7 @@ Nothing here is a bug report against shipped behaviour: these are tracked gaps,
 deliberate deferrals and decisions waiting on the owner. A green test run does not
 close any of them. Defects with a known wrong behaviour live in
 [`KNOWN-BUGS.md`](../KNOWN-BUGS.md) (added 2026-08-09, from the whole-app test
-pass) — that file holds the repros, this one keeps the design questions a defect
+pass). That file holds the repros; this one keeps the design questions a defect
 sometimes raises.
 
 *(Extracted from `HANDOFF.md` on 2026-07-27, unchanged.)*
@@ -28,58 +28,58 @@ The *functional* bug is fixed (`d35f113`, 2026-07-27): below 1024px the rail sta
 closed and the header's «/» shows and hides it. What is still wrong is how it looks
 and where it goes.
 
-- **No transition.** The beside rail animates four properties on collapse —
-  `width .35s, opacity .25s, margin-left .35s, transform .35s` — and the brief asks
+- **No transition.** The beside rail animates four properties on collapse
+  (`width .35s, opacity .25s, margin-left .35s, transform .35s`), and the brief asks
   for exactly that (`design-brief-dark/README.md`: "Sidebar collapses via header «
   chevron (width/opacity/translate animate .35s)"). The inline form is
   conditionally *mounted*, so it pops in and out with no transition at all. Two
   affordances driven by one button behave visibly differently.
 - **It lands in the wrong place.** It renders in `ChatThread`'s `footer`, so it sits
-  in the reading column between the last message and the composer — which is why it
+  in the reading column between the last message and the composer, which is why it
   read as "covering the chat window" even when short. It pushes the conversation up
   and competes with the composer for the eye.
 - **The placement has no design authority behind it.** `IMPLEMENTATION.md` says
-  "**Mobile** (<md): keep the existing drawer + inline-widgets structure" — that
+  "**Mobile** (<md): keep the existing drawer + inline-widgets structure", which
   covers below 768px only. The 768–1024 band was invented by the 07-26 responsive
   work by extrapolating the mobile rule; the brief never specifies it. Worth
   deciding rather than inheriting.
 - **Prior art that was deleted:** `BottomSheet.tsx` was removed in the v4 cleanup as
   orphaned "since widgets moved inline on mobile". A sheet or slide-over anchored to
-  the header button — sibling to the existing `MobileDrawer` — is the obvious
+  the header button, sibling to the existing `MobileDrawer`, is the obvious
   candidate, and it would fix the transition and the position together. Check git
   history before rebuilding it from scratch.
 
 **The sidebar's "Code" row carries no mono hint, and its two siblings do (UI/UX,
 owner call).** `design-brief-dark/IMPLEMENTATION.md` describes the Workspace block as
 rows whose right-hand mono fact is "a real count (or the policy mode); never a
-placeholder" — Tools shows the trusted-root count or the mode, Snapshots shows the
+placeholder": Tools shows the trusted-root count or the mode, Snapshots shows the
 restore-point count. `Code` (shipped 2026-08-08, Developer/Custom only) shows
 nothing, so one row in a three-row block has an empty right column. Either is
 defensible and this is not a bug: the honest candidate hint is the number of edits
 still live on disk, which is exactly `workspace.listEdits`'s count and already
 fetched by `useCodeReview`; the honest argument against is that a hint reading `0`
 next to a screen whose whole job is "show me what changed" is noise. Decide it as
-design, not as a fix — `Sidebar.tsx` renders the row and `IMPLEMENTATION.md` owns
+design, not as a fix: `Sidebar.tsx` renders the row and `IMPLEMENTATION.md` owns
 the block's look.
 
 **Opened by step 5.5 items 1–3 (2026-07-31):**
 
 - ~~The denylist's CONTAINS direction is scaffolding and should be deleted.~~
   **RETIRED WHERE THE KERNEL DOES THE JOB, 2026-08-06.** `ls ~`, `ls .`,
-  `grep -r TODO .` and `npm run build -- --out .` were refused outright — not
-  carded, refused — because `rm -rf ~` takes the G3 floor with it and read and
+  `grep -r TODO .` and `npm run build -- --out .` were refused outright (not
+  carded, refused) because `rm -rf ~` takes the G3 floor with it and read and
   write are not distinguishable in a `shell=True` string (#48, three times). The
   seatbelt makes that distinction at the kernel, which was this entry's own stated
   condition for removal, so `policy.command_denied_path` now skips the direction
   wherever writes are confined. INSIDE is untouched: the sandbox deliberately
   permits reads, so `cat ~/.ssh/id_rsa` is refused here or nowhere.
-  **Retired by PLATFORM, not deleted** (`policy.kernel_confines_writes`) — where
+  **Retired by PLATFORM, not deleted** (`policy.kernel_confines_writes`): where
   `sandbox_invocation` shells out to `/bin/sh` with `sandboxed: false`, this
   string is still the only thing between `rm -rf ~` and the recovery floor.
   It was closed without waiting for the `forbidden` audit data this entry asked
   for, and the reason is that the data would only have measured *frequency* while
   the argument turned on *correctness*: the refusal never protected the floor on
-  macOS — the kernel did — it only refused to let the model try, and a control a
+  macOS (the kernel did); it only refused to let the model try, and a control a
   developer cannot approve past is one they route around with `cd`, which also
   defeats the relative-path resolution. A verb-list classifier ("keep it for `rm`,
   drop it for `ls`") was rejected for the reason the docstring already gave: it is
@@ -87,26 +87,26 @@ the block's look.
 - ~~A forbidden call is invisible outside the transcript.~~ **CLOSED 2026-07-31**
   by item 4's `tool_audit`: every refusal writes a row with `outcome='forbidden'`,
   at all three dispatch sites. The same change closed the older hole it was
-  grouped with — `read_web_page` is LOW so it writes no `action_snapshots` row, and
+  grouped with: `read_web_page` is LOW so it writes no `action_snapshots` row, and
   the tool most exposed to prompt injection now leaves a durable record of which
   hosts it reached (`detail` is the host, never the full URL).
 - **A command runs UNCONFINED on any platform without a profile.** macOS refuses
   rather than running bare; Linux has no Landlock/bubblewrap path yet, so the
   command runs and the answer carries `sandboxed: false`, which the tool prints
-  above the output. Never silent — but never protected either, and v1 is macOS, so
+  above the output. Never silent, but never protected either, and v1 is macOS, so
   this is a real gap the day a second platform ships.
 - **`sandbox-exec` is formally deprecated by Apple.** It still works and is what
   Claude Code and Codex CLI both rely on. Acceptable; not permanent. **Recorded in
-  design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered —
+  design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered;
   the gap is now the dependency itself, not the silence about it.
 - **The permission card shows the command, not its consequences (open, 2026-08-06).**
   A card for `rm -rf build` says `rm -rf build`, which is the least informative
   true thing that could be shown. Two narrower forms of "preview before you
-  approve" are open — both are cheaper than they sound and neither is the
+  approve" are open, and both are cheaper than they sound and neither is the
   VM-dry-run idea [`ROADMAP.md`](../ROADMAP.md) rejects (that one runs a
   side-effecting command twice; these run nothing):
   - **Compute the affected set, execute nothing.** For a delete, walk the path
-    and put the count on the card — "1,240 files, 3 modified today". No sandbox,
+    and put the count on the card: "1,240 files, 3 modified today". No sandbox,
     no clone, no execution; it is a directory read. This is the one worth
     building, and it is a day rather than a subsystem.
   - **A copy-on-write clone for the file-only subset.** APFS `clonefile` is
@@ -114,91 +114,91 @@ the block's look.
     seatbelt with `network-outbound` denied, and the diff shown. Honest limits:
     it covers only commands that need no network, and it must SAY it skipped the
     preview rather than silently showing none.
-  If ever scheduled this is **5.6**, not a new step — it is card and containment
+  If ever scheduled this is **5.6**, not a new step: it is card and containment
   work on the step-5 harness, the same shape 5.5 was.
 - **A sandboxed command can reach the network, deliberately.** `network-outbound`
   is granted; `network-bind` is not. Denying outbound was the first draft's
   accidental default and it broke `git fetch` / `npm install` / `pip install`
-  while buying nothing — the command's output already travels to a cloud provider,
+  while buying nothing: the command's output already travels to a cloud provider,
   so blocking `curl` closes only the useful half. **This makes item 4 (output
   redaction) and the v2 untrusted-content screening deferral load-bearing rather
   than theoretical**: they are now the only things standing between a prompt-
   injected command and a deliberate exfiltration. The CLAUDE.md deferral for
   screening was written with a trigger ("becomes load-bearing once free/gray-area
-  endpoints and MCP tools are in play") — this is a second trigger arriving early,
+  endpoints and MCP tools are in play"); this is a second trigger arriving early,
   and it needs an explicit owner decision rather than silent expiry. **The THIRD
   trigger went live 2026-08-07** when step 7 phase 3 shipped dispatch: a tool
   server's descriptions, schemas and answers now reach a model's context. Screening
-  is still v2 and that is unchanged; what shipped instead is a recorded backstop —
-  redaction, caps and a card on every single call — stated at its real strength in
+  is still v2 and that is unchanged; what shipped instead is a recorded backstop
+  (redaction, caps and a card on every single call), stated at its real strength in
   [step-7-mcp-plan.md](step-7-mcp-plan.md) §7, which owns that re-read. **Phase 4
   re-read it again the same day** against the wider surface it opened, reached the
   same answer, and added ONE thing: a cleaning pass over a server's answer that
   runs BEFORE the redactor, because a credential with a zero-width space in the
   middle of it matches no rule and cleaning afterwards would have handed a model a
   key the redactor had already declined to see. That is a character filter and not
-  a screen — it does not read the text and would not notice the plainest injected
-  instruction — and §7 says so in those words. **Partly
+  a screen (it does not read the text and would not notice the plainest injected
+  instruction), and §7 says so in those words. **Partly
   mitigated 2026-07-31**: output redaction (`agent_core/redaction.py`) strips the
   credential shapes it knows on the way to the model and the audit trail records
-  that it happened — but an unrecognised or deliberately-encoded secret still
+  that it happened, but an unrecognised or deliberately-encoded secret still
   passes, so this stays open and is stated as such in design-doc §9.x.
 - ~~**OS-automation directories can be trusted and written today.**~~ **CLOSED
-  2026-08-07, the same day it was found — by step 8 phase 1, in the same PR that
+  2026-08-07, the same day it was found, by step 8 phase 1, in the same PR that
   recorded it.** The gap: `workspace_trust_allows` refused only Addison's own
   protected directories, so `~/Library/LaunchAgents` could be granted as a
   trusted workspace and `write_project_file` could put a plist there behind an
-  ordinary card — login-time automation, armed, no keyword gate. Closed by the
+  ordinary card: login-time automation, armed, no keyword gate. Closed by the
   fence [step-8-automation-plan.md](step-8-automation-plan.md) §5.5 specifies:
   ONE closed list (`policy.OS_AUTOMATION_DIRS`, hand-synced entry-for-entry with
   `exec.rs`'s copy and pinned by a lockstep test that reads both), THREE
-  consumers — the trust floor refuses those directories in both directions at
+  consumers: the trust floor refuses those directories in both directions at
   grant AND authorize time (so a pre-fence trust row over one stopped confining
   anything the moment this landed, no migration needed), `denylisted_roots`
   refuses a command naming one plus the four arming binaries
-  (`launchctl`/`crontab`/`at`/`batch`) as a segment's first word — or behind a
-  prefix the shell itself drops (`sudo`, `exec`, `env`…) — and the
+  (`launchctl`/`crontab`/`at`/`batch`) as a segment's first word (or behind a
+  prefix the shell itself drops: `sudo`, `exec`, `env`…), and the
   seatbelt write-denies them shell-side after every allow, dropping any trusted
   root that touches one. Recorded costs, each stated where the code makes it:
   `~/Library` and `~/.config` are no longer trustable workspaces, and a command
   merely READING a plist is refused by the denylist (which cannot tell read from
   write; the seatbelt, which can, denies only writes).
 - ~~**A G3 restore can orphan an armed job, and nothing on any surface can then name
-  or stop it.**~~ **CLOSED 2026-08-08 (owner-authorized), by reconcile-on-restore —
+  or stop it.**~~ **CLOSED 2026-08-08 (owner-authorized), by reconcile-on-restore,
   exactly the fix this entry prescribed and none of the ones it forbade.** The gap,
   found by the phase-4 review 2026-08-07: `apply_config_state` is REPLACE-ALL, so
-  restoring a snapshot that predates an automation deletes its row — while
+  restoring a snapshot that predates an automation deletes its row, while
   `~/Library/LaunchAgents/<label>.plist` stays installed and launchd goes on running
   it at every login. After that, `disarm_automation` refused ("that automation isn't
   saved any more"), `automation.remove` refused the same way before it could reach
   `_disarm_before_forgetting`, and the Settings section rendered armed-ness per ROW so
   it showed nothing at all. Recovery was `launchctl` by hand. It was the same shape
-  phase 3's review fixed for the Remove path — a job nobody can see and nobody can
-  stop — reached through Restore instead.
+  phase 3's review fixed for the Remove path (a job nobody can see and nobody can
+  stop), reached through Restore instead.
   **What closed it, in three pieces.** (1) DETECTION needed no new question: the
   section already asks `automation.status` (armed LABELS) and `automation.list`
   (rows) when it loads, so an orphan is an armed label matching no row, computed
   where the two answers already meet and filtered to the labels Addison MINTS
   (`com.addison.auto.[a-z0-9][a-z0-9-]{0,39}`) so somebody's unrelated launchd jobs
   are never rendered. (2) THE ROW says *"Running, but not saved here"*, carries the
-  label — the only fact left — and says the honest limit out loud: there is no row, so
+  label (the only fact left) and says the honest limit out loud: there is no row, so
   Addison cannot show what it runs, only switch it off. (3) STOPPING it is
   `automation.disarmOrphan {label}`, a new RPC that works with NO row, validates the
   label against the set Addison mints before it reads the store or reaches the shell,
   refuses a label that HAS a row (that one has its own controls), and answers in EVERY
-  profile — a tightening is never profile-gated, and a Simple person who restored an
+  profile: a tightening is never profile-gated, and a Simple person who restored an
   old point is precisely who this strands. G2 is untouched: it can only stop, and the
   structural test now reads the shell bridge's own method set and pins that this
   namespace names `list_armed` and `disarm_automation` and nothing else.
-  **The restore itself is unchanged** — never blocked, and nothing silently disarmed
+  **The restore itself is unchanged**: never blocked, and nothing silently disarmed
   during one, because an arming decision must not live inside the one action G3
   promises is always available. **The accepted cost, stated where the code makes it
   (`hooks/useAutomations.ts`):** a restore re-reads the ROWS and deliberately does not
   re-ask the OS, so an orphan created while Settings is open appears on the NEXT
   section load rather than at once. Re-asking on restore would be the check nobody
-  caused that plan §5.6 forbids, and wrong on its own terms — a restore cannot change
+  caused that plan §5.6 forbids, and wrong on its own terms: a restore cannot change
   what launchd holds. Nothing polls.
-- **An armed automation may launch Addison itself, and nothing refuses it — an
+- **An armed automation may launch Addison itself, and nothing refuses it: an
   OWNER QUESTION, not a defect (raised by the phase-3 review, 2026-08-07).**
   `policy._ARMING_BINARIES` refuses `launchctl`/`crontab`/`at`/`batch` as a
   command's program, but an automation whose command is `open -a Addison` on a
@@ -208,20 +208,20 @@ the block's look.
   still has no timer, watcher or callback of its own. But it is the one shape that
   produces an Addison-relaunch loop, and the plan's §6 ("no Addison-side scheduler
   … in any phase, ever") never contemplated a job that starts the app rather than
-  being started by it. **What it needs is a sentence from the owner** — either "that
-  is a person's prerogative" or a denylist entry — rather than a code change made
+  being started by it. **What it needs is a sentence from the owner**: either "that
+  is a person's prerogative" or a denylist entry, rather than a code change made
   quietly on the strength of one reviewer's reading. Recorded here because a
   judgement call that lives only in a review report is one nobody makes.
 - **A line inside a heredoc is read as a command, so an ordinary document can be
   refused as "arming" (step 8 phase 1; recorded 2026-08-07).** `_SEGMENT_SPLIT`
-  treats every newline as the start of a new command — it must, because
-  `ls\ncrontab -` is two commands and that was #48's vector — and the same rule
+  treats every newline as the start of a new command (it must, because
+  `ls\ncrontab -` is two commands and that was #48's vector), and the same rule
   reads a heredoc BODY as commands. Since `at` and `batch` are ordinary English
   words, `cat > NOTES.md <<'EOF'` followed by a line beginning *"at last we fixed
   it"* is refused with the arming sentence. Bounded and deliberate: it needs the
   arming word at the START of a line, it is Developer-profile only, and the person
   can run the command in their own terminal. **The cost of the alternative is
-  higher** — not splitting on newlines would let `ls\ncrontab -e` past a guard whose
+  higher**: not splitting on newlines would let `ls\ncrontab -e` past a guard whose
   whole job is the obvious spelling. `tests/test_step_5_5_containment.py`'s
   `_ARMING_FALSE_POSITIVES_ACCEPTED` pins the behaviour so a change is a decision;
   if it is ever fixed, delete that test WITH this entry.
@@ -234,12 +234,12 @@ the block's look.
 - **Trusted roots reach the shell as data on every call.** `writeRoots` is sent by
   the core, so the profile is only as narrow as that list. The shell re-derives
   and re-denies its own data dirs on top, independently, which is what keeps the
-  floor from depending on the core's honesty — but a *widened* allowlist is not
+  floor from depending on the core's honesty, but a *widened* allowlist is not
   independently checked. Nothing in the tree can widen it today (it is read
   straight from `workspace_trust`); noted so the next thing that touches that path
   knows what it is standing on.
 - The data-versus-code edge was **unchanged by this step and was then the sharper of
-  the two** — the seatbelt profile denied writes to the data dir but not to a packaged
+  the two**: the seatbelt profile denied writes to the data dir but not to a packaged
   `/Applications/Addison.app`. **That has since been closed for a packaged install
   (2026-08-06)**; what is left open is the wording, not the code. It is the same owner
   call opened by steps 4 + 5 and is stated once, below; it is not restated here.
@@ -248,7 +248,7 @@ the block's look.
 BUILT (2026-08-06):** [docs/secrets-and-keychain-plan.md](secrets-and-keychain-plan.md).
 The double-password diagnosis first produced a ground-up encrypted-vault rewrite;
 scrutiny (60 findings) and two spikes then **turned it into a repair-first plan**.
-Steps 1 and 2 landed on 2026-08-06 — presence left the keychain for
+Steps 1 and 2 landed on 2026-08-06: presence left the keychain for
 `provider_config.secret_presence`, and every credential write is now an explicit,
 verified delete-then-add with self-heal on top of it. **Two of step 4's four items
 landed the same day**: a definitive 401/403 now marks the provider needs-attention
@@ -257,25 +257,25 @@ lets routing degrade to another connected provider (§5.2); and a key is normali
 and shape-checked where it is STORED, in `keychain.rs`, rather than trusted to the
 frontend's `.trim()` (§5.3). **What is still PROPOSED**: `Intent` and the
 background-caller re-arm (§4.3), launch reconciliation (§5.1), the shipped read
-counter (§5.6), and the click-anchored cards (§6) — which is where a
+counter (§5.6), and the click-anchored cards (§6), which is where a
 needs-attention Settings ROW will live; today §5.2's state is core-side plus one
 chat-side line. So one item on the old list remains true: G1's zeroization stops at
 the Python boundary. The vault survives as a documented destination with named
 triggers (step 7's MCP tokens, Android, or the Phase-3 identity rotation). §14 lists
-the owner decisions; **decisions 3 and 6 are now answered** — see
+the owner decisions; **decisions 3 and 6 are now answered**; see
 [BUILD-LOG.md](BUILD-LOG.md).
 
 **The presence probe cost is CLOSED (built 2026-08-06).** It had been watched
 happening on 2026-08-01: with `ADDISON_KEYCHAIN_TRACE=1`, `_primary_key_available()`
 (`main.py`) showed up as a real OS keychain read, because **the probe IS the
-keychain read**, and it ran on polls with no user action behind it — roughly ten
+keychain read**, and it ran on polls with no user action behind it: roughly ten
 undismissible dialogs stacked in one session, each orphaned when the app restarted.
 Presence is now a SQLite column and no polled or launch-driven path reads a key to
 answer it; the `_connections` / `_provider_list` fallbacks and the server's
 `_primary_key_available` are gone. What is left is deliberate and person-driven: the
 per-turn read (`_primary_key_status`, still fresh, because it is the one caller with
 a person behind it), `provider.connect`, and the post-restore keyless note. The one
-caller class NOT yet fixed is the background pair the plan's §4.3 owns —
+caller class NOT yet fixed is the background pair the plan's §4.3 owns:
 `_maybe_load_live_catalog` and `_maybe_reconnect_saved_providers` still fetch a key
 value without a person behind them, which is why `FAILED_READS` survives in
 `keychain.rs` as a decline memory (§5.5) rather than being deleted with the poll.
@@ -286,7 +286,7 @@ item alike". Only the provider keys got it. The reason is the asymmetry §7 of t
 plan already names: **a provider key can be pasted again from the vendor's website;
 the device identity's private half can be recovered by nobody.** Self-heal is a
 delete-then-add, and delete-then-add is the one operation in this subsystem that can
-lose data — so running it against the single irreplaceable secret needs its own
+lose data, so running it against the single irreplaceable secret needs its own
 verification pass, not a shared one. Consequence, stated plainly: on a build whose
 signing identity has rotated, the device item stays foreign and keeps costing one
 dialog per session, which is exactly the symptom self-heal exists to end. Doing it
@@ -300,7 +300,7 @@ reason is worth keeping.** `sign-and-run.sh` was written on the premise that
 signing every dev build with one identity gives the keychain ACL something
 durable to match. That premise is necessary and was not sufficient: asked to
 invent a designated requirement for a **self-signed** leaf, `codesign` falls
-back to `cdhash H"…"` — a hash of the binary's CONTENTS — and macOS stores THAT
+back to `cdhash H"…"` (a hash of the binary's CONTENTS), and macOS stores THAT
 as the ACL entry. Measured on this repo: a correctly-signed build still carried
 `designated => cdhash H"1380cf87…"`, so every rebuild presented a new
 requirement and the granted permission could never match. That is the original
@@ -308,12 +308,12 @@ ad-hoc bug wearing a certificate. Fixed by naming the requirement explicitly
 (`identifier "addison" and certificate leaf H"<cert>"`), read from the keychain
 rather than hard-coded so it does not silently regress on another clone. Kept
 here rather than only in the script because the failure looks exactly like a
-user error — pressing the button and having nothing happen — and cost real time
+user error (pressing the button and having nothing happen), and cost real time
 twice.
 
 **Still open from the retired step-1 ledgers:**
 
-- **`tool_grants` capture is still undecided.** Excluded today, and correctly so —
+- **`tool_grants` capture is still undecided.** Excluded today, and correctly so:
   the table is inert (nothing reads or writes it; `PermissionGate` keeps grants in
   memory). If grants ever persist, restoring a snapshot taken *before* the user
   revoked one would **reinstate** it: a privilege grant delivered by a deliberately
@@ -322,13 +322,13 @@ twice.
 - ~~**`LiveDatabaseBlocked` should probably be a `BaseException`.**~~ **CLOSED
   2026-08-08** (owner decision), with the verification pass this entry asked for.
   It is a `BaseException` now, so no broad handler can quieten it, and a rebuild it
-  refuses answers with the guard's own sentence instead of `_REBUILD_FAILED` —
+  refuses answers with the guard's own sentence instead of `_REBUILD_FAILED`,
   which said "your saved restore points wouldn't go back in", a false statement
   about the floor's own storage that also hid the one fixable mistake in play.
   **The audit was small because the surface is**: `Store.__init__` and
   `Store._reconnect` are the only two `sqlite3.connect` calls in the tree, so the
   only broad handlers that can sit between a raise and the top level are the ones
-  around a `Store` construction. Two methods now name it, both in `main.py` —
+  around a `Store` construction. Two methods now name it, both in `main.py`:
   `_worker_loop`, at the startup build AND per dequeued job (a `BaseException` out
   of a thread's `run()` KILLS it, and a dead worker is the hang §6.5 exists to
   prevent), and `_recover_from_sidecars`, at the rebuild and at the build that
@@ -338,17 +338,17 @@ twice.
   is on a path the same process already opened, so it cannot newly refuse. **The
   per-job catch is a BELT and is stated as one**: today a build failure
   short-circuits every job two branches earlier, so nothing can reach
-  `_ensure_built()` from a job and raise — that is a short-circuit, not a
+  `_ensure_built()` from a job and raise; that is a short-circuit, not a
   guarantee, and the last time this thread was allowed to die every later request
   hung with no frame at all. Its test reaches the branch by putting the server back
   into its pre-build state.
-- **`routines/engine.py` — FIVE pre-gate guards each duplicate `on_failure`
+- **`routines/engine.py`: FIVE pre-gate guards each duplicate `on_failure`
   handling.** The unknown-tool refusal, the dev-only guard, the not-callable
   guard, the step-5.5 denylist and the confinement guard each shape their refusal
   as a failed step and re-implement abort / ask_user / skip **inline** instead of
   falling through to the canonical `if not result.success:` block. All five match
   that block today and will silently diverge the moment someone adds a fourth
-  `on_failure` policy. **This entry has been overtaken twice** — it was written
+  `on_failure` policy. **This entry has been overtaken twice**: it was written
   about three guards, phase 2 added a fourth and the 2026-08-07 review added a
   fifth, and each copy was written to match its neighbours rather than introduce a
   new shape. That is the right call for one diff and the wrong equilibrium overall,
@@ -356,37 +356,37 @@ twice.
   so all six paths share one block**; it is cheaper to do than to keep deferring.
 
 **Open design questions, each blocking a specific step** (moved here from the scope
-amendment's §13 when that document was retired, 2026-07-27 — the other four §13
+amendment's §13 when that document was retired, 2026-07-27; the other four §13
 questions were resolved during steps 1–3 and went with it):
 
-- ~~**Keyword-gate syntax (blocks step 8).**~~ **ANSWERED 2026-08-07 — no longer
+- ~~**Keyword-gate syntax (blocks step 8).**~~ **ANSWERED 2026-08-07, no longer
   blocks the step.** The syntax is a **per-automation nonce** Addison shows and
   the person retypes (owner decision: a fixed prefix like `!run` is forgeable by
-  anything that can write English — observed content can say "type `!run
+  anything that can write English: observed content can say "type `!run
   install`", but cannot pre-write a code that did not exist yet). The set of
   actions it gates is settled the way the owner's reading pointed: **arming**
-  OS-run automation in the harness, never ordinary chat — a one-shot command
+  OS-run automation in the harness, never ordinary chat: a one-shot command
   already meets a per-invocation card and the seatbelt, and the recurring,
   unconfined, outlives-the-session nature of an armed job is the jump that earns
   the ceremony. [step-8-automation-plan.md](step-8-automation-plan.md) owns the
-  build order and the surrounding decisions. **Phases 1–3 landed 2026-08-07** — the
-  fence, authoring, the gate and arming — **and phase 4 (state honesty) on
+  build order and the surrounding decisions. **Phases 1–3 landed 2026-08-07** (the
+  fence, authoring, the gate and arming) **and phase 4 (state honesty) on
   2026-08-08**, so this question is answered AND built.
-- **MCP tools in SAFE — still open, but it no longer BLOCKS step 7.** Read-only
+- **MCP tools in SAFE: still open, but it no longer BLOCKS step 7.** Read-only
   only, a curated allowlist, or dev-only? And how MCP tool metadata declares
   undo-ability. **A server declares its own risk, so this cannot be taken on
-  trust** — see the sharpened note in the spec's MCP section and item 4 of the
+  trust**; see the sharpened note in the spec's MCP section and item 4 of the
   step-5.5 plan. What unblocked the step was the owner's 2026-08-06 decision that
   MCP is **dev-only for v1**: SAFE admission is deferred rather than answered, and
-  no code depends on it — phases 2 and 3 register a server's tools and call them,
+  no code depends on it: phases 2 and 3 register a server's tools and call them,
   and every one is `open_only`, so the SAFE view has never held one. Promoting a
   tool into SAFE is a later, separate decision.
   [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the step's phases and its other
-  decisions — **transport was the second open question and is now answered: HTTP
+  decisions. **Transport was the second open question and is now answered: HTTP
   only for v1**, which is why nothing in the step launches a program.
 - ~~**Widget capability tiers and vocabulary (blocks step 6).**~~ **CLOSED
   2026-08-06.** The safe interactive kinds are `checklist`, `note` and `timer`, and
-  the vocabulary is a **closed, hard-coded set** — a widget spec does NOT declare
+  the vocabulary is a **closed, hard-coded set**: a widget spec does NOT declare
   the capabilities it needs, and there is no capability→mode map, because the list
   of kinds is the gate (`agent_core/widgets.py`; [SAFETY.md](SAFETY.md) owns
   invariant 4). Where a widget invokes a tool, the tier check is
@@ -394,16 +394,16 @@ questions were resolved during steps 1–3 and went with it):
   are still Developer-only and still unbuilt; when they land they are listed by the
   same `widget.list`, disabled in Simple like every other dev-made artifact.
 - ~~**A routine's availability is still decided by its STAMP, not by what it needs.**~~
-  **CLOSED 2026-08-08 — owner decision, built exactly as this entry prescribed.**
-  Both surfaces — the `unavailable` marker on `routine.list` and
-  `_handle_routine_run`'s refusal — now ask **what the routine needs**, through ONE
+  **CLOSED 2026-08-08 (owner decision), built exactly as this entry prescribed.**
+  Both surfaces (the `unavailable` marker on `routine.list` and
+  `_handle_routine_run`'s refusal) now ask **what the routine needs**, through ONE
   function with one owner: `rpc/routines.py::_routine_needs_dev`, true when the plan
   carries a command step (`routine_uses_dev_abilities`) **or** when a step names a
   tool absent from `registry.visible_tools(SAFE)`. A routine of nothing but
   `web_search` steps, saved while Developer was active, is an ordinary Simple row
   again, and it runs. `created_in_mode` still ships as display provenance for the DEV
-  badge and decides nothing; `RoutineLibrary.created_in_mode` — the by-id accessor
-  that existed only to decide — is deleted, and a source-level test
+  badge and decides nothing; `RoutineLibrary.created_in_mode`, the by-id accessor
+  that existed only to decide, is deleted, and a source-level test
   (`test_availability_is_never_decided_from_where_a_routine_was_born`) pins that no
   branch in either RPC module names the stamp.
   **The dispatch refusal in SAFE was loosened, which is what made this an owner
@@ -415,20 +415,20 @@ questions were resolved during steps 1–3 and went with it):
   **The second half of the entry drove the design.** `routine_uses_dev_abilities`
   alone sees only `step.command`, so a step naming an `open_only` tool
   (`create_automation`, `arm_automation`, `disarm_automation`, `run_command`, every
-  `mcp:` tool — and, until 2026-08-11, the two file tools) would have
-  slipped through — the question needs the registry as well as the plan, and the
+  `mcp:` tool, and, until 2026-08-11, the two file tools) would have
+  slipped through; the question needs the registry as well as the plan, and the
   module boundary rule keeps `routines/` from importing `tools/`, so it lives in the
   RPC layer. The one follow-on line landed in the same commit:
   `rpc/widgets.py::_widget_needs_dev`'s look-through asks that same function, so the
-  rail and the library still cannot disagree about one routine — now about the right
+  rail and the library still cannot disagree about one routine, now about the right
   answer. [SAFETY.md](SAFETY.md) owns the rule both halves implement.
-- **Auto-routing depth — v2 or now? (half-resolved.)** The AVAILABILITY half
+- **Auto-routing depth: v2 or now? (half-resolved.)** The AVAILABILITY half
   shipped in step 3: escalate/degrade on unavailable, rate-limit or network
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain
-  "X was busy, so Addison used Y" note. The CONFIDENCE half — quality-based
-  escalation — remains v2 substrate, untouched.
+  "X was busy, so Addison used Y" note. The CONFIDENCE half, quality-based
+  escalation, remains v2 substrate, untouched.
 
-**Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)** — that file had become a
+**Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)**: that file had become a
 second live-issue register holding items this one did not have. All checked
 against the tree on 2026-07-26:
 
@@ -437,14 +437,14 @@ against the tree on 2026-07-26:
   to the routine it was entered for. **The repro in this entry was wrong and the
   fix is narrower than it looked:** `executeRun` clears `values` in its `finally`,
   so *completing* routine A cleans up after itself. The reachable path is
-  **abandoning** a fill — open A's fill panel, type an answer, then run B (which
+  **abandoning** a fill: open A's fill panel, type an answer, then run B (which
   needs no input, so it skips the fill step and runs immediately) and B carries
   A's answer under the shared name. Mutation-proven; a first version of the test
   passed under mutation because it ran A to completion first.
 - ~~**Empty-text `sendMessage` has no guard.**~~ **CLOSED 2026-08-08** (owner
-  decision). `_run_send_message` refuses empty or whitespace-only text — and a
+  decision). `_run_send_message` refuses empty or whitespace-only text (and a
   non-string `text`, which would otherwise have persisted `str(None)` as somebody's
-  message — before anything is read, cleared or written. It is **the core keeping
+  message) before anything is read, cleared or written. It is **the core keeping
   its own invariant, not a second copy of the composer's rule**: `Composer.tsx`
   already trims and disables the button, and the CLI skips a blank line, so no
   shipped caller reaches it. That is exactly why it was missing, and a guard whose
@@ -452,7 +452,7 @@ against the tree on 2026-07-26:
   pending-pick reset as well, so a refusal cannot silently spend a
   `setRoleForNextMessage` the person made for the message they are about to write.
   *(The guard immediately found four tests sending `{"content": ...}` where the
-  wire field is `text` — they had been running whole turns on an empty user
+  wire field is `text`; they had been running whole turns on an empty user
   message, which is the litter this entry describes.)*
 - **Local-setup pre-flight HTTP runs on the read loop.**
   `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch handler
@@ -460,24 +460,24 @@ against the tree on 2026-07-26:
   `availableRoles` was moved off the read loop for exactly this reason; same shape
   as `shell.pickDirectory` blocking the worker on a modal.
 - ~~**Three stale-docstring flags, still UNVERIFIED.**~~ **All three resolved
-  2026-08-06 — one was real, two were the stale thing.** `openai_provider.py` was
+  2026-08-06: one was real, two were the stale thing.** `openai_provider.py` was
   REAL and is fixed: its module docstring said the custom base URL is "validated
   http(s):// at connect time (main.py)", and that validation is
-  `rpc/providers.py::_valid_http_url` — the RPC split moved it and the reference
+  `rpc/providers.py::_valid_http_url`; the RPC split moved it and the reference
   did not follow. `ModelRouter.register` (`providers/router.py`) is **accurate**:
   it names `DirectAPIProvider`, which exists (`providers/direct_api_provider.py`),
   and `register` really is additive per role. The `PermissionRequest` dataclass
   (`permissions/gate.py`) **has no docstring at all**, so there was never anything
-  there to be stale. Both flags deleted rather than re-verified again — a flag that
+  there to be stale. Both flags deleted rather than re-verified again: a flag that
   survives two checks against a thing that does not exist is itself the defect. The
   fourth,
   **`default_cloud_model([])`, was real and is CLOSED 2026-08-01**: its docstring
   called `catalog[0]` "a safe fallback" while an empty catalog raised
   `IndexError`. It now raises `ValueError` naming the cause. No caller can reach
-  it today (all three guard first), so this is for the next one — an empty live
+  it today (all three guard first), so this is for the next one: an empty live
   catalog fetch should say what went wrong, not surface three frames away.
 - **Polish, unstarted:** no conversation search in the sidebar; **scoped consent
-  ("always allow" per site)** — a SAFE grant is keyed by tool id, so after the
+  ("always allow" per site)**: a SAFE grant is keyed by tool id, so after the
   first card every later `read_web_page` is ungated and model-addressed, with
   Activity-Panel visibility as the shipped mitigation; "Not now" sometimes
   described by the model as a malfunction; routine-save affordance is a small
@@ -490,14 +490,14 @@ against the tree on 2026-07-26:
   is a CHECK-constrained vocabulary, so widening it was a schema rebuild and not an
   insert: `CREATE TABLE IF NOT EXISTS` leaves every existing database on the old
   CHECK, so a new value would have worked on a fresh DB and been swallowed by
-  `_audit`'s best-effort `except` on an upgraded one — a log that quietly stops
+  `_audit`'s best-effort `except` on an upgraded one: a log that quietly stops
   logging, which is worse than no row at all. `Store._migrate_tool_audit_outcomes`
   rebuilds the table, preserving every existing row, and the
   vocabulary gained `not_callable` (the refusal this entry was about) and `failed`
   (the gate said yes and the call never landed). Both dispatch paths write both.
   *(The rebuild's first version preserved those rows only when nothing interrupted
   it; how that was closed is in [BUILD-LOG.md](BUILD-LOG.md).)*
-  The refusal branch itself is now quiet for MCP tools — they are callable — and
+  The refusal branch itself is now quiet for MCP tools (they are callable) and
   remains the mechanism `mcp_catalog.MCP_TOOLS_ARE_CALLABLE` operates through.
 
 **Opened by step 7 phase 4 (2026-08-07):**
@@ -506,23 +506,23 @@ against the tree on 2026-07-26:
   Phase 4 counts and discloses `image` / `audio` / binary-resource parts and
   forwards none of them ([step-7-mcp-plan.md](step-7-mcp-plan.md) §4.4, decision 1),
   so a server whose whole output is a chart returns *"nothing Addison can pass on"*
-  plus a count. That is the deliberate answer and it is the right one for v1 —
-  provenance, not capability, is the objection: the machinery to carry an image to a
+  plus a count. That is the deliberate answer and it is the right one for v1.
+  Provenance, not capability, is the objection: the machinery to carry an image to a
   model exists (`read_file` → `_gate_image_result`) and it carries a file **the
   person picked**, not bytes a program nobody has audited pushed in unasked.
   Recorded here rather than only in the plan because it is a real limitation
   somebody will meet, and because the upgrade path is specific rather than
   hypothetical: route a server's image through the same vision gate, behind the
-  same per-invocation card, once there is a reason to trust the provenance —
+  same per-invocation card, once there is a reason to trust the provenance,
   which is the promoted-allowlist decision wearing a different hat, and is
   therefore the same later conversation.
 
 **Opened by the 2026-08-07 review of all four step-7 phases:**
 
 Two shapes of credential still cross `agent_core/redaction.py` untouched, and both
-are deliberate as far as they go. The redactor is a **backstop, not a boundary** —
-its own header says so and [step-7-mcp-plan.md](step-7-mcp-plan.md) §7 owns the
-strength that may be claimed for it — so these are not bugs against a promise. They
+are deliberate as far as they go. The redactor is a **backstop, not a boundary**
+(its own header says so and [step-7-mcp-plan.md](step-7-mcp-plan.md) §7 owns the
+strength that may be claimed for it), so these are not bugs against a promise. They
 are here because somebody will meet them, and because anything built on top of
 "the redactor saw it" is built on sand.
 
@@ -539,21 +539,21 @@ are here because somebody will meet them, and because anything built on top of
   machine)*, and the audit row honestly records that nothing was.
   **What it costs:** getting a key past this pass costs a server one
   keystroke, so no later control may assume the text it receives has been cleared.
-  **What would close it** is not a wider character class — it is the untrusted-
+  **What would close it** is not a wider character class; it is the untrusted-
   content screening deferred to v2, which three separate triggers already point at
   (above, and §7 of the plan).
 - **A fullwidth or homoglyph credential (`ＡＫＩＡ…`) is not caught, and NFKC
   normalization was deliberately not half-built.** Folding a copy of the text and
   matching against the fold finds the key and then cannot say where it was: the
   folded string has different offsets from the original, so replacing what was found
-  means the redactor must expose SPANS and map them back — a change to the shape of
+  means the redactor must expose SPANS and map them back: a change to the shape of
   the most safety-critical file in the tree, made for a shape nobody has yet been
   seen to send. The half-built version is the one that must not exist: a redactor
   that matches on the fold and returns the original names a kind in the audit row it
   did not actually remove from the text, which is worse than this gap, because this
   gap at least reports itself honestly. Owner call, with the cost written down.
 
-**Opened by steps 4 + 5 — decide these, don't rediscover them:**
+**Opened by steps 4 + 5: decide these, don't rediscover them:**
 
 - **The webview cannot open an external link, at all.** `main.rs` registers four
   commands for it (`send_to_core`, `store_provider_key`, `delete_provider_key`,
@@ -563,8 +563,8 @@ are here because somebody will meet them, and because anything built on top of
   must never call any `shell.*` IPC method". So every address shown in Settings is
   copy-paste text (the Google free-tier line now says so honestly), and
   `Markdown.tsx`'s inert anchors are inert for the same reason. If clickable links
-  are wanted, the fix is **one narrow webview→shell Tauri command**, not an anchor
-  — and it is new highest-trust surface, so it is an owner call, not a cleanup.
+  are wanted, the fix is **one narrow webview→shell Tauri command**, not an anchor,
+  and it is new highest-trust surface, so it is an owner call, not a cleanup.
 - **The Custom guard panel still has no workspace-trust guard**, which CLAUDE.md
   and this file both said step 5 would add ("as those capabilities land, never
   before"). It was not in the frozen step-5 contract, so it was not built. In the
@@ -575,7 +575,7 @@ are here because somebody will meet them, and because anything built on top of
   2026-08-06 without touching it (it turned out to be entirely widget-side) and 8
   completed 2026-08-08 without touching it either, and `GuardConfig` in
   `agent_core/policy.py` still has exactly two fields. **Do not re-schedule it
-  against the next step** — the last two deadlines passed silently, which is what a
+  against the next step**: the last two deadlines passed silently, which is what a
   deadline nobody owns does. Decide it, or record that the precedence rule is the
   answer and close this entry.
 - ~~`tsc --noEmit` does not cover the test files.~~ **CLOSED 2026-08-01.**
@@ -596,7 +596,7 @@ are here because somebody will meet them, and because anything built on top of
   could rewrite `policy.py` inside `/Applications/Addison.app` card-free, which is
   a more complete bypass than deleting the snapshots ever was. The running app's
   BUNDLE now joins the protected set (`filesystem.rs::addison_app_bundle`), so the
-  seatbelt denies writes to it exactly as it denies the data dirs — one mechanism,
+  seatbelt denies writes to it exactly as it denies the data dirs: one mechanism,
   not a second one beside it.
   **A dev build contributes nothing, deliberately**, and that is not a gap: the
   dev binary lives in the repo, and that repo is exactly what the coding harness
@@ -607,55 +607,55 @@ are here because somebody will meet them, and because anything built on top of
   What remains open is the wording, not the code: the amendment's "inviolable
   machinery: Addison's code and the global floors" is still broader than what
   ships, because a *developer's* checkout is writable by design.
-- **A hardlink inside a trusted root to a file outside it is trusted** — `realpath`
+- **A hardlink inside a trusted root to a file outside it is trusted**: `realpath`
   cannot see hardlinks. Inherent to any realpath-based confinement; noted rather
   than fixed.
 - ~~**Two spellings of a file that is NO LONGER THERE keep one revert chain each.**~~
   **CLOSED 2026-08-08 for every row written from now on, and the claim this entry made
   while it was open was wrong.** It said a wrong SPLIT "only leaves two rows where one
-  would do — and each still reverts to a state that actually existed on disk". It does
+  would do, and each still reverts to a state that actually existed on disk". It does
   not. On the case-insensitive volume macOS ships with, `Notes.md` and `notes.md` are one
   file and one chain; delete the file and the chain split into two rows, one of which
-  offered `before='v1'` — a state ADDISON wrote — under "the way it was before Addison
+  offered `before='v1'` (a state ADDISON wrote) under "the way it was before Addison
   changed it", and reverting the v0 row recreated the file so the other row was no longer
   pointing at nothing: the next "Undo last action" wrote v1 back. That is the S1/S2
   resurrection `file_revert`'s chain collapse exists to make impossible, reached from the
   other end.
   **What closed it:** the grouping no longer asks the disk at read time. Every write
   records the file it landed on (`wrote_ident`, minted by `revert_key`), and a chain is
-  the rows joined by the same recorded NAME or the same recorded FILE — facts about the
+  the rows joined by the same recorded NAME or the same recorded FILE: facts about the
   past, which deleting a file cannot change.
   **What is still open, and it is narrower:** a row written BEFORE 2026-08-08 carries no
-  identity, so it falls back to asking at read time and both hazards remain for it — the
+  identity, so it falls back to asking at read time and both hazards remain for it: the
   split above, and the hard-link merge below. Rows are never migrated (the payload is TEXT
   holding JSON and a migration would be inventing a fact about the past), so this ages out
   as those rows are reverted or retained away rather than being fixed.
 - **The file identity behind all of this is an inode number, and inode numbers are
-  REUSED on ext4 — just not on what Addison ships (found by CI, 2026-08-08).**
+  REUSED on ext4, just not on what Addison ships (found by CI, 2026-08-08).**
   `file_revert.revert_key` answers `file:{st_dev}:{st_ino}`, and the whole
   hard-link/case-collision repair rests on two names being the same file iff that pair
   matches. On APFS the assumption holds outright: inode numbers come from a monotonic
   counter, and a hunt measured 4000 create/delete cycles with 4000 distinct numbers and
   no reuse. On ext4 the freed number is handed straight back, so a file deleted and a
-  different one created can carry the identity Addison recorded for the first — which
+  different one created can carry the identity Addison recorded for the first, which
   would let `another_file_stands_there` accept a file it never wrote, and could join two
   unrelated chains. **Not reachable on the shipping platform** (macOS only: launchd, the
   seatbelt, a Tauri macOS build), and the join is `name OR identity`, so a wrong identity
   match still needs the row's own name to be involved. It surfaced because the Linux CI
-  runner made a test's own fixture stop proving anything — the test now renames a
+  runner made a test's own fixture stop proving anything; the test now renames a
   replacement over the name instead, which allocates the new inode while the old file is
   alive and cannot collide anywhere. Recorded rather than fixed: the fix is a
   cheaper-than-it-sounds `st_ctime`/`st_size` tiebreak, and it belongs with any decision
   to support a second platform, not before it.
 - **A revert refuses where the file at that name was REPLACED since Addison last wrote
-  it** (opened 2026-08-08, deliberately — the cost of closing the two above).
+  it** (opened 2026-08-08, deliberately: the cost of closing the two above).
   `file_revert.another_file_stands_there` lets a chain go back onto a file it actually
-  wrote, or onto a name with nothing at it, and refuses anything else — which is what
+  wrote, or onto a name with nothing at it, and refuses anything else, which is what
   stops a hard link planted at a written path from taking one file's prior bytes into
   another. The same rule catches a case nobody planted: `git checkout` and editors that
   save by rename put a NEW file at the name, so a chain whose newest write predates such a
   swap is refused rather than overwritten (*"A different file is at that name now…"*).
-  A swap BETWEEN two of Addison's own writes is not affected — those rows are one chain
+  A swap BETWEEN two of Addison's own writes is not affected: those rows are one chain
   and it goes back onto the newer file. The BEFORE pane still holds the text to copy,
   which is the answer this module already gives for a partial revert; the alternative was
   to keep overwriting whatever now stands there, which is the harm. **If this proves
@@ -663,7 +663,7 @@ are here because somebody will meet them, and because anything built on top of
   silent overwrite.
 - **A refused undo says less than it knows.** `WriteProjectFileTool.undo()` raises a plain
   sentence for the case above; `rpc/undo.py::_undo_last_action` replaces every failure with
-  *"Couldn't undo the last action. You may need to reverse it yourself."* — as it already
+  *"Couldn't undo the last action. You may need to reverse it yourself."*, as it already
   did for the no-shell refusal. The review surface's Revert shows the real sentence. Redo
   already surfaces `result.detail`; undo cannot simply copy that, because an undo failure
   can also be a bug's exception text and no stack trace may reach a person (CLAUDE.md).
@@ -673,14 +673,14 @@ are here because somebody will meet them, and because anything built on top of
   `restore_workspace_path` checks its session ledger against the NAME and then
   `fs::write`s that name; `read_workspace_view` opens it. Neither asks whether a
   symlink now stands there, so a path Addison legitimately wrote is a write-through to
-  wherever that name later points — and it takes no attacker to arrive, only somebody
+  wherever that name later points, and it takes no attacker to arrive, only somebody
   moving a config file into a dotfiles folder and linking it back. The review surface
   refuses first, core-side: `file_revert.replaced_by_a_link` guards the diff's read and
   the revert's write, and what crosses is the RECORDED path rather than a re-resolution
   of it. **The chat header's Undo stopped writing through such a link on 2026-08-08**:
   `WriteProjectFileTool.undo()` now asks `another_file_stands_there` first, and a shortcut
   standing at a written path reaches a different file by that question too, so nothing is
-  written (it used to put its prior bytes into whatever the link pointed at — a private
+  written (it used to put its prior bytes into whatever the link pointed at: a private
   key, in the test that plants one). What is still open is the SHELL's own half: nothing in
   `filesystem.rs` refuses a symlink on these methods, so any future caller that has not
   asked core-side is unguarded, and a row written before `wrote_ident` existed cannot ask.
@@ -688,27 +688,27 @@ are here because somebody will meet them, and because anything built on top of
   rule for listing and would need the same refusal on both these methods. **Cosmetic consequence of the same swap, not a second gap:** a row whose
   recorded path is now a shortcut lists with `root: null` and its whole path, because
   the display comparator (`policy.path_is_within`) resolves both sides. `root` permits
-  nothing — it decides only what the row renders as.
+  nothing; it decides only what the row renders as.
 - **The shell's file floor does not know the OS automation directories, and
   `exec.rs`'s does** (found by the 2026-08-08 adversarial pass; recorded, not
   closed). `filesystem.rs::refuse_addison_data_dir` guards every workspace read and
   write against Addison's own data dirs and bundle. The step-8 fence
-  (`exec.rs::OS_AUTOMATION_DIRS`) guards a different set — `~/Library/LaunchAgents`
-  and the ten other places where writing a file IS arming a job — and only in the
+  (`exec.rs::OS_AUTOMATION_DIRS`) guards a different set (`~/Library/LaunchAgents`
+  and the ten other places where writing a file IS arming a job), and only in the
   seatbelt profile around `run_command`. So `write_project_file` naming a plist path
   is refused by the CORE (twice: `policy.workspace_trust_allows` on the grant and
   the pre-gate denylist on the call) and by nothing in the shell. Both core
   refusals are mode-independent, which is what kept this unchanged when the file
-  tools reached SAFE on 2026-08-11 — a Simple-profile edit meets exactly the same
+  tools reached SAFE on 2026-08-11: a Simple-profile edit meets exactly the same
   two checks.
   **Left open deliberately, with the cost stated.** Closing it means ungating
   `OS_AUTOMATION_DIRS` from `#[cfg(target_os = "macos")]` and giving a hand-synced
-  three-consumer list a fourth consumer in a second module — while the fence's own
+  three-consumer list a fourth consumer in a second module, while the fence's own
   test pins the count precisely because that list drifts. The floor
   `refuse_addison_data_dir` states is "Addison's own memory", and automation dirs are
   a different floor (G2) with a different owner; folding them in would make one
   refusal sentence answer for two unrelated properties. What it would BUY is defence
-  in depth for a path the core already refuses in two places — which is worth having,
+  in depth for a path the core already refuses in two places, which is worth having,
   and is the reason this is written down rather than dismissed. **Owner's call.**
 - ~~**The name on the card is resolved a SECOND time, so it can go stale between the
   label and the effect.**~~ **CLOSED 2026-08-08**, in the review surface's read-paths
@@ -717,11 +717,11 @@ are here because somebody will meet them, and because anything built on top of
   above its refusal branches and passes that value to `call_permission_detail`, which
   hands it to the tool's new `permission_detail_for_path(resolved_path)`. A path tool
   no longer sees `args` at that seam at all, so there is nothing left to resolve a
-  second time even if a later edit wanted to — which is why it is a second HOOK rather
+  second time even if a later edit wanted to, which is why it is a second HOOK rather
   than a second parameter on the first. Two things the entry did not foresee. The
   resolution had to move UP in both dispatch loops, above the denylist and arming
   branches, because the audit rows written there name a file too, and they were
-  re-resolving as well — so the fix is one resolution per CALL, not merely one shared
+  re-resolving as well, so the fix is one resolution per CALL, not merely one shared
   between the card and confinement. And the proof is not a symlink swapped mid-race
   (that is a race, and a test of one is a flake): a fake tool whose `affected_path`
   answers a DIFFERENT path the second time it is asked fails on ANY second resolution,
@@ -731,7 +731,7 @@ are here because somebody will meet them, and because anything built on top of
 - **`revertable` is ONE boolean carrying THREE different facts, and the surface can
   only render the vaguest of them.** `_edit_payload` sends
   `"revertable": bool(restorable)` (`agent_core/rpc/workspace.py`), and
-  `_restorable_map` returns `{}` — false for every listed edit — in three unrelated
+  `_restorable_map` returns `{}` (false for every listed edit) in three unrelated
   situations: there is no shell bridge, the single batch
   `shell.canRestoreWorkspaceFiles` call raised, or the shell genuinely does not hold
   that path in its session write ledger. Only the third is the restart case. The
@@ -739,12 +739,12 @@ are here because somebody will meet them, and because anything built on top of
   *"Addison changed this before the app was last restarted, so it can't put it back
   for you"* under every row on screen, including a file Addison had written a minute
   earlier. **Mitigated frontend-only on 2026-08-08**: `NOT_REVERTABLE_LINE`
-  (`shell/src/components/CodeSurface.tsx`) now names no cause at all — it says only
+  (`shell/src/components/CodeSurface.tsx`) now names no cause at all: it says only
   what is true in all three cases, that Addison cannot put the file back and the
   earlier version is on the left. That is honest and less useful, and it is where it
   stays until the core can tell the three apart.
   **The wire shape that would let the sentence come back**: make the field TRI-STATE
-  exactly as `onDiskChanged` already is on the same payload — `true` / `false` /
+  exactly as `onDiskChanged` already is on the same payload: `true` / `false` /
   `null`, with `null` meaning "Addison could not find out" (no bridge, or the query
   failed) and `false` reserved for the shell's real "not in my ledger". Then the
   surface renders three sentences for three states, the way it already does for
@@ -758,11 +758,11 @@ are here because somebody will meet them, and because anything built on top of
   `{"directory": null}` with no explanation, while every other store RPC queues
   behind the open dialog.
 - **The CSP blocks Tauri's own custom-protocol IPC, and whether to admit it is an
-  OWNER DECISION** (found 2026-08-08, verified against tauri 2.11.5 — the version in
+  OWNER DECISION** (found 2026-08-08, verified against tauri 2.11.5, the version in
   `Cargo.lock`). `connect-src 'self'` does not admit `ipc:` (macOS/Linux) or
   `http://ipc.localhost` (Windows), and **Tauri does not inject them**:
   `tauri::manager::set_csp` augments `script-src` and `style-src` with nonces and
-  hashes and touches nothing else — Tauri's own documentation has the app author
+  hashes and touches nothing else; Tauri's own documentation has the app author
   `connect-src ipc: http://ipc.localhost` by hand. So `scripts/ipc-protocol.js`'s
   `fetch(convertFileSrc(cmd, 'ipc'))` is refused, Tauri catches it and falls back to
   `window.ipc.postMessage`, and every invoke since has gone that way.
@@ -771,54 +771,54 @@ are here because somebody will meet them, and because anything built on top of
   only ever run on the postMessage path.
   **What changed is that it is now AUDIBLE.** `installCspViolationReporter` (shipped
   2026-08-08) pushes a diagnostic for every violation, so the app's own IPC produces
-  one on each launch — exactly the recurring noise that would train a reader to
+  one on each launch: exactly the recurring noise that would train a reader to
   ignore the pane and mask a real Monaco or worker violation.
   **Taken: the narrow half.** The policy is unchanged and the REPORTER is taught to
   pass over that one endpoint, by name and with the reason written at the code. The
   violation is still real, still enforced, and still visible in devtools; what is
   suppressed is a diagnostic about a fallback the app was designed around.
-  **AMENDED 2026-08-08 — the macOS/Linux half was never narrow, and is now gone.**
+  **AMENDED 2026-08-08: the macOS/Linux half was never narrow, and is now gone.**
   CSP3 §5.4 strips a blocked URL for reporting and returns **the scheme alone** for a
   non-http(s) URL, so `ipc://localhost/plugin:…` reaches a compliant engine's report
-  as the three characters `ipc` — no host, no path, nothing to name. The reporter's
+  as the three characters `ipc`: no host, no path, nothing to name. The reporter's
   `blockedURI === "ipc"` branch was therefore a filter on a SCHEME wearing a named
   allowance's docstring: it dropped every `ipc:` `connect-src` violation there could
-  be, including page script calling `fetch("ipc://localhost/plugin:fs|remove")` — a
+  be, including page script calling `fetch("ipc://localhost/plugin:fs|remove")`, a
   direct command invocation, and the one violation on that scheme that would mean
   something. The two are byte-identical in a report, so they cannot be told apart;
   the branch is removed and the scheme-only shape is REPORTED. **The accepted cost is
   one benign diagnostic per launch on macOS and Linux**, which is the honest price of
   never hiding the other one. What still suppresses is the host-bearing list
   (`http(s)://ipc.localhost`, which is what Windows actually files, stripped to its
-  origin) — narrow not because it reads intent, which no report allows, but because
+  origin), narrow not because it reads intent, which no report allows, but because
   it can only ever hide a violation naming that one endpoint.
   **NOT taken, and this is the owner's call:** adding `ipc:` and
   `http://ipc.localhost` to `connect-src`. It would let the custom-protocol IPC path
-  run for the first time in this app's life — a behaviour change nobody asked for, on
-  the highest-traffic seam there is — and it widens the one directive that governs
+  run for the first time in this app's life (a behaviour change nobody asked for, on
+  the highest-traffic seam there is), and it widens the one directive that governs
   where a local-first app may talk to. It would also need a named exception in
   `tests/test_csp_is_pinned.py`, whose vocabulary rule refuses `ipc:` and every
   `http://…` on purpose. Worth doing only if the postMessage path is ever measured to
   be the problem; the test refuses it today so that the decision has to be made out
   loud rather than to quieten a warning.
-- ~~**A failed endpoint add still clobbers the keychain**~~ — **CLOSED 2026-08-08**
+- ~~**A failed endpoint add still clobbers the keychain**~~, **CLOSED 2026-08-08**
   (owner decision) **with the rollback, not just the disclosure.** The ordering is
   unchanged and unchangeable: the key is saved before the connect because the core
   reads it from the OS at connect time and it may never be a parameter of a core
   frame (G1). What changed is that the save is now UNDOABLE. `keychain.rs` records
   what each overwriting save replaced, and a fourth Tauri command
-  (`restore_replaced_provider_key`) puts it back — the previous key rewritten
+  (`restore_replaced_provider_key`) puts it back: the previous key rewritten
   through the ordinary delete-then-add-and-read-back ladder, or the item removed
   where nothing was saved before.
   **Why shell-side and not core-side.** The save happens in the shell at the
   webview's request, so its undo belongs at the same seam; the core learns nothing
   new, gains no new power, and is not involved at all. The webview sends a provider
-  id and gets back one boolean — no key value crosses in either direction, so G1 is
+  id and gets back one boolean; no key value crosses in either direction, so G1 is
   untouched by the new command. It costs no extra OS touch either: the previous
   value comes from the read the save already performs (`save_verdict`), because a
   second look would be a second password dialog.
   **What it deliberately will NOT do, and what remains.** It never guesses. A
-  rollback runs only where the previous state was positively KNOWN — a value read,
+  rollback runs only where the previous state was positively KNOWN: a value read,
   or a definite "nothing saved". A read that merely FAILED (a dismissed password
   dialog) records nothing, the rollback answers "couldn't", and **the caller then
   discloses**: both call sites (the add-a-server card and the Settings connect row,
@@ -827,11 +827,11 @@ are here because somebody will meet them, and because anything built on top of
   survives as the floor for the case that cannot be undone. Also left standing,
   deliberately: after a rolled-back failure the stored `base_url` is the NEW
   server's while the key is the old one, and `secret_presence` may read `present`
-  when the rollback removed the item — the first is what G3's `add_endpoint`
+  when the rollback removed the item: the first is what G3's `add_endpoint`
   restore point is for, and a stale `present` is the safe direction by design
   (`Store.record_secret_presence`: it can never reach the relay).
 
-- `draft_message` compose handoff: Rust returns "not available yet" — a real
+- `draft_message` compose handoff: Rust returns "not available yet"; a real
   discardable-draft mechanism is required by the undo invariant.
 - No file-attach/drop UI → `read_file` unreachable from chat.
 - Setup Assistant relay is client-complete; the server side is external by design.
@@ -841,49 +841,49 @@ are here because somebody will meet them, and because anything built on top of
   guidance now names the checklist, note and timer as things Addison really makes,
   states the two limits worth hearing early (a checklist's lines are fixed at
   creation; a timer never rings, because nothing runs by itself), and keeps the
-  refusal for what is still not a widget — a calculator, a game, a watcher. The
+  refusal for what is still not a widget: a calculator, a game, a watcher. The
   never-save-a-file-instead rule is unchanged and still load-bearing. It remains
   MITIGATION, not a mechanism: it failed once (#43) and was re-hardened once (#45),
-  and a third regression should go structural — a registry-level guard on
+  and a third regression should go structural: a registry-level guard on
   `save_file` calls that look like widget substitutes.
 - **The design-doc and engineering-spec *bodies* predate the SAFE/OPEN
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 
-**Feature suggestions judged 2026-08-09 (owner-reviewed) — recorded in their
+**Feature suggestions judged 2026-08-09 (owner-reviewed), recorded in their
 judged shapes so the raw suggestions are not re-litigated later:**
 
 An outside list of features was propped against what exists. Two were already
 covered or contradicted by recorded decisions and are NOT open: copy-and-regenerate
 is design-doc §7.9.1's Retry, and a web-search / code-execution on-off pair exists
-in a stronger shape than toggles — consent cards for search, and code execution is
+in a stronger shape than toggles: consent cards for search, and code execution is
 a profile rather than a switch (`run_command` is absent from `visible_tools(SAFE)`;
 a Simple-profile toggle for it would break SAFE invariant 1). The rest survive, as
 follows. None is scheduled and none blocks anything.
 
-- **Highlight → Ask / Explain — the one worth building first.** Selecting text in a
+- **Highlight → Ask / Explain: the one worth building first.** Selecting text in a
   past message offers Ask (type a question about the selection) and Explain (the
-  same mechanism with a canned prompt — one feature, two labels). The judged shape:
-  a selection popover — floating chrome, the sanctioned bordered-panel element in
-  the v4 direction — that inserts the selection as a QUOTE plus the question into
+  same mechanism with a canned prompt: one feature, two labels). The judged shape:
+  a selection popover (floating chrome, the sanctioned bordered-panel element in
+  the v4 direction) that inserts the selection as a QUOTE plus the question into
   the main thread. Deliberately NOT the suggested "small window with the AI
   responding in it": a second parallel chat surface forks the single-thread
   correspondence UI and mints new state to manage, restore and explain. Read-only,
-  frontend-only, no new tool, no gate or registry work, works in every profile —
+  frontend-only, no new tool, no gate or registry work, works in every profile,
   and the best persona fit on the list, because an unclear sentence is exactly what
   a non-technical person cannot phrase a follow-up about.
-- **Continue — truncation-aware only.** A button beside Retry that appears when the
+- **Continue: truncation-aware only.** A button beside Retry that appears when the
   provider's stop reason says the response hit its output cap, and asks the model
   to resume. Per-provider spellings of that fact belong on `ProviderCapabilities`,
   never an `isinstance`. Deliberately NOT an always-present "make it longer":
   §7.9.1 keeps the command set short on purpose, and a generic Continue invites
   padding rather than completing a cut-off answer.
-- **Knowledge — retrieval over person-attached files. v2, and it must land WITH
+- **Knowledge: retrieval over person-attached files. v2, and it must land WITH
   untrusted-content screening, not before it.** The suggestion is right that
   "search the file" beats "read the whole file", and nothing on any roadmap does
   retrieval. The clean shape when it comes: files enter through the existing picker
   consent; indexing is local-only (an embedding model through the Ollama path that
-  already exists — cloud embeddings would ship file contents to a provider, a new
+  already exists; cloud embeddings would ship file contents to a provider, a new
   privacy surface needing its own plain sentence); the index lives in SQLite; and
   retrieved passages enter context marked with their source. A knowledge base is a
   standing channel for a poisoned document to speak in every session, which makes
@@ -891,26 +891,26 @@ follows. None is scheduled and none blocks anything.
   One structural note so it is not rediscovered: a retrieval TOOL must not import
   `providers/` (module boundary rule), so indexing belongs to an
   orchestrator-owned service and the tool only queries the index it left behind.
-- **Per-task model assignment — Developer-only, not v1 (owner, 2026-08-09).** The
+- **Per-task model assignment: Developer-only, not v1 (owner, 2026-08-09).** The
   raw suggestion was "models casually on the sidebar"; rejected for Simple (model
-  choice is a power-user surface — design-doc §7.3.3 — and the companion keeps its
+  choice is a power-user surface, design-doc §7.3.3, and the companion keeps its
   one prefer-quality/prefer-free toggle), it grew into something better in review:
-  assigning different models to different KINDS of work — one model drives tool use
-  such as search, a different one interprets what came back — with a possible
+  assigning different models to different KINDS of work (one model drives tool use
+  such as search, a different one interprets what came back), with a possible
   drag-and-drop rail of chosen models as the Developer surface. It is also the
-  MANUAL half of the auto-routing question above ("Auto-routing depth — v2 or
+  MANUAL half of the auto-routing question above ("Auto-routing depth: v2 or
   now?"), so the two are designed as one thing, with the automatic chooser
   arriving later rather than beside it. **The design now has an owner:**
   [`model-assignments-plan.md`](model-assignments-plan.md) (2026-08-09, proposed,
-  not scheduled) — closed duty set decided structurally, byte-identical behaviour
+  not scheduled): closed duty set decided structurally, byte-identical behaviour
   when nothing is assigned, and the mid-turn provider boundary stated rather than
   discovered.
-- **Notes — no standalone application; add the pieces where they fit (owner,
+- **Notes: no standalone application; add the pieces where they fit (owner,
   2026-08-09).** A notes app inside Addison is a second product, and the two jobs
   it would do are owned already: "a thing I edit and keep" is the `note` widget
   kind, and "things Addison should know" is long-term memory (design-doc §7.6),
   which has a consent-and-deletion story a free-form pile would not. What survives
-  of the suggestion is attachment — "this note is context for this conversation" —
+  of the suggestion is attachment ("this note is context for this conversation"),
   and that is the Knowledge entry above wearing a smaller hat: once retrieval
   lands, a note is a small attachable document that is already local and already
   trusted. Until then, nothing to build.
