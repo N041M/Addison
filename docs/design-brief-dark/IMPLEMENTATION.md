@@ -127,7 +127,11 @@ glyphs hover to `ink`.
   calc(100% - 20px), transparent)`), hidden scrollbars.
 - **Sidebar:** top "Workspace" block (2px rail + 11px label) with rows →
   **Tools** (mono hint: trusted-root count or mode note), **Snapshots**
-  (mono hint: restore-point count) and — under the Developer and Custom profiles
+  (mono hint: restore-point count) — **naming divergence, deliberate (owner
+  decision 2026-08-12):** the prototype's "Snapshots" row and surface ship as
+  **"Restore points"**; the user-facing name says what the thing is for, while
+  "snapshot" stays the internal vocabulary (code, schema, technical docs). The
+  prototype is a frozen reference and was not edited — and — under the Developer and Custom profiles
   only — **Code**, the review surface (no mono hint today; see the code-surface
   section below). The Code row is rendered only when `App` hands `Sidebar` an
   `onOpenCode` handler, so in Simple there is no disabled control inviting a
