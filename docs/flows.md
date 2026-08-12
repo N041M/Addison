@@ -114,7 +114,7 @@ sequenceDiagram
         WV->>SRV: permission.respond, toolId and allow
         SRV->>SRV: _handle_permission_respond sets the event
         PG-->>ORC: GRANTED or DENIED
-        Note over PG: a SAFE grant is remembered; a destructive-OPEN approval is<br/>per-invocation (never remembered); DENIED clears at the next user turn
+        Note over PG: a SAFE grant is remembered. A destructive-OPEN approval is<br/>per-invocation (never remembered). DENIED clears at the next user turn
     end
 ```
 
@@ -219,7 +219,7 @@ sequenceDiagram
     loop each step
         Note over RE: same pre-gate checks as the live turn:<br/>refuse_if_dev_only_outside_open, then confinement
         RE->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted=False)
-        Note over PG: SAFE prompts; OPEN auto-allows non-destructive, prompts destructive.<br/>trusted is always False here, so a saved command step always cards
+        Note over PG: SAFE prompts. OPEN auto-allows non-destructive, prompts destructive.<br/>trusted is always False here, so a saved command step always cards
         PG-->>RE: GRANTED or DENIED
         RE->>TL: execute(resolved_args, context)
         TL-->>RE: ToolResult
@@ -358,7 +358,7 @@ sequenceDiagram
     Note over WV,SRV: on-command: Settings "Restore points" card
     WV->>SRV: snapshot.create
     SRV->>SM: capture(trigger="on_command", reason="user_request")
-    SM->>ST: capture (always deletable; an anchor comes only from<br/>mint_anchor, via guards.set)
+    SM->>ST: capture (always deletable. An anchor comes only from<br/>mint_anchor, via guards.set)
     SRV-->>WV: {ok: true, snapshotId}
 
     Note over WV,SRV: the one-action button, no argument, by design
@@ -420,7 +420,7 @@ sequenceDiagram
     participant ST as Store
 
     WV->>SRV: conversation.sendMessage ("make the models as cheap as possible")
-    SRV-->>WV: an ordinary prose answer; nothing actionable rides on it
+    SRV-->>WV: an ordinary prose answer, nothing actionable rides on it
     Note over WV: after the turn, the user's OWN text matches the cheaper pattern
     WV->>SRV: costPlan.propose
     Note over SRV: canned constants: skill name, full instructions text,<br/>strategy "cost_first". No store read, nothing derived
@@ -466,7 +466,7 @@ sequenceDiagram
     SRV-->>WV: an ordinary prose answer
     Note over WV: the user's own text matches the add-a-server pattern
     WV->>SRV: endpoint.proposeFromConversation
-    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it; nothing is held. Nothing to add -> {none: true}, silently
+    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it, nothing is held. Nothing to add -> {none: true}, silently
     SRV-->>WV: {baseUrl, isLocalOrLan}
     Note over WV: EndpointProposalCard: key pasted here goes to the keychain,<br/>never into a chat frame
     WV->>SH: invoke store_provider_key("custom", key)
@@ -589,7 +589,7 @@ sequenceDiagram
         W-->>SRV: None (valid in-tier), else reject + plain reason
         SRV->>DB: insert_widget (created_in_mode="open")
     end
-    Note over DB: the stamp is WHERE IT WAS BORN, never what it may do:<br/>a checklist made in Developer is stamped "open" and is still<br/>an ordinary row in Simple. What Simple may use is asked of the<br/>SPEC at render (widget_uses_dev_abilities), never of this column.<br/>"custom" is a PROFILE; only snapshots ever record it as a mode.
+    Note over DB: the stamp is WHERE IT WAS BORN, never what it may do:<br/>a checklist made in Developer is stamped "open" and is still<br/>an ordinary row in Simple. What Simple may use is asked of the<br/>SPEC at render (widget_uses_dev_abilities), never of this column.<br/>"custom" is a PROFILE. Only snapshots ever record it as a mode.
     SRV-->>WV: {ok: true, widgetId}
     Note over SRV: later, a tick or an edit or a pause -> widget.setState<br/>validated per kind against the spec, and NOT snapshot-captured
     Note over WV: running/arming a system-capable widget -> workspace-trust + keyword gate (flow 12)
@@ -617,8 +617,8 @@ sequenceDiagram
     participant B as Provider B (next in the chain)
 
     ORC->>RC: routing_chain(role, model_name)
-    Note over RC: head = the user's default; strategy orders the tail
-    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown;<br/>the orchestrator skips cooled providers over this result)
+    Note over RC: head = the user's default, strategy orders the tail
+    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown.<br/>The orchestrator skips cooled providers over this result)
     ORC->>A: send(..., timeout=budget remaining)
     alt A answers
         A-->>ORC: response
@@ -685,7 +685,7 @@ sequenceDiagram
     MC->>SRV: tools/call
     SRV-->>MC: result (text, structuredContent, other parts counted)
     MC-->>MT: CallResult: nothing cut, text not yet redacted
-    Note over MT: redact, THEN compose_result cuts;<br/>a cut through a credential defeats the redactor
+    Note over MT: redact, THEN compose_result cuts.<br/>A cut through a credential defeats the redactor
     MT-->>ORC: ToolResult + redacted_kinds
     ORC->>ST: tool_audit row (granted / failed / refused, and what was redacted)
 ```
@@ -718,7 +718,7 @@ sequenceDiagram
     Note over WV,SRV: browsing: Developer/Custom only, one resolution per call
     WV->>SRV: workspace.listDirectory {directory}
     SRV->>SH: shell.listWorkspaceDirectory
-    SH-->>SRV: entries (kind, size); a target outside the root is marked escaping
+    SH-->>SRV: entries (kind, size), a target outside the root is marked escaping
     SRV-->>WV: {directory, root, entries, truncated}
     WV->>SRV: workspace.readFile {path}
     SRV->>SH: shell.readWorkspaceFileForView
