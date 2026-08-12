@@ -513,10 +513,14 @@ class _Call:
 
 
 class _Msg:
-    def __init__(self, role, content="", tool_calls=()):
+    def __init__(self, role, content="", tool_calls=(), past_tool_calls=()):
         self.role = role
         self.content = content
         self.tool_calls = list(tool_calls)
+        # What conversation.load restores onto a reopened chat's messages instead
+        # of tool_calls — history the builder may read and no provider replays
+        # (providers/base.py owns why the two are separate fields).
+        self.past_tool_calls = list(past_tool_calls)
 
 
 class _Conv:
@@ -546,6 +550,110 @@ def test_builder_extracts_tool_calls_not_prose_and_generalizes():
     by_name = {v.name: v for v in draft.variables}
     assert by_name["chosen_file"].default is None
     assert by_name["output_filename"].default == "total.txt"
+
+
+def test_builder_captures_only_the_turn_that_produced_the_answer():
+    """The window is ONE TURN, not the last N messages. A chat that already did
+    unrelated work used to put those stale steps ahead of the ones the person was
+    looking at — the plan offered two automation steps before the sum."""
+    conversation = _Conv([
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("create_automation", {"name": "backup"})]),
+        _Msg("tool", "drafted"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("tool", "armed"),
+        _Msg("assistant", "Armed."),
+        _Msg("user", "now add these numbers up"),
+        _Msg("assistant", "", [_Call("calculate", {"expression": "1+2"})]),
+        _Msg("tool", "3"),
+        _Msg("assistant", "That's 3."),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+    # First step of a fresh plan depends on nothing — the chain did not inherit
+    # the earlier turn's tail either.
+    assert draft.steps[0].depends_on == []
+
+
+def test_builder_captures_one_turn_in_a_reloaded_conversation():
+    """A reopened chat is the same question: the panel shows the last turn's
+    steps, so the proposal must too — whatever earlier turns the transcript
+    restored alongside them."""
+    conversation = _Conv([
+        # Restored from the store: earlier turns, prose kept.
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("assistant", "Armed."),
+        # This session's turn, in memory.
+        _Msg("user", "add these up"),
+        _Msg("assistant", "", [_Call("calculate", {"expression": "6000+16"})]),
+        _Msg("tool", "6016"),
+        _Msg("assistant", "That's 6016."),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+
+
+def test_builder_refuses_when_the_shown_turn_did_no_work():
+    """An earlier turn's tool calls are not this turn's, so there is nothing to
+    save — a plain refusal beats a plan the person never watched happen."""
+    conversation = _Conv([
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("tool", "armed"),
+        _Msg("assistant", "Armed."),
+        _Msg("user", "thanks!"),
+        _Msg("assistant", "Any time."),
+    ])
+    with pytest.raises(ValueError, match="couldn't find any actions"):
+        RoutineBuilder().propose_from_recent_actions(conversation)
+
+
+def test_builder_falls_back_to_the_count_window_without_a_user_message():
+    """No user message at all (a filtered transcript, a synthetic conversation):
+    the old count window is the widest honest guess, and still works."""
+    conversation = _Conv([
+        _Msg("assistant", "", [_Call("calculate", {"expression": "1+1"})]),
+        _Msg("tool", "2"),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+
+
+def test_builder_keeps_every_step_of_a_long_turn():
+    """The turn is not truncated to ``n_messages``: half a plan is worse than a
+    wrong one, and a genuinely long turn is normal work."""
+    messages = [_Msg("user", "do the whole thing")]
+    for i in range(12):
+        messages.append(_Msg("assistant", "", [_Call("calculate", {"expression": f"{i}+1"})]))
+        messages.append(_Msg("tool", str(i + 1)))
+    draft = RoutineBuilder().propose_from_recent_actions(_Conv(messages))
+    assert len(draft.steps) == 12
+
+
+def test_builder_reads_a_reopened_conversations_restored_calls():
+    """KNOWN-BUGS #5: a chat reopened after a relaunch is still saveable.
+
+    ``conversation.load`` cannot put restored calls back on ``tool_calls`` — a
+    provider replays that field, and a ``tool_use`` sent without the
+    ``tool_result`` that answered it makes the API reject every later request of
+    the session — so it puts them on ``past_tool_calls`` instead. To a routine the
+    two are the same thing: steps the person watched happen. The message here
+    carries ONLY the restored field, which is exactly the shape a reload produces.
+    """
+    restored = _Msg(
+        "assistant", "All done!",
+        past_tool_calls=[_Call("save_file", {"filename": "total.txt"})],
+    )
+    conversation = _Conv([_Msg("user", "save my total"), restored])
+
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["save_file"]
+    # The generalization is the live one, not a lesser copy for reloaded chats.
+    assert draft.steps[0].args_template["filename"] == "{{output_filename}}"
 
 
 def test_builder_raises_plainly_when_nothing_to_extract():
@@ -613,8 +721,10 @@ def test_library_crud_round_trip(tmp_path):
 #
 # These enter through the real JSON-RPC server with the REAL tool registry
 # (`build_registry(DEVELOPER)`), because half the question is which tools the
-# SAFE view holds — `read_project_file` is registered `open_only`, and no
-# hand-rolled test registry would reproduce that.
+# SAFE view holds — `create_automation` is registered `open_only`, and no
+# hand-rolled test registry would reproduce that. (It was `read_project_file`
+# until 2026-08-11, when the file tools joined the SAFE view and stopped being an
+# example of anything Simple cannot reach — docs/SAFETY.md owns that decision.)
 # ===========================================================================
 
 # Frozen copy (rpc/constants.py holds it once, for both the marker and the
@@ -720,7 +830,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     """THE CASE ``routine_uses_dev_abilities`` ALONE MISSES, and the reason the
     question lives in the RPC layer at all.
 
-    ``read_project_file`` is registered ``open_only``: absent from
+    ``create_automation`` is registered ``open_only``: absent from
     ``visible_tools(SAFE)`` and refused at dispatch outside OPEN. A routine naming
     it carries NO command step, so the plan-only test answers "needs nothing" — and
     the row would sit in Simple offering a Run that the engine refuses one click
@@ -741,7 +851,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     this row is stamped 'safe'."""
     h = _seeded(
         tmp_path,
-        [(_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "README.md"})]), "safe")],
+        [(_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe")],
     )
     try:
         assert _rows(h, 1)["reader"]["unavailable"] == _DISABLED
@@ -807,7 +917,7 @@ def test_the_rail_and_the_library_never_disagree_about_one_routine(tmp_path):
         tmp_path,
         [
             (_plan("calc", [RoutineStep("s1", "calculator", {"expression": "1+1"})]), "open"),
-            (_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "x"})]), "safe"),
+            (_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe"),
         ],
         widgets=[
             ("w-calc", {"kind": "routine", "routineId": "calc", "title": "Add up"}),

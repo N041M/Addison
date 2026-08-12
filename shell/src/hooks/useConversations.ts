@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import type { ConversationSummary, DisplayMessage } from "../types/ui";
+import type { ActivityUpdate } from "../types/protocol";
 import { ipc, isEngineConnected } from "../ipc/client";
 
 interface UseConversationsArgs {
@@ -24,6 +25,9 @@ interface UseConversationsArgs {
   resetTransientState: () => void;
   /** The thread setter, from useTurn. */
   setMessages: Dispatch<SetStateAction<DisplayMessage[]>>;
+  /** The work-panel setter, from useTurn: a reopened chat gets its last turn's
+   * steps back (KNOWN-BUGS #5), which is also what puts "Save as routine" back. */
+  setActivities: Dispatch<SetStateAction<ActivityUpdate[]>>;
   setScreen: (screen: "chat" | "settings") => void;
   setStatusBanner: (text: string | null) => void;
 }
@@ -34,6 +38,7 @@ export function useConversations({
   permissionPending,
   resetTransientState,
   setMessages,
+  setActivities,
   setScreen,
   setStatusBanner,
 }: UseConversationsArgs) {
@@ -125,6 +130,10 @@ export function useConversations({
         }));
         resetTransientState();
         setMessages(rows);
+        // AFTER the reset, which clears the previous chat's steps. The panel is
+        // per-turn state, so this is the reopened chat's last turn and nothing
+        // older — the same thing the person was looking at when they closed it.
+        setActivities(loaded.work);
         setCurrentConversationId(loaded.conversationId || id);
         setConversationTitle(
           loaded.title ?? conversations.find((c) => c.id === (loaded.conversationId || id))?.title ?? null,

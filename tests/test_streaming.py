@@ -32,6 +32,7 @@ from agent_core.providers.base import (
     ModelRole,
     ProviderCapabilities,
     ProviderUnavailable,
+    ToolCallRequest,
     Usage,
     iter_sse_json,
 )
@@ -622,3 +623,147 @@ def test_a_stream_that_dies_before_showing_anything_still_falls_forward():
     assert emitted == ["Second ", "model."]
     assert first.sends == 1 and second.sends == 1
     assert _final_assistant_text(conversation) == "Second model."
+
+
+# --- what goes BETWEEN two things Addison says in one turn -----------------
+# KNOWN-BUGS P3/6. A turn that calls a tool says something before the call and
+# something after it. Each is its own run of deltas, the frontend appends them
+# into ONE message, and with nothing in between the reader got
+# "…the current state of the add function.Now I'll add a docstring" — on screen
+# while streaming and in the settled transcript afterwards, because the joined
+# text is what that message holds. A send boundary is the only place that knows
+# where one utterance ends, so `_DeltaRelay` is where the break belongs.
+
+
+class _Segmented:
+    """A provider whose turn is prose, a tool call, then more prose.
+
+    Each scripted round is ``(chunks, tool_calls)``. ``honours_sink=False`` is the
+    same turn from a provider that ignores ``on_delta`` — the finished text is
+    then the reader's only copy, and it is a segment on exactly the same terms."""
+
+    def __init__(self, rounds, *, honours_sink=True):
+        self._rounds = list(rounds)
+        self._honours_sink = honours_sink
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            native_tool_calling=True,
+            max_context_tokens=1000,
+            supports_streaming=self._honours_sink,
+            runs_off_device=False,
+        )
+
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
+        chunks, tool_calls = self._rounds.pop(0)
+        if self._honours_sink and on_delta is not None:
+            for chunk in chunks:
+                on_delta(chunk)
+        return ModelResponse(text="".join(chunks) or None, tool_calls=list(tool_calls))
+
+
+def _a_call() -> ToolCallRequest:
+    """A tool_use for an id nothing is registered under. The registry refuses it
+    and the turn carries on to its second round — which is all these tests need,
+    and it keeps them about the relay rather than about any tool."""
+    return ToolCallRequest(id="call-1", tool_id="read_file", args={})
+
+
+BEFORE = "I'll read the file first to see the current state of the add function."
+AFTER = "Now I'll add a docstring."
+
+
+def test_two_things_said_around_a_tool_call_do_not_fuse():
+    emitted: list = []
+    provider = _Segmented([([BEFORE], [_a_call()]), ([AFTER], [])])
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    # What the reader's one message ends up holding — the frontend appends chunks.
+    assert "".join(emitted) == f"{BEFORE}\n\n{AFTER}"
+    assert "function.Now" not in "".join(emitted)
+    # The break rides on the SECOND segment's first chunk; the first is untouched.
+    assert emitted[0] == BEFORE
+
+
+def test_the_deltas_inside_one_segment_are_relayed_untouched():
+    """The break is added between segments and NOWHERE else. A segment arrives as
+    many small deltas — a fence, a list, half a word — and inserting a blank line
+    inside one would corrupt the very markdown it exists to serve."""
+    emitted: list = []
+    provider = _Segmented([(["```py\n", "x = 1\n", "```"], [_a_call()]), (["Done."], [])])
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    assert emitted[:3] == ["```py\n", "x = 1\n", "```"]
+    assert "".join(emitted) == "```py\nx = 1\n```\n\nDone."
+
+
+def test_a_segment_that_already_ended_on_a_blank_line_gets_no_second_one():
+    """Top-up, not a fixed insert: the separation is one blank line either way, so
+    a segment that ended on its own newline does not open a gap."""
+    emitted: list = []
+    provider = _Segmented([(["Here goes.\n"], [_a_call()]), (["Done."], [])])
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    assert "".join(emitted) == "Here goes.\n\nDone."
+
+
+def test_nothing_is_separated_from_a_segment_that_was_never_said():
+    """The common shape: the model calls a tool and says nothing first. There is
+    no earlier utterance, so the answer must not open with a blank line."""
+    emitted: list = []
+    provider = _Segmented([([], [_a_call()]), ([AFTER], [])])
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    assert "".join(emitted) == AFTER
+
+
+def test_a_provider_that_ignores_the_sink_opens_with_no_break():
+    """The finished text now goes THROUGH the relay rather than past it, so this
+    pins that it cannot pick up a break it hasn't earned. Such a provider streams
+    nothing at all, and the prose it said before its tool call is not relayed
+    either (only the final text is pushed), so there is no earlier utterance to
+    separate this one from — and the answer must not open on a blank line."""
+    emitted: list = []
+    provider = _Segmented([([BEFORE], [_a_call()]), ([AFTER], [])], honours_sink=False)
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    assert emitted == [AFTER]
+
+
+def test_the_single_provider_path_separates_its_segments_the_same_way():
+    """``_run_single`` is the CLI/test freeze path, and it relays on the same terms."""
+    emitted: list = []
+    provider = _Segmented([([BEFORE], [_a_call()]), ([AFTER], [])])
+    orch, conversation = _orchestrator({"m": provider}, None, emitted)
+
+    orch.run_turn(conversation, model_name="m", mode=PolicyMode.SAFE)
+
+    assert "".join(emitted) == f"{BEFORE}\n\n{AFTER}"
+
+
+def test_the_out_of_steps_sentence_does_not_fuse_onto_what_was_said(monkeypatch):
+    """The turn that stops itself is the same shape: Addison has usually already
+    said something before its first tool call, and the sentence that closes the
+    turn must not land against it."""
+    import agent_core.orchestrator as orchestrator_module
+
+    monkeypatch.setattr(orchestrator_module, "_MAX_TOOL_ROUNDS", 1)
+    emitted: list = []
+    provider = _Segmented([([BEFORE], [_a_call()])])
+    orch, conversation = _orchestrator({"m": provider}, [_cand("m", "p")], emitted)
+
+    orch.run_turn(conversation, mode=PolicyMode.SAFE)
+
+    shown = "".join(emitted)
+    assert shown.startswith(f"{BEFORE}\n\n")
+    assert "more steps than I should take" in shown

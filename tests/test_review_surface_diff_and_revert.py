@@ -113,9 +113,15 @@ class _FakeWorkspaceShell(ShellBridgeStubs):
         at = self._on_disk(path)
         existed = at in self.disk
         prior = self.disk.get(at)
-        self.disk[at] = content
+        # THE TRAILING NEWLINE THE EDIT DROPPED, put back exactly as the real shell
+        # does (``needs_trailing_newline`` in filesystem.rs, which owns the rule). It is
+        # modelled here rather than ignored because the thing this suite reads off a
+        # write is the DIGEST of what landed, and a fake that writes something other
+        # than the shell would would make that digest agree with nothing.
+        restored = bool(prior and prior.endswith("\n") and content and not content.endswith("\n"))
+        self.disk[at] = content + "\n" if restored else content
         self.ledger.add(self._at(path))
-        return {"existed": existed, "prior": prior}
+        return {"existed": existed, "prior": prior, "newlineRestored": restored}
 
     def restore_workspace_file(self, path: str, prior_content: str | None) -> None:
         # Recorded AS ASKED, never normalised: what crossed the boundary is exactly
@@ -354,6 +360,29 @@ def test_the_write_records_the_digest_of_what_it_put_on_disk(tmp_path):
     # The undo contract is untouched — existed/prior are what they always were.
     assert snapshot.undo_payload["existed"] is False
     assert snapshot.undo_payload["prior"] is None
+
+
+def test_the_digest_is_of_what_landed_when_the_shell_put_a_newline_back(tmp_path):
+    """KNOWN-BUGS P3 #7's other half. The shell restores a trailing newline the edit
+    dropped, so the bytes on disk are one longer than the bytes the model sent — and
+    the digest recorded here is the whole basis of "has this changed since Addison
+    wrote it".
+
+    Mutation: hash ``content`` instead of what landed. Every append reports
+    ``onDiskChanged: True`` the instant it is written, so the surface warns that
+    somebody has edited a file nobody has touched — and the warning that means
+    something stops meaning anything.
+
+    ``prior``, and therefore the undo, is untouched by any of it."""
+    shell = _FakeWorkspaceShell(disk={"/p/notes.md": "one\ntwo\n"})
+    bench = _Bench(tmp_path, shell)
+
+    snapshot = bench.write("/p/notes.md", "one\ntwo\nthree")
+
+    assert shell.disk["/p/notes.md"] == "one\ntwo\nthree\n", "the byte the edit dropped"
+    assert snapshot.undo_payload["wrote_sha256"] == _sha(shell.disk["/p/notes.md"])
+    assert snapshot.undo_payload["wrote_sha256"] != _sha("one\ntwo\nthree")
+    assert snapshot.undo_payload["prior"] == "one\ntwo\n"
 
 
 def test_the_write_records_which_file_it_landed_on(tmp_path):
@@ -1438,6 +1467,74 @@ def test_a_shortcut_planted_at_a_written_path_never_moves_the_diff_or_the_revert
         harness.close()
 
 
+def test_the_list_says_a_file_was_swapped_so_the_confirm_can_say_it_first(
+    tmp_path, project
+):
+    """KNOWN-BUGS P3 #10. Both refusals above are correct and both arrive too late:
+    ``listEdits`` said nothing about a swapped file, so the surface offered the
+    ordinary two-press Revert, showed the generic "you've changed this file since
+    Addison did" confirm — an event that did not happen — and only then was refused by
+    the engine.
+
+    ``replacedBy`` is those same two questions asked one step earlier and in the same
+    order, so the list and the refusal cannot describe one file two ways. It is a
+    MARKER and never the enforcement: ``revert_path`` asks again at the moment it would
+    write, and the assertions here keep both refusals in place beside it.
+
+    Mutations, one per assertion group:
+      * answer ``None`` unconditionally: the surface is back to offering a revert that
+        cannot succeed, which is the whole bug;
+      * collapse the two kinds into one boolean: a hard link is described as a
+        shortcut, which is the wrong sentence for the swap that is not one;
+      * mark an ordinary edit: every working Revert on the screen disappears."""
+    ordinary = str(project / "fine.txt")
+    linked = str(project / "config.yml")
+    swapped = str(project / "a.txt")
+    sibling = str(project / "b.txt")
+    # REAL files, for ``test_a_hard_link_...``'s reason: the identity is a real question
+    # about a real inode. The bytes every assertion reads are still the fake shell's.
+    (project / "a.txt").write_text("A0\n", encoding="utf-8")
+    (project / "b.txt").write_text("B0\n", encoding="utf-8")
+    (project / "fine.txt").write_text("F0\n", encoding="utf-8")
+
+    shell = _FakeWorkspaceShell(disk={ordinary: "F0\n", linked: "v0\n", swapped: "A0\n"})
+    harness = _Harness(
+        tmp_path,
+        shell,
+        edits=((ordinary, "F1\n", 100), (linked, "v1\n", 101), (swapped, "A1\n", 102)),
+    )
+    try:
+        harness.trust(project)
+        listed = harness.call("workspace.listEdits")["edits"]
+        assert {row["path"]: row["replacedBy"] for row in listed} == {
+            ordinary: None,
+            linked: None,
+            swapped: None,
+        }
+
+        _plant_a_shortcut(linked, str(tmp_path / "outside" / "id_rsa"))
+        os.unlink(swapped)
+        os.link(sibling, swapped)
+
+        listed = harness.call("workspace.listEdits")["edits"]
+        after = {row["path"]: row["replacedBy"] for row in listed}
+        # TWO KINDS, because they are two things to tell a person: a shortcut leads
+        # somewhere else, a hard link IS somewhere else wearing the same name.
+        assert after[linked] == "shortcut"
+        assert after[swapped] == "other-file"
+        # ...and an untouched edit keeps its Revert.
+        assert after[ordinary] is None
+
+        # THE MARKER IS NEVER THE ENFORCEMENT: both are still refused at the door, and
+        # the one that was never swapped still goes through.
+        assert harness.call("workspace.revertFile", {"path": linked})["ok"] is False
+        assert harness.call("workspace.revertFile", {"path": swapped})["ok"] is False
+        assert shell.restored == []
+        assert harness.call("workspace.revertFile", {"path": ordinary})["ok"] is True
+    finally:
+        harness.close()
+
+
 def test_the_restart_question_is_asked_about_the_path_the_undo_would_use(
     tmp_path, project
 ):
@@ -1538,6 +1635,7 @@ def test_the_list_carries_metadata_only_and_the_relative_path_the_ui_renders(
         assert set(edit) == {
             "path", "root", "relativePath", "snapshotIds", "writes", "created",
             "firstWrittenAt", "lastWrittenAt", "revertable", "onDiskChanged", "missing",
+            "replacedBy",
         }
         assert edit["relativePath"] == "src/app.py"
         assert edit["root"] == str(project)

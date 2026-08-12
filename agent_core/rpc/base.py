@@ -115,6 +115,10 @@ class ServerContext:
         _primary_prompt: str | None
         _perm_lock: threading.Lock
         _permission_waiters: dict[str, dict]
+        # Raised by conversation.stop, lowered when the worker takes its next job
+        # (main.py). A mixin that can raise a permission card must check it before
+        # emitting one: a stopped turn asks nobody anything (KNOWN-BUGS #4).
+        _turn_stopped: bool
         _local_setup_lock: threading.Lock
         _local_setup_active: bool
         # --- G3 (guaranteed rollback) ---

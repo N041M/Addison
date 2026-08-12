@@ -62,7 +62,11 @@ from typing import TYPE_CHECKING
 from agent_core.automations import Automation
 from agent_core.policy import PolicyMode
 from agent_core.redaction import redact
-from agent_core.tools.arm_automation import arming_is_supported
+from agent_core.tools.arm_automation import (
+    AutomationLookup,
+    arming_is_supported,
+    resolve_automation,
+)
 from agent_core.tools.base import (
     ExecutionContext,
     RiskTier,
@@ -82,7 +86,17 @@ _ONLY_ON_A_MAC = (
     "Addison only switches automations on and off for your computer on a Mac, so "
     "there was nothing to switch off here."
 )
-_NO_SUCH_AUTOMATION = "That automation isn't saved any more, so there was nothing to turn off."
+# Its sibling's correction, in this direction (see ``arm_automation``'s note): the
+# old sentence announced a deletion Addison had no way of knowing about, and said it
+# to anybody who gave a name instead of an id.
+_NO_SUCH_AUTOMATION = (
+    "Addison couldn't find a saved automation with that name or id, so nothing was "
+    "switched off. Check the Automations list in Settings for the exact name."
+)
+_AMBIGUOUS_NAME = (
+    "More than one saved automation has that name, so Addison didn't switch anything "
+    "off. Open the Automations list in Settings and say which id you mean."
+)
 _NO_SHELL = (
     "Addison can only switch an automation off from the desktop app, so it didn't "
     "switch that one off."
@@ -120,7 +134,8 @@ class DisarmAutomationTool:
                     "type": "string",
                     "description": (
                         "Which saved automation to switch off — the id from the list "
-                        "of automations."
+                        "of automations, or its exact name if that is all you have. "
+                        "If two automations share a name, only the id will do."
                     ),
                 }
             },
@@ -166,18 +181,19 @@ class DisarmAutomationTool:
 
     # --- the door ------------------------------------------------------------
 
-    def _row(self, args: dict) -> Automation | None:
-        """The automation this call names, or None. Never raises."""
+    def _lookup(self, args: dict) -> AutomationLookup:
+        """Which automation this call named — the one place this tool asks, and the
+        SAME resolution its sibling uses (``resolve_automation``): the id first, then
+        an exact name. Shared rather than copied, so switching one off can never land
+        on a different row from the one that was switched on."""
         store = self._store_ref()
         if store is None:
-            return None
-        automation_id = args.get("id")
-        if not isinstance(automation_id, str) or not automation_id:
-            return None
-        try:
-            return store.get_automation(automation_id)
-        except Exception:
-            return None
+            return AutomationLookup()
+        return resolve_automation(store, args.get("id"))
+
+    def _row(self, args: dict) -> Automation | None:
+        """The automation this call names, or None. Never raises."""
+        return self._lookup(args).row
 
     def arming_refusal(self, args: dict) -> str | None:
         """The door, asked BEFORE the gate — two questions, not four.
@@ -190,7 +206,10 @@ class DisarmAutomationTool:
             return _NOT_READY
         if not arming_is_supported():
             return _ONLY_ON_A_MAC
-        if self._row(args) is None:
+        found = self._lookup(args)
+        if found.ambiguous:
+            return _AMBIGUOUS_NAME
+        if found.row is None:
             return _NO_SUCH_AUTOMATION
         return None
 

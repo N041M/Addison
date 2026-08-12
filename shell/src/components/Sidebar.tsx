@@ -26,6 +26,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary, View } from "../types/ui";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
+import { formatRowTime, isSameDay } from "../lib/time";
 
 interface Props {
   conversations: ConversationSummary[];
@@ -53,10 +54,14 @@ interface Props {
   onOpenCode?: () => void;
   /** Mono hint beside "Tools" — the trusted-folder count, else the policy mode. */
   toolsHint?: string;
-  /** Mono hint beside "Snapshots" — how many restore points exist. */
+  /** Mono hint beside "Restore points" — how many restore points exist. */
   snapshotsHint?: string;
-  /** Plain label for the active profile, e.g. "Simple profile". */
-  profileLabel: string;
+  /**
+   * Plain label for the active profile, e.g. "Simple profile" — or UNDEFINED
+   * while the engine has not answered yet, in which case the footer note is not
+   * rendered at all. Silence is correct here; a default asserted as fact is not.
+   */
+  profileLabel?: string;
   /**
    * OPEN mode only: a dim suffix ("open") appended to the profile note — the one
    * quiet acknowledgement that the safety posture is different. Nothing louder.
@@ -222,8 +227,10 @@ export function Sidebar({
     // read refs, so the lint rule is satisfied without a disable.)
   }, [expanded]);
 
-  const profileNote =
-    `${profileLabel} · local` + (modeNote ? ` · ${modeNote}` : "");
+  // Nothing is claimed until the profile is known — see `profileLabel` above.
+  const profileNote = profileLabel
+    ? `${profileLabel} · local` + (modeNote ? ` · ${modeNote}` : "")
+    : null;
 
   return (
     <div
@@ -269,7 +276,7 @@ export function Sidebar({
             onClick={onOpenTools}
           />
           <WorkspaceRow
-            label="Snapshots"
+            label="Restore points"
             hint={snapshotsHint}
             active={view === "snapshots"}
             onClick={onOpenSnapshots}
@@ -361,7 +368,16 @@ export function Sidebar({
         >
           Settings
         </button>
-        <p className="pl-3.5 font-mono text-[10px] text-disabled">{profileNote}</p>
+        {/* Empty until the profile is known: the line keeps its height (so the
+            footer does not jump when the answer lands) but says nothing, and is
+            hidden from assistive tech while it holds only the spacer. */}
+        <p
+          className="pl-3.5 font-mono text-[10px] text-disabled"
+          data-testid="profile-note"
+          aria-hidden={profileNote === null || undefined}
+        >
+          {profileNote ?? "\u00a0"}
+        </p>
       </div>
     </div>
   );
@@ -523,24 +539,6 @@ function bucketConversations(conversations: ConversationSummary[]): {
   return { today, earlier };
 }
 
-// HH:MM today · the weekday within the last week · a short date beyond that ·
-// nothing at all when there is no usable timestamp.
-function formatRowTime(startedAt: number, now: Date = new Date()): string {
-  if (!startedAt) return "";
-  const d = new Date(startedAt * 1000);
-  if (Number.isNaN(d.getTime())) return "";
-  if (isSameDay(d, now)) {
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  }
-  const days = (now.getTime() - d.getTime()) / 86_400_000;
-  if (days >= 0 && days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+// The row time and the day comparison behind it live in `lib/time.ts` — the Code
+// screen's Changes list renders the same fact in the same shape, and one format
+// with two homes would become two formats.

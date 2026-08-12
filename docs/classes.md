@@ -38,15 +38,18 @@ classDiagram
     class Conversation {
         +id
         +messages
+        +shown_steps
         +append_tool_result(tool_call_id, result)
         +append_assistant_message(text)
         +append_assistant_tool_calls(text, tool_calls)
+        +note_step_shown(tool_call_id, detail)
     }
     class Message {
         +role
         +content
         +tool_call_id
         +tool_calls
+        +past_tool_calls "history only, never replayed"
     }
     class Tool {
         <<interface>>

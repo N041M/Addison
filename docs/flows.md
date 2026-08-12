@@ -122,9 +122,12 @@ sequenceDiagram
 
 History landed recently. Listing counts only user and assistant rows; loading rebuilds
 the in-memory transcript from user and non-empty assistant rows and skips persisted
-tool rows on purpose — the store never persists an assistant turn's `tool_calls`, so
-replaying tool rows would send unpaired tool results and the provider would reject the
-next turn. A new conversation gets a fresh uuid but no store row until its first real
+tool rows on purpose — replaying them would send unpaired tool results and the provider
+would reject the next turn. The calls themselves ARE stored (`messages.tool_calls_json`,
+2026-08-09) and come back as history rather than transcript: `conversation.load` answers
+with the last turn's steps (`work`) so the work panel redraws, and hangs the calls on
+`Message.past_tool_calls`, which the routine builder reads and no provider does — so
+"Save as routine" survives a relaunch (KNOWN-BUGS #5). A new conversation gets a fresh uuid but no store row until its first real
 turn, and the title is written first-write-wins from the first user message.
 
 ```mermaid
@@ -487,7 +490,10 @@ saw) the card SAYS the previous key was replaced. Closed 2026-08-08; see
 ## 12. Workspace-trust grant and a keyword-gated powerful action
 
 The harness (Developer/OPEN) reconciles the agentic loop with the per-invocation card
-(amendment §8.2, §9). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
+(amendment §8.2, §9). The diagram below is the OPEN path, where the `trusted` flag
+suppresses the card; **since 2026-08-11 the same two file tools are reachable from
+Simple/SAFE**, where confinement is identical and the card is never suppressed —
+each edit cards and names the file ([SAFETY.md](SAFETY.md) invariant 1). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
 step 8 phase 3 (2026-08-07). The essential correction to the amendment's framing: trust is
 **two** predicates, not one.
 

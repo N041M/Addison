@@ -258,7 +258,7 @@ Check this at **1280×620** specifically: both actions must sit inside the fold
 `FirstRunBanner.tsx`).
 
 **Sidebar / history.** The 212px left column, top to bottom: a **Workspace**
-block (11px label on a 2px `rail` rule) with **Tools** and **Snapshots** rows,
+block (11px label on a 2px `rail` rule) with **Tools** and **Restore points** rows,
 each carrying a mono hint (trusted-folder count or policy mode; restore-point
 count); **＋ New chat** in accent; then real conversations grouped **Today /
 Earlier**, newest first. A group header is an 11px `faint` label with a mono
@@ -297,7 +297,7 @@ from real flags — `free` stays Ollama-only, and no cloud model may ever claim
 it. When the picked cloud model has effort levels, an "Effort" section follows
 in the same idiom. Footer hint: "picked per message · default in Settings".
 
-**Surfaces.** Settings, Tools, Snapshots and Build a widget replace the chat
+**Surfaces.** Settings, Tools, Restore points and Build a widget replace the chat
 column (they are not a drawer and not a modal): centred ≤580px, scrollable
 behind the vertical fade mask, 20px title + 13px `muted` description, sections
 as an 11px label on a 2px `rail` rule with rows separated by 1px `line` top
@@ -409,8 +409,10 @@ else in this document — file it first.
 
 **Where.** Settings → **Restore points**, directly under Profile (deliberate:
 the person who just changed their profile is one row away from undoing it).
-It is called "Restore points" everywhere in the UI, never "Snapshots" — except
-as the name of the sidebar's **Snapshots** surface, which shows the same rows.
+It is called "Restore points" everywhere in the UI, never "Snapshots" — the
+sidebar's **Restore points** surface, which shows the same rows, included. (It
+was the one exception until 2026-08-09; "Snapshots" now survives only in code,
+the schema and the technical docs.)
 
 **The summary row.** The section leads with the one-action way back: a row
 reading **"Going back to {target}"** — the target named in bright `ink` — with
@@ -418,7 +420,7 @@ its timestamp as the mono value and **restore** as the accent action. Below it,
 **"All restore points"** with a mono count and an **open** action, which raises
 the modal.
 
-**The list** (modal, or the Snapshots surface). One row per restore point: a
+**The list** (modal, or the Restore points surface). One row per restore point: a
 plain-language label ("Working setup", "Before switching profile", "Before
 deleting a note", "You saved this") with its timestamp as the **mono** value
 (machine facts only). On a fresh profile there is exactly one row, **"Addison as
@@ -725,7 +727,7 @@ the view title, and "Undo last action" stay exactly where they are. Two things
 change: the sidebar chevron `«`/`»` becomes **☰** (44px), and the rail chevron
 **disappears** below 1024px, because there is no rail column for it to toggle.
 The ☰ is present on surfaces too, not just chat: on a phone the `←` alone would
-strand you with no way to reach Tools, Snapshots or your chats without going
+strand you with no way to reach Tools, Restore points or your chats without going
 back to the thread first.
 
 **Widget rail → inline.** Between 768px and 1024px, and below it, the rail
@@ -740,7 +742,7 @@ slide-over** (280px, `paper` background, scrim behind). It is a real **modal**:
 `role="dialog"` + `aria-modal`, focus moves into the panel on open and back to
 the ☰ on close, and **Tab cycles inside it** — tabbing through to the page
 behind the scrim is a bug. It closes on the **scrim tap**, its own close arrow,
-**Escape**, and **picking** a conversation / Settings / Tools / Snapshots / New
+**Escape**, and **picking** a conversation / Settings / Tools / Restore points / New
 chat, and it plays the slide-out on every one of those paths. Grow the window
 back past 768px — the drawer is gone and the static 212px sidebar is back.
 
@@ -755,7 +757,7 @@ first-run actions, and the empty-state suggestion chips are all **≥44px** tall
 (`max-md:` utilities, so desktop keeps its compact sizes).
 
 **Hit targets ≥44px.** Spot-check with a ruler / devtools: ☰, drawer
-conversation rows, New chat, Tools, Snapshots, Settings; composer **Send**/Stop;
+conversation rows, New chat, Tools, Restore points, Settings; composer **Send**/Stop;
 widget **Run** actions, the tray "N more widgets" row, and the add-widget row.
 
 **Safe area + no overflow.** In the DOM the drawer's sidebar carries

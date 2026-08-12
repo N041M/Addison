@@ -57,6 +57,19 @@ interface Props {
    * place where the two could one day disagree.
    */
   onRespond: (allow: boolean, typed?: string) => void;
+  /**
+   * The turn this card belongs to was stopped (KNOWN-BUGS #4, owner decision
+   * 2026-08-09: THE CARD DIES WITH ITS TURN). The card stays — it is the record of
+   * what Addison was asking — but it is a dead thing: no Allow, no Not now, no code
+   * box, one sentence saying the asking ended.
+   *
+   * PRESENTATION ONLY. The core refuses a late `permission.respond` on its own
+   * (`agent_core/main.py`), which is what makes this safe to be a mere prop: a
+   * stale or hand-edited frontend that renders the buttons anyway gets the same
+   * refusal an honest one would. The house rule, unchanged — the marker is never
+   * the enforcement, and dispatch wins.
+   */
+  expired?: boolean;
 }
 
 // Per-invocation destructive cards (OPEN/Developer mode) describe the exact
@@ -106,7 +119,17 @@ function splitCommand(description: string): { lead: string; command: string | nu
   return { lead: description.slice(0, at + RUN_PREFIX.length).trimEnd(), command };
 }
 
-export function PermissionCard({ request, onRespond }: Props) {
+/** The dead state's one sentence. Plain, and it says what happened rather than
+ * naming a mechanism: the person pressed Stop, so the thing Addison was asking
+ * about is over. No "expired", no "invalid", no id. */
+const EXPIRED_MESSAGE = "This request ended when you stopped the answer.";
+
+export function PermissionCard({ request, onRespond, expired }: Props) {
+  // THE DEAD CARD, before every other branch — the arming variant included. A
+  // stopped keyword card must lose its code box exactly as an ordinary one loses
+  // Allow: the box is the ceremony's live half, and a ceremony nothing can accept
+  // is worse than no ceremony at all.
+  if (expired) return <ExpiredCard request={request} />;
   // The keyword gate is a different card, not a decorated one: its preview is the
   // defence, so it renders its own reading order rather than squeezing four facts
   // into the consequence sentence.
@@ -152,6 +175,43 @@ export function PermissionCard({ request, onRespond }: Props) {
           Not now
         </button>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The dead card (KNOWN-BUGS #4)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a permission card becomes when its turn is stopped.
+ *
+ * It keeps the question — the label, and the consequence sentence under it — so a
+ * person who looks back can see what they turned down by stopping; both go MUTED,
+ * the app's standing idiom for a row that is present but not available (the
+ * WAITING routines and automations in Settings say their one plain sentence in
+ * exactly this ink). Then a hairline rule, and the sentence.
+ *
+ * NO BUTTONS AT ALL rather than disabled ones. A disabled Allow is still an Allow
+ * in the reading order, still the accent-filled thing the eye goes to, and still
+ * something to try pressing; there is nothing here to press because there is
+ * nothing left to answer. Nothing on this card calls `onRespond`, so it does not
+ * take the prop — a component that cannot answer is better than one that is asked
+ * not to.
+ */
+function ExpiredCard({ request }: { request: PermissionRequest }) {
+  const { lead } = splitCommand(request.description);
+  return (
+    <div
+      {...CONSENT_CONTAINER}
+      data-consent-expired=""
+      className={CONSENT_CLASS + " px-3.5 py-3"}
+    >
+      <p className="m-0 text-[12px] font-medium leading-[1.45] text-muted">{request.label}</p>
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.55] text-muted">{lead}</p>
+      <p className="m-0 mt-2.5 border-t border-line pt-2.5 text-[12px] leading-[1.55] text-ink-soft">
+        {EXPIRED_MESSAGE}
+      </p>
     </div>
   );
 }

@@ -174,7 +174,7 @@ describe("who can reach the code screen at all", () => {
     // browsing a folder trusted under a profile that is no longer on.
     render(<App />);
     await waitFor(() => expect(ipc.getProfile).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getByText("Snapshots")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Restore points")).toBeTruthy());
     expect(screen.queryByText("Code")).toBeNull();
   });
 
@@ -281,6 +281,7 @@ const EDIT: WorkspaceEdit = {
   revertable: true,
   onDiskChanged: false,
   missing: false,
+  replacedBy: null,
 };
 
 const LISTING: WorkspaceListing = {
@@ -333,6 +334,77 @@ function renderSurface(review: CodeReviewState, extra: Partial<{ turnWorking: bo
     />,
   );
 }
+
+describe("the Changes rows carry a NAME and a TIME", () => {
+  // The list is newest first, and for a while it showed nothing that said so: with
+  // four files changed in one session, "which of these did Addison just touch?" was
+  // unanswerable from the screen and the order had to be taken on trust. The time is
+  // `lastWrittenAt` — the most recent write of the collapsed chain, which is the
+  // field the order is by — in the chat list's shape: HH:MM today, a weekday within
+  // the week, a short date beyond it.
+  const times = () => Array.from(document.querySelectorAll("[data-edit-time]"));
+
+  function at(offsetDays: number, hours: number, minutes: number): number {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    d.setHours(hours, minutes, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  it("renders HH:MM beside the name for a file changed today", () => {
+    renderSurface(reviewState({ edits: [{ ...EDIT, lastWrittenAt: at(0, 9, 5) }] }));
+    expect(screen.getByText("src/app.py")).toBeTruthy();
+    expect(times().map((el) => el.textContent)).toEqual(["09:05"]);
+  });
+
+  it("dates an older change rather than printing a misleading clock time", () => {
+    // Kills rendering HH:MM for everything: "14:20" on a row from three weeks ago
+    // reads as today, which is the one thing this list must not say.
+    const older = at(30, 14, 20);
+    renderSurface(reviewState({ edits: [{ ...EDIT, lastWrittenAt: older }] }));
+    const shown = times()[0]?.textContent ?? "";
+    expect(shown).not.toMatch(/^\d\d:\d\d$/);
+    expect(shown).toBe(
+      new Date(older * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }),
+    );
+  });
+
+  it("shows no time at all when the core sent none", () => {
+    // The parser floors an unreadable `lastWrittenAt` to 0. Inventing "00:00" for it
+    // would date a change to midnight today — a fact about the person's own history
+    // that nobody has.
+    renderSurface(reviewState({ edits: [{ ...EDIT, lastWrittenAt: 0 }] }));
+    expect(times()).toEqual([]);
+  });
+
+  it("keeps the time out of the row's accessible name", () => {
+    // A machine fact beside the name, never part of what the row is CALLED — the
+    // same rule the chat list follows.
+    renderSurface(reviewState({ edits: [{ ...EDIT, lastWrittenAt: at(0, 9, 5) }] }));
+    const row = screen.getByLabelText("src/app.py");
+    expect(row.getAttribute("aria-label")).toBe("src/app.py");
+  });
+
+  it("renders the rows in the order the core sent them — newest first", () => {
+    // The screen never re-sorts: `workspace.listEdits` promises newest first (its
+    // ORDER BY, and the fixture suite pins it), and a second ordering here would be
+    // a second opinion about which of two rows is newer. Kills a render that
+    // reverses or sorts by path.
+    renderSurface(
+      reviewState({
+        edits: [
+          { ...EDIT, path: "/p/new.py", relativePath: "new.py", lastWrittenAt: at(0, 11, 30) },
+          { ...EDIT, path: "/p/old.py", relativePath: "old.py", lastWrittenAt: at(0, 8, 15) },
+        ],
+      }),
+    );
+    const rendered = Array.from(document.querySelectorAll("[aria-label$='.py']")).map(
+      (el) => el.getAttribute("aria-label"),
+    );
+    expect(rendered).toEqual(["new.py", "old.py"]);
+    expect(times().map((el) => el.textContent)).toEqual(["11:30", "08:15"]);
+  });
+});
 
 describe("an edit Addison can no longer put back", () => {
   const READ_ONLY_LINE =
@@ -407,6 +479,52 @@ describe("the warn-before-clobber", () => {
     expect(
       screen.getByText("Addison created app.py. Putting it back removes the file."),
     ).toBeTruthy();
+  });
+});
+
+describe("a file that has been swapped since Addison wrote it", () => {
+  // KNOWN-BUGS P3 #10. The core refuses to write to a name that no longer reaches
+  // the file it wrote — but the list said nothing, so the FIRST press showed the
+  // generic "you've changed this file since Addison did" confirm and offered a
+  // revert the engine then correctly refused. The confirm has to tell the truth
+  // first, and the truth is that there is no press to make.
+  const SHORTCUT =
+    "That file has been replaced by a shortcut to somewhere else, so Addison won't " +
+    "put it back. The earlier version is on the left; you can copy it.";
+  const OTHER_FILE =
+    "A different file is at that name now, so Addison won't put the old text there. " +
+    "The earlier version is on the left; you can copy it.";
+  const CLOBBER =
+    "You've changed this file since Addison did. Reverting will replace what's " +
+    "there now with the version from before Addison's first change.";
+
+  it("says a shortcut stands there, and offers no revert at all", () => {
+    const revert = vi.fn(async () => true);
+    renderSurface(reviewState({ edits: [{ ...EDIT, replacedBy: "shortcut" }], revert }));
+    expect(screen.getByText(SHORTCUT)).toBeTruthy();
+    // Kills: keeping the two-press flow and merely adding a line to the confirm.
+    expect(screen.queryByText("put it back")).toBeNull();
+    expect(screen.queryByText(CLOBBER)).toBeNull();
+    expect(revert).not.toHaveBeenCalled();
+  });
+
+  it("names the OTHER swap in its own words — a hard link is not a shortcut", () => {
+    // Two sentences rather than one: what a person needs told here is not "a
+    // shortcut" but that this is no longer the file Addison changed.
+    renderSurface(reviewState({ edits: [{ ...EDIT, replacedBy: "other-file" }] }));
+    expect(screen.getByText(OTHER_FILE)).toBeTruthy();
+    expect(screen.queryByText(SHORTCUT)).toBeNull();
+    expect(screen.queryByText("put it back")).toBeNull();
+  });
+
+  it("wins over the on-disk-changed warning, which describes a different event", () => {
+    // A swapped file has almost always "changed on disk" too. Saying somebody
+    // edited it would be a true-sounding sentence about the wrong thing.
+    renderSurface(
+      reviewState({ edits: [{ ...EDIT, replacedBy: "other-file", onDiskChanged: true }] }),
+    );
+    expect(screen.getByText(OTHER_FILE)).toBeTruthy();
+    expect(screen.queryByText(CLOBBER)).toBeNull();
   });
 });
 

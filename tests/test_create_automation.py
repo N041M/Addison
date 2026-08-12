@@ -581,6 +581,32 @@ def test_the_answer_carries_the_schedule_the_preview_and_the_not_armed_line(tool
     assert "RunAtLoad" not in text
 
 
+def test_the_answer_carries_the_id_arming_will_need(tool, store: Store):
+    """THE FIX FOR KNOWN-BUGS P1 #1, at this end of it.
+
+    ``arm_automation`` takes an id. The only place an id is ever minted is the row
+    this call writes. Until 2026-08-09 the answer carried a schedule, a preview and
+    a not-armed line — and no id — so the model that had just written the automation
+    could not answer "now switch it on", and the refusal it got back said the
+    automation was not saved while it sat in Settings.
+
+    Mutation: delete the ``Automation id:`` line from ``_result_text`` — the first
+    assertion fails, and no other test in this file notices."""
+    text = str(tool.execute(_calendar(weekday=1), _ctx()).content)
+    saved = store.list_automations()
+    assert len(saved) == 1
+    assert f"Automation id: {saved[0].id}" in text
+
+    # It is Addison's bookkeeping, so it stays OUT of the preview — that block is a
+    # verbatim copy of what the computer would be handed, and a line of ours inside
+    # it would make the copy a paraphrase.
+    body = text.split("```")[1]
+    assert saved[0].id not in body
+    # ...and it sits with the sentence naming what was saved, above the preview,
+    # rather than after the not-armed line where a reader stops.
+    assert text.index("Automation id:") < text.index("```")
+
+
 def test_the_not_armed_line_says_it_plainly(tool):
     """It is the sentence a person reads to learn that nothing happened yet, so it
     must survive every later rewording with its meaning intact and its jargon out.

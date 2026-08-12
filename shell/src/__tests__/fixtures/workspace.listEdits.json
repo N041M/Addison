@@ -12,6 +12,7 @@
       "firstWrittenAt": 4102444807,
       "lastWrittenAt": 4102444807,
       "revertable": true,
+      "replacedBy": null,
       "onDiskChanged": false,
       "missing": false
     },
@@ -27,6 +28,7 @@
       "firstWrittenAt": 4102444806,
       "lastWrittenAt": 4102444806,
       "revertable": true,
+      "replacedBy": null,
       "onDiskChanged": null,
       "missing": true
     },
@@ -42,6 +44,7 @@
       "firstWrittenAt": 4102444805,
       "lastWrittenAt": 4102444805,
       "revertable": false,
+      "replacedBy": null,
       "onDiskChanged": null,
       "missing": false
     },
@@ -57,6 +60,7 @@
       "firstWrittenAt": 4102444804,
       "lastWrittenAt": 4102444804,
       "revertable": true,
+      "replacedBy": null,
       "onDiskChanged": false,
       "missing": false
     },
@@ -74,6 +78,7 @@
       "firstWrittenAt": 4102444801,
       "lastWrittenAt": 4102444803,
       "revertable": true,
+      "replacedBy": null,
       "onDiskChanged": true,
       "missing": false
     }

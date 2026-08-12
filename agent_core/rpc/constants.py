@@ -17,6 +17,22 @@ _METHOD_NOT_FOUND = -32601
 _SERVER_ERROR = -32000
 
 _NOT_BUILT_MESSAGE = "This isn't built yet."
+# The card died with its turn (KNOWN-BUGS #4, owner decision 2026-08-09). Said to a
+# `permission.respond` that arrives for a request nobody is waiting on any more —
+# almost always an Allow pressed on a card whose turn was stopped.
+#
+# THIS SENTENCE IS THE ENFORCEMENT'S VOICE, not a label the webview may substitute
+# for its own: the frontend greys the card out (`PermissionCard`'s expired state),
+# but a stale, hand-edited or simply slow frontend still answers here, and here is
+# where the answer is refused. Same rule as every other marker in this file —
+# dispatch wins.
+_ANSWER_AFTER_STOP_MESSAGE = (
+    "That request ended when you stopped the answer. Ask again if you still want it."
+)
+# The other way a waiter can be missing: it was already answered (a double press, a
+# duplicated frame). Nothing went wrong and nothing is pending — say so plainly
+# rather than blaming a stop that never happened.
+_ANSWER_NOT_PENDING_MESSAGE = "That request isn't waiting for an answer any more."
 # Plain-language model-picker refusals (§4.1.1; CLAUDE.md: no jargon).
 _MODEL_UNAVAILABLE_MESSAGE = "That model option isn't available."
 _EFFORT_UNAVAILABLE_MESSAGE = "That answer-style isn't available for this model."

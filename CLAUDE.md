@@ -64,7 +64,10 @@ used to mean editing thirteen files.
 **Two policy modes, derived 1:1 from the active Profile** (`agent_core/policy.py`,
 `mode_for_profile`) — there is no separately-persisted mode:
 
-- **Simple → SAFE.** Today's behaviour, byte-for-byte. All four SAFE invariants hold.
+- **Simple → SAFE.** All four SAFE invariants hold. (It was the v1 gate
+  byte-for-byte until 2026-08-11; the one change since is strictly tighter — a
+  destructive call cards per invocation instead of once — and it arrived with the
+  file tools. See invariant 1.)
 - **Developer → OPEN.** Real command execution exists (`run_command`, dev-only); a
   `dev_only` tool may register at HIGH without `undo()`; routines and widgets may
   carry a `command` step/kind; the gate auto-allows non-destructive actions and
@@ -93,9 +96,16 @@ used to mean editing thirteen files.
 **Four SAFE-mode invariants (Simple profile — hold byte-for-byte):**
 
 1. **No arbitrary code/shell execution.** No `eval`, no Lua sandbox, no raw-code
-   field. OPEN's `run_command`, the two `open_only` file tools and every tool
+   field. OPEN's `run_command`, the three automation tools and every tool
    discovered from an outside tool server are absent from
-   `registry.visible_tools(SAFE)` and refused at dispatch outside OPEN.
+   `registry.visible_tools(SAFE)` and refused at dispatch outside OPEN. The two
+   path-bounded file tools (`read_project_file` / `write_project_file`) were in
+   that list until **2026-08-11**, when Simple gained them — a typed function is
+   not a shell, so the invariant is unaffected. Simple gets the card FIRST and
+   every time (a destructive call in SAFE now takes the per-invocation card,
+   naming the file), and confinement, the size/binary refusals and the guaranteed
+   undo are unchanged. [docs/SAFETY.md](docs/SAFETY.md) owns the decision, its
+   terms, and what it costs.
 2. **Every `risk_tier != LOW` tool has a real `undo()`**, enforced at registration
    in `tools/registry.py`, which raises otherwise. Never satisfy this with a no-op:
    a tool that genuinely cannot be undone stays LOW and read-only. **This is the

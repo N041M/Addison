@@ -269,12 +269,13 @@ export function buildMonacoTheme(
  * Called again on every appearance flip, and that is the point: the hex values are
  * baked at DEFINE time, so `setTheme` alone would leave a person who flips
  * Appearance looking at the old palette until they reopened the file.
- * `MermaidDiagram.tsx` reads the dark class once per session; that is tolerable for
- * a diagram already drawn and wrong for a document somebody is reading.
  *
  * Deliberately NOT a `MutationObserver` on the `dark` class: App already computes
- * the resolved theme every time it applies one, and a second source of truth for a
- * fact the app knows is how the two come to disagree.
+ * the resolved theme every time it applies one and hands it to `CodeSurface` as a
+ * prop, and a second source of truth for a fact the app knows is how the two come
+ * to disagree. `MermaidDiagram.tsx` does observe the class, for the reason stated
+ * there — a diagram is created inside model-authored markdown, below every
+ * component that could be given the prop.
  */
 export function applyMonacoTheme(
   monaco: {

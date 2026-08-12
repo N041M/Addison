@@ -32,6 +32,7 @@ from agent_core.providers.base import (
     ProviderRequestRejected,
     ProviderUnavailable,
     ToolCallRequest,
+    note_candidate,
     server_detail_of,
     status_code_of,
 )
@@ -86,6 +87,16 @@ _TOO_MANY_STEPS = (
 _STEP_NOT_RUN = (
     "This step was not run: the turn reached its limit on how many steps it may take."
 )
+
+# What goes BETWEEN two things Addison says in one turn. A turn that calls a tool
+# says something before the call and something after it, and each arrives as its
+# own run of deltas; the frontend appends them into one message, so with nothing
+# in between the reader got "…the current state of the add function.Now I'll add a
+# docstring". They are separate utterances, and a blank line is how prose says so —
+# it is also the only separator markdown reads as a paragraph break, which a single
+# space is not. Inserted only BETWEEN segments and never inside one, so no fence,
+# list or code block can be cut by it.
+_SEGMENT_BREAK = "\n\n"
 
 # --- graceful fallback + cooldown (step 3, contract D4) ---------------------
 # Module constants, not settings — the model must not be able to shrink the
@@ -149,6 +160,18 @@ def _result_as_text(content: Any) -> str:
 class Conversation:
     id: str
     messages: list[Message] = field(default_factory=list)
+    #: tool_call id -> the ``detail`` line the Activity Panel showed for it, for
+    #: every step that ACTUALLY RAN this session. Not state the turn reads: it is
+    #: what ``rpc/conversation.py`` writes into ``messages.tool_calls_json`` so a
+    #: reopened chat can redraw "Addison's work" as a record of what happened
+    #: rather than of what was requested (a denied call is recorded too, marked
+    #: not-run, because the routine builder must see the same set either way).
+    #: Empty detail is stored as None — most tools have nothing to name.
+    shown_steps: dict[str, str | None] = field(default_factory=dict)
+
+    def note_step_shown(self, tool_call_id: str, detail: str | None) -> None:
+        """Record that this call reached the panel (and therefore ran)."""
+        self.shown_steps[tool_call_id] = detail or None
 
     def append_tool_result(self, tool_call_id: str, result: ToolResult) -> None:
         self.messages.append(
@@ -194,12 +217,23 @@ class _DeltaRelay:
     Empty deltas are dropped rather than counted — a provider that emits a
     zero-length chunk has shown the reader nothing, and treating it as "shown"
     would suppress the finished text and lose the answer entirely.
+
+    It is also the ONE place that knows where one thing Addison says ends and the
+    next begins: a send boundary. Deltas within a send are the same sentence
+    arriving in pieces and are relayed byte-for-byte; the first delta of a LATER
+    send in the same turn is a new utterance, so ``_SEGMENT_BREAK`` goes in front
+    of it (see the constant). Nothing is ever stripped or rewritten — the break is
+    added, and only between segments.
     """
 
     def __init__(self, sink) -> None:
         self._sink = sink
         self.shown_this_send = False
         self.shown_this_turn = False
+        # Trailing newlines of what has been shown, so a segment that already ended
+        # on a blank line does not get a second one. Only newlines are counted: any
+        # other character means the break is needed in full.
+        self._trailing_newlines = 0
 
     def begin_send(self) -> None:
         self.shown_this_send = False
@@ -207,8 +241,19 @@ class _DeltaRelay:
     def __call__(self, text: str) -> None:
         if not text:
             return
+        # First output of a send, with something already on screen from an earlier
+        # one: separate them. Top-up only — a segment ending "…\n" needs one more
+        # newline, one ending "…\n\n" needs none.
+        if not self.shown_this_send and self.shown_this_turn:
+            missing = len(_SEGMENT_BREAK) - min(self._trailing_newlines, len(_SEGMENT_BREAK))
+            text = "\n" * missing + text
         self.shown_this_send = True
         self.shown_this_turn = True
+        body = text.rstrip("\n")
+        tail = len(text) - len(body)
+        # A chunk that is nothing but newlines EXTENDS the run; anything else
+        # restarts the count from its own tail.
+        self._trailing_newlines = tail if body else self._trailing_newlines + tail
         self._sink(text)
 
 
@@ -405,7 +450,10 @@ class Orchestrator:
             # Already relayed as it arrived, unless this provider ignored on_delta —
             # then the finished text is the reader's only copy of the answer.
             if not relay.shown_this_send:
-                self.stream_to_frontend(response.text)
+                # Through the relay, not past it: this provider ignored on_delta, so
+                # the finished text is a SEGMENT like any other and needs the same
+                # break in front of it when the turn has already said something.
+                relay(response.text)
             # A single-path answer is the model the caller picked, so it is not routed.
             self.on_answered(model_id, self._model_label(model_id), False, False)
             break
@@ -414,7 +462,7 @@ class Orchestrator:
             # transcript ending on tool results with nothing said to the person.
             budget_spent = True
         if budget_spent:
-            self._finish_over_budget(conversation)
+            self._finish_over_budget(conversation, relay)
 
     # --- routed path with graceful fallback + cooldown (D4) -----------------
     def _run_with_fallback(
@@ -596,14 +644,17 @@ class Orchestrator:
             conversation.append_assistant_message(response.text)
             # Already relayed as it arrived, unless this provider ignored on_delta.
             if not relay.shown_this_send:
-                self.stream_to_frontend(response.text)
+                # Through the relay, not past it: this provider ignored on_delta, so
+                # the finished text is a SEGMENT like any other and needs the same
+                # break in front of it when the turn has already said something.
+                relay(response.text)
             answered = candidate
             break
         else:
             budget_spent = True
 
         if budget_spent:
-            self._finish_over_budget(conversation)
+            self._finish_over_budget(conversation, relay)
             return
         if answered is not None:
             # [S-b] routed == (the answering model differs from the user's explicit
@@ -657,11 +708,16 @@ class Orchestrator:
         on every CLI and test turn."""
         return self._on_tool_audit is not None
 
-    def _finish_over_budget(self, conversation) -> None:
+    def _finish_over_budget(self, conversation, relay: "_DeltaRelay") -> None:
         # Same sentence for both ceilings: the person does not care which counter ran
         # out, only that Addison stopped and is saying so.
         conversation.append_assistant_message(_TOO_MANY_STEPS)
-        self.stream_to_frontend(_TOO_MANY_STEPS)
+        # Also a segment, and a new one: a turn that stops here has usually already
+        # said something before its first tool call, and the sentence must not fuse
+        # onto it. ``begin_send`` is how the relay is told a fresh utterance starts —
+        # this sentence is Addison's own, not the tail of the send that preceded it.
+        relay.begin_send()
+        relay(_TOO_MANY_STEPS)
 
     def _run_tool_calls(
         self, conversation, response, context, guards, mode, provider, calls_made
@@ -884,6 +940,12 @@ class Orchestrator:
                 # destination, not a familiar one being misused. Bounding WHO can be
                 # reached is a grant-scoping change and is still open.
                 self.on_activity(call.tool_id, tool.definition.label, detail)
+                # The same announcement, written down instead of emitted. A panel
+                # that is gone the moment the app closes is what made a turn's
+                # steps unsaveable after a reload (KNOWN-BUGS #5); this is the only
+                # place that knows a step both ran and was described this way, so
+                # it is the only place that can say so honestly.
+                conversation.note_step_shown(call.id, detail)
                 # A tool/bridge failure is a FAILED STEP, never a crashed turn:
                 # crashing here would leave this tool_use with no tool_result, and the
                 # provider then rejects every later request (API 400) until restart.
@@ -962,7 +1024,17 @@ class Orchestrator:
         The MESSAGE is the plain sentence the person saw, so the row and the screen
         cannot tell different stories, and the status code rides alongside it —
         `str(exc)` says "Google is busy right now", `status_code` says 404, and only
-        together do they say the message was wrong."""
+        together do they say the message was wrong.
+
+        IT ALSO STAMPS THE EXCEPTION, before anything else and regardless of whether
+        a sink is wired. The row is history; the exception is on its way to the
+        person, and the Developer profile's "Technical details" fold has the same
+        need this row does — it can read the status and the server's sentence off the
+        exception already, and WHICH PROVIDER is the one fact that exists nowhere but
+        here (``note_candidate`` says why). Every failure path in the walk above
+        passes through this method, so stamping here covers all four rather than
+        four near-copies at the ``except`` clauses."""
+        note_candidate(exc, candidate.provider_id, candidate.model_id)
         if self._on_provider_attempt is None:
             return
         try:
