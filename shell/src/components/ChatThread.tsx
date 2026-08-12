@@ -634,11 +634,15 @@ function MessageRow({
   const label = SENDER_LABEL[message.role] ?? message.role;
   const isAddison = message.role === "assistant";
   const showRaw = showTechnicalDetails && message.failed && Boolean(message.raw);
-  // The free-model disclaimer (Phase-2 step 3, contract D5 [S-b]). Renders ONLY
-  // when a free model answered a turn the user did not choose it for — both
-  // booleans come from the core; the frontend never re-derives `routed`. Not an
-  // error, so no danger tone: it's Addison telling you which model replied.
-  const showFreeChip = Boolean(message.answeredWith?.free && message.answeredWith?.routed);
+  // The free-model disclaimer (Phase-2 step 3, contract D5). Renders whenever a
+  // KNOWN-FREE model answered — owner decision 2026-08-12. It used to also require
+  // `routed` (a free answer the user did not choose), and that is why the QA pass
+  // of 9 August saw no note at all: the ordinary way to get a free answer is to
+  // PICK the local model, and picking it set routed=false and hid the disclosure.
+  // The claim is about the answer's cost, not about who chose it. `free` still
+  // comes from the core and is free-by-construction only (a local Ollama model);
+  // the frontend never derives it. Not an error, so no danger tone.
+  const showFreeChip = message.answeredWith?.free === true;
   // Markdown once the turn has settled AND its text has finished resolving.
   // Feeding scrambled glyphs to the markdown parser 26×/s makes a stray `#` a
   // heading for one frame, so a revealing answer stays plain pre-wrap text and

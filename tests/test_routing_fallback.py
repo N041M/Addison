@@ -206,7 +206,59 @@ def test_routed_free_answer_reports_the_chip():
         on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
     )
     orch.run_turn(conv)
-    assert answered == [("b", True, True)]         # free && routed -> chip renders
+    assert answered == [("b", True, True)]         # free -> the disclaimer renders
+
+
+def test_a_free_model_the_user_PICKED_still_reports_free():
+    """The case the disclaimer was missing (owner decision 2026-08-12).
+
+    Choosing your local model is the ORDINARY way to get a free answer, and it
+    sets routed=False. While the chip required ``free && routed`` that turn showed
+    nothing at all — a cost disclosure hidden precisely when it was most certainly
+    true. ``free`` must be reported on its own; the frontend now renders on it."""
+    b = _Provider([_answer("free!")], local=True)
+    answered = []
+    orch, conv = _build(
+        {"b": b}, [_cand("b", "ollama", role=ModelRole.LOCAL, free=True, local=True)],
+        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+    )
+    orch.run_turn(conv, model_name="b")            # the user picked the local model
+    assert answered == [("b", True, False)]
+
+
+def test_a_paid_answer_never_reports_free():
+    """Free is a claim about cost, so it is only ever made where it is established
+    by construction. A cloud candidate carries free=False and must report it."""
+    a = _Provider([_answer("hi")])
+    answered = []
+    orch, conv = _build(
+        {"a": a}, [_cand("a", "anthropic")],
+        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+    )
+    orch.run_turn(conv)
+    assert answered == [("a", False, True)]
+
+
+def test_an_ollama_answer_on_the_unrouted_path_is_free_too():
+    """The single-provider path has no candidate to read ``free`` off, so it used to
+    report False unconditionally — a claim about cost, not the absence of one. It
+    now asks the one thing that is free BY CONSTRUCTION: an Ollama local."""
+    b = _Provider([_answer("free!")], local=True)
+    registry = ToolRegistry()
+    gate = PermissionGate()
+    answered = []
+    orch = Orchestrator(
+        model_router=ModelRouter(configured={}, local_models={"b": b}),
+        tool_registry=registry,
+        permission_gate=gate,
+        undo_manager=UndoManager(store=_FakeStore(), tool_registry=registry),
+        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        # routing_chain deliberately UNWIRED -> the single-provider path.
+    )
+    conv = Conversation(id="c")
+    conv.messages.append(Message(role="user", content="hi"))
+    orch.run_turn(conv, requested_role=ModelRole.LOCAL, model_name="b")
+    assert answered == [("b", True, False)]
 
 
 def test_explicit_pick_that_answered_is_not_routed():

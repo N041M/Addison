@@ -314,18 +314,23 @@ function renderThreadWith(answeredWith: AnsweredWith | undefined) {
 }
 
 describe("the free-model chip", () => {
-  it("renders the frozen copy when free && routed — byte-for-byte", () => {
+  it("renders the frozen copy when the answer was free — byte-for-byte", () => {
     renderThreadWith(answered({ free: true, routed: true }));
     expect(screen.getByText(CHIP)).toBeTruthy();
   });
 
-  it("does NOT render for the other three boolean combinations", () => {
-    for (const [free, routed] of [
-      [false, false],
-      [true, false],
-      [false, true],
-    ] as const) {
-      renderThreadWith(answered({ free, routed }));
+  it("renders for a free model the user PICKED — the case the note was missing", () => {
+    // Owner decision 2026-08-12. `routed` used to gate this, so the commonest way
+    // to get a free answer — choosing your local model — showed nothing at all
+    // (QA pass, 9 August). The note is about what the answer cost, not about who
+    // chose the model.
+    renderThreadWith(answered({ free: true, routed: false }));
+    expect(screen.getByText(CHIP)).toBeTruthy();
+  });
+
+  it("does NOT render when the answering model was not free, routed or not", () => {
+    for (const routed of [false, true] as const) {
+      renderThreadWith(answered({ free: false, routed }));
       expect(screen.queryByText(CHIP)).toBeNull();
       cleanup();
     }

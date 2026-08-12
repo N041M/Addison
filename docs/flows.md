@@ -636,7 +636,7 @@ sequenceDiagram
         Note over ORC: activity note "A rejected Addison's key — it may have been revoked.<br/>Add a new one in Settings." — and it REPLACES the "was busy" note,<br/>which would be a plain falsehood about a revoked key
     end
     Note over ORC: on_answered(model, label, free, routed) -> reply carries answeredWith
-    Note over ORC: chip "Answered with a free model." iff free AND routed<br/>(routed = the answering model was not the user's explicit pick)
+    Note over ORC: chip "Answered with a free model." iff free — known-free by construction<br/>(owner decision 2026-08-12. It also required routed until then, which hid the note<br/>in the commonest free case: the user PICKING their local model)
 ```
 
 ## 15. MCP tool call through the existing gate

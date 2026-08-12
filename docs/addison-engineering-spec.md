@@ -1124,8 +1124,11 @@ directory the user deliberately trusted.
 >   resolved **before** the Setup-Assistant relay branch, so no model call leaves
 >   the machine under it.
 > - **The free chip is Ollama-only.** `answeredWith` carries the resolved
->   per-attempt identity, and the "Answered with a free model." chip appears only
->   when `free && routed`. **No cloud model ever claims free** — Google's free tier
+>   per-attempt identity, and the "Answered with a free model." chip appears
+>   whenever `free` (owner decision 2026-08-12: the trigger is known-free BY
+>   CONSTRUCTION, so a free model the user PICKED discloses too — it also required
+>   `routed` until then, which hid the note in exactly that, the commonest, case).
+>   **No cloud model ever claims free** — Google's free tier
 >   is information shown to the user, never a routing flag.
 >
 > Step 4 additionally factored the pinned-request mechanism out of `read_web_page`
