@@ -453,7 +453,9 @@ class Orchestrator:
                 # Through the relay, not past it: this provider ignored on_delta, so
                 # the finished text is a SEGMENT like any other and needs the same
                 # break in front of it when the turn has already said something.
-                relay(response.text)
+                # (``or ""`` for the None a tool-call-only response carries — the
+                # relay drops empty text, so nothing is shown and no break is minted.)
+                relay(response.text or "")
             # A single-path answer is the model the caller picked, so it is not routed.
             self.on_answered(model_id, self._model_label(model_id), False, False)
             break
@@ -647,7 +649,9 @@ class Orchestrator:
                 # Through the relay, not past it: this provider ignored on_delta, so
                 # the finished text is a SEGMENT like any other and needs the same
                 # break in front of it when the turn has already said something.
-                relay(response.text)
+                # (``or ""`` for the None a tool-call-only response carries — the
+                # relay drops empty text, so nothing is shown and no break is minted.)
+                relay(response.text or "")
             answered = candidate
             break
         else:

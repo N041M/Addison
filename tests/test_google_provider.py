@@ -11,7 +11,13 @@ import json
 import httpx
 import pytest
 
-from agent_core.providers.base import Message, ProviderRequestRejected, ToolCallRequest
+from agent_core.providers.base import (
+    Message,
+    ProviderRequestRejected,
+    ToolCallRequest,
+    server_detail_of,
+    status_code_of,
+)
 from agent_core.providers.google_provider import GoogleProvider, list_models
 
 
@@ -422,8 +428,11 @@ def test_400_is_a_request_problem_not_a_rejected_key():
         "keeps happening pick a different model."
     )
     # The server's own words go to the log, never the screen; the key never moves.
-    assert excinfo.value.status_code == 400
-    assert "thought_signature" in (excinfo.value.server_detail or "")
+    # Read through the accessors — the attributes are stamped dynamically, and
+    # `status_code_of`/`server_detail_of` are the vocabulary the rest of the tree
+    # uses for exactly that reason.
+    assert status_code_of(excinfo.value) == 400
+    assert "thought_signature" in (server_detail_of(excinfo.value) or "")
     assert "sk-fine" not in message
 
 
