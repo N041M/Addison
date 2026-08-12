@@ -54,7 +54,7 @@ from agent_core.policy import PolicyMode, mode_for_profile
 from agent_core.profiles import Profile, ProfileId, resolve_active_profile
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
-from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.base import Message, ModelRole, technical_detail
 from agent_core.providers.google_provider import GoogleProvider
 from agent_core.providers.google_provider import list_models as google_list_models
 from agent_core.providers.ollama_provider import (
@@ -1094,9 +1094,14 @@ class JsonRpcServer(
         self._write_frame({"jsonrpc": "2.0", "id": request_id, "error": error})
 
     def _raw_detail(self, exc: BaseException) -> dict | None:
-        """Developer-profile raw diagnostics for an error frame: the repr of the
-        underlying exception, or None for Simple (which is unchanged). This adds
-        VISIBILITY only — it never changes control flow or the plain message (§8.7).
+        """Developer-profile raw diagnostics for an error frame, or None for Simple
+        (which is unchanged). This adds VISIBILITY only — it never changes control
+        flow or the plain message (§8.7).
+
+        WHAT IS IN IT is ``providers.base.technical_detail``'s to decide, and it owns
+        why: for a provider failure the fold carries the provider, the HTTP status
+        and the server's own sentence beside the repr; for everything else it is the
+        repr alone, exactly as before.
 
         ``BaseException``, not ``Exception``: ``LiveDatabaseBlocked`` is one
         (live_db_guard.py) and the two handlers that name it want a raw detail like
@@ -1104,7 +1109,7 @@ class JsonRpcServer(
         ``repr`` is defined on both."""
         profile = self._active_profile
         if profile is not None and profile.raw_diagnostics:
-            return {"raw": repr(exc)}
+            return {"raw": technical_detail(exc)}
         return None
 
     # --- Core -> Frontend notifications -----------------------------------

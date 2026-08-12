@@ -32,6 +32,7 @@ from agent_core.providers.base import (
     ProviderRequestRejected,
     ProviderUnavailable,
     ToolCallRequest,
+    note_candidate,
     server_detail_of,
     status_code_of,
 )
@@ -1023,7 +1024,17 @@ class Orchestrator:
         The MESSAGE is the plain sentence the person saw, so the row and the screen
         cannot tell different stories, and the status code rides alongside it —
         `str(exc)` says "Google is busy right now", `status_code` says 404, and only
-        together do they say the message was wrong."""
+        together do they say the message was wrong.
+
+        IT ALSO STAMPS THE EXCEPTION, before anything else and regardless of whether
+        a sink is wired. The row is history; the exception is on its way to the
+        person, and the Developer profile's "Technical details" fold has the same
+        need this row does — it can read the status and the server's sentence off the
+        exception already, and WHICH PROVIDER is the one fact that exists nowhere but
+        here (``note_candidate`` says why). Every failure path in the walk above
+        passes through this method, so stamping here covers all four rather than
+        four near-copies at the ``except`` clauses."""
+        note_candidate(exc, candidate.provider_id, candidate.model_id)
         if self._on_provider_attempt is None:
             return
         try:

@@ -26,6 +26,8 @@ from agent_core.providers.base import (
     ProviderUnavailable,
     effective_timeout,
     exception_for_http_status,
+    note_candidate,
+    technical_detail,
 )
 from agent_core.providers.anthropic_provider import AnthropicProvider
 from agent_core.providers.google_provider import GoogleProvider
@@ -322,3 +324,63 @@ def test_no_deadline_keeps_todays_one_retry():
     with pytest.raises(ProviderUnavailable):
         provider.send([Message(role="user", content="hi")], [])
     assert calls["n"] == 2  # the standalone-call freeze: attempt + one retry
+
+
+# --- the "Technical details" fold (KNOWN-BUGS P3 #12) -----------------------
+# The fold used to hold ``repr(exc)`` alone: the plain sentence a person had just
+# read, wrapped in a class name. It named no provider and no status, so a
+# misattributed 400 was indistinguishable from a genuinely rejected key.
+
+
+def test_technical_detail_carries_provider_status_and_the_servers_own_words():
+    exc = exception_for_http_status(
+        400, "Your key doesn't work.", "API key not valid. Please pass a valid API key."
+    )
+    note_candidate(exc, "google", "gemini-3-flash")
+    detail = technical_detail(exc)
+
+    assert "provider: google · gemini-3-flash" in detail
+    # THE NUMBER, on its own line — this is what makes the misattributed Gemini 400
+    # diagnosable without touching the mapping that misattributes it (KNOWN-BUGS #2).
+    assert "http status: 400" in detail
+    assert "provider said: API key not valid. Please pass a valid API key." in detail
+    # The exception is still there, last.
+    assert repr(exc) in detail
+
+
+def test_technical_detail_of_a_plain_error_is_exactly_the_repr():
+    # The freeze: every non-provider error's fold is byte-for-byte what it was.
+    assert technical_detail(RuntimeError("boom")) == "RuntimeError('boom')"
+
+
+def test_technical_detail_omits_what_it_does_not_know():
+    # A timeout reached no server, so there is no status to show — and inventing a
+    # 0 or a 500 for it would report a reply nobody sent (``status_code_of``).
+    exc = ProviderUnavailable("Anthropic isn't answering right now.")
+    note_candidate(exc, "anthropic", None)
+    detail = technical_detail(exc)
+    assert "provider: anthropic" in detail
+    assert " · " not in detail
+    assert "http status" not in detail
+    assert "provider said" not in detail
+
+
+def test_technical_detail_redacts_a_secret_the_server_echoed_back():
+    # The fold goes to the WEBVIEW, the one process that may never see a key (G1).
+    # A provider that echoes the credential it refused must not put it there.
+    exc = exception_for_http_status(
+        401, "That key doesn't work.", "invalid key: sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA"
+    )
+    note_candidate(exc, "anthropic", "claude-x")
+    detail = technical_detail(exc)
+    assert "sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA" not in detail
+    assert "[redacted:" in detail
+
+
+def test_note_candidate_changes_neither_the_type_nor_the_sentence():
+    # VISIBILITY ONLY (§8.7): the class the attempt loop branches on and the plain
+    # message the person reads are both untouched by the stamp.
+    exc = exception_for_http_status(429, "Google is busy right now.")
+    note_candidate(exc, "google", "gemini-3-flash")
+    assert isinstance(exc, ProviderUnavailable)
+    assert str(exc) == "Google is busy right now."

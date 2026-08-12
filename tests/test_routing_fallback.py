@@ -28,6 +28,7 @@ from agent_core.providers.base import (
     ToolCallRequest,
     Usage,
     exception_for_http_status,
+    technical_detail,
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.snapshots.undo_manager import UndoManager
@@ -395,6 +396,25 @@ def test_a_failure_that_never_reached_a_server_records_no_status():
     orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
 
     assert rows[0]["status_code"] is None
+
+
+def test_the_failure_that_reaches_the_person_names_the_provider_it_came_from():
+    """KNOWN-BUGS P3 #12. The status and the server's sentence ride on the exception
+    already; WHICH provider was being talked to exists nowhere but the walk, and the
+    Developer profile's "Technical details" fold is where it has to end up.
+
+    Stamped even with no attempt sink wired — the log is history, the exception is on
+    its way to a person, and the second must not depend on the first."""
+    exc = exception_for_http_status(400, "That key doesn't work.", "API key not valid.")
+    orch, conv = _build({"a": _Provider([exc])}, [_cand("a", "pa")])
+    with pytest.raises(ProviderRequestRejected) as raised:
+        orch.run_turn(conv)
+
+    assert technical_detail(raised.value).splitlines()[:3] == [
+        "provider: pa \u00b7 a",
+        "http status: 400",
+        "provider said: API key not valid.",
+    ]
 
 
 def test_a_throwing_attempt_sink_never_breaks_the_turn():

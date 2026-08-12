@@ -1481,6 +1481,9 @@ export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
 //   * an edit whose `onDiskChanged` is not literally `true` or `false` is `null` —
 //     "Addison can't tell" — because collapsing an unknown into `false` is the one
 //     wrong reading that lets a revert discard somebody's own work with no warning.
+//   * ...and `replacedBy` fails the OTHER way, which is not an inconsistency: an
+//     unreadable value there means "nothing was swapped", because the core refuses a
+//     swapped file regardless, and guessing a swap would hide a Revert that works.
 //   * a shape we cannot read at all becomes an error sentence, never an empty
 //     listing: a file tree that renders "nothing here" for a folder full of files
 //     is a lie in exactly the place this surface exists to tell the truth.
@@ -1584,6 +1587,15 @@ function parseEdit(item: unknown): WorkspaceEdit | null {
     onDiskChanged:
       row.onDiskChanged === true ? true : row.onDiskChanged === false ? false : null,
     missing: row.missing === true,
+    // Only the two values this side has a sentence for. Anything else — including a
+    // kind a later build invents — reads as `null`, which is the OPEN direction here
+    // and deliberately so: the core refuses a swapped file whatever this says, so an
+    // unreadable value costs a person one refused press, while inventing a swap for
+    // an ordinary edit would remove a Revert that works.
+    replacedBy:
+      row.replacedBy === "shortcut" || row.replacedBy === "other-file"
+        ? row.replacedBy
+        : null,
   };
 }
 
