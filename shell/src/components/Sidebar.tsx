@@ -26,6 +26,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary, View } from "../types/ui";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
+import { formatRowTime, isSameDay } from "../lib/time";
 
 interface Props {
   conversations: ConversationSummary[];
@@ -523,24 +524,6 @@ function bucketConversations(conversations: ConversationSummary[]): {
   return { today, earlier };
 }
 
-// HH:MM today · the weekday within the last week · a short date beyond that ·
-// nothing at all when there is no usable timestamp.
-function formatRowTime(startedAt: number, now: Date = new Date()): string {
-  if (!startedAt) return "";
-  const d = new Date(startedAt * 1000);
-  if (Number.isNaN(d.getTime())) return "";
-  if (isSameDay(d, now)) {
-    return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  }
-  const days = (now.getTime() - d.getTime()) / 86_400_000;
-  if (days >= 0 && days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-}
-
-function isSameDay(a: Date, b: Date): boolean {
-  return (
-    a.getFullYear() === b.getFullYear() &&
-    a.getMonth() === b.getMonth() &&
-    a.getDate() === b.getDate()
-  );
-}
+// The row time and the day comparison behind it live in `lib/time.ts` — the Code
+// screen's Changes list renders the same fact in the same shape, and one format
+// with two homes would become two formats.
