@@ -1,11 +1,11 @@
-# Handoff: Addison UI Redesign ("Fern") — HISTORY, NOT CURRENT GUIDANCE
+# Handoff: Addison UI Redesign ("Fern"): HISTORY, NOT CURRENT GUIDANCE
 
-> # ⛔ SUPERSEDED (2026-07-26) — do not implement from this file.
+> # ⛔ SUPERSEDED (2026-07-26). Do not implement from this file.
 >
 > The Fern direction (v3) shipped and was then **replaced in full** by the dark
 > "correspondence-instrument" direction (v4). **`docs/design-brief-dark/` is
-> authoritative** — its `README.md` + `prototype.html` are the designer's reference,
-> `IMPLEMENTATION.md` is the binding prototype→app mapping — together with the UI
+> authoritative**; its `README.md` + `prototype.html` are the designer's reference,
+> `IMPLEMENTATION.md` is the binding prototype→app mapping, together with the UI
 > bullet in `CLAUDE.md` and the tokens in `shell/tailwind.config.js`. This bundle is
 > kept in the tree **only** so the decision trail stays auditable.
 >
@@ -13,12 +13,12 @@
 > every one of these was retired: the warm paper palette and the fern-green accent
 > (now near-black `#0C0C0D` paper with one violet `#B4A9F5` accent); the three
 > bundled OFL fonts and the Source Serif "correspondence" voice (now **system
-> stacks only** — there is no `@font-face` in the app and no serif token); the
+> stacks only**, there is no `@font-face` in the app and no serif token); the
 > blocky-vs-rounded shape rule with its cards and pills (now hairline rows, a 2px
 > accent left rail for selection, and bordered panels reserved for floating chrome);
 > the settings *drawer* framing (now in-window surfaces that replace the chat
 > column); the pine first-run banner; and the **service-bell logo** chosen as
-> "concept B" below — the mark is now the lowercase-`a` tile with the lavender dot.
+> "concept B" below; the mark is now the lowercase-`a` tile with the lavender dot.
 > The layout/IA and accessibility rules those directions all shared are unchanged
 > and live in design-doc §7.1, not here.
 
@@ -26,20 +26,20 @@
 Complete redesign of the Addison desktop app (repo: `N041M/Addison`, Tauri + React + Tailwind in `shell/`). Replaces the current cool-slate single-window chat with a warm, calm three-column layout: conversation sidebar, correspondence-style chat, and a user-owned widget rail. Adds an in-window settings page, multi-provider API keys, dark mode, a first-run setup banner, and a service-bell logo.
 
 ## About the Design Files
-The `.dc.html` files in this bundle are **design references created in HTML** — interactive prototypes showing intended look and behavior, NOT production code to copy. Open them in a browser (keep `support.js` beside them; they fetch Google Fonts, so go online). The task is to **recreate these designs inside the existing codebase** (`shell/src`, React + Tailwind + Tauri), using its established patterns: the typed `ipc` client, the existing notification subscriptions, the permission/undo wiring. Do not change the safety model (permission gate, undo-at-registration, key isolation, no-arbitrary-shell).
+The `.dc.html` files in this bundle are **design references created in HTML**, interactive prototypes showing intended look and behavior, NOT production code to copy. Open them in a browser (keep `support.js` beside them; they fetch Google Fonts, so go online). The task is to **recreate these designs inside the existing codebase** (`shell/src`, React + Tailwind + Tauri), using its established patterns: the typed `ipc` client, the existing notification subscriptions, the permission/undo wiring. Do not change the safety model (permission gate, undo-at-registration, key isolation, no-arbitrary-shell).
 
-- `Addison App.dc.html` — **the primary reference.** Interactive: sidebar Settings ↔ chat routing, widget-rail hide/show, widget tray expand, light/dark toggle (Settings → Appearance).
-- `Addison Brand Book.dc.html` — tokens, type, shape rules, component specs, implementation order.
-- `Addison Logo.dc.html` — logo sheet; **concept B (service bell) is chosen.**
-- `Addison Redesign Directions.dc.html` — exploration history (context only; the app file wins on conflicts).
-- `Addison Mobile.dc.html` — mobile companion reference (four phone screens; needs `ios-frame.jsx` beside it). Mobile moves: widget rail → bottom sheet behind the bell button, consent cards inline in the thread, sidebar → slide-over drawer, settings one flowing column, hit targets ≥44px, 63px safe-area top padding for the status bar/island.
+- `Addison App.dc.html`: **the primary reference.** Interactive: sidebar Settings ↔ chat routing, widget-rail hide/show, widget tray expand, light/dark toggle (Settings → Appearance).
+- `Addison Brand Book.dc.html`: tokens, type, shape rules, component specs, implementation order.
+- `Addison Logo.dc.html`: logo sheet; **concept B (service bell) is chosen.**
+- `Addison Redesign Directions.dc.html`: exploration history (context only; the app file wins on conflicts).
+- `Addison Mobile.dc.html`: mobile companion reference (four phone screens; needs `ios-frame.jsx` beside it). Mobile moves: widget rail → bottom sheet behind the bell button, consent cards inline in the thread, sidebar → slide-over drawer, settings one flowing column, hit targets ≥44px, 63px safe-area top padding for the status bar/island.
 
 ## Fidelity
 **High-fidelity.** Colors, type, spacing, radii, and copy are final; recreate pixel-perfectly with Tailwind against the token set below. The widget contents (token counts, latency) are sample data.
 
 ## Design Tokens
 
-### Color — light
+### Color: light
 | token | hex | use |
 |---|---|---|
 | paper | `#F6F5F1` | app background |
@@ -59,14 +59,14 @@ The `.dc.html` files in this bundle are **design references created in HTML** �
 | pine | `#1E2B25` | setup banner bg (only high-contrast block) |
 | danger | `#8F3A44` | errors (unchanged from current app) |
 
-### Color — dark (`darkMode: "class"`)
+### Color: dark (`darkMode: "class"`)
 paper `#171D1A` · side `#131815` · surface `#1F2723` · line `#2E3A33` · hair `#243029` · ink `#E7EBE7` · ink-soft `#C3CDC6` · muted `#92A099` · dim `#6F7D75` · fern `#7FB59A` · fern-text `#A9CBB9` · on-accent `#14201A` (dark text on light-fern buttons) · tint `#223229` · rule `#33493D` · dash `#3B4A41`. Same hues, inverted values; primary buttons flip to dark-on-light-fern.
 
 ### Typography
-- **Source Serif 4** (500 display / 400 text) — message text 17px/1.7; greetings 32px; settings/section display. This serif = the "correspondence" feel.
-- **Public Sans** — all UI. Body 15px/1.55, controls 13–13.5px/500–600, small-caps section labels 10.5px/600, uppercase, letter-spacing .09–.11em.
-- **IBM Plex Mono** — machine facts only (token counts, latency, model tags, diagnostics), 10–12px.
-- **CSP note:** don't hotlink Google Fonts — bundle woff2 files in `shell/src/assets/fonts/` with `@font-face` (all three are OFL). Keep system-stack fallbacks.
+- **Source Serif 4** (500 display / 400 text): message text 17px/1.7; greetings 32px; settings/section display. This serif = the "correspondence" feel.
+- **Public Sans**: all UI. Body 15px/1.55, controls 13–13.5px/500–600, small-caps section labels 10.5px/600, uppercase, letter-spacing .09–.11em.
+- **IBM Plex Mono**: machine facts only (token counts, latency, model tags, diagnostics), 10–12px.
+- **CSP note:** don't hotlink Google Fonts; bundle woff2 files in `shell/src/assets/fonts/` with `@font-face` (all three are OFL). Keep system-stack fallbacks.
 
 ### Shape ("blocky = live annotation, rounded = ownable/actionable")
 - Blocky (square, 2px left rules, small-caps labels): "Addison's work" list, active sidebar item indicator, section labels. The rule spans **only its list**, never the whole column.
@@ -89,7 +89,7 @@ paper `#171D1A` · side `#131815` · surface `#1F2723` · line `#2E3A33` · hair
 - Header: "YOUR WIDGETS" small-caps + "Edit" text button.
 - Widget cards (`surface`, 1px `line`, 10px radius, 11px 13px padding): routine row (name + fern-tint pill "Run"), token meter (small-caps title + mono value + 5px progress bar, fern on `hair`), connections list (6px status dots: fern = up, dash-gray = idle; mono right-aligned values).
 - Overflow tray: stacked-edge tab (two offset 8px strips peeking above a full row button "4 more widgets ▾"); expanding reveals extra rows inline, label flips to "Show fewer ▴". Pinned state (⬤/◯) per widget in expanded view.
-- "＋ Ask Addison to build a widget" — dashed border (dash token), 10px radius, muted text; widgets are support scripts Addison writes in chat and the user pins.
+- "＋ Ask Addison to build a widget", dashed border (dash token), 10px radius, muted text; widgets are support scripts Addison writes in chat and the user pins.
 - **"Addison's work"** block below widgets: 2px `rule` left border + 14px padding-left wrapping ONLY the small-caps label, dot list (filled fern dot = done, 1.5px outlined = in progress, 12.5px ink-soft text), and underlined "Save these steps as a routine" link. Ends where the list ends.
 - **Consent card** below the work block, outside the rule: fern-tint bg, 10px radius, question 12.5px/600 ("Allow Addison to save "Weather note.txt" in Documents?"), consequence line 11.5px ("One new file. You can undo it afterwards."), pill "Allow" (fern, white text) + "Not now" text button. When the rail is hidden, render it inline in the thread instead.
 
@@ -110,7 +110,7 @@ Pine banner in the chat column: small-caps "FIRST-TIME SETUP · STEP 1 OF 2" (#8
 - All existing behaviors keep their wiring: streamed text into pending message, Stop, Retry, Rewind-to-here, permission respond, undo/redo detail lines, routine propose/confirm, local-model setup progress bar (restyle: 5px fern bar on `hair`).
 
 ## State Management
-Existing App state stays. New: `screen` ("chat"|"settings"), `railOpen`, `trayOpen`, `pinnedWidgets[]`, `theme` ("light"|"dark"), `conversations[]` + `activeConversationId` (needs a conversations table in the SQLite schema — currently single-thread). Widgets are declarative JSON `{id, title, valueSource, action?}`; Addison proposes them like routines (gated, saved only on confirm); token/latency widgets need a new `stats.get` IPC method.
+Existing App state stays. New: `screen` ("chat"|"settings"), `railOpen`, `trayOpen`, `pinnedWidgets[]`, `theme` ("light"|"dark"), `conversations[]` + `activeConversationId` (needs a conversations table in the SQLite schema, currently single-thread). Widgets are declarative JSON `{id, title, valueSource, action?}`; Addison proposes them like routines (gated, saved only on confirm); token/latency widgets need a new `stats.get` IPC method.
 
 ## Assets
 - Logo: service bell, inline SVG (3 shapes), in `Addison Logo.dc.html` and the app sidebar. Monochrome only: fern on light, `#E9EDE9` on pine/dark. Use for favicon/tray at 16px.
@@ -118,7 +118,7 @@ Existing App state stays. New: `screen` ("chat"|"settings"), `railOpen`, `trayOp
 - No raster assets.
 
 ## Suggested order of work
-1. Tailwind tokens + bundled fonts (pure config — whole app reskins)
+1. Tailwind tokens + bundled fonts (pure config, whole app reskins)
 2. Settings page (moves drawer content in-window; add API-keys card)
 3. Three-column shell + sidebar (needs conversations schema)
 4. Rail: Addison's-work list + consent card (rewire ActivityPanel/PermissionCard feeds)
@@ -127,8 +127,8 @@ Existing App state stays. New: `screen` ("chat"|"settings"), `railOpen`, `trayOp
 7. First-run pine banner + bell favicon
 
 ## Files
-- `Addison App.dc.html` — primary interactive reference (chat, rail, settings, themes)
-- `Addison Brand Book.dc.html` — tokens & rules (its "Implementation" section maps component-by-component to `shell/src`)
-- `Addison Logo.dc.html` — logo sheet (B chosen)
-- `Addison Redesign Directions.dc.html` — exploration history (first-run 5a, dark 5c, tray 9a)
-- `support.js` — runtime the HTML references; needed only to open the files, not for implementation
+- `Addison App.dc.html`: primary interactive reference (chat, rail, settings, themes)
+- `Addison Brand Book.dc.html`: tokens & rules (its "Implementation" section maps component-by-component to `shell/src`)
+- `Addison Logo.dc.html`: logo sheet (B chosen)
+- `Addison Redesign Directions.dc.html`: exploration history (first-run 5a, dark 5c, tray 9a)
+- `support.js`: runtime the HTML references; needed only to open the files, not for implementation

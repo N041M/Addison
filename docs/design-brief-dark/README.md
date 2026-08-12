@@ -1,7 +1,7 @@
-# Handoff: Addison — desktop app redesign
+# Handoff: Addison, desktop app redesign
 
 > **How to read this file (added 2026-07-26).** This is the **designer's handoff,
-> reproduced as delivered** — it is the authoritative reference for colours, type,
+> reproduced as delivered**. It is the authoritative reference for colours, type,
 > spacing, copy and motion, and it is deliberately not edited to match the app. The
 > binding prototype→app mapping lives beside it in **`IMPLEMENTATION.md`**, and
 > where the two differ on anything other than visual intent, `IMPLEMENTATION.md`
@@ -10,7 +10,7 @@
 > - **"dark theme only" describes the designed reference, not the shipped app.**
 >   Dark is the reference; light is a derived translation with the same structure,
 >   and the theme stays class-driven three-way (light / dark / system, default
->   **system**). The light values are contrast-bound rather than translated by eye —
+>   **system**). The light values are contrast-bound rather than translated by eye;
 >   see the note under `IMPLEMENTATION.md`'s token table.
 > - **All content here is demo data.** The sample chats, connections and restore
 >   points are the prototype's; the app renders real state and never ships a control
@@ -28,9 +28,9 @@
 A redesign of Addison, a local-first AI assistant desktop app (macOS). Core ideas: calm, text-first dark UI; everything reversible ("everything can be undone"); a left sidebar of chats, a center chat column, a right rail of ambient widgets, and full-page surfaces (Settings, Tools, Snapshots, Build-a-widget) that replace the chat column. Signature motion: a character-scramble text animation and small fade/rise transitions.
 
 ## About the Design Files
-The files in this bundle are **design references created in HTML** — a working prototype showing intended look and behavior, not production code to copy directly. Recreate this design in the target codebase's existing environment (Electron/React, Swift/AppKit, etc.) using its established patterns. If no environment exists yet, choose the stack that fits a macOS-style desktop app and implement the design there.
+The files in this bundle are **design references created in HTML**, a working prototype showing intended look and behavior, not production code to copy directly. Recreate this design in the target codebase's existing environment (Electron/React, Swift/AppKit, etc.) using its established patterns. If no environment exists yet, choose the stack that fits a macOS-style desktop app and implement the design there.
 
-- `Addison Prototype v2.dc.html` — the full prototype (open in a browser; `support.js` must sit next to it). All layout/styling is inline in the markup; all behavior is in the `<script data-dc-script>` class at the bottom.
+- `Addison Prototype v2.dc.html`: the full prototype (open in a browser; `support.js` must sit next to it). All layout/styling is inline in the markup; all behavior is in the `<script data-dc-script>` class at the bottom.
 
 ## Fidelity
 **High-fidelity.** Colors, type, spacing, copy, and motion are final intent. Recreate pixel-perfectly; where the real app already has equivalents (e.g. native menus), match the prototype's styling.
@@ -59,10 +59,10 @@ Other:
 
 ## Screens / Views
 
-### 1. Chat — empty state
-Centered greeting stack: time-of-day greeting (26px, `#E9E9E7`, scramble-in), subline "Ask anything, or hand me a chore. Everything can be undone." (14px `#909398`), and 3 purple suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the weekend") that fill the composer. A faint dotted "starfield" (few 1px radial-gradient dots, some purple) sits behind. **[NOT SHIPPED — owner decision 2026-07-26: with five dots it read as dust rather than a field, and two landed within 20px of the type. See IMPLEMENTATION.md.]** Sublines fade-rise in staggered (.6s ease, delays .6s/.9s).
+### 1. Chat: empty state
+Centered greeting stack: time-of-day greeting (26px, `#E9E9E7`, scramble-in), subline "Ask anything, or hand me a chore. Everything can be undone." (14px `#909398`), and 3 purple suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the weekend") that fill the composer. A faint dotted "starfield" (few 1px radial-gradient dots, some purple) sits behind. **[NOT SHIPPED. Owner decision 2026-07-26: with five dots it read as dust rather than a field, and two landed within 20px of the type. See IMPLEMENTATION.md.]** Sublines fade-rise in staggered (.6s ease, delays .6s/.9s).
 
-### 2. Chat — thread
+### 2. Chat: thread
 Single centered column (max 580px), messages stacked with 32px gap, vertical fade mask top/bottom. Each message: tiny label ("You" `#55575C` / "Addison" `#E9E9E7`, 11px/500) + body (15.5px; user `#B9BBBE`, assistant `#E9E9E7`, `white-space: pre-wrap`). While replying, a 7×14px blinking block cursor follows the text.
 
 ### 3. Composer (chat only)
@@ -71,16 +71,16 @@ Bottom of center column: borderless textarea (15px) over a 1px top border that b
 ### 4. Left sidebar (212px, collapsible)
 "＋ New chat" (purple, 12px); chat list grouped **Today / Earlier**. Group header row: label (11px `#6E7076`) + mono hint (count, or "collapse"); click toggles. Collapsed groups show 3 rows + "N more…" row. Chat rows: 12px, title ellipsized + mono timestamp; active row = purple 2px left rail + `#E9E9E7`. Footer pinned to bottom: "Settings" row (same rail treatment when active) + mono profile note "Simple profile · local". Sidebar collapses via header « chevron (width/opacity/translate animate .35s).
 
-### 5. Right rail — widgets (232px, collapsible, chat view only)
+### 5. Right rail: widgets (232px, collapsible, chat view only)
 "Addison's work" step list during a task (5px dots; current step blinks, done steps dim). Widget cards separated by hairlines; footer row "Build a widget" (`#55575C`) opens the widget surface. Rail hides entirely on surface views; header » chevron toggles it in chat.
 
 ### 6. Header
 56px-ish bar, 1px bottom border. Left: back arrow ← (surfaces only, returns to chat) OR sidebar chevron (chat only) + view title (scrambles on change). Right: "Undo last action" (purple) + rail chevron (chat only).
 
 ### 7. Surfaces (Settings / Tools / Snapshots / Build a widget)
-Replace the chat column (centered, max 580px, scrollable, fade-masked). Pattern: 20px title, 13px `#909398` description, then sections: label with 2px `#2E2F33` left rail, rows separated by 1px `#1E1F22` top borders. Row anatomy: name (12px `#B9BBBE`) — spacer — mono value (10.5px `#909398`) — purple action link.
+Replace the chat column (centered, max 580px, scrollable, fade-masked). Pattern: 20px title, 13px `#909398` description, then sections: label with 2px `#2E2F33` left rail, rows separated by 1px `#1E1F22` top borders. Row anatomy: name (12px `#B9BBBE`), then spacer, then mono value (10.5px `#909398`), then purple action link.
 
-**Settings sections** (in order): Where Addison thinks (Cloud default ✓ / On this computer "not set up yet" / Cloud model + "change" → model popup); Which model answers (Quality first / Cost first / Local only / Custom order — single-select, "selected ✓"); API keys (Anthropic/OpenAI/Google add–remove, Your own server "OpenAI-compatible · http://…" connect); Run a model on this computer (Light and quick 2 GB/8 GB, Balanced 4.7 GB/16 GB, Most capable 9 GB/32 GB — "set up" → "ready ✓"); Routines (empty state); Skills (empty state, "add a skill"); Profile (Simple ↔ Developer switch, Appearance cycles Light/Dark/Match this computer, "What Addison calls you"); Folders Addison may work in ("choose a folder…"); Restore points (opens Restore points modal); Diagnostics ("nothing to show yet").
+**Settings sections** (in order): Where Addison thinks (Cloud default ✓ / On this computer "not set up yet" / Cloud model + "change" → model popup); Which model answers (Quality first / Cost first / Local only / Custom order, single-select, "selected ✓"); API keys (Anthropic/OpenAI/Google add–remove, Your own server "OpenAI-compatible · http://…" connect); Run a model on this computer (Light and quick 2 GB/8 GB, Balanced 4.7 GB/16 GB, Most capable 9 GB/32 GB, "set up" → "ready ✓"); Routines (empty state); Skills (empty state, "add a skill"); Profile (Simple ↔ Developer switch, Appearance cycles Light/Dark/Match this computer, "What Addison calls you"); Folders Addison may work in ("choose a folder…"); Restore points (opens Restore points modal); Diagnostics ("nothing to show yet").
 
 Sidebar footer note mirrors profile: "{Simple|Developer} profile · local".
 
@@ -123,8 +123,8 @@ Full-screen scrim `rgba(0,0,0,.55)` (fade .2s); centered 440px panel (bg `#14151
 - A `motion: boolean` flag disables all animation (accessibility; also respect `prefers-reduced-motion`)
 
 ## Assets
-None — no images or icon fonts. Arrows/chevrons are text glyphs (←, «, », ＋, ↑, ✕, ✓, ·). The empty-state starfield is a few radial-gradient dots. **[NOT SHIPPED — see line 63 and IMPLEMENTATION.md; removed 2026-07-26.]**
+None: no images or icon fonts. Arrows/chevrons are text glyphs (←, «, », ＋, ↑, ✕, ✓, ·). The empty-state starfield is a few radial-gradient dots. **[NOT SHIPPED: see line 63 and IMPLEMENTATION.md; removed 2026-07-26.]**
 
 ## Files
-- `Addison Prototype v2.dc.html` — complete prototype: markup + inline styles in `<x-dc>`, behavior in the `Component` class (scramble engine ~line 358, send/streaming ~line 404, view/collapse transitions ~line 280–335, all screen content in `renderVals()`).
-- `support.js` — prototype runtime only (renders the file in a browser); not part of the design. One copy, at the root of this directory. `brand/` used to carry a byte-identical second copy; that was deleted 2026-07-26 and the three `brand/*.dc.html` files now load `../support.js`.
+- `Addison Prototype v2.dc.html`: complete prototype: markup + inline styles in `<x-dc>`, behavior in the `Component` class (scramble engine ~line 358, send/streaming ~line 404, view/collapse transitions ~line 280–335, all screen content in `renderVals()`).
+- `support.js`: prototype runtime only (renders the file in a browser); not part of the design. One copy, at the root of this directory. `brand/` used to carry a byte-identical second copy; that was deleted 2026-07-26 and the three `brand/*.dc.html` files now load `../support.js`.

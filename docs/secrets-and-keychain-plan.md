@@ -1,23 +1,23 @@
-# Secrets and the keychain — the plan
+# Secrets and the keychain: the plan
 
 **Status: steps 1 and 2 BUILT (2026-08-06), and step 4's §5.2 + §5.3 with them;
 steps 3 and 5 PROPOSED.** Drafted
 2026-07-31 as a ground-up vault redesign; **revised the same day to a repair-first
 plan** after a six-lens adversarial review (60 findings), two live spikes, and two
 verifications that undercut the rewrite's own justification. §15 records what
-changed and why. Owner decisions: §14 — **decision 6 is now answered, and its
+changed and why. Owner decisions: §14; **decision 6 is now answered, and its
 answer voids §4.2's honest limit** (see there). ROADMAP owns scheduling.
 
 **What is built** (per §13's order, and each section says so in place): §4.1
 presence in `provider_config.secret_presence`, three-way, with the relay rule in one
 function; §4.2 delete-then-add on every credential write, plus self-heal for provider
 keys; §5.4 idempotent writes; **§5.2 a rejected key marks the provider** and **§5.3
-normalisation at the store boundary** (both 2026-08-06 — §14 decision 3 is answered,
+normalisation at the store boundary** (both 2026-08-06; §14 decision 3 is answered,
 and the answer is IN). **What is not**: §4.3 `Intent` and the background-caller
 re-arm, §5.1 reconciliation, §5.6 the read counter, §6 the cards.
 
-**The recommendation in one line: repair the existing integration — the three
-changes in §4 kill every measured symptom — and keep the encrypted vault as a
+**The recommendation in one line: repair the existing integration (the three
+changes in §4 kill every measured symptom), and keep the encrypted vault as a
 documented destination with named triggers, not as the next step.**
 
 ---
@@ -26,57 +26,57 @@ documented destination with named triggers, not as the next step.**
 
 Owner, 2026-07-31:
 
-- **R1 — plain "Allow" must be enough.** One press works for the session; no
+- **R1: plain "Allow" must be enough.** One press works for the session; no
   second popup, even where *Always Allow* would also have solved it.
-- **R2 — "Always Allow" must work**, across launches *and rebuilds*.
-- **R3 — at most ONE popup per app start.**
+- **R2: "Always Allow" must work**, across launches *and rebuilds*.
+- **R3: at most ONE popup per app start.**
 
 Derived, from this repo's standards:
 
-- **R4 — zero popups in the steady state.** One is the ceiling, not the target.
-- **R5 — a dialog, when one must appear, is explained first and anchored to a
-  deliberate act**; a declined dialog leaves the app in a state that says so —
+- **R4: zero popups in the steady state.** One is the ceiling, not the target.
+- **R5: a dialog, when one must appear, is explained first and anchored to a
+  deliberate act**; a declined dialog leaves the app in a state that says so,
   never the 74 seconds of silent keylessness the 07-31 trace caught.
-- **R6 — every floor holds.** G1 (keys never in the webview or SQLite, read at
+- **R6: every floor holds.** G1 (keys never in the webview or SQLite, read at
   the moment of use), G3's spirit (nothing resurrects a deleted key), the
   module-boundary rule, the three-process trust gradient.
 
 **Scope honesty, up front: popups are not 1:1 with OS accesses.** The 07-31
 trace showed one `SecKeychainFindGenericPassword` blocking until *two* dialogs
-were answered — macOS's ACL + partition sequence against a foreign item. No
+were answered: macOS's ACL + partition sequence against a foreign item. No
 app-side design can promise a popup count the OS attaches to a single access.
 What is guaranteeable is **at most one promptable OS access per session per
 item, and zero for items the app owns**. R1/R3 therefore hold absolutely in the
 app's normal life and degrade to one explained sequence in the foreign-item
-edges — which §4.2's self-heal actively converges back to zero.
+edges, which §4.2's self-heal actively converges back to zero.
 
 ## 2. What the current system taught
 
-`keychain.rs` is 1,101 lines (438 code, 663 comment — and those comments are a
+`keychain.rs` is 1,101 lines (438 code, 663 comment, and those comments are a
 ledger of bugs already paid for), 6 statics, 40 tests, plus nine core-side
 probe/getter symbols and a 342-line failure-mode test file.
 
 1. **The root cause of every popup was identity, not access.** macOS keys an
    item's ACL to the requesting app's code signature; the ad-hoc dev binary
    changed identity every rebuild. Mitigated 07-31 by `sign-and-run.sh`.
-2. **One access can raise two dialogs** — ACL + partition, live-traced. Caching
+2. **One access can raise two dialogs**: ACL + partition, live-traced. Caching
    cannot fix a count the OS attaches to one access.
 3. **Presence was asked of the secret store.** A "connected" dot polled the OS
    every 60 s per provider; that one decision generated `KEY_CACHE`,
    `FAILED_READS`, the never-cache-`nothing-saved` rule, and three probe
    variants. **This is the single largest source of the integration's size.**
 4. **The three-way outcome is sacred.** *Found* / *nothing saved* /
-   *unreadable* must never collapse — collapsing is what silently routed a
+   *unreadable* must never collapse; collapsing is what silently routed a
    message to the external relay (07-25).
 5. **A dismissed dialog must not cost the session silently.**
 6. **Dialogs must be serialized and re-checked under the lock.**
 7. **Orphaned items resurrect** (`provider-key:primary`).
-8. **A trace with hard no-secret rules is worth its weight** — it stays, and
+8. **A trace with hard no-secret rules is worth its weight**: it stays, and
    §5.6 promotes part of it into a shipped diagnostic.
-9. **`keyring` hid what mattered** *at diagnosis time* — no attributes-only
+9. **`keyring` hid what mattered** *at diagnosis time*: no attributes-only
    query, no ACL control, and it silently chose the legacy SecKeychain API.
    (§4.4 keeps it anyway, on measured terms.)
-10. **(Spike 1, 07-31 — SUPERSEDED 2026-08-06, kept as the measurement it was.)**
+10. **(Spike 1, 07-31, SUPERSEDED 2026-08-06, kept as the measurement it was.)**
     It read: under a self-signed identity, creator trust does not survive a rebuild.
     An item created by an "Addison Dev"-signed binary read back silently from that
     binary (29 ms) and **prompted from a rebuilt binary signed with the same
@@ -102,7 +102,7 @@ verifications on 2026-07-31 undercut its own case:
   keys are NEVER stored here. This table only holds non-secret connection
   metadata."* The vault's manifest was invented to answer a question the schema
   already answers.
-- **`keyring` already covers four platforms** — its backends are `macos.rs`,
+- **`keyring` already covers four platforms**: its backends are `macos.rs`,
   `ios.rs`, `windows.rs`, `secret_service.rs`, `keyutils.rs`. Only **Android**
   is missing. The "you only need a store-one-master-key primitive per OS"
   portability argument was overstated.
@@ -111,14 +111,14 @@ Mapping symptoms to causes settles it:
 
 | Symptom | Cause | Fix | Needs a vault? |
 |---|---|---|---|
-| Two dialogs per read | foreign item | stable signing | no — shipped |
+| Two dialogs per read | foreign item | stable signing | no (shipped) |
 | Dialogs return after each rebuild | foreign item | signing + **self-heal** (§4.2) | no |
 | 8 OS reads in 20 ms, forever, on a 60 s timer | presence asked of the OS | **presence in `provider_config`** (§4.1) | no |
 | 1,500 lines, 9 symbols, 6 statics | consequence of the above | the above | no |
 
 Not one measured problem requires an encrypted file. The vault remains the
-better *destination* — §10 keeps it, with the triggers that would justify the
-trip — but going now would spend weeks and discard 663 lines of hard-won
+better *destination* (§10 keeps it, with the triggers that would justify the
+trip), but going now would spend weeks and discard 663 lines of hard-won
 annotations to buy advantages that mostly matter inside a window self-heal
 closes, while adding failure modes (corrupt envelope, torn write, stale backup,
 joint loss) that do not exist today.
@@ -132,7 +132,7 @@ then adds an envelope, a file layer, and a migration.
 ### 4.1 Presence leaves the keychain
 
 **BUILT 2026-08-06.** As built it is a NEW column, `provider_config.secret_presence`,
-not `connected` — the two answer different questions and collapsing them would have
+not `connected`; the two answer different questions and collapsing them would have
 made a saved-but-rejected key indistinguishable from no key. `connected` still means
 "did `provider.connect`'s validating request pass". Written by `provider.connect` and
 by the per-turn `_primary_key_status`, which keeps its fresh keychain read because it
@@ -151,7 +151,7 @@ never-cache-`nothing-saved` rule, the 60-second OS poll, and three of the nine
 core probes (68 references in `keychain.rs`, plus most of its 40 tests, exist to
 make OS-polling survivable).
 
-**Presence stays three-way** (lesson 4) — `present | absent | unknown` —
+**Presence stays three-way** (lesson 4), `present | absent | unknown`,
 because two things can make it unanswerable: the store read fails, or
 reconciliation (§5.1) finds the row and the keychain disagreeing. `unknown` must
 **never** read as "no key": that is the 07-25 relay-routing bug, and the router
@@ -160,17 +160,17 @@ may reach the Setup Assistant relay only on `absent`, never on `unknown`.
 **Snapshot caveat, stated because it is real:** `provider_config` *is*
 snapshot-captured (`snapshots/scope.py`), so restoring an old snapshot can
 resurrect a stale `connected = 1` for a provider whose key was since deleted.
-That resurrects a **flag, never a key** — G3's letter holds — and §5.1
+That resurrects a **flag, never a key** (G3's letter holds), and §5.1
 reconciles it away promptlessly at the next launch. The alternative (excluding
 the column) would make a restored config claim *fewer* connections than exist,
 which is the worse lie.
 
 ### 4.2 Self-heal: repair a foreign item by re-creating it
 
-**BUILT 2026-08-06**, for provider keys only — see the scope note at the end of this
+**BUILT 2026-08-06**, for provider keys only; see the scope note at the end of this
 section, which is a deliberate departure from what it used to say.
 
-A keychain item's ACL — the list of apps that may read it without asking — is
+A keychain item's ACL (the list of apps that may read it without asking) is
 minted **at creation**, with the creating app on it. That is why creating never
 prompts, reading your own item never prompts, and reading someone else's always
 does. An item goes *foreign* when a previous build made it, when a keychain is
@@ -178,10 +178,10 @@ restored to a new Mac, or when the signing identity rotates.
 
 You cannot repair an ACL by writing to the item. You can by **deleting it and
 adding it back**. So: after any successful read of a foreign item, immediately
-delete and re-create it with the same bytes — both operations promptless for the
+delete and re-create it with the same bytes; both operations promptless for the
 item we now own. "One dialog every session, forever" becomes "one dialog, once."
 
-**Corollary — the trap.** `security-framework`'s `set_password_internal` does:
+**Corollary: the trap.** `security-framework`'s `set_password_internal` does:
 
 ```rust
 let status = SecItemAdd(...);
@@ -198,8 +198,8 @@ provider keys and the device-identity item alike", and that was the wrong call. 
 provider key can be pasted again from the vendor's website; the device identity's
 private half can be recovered by nobody (§7). Self-heal IS a delete-then-add, i.e.
 the one operation here that can lose data, so it does not get pointed at the single
-irreplaceable secret on the strength of a shared implementation. The cost — the
-device item stays foreign after an identity rotation, one dialog per session — and
+irreplaceable secret on the strength of a shared implementation. The cost (the
+device item stays foreign after an identity rotation, one dialog per session) and
 what a future pass would have to add are written up in
 [KNOWN-GAPS.md](KNOWN-GAPS.md).
 
@@ -209,7 +209,7 @@ fallback**.
 
 The fact: every write goes through `write_credential_with`, so the app knows when
 IT minted an item, and records that in the **mint ledger**. A ledger entry
-*vetoes* a heal — an item this build minted is not foreign, whatever the stopwatch
+*vetoes* a heal: an item this build minted is not foreign, whatever the stopwatch
 says.
 
 The fallback, for an item with no record: a foreign item ALWAYS prompts, and a
@@ -222,7 +222,7 @@ machine; a cold first read or a slower machine moves it)*; the threshold is 400 
 **Why the clock was demoted.** It is a threshold calibrated on one machine, and
 what it gates is the one operation here that can lose a key. On 2026-08-06 the
 owner's machine produced repeated re-creations of the same item under rebuild
-churn — a legitimate app-owned read crossing 400 ms because the app was
+churn: a legitimate app-owned read crossing 400 ms because the app was
 relaunching while the tree was being recompiled. The heuristic's reasoning was
 never wrong; it is simply not something to point at a credential when a fact is
 available.
@@ -233,7 +233,7 @@ read*. The two ways to be wrong are not equal: a stale record costs ONE extra
 session with a dialog and then converges, while trusting the clock over the record
 can cost the key. The recoverable mistake is the one to make.
 
-**~~Honest limit~~ — VOID as of 2026-08-06.** This section used to say: *"spike 1
+**~~Honest limit~~: VOID as of 2026-08-06.** This section used to say: *"spike 1
 showed that under the self-signed dev cert even an app-created item prompts after a
 rebuild, so on dev builds self-heal resets the clock to the next rebuild rather than
 'once ever'."* That is **no longer true**, and the reason is that spike 1 measured a
@@ -264,10 +264,10 @@ instead of inferable from a docstring. Core-side, nine symbols become three:
 `secret_presence(provider) -> present|absent|unknown`,
 `get_secret(provider, *, intent)`, and `relay_signing()`. `_primary_key_status`
 (the ninth, missed by the first draft) maps: `ready` = present, `missing` =
-absent, `unreadable` = unknown **or** a send-time Locked/Unavailable —
+absent, `unreadable` = unknown **or** a send-time Locked/Unavailable;
 `rpc/conversation.py` keeps its refusal branch byte-for-byte.
 
-**Caller inventory** — the reason `Intent` earns a place rather than being a
+**Caller inventory**, the reason `Intent` earns a place rather than being a
 source-level rule:
 
 | Call site | Needs | Intent |
@@ -283,17 +283,17 @@ The two Background consumers were missed by the first draft and are a real
 blocker: both **re-arm on the first successful read** (the shell notifies the
 core), and the reconnect one-shot latch is set only after a sweep that actually
 ran with a readable store. Until then the fallback catalog serves and providers
-show as saved-but-idle — never a dialog from a poll.
+show as saved-but-idle, never a dialog from a poll.
 
 ### 4.4 What stays, deliberately
 
-`keyring` **stays** — but on measured terms, not by default. Lesson 9's missing
+`keyring` **stays**, but on measured terms, not by default. Lesson 9's missing
 knobs were *diagnosis-time* needs and the diagnosis is done; at runtime it does
 read/write/delete correctly on four platforms. Two things get added beside it in
 `keychain.rs`, because the crate cannot express them:
 
 - an **attributes-only presence probe** (`ItemSearchOptions` with
-  `load_attributes(true)`, `load_data(false)`) — verified live to raise **no
+  `load_attributes(true)`, `load_data(false)`), verified live to raise **no
   dialog**, and the mechanism §5.1 runs on;
 - **delete-then-add writes** (§4.2), bypassing the duplicate→update fallback.
 
@@ -301,20 +301,20 @@ Also unchanged: the three-way outcome on every wire, the OS lock and its
 double-checked re-read, per-call key delivery with nothing retained core-side,
 the webview's write-only surface, and the trace.
 
-## 5. New — things this thread had not considered
+## 5. New: things this thread had not considered
 
 Each is small; each closes something real that the vault plan also missed.
 
 ### 5.1 Promptless reconciliation at launch
 
 Attributes-only queries never prompt (verified). So at every launch, compare
-`provider_config.connected` against what the keychain actually holds — **zero
-dialogs, a few milliseconds** — and surface disagreement *before* the person
+`provider_config.connected` against what the keychain actually holds (**zero
+dialogs, a few milliseconds**), and surface disagreement *before* the person
 sends a message:
 
 - row says connected, item absent → the key was deleted outside Addison
   (Keychain Access, a restored config snapshot, §4.1). Mark `unknown`, show
-  "Addison can't find your saved key for X — add it again."
+  "Addison can't find your saved key for X. Add it again."
 - row says absent, item present → an orphan from a failed delete (lesson 7).
   Offer to clean it up; never read it.
 
@@ -334,9 +334,9 @@ the whole subsystem, and no part of the original thread had looked at it. (The
 draft named the exception `ProviderAuthError`; it is and always was
 `ProviderAuthFailed`.)
 
-On a **definitive** auth failure — 401/403, never a 429, never a 5xx, never a
-network error or a timeout — the provider is marked needs-attention, one plain line
-is surfaced ("X rejected Addison's key — it may have been revoked. Add a new one in
+On a **definitive** auth failure (401/403, never a 429, never a 5xx, never a
+network error or a timeout), the provider is marked needs-attention, one plain line
+is surfaced ("X rejected Addison's key. It may have been revoked. Add a new one in
 Settings."), and routing degrades to another connected provider exactly as it does
 for an unavailable one. Idempotent: repeated 401s do not re-notify.
 
@@ -346,25 +346,25 @@ for an unavailable one. Idempotent: repeated 401s do not re-notify.
   seconds, NULL = not rejected). NOT `last_check_ok`, which this section used to
   point at: it answers "did the last CONNECT PING pass", every write of `0` to it is
   paired with `connected = 0`, so a reader cannot tell "never connected" from
-  "connected, then revoked" — the only state that earns the sentence — and it has
+  "connected, then revoked" (the only state that earns the sentence), and it has
   nowhere to record that the person has been told. NOT `connected`, which gates the
   reconnect path. And **never** `secret_presence`: a rejected key is `present` and
   rejected, and writing `absent` would make `may_reach_setup_relay` true and hand
-  the next message to the external relay while the key sits in the keychain — the
+  the next message to the external relay while the key sits in the keychain: the
   07-25 bug through a new door. `data-model.md` owns the column.
 - **A narrow exception type carries the distinction.** `ProviderKeyRejected`
   subclasses `ProviderAuthFailed` and is returned by `exception_for_http_status` for
   401/403 only. The parent is also raised locally for a missing or malformed key,
   which is no evidence about a SAVED key; only the subclass marks anything. Every
   existing `except ProviderAuthFailed` still catches both, so nothing else moved.
-- **The walk.** `ProviderKeyRejected` now advances the chain and cools the provider
-  — the same two lines `ProviderUnavailable` runs, not a second mechanism. The old
-  "auth never walks" rule reasoned that the next provider gets the same bad key;
-  that is true of a MISSING key and false of a rejected one, and plain
+- **The walk.** `ProviderKeyRejected` now advances the chain and cools the
+  provider, the same two lines `ProviderUnavailable` runs, not a second mechanism.
+  The old "auth never walks" rule reasoned that the next provider gets the same bad
+  key; that is true of a MISSING key and false of a rejected one, and plain
   `ProviderAuthFailed` still fails the turn immediately.
 - **Told once, decided at the store.** `Store.record_key_rejected` returns True only
   the first time; the orchestrator says the sentence only on True. Cleared by
-  `provider.connect` succeeding — and by that branch alone, since the failing
+  `provider.connect` succeeding, and by that branch alone, since the failing
   branches write the config row too and a failed connect is no evidence the revoked
   key was replaced.
 - **The note channel is the routing one**, beside the fallback note, and it
@@ -378,16 +378,16 @@ the column is core-side state plus one chat-side line, not yet a wire field.
 
 **BUILT 2026-08-06**, in `keychain.rs` (`normalised_key`).
 
-`SettingsPage.tsx` does `key.trim()` — but only there, and `.trim()` is the
+`SettingsPage.tsx` does `key.trim()`, but only there, and `.trim()` is the
 frontend's courtesy, not a contract. The Rust store path took the string as-is, so
 any other route (or one frontend regression) could persist a key with a trailing
-newline — the classic paste bug that produces an auth failure indistinguishable from
+newline: the classic paste bug that produces an auth failure indistinguishable from
 a wrong key.
 
 Normalised **where it is stored**: surrounding whitespace is stripped; an embedded
 line break, any other control character, and the zero-width marks a styled copy
 carries along are REFUSED, each with its own plain sentence ("That key has a line
-break in it — paste it again as one line."). Refusing beats silently mangling — a
+break in it. Paste it again as one line."). Refusing beats silently mangling: a
 key Addison quietly altered is a key that fails mysteriously later. A value that is
 empty after the strip is refused too, because an empty item reads back as the empty
 string, which is how this subsystem says "nothing saved", and that is the one answer
@@ -396,7 +396,7 @@ that may reach the relay.
 Two composition points, both load-bearing:
 
 - it runs **before** `save_would_change_nothing` (§5.4), or a re-paste with a
-  trailing newline reads as a change and needlessly re-mints the item — the one
+  trailing newline reads as a change and needlessly re-mints the item, the one
   operation here that can lose a key. A source-level test pins the order;
 - the refusal has to **reach the person**. A Tauri command returning `Err(String)`
   rejects with the bare string and the Settings row only re-shows `err.message`, so
@@ -404,9 +404,9 @@ Two composition points, both load-bearing:
   how to fix the paste was replaced by the generic "check the key and try again".
 
 G1 holds absolutely: the three sentences are constants, and no branch logs, traces
-or embeds the value, its length or its prefix — only the SHAPE of the problem.
+or embeds the value, its length or its prefix, only the SHAPE of the problem.
 
-### 5.4 Idempotent writes — don't churn the ACL
+### 5.4 Idempotent writes: don't churn the ACL
 
 **BUILT 2026-08-06.** Since every write is now delete-then-add (§4.2), a naive
 "Save" on an unchanged value would needlessly destroy and re-mint an item.
@@ -418,14 +418,14 @@ Two conditions were added while building it, because §5.4 as written cancels §
 The short-circuit ALSO requires that the item is not foreign, and that the provider
 is not on the repair-lost list. Without the first, a person re-saving the same key
 onto an item this build cannot read without a dialog would be short-circuited out of
-the very repair they need — pressing Save forever with nothing happening, which is
+the very repair they need, pressing Save forever with nothing happening, which is
 the original reported symptom. Without the second, a Save after a torn write would
 compare against the session cache and skip writing to a keychain that holds nothing.
 
-### 5.5 Decline backoff — never a dialog the person did not ask for
+### 5.5 Decline backoff: never a dialog the person did not ask for
 
 A decline is remembered for the session (today's `FAILED_READS` behaviour,
-preserved) — but the retry signal must be an explicit act, not any incidental
+preserved), but the retry signal must be an explicit act, not any incidental
 UserAction. A person who declines and then types is not asking again. Retry is
 offered by the click-anchored card (§6), never re-raised by a keystroke, a poll,
 or a re-render.
@@ -433,7 +433,7 @@ or a re-render.
 ### 5.6 Ship the diagnostic that found this bug
 
 `ADDISON_KEYCHAIN_TRACE` is dev-only and it is what cracked the original
-mystery. Promote the *count* — not the trace — into Settings → diagnostics:
+mystery. Promote the *count* (not the trace) into Settings → diagnostics:
 **"Keychain reads this session: N"**. In the healthy steady state that reads 0
 or 1 forever; anything else is the regression, visible without a terminal, from
 a user's screenshot. The full trace stays behind the env var with its no-secret
@@ -447,64 +447,64 @@ rules (variant words only, never a value, a length, or a prefix).
   frames; a dropped keychain response logs a message, not a payload). But once
   the value reaches Python it is a `str`: **Python cannot zeroize**, so a key
   lingers in that process's heap until GC. The shell zeroizes; the core cannot.
-  Mitigation is lifetime, not erasure — fetch at the moment of use, hold in a
+  Mitigation is lifetime, not erasure: fetch at the moment of use, hold in a
   local, never log. State it in SAFETY.md rather than implying the whole path is
   scrubbed.
-- **A locked login keychain still prompts** — the one case even an app-owned
+- **A locked login keychain still prompts**: the one case even an app-owned
   item raises a dialog. Yours is `no-timeout` (checked), so it does not arise
   here, but it belongs in the failure matrix instead of being discovered later.
 
 ## 6. Dialog policy
 
 - **Launch: zero promptable OS touches.** Presence is a SQLite read;
-  reconciliation (§5.1) is attributes-only. The test asserts exactly that —
+  reconciliation (§5.1) is attributes-only. The test asserts exactly that:
   *zero promptable* touches, with attrs-only probes permitted and counted.
 - **The promptable read is click-anchored.** When a read will plausibly prompt
   (foreign item, prior decline, or the shell detects itself ad-hoc signed), the
   UI shows an explained card and **its button performs the read**. A password
   sheet never lands on top of a person's first message with a 600 s budget
-  behind it — the worst timing for personas 54 and 68.
-- **Steady state:** zero dialogs, with an Apple-issued identity AND — since
-  2026-08-06 — with the self-signed dev cert, once `sign-and-run.sh` has named the
+  behind it: the worst timing for personas 54 and 68.
+- **Steady state:** zero dialogs, with an Apple-issued identity AND (since
+  2026-08-06) with the self-signed dev cert, once `sign-and-run.sh` has named the
   designated requirement explicitly (§4.2, §14.6). `sign-and-run.sh` still fails
   open, so the shell should detect its own signing state and say plainly *"Always
-  Allow won't stick on this build"* when it is genuinely ad-hoc — that is now the
+  Allow won't stick on this build"* when it is genuinely ad-hoc; that is now the
   UNSIGNED case only, not every dev build.
 - **Declined:** remembered for the session; a persistent, non-dismissible row in
   the Settings provider card plus a chat notice, carried to the webview on the
   existing `provider.list`/`stats.get` responses (no new event channel).
   Background callers resolve instantly. Retry only from the card (§5.5).
-- **Timeout:** a timed-out read leaves state **unchanged** — nobody declined,
+- **Timeout:** a timed-out read leaves state **unchanged**: nobody declined,
   nothing failed. The parked OS read keeps waiting; a late *Allow* is **banked
   into the session** so the next message just works. Callers get "macOS is still
-  asking for your password — answer that window first", never Declined. A retry
+  asking for your password. Answer that window first", never Declined. A retry
   **attaches to the pending read**; a second access is never issued while one is
   parked.
 
-**Copy table** — one user-facing noun throughout: *"your computer's keychain"*
+**Copy table**: one user-facing noun throughout: *"your computer's keychain"*
 (the shipped strings' wording).
 
 | State | Chat turn | Settings row |
 |---|---|---|
-| Declined | "Your Mac didn't let Addison read your saved key, so this message wasn't sent. Try again to let it ask once more." | "Can't reach your saved key — try again" |
-| Still waiting | "macOS is still asking for your password — answer that window first." | same |
+| Declined | "Your Mac didn't let Addison read your saved key, so this message wasn't sent. Try again to let it ask once more." | "Can't reach your saved key, try again" |
+| Still waiting | "macOS is still asking for your password. Answer that window first." | same |
 | Unavailable | "Addison couldn't reach your computer's keychain. Locking and unlocking your Mac usually fixes this." (raw OS text → trace only) | same |
 | Absent | key card | "No key saved" |
-| Unknown (§5.1) | "Addison can't find your saved key for X — add it again in Settings." | needs-attention row |
-| Rejected (§5.2) | "X rejected Addison's key — it may have been revoked. Add a new one in Settings." | needs-attention row |
+| Unknown (§5.1) | "Addison can't find your saved key for X. Add it again in Settings." | needs-attention row |
+| Rejected (§5.2) | "X rejected Addison's key. It may have been revoked. Add a new one in Settings." | needs-attention row |
 
 ## 7. The device identity stays its own item
 
 **It is the one secret nobody can re-type.** Provider keys came from a website
 and can be re-obtained; the device identity is generated by Addison, never
 shown, and used to sign Setup Assistant relay requests so the relay recognises
-the machine. Lose it and there is nothing to restore from — and the app cannot
+the machine. Lose it and there is nothing to restore from, and the app cannot
 even tell: it would mint a fresh one and the relay would see a brand-new device.
 
 Today's code already refuses that (`keychain.rs::from_stored`: *"Errors (rather
 than regenerating) on a missing or corrupt blob, so a load never silently
 rotates the device's identity"*). It keeps its own item, gets §4.2's self-heal,
-and is never folded in with the provider keys — which is also why the vault's
+and is never folded in with the provider keys, which is also why the vault's
 joint-loss trade (§10) would only ever cover re-typeable secrets.
 
 ## 8. Failure matrix
@@ -535,15 +535,15 @@ safely.
 
 | Platform | Store | Dialogs | Attrs-only presence | Self-heal |
 |---|---|---|---|---|
-| **macOS** | login keychain | 0 (Apple ID **and**, since 2026-08-06, the signed dev cert — §4.2) | `SecItem*`, verified | needed, **built for provider keys**; device identity deferred |
-| **Windows** | Credential Manager (DPAPI-backed) | **0 — no credential-ACL prompt mechanism exists** | `CredEnumerate` metadata | not needed (no ACL) |
+| **macOS** | login keychain | 0 (Apple ID **and**, since 2026-08-06, the signed dev cert, §4.2) | `SecItem*`, verified | needed, **built for provider keys**; device identity deferred |
+| **Windows** | Credential Manager (DPAPI-backed) | **0 (no credential-ACL prompt mechanism exists)** | `CredEnumerate` metadata | not needed (no ACL) |
 | **Linux** | Secret Service | 0 with a login-unlocked collection; ≤1 collection unlock/session | attribute search without secret | not needed |
-| **iOS** | data-protection keychain, app-scoped by entitlement | **0 — the mechanism does not exist** | same crate | not needed |
-| **Android** | **gap** — keyring has no backend | n/a | n/a | n/a |
+| **iOS** | data-protection keychain, app-scoped by entitlement | **0 (the mechanism does not exist)** | same crate | not needed |
+| **Android** | **gap**, keyring has no backend | n/a | n/a | n/a |
 
 Notes worth carrying: Windows DPAPI is user-scoped, so any process running as
 the user can unwrap it (the infostealer class; Chrome's app-bound fix needs a
-SYSTEM service, out of scope for a no-service desktop app) — and there is no
+SYSTEM service, out of scope for a no-service desktop app), and there is no
 seatbelt equivalent yet, so step 5.5's "a sandboxed command gets ciphertext
 only" property is macOS-only. **Android is the one platform that needs new work
 either way**, and it is the platform where the vault shape genuinely wins (§10):
@@ -552,11 +552,11 @@ small Kotlin plugin. iOS and Android both need Tauri mobile targets the product
 has not adopted; a path provider replacing the hardcoded `~/.addison` is the
 shared prerequisite.
 
-## 10. The vault — kept as a destination, with triggers
+## 10. The vault: kept as a destination, with triggers
 
 The encrypted-file design (one app-created master item; secrets in
 `secrets.vault`; a manifest for presence) is the right end state. **Its detailed
-specification is NOT preserved** — the draft lived only in this file, which was
+specification is NOT preserved**: the draft lived only in this file, which was
 renamed and rewritten while untracked, so nothing in git holds it. Rebuilding it
 means re-deriving the module layout, envelope format and migration state
 machine. What must NOT be re-derived is the scrutiny that hardened it, so the
@@ -566,9 +566,9 @@ design work.
 What it buys that §4 does not:
 
 - **one unlock for a multi-provider turn** (a fallback chain reads two keys);
-- **a free slot for every future secret** — step 7's MCP server tokens grow the
+- **a free slot for every future secret**: step 7's MCP server tokens grow the
   item count, and therefore the *foreign*-item exposure, one per server;
-- **one sequence, not N, at Phase-3 identity rotation** — when the dev cert
+- **one sequence, not N, at Phase-3 identity rotation**: when the dev cert
   becomes a Developer ID every item goes foreign at once (self-heal spreads the
   cost across first-use rather than a burst, but N items is N sequences);
 - **Android**, where a wrapped non-exportable master key is the natural shape.
@@ -586,7 +586,7 @@ that read as fine on the page. They are not implied by the idea; a fresh draft
 will contain them again unless it is checked against this list.
 
 1. **Mint the master keychain item BEFORE writing the vault file.** The reverse
-   order leaves — on interruption — a vault sealed under a key that existed only
+   order leaves, on interruption, a vault sealed under a key that existed only
    in memory, which makes `migration_needed` permanently false while every real
    key still sits in legacy items. Detection must therefore be
    `any_legacy_exists() ∧ migration != Done`, evaluated *regardless* of whether
@@ -594,7 +594,7 @@ will contain them again unless it is checked against this list.
    otherwise be invisible forever).
 2. **Migration reads must be all-or-nothing.** One declined item mid-batch,
    followed by writing the vault anyway, silently converts "saved but unread"
-   into "nothing saved" — lesson 4's collapse, through a new door.
+   into "nothing saved": lesson 4's collapse, through a new door.
 3. **While migration is Pending, deleting a secret must delete its legacy
    counterpart too**, or a deliberately deleted key is resurrected by a later
    re-migration. This is the 07-25 fix; a rewrite drops it by omission.
@@ -604,24 +604,24 @@ will contain them again unless it is checked against this list.
    random **lineage id** so a backup from a pre-re-mint vault reports "older
    vault" rather than "tampered".
 5. **Presence read from an unauthenticated manifest must stay three-way.** A
-   corrupt or tampered manifest answering "no key" is the relay-misroute again —
+   corrupt or tampered manifest answering "no key" is the relay-misroute again;
    see §4.1's `unknown` rule, which is the same defence in the repair plan.
 6. **Every mutation holds one lock across read-decrypt-modify-seal-write.** Two
    rapid stores are otherwise a silent read-modify-write race that loses a key.
 7. **Zeroize the whole decrypted map, not just the master key and the returned
-   value** — opening the envelope materialises every secret, so reading one key
+   value**: opening the envelope materialises every secret, so reading one key
    leaves plaintext copies of the others in freed heap.
-8. **Keep the device identity out of it** (§7) — the reasoning is identical and
+8. **Keep the device identity out of it** (§7); the reasoning is identical and
    already applies to the repair plan.
 
 ## 11. Explored and rejected
 
-- **Move HTTPS into the shell** so a key never crosses into Python at all — the
+- **Move HTTPS into the shell** so a key never crosses into Python at all, the
   strongest possible G1 upgrade (it would close §5.7's zeroization gap
   outright). Rejected: the orchestrator is provider-agnostic by design and owns
   retries, streaming, tool-call translation and routing; moving HTTP to Rust
   means re-implementing four provider translators **in the highest-trust
-  process** — a far larger attack surface there, to defend against an attacker
+  process**: a far larger attack surface there, to defend against an attacker
   who already has the core. Revisit only if the core's trust level changes.
 - **Touch ID / `LAContext` gating.** Adds a prompt to a project whose goal is
   removing them. Reject for v1; a plausible opt-in "extra protection" setting
@@ -632,7 +632,7 @@ will contain them again unless it is checked against this list.
   (§10), reached by another name.
 - **Never storing keys (ask each session).** Hostile to personas 54 and 68.
 - **A "forget everything" panic action** (delete all items + clear config).
-  Genuinely cheap and arguably a butler-appropriate affordance — not rejected,
+  Genuinely cheap and arguably a butler-appropriate affordance; not rejected,
   deferred as its own small product decision rather than smuggled in here.
 
 ## 12. Tests
@@ -641,7 +641,7 @@ BUILT with steps 1–2 (2026-08-06): `presence_is_answered_without_touching_the_
 `unknown_presence_never_reads_as_no_key`,
 `a_foreign_item_is_re_created_after_a_successful_read`,
 `a_write_is_never_an_update_in_place`,
-`an_unchanged_save_does_not_re_create_the_item` — plus, unplanned and earned during
+`an_unchanged_save_does_not_re_create_the_item`, plus, unplanned and earned during
 the build: `a_write_is_never_reported_successful_without_reading_it_back`,
 `a_write_that_cannot_delete_leaves_the_old_key_exactly_where_it_was`,
 `a_lost_repair_is_never_reported_as_nothing_saved`,
@@ -650,7 +650,7 @@ the build: `a_write_is_never_reported_successful_without_reading_it_back`,
 `the_legacy_migration_deletes_only_against_a_verified_copy`) for the wiring no
 in-process test can reach without an OS keychain. **Note the counting fakes:** a
 probe that RAISES is swallowed by the `except Exception` every honest presence caller
-wraps it in, so the OS-touch assertion must COUNT, not raise — a raising version of
+wraps it in, so the OS-touch assertion must COUNT, not raise: a raising version of
 `presence_is_answered_without_touching_the_os` survived its own mutation.
 
 BUILT with §5.2/§5.3 (2026-08-06): `a_401_marks_the_provider_and_a_429_does_not`,
@@ -680,7 +680,7 @@ fake, full RPC boot, 100× polls; attrs-only permitted and counted),
 `a_timed_out_read_neither_declines_nor_double_reads`,
 `a_restored_snapshot_never_resurrects_a_key_only_a_flag`.
 
-Kept and re-pointed rather than rewritten — **the repair plan's biggest
+Kept and re-pointed rather than rewritten, **the repair plan's biggest
 advantage over the rewrite**: `tests/test_keychain_read_failures.py` (342 lines
 of relay-privacy assertions) and `tests/test_shell_bridge.py` survive with their
 properties intact, because the wire methods and the three-way seam do not
@@ -708,26 +708,26 @@ Each step lands green and is independently useful:
    2026-08-06**, provider keys only (§4.2).
 3. **`Intent`** + the unlock re-arm for the two Background consumers (§4.3).
 4. **Reconciliation, 401 handling, key normalisation, the read counter**
-   (§5.1–5.3, §5.6) — product-facing, independent of each other. **401 handling
+   (§5.1–5.3, §5.6): product-facing, independent of each other. **401 handling
    (§5.2) and normalisation (§5.3) BUILT 2026-08-06**; §5.1 and §5.6 remain.
 5. **Cards + copy table + ad-hoc detection** (§6); docs sweep (§12).
 
 ## 14. Owner decisions
 
-1. **Repair vs replace** — this plan recommends repair (§3); the vault stays
+1. **Repair vs replace**: this plan recommends repair (§3); the vault stays
    documented with triggers (§10).
 2. **The `provider_config` snapshot caveat** (§4.1): reconcile-and-correct as
    planned, or exclude the presence column? Plan says reconcile.
-3. ~~**A 401 marking a provider needs-attention** (§5.2)~~ **ANSWERED 2026-08-06 —
+3. ~~**A 401 marking a provider needs-attention** (§5.2)~~ **ANSWERED 2026-08-06:
    IN.** ONE definitive auth failure marks it; not N consecutive, because a 401 is
    unambiguous in a way a 429 or a 500 is not. Built as described in §5.2, including
    the routing change it implies (a rejected key now walks the chain).
-4. **The shipped read counter** (§5.6) — Settings diagnostics line, or keep the
+4. **The shipped read counter** (§5.6): Settings diagnostics line, or keep the
    trace dev-only?
 5. **Phase 3**: Apple-issued identity (the only thing that makes R4 absolute),
    data-protection keychain (precondition measured, spike 2), Secure Enclave for
-   the device identity (P-256 — a relay-contract change).
-6. ~~**A one-click experiment only you can run:**~~ **ANSWERED 2026-08-06 — no
+   the device identity (P-256, a relay-contract change).
+6. ~~**A one-click experiment only you can run:**~~ **ANSWERED 2026-08-06: no
    dialog.** Always Allow, a genuine recompile through `npm run tauri dev`, relaunch:
    the ACL still matched, because the explicit designated requirement makes the
    rebuilt binary present the same identity. The dev floor is **once-ever**, not
@@ -742,7 +742,7 @@ device-identity carve-out (the review's top regret-risk); the self-heal
 mechanism and the update-in-place trap; timeout semantics; decline retry;
 `_primary_key_status`; the test and doc ledgers; the copy table; the
 click-anchored card. Findings that applied only to the vault's envelope,
-migration state machine and backup lifecycle went with it to §10 — resolved in
+migration state machine and backup lifecycle went with it to §10, resolved in
 the shelved design, not lost.
 
 **Spikes (07-31).** Spike 1 falsified the rewrite's central claim for
@@ -754,6 +754,6 @@ self-signed builds; spike 2 measured the data-protection precondition
 denies `mach-lookup`, so a sandboxed command cannot reach `securityd`; keychain
 responses never reach the webview; `provider_config` already exists as a
 non-secret presence home; keyring already covers four platforms. The last two
-verifications on that list — *a 401 currently changes nothing* and *the key is
-trimmed only in the frontend* — were both true when measured and are **no longer
+verifications on that list (*a 401 currently changes nothing* and *the key is
+trimmed only in the frontend*) were both true when measured and are **no longer
 true**: §5.2 and §5.3 closed them on 2026-08-06.

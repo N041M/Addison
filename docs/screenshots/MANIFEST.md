@@ -1,4 +1,4 @@
-# Screenshots — generated, not hand-taken
+# Screenshots: generated, not hand-taken
 
 **Regenerate with one command. Do not edit these by hand.**
 
@@ -13,7 +13,7 @@ Source: [`shell/scripts/capture-screenshots.mjs`](../../shell/scripts/capture-sc
 |---|---|---|
 | `hero.png` | The three-column shell, the first-run block, a composed message. Dark. | `8768cab` |
 | `hero-light.png` | The same, light theme. | `8768cab` |
-| `settings.png` | Settings — providers, keys, local models. Dark. | `8768cab` |
+| `settings.png` | Settings (providers, keys, local models). Dark. | `8768cab` |
 
 **These three are STALE as of 2026-08-07 and the retake trigger below has fired.**
 Many commits have touched `shell/src` since `8768cab`: Settings gained a **Tool
@@ -24,7 +24,7 @@ shipped surfaces. Regenerate with the command above and bump the commit column.
 
 ## Why these are generated
 
-Images are the **only** documentation this repo's drift tests cannot check — a
+Images are the **only** documentation this repo's drift tests cannot check. A
 stale PNG is invisible to CI, and the UI has been redesigned wholesale three times
 (cool-slate → terminal → Fern → dark v4 is four directions, so three replacements). Generating them makes "is this current?"
 answerable by re-running one command instead of by eye.
@@ -38,7 +38,7 @@ the restore-point list. Those need `npm run tauri dev` and a real key.
 
 One piece of stagecraft, declared: without a core the composer placeholder reads
 *"Addison's engine isn't connected yet."* The script types a real message into it
-— what a user would do — rather than hiding the line.
+(what a user would do) rather than hiding the line.
 
 ## When to retake
 
