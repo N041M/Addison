@@ -87,6 +87,16 @@ _STEP_NOT_RUN = (
     "This step was not run: the turn reached its limit on how many steps it may take."
 )
 
+# What goes BETWEEN two things Addison says in one turn. A turn that calls a tool
+# says something before the call and something after it, and each arrives as its
+# own run of deltas; the frontend appends them into one message, so with nothing
+# in between the reader got "…the current state of the add function.Now I'll add a
+# docstring". They are separate utterances, and a blank line is how prose says so —
+# it is also the only separator markdown reads as a paragraph break, which a single
+# space is not. Inserted only BETWEEN segments and never inside one, so no fence,
+# list or code block can be cut by it.
+_SEGMENT_BREAK = "\n\n"
+
 # --- graceful fallback + cooldown (step 3, contract D4) ---------------------
 # Module constants, not settings — the model must not be able to shrink the
 # rollback/fallback safety window. Read through the module namespace inside
@@ -206,12 +216,23 @@ class _DeltaRelay:
     Empty deltas are dropped rather than counted — a provider that emits a
     zero-length chunk has shown the reader nothing, and treating it as "shown"
     would suppress the finished text and lose the answer entirely.
+
+    It is also the ONE place that knows where one thing Addison says ends and the
+    next begins: a send boundary. Deltas within a send are the same sentence
+    arriving in pieces and are relayed byte-for-byte; the first delta of a LATER
+    send in the same turn is a new utterance, so ``_SEGMENT_BREAK`` goes in front
+    of it (see the constant). Nothing is ever stripped or rewritten — the break is
+    added, and only between segments.
     """
 
     def __init__(self, sink) -> None:
         self._sink = sink
         self.shown_this_send = False
         self.shown_this_turn = False
+        # Trailing newlines of what has been shown, so a segment that already ended
+        # on a blank line does not get a second one. Only newlines are counted: any
+        # other character means the break is needed in full.
+        self._trailing_newlines = 0
 
     def begin_send(self) -> None:
         self.shown_this_send = False
@@ -219,8 +240,19 @@ class _DeltaRelay:
     def __call__(self, text: str) -> None:
         if not text:
             return
+        # First output of a send, with something already on screen from an earlier
+        # one: separate them. Top-up only — a segment ending "…\n" needs one more
+        # newline, one ending "…\n\n" needs none.
+        if not self.shown_this_send and self.shown_this_turn:
+            missing = len(_SEGMENT_BREAK) - min(self._trailing_newlines, len(_SEGMENT_BREAK))
+            text = "\n" * missing + text
         self.shown_this_send = True
         self.shown_this_turn = True
+        body = text.rstrip("\n")
+        tail = len(text) - len(body)
+        # A chunk that is nothing but newlines EXTENDS the run; anything else
+        # restarts the count from its own tail.
+        self._trailing_newlines = tail if body else self._trailing_newlines + tail
         self._sink(text)
 
 
@@ -417,7 +449,10 @@ class Orchestrator:
             # Already relayed as it arrived, unless this provider ignored on_delta —
             # then the finished text is the reader's only copy of the answer.
             if not relay.shown_this_send:
-                self.stream_to_frontend(response.text)
+                # Through the relay, not past it: this provider ignored on_delta, so
+                # the finished text is a SEGMENT like any other and needs the same
+                # break in front of it when the turn has already said something.
+                relay(response.text)
             # A single-path answer is the model the caller picked, so it is not routed.
             self.on_answered(model_id, self._model_label(model_id), False, False)
             break
@@ -426,7 +461,7 @@ class Orchestrator:
             # transcript ending on tool results with nothing said to the person.
             budget_spent = True
         if budget_spent:
-            self._finish_over_budget(conversation)
+            self._finish_over_budget(conversation, relay)
 
     # --- routed path with graceful fallback + cooldown (D4) -----------------
     def _run_with_fallback(
@@ -608,14 +643,17 @@ class Orchestrator:
             conversation.append_assistant_message(response.text)
             # Already relayed as it arrived, unless this provider ignored on_delta.
             if not relay.shown_this_send:
-                self.stream_to_frontend(response.text)
+                # Through the relay, not past it: this provider ignored on_delta, so
+                # the finished text is a SEGMENT like any other and needs the same
+                # break in front of it when the turn has already said something.
+                relay(response.text)
             answered = candidate
             break
         else:
             budget_spent = True
 
         if budget_spent:
-            self._finish_over_budget(conversation)
+            self._finish_over_budget(conversation, relay)
             return
         if answered is not None:
             # [S-b] routed == (the answering model differs from the user's explicit
@@ -669,11 +707,16 @@ class Orchestrator:
         on every CLI and test turn."""
         return self._on_tool_audit is not None
 
-    def _finish_over_budget(self, conversation) -> None:
+    def _finish_over_budget(self, conversation, relay: "_DeltaRelay") -> None:
         # Same sentence for both ceilings: the person does not care which counter ran
         # out, only that Addison stopped and is saying so.
         conversation.append_assistant_message(_TOO_MANY_STEPS)
-        self.stream_to_frontend(_TOO_MANY_STEPS)
+        # Also a segment, and a new one: a turn that stops here has usually already
+        # said something before its first tool call, and the sentence must not fuse
+        # onto it. ``begin_send`` is how the relay is told a fresh utterance starts —
+        # this sentence is Addison's own, not the tail of the send that preceded it.
+        relay.begin_send()
+        relay(_TOO_MANY_STEPS)
 
     def _run_tool_calls(
         self, conversation, response, context, guards, mode, provider, calls_made

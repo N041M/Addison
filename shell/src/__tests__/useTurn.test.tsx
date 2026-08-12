@@ -668,4 +668,68 @@ describe("what the thread shows for a turn useTurn has driven", () => {
     const bodies = container.querySelectorAll("[data-msg-text]");
     expect(bodies[bodies.length - 1]?.textContent).toBe(result.current.streamDisplay);
   });
+
+  // KNOWN-BUGS P3/6. A turn that calls a tool says something before the call and
+  // something after it, and both land in ONE message here — so the two used to
+  // fuse into "…the add function.Now I'll add a docstring", while streaming and
+  // in the settled transcript alike. The break is put in by the core's relay at
+  // the send boundary (`orchestrator.py`, `_DeltaRelay`), which is the only place
+  // that knows where one utterance ends; these two pin the other end of that
+  // contract — the frontend neither swallows the separator nor renders through
+  // it. The chunks below are exactly what the core now puts on the wire.
+  const SAID_BEFORE = "I'll read the file first to see the current state of the add function.";
+  const SAID_AFTER = "Now I'll add a docstring.";
+
+  it("keeps the two halves apart while they are still streaming in", () => {
+    setMotionEnabled(false); // no overlay: the message content IS what is rendered
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    act(() => {
+      result.current.handleSend("add a docstring to add()");
+    });
+    act(() => {
+      result.current.appendStreamedText(SAID_BEFORE);
+    });
+    act(() => {
+      // The second segment arrives with the core's break in front of it.
+      result.current.appendStreamedText(`\n\n${SAID_AFTER}`);
+    });
+
+    expect(result.current.messages.at(-1)).toMatchObject({
+      content: `${SAID_BEFORE}\n\n${SAID_AFTER}`,
+    });
+    const { container } = thread(result.current, result.current.isWorking);
+    const bodies = container.querySelectorAll("[data-msg-text]");
+    const shown = bodies[bodies.length - 1]?.textContent ?? "";
+    expect(shown).toContain("add function.\n\nNow I'll add");
+    expect(shown).not.toContain("add function.Now");
+  });
+
+  it("renders the settled turn as two paragraphs, not one run-on line", async () => {
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    act(() => {
+      result.current.handleSend("add a docstring to add()");
+    });
+    act(() => {
+      result.current.appendStreamedText(SAID_BEFORE);
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 30); // the display catches up while the tool runs
+    });
+    act(() => {
+      result.current.appendStreamedText(`\n\n${SAID_AFTER}`);
+    });
+    await act(async () => {
+      deferreds[0].resolve({ assistantMessageId: "m-1" });
+      await flushMicrotasks();
+    });
+    act(() => {
+      vi.advanceTimersByTime(38 * 60);
+    });
+
+    const { container } = thread(result.current, result.current.isWorking);
+    const paragraphs = [...container.querySelectorAll("p")].map((p) => p.textContent);
+    expect(paragraphs).toContain(SAID_BEFORE);
+    expect(paragraphs).toContain(SAID_AFTER);
+    expect(container.textContent).not.toContain("add function.Now");
+  });
 });
