@@ -54,15 +54,16 @@ is only defects with a known wrong behaviour.
    "save a new file" (observed 2026-08-11 running the §03 check; the model's
    refusal was accurate to the tool view). **Owner decision 2026-08-11: this is a
    bug — Simple should show the permission card first and then do the edit,**
-   not lack the capability. Today `write_project_file` registers `open_only` and
-   is absent from `visible_tools(SAFE)`. Fixing this surfaces an edit capability
-   in the SAFE view (carded, MEDIUM, real `undo()` — which `write_project_file`
-   already has) and must, in the same commit, amend the SAFE-invariant wording
-   ("the two `open_only` file tools" — CLAUDE.md + docs/SAFETY.md) and the test
-   that pins the absence, `tests/test_workspace_trust.py:493`
-   (`test_write_project_file_registers_open_only_and_hidden_from_safe`), plus any
-   doc_claims row that carries the sentence. Trusted-folder confinement and the
-   size/symlink floors apply unchanged.
+   not lack the capability. Until 2026-08-11 `write_project_file` registered
+   `open_only` and was absent from the SAFE view; PR #101 surfaced both
+   path-bounded file tools in SAFE (carded per invocation, MEDIUM, real
+   `undo()`), amending the SAFE-invariant wording and the workspace-trust pin in
+   the same commit — docs/SAFETY.md invariant 1 owns the decision and its terms.
+   Trusted-folder confinement and the size/symlink floors apply unchanged.
+   Remaining before this is struck: the artifact §03 red-railed check re-runs
+   green, and the owner decides the follow-up recorded in SAFETY.md (Simple has
+   no trust-granting surface, so the capability reaches only folders trusted
+   while Developer was active).
    `agent_core/tools/write_project_file.py` · `agent_core/tools/registry.py` · artifact §03
 
 ## P3 — quality
