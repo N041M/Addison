@@ -11,8 +11,9 @@
 // ("Really remove?") is unchanged.
 
 import { useEffect, useState } from "react";
-import { ipc, isEngineConnected } from "../ipc/client";
+import { ipc, isEngineConnected, subscribe } from "../ipc/client";
 import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
+import { Method } from "../types/protocol";
 import type { ArtifactUnavailable } from "../types/ui";
 import { RowAction, SurfaceRow, WaitingTag } from "./Surface";
 
@@ -53,6 +54,27 @@ interface RoutineRow {
 interface RunOutcome {
   ok: boolean;
   detail: string;
+  /**
+   * What the routine ANSWERED — the last text its steps produced (owner decision
+   * 2026-08-12). Empty/absent for a run that produced no text; the panel then
+   * shows nothing rather than an empty heading.
+   */
+  answer?: string;
+}
+
+/**
+ * One step of the run in progress, as `routine.stepUpdate` describes it. The
+ * core sends two of these per step — 'running' as it begins, then 'ok' or
+ * 'failed' — and `label` is the registry's plain name for the tool, so these read
+ * exactly like the chat's "Addison's work" lines.
+ */
+interface StepRow {
+  stepId: string;
+  toolId: string;
+  label: string;
+  status: "running" | "ok" | "failed";
+  /** Plain sentence for a step that didn't work. Absent when it did. */
+  message?: string;
 }
 
 interface Props {
@@ -93,6 +115,16 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   const [running, setRunning] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<Record<string, RunOutcome>>({});
   const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null);
+  // The live step list per routine (owner decision 2026-08-12). Kept AFTER the run
+  // ends rather than cleared: what a person wants once a routine has finished is
+  // to see what it did and what it answered, and a list that vanishes at the
+  // moment of the answer is the old "Done — every step finished" wearing steps.
+  const [steps, setSteps] = useState<Record<string, StepRow[]>>({});
+  // A permission card is on screen. The core's step events say a step is RUNNING;
+  // what makes it "waiting" is a question in front of the person, and this surface
+  // is told about that question directly. Hiding the state would leave a step
+  // blinking away with nothing saying it is stopped on an answer.
+  const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const [planOpen, setPlanOpen] = useState<Record<string, boolean>>({}); // Developer: expanded plans
 
   useEffect(() => {
@@ -102,6 +134,30 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
     }
     refresh();
   }, [connected, refreshKey]);
+
+  // Live progress while a routine runs. Subscribed once for the surface, not per
+  // row: the core runs one routine at a time (routine.* are worker jobs), and each
+  // event names the routine it belongs to.
+  useEffect(() => {
+    const stopSteps = subscribe(Method.RoutineStepUpdate, (params) => {
+      const update = parseStepUpdate(params);
+      if (!update) return;
+      // A step's own event is the answer to "is anyone still waiting?" — it only
+      // arrives once the card has been answered and the run moved on.
+      setAwaitingAnswer(false);
+      setSteps((prev) => {
+        const list = prev[update.routineId] ?? [];
+        const at = list.findIndex((s) => s.stepId === update.step.stepId);
+        const next = at >= 0 ? list.map((s, i) => (i === at ? update.step : s)) : [...list, update.step];
+        return { ...prev, [update.routineId]: next };
+      });
+    });
+    const stopCards = subscribe(Method.PermissionRequestGrant, () => setAwaitingAnswer(true));
+    return () => {
+      stopSteps();
+      stopCards();
+    };
+  }, []);
 
   function refresh() {
     ipc
@@ -131,6 +187,11 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
     setFilling(null);
     setRunning(routine.id);
     setOutcome((prev) => ({ ...prev, [routine.id]: undefined as unknown as RunOutcome }));
+    // This run's steps only — the previous run's list would otherwise read as this
+    // one's, which is the worst kind of wrong on a panel whose whole job is saying
+    // what is happening right now.
+    setSteps((prev) => ({ ...prev, [routine.id]: [] }));
+    setAwaitingAnswer(false);
     try {
       // Only ever send values that were entered FOR this routine. Anything else is
       // another routine's answers wearing the same variable name.
@@ -143,13 +204,18 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
           : ok
             ? "Done — every step finished."
             : "It didn't finish. Nothing else was changed.";
-      setOutcome((prev) => ({ ...prev, [routine.id]: { ok, detail } }));
+      // The answer the run produced, when it produced one (owner decision
+      // 2026-08-12). Shown as READABLE TEXT below the steps — it is the thing the
+      // person pressed Run for, not a machine fact.
+      const answer = typeof res?.answer === "string" ? res.answer : "";
+      setOutcome((prev) => ({ ...prev, [routine.id]: { ok, detail, answer } }));
       refresh(); // pick up run count / last-run time
     } catch (err) {
       const detail = err instanceof Error ? err.message : "That routine couldn't run.";
       setOutcome((prev) => ({ ...prev, [routine.id]: { ok: false, detail } }));
     } finally {
       setRunning(null);
+      setAwaitingAnswer(false);
       // Both halves, together. `values` and `valuesFor` are one fact spelled in
       // two variables — which answers WHICH routine the answers belong to — and
       // clearing only the answers leaves an id pointing at an empty map. Harmless
@@ -263,11 +329,12 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
             </div>
           )}
 
-          {outcome[routine.id] && (
-            <p className="m-0 mt-2 text-[12px] leading-[1.55] text-ink-soft">
-              {outcome[routine.id].detail}
-            </p>
-          )}
+          <RunPanel
+            steps={steps[routine.id] ?? []}
+            running={running === routine.id}
+            awaitingAnswer={running === routine.id && awaitingAnswer}
+            outcome={outcome[routine.id]}
+          />
 
           {exposeRoutinePlan && routine.planSteps && routine.planSteps.length > 0 && (
             <div className="mt-2">
@@ -287,6 +354,135 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
       ))}
     </>
   );
+}
+
+/**
+ * What this run is doing, step by step, and what it answered (owner decision
+ * 2026-08-12, closing the QA artifact's §06 open question).
+ *
+ * INLINE, under the row that started it — deliberately, and this is the whole of
+ * the argument: the person is looking at this row, they pressed Run on this row,
+ * and a floating panel would be new chrome that has to explain which routine it
+ * belongs to. Expanding under the row explains that by being there.
+ *
+ * It borrows the chat's "Addison's work" idiom rather than inventing a second one
+ * (components/ActivityPanel.tsx): a 2px `rail` left rule, an 11px section label,
+ * a 5px dot per step — blinking while the step is live, dimmed once it is done —
+ * with the tool's id under the label in mono, because THAT is the machine fact and
+ * the label is the sentence.
+ *
+ * The answer is the exception to the mono rule and reads as ordinary text at the
+ * bottom, because it is the one thing here written for a person to read rather
+ * than a report of what the machine did.
+ */
+function RunPanel({
+  steps,
+  running,
+  awaitingAnswer,
+  outcome,
+}: {
+  steps: StepRow[];
+  running: boolean;
+  awaitingAnswer: boolean;
+  outcome?: RunOutcome;
+}) {
+  if (steps.length === 0 && !outcome) return null;
+  const answer = outcome?.answer?.trim();
+  return (
+    <div className="mt-2.5">
+      {steps.length > 0 && (
+        <div className="border-l-2 border-rail pl-3.5">
+          <p className="m-0 text-[11px] font-medium tracking-[.04em] text-faint">
+            {running ? "Running now" : "What it did"}
+          </p>
+          <ul
+            aria-label="Routine steps"
+            className="mt-[11px] flex list-none flex-col gap-[9px] p-0 text-[12px]"
+          >
+            {steps.map((step) => (
+              <li
+                key={step.stepId}
+                className={
+                  "flex animate-[fadeRise_.3s_ease_both] items-start gap-2 " +
+                  (step.status === "running" ? "text-ink" : "text-muted")
+                }
+              >
+                <span
+                  aria-hidden="true"
+                  className={
+                    "mt-[6px] h-[5px] w-[5px] shrink-0 rounded-full " +
+                    (step.status === "running"
+                      ? "animate-[blink_1.1s_step-start_infinite] bg-ink"
+                      : step.status === "failed"
+                        ? "bg-danger"
+                        : "bg-disabled")
+                  }
+                />
+                <span className="min-w-0">
+                  {step.label}
+                  {/* The tool the step ran — a machine fact, so mono, exactly as
+                      the chat panel treats a destination. */}
+                  <span className="mt-0.5 block break-all font-mono text-[10px] text-muted">
+                    {step.toolId}
+                  </span>
+                  {/* A step waiting on a permission card says so. The card itself
+                      is elsewhere on screen; without this the step blinks as
+                      though it were working. */}
+                  {awaitingAnswer && step.status === "running" && (
+                    <span className="mt-0.5 block text-[11px] text-ink-soft">
+                      Waiting for your answer.
+                    </span>
+                  )}
+                  {/* A step that didn't work says which one and why, in a plain
+                      sentence — never a code, never a stack. */}
+                  {step.status === "failed" && step.message && (
+                    <span className="mt-0.5 block text-[11px] leading-[1.5] text-ink-soft">
+                      {step.message}
+                    </span>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {outcome && (
+        <p className="m-0 mt-2 text-[12px] leading-[1.55] text-ink-soft">{outcome.detail}</p>
+      )}
+
+      {answer && (
+        <div className="mt-2.5 border-l-2 border-rail pl-3.5">
+          <p className="m-0 text-[11px] font-medium tracking-[.04em] text-faint">Answer</p>
+          <p className="m-0 mt-1.5 whitespace-pre-wrap text-[13px] leading-[1.55] text-ink">
+            {answer}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One `routine.stepUpdate` notification, or null if it isn't one we can use. */
+function parseStepUpdate(params: Record<string, unknown>): { routineId: string; step: StepRow } | null {
+  const routineId = typeof params.routineId === "string" ? params.routineId : "";
+  const stepId = typeof params.stepId === "string" ? params.stepId : "";
+  const status = params.status;
+  if (!routineId || !stepId) return null;
+  if (status !== "running" && status !== "ok" && status !== "failed") return null;
+  const toolId = typeof params.toolId === "string" ? params.toolId : "";
+  return {
+    routineId,
+    step: {
+      stepId,
+      toolId,
+      // The core labels the id; falling back to the id itself is what it does too,
+      // so a tool nothing is registered under is still named rather than blank.
+      label: typeof params.label === "string" && params.label ? params.label : toolId,
+      status,
+      message: typeof params.message === "string" && params.message ? params.message : undefined,
+    },
+  };
 }
 
 // Read-only rendering of a routine's declarative plan (§6.5). No inputs, no

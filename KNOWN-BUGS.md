@@ -117,6 +117,14 @@ is only defects with a known wrong behaviour.
 - **Free-model disclaimer:** gemini-3.5-flash on a free-tier key answered with
   no "answered with a free model" note — trigger narrower than the spec's
   sentence, or missing? artifact §02
-- **A routine's answer never reaches the person:** Quick Sums reports only
-  "Done — every step finished"; 6016 appears nowhere. artifact §06
+- ~~**A routine's answer never reaches the person:** Quick Sums reports only
+  "Done — every step finished"; 6016 appears nowhere. artifact §06~~
+  **DECIDED 2026-08-12 (owner).** A run now says what it is doing while it does
+  it, and hands back what it produced. The engine emits one `routine.stepUpdate`
+  per step as it begins and again when it ends (tool IDS — the RPC layer labels
+  them from the registry, so a routine's steps read exactly like the chat panel's);
+  `routine.run` carries `answer`, the last text the run produced. The Settings
+  routine row expands a small panel under itself in the "Addison's work" idiom —
+  live steps, a step waiting on a permission card saying so, a failed step naming
+  itself in a plain sentence, and the answer as readable text at the end.
 - **Diagnostics entries seemed profile-scoped** — confirm and decide. artifact §01

@@ -1053,6 +1053,10 @@ class JsonRpcServer(
             # The same Activity Panel the live turn drives. A routine reaches the
             # web through the same tools, so it must name where it went too.
             on_activity=self._emit_activity,
+            # Per-step progress for the panel the Settings row opens while a run is
+            # going (owner decision 2026-08-12). The engine emits tool IDS; the
+            # label is put on here, where the registry is.
+            on_step=self._emit_routine_step,
             # Same guard resolution as the live loop (D3) — a routine can never
             # out- or under-permission the conversation.
             guards_provider=self._effective_guards,
@@ -1193,6 +1197,38 @@ class JsonRpcServer(
                 else detail[:MAX_PERMISSION_DETAIL_CHARS] + "…"
             )
         self._notify(Method.TOOL_ACTIVITY_UPDATE, params)
+
+    def _emit_routine_step(self, event: dict) -> None:
+        """One routine step starting or ending, on its way to the panel the Settings
+        row opens (owner decision 2026-08-12, closing the QA artifact's §06).
+
+        THE LABEL IS ADDED HERE. The engine emits a tool id, because a refused step
+        may never have had a tool in hand at all; ``_label`` answers the registry's
+        plain name and falls back to the id itself, which is the same path the
+        OPEN-mode auto-grant notification takes. Doing it there instead would put a
+        second labelling rule in the tree, and the panel's steps must read exactly
+        like the chat panel's.
+
+        Nothing here is enforcement, and nothing reads it back: it is one direction,
+        core to webview, and a dropped notification costs a line on a panel and
+        never a step. The run's own reply is what says how the run ended."""
+        tool_id = str(event.get("tool_id") or "")
+        params: dict = {
+            "runId": event.get("run_id"),
+            "routineId": event.get("routine_id"),
+            "stepId": event.get("step_id"),
+            "index": event.get("index"),
+            "total": event.get("total"),
+            "toolId": tool_id,
+            "label": self._label(tool_id),
+            "status": event.get("status"),
+        }
+        message = event.get("message")
+        # Omitted rather than sent as null, exactly as the activity line omits a
+        # detail no tool gave it: a step that worked has nothing to explain.
+        if message:
+            params["message"] = str(message)
+        self._notify(Method.ROUTINE_STEP_UPDATE, params)
 
     # --- dispatch ---------------------------------------------------------
     def _dispatch(self, frame: dict) -> None:

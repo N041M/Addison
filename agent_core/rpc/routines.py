@@ -239,6 +239,14 @@ class RoutinesMixin(ServerContext):
                 "ok": result.status == "completed",
                 "status": result.status,
                 "detail": result.detail,
+                # THE ANSWER (owner decision 2026-08-12, closing the QA artifact's
+                # §06 open question). The last text the run produced — for a
+                # calculator routine, the sum. It was already in `steps` below, as a
+                # 200-character summary under a step id nothing displayed, which is a
+                # record of the run rather than a reply to the person who started it.
+                # Empty string when the run produced no text; the surface shows
+                # nothing rather than an empty heading.
+                "answer": result.answer,
                 "steps": [
                     {
                         "stepId": step_id,

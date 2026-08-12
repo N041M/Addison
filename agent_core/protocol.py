@@ -98,7 +98,21 @@ class Method:
     # the plain sentence to show, byte-identical to what routine.run refuses with.
     # DISPLAY ONLY — dispatch, not this field, is what refuses the run.
     ROUTINE_LIST = "routine.list"
+    # routine.run -> {ok, status, detail, answer, steps}. `answer` (owner decision
+    # 2026-08-12) is the last text the run produced — the sum a "Quick Sums" run was
+    # started FOR. It used to reach nobody: the reply carried a terminal sentence and
+    # per-step summaries keyed by step id, and the surface showed only the sentence,
+    # so a routine's answer appeared nowhere. Empty string when a run produced no
+    # text, which is not a failure.
     ROUTINE_RUN = "routine.run"
+    # {runId, routineId, stepId, index, total, toolId, label, status, message?} ->
+    # notification only, emitted TWICE per step: 'running' as it begins, then 'ok' or
+    # 'failed'. `label` is the registry's plain name for the tool, filled in HERE (the
+    # engine emits ids); `message` is the plain sentence for a failed step and is
+    # omitted otherwise. It is the routine half of `tool.activityUpdate` — the same
+    # "what is happening right now" the chat's work panel shows, for the path that
+    # otherwise runs with nothing on screen until it is over.
+    ROUTINE_STEP_UPDATE = "routine.stepUpdate"
     ROUTINE_DELETE = "routine.delete"
     # profile.get profiles entries are {id,label,description}; the Custom entry ALSO
     # carries "advanced": true (D4) — Simple/Developer entries never grow the key.
