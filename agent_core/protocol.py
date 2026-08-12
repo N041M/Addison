@@ -7,7 +7,7 @@ test (§9) compares the two.
 METHODS (representative subset, §7):
   Frontend -> Core:
     conversation.sendMessage
-    permission.respond
+    permission.respond, permission.pending
     undo.rewindConversation, undo.undoLastAction
     routine.proposeFromConversation, routine.confirmSave
     routine.list, routine.run, routine.delete
@@ -62,6 +62,18 @@ class Method:
     # showing the card as expired is presentation, this is the enforcement.
     CONVERSATION_STOP = "conversation.stop"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
+    # {} -> {request: card | null}. THE RE-SYNC QUERY, and the reason it exists is
+    # worth stating: `permission.requestGrant` is a NOTIFICATION, so a card that is
+    # dropped (no subscriber yet), cleared by the webview, or rendered somewhere the
+    # reader cannot see leaves the engine blocked on an answer with NOTHING on
+    # screen and nothing that times out. This lets the surface ASK, so the worst
+    # case is a two-second blip instead of a wait with no end. Answered INLINE on
+    # the read loop — the worker is blocked on exactly the question being asked
+    # about, so a queued handler could never reply. The card it returns is the one
+    # already emitted, byte-for-byte; nothing is minted here (an arming card's code
+    # included — this hands back the code that card already carried, and asking
+    # never costs an attempt).
+    PERMISSION_PENDING = "permission.pending"
     PERMISSION_RESPOND = "permission.respond"
     # {toolId, allow, typed?} — `typed` carries the code the person retyped on an
     # arming card (step 8 phase 3). It is compared in the CORE and never stored,

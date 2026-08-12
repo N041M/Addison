@@ -1243,6 +1243,9 @@ class JsonRpcServer(
             Method.UNDO_UNDO_LAST_ACTION: enqueue("undo"),
             Method.UNDO_REWIND_CONVERSATION: enqueue("rewind"),
             Method.PERMISSION_RESPOND: self._handle_permission_respond,
+            # Inline for the same reason as the line above: the worker is blocked on
+            # the card being asked about, so a queued handler could never reply.
+            Method.PERMISSION_PENDING: self._handle_permission_pending,
             # INLINE, and it has to be: Stop's whole job is to reach a worker that
             # is blocked waiting for a permission answer. Queued behind the turn it
             # is trying to end, it would run after that turn finished — which is to
@@ -1832,7 +1835,18 @@ class JsonRpcServer(
             # answers it.
             if self._turn_stopped:
                 return False, None
-            self._permission_waiters[tool_id] = {"event": event, "allow": False, "typed": None}
+            # The CARD is kept beside the event, and that is the whole of what makes
+            # `permission.pending` possible: the emitted notification is the only
+            # copy otherwise, and a notification nobody received is gone. Stored by
+            # reference, never rebuilt — a re-sync that composed a second card could
+            # show a person different words from the ones the engine is waiting on.
+            self._permission_waiters[tool_id] = {
+                "event": event,
+                "allow": False,
+                "typed": None,
+                "card": card,
+                "answered": False,
+            }
         self._notify(Method.PERMISSION_REQUEST_GRANT, card)
         event.wait()
         with self._perm_lock:
@@ -1913,6 +1927,11 @@ class JsonRpcServer(
             if waiter is not None:
                 waiter["allow"] = allow
                 waiter["typed"] = params.get("typed")
+                # Answered, so `permission.pending` must stop offering it. The worker
+                # pops the waiter a moment later; between the two, a re-sync poll that
+                # still saw this entry would put a card the person just answered back
+                # in front of them.
+                waiter["answered"] = True
                 waiter["event"].set()
             stopped = self._turn_stopped
         if waiter is None:
@@ -1920,6 +1939,33 @@ class JsonRpcServer(
             self._respond(request_id, {"ok": False, "error": message})
             return
         self._respond(request_id, {"ok": True})
+
+    def _handle_permission_pending(self, params: dict, request_id) -> None:
+        """permission.pending {} -> {request: card | null} — the surface asking what
+        the engine is waiting for.
+
+        INLINE on the read loop, for the same reason ``permission.respond`` is: the
+        worker thread is blocked inside ``_ask_once``, so a handler queued behind it
+        could not answer until the very thing it is asking about had already resolved.
+
+        NOT a second way to decide anything. It reads; it never mints, re-emits,
+        expires or answers a card, and it never touches the attempt budget. An
+        arming card's code comes back because it is part of the card that was already
+        put on screen — a person who never saw that card cannot be helped by hiding
+        its code from the window it was sent to, and the code is only ever a secret
+        from the MODEL (``_ask_with_keyword``), which cannot reach this method.
+
+        The NEWEST unanswered waiter wins. There is normally exactly one; a keyword
+        card that was retried has popped the previous entry before registering the
+        next, so "newest" and "only" are the same answer on every path that exists
+        today and the ordering is stated so a second concurrent ask cannot silently
+        surface the stale one."""
+        card: dict | None = None
+        with self._perm_lock:
+            for waiter in self._permission_waiters.values():
+                if not waiter.get("answered"):
+                    card = waiter.get("card")
+        self._respond(request_id, {"request": card})
 
     def _handle_conversation_stop(self, params: dict, request_id) -> None:
         """conversation.stop — the person pressed Stop. THE CARD DIES WITH ITS TURN.
@@ -1952,6 +1998,11 @@ class JsonRpcServer(
             for waiter in waiters:
                 waiter["allow"] = False
                 waiter["typed"] = None
+                # A stop IS an answer (a refusal), so `permission.pending` must stop
+                # offering the card at once — without this, a re-sync poll landing in
+                # the moment between waking the worker and the worker popping the
+                # waiter would put a card Stop just killed back on screen.
+                waiter["answered"] = True
                 waiter["event"].set()
         self._respond(request_id, {"ok": True, "endedRequests": len(waiters)})
 

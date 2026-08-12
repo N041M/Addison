@@ -86,6 +86,7 @@ import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useCodeReview } from "./hooks/useCodeReview";
 import { useMcpServers } from "./hooks/useMcpServers";
+import { usePendingConsentResync } from "./hooks/usePendingConsentResync";
 import { useAutomations } from "./hooks/useAutomations";
 import { useOffers } from "./hooks/useOffers";
 import { useTurn } from "./hooks/useTurn";
@@ -377,6 +378,9 @@ export function App() {
   const conversationsState = useConversations({
     connected,
     controlsBusy,
+    // The half of `controlsBusy` that must never be navigated away from: a card the
+    // engine is blocked on. See the prop's own comment in useConversations.
+    permissionPending: turn.permission != null,
     resetTransientState,
     setMessages: turn.setMessages,
     setActivities: turn.setActivities,
@@ -582,6 +586,18 @@ export function App() {
     return () => unsubs.forEach((u) => u());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connected]);
+
+  // The consent re-sync watchdog (KNOWN-BUGS P2 #3). A working turn with no card
+  // on screen asks the engine whether it is blocked on one — the net under every
+  // way a `permission.requestGrant` NOTIFICATION can go missing, none of which
+  // times out on its own. The hook owns the why; enabling it is the whole of App's
+  // part. Clearing the card (answering it) re-enables the watchdog, which restarts
+  // its interval from zero — so the first poll after an answer is a full
+  // PENDING_RESYNC_MS later, long past the moment `permission.respond` lands.
+  usePendingConsentResync({
+    enabled: connected && turn.isWorking && turn.permission == null,
+    onFound: (request) => turn.setPermission(normalizePermission(request)),
+  });
 
   // Transient shell notices fade out on their own so they don't linger.
   useEffect(() => {
@@ -1264,6 +1280,16 @@ export function App() {
                   conversationKey={conversationsState.currentConversationId}
                   onSuggestion={(text) => setComposerSeed(text)}
                   header={firstRunHeader}
+                  // The one footer change the thread may scroll for: a consent card
+                  // arriving inline (rail hidden) lands BELOW the fold otherwise,
+                  // in a container whose scrollbar is hidden — KNOWN-BUGS P2 #3.
+                  // The attempts count is in the key so a keyword card re-asked
+                  // after a mistyped code counts as a new arrival.
+                  attention={
+                    turn.permission
+                      ? `${turn.permission.toolId}:${turn.permission.arming?.attemptsLeft ?? ""}`
+                      : null
+                  }
                   footer={
                     <>
                       {proposalBlock}

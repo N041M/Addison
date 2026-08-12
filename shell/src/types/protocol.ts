@@ -19,6 +19,12 @@ export const Method = {
   // makes a late Allow do nothing (agent_core/main.py, `_handle_conversation_stop`).
   ConversationStop: "conversation.stop",
   PermissionRequestGrant: "permission.requestGrant",
+  // {} -> {request: PermissionRequest | null}. The re-sync query: `requestGrant` is
+  // a notification, so a card that never reached a subscriber — or was rendered
+  // where the reader could not see it — leaves the engine blocked with nothing on
+  // screen and nothing that expires. Asking turns that into a short blip. Reading
+  // only: it never answers a card and never costs an arming attempt.
+  PermissionPending: "permission.pending",
   PermissionRespond: "permission.respond",
   ToolActivityUpdate: "tool.activityUpdate",
   UndoRewindConversation: "undo.rewindConversation",
