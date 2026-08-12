@@ -253,10 +253,21 @@ class RoutinesMixin(ServerContext):
     def _ask_user_continue(self, step: RoutineStep, run_id: str, message: str) -> bool:
         """§6.2 on_failure="ask_user": pause the run and ask, reusing the exact
         permission-card round-trip — the frontend renders label/description and
-        answers via permission.respond with this synthetic toolId."""
+        answers via permission.respond with this synthetic toolId.
+
+        A STOPPED RUN IS NOT ASKED (KNOWN-BUGS #4). ``conversation.stop`` ends this
+        run's consent exactly as it ends a turn's, so a card raised after it would
+        be one nobody can answer — the frontend has already let go of the run — and
+        one nothing would refuse if they did. "Don't keep going" is the honest
+        reading of a stop, so the answer is False without a card. Checked under
+        ``_perm_lock`` beside the waiter's registration for the same reason
+        ``_ask_once`` does it: stop lands on the read loop while this thread is
+        blocked, so the flag and the waiter must move together."""
         waiter_key = f"routine-step:{run_id}:{step.step_id}"
         event = threading.Event()
         with self._perm_lock:
+            if self._turn_stopped:
+                return False
             self._permission_waiters[waiter_key] = {"event": event, "allow": False}
         self._notify(
             Method.PERMISSION_REQUEST_GRANT,

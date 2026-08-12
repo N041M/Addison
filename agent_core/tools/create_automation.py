@@ -501,16 +501,27 @@ def _fenced(payload: str) -> str:
 def _result_text(row: Automation) -> str:
     """What the MODEL is handed, and therefore what it relays.
 
-    Three things, in this order: the plain-words schedule, the exact plist as a
-    preview, and the standing truth that nothing is armed. The preview is here
+    Four things, in this order: the plain-words schedule, **the id**, the exact plist
+    as a preview, and the standing truth that nothing is armed. The preview is here
     rather than "available in Settings" because the person is being asked to
     understand a thing that will one day run without them watching, and the phrase
     "the preview you approved" only means something if the preview was in front of
-    them (plan §3)."""
+    them (plan §3).
+
+    THE ID IS HERE BECAUSE ARMING NEEDS IT, and for two years of this file's life it
+    was the one fact this answer left out. ``arm_automation`` takes an id; the only
+    place an id is ever minted is the row this call just wrote; and nothing put it in
+    front of the model — so "now switch it on", the very next thing a person says,
+    could not be answered and was met with a sentence claiming the automation was not
+    saved (KNOWN-BUGS P1 #1). It sits on its own line next to the sentence that names
+    what was saved, NOT inside the preview: the preview is a verbatim copy of what
+    would be handed to the computer, and Addison's own bookkeeping is not part of
+    that document."""
     fields = schedule_fields(row.schedule_kind, row.schedule_json)
     return (
         f'Saved "{row.name}" as a draft automation. '
-        f"{schedule_sentence(row.schedule_kind, fields)}.\n\n"
+        f"{schedule_sentence(row.schedule_kind, fields)}.\n"
+        f"Automation id: {row.id}\n\n"
         "This is exactly what would be handed to your computer:\n\n"
         f"{_fenced(plist_text(row))}\n\n"
         f"{NOT_ARMED_LINE}"

@@ -513,10 +513,14 @@ class _Call:
 
 
 class _Msg:
-    def __init__(self, role, content="", tool_calls=()):
+    def __init__(self, role, content="", tool_calls=(), past_tool_calls=()):
         self.role = role
         self.content = content
         self.tool_calls = list(tool_calls)
+        # What conversation.load restores onto a reopened chat's messages instead
+        # of tool_calls — history the builder may read and no provider replays
+        # (providers/base.py owns why the two are separate fields).
+        self.past_tool_calls = list(past_tool_calls)
 
 
 class _Conv:
@@ -546,6 +550,29 @@ def test_builder_extracts_tool_calls_not_prose_and_generalizes():
     by_name = {v.name: v for v in draft.variables}
     assert by_name["chosen_file"].default is None
     assert by_name["output_filename"].default == "total.txt"
+
+
+def test_builder_reads_a_reopened_conversations_restored_calls():
+    """KNOWN-BUGS #5: a chat reopened after a relaunch is still saveable.
+
+    ``conversation.load`` cannot put restored calls back on ``tool_calls`` — a
+    provider replays that field, and a ``tool_use`` sent without the
+    ``tool_result`` that answered it makes the API reject every later request of
+    the session — so it puts them on ``past_tool_calls`` instead. To a routine the
+    two are the same thing: steps the person watched happen. The message here
+    carries ONLY the restored field, which is exactly the shape a reload produces.
+    """
+    restored = _Msg(
+        "assistant", "All done!",
+        past_tool_calls=[_Call("save_file", {"filename": "total.txt"})],
+    )
+    conversation = _Conv([_Msg("user", "save my total"), restored])
+
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["save_file"]
+    # The generalization is the live one, not a lesser copy for reloaded chats.
+    assert draft.steps[0].args_template["filename"] == "{{output_filename}}"
 
 
 def test_builder_raises_plainly_when_nothing_to_extract():

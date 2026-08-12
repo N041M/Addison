@@ -8,19 +8,32 @@ is only defects with a known wrong behaviour.
 
 ## P1 — broken features
 
-1. **Settings "Arm…" can never succeed.** Only three automation tools exist and
-   `arm_automation` resolves by UUID, but the seeded sentence the Arm… button
-   drops into a fresh chat carries only the *name* — so the model has nothing to
-   resolve and the refusal wrongly tells the user their automation "isn't saved
-   any more" while the row sits in Settings. Arming works only when the id is
-   already in the conversation.
-   *Fix direction: either a list/lookup tool, or seed the sentence with the id.*
-   `agent_core/tools/arm_automation.py` · SettingsPage AutomationsSection · artifact §07
+1. **Arming an automation from chat can never succeed — the id is never in the
+   conversation, in any flow.** Root cause pinned 2026-08-11: `create_automation`'s
+   tool result (`_result_text`, `create_automation.py:501`) hands the model the
+   schedule sentence, the plist preview and the not-armed line but **never
+   `row.id`**; the plist carries only the label, which arming doesn't accept.
+   `arm_automation` resolves strictly by UUID (`arm_automation.py:307`), so even
+   create-then-"arm Probe" *in the same conversation* fails (reproduced
+   2026-08-11), and the refusal lies: `_NO_SUCH_AUTOMATION` says the automation
+   "isn't saved any more" while the row sits in the store. The model's natural
+   recovery — "recreate and arm in one go" — also dead-ends on the duplicate-name
+   guard (`_NAME_IN_USE`). This subsumes the earlier Settings-"Arm…" finding: the
+   seeded name-only sentence is just one instance of the same missing id.
+   *Fix, in order: (a) surface `row.id` in `_result_text`; (b) make the refusal
+   distinguish "no row with that id" from "that isn't an id" and never claim
+   deletion; (c) optionally let `arm_automation` resolve a unique name, refusing
+   on ambiguity — which is also what the Settings seeded sentence needs.*
+   `agent_core/tools/create_automation.py` · `agent_core/tools/arm_automation.py` ·
+   SettingsPage AutomationsSection · artifact §07
 
 2. **Gemini 3.x multi-step tool turns always fail.** The adapter does not replay
    Gemini's `thought_signature` on the second model call, every multi-step tool
    turn 400s, and the error is surfaced as "That key doesn't work" (it does — it
-   was a 400, not an auth failure).
+   was a 400, not an auth failure). Re-reproduced 2026-08-11 08:31:06 running the
+   artifact §02 check (the Probe automation prompt): the turn died on the second
+   call with `ProviderRequestRejected("That key doesn't work. Check it and try
+   again.")` — same misattribution, still open.
    `agent_core/providers/` google adapter · artifact §02
 
 ## P2 — trust and lifecycle
@@ -37,39 +50,64 @@ is only defects with a known wrong behaviour.
    save link vanish after quit/relaunch; the steps become silently unsaveable.
    Frontend work-panel state · artifact §06
 
+6. **Simple cannot edit existing files at all** — it refuses and offers only
+   "save a new file" (observed 2026-08-11 running the §03 check; the model's
+   refusal was accurate to the tool view). **Owner decision 2026-08-11: this is a
+   bug — Simple should show the permission card first and then do the edit,**
+   not lack the capability. Today `write_project_file` registers `open_only` and
+   is absent from `visible_tools(SAFE)`. Fixing this surfaces an edit capability
+   in the SAFE view (carded, MEDIUM, real `undo()` — which `write_project_file`
+   already has) and must, in the same commit, amend the SAFE-invariant wording
+   ("the two `open_only` file tools" — CLAUDE.md + docs/SAFETY.md) and the test
+   that pins the absence, `tests/test_workspace_trust.py:493`
+   (`test_write_project_file_registers_open_only_and_hidden_from_safe`), plus any
+   doc_claims row that carries the sentence. Trusted-folder confinement and the
+   size/symlink floors apply unchanged.
+   `agent_core/tools/write_project_file.py` · `agent_core/tools/registry.py` · artifact §03
+
 ## P3 — quality
 
-6. **Message segments fuse without whitespace** ("for you.The answer is…").
+7. **Message segments fuse without whitespace** ("for you.The answer is…").
    Confirmed 9 Aug (second session): the fused text is also in the *settled*
    transcript ("file.Now I'll add", "the end:Done.") — this is not just the
    streaming renderer; the joined content is what gets persisted/rendered after
    the turn completes. Frontend message renderer (and possibly segment storage) · artifact §04
 
-7. **Appends drop the trailing newline.** Addison writes the appended line
+8. **Appends drop the trailing newline.** Addison writes the appended line
    without `\n`, so the next writer's line fuses onto it
    (`edited: yesmy own edit`). File-edit tool append path · artifact §09
 
-8. **Changes entries carry no timestamp.** The Code screen's Changes list is
+9. **Changes entries carry no timestamp.** The Code screen's Changes list is
    supposed to show name and time; only the name renders. Code screen Changes list · artifact §09
 
-9. **Revert confirm contradicts enforcement on swapped files.** When a file has
+10. **Revert confirm contradicts enforcement on swapped files.** When a file has
    been replaced (symlink/hard link/FIFO), the first put-it-back press still
    shows the generic "you've changed this file" confirm and offers a revert the
    engine then (correctly) refuses. The confirm should detect and say it first.
    Code screen revert confirm · artifact §10
 
-10. **Routine plan capture is conversation-scoped.** "Save as routine" offers
+11. **Routine plan capture is conversation-scoped.** "Save as routine" offers
     every tool call in the conversation, including stale unrelated steps, not
     the turn that produced the answer. Routine plan capture · artifact §06
 
-11. **"Technical details" adds nothing.** The fold shows the same sentence
+12. **"Technical details" adds nothing.** The fold shows the same sentence
     wrapped in an exception class — no provider, no status code. Error surface · artifact §02
 
-12. **Status footer claims before it knows.** Asserts "Simple profile · local"
+13. **Status footer claims before it knows.** Asserts "Simple profile · local"
     at launch before the engine has answered, then corrects itself. Frontend status bar · artifact §01
 
-13. **One thing, two names.** Sidebar says "Snapshots", Settings says "Restore
+14. **One thing, two names.** Sidebar says "Snapshots", Settings says "Restore
     points". Naming, sidebar + SettingsPage.
+
+15. **Mermaid diagrams render unthemed and clipped.** Observed 2026-08-11 (light
+    theme, §04 check): nodes are solid near-black fills with dark text —
+    black-on-black, illegible in the light theme and not Addison's palette in
+    either theme; node labels truncate mid-word ("Task reques", "Do it dire",
+    "Just reading or answ"); edge arrows render as oversized filled blobs rather
+    than lines. The diagram itself is structurally correct — this is theming
+    (mermaid theme variables not wired to the app's tokens) plus a node-sizing
+    bug (fixed-width nodes clipping their labels).
+    Frontend mermaid renderer / theme wiring · artifact §04
 
 ## Open questions (need a decision or one more observation, not yet a defect)
 

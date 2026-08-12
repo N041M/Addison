@@ -38,6 +38,7 @@ const FIELDS = [
   "onDiskChanged",
   "path",
   "relativePath",
+  "replacedBy",
   "revertable",
   "root",
   "snapshotIds",
@@ -235,6 +236,26 @@ describe("the diff parsers fail CLOSED", () => {
       ],
     });
     expect(answer.value!.edits.map((e) => e.onDiskChanged)).toEqual([true, false, null, null]);
+  });
+
+  it("keeps only the two swap kinds it has a sentence for", () => {
+    // `replacedBy` is the one field that fails OPEN, and the asymmetry is deliberate:
+    // the core refuses a swapped file whether or not this says so, while inventing a
+    // swap from an unreadable value would take away a Revert that works.
+    const answer = parseWorkspaceEditList({
+      edits: [
+        { path: "/a", replacedBy: "shortcut" },
+        { path: "/b", replacedBy: "other-file" },
+        { path: "/c", replacedBy: "something-new" },
+        { path: "/d" },
+      ],
+    });
+    expect(answer.value!.edits.map((e) => e.replacedBy)).toEqual([
+      "shortcut",
+      "other-file",
+      null,
+      null,
+    ]);
   });
 
   it("drops a row it cannot name rather than rendering a nameless one", () => {
