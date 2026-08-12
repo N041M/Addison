@@ -425,6 +425,13 @@ export const ipc = {
       typed === undefined ? { toolId, allow } : { toolId, allow, typed },
     ),
 
+  // Stop, sent as the person presses it. Fire-and-forget by design: the webview
+  // has already let go of the turn, and a failed frame must not leave a card
+  // looking answerable — the caller greys the card out either way and the CORE is
+  // what refuses a late answer. Nothing here waits for a turn to end, because the
+  // core does not end one: it ends the turn's consent.
+  stopTurn: () => call(Method.ConversationStop),
+
   undoLastAction: () => call(Method.UndoUndoLastAction),
   redoLastAction: () => call(Method.UndoRedoLastAction),
   rewindConversation: (toMessageId: string) =>

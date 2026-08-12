@@ -1437,6 +1437,7 @@ JSON-RPC 2.0 methods, implemented in `agent_core/main.py` and called from `shell
 |---|---|---|
 | `conversation.sendMessage` | Frontend → Core | User sends a chat message |
 | `conversation.streamChunk` | Core → Frontend | Streamed assistant text |
+| `conversation.stop` | Frontend → Core | The person pressed Stop. Ends the turn's CONSENT, never its work: every pending permission card is refused and the turn may raise no other, so a late Allow does nothing (KNOWN-BUGS #4) |
 | `permission.requestGrant` | Core → Frontend | Renders a PermissionCard |
 | `permission.respond` | Frontend → Core | User's Allow/Deny answer |
 | `tool.activityUpdate` | Core → Frontend | Drives the Activity Panel ("Searching the web…") |

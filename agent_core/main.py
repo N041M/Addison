@@ -74,6 +74,8 @@ from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
 from agent_core.rpc.constants import (
+    _ANSWER_AFTER_STOP_MESSAGE,
+    _ANSWER_NOT_PENDING_MESSAGE,
     _GENERIC_TURN_ERROR,
     _LOCAL_SETUP_BUSY_MESSAGE,
     _METHOD_NOT_FOUND,
@@ -705,6 +707,20 @@ class JsonRpcServer(
         self._queue: queue.Queue = queue.Queue()
         self._perm_lock = threading.Lock()
         self._permission_waiters: dict[str, dict] = {}
+        # THE CARD DIES WITH ITS TURN (KNOWN-BUGS #4, owner decision 2026-08-09).
+        # Raised by ``conversation.stop`` and lowered when the worker picks up its
+        # next job, so it always describes the job that is running RIGHT NOW. While
+        # it is up no card may be raised (``_on_permission_request``, the routine
+        # engine's ask) and every card already up has been answered "no" — a person
+        # who ended a turn has not consented to anything that turn was about to do,
+        # and a card left actionable is a way for them to consent to it minutes
+        # later, to a step whose reason has scrolled away.
+        #
+        # Guarded by ``_perm_lock``, which the read loop and the worker already
+        # share for the waiters: Stop arrives on the read loop while the worker is
+        # blocked inside ``_ask_once``, so the flag and the waiter it invalidates
+        # must move together or a card can be raised in the gap between them.
+        self._turn_stopped = False
         # Only one local-model setup may run at a time (§4.1.2); the flag is held
         # from pre-flight through the background pull/verify.
         self._local_setup_lock = threading.Lock()
@@ -1182,6 +1198,11 @@ class JsonRpcServer(
             Method.UNDO_UNDO_LAST_ACTION: enqueue("undo"),
             Method.UNDO_REWIND_CONVERSATION: enqueue("rewind"),
             Method.PERMISSION_RESPOND: self._handle_permission_respond,
+            # INLINE, and it has to be: Stop's whole job is to reach a worker that
+            # is blocked waiting for a permission answer. Queued behind the turn it
+            # is trying to end, it would run after that turn finished — which is to
+            # say never, for the only case it exists for.
+            Method.CONVERSATION_STOP: self._handle_conversation_stop,
             Method.MODEL_AVAILABLE_ROLES: enqueue("available_roles"),
             Method.PROFILE_GET: enqueue("profile_get"),
             Method.PROFILE_SET: enqueue("profile_set"),
@@ -1244,6 +1265,14 @@ class JsonRpcServer(
             if job is None:
                 break
             kind, params, request_id = job
+            # A new job is a new turn's worth of consent: whatever was stopped, it
+            # was the job before this one. Lowered HERE rather than in the send
+            # handler because every job that can raise a card (a routine run, a
+            # widget run, a message) has to start from an unstopped state, and jobs
+            # run one at a time — so "the job being dequeued" and "the job a Stop
+            # could have been aimed at" can never be the same one.
+            with self._perm_lock:
+                self._turn_stopped = False
             if self._build_error is not None:
                 # THE EXEMPTION. Without it this branch answers EVERY job —
                 # including the restore the message above tells the user to run —
@@ -1714,7 +1743,16 @@ class JsonRpcServer(
         never carries over to the next destructive call.
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
-        by ``_ask_with_keyword`` below."""
+        by ``_ask_with_keyword`` below.
+
+        A STOPPED TURN NEVER GETS A CARD. The worker keeps running after Stop (there
+        is no mid-step interrupt in v1), so without this check the turn's next tool
+        call would put a fresh, fully live card in front of somebody who has already
+        said they were done — the same defect as the card that outlived its turn,
+        one step later. Denied without emitting anything: the model is told no, and
+        nobody is asked a question they have already answered by stopping."""
+        if self._stopped():
+            return PermissionStatus.DENIED
         definition = self.tool_registry.get(tool_id).definition
         description = definition.description
         if detail:
@@ -1740,6 +1778,14 @@ class JsonRpcServer(
         different round-trips."""
         event = threading.Event()
         with self._perm_lock:
+            # Registering the waiter and reading the stop flag under ONE lock is
+            # what makes Stop race-free: ``_handle_conversation_stop`` takes the
+            # same lock to raise the flag and to wake every waiter, so a card is
+            # either registered before the stop (and woken by it) or refused here
+            # after it. There is no ordering in which one is emitted and nothing
+            # answers it.
+            if self._turn_stopped:
+                return False, None
             self._permission_waiters[tool_id] = {"event": event, "allow": False, "typed": None}
         self._notify(Method.PERMISSION_REQUEST_GRANT, card)
         event.wait()
@@ -1805,7 +1851,15 @@ class JsonRpcServer(
         never logged, and never echoed back — this handler's whole job is to carry
         it the last few feet. It arrives as whatever the webview sent, including not
         a string at all, and ``automation_nonce.normalise`` turns anything that is
-        not one into a wrong answer rather than an exception."""
+        not one into a wrong answer rather than an exception.
+
+        An answer with NO WAITER is refused rather than swallowed (KNOWN-BUGS #4).
+        It used to answer ``{"ok": True}`` whatever it found, so a card the person
+        stopped — or one they double-pressed — reported success for an approval that
+        authorised nothing, and the two indistinguishable outcomes were the reason
+        the stopped card looked alive. Which sentence comes back depends on WHY
+        nobody is waiting: a stopped turn is the case that has a next step worth
+        naming, and an already-answered card is not a failure at all."""
         tool_id = params.get("toolId")
         allow = bool(params.get("allow"))
         with self._perm_lock:
@@ -1814,7 +1868,51 @@ class JsonRpcServer(
                 waiter["allow"] = allow
                 waiter["typed"] = params.get("typed")
                 waiter["event"].set()
+            stopped = self._turn_stopped
+        if waiter is None:
+            message = _ANSWER_AFTER_STOP_MESSAGE if stopped else _ANSWER_NOT_PENDING_MESSAGE
+            self._respond(request_id, {"ok": False, "error": message})
+            return
         self._respond(request_id, {"ok": True})
+
+    def _handle_conversation_stop(self, params: dict, request_id) -> None:
+        """conversation.stop — the person pressed Stop. THE CARD DIES WITH ITS TURN.
+
+        Answered INLINE on the read loop (see the dispatch table), because the
+        worker this has to reach is typically blocked inside ``_ask_once`` waiting
+        for the very card this ends.
+
+        What it does, and just as importantly what it does not:
+
+          * every pending permission waiter is resolved as a REFUSAL and woken, so
+            the blocked worker gets ``DENIED`` and its tool never runs. A stop is
+            not consent, so there is no other honest answer to give the gate;
+          * the stop flag stays up for the REST of this job, so the turn — which
+            keeps running, there being no mid-step interrupt in v1 — cannot raise a
+            second card at somebody who has left;
+          * a late ``permission.respond`` for one of those cards then finds no
+            waiter and is refused above. **That refusal is the enforcement.** The
+            webview greying the card out is presentation, and a stale or
+            hand-edited one is answered exactly like an honest one;
+          * it does NOT cancel the turn, undo anything, or touch grants. Stop has
+            never meant "unhappen"; it means Addison stops asking and stops acting
+            on this turn's behalf.
+
+        ``endedRequests`` is how many cards were standing when Stop landed — zero
+        for the ordinary case of stopping a turn that was merely thinking."""
+        with self._perm_lock:
+            self._turn_stopped = True
+            waiters = list(self._permission_waiters.values())
+            for waiter in waiters:
+                waiter["allow"] = False
+                waiter["typed"] = None
+                waiter["event"].set()
+        self._respond(request_id, {"ok": True, "endedRequests": len(waiters)})
+
+    def _stopped(self) -> bool:
+        """Has the running job been stopped? Read under the lock that writes it."""
+        with self._perm_lock:
+            return self._turn_stopped
 
     # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
     def _record_tool_audit(self, row: dict) -> None:

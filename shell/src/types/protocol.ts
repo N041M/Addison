@@ -12,6 +12,12 @@ export const Method = {
   ConversationList: "conversation.list",
   ConversationRename: "conversation.rename",
   ConversationStreamChunk: "conversation.streamChunk",
+  // Stop. There is still no mid-step interrupt in v1 — the core finishes the tool
+  // call it started — so what this ends is the turn's CONSENT: every permission
+  // card waiting for an answer is refused, and the turn may not raise another. The
+  // webview showing a stopped card as expired is presentation; this call is what
+  // makes a late Allow do nothing (agent_core/main.py, `_handle_conversation_stop`).
+  ConversationStop: "conversation.stop",
   PermissionRequestGrant: "permission.requestGrant",
   PermissionRespond: "permission.respond",
   ToolActivityUpdate: "tool.activityUpdate",

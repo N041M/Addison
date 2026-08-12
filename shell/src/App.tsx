@@ -367,7 +367,13 @@ export function App() {
   });
   // Sidebar controls are held while a turn is running or a permission prompt is
   // open — switching conversations mid-turn would strand in-flight work.
-  const controlsBusy = turn.isWorking || turn.permission != null;
+  //
+  // An EXPIRED card holds nothing. It is the record of a question whose turn was
+  // stopped (KNOWN-BUGS #4), and nothing is in flight behind it — leaving the
+  // sidebar and "＋ New chat" locked on it would mean pressing Stop could strand a
+  // person on a card they can no longer answer, with no way out but sending
+  // another message.
+  const controlsBusy = turn.isWorking || (turn.permission != null && !turn.permissionExpired);
   const conversationsState = useConversations({
     connected,
     controlsBusy,
@@ -887,7 +893,11 @@ export function App() {
     />
   ) : null;
   const consentBlock = turn.permission ? (
-    <PermissionCard request={turn.permission} onRespond={handleRespondPermission} />
+    <PermissionCard
+      request={turn.permission}
+      onRespond={handleRespondPermission}
+      expired={turn.permissionExpired}
+    />
   ) : null;
   const proposalBlock = routineProposal ? (
     <RoutineProposalCard
