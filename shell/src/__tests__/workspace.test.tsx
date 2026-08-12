@@ -14,9 +14,11 @@
 //   (d) The revoke flow: a per-row "Stop trusting" calls revokeTrust, and — driven
 //       through the real hook — sets the frozen "Addison will ask first again in …"
 //       line byte-for-byte.
-//   (e) The page-level gate: the card renders ONLY on the Developer/Custom
-//       surfaces (keyed off the active profile, never the mode); Simple never sees
-//       it.
+//   (e) The page-level gate: the card renders in EVERY profile (owner decision
+//       2026-08-12 — Simple gained the two path-bounded file tools on 2026-08-11 and
+//       needs a way to trust the folder they scope by), it waits for the profile to
+//       load, and it is omitted when no workspace bundle is supplied. The copy each
+//       surface gets is the honest one for its mode.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
@@ -56,6 +58,15 @@ const STANDING_LINE =
 const GRANT_CONFIRM =
   "While Addison works in this folder it won't ask before each file change, and " +
   "everything is logged. Trust this folder?";
+// The SAFE (Simple) pair, added 2026-08-12 with the panel's second audience. The
+// OPEN copy above is UNCHANGED; these are the sentences that are true in SAFE,
+// where a destructive call takes a card per invocation.
+const STANDING_LINE_ASKS =
+  "Inside a trusted folder, Addison can read your files and help you change them. " +
+  "It asks you before every change, and every change can be undone.";
+const GRANT_CONFIRM_ASKS =
+  "Addison will be able to open the files in this folder, and it will ask you " +
+  "before every change it makes. Trust this folder?";
 const DATA_DIR_REFUSAL =
   "That folder holds Addison's own memory, so Addison always asks there. " +
   "Pick a project folder instead.";
@@ -154,14 +165,36 @@ function stateWith(over: Partial<WorkspaceCardState> = {}): WorkspaceCardState {
   };
 }
 
-function renderPanel(state: WorkspaceCardState) {
-  render(<WorkspaceTrustPanel connected={true} workspace={state} />);
+function renderPanel(state: WorkspaceCardState, asksBeforeEachChange = false) {
+  render(
+    <WorkspaceTrustPanel
+      connected={true}
+      workspace={state}
+      asksBeforeEachChange={asksBeforeEachChange}
+    />,
+  );
 }
 
 describe("the workspace-trust panel", () => {
-  it("shows the frozen standing line byte-for-byte", () => {
+  it("shows the frozen standing line byte-for-byte in OPEN", () => {
     renderPanel(stateWith());
     expect(screen.getByText(STANDING_LINE)).toBeTruthy();
+  });
+
+  it("tells the SAFE truth in SAFE — a card before every change, and no OPEN copy", () => {
+    // The copy decision (2026-08-12): per-mode, not one string. The OPEN line says
+    // Addison edits "without asking first", which is FALSE in SAFE, where the file
+    // tools card per invocation. Both directions are pinned, because the failure
+    // this guards against is one sentence shown to both audiences.
+    renderPanel(stateWith(), true);
+    expect(screen.getByText(STANDING_LINE_ASKS)).toBeTruthy();
+    expect(screen.queryByText(STANDING_LINE)).toBeNull();
+    expect(document.body.textContent ?? "").not.toContain("without asking first");
+  });
+
+  it("says nothing about commands in SAFE, where Addison runs none", () => {
+    renderPanel(stateWith(), true);
+    expect(document.body.textContent ?? "").not.toMatch(/command/i);
   });
 
   it("makes NO false claim that commands are undoable or restore-covered", () => {
@@ -177,6 +210,24 @@ describe("the workspace-trust panel", () => {
   it("shows a quiet line before the trusted folders have loaded", () => {
     renderPanel(stateWith({ rootsLoaded: false }));
     expect(screen.getByText("Looking for your trusted folders…")).toBeTruthy();
+  });
+
+  it("keeps the two-step ceremony in SAFE, with SAFE's own confirm copy", async () => {
+    // The ceremony is identical in every profile — the OS picker, then Addison's
+    // own inline confirm. Nothing about it was weakened to put the panel in Simple.
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const state = stateWith();
+    renderPanel(state, true);
+
+    fireEvent.click(screen.getByRole("button", { name: CHOOSE_ACTION }));
+    expect(await screen.findByText(GRANT_CONFIRM_ASKS)).toBeTruthy();
+    expect(screen.getByTestId("pending-dir").textContent).toBe(DIR);
+    expect(state.handleGrant).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Trust this folder" }));
+    await waitFor(() => expect(state.handleGrant).toHaveBeenCalledWith(DIR));
+    expect(confirmSpy).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 
   it("gates grantTrust behind the two-step confirm — pick shows the copy, only confirm grants", async () => {
@@ -261,7 +312,13 @@ describe("the workspace-trust panel", () => {
   });
 
   it("shows a quiet placeholder when the engine isn't connected", () => {
-    render(<WorkspaceTrustPanel connected={false} workspace={stateWith()} />);
+    render(
+      <WorkspaceTrustPanel
+        connected={false}
+        workspace={stateWith()}
+        asksBeforeEachChange={false}
+      />,
+    );
     expect(screen.queryByRole("button", { name: CHOOSE_ACTION })).toBeNull();
     expect(screen.getByText(/once Addison.s engine is connected/i)).toBeTruthy();
   });
@@ -337,7 +394,7 @@ const PROFILE: ProfileState = {
   },
 };
 
-function renderSettings(profile: ProfileState, withWorkspace = true) {
+function renderSettings(profile: ProfileState | null, withWorkspace = true, connected = false) {
   const noop = vi.fn();
   const models = {
     roles: [],
@@ -390,7 +447,7 @@ function renderSettings(profile: ProfileState, withWorkspace = true) {
   };
   render(
     <SettingsPage
-      connected={false}
+      connected={connected}
       models={models as unknown as ModelSelection}
       skills={skills as unknown as SkillsState}
       snapshots={snapshots as unknown as SnapshotsState}
@@ -408,17 +465,32 @@ function renderSettings(profile: ProfileState, withWorkspace = true) {
 
 describe("the workspace-trust card gate", () => {
   it("renders on the Developer surface", () => {
-    renderSettings({ ...PROFILE, activeProfile: "developer", mode: "open" });
+    renderSettings({ ...PROFILE, activeProfile: "developer", mode: "open" }, true, true);
     expect(screen.getByText(CARD_TITLE)).toBeTruthy();
+    expect(screen.getByText(STANDING_LINE)).toBeTruthy();
   });
 
   it("renders on the Custom surface", () => {
-    renderSettings({ ...PROFILE, activeProfile: "custom", mode: "open" });
+    renderSettings({ ...PROFILE, activeProfile: "custom", mode: "open" }, true, true);
     expect(screen.getByText(CARD_TITLE)).toBeTruthy();
+    expect(screen.getByText(STANDING_LINE)).toBeTruthy();
   });
 
-  it("does NOT render on the Simple surface", () => {
-    renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" });
+  it("renders on the Simple surface too, in SAFE's words", () => {
+    // FLIPPED 2026-08-12. This asserted the opposite ("does NOT render on the
+    // Simple surface") and was right until Simple gained the two file tools, which
+    // scope by trusted root — leaving a Simple-only person with no way to grant the
+    // one thing their own tools need. docs/SAFETY.md invariant 1 owns the decision.
+    renderSettings({ ...PROFILE, activeProfile: "simple", mode: "safe" }, true, true);
+    expect(screen.getByText(CARD_TITLE)).toBeTruthy();
+    expect(screen.getByText(STANDING_LINE_ASKS)).toBeTruthy();
+    expect(screen.queryByText(STANDING_LINE)).toBeNull();
+  });
+
+  it("waits for the profile rather than guessing a mode for the copy", () => {
+    // `null` is "not answered yet", never "Simple" — and picking a sentence from a
+    // guessed mode is picking which of two contradictory promises a person reads.
+    renderSettings(null);
     expect(screen.queryByText(CARD_TITLE)).toBeNull();
   });
 

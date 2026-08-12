@@ -1108,9 +1108,14 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "Simple reads and changes a file inside a folder you have trusted, behind "
             "a card that names the file, and every change can be undone."
         ),
-        "the honest limit that remains, which names Simple and a folder": (
-            "A Simple person still has no surface for granting a trusted folder, so "
-            "in practice this reaches them only for folders trusted under Developer."
+        # CORRECTED 2026-08-12, when the limit it recorded was closed: Simple has
+        # the "Folders Addison may work in" panel. A precision sample is prose the
+        # gate declares LEGITIMATE, so a stale one is the tree's own wrong sentence
+        # sitting where no document can contradict it (the 2026-08-08 correction
+        # under `artifact-disabling-polarity` says the same thing).
+        "the limit that USED to remain, closed and dated": (
+            "A Simple person had no surface for granting a trusted folder until "
+            "2026-08-12; the panel is in every profile now."
         ),
     },
     "mcp-is-dev-only-in-v1": {

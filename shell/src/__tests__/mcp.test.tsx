@@ -535,14 +535,14 @@ describe("useMcpServers (real hook, mocked ipc)", () => {
 // ---------------------------------------------------------------------------
 // (d) the Tools surface — one SECTION per server (the plan's Decision 2)
 // ---------------------------------------------------------------------------
-function renderTools(servers: McpServer[], showTrustedFolders = true) {
+function renderTools(servers: McpServer[], showToolServers = true) {
   render(
     <ToolsSurface
       connected
       providers={[]}
       roles={[]}
       trustedRoots={[]}
-      showTrustedFolders={showTrustedFolders}
+      showToolServers={showToolServers}
       mcpServers={servers}
       onAddKey={vi.fn()}
       onStopTrusting={vi.fn()}

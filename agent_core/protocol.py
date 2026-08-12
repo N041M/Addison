@@ -121,8 +121,10 @@ class Method:
     # snapshot-captured, never a floor.
     ROUTING_GET = "routing.get"      # {} -> {strategy, availableStrategies, customChain, surface}
     ROUTING_SET = "routing.set"      # {strategy?, customChain?} -> {ok, strategy, customChain} | {ok:false, error}
-    # Workspace trust (step 5) — the OPEN-mode coding harness's trust boundary.
-    # Developer/Custom surfaces only (the frontend hides the card in Simple).
+    # Workspace trust (step 5) — the trust boundary the two path-bounded file tools
+    # scope by. It began as the OPEN coding harness's boundary and reaches SAFE as
+    # well since 2026-08-11; the Settings panel that grants a folder is in every
+    # profile since 2026-08-12, so these are NOT mode-gated calls and never were.
     # grantTrust floor-refuses Addison's own data dir. Trust rows are EXCLUDED from
     # snapshots (standing consent, like tool_grants).
     WORKSPACE_GRANT_TRUST = "workspace.grantTrust"   # {directory} -> {ok, directory} | {ok:false, error}

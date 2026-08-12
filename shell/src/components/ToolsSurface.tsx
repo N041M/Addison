@@ -12,13 +12,17 @@
 //               on this computer, and the folders Addison may work in.
 //   Available — providers with no key yet, each with the way to add one.
 //
-// Trusted folders appear here ONLY on the Developer and Custom surfaces, keyed
-// off the active profile exactly as the Settings panel is (Phase-2 step 5): a
-// Simple-profile person has no workspace-trust surface anywhere, and this page
-// is not a back door to one. Tool servers are gated the same way, and that gate
-// is the whole of what a Simple-profile person is told about them: no section is
-// rendered at all, because these tools are Developer-only and a page that named
-// them would be claiming reach the active profile does not have.
+// Trusted folders appear here in EVERY profile since 2026-08-12, when Simple
+// gained the Settings panel that grants them (owner decision; docs/SAFETY.md
+// invariant 1). They were Developer/Custom only before that, so that this page
+// could not become a back door to a surface Settings hid — and with Settings no
+// longer hiding it, keeping them off this page would be the opposite fault: the
+// page that answers "what can Addison reach" leaving out folders a Simple person
+// trusted and Addison's file tools genuinely read. Tool servers are NOT in that
+// position and keep the Developer/Custom gate, which is the whole of what a
+// Simple-profile person is told about them: no section is rendered at all,
+// because those tools are Developer-only and a page that named them would be
+// claiming reach the active profile does not have.
 //
 // TOOL SERVERS GET A SECTION EACH, never rows mixed into the lists above
 // (Phase-2 step 7, phase 2 — the plan's Decision 2, answered 2026-08-07).
@@ -58,7 +62,7 @@ export function ToolsSurface({
   providers,
   roles,
   trustedRoots,
-  showTrustedFolders,
+  showToolServers,
   mcpServers = [],
   onAddKey,
   onStopTrusting,
@@ -69,10 +73,10 @@ export function ToolsSurface({
   providers: ProviderInfo[];
   roles: RoleOption[];
   trustedRoots: WorkspaceRoot[];
-  /** Developer/Custom only — the same gate the Settings panel uses. Covers the
-   * tool-server sections too: both answer "what may Addison reach", and both are
-   * Developer surfaces. */
-  showTrustedFolders: boolean;
+  /** Developer/Custom only — the tool-server sections. It used to gate the trusted
+   * folders too (as `showTrustedFolders`); folders are listed in every profile
+   * since 2026-08-12, so what is left is the MCP gate alone. */
+  showToolServers: boolean;
   /** The configured tool servers with whatever the last check found. Empty on the
    * Simple surface, which is the gate rather than a rendering choice. */
   mcpServers?: McpServer[];
@@ -85,8 +89,8 @@ export function ToolsSurface({
   const connectedProviders = providers.filter((p) => p.connected);
   const availableProviders = providers.filter((p) => !p.connected);
   const localModels = roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
-  const folders = showTrustedFolders ? trustedRoots : [];
-  const servers = showTrustedFolders ? mcpServers : [];
+  const folders = trustedRoots;
+  const servers = showToolServers ? mcpServers : [];
 
   // Tool servers count. They get their own sections below rather than rows in
   // this list, but "Nothing yet" is a claim about the whole page — and it sat
