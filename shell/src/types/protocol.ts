@@ -12,6 +12,12 @@ export const Method = {
   ConversationList: "conversation.list",
   ConversationRename: "conversation.rename",
   ConversationStreamChunk: "conversation.streamChunk",
+  // Stop. There is still no mid-step interrupt in v1 — the core finishes the tool
+  // call it started — so what this ends is the turn's CONSENT: every permission
+  // card waiting for an answer is refused, and the turn may not raise another. The
+  // webview showing a stopped card as expired is presentation; this call is what
+  // makes a late Allow do nothing (agent_core/main.py, `_handle_conversation_stop`).
+  ConversationStop: "conversation.stop",
   PermissionRequestGrant: "permission.requestGrant",
   PermissionRespond: "permission.respond",
   ToolActivityUpdate: "tool.activityUpdate",
@@ -154,7 +160,10 @@ export const Method = {
   // plainly and leaves the earlier version on screen for you to copy. `onDiskChanged`
   // has THREE answers — yes, no, and "Addison can't tell" — and the third is honest
   // rather than a guess: reverting replaces whatever is there now, so a file you have
-  // edited yourself since is warned about before anything is written.
+  // edited yourself since is warned about before anything is written. `replacedBy`
+  // is the other question — not "has this file changed?" but "is this still the same
+  // file?": a shortcut or a different file standing at the name is refused by the
+  // core, so the screen says so instead of offering a Revert that cannot work.
   //
   // Developer/Custom only, like the two above. Mirrored in protocol.py.
   WorkspaceListEdits: "workspace.listEdits",
@@ -513,6 +522,17 @@ export interface WorkspaceEdit {
   onDiskChanged: boolean | null;
   /** The file is not there any more. Revert can still put it back. */
   missing: boolean;
+  /**
+   * SOMETHING ELSE IS AT THAT NAME NOW — a shortcut (`"shortcut"`) or a different
+   * file, hard link included (`"other-file"`). `null` is the ordinary case.
+   *
+   * Distinct from `onDiskChanged`, which is about a file's CONTENTS: this says the
+   * name no longer reaches the file Addison wrote at all. The core refuses both the
+   * diff and the revert for these, so the screen must not offer a Revert that could
+   * only fail — but this is a MARKER, never the enforcement. The refusal is the
+   * core's and wins if the two ever disagree.
+   */
+  replacedBy: "shortcut" | "other-file" | null;
 }
 
 /** A `workspace.listEdits` answer. Newest first. */

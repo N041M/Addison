@@ -23,7 +23,13 @@ import httpx
 from agent_core.memory.store import Store
 from agent_core.models_catalog import CloudModel
 from agent_core.protocol import Method
-from agent_core.providers.base import ModelProvider, ModelResponse, ToolCallRequest, Usage
+from agent_core.providers.base import (
+    ModelProvider,
+    ModelResponse,
+    ProviderCapabilities,
+    ToolCallRequest,
+    Usage,
+)
 from agent_core.secret_presence import SecretPresence
 from agent_core.shell_bridge import IpcShellBridge
 from agent_core.tools.base import (
@@ -84,6 +90,74 @@ def test_send_message_streams_and_completes(tmp_path):
         assert isinstance(done["result"]["assistantMessageId"], str)
     finally:
         _shutdown(reader, thread)
+
+
+class _SegmentedStreamingProvider:
+    """Says something, calls a tool, then says something else — streaming both.
+
+    The conftest double ignores ``on_delta``; this one honours it, which is the
+    only way to see what a real turn puts on the wire around a tool call."""
+
+    def __init__(self, rounds) -> None:
+        self._rounds = list(rounds)
+
+    def capabilities(self):
+        return ProviderCapabilities(
+            native_tool_calling=True,
+            max_context_tokens=100_000,
+            supports_streaming=True,
+            runs_off_device=False,
+        )
+
+    def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
+        text, tool_calls = self._rounds.pop(0)
+        if on_delta is not None:
+            on_delta(text)
+        return ModelResponse(text=text, tool_calls=list(tool_calls))
+
+
+def test_the_two_halves_of_a_tool_turn_reach_the_reader_separated(tmp_path):
+    """KNOWN-BUGS P3/6, end to end. The frontend appends every ``streamChunk``
+    into ONE message, so what those frames join to IS the settled transcript —
+    which is why "…the add function.Now I'll add a docstring" survived the turn
+    rather than being a live-render artifact. The break belongs on the wire.
+
+    The tool_use names an id nothing is registered under: the registry refuses it
+    and the turn carries on to its second round, so the test is about the two
+    halves of the turn and not about any tool.
+    """
+    before = "I'll read the file first to see the current state of the add function."
+    after = "Now I'll add a docstring."
+    provider = _SegmentedStreamingProvider(
+        [
+            (before, [ToolCallRequest(id="call-1", tool_id="no_such_tool", args={})]),
+            (after, []),
+        ]
+    )
+    h = build_server(tmp_path, provider=provider)
+    try:
+        h.reader.feed(
+            {"jsonrpc": "2.0", "id": 1,
+             "method": Method.CONVERSATION_SEND_MESSAGE, "params": {"text": "add a docstring"}}
+        )
+        done = h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        assert done["result"]["ok"] is True
+
+        shown = "".join(
+            f["params"]["text"]
+            for f in h.writer.frames
+            if f.get("method") == Method.CONVERSATION_STREAM_CHUNK
+        )
+        assert shown == f"{before}\n\n{after}"
+        assert "function.Now" not in shown
+
+        # And on disk the two halves are two rows, so nothing can re-fuse them
+        # when the conversation is loaded again.
+        _, messages = _stored_transcript(tmp_path)
+        said = [m["content"] for m in messages if m["role"] == "assistant"]
+        assert said == [before, after]
+    finally:
+        _shutdown(h.reader, h.thread)
 
 
 def _stored_transcript(tmp_path) -> tuple[list, list]:
@@ -546,9 +620,11 @@ def test_rewind_after_load_truncates_store_and_memory(tmp_path):
 
 
 def test_load_after_tool_turn_skips_tool_rows_and_empty_stubs(tmp_path):
-    # insert_message never persists assistant tool_calls, so a reload must keep
-    # only user messages and the assistant's final prose — replaying persisted
-    # tool rows would send unpaired tool_results and the provider would 400.
+    # A reload keeps only user messages and the assistant's final prose —
+    # replaying persisted tool rows would send unpaired tool_results and the
+    # provider would 400. The calls themselves ARE stored (KNOWN-BUGS #5) and come
+    # back as history, never as transcript: tests/test_reloaded_work.py owns that
+    # half, including the proof that nothing restored reaches a provider.
     responses = [_tool_call_response(), ModelResponse(text="Done.", tool_calls=[])]
     server, reader, writer, tool, thread = _server(tmp_path, responses)
     try:

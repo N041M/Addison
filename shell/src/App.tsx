@@ -118,7 +118,7 @@ const VIEW_COMMIT_MS = 240;
 const SURFACE_TITLES: Record<Exclude<View, "chat">, string> = {
   settings: "Settings",
   tools: "Tools",
-  snapshots: "Snapshots",
+  snapshots: "Restore points",
   widgets: "Build a widget",
   code: "Code",
 };
@@ -367,12 +367,19 @@ export function App() {
   });
   // Sidebar controls are held while a turn is running or a permission prompt is
   // open — switching conversations mid-turn would strand in-flight work.
-  const controlsBusy = turn.isWorking || turn.permission != null;
+  //
+  // An EXPIRED card holds nothing. It is the record of a question whose turn was
+  // stopped (KNOWN-BUGS #4), and nothing is in flight behind it — leaving the
+  // sidebar and "＋ New chat" locked on it would mean pressing Stop could strand a
+  // person on a card they can no longer answer, with no way out but sending
+  // another message.
+  const controlsBusy = turn.isWorking || (turn.permission != null && !turn.permissionExpired);
   const conversationsState = useConversations({
     connected,
     controlsBusy,
     resetTransientState,
     setMessages: turn.setMessages,
+    setActivities: turn.setActivities,
     // Loading or starting a conversation always lands on the chat view, through
     // the same transition every other route uses.
     setScreen: (screen) => changeView(screen),
@@ -887,7 +894,11 @@ export function App() {
     />
   ) : null;
   const consentBlock = turn.permission ? (
-    <PermissionCard request={turn.permission} onRespond={handleRespondPermission} />
+    <PermissionCard
+      request={turn.permission}
+      onRespond={handleRespondPermission}
+      expired={turn.permissionExpired}
+    />
   ) : null;
   const proposalBlock = routineProposal ? (
     <RoutineProposalCard
@@ -920,12 +931,19 @@ export function App() {
     />
   ) : null;
 
+  // UNTIL THE ENGINE HAS ANSWERED, THIS IS UNDEFINED and the footer says nothing.
+  // It used to fall through to "Simple profile", so every launch asserted a
+  // default as fact for the first seconds and then corrected itself in front of
+  // the person — and a Developer-profile user watched their window claim Simple.
+  // Same idiom as `snapshotsHint`: an unknown fact is omitted, never guessed.
   const profileLabel =
-    profile?.activeProfile === "developer"
-      ? "Developer profile"
-      : profile?.activeProfile === "custom"
-        ? "Custom profile"
-        : "Simple profile";
+    profile === null
+      ? undefined
+      : profile.activeProfile === "developer"
+        ? "Developer profile"
+        : profile.activeProfile === "custom"
+          ? "Custom profile"
+          : "Simple profile";
   // In OPEN mode the sidebar appends a dim, mono " · open" — the one quiet
   // acknowledgement that the safety posture is different. Nothing louder.
   const profileModeNote = profile?.mode === "open" ? "open" : undefined;

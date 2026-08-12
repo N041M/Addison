@@ -38,6 +38,22 @@ from agent_core.providers.base import (
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _TIMEOUT_SECONDS = 60.0
 
+# Gemini 3 returns a signed record of its reasoning on the SAME part as each
+# ``functionCall``, and REQUIRES it back verbatim when that call is replayed in
+# history — a missing one is a 400 INVALID_ARGUMENT, so every multi-step tool turn
+# died on the second model call until this was captured. The name is the REST
+# wire spelling: this module speaks v1beta camelCase throughout (``functionCall``,
+# ``usageMetadata``), NOT the SDK's ``thought_signature``. The value is opaque —
+# a base64 string we never decode, compare or shorten, only carry.
+#
+# A signature can also appear on a TEXT part. It is not replayed, because
+# Addison's ``Message`` keeps assistant prose as a bare string with nowhere to
+# hang one, and because only functionCall parts are strictly validated — a text
+# part without its signature is accepted, while a text part carrying somebody
+# ELSE's signature is its own 400. Send what we have on the part we got it from,
+# and nothing else.
+_SIGNATURE_FIELD = "thoughtSignature"
+
 _NO_KEY_MESSAGE = (
     "No API key is set up yet. Add your Google API key in Settings to start chatting."
 )
@@ -193,6 +209,9 @@ def _translate_history(messages: list[Message]) -> list[dict]:
     Consecutive tool results MUST merge into one ``user`` turn — Gemini pairs a
     ``functionResponse`` to the ``functionCall`` by tool NAME, so we carry the name
     forward from the assistant turn that requested it.
+
+    Each replayed ``functionCall`` also carries back the ``thoughtSignature`` the
+    model sent with it, when we have one — see ``_function_call_part``.
     """
     contents: list[dict] = []
     pending_results: list[dict] = []
@@ -230,11 +249,49 @@ def _translate_history(messages: list[Message]) -> list[dict]:
                 parts.append({"text": m.content})
             for c in m.tool_calls:
                 call_names[c.id] = c.tool_id
-                parts.append({"functionCall": {"name": c.tool_id, "args": c.args}})
+                parts.append(_function_call_part(c))
             contents.append({"role": "model", "parts": parts})
 
     flush_results()
     return contents
+
+
+def _function_call_part(call: ToolCallRequest) -> dict:
+    """One ``functionCall`` part for the history replay, signature included.
+
+    The signature rides on the PART, beside ``functionCall`` rather than inside
+    it, exactly where the model put it. Absent — a turn from before this was
+    captured, a restored conversation, or any model that does not sign — the part
+    goes out without the field rather than with an empty or invented one: Gemini
+    only enforces a signature it actually issued, and a wrong one is worse than
+    none. Parallel calls each keep their own, because the signature is stored on
+    the ToolCallRequest and never on the turn.
+    """
+    part: dict = {"functionCall": {"name": call.tool_id, "args": call.args}}
+    signature = (call.provider_meta or {}).get(_SIGNATURE_FIELD)
+    if isinstance(signature, str) and signature:
+        part[_SIGNATURE_FIELD] = signature
+    return part
+
+
+def _tool_call_from_part(part: dict) -> ToolCallRequest | None:
+    """A ``functionCall`` response part as a ``ToolCallRequest``, or None if the
+    part names no function. Shared by the plain and streaming translations so a
+    signature can never be captured by one path and dropped by the other."""
+    fn = part.get("functionCall") or {}
+    name = fn.get("name")
+    if not name:
+        return None
+    args = fn.get("args")
+    if not isinstance(args, dict):
+        args = {}
+    meta: dict = {}
+    signature = part.get(_SIGNATURE_FIELD)
+    if isinstance(signature, str) and signature:
+        meta[_SIGNATURE_FIELD] = signature
+    return ToolCallRequest(
+        id=f"google-{uuid.uuid4().hex[:8]}", tool_id=name, args=args, provider_meta=meta
+    )
 
 
 def _translate_response(data: dict) -> ModelResponse:
@@ -246,16 +303,10 @@ def _translate_response(data: dict) -> ModelResponse:
         if not isinstance(part, dict):
             continue
         if "functionCall" in part:
-            fn = part.get("functionCall") or {}
-            name = fn.get("name")
-            if not name:
+            call = _tool_call_from_part(part)
+            if call is None:
                 continue
-            args = fn.get("args")
-            if not isinstance(args, dict):
-                args = {}
-            tool_calls.append(
-                ToolCallRequest(id=f"google-{uuid.uuid4().hex[:8]}", tool_id=name, args=args)
-            )
+            tool_calls.append(call)
         elif isinstance(part.get("text"), str):
             text_parts.append(part["text"])
     text = "".join(text_parts) if text_parts else None
@@ -291,16 +342,10 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
             if not isinstance(part, dict):
                 continue
             if "functionCall" in part:
-                fn = part.get("functionCall") or {}
-                name = fn.get("name")
-                if not name:
+                call = _tool_call_from_part(part)
+                if call is None:
                     continue
-                args = fn.get("args")
-                if not isinstance(args, dict):
-                    args = {}
-                tool_calls.append(
-                    ToolCallRequest(id=f"google-{uuid.uuid4().hex[:8]}", tool_id=name, args=args)
-                )
+                tool_calls.append(call)
             elif isinstance(part.get("text"), str) and part["text"]:
                 text_parts.append(part["text"])
                 on_delta(part["text"])
@@ -326,7 +371,21 @@ def _translate_usage(usage) -> Usage | None:
 
 
 def _http_error_message(status_code: int) -> str:
-    if status_code in (400, 401, 403):
+    if status_code == 400:
+        # NOT the key sentence. 400 INVALID_ARGUMENT on ``generateContent`` is
+        # about what Addison SENT — a malformed history, an unusable tool schema,
+        # a missing thoughtSignature — and reading it as a rejected key sent
+        # people to Settings to re-paste a key that was working fine. The
+        # server's own words ride along as ``server_detail`` for the log
+        # (``exception_for_http_status``), never onto the screen.
+        # ``list_models`` below keeps the key sentence for its own 400 on
+        # purpose: that request has no body to be wrong, so the key is the only
+        # thing left, and Google answers a bad key there with 400 API_KEY_INVALID.
+        return (
+            "Google didn't accept the request Addison sent. Try again, and if it "
+            "keeps happening pick a different model."
+        )
+    if status_code in (401, 403):
         return "That key doesn't work. Check it and try again."
     if status_code == 429:
         return "Google is busy right now (too many requests). Wait a moment and try again."

@@ -93,6 +93,13 @@ class Store:
         # for an older row is NULL — "nobody has been told anything", so the first
         # 401 after the upgrade notifies once and every later one does not.
         self._add_column_if_missing("provider_config", "key_rejected_at", "INTEGER")
+        # The work panel and "Save as routine" after a relaunch (KNOWN-BUGS #5).
+        # Same idiom, same guard: schema.sql already carries the column on a fresh
+        # database (no-op), an older one gets it added. NULL is the only honest
+        # default — a row written before this column recorded no tool calls, and
+        # "no calls recorded" is exactly what a reopened chat should conclude
+        # rather than inventing steps for a turn nobody wrote down.
+        self._add_column_if_missing("messages", "tool_calls_json", "TEXT")
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -471,15 +478,20 @@ class Store:
         content: str,
         created_at: int,
         tool_call_id: str | None = None,
+        tool_calls_json: str | None = None,
     ) -> None:
         """Append one message to the transcript. Columns map 1:1 to the schema;
         no summarization or token counting happens here — that is the v2 Context
-        Budget Manager's job (spec §4.8/§10), not this read/write layer's."""
+        Budget Manager's job (spec §4.8/§10), not this read/write layer's.
+
+        ``tool_calls_json`` is what an assistant turn asked for, encoded by the one
+        caller that has the live objects (``rpc/conversation.py``). schema.sql owns
+        why it is written down; this layer only stores the string."""
         self._conn.execute(
             "INSERT INTO messages "
-            "(id, conversation_id, role, content, tool_call_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (id, conversation_id, role, content, tool_call_id, created_at),
+            "(id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json),
         )
         self._conn.commit()
 
@@ -489,7 +501,8 @@ class Store:
         Rows are returned as plain column-keyed dicts — there is no messages
         ``model.py`` to mirror, and this stays a minimal read helper."""
         rows = self._conn.execute(
-            "SELECT id, conversation_id, role, content, tool_call_id, created_at "
+            "SELECT id, conversation_id, role, content, tool_call_id, created_at, "
+            "tool_calls_json "
             "FROM messages WHERE conversation_id = ? "
             "ORDER BY created_at ASC, rowid ASC",
             (conversation_id,),

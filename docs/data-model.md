@@ -50,6 +50,7 @@ erDiagram
         TEXT content
         TEXT tool_call_id
         INTEGER created_at
+        TEXT tool_calls_json "history only, never replayed"
     }
     memory_facts {
         TEXT id PK
@@ -87,11 +88,15 @@ erDiagram
   (lineage for a continued conversation). A conversation row is created lazily on the
   first turn, so an abandoned empty chat leaves nothing behind.
 - **messages** — the full transcript in insertion order. `role` is constrained to
-  `user`, `assistant`, or `tool`. Note there is **no** `tool_calls` column: an
-  assistant turn's requested tool calls are not persisted, only its text. That is why
-  reopening a conversation keeps the assistant's prose but not its tool plumbing —
-  replaying persisted tool rows would send unpaired tool results and the provider
-  would reject the next turn.
+  `user`, `assistant`, or `tool`. Reopening a conversation rebuilds the model-facing
+  transcript from user rows and non-empty assistant rows only: replaying persisted
+  tool rows would send unpaired tool results and the provider would reject the next
+  turn. `tool_calls_json` (added 2026-08-09, KNOWN-BUGS #5) records what an assistant
+  turn ASKED FOR — `{id, tool_id, args, ran, detail}` per call — and is **history, not
+  transcript**: it is never replayed to a model. It is what lets a reopened chat
+  redraw "Addison's work" and still offer "Save as routine", both of which used to
+  vanish on relaunch. The decoded calls ride on `Message.past_tool_calls`, a field no
+  provider adapter reads.
 - **memory_facts** — the second tier of memory: durable facts to be written only on
   explicit user confirmation (`confirmed_by_user`), never silently. **Inert today** —
   the table is created, but `Store` has no method that reads or writes it, so nothing

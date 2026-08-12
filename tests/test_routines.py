@@ -513,10 +513,14 @@ class _Call:
 
 
 class _Msg:
-    def __init__(self, role, content="", tool_calls=()):
+    def __init__(self, role, content="", tool_calls=(), past_tool_calls=()):
         self.role = role
         self.content = content
         self.tool_calls = list(tool_calls)
+        # What conversation.load restores onto a reopened chat's messages instead
+        # of tool_calls — history the builder may read and no provider replays
+        # (providers/base.py owns why the two are separate fields).
+        self.past_tool_calls = list(past_tool_calls)
 
 
 class _Conv:
@@ -629,6 +633,29 @@ def test_builder_keeps_every_step_of_a_long_turn():
     assert len(draft.steps) == 12
 
 
+def test_builder_reads_a_reopened_conversations_restored_calls():
+    """KNOWN-BUGS #5: a chat reopened after a relaunch is still saveable.
+
+    ``conversation.load`` cannot put restored calls back on ``tool_calls`` — a
+    provider replays that field, and a ``tool_use`` sent without the
+    ``tool_result`` that answered it makes the API reject every later request of
+    the session — so it puts them on ``past_tool_calls`` instead. To a routine the
+    two are the same thing: steps the person watched happen. The message here
+    carries ONLY the restored field, which is exactly the shape a reload produces.
+    """
+    restored = _Msg(
+        "assistant", "All done!",
+        past_tool_calls=[_Call("save_file", {"filename": "total.txt"})],
+    )
+    conversation = _Conv([_Msg("user", "save my total"), restored])
+
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["save_file"]
+    # The generalization is the live one, not a lesser copy for reloaded chats.
+    assert draft.steps[0].args_template["filename"] == "{{output_filename}}"
+
+
 def test_builder_raises_plainly_when_nothing_to_extract():
     with pytest.raises(ValueError, match="couldn't find any actions"):
         RoutineBuilder().propose_from_recent_actions(_Conv([_Msg("user", "hello")]))
@@ -694,8 +721,10 @@ def test_library_crud_round_trip(tmp_path):
 #
 # These enter through the real JSON-RPC server with the REAL tool registry
 # (`build_registry(DEVELOPER)`), because half the question is which tools the
-# SAFE view holds — `read_project_file` is registered `open_only`, and no
-# hand-rolled test registry would reproduce that.
+# SAFE view holds — `create_automation` is registered `open_only`, and no
+# hand-rolled test registry would reproduce that. (It was `read_project_file`
+# until 2026-08-11, when the file tools joined the SAFE view and stopped being an
+# example of anything Simple cannot reach — docs/SAFETY.md owns that decision.)
 # ===========================================================================
 
 # Frozen copy (rpc/constants.py holds it once, for both the marker and the
@@ -801,7 +830,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     """THE CASE ``routine_uses_dev_abilities`` ALONE MISSES, and the reason the
     question lives in the RPC layer at all.
 
-    ``read_project_file`` is registered ``open_only``: absent from
+    ``create_automation`` is registered ``open_only``: absent from
     ``visible_tools(SAFE)`` and refused at dispatch outside OPEN. A routine naming
     it carries NO command step, so the plan-only test answers "needs nothing" — and
     the row would sit in Simple offering a Run that the engine refuses one click
@@ -822,7 +851,7 @@ def test_a_routine_naming_a_developer_only_tool_is_disabled_and_refused_in_simpl
     this row is stamped 'safe'."""
     h = _seeded(
         tmp_path,
-        [(_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "README.md"})]), "safe")],
+        [(_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe")],
     )
     try:
         assert _rows(h, 1)["reader"]["unavailable"] == _DISABLED
@@ -888,7 +917,7 @@ def test_the_rail_and_the_library_never_disagree_about_one_routine(tmp_path):
         tmp_path,
         [
             (_plan("calc", [RoutineStep("s1", "calculator", {"expression": "1+1"})]), "open"),
-            (_plan("reader", [RoutineStep("s1", "read_project_file", {"path": "x"})]), "safe"),
+            (_plan("reader", [RoutineStep("s1", "create_automation", {"name": "N"})]), "safe"),
         ],
         widgets=[
             ("w-calc", {"kind": "routine", "routineId": "calc", "title": "Add up"}),

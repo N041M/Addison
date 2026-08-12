@@ -301,9 +301,9 @@ describe("re-theming on the appearance flip", () => {
   it("REDEFINES both themes and then selects one", () => {
     // Kills: calling only `setTheme`. The hex values are baked at define time, so
     // a person who flips Appearance while reading a file would keep the old
-    // palette until they reopened it — the exact failure `MermaidDiagram`'s
-    // once-per-session read has, which is tolerable for a drawn diagram and wrong
-    // for a document somebody is looking at.
+    // palette until they reopened it. (`MermaidDiagram` had exactly that failure
+    // until 2026-08-11 — it initialized mermaid once per session — and now
+    // re-initializes on the flip; see mermaidDiagram.test.tsx.)
     const defined: { name: string; background: string }[] = [];
     const selected: string[] = [];
     const monaco = {

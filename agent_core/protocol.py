@@ -53,6 +53,14 @@ class Method:
     CONVERSATION_LIST = "conversation.list"  # {} -> {conversations}
     CONVERSATION_RENAME = "conversation.rename"  # {conversationId, title} -> {ok, title?, error?}
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
+    # {} -> {ok, endedRequests}. The person pressed Stop. The v1 contract still has
+    # no way to interrupt a turn MID-STEP (the worker finishes what it started), and
+    # this method deliberately does not pretend otherwise — what it ends is the
+    # turn's CONSENT: every card waiting for an answer is resolved as "no", and no
+    # further card is raised for that turn. A permission answer arriving afterwards
+    # is refused by the core (main.py, ``_handle_permission_respond``); the webview
+    # showing the card as expired is presentation, this is the enforcement.
+    CONVERSATION_STOP = "conversation.stop"
     PERMISSION_REQUEST_GRANT = "permission.requestGrant"
     PERMISSION_RESPOND = "permission.respond"
     # {toolId, allow, typed?} — `typed` carries the code the person retyped on an
@@ -153,14 +161,17 @@ class Method:
     # before/after into one payload means a twenty-file turn ships ~10 MB across two
     # process boundaries on a single JSON line.
     # <edit> = {path, root, relativePath, snapshotIds, writes, created, firstWrittenAt,
-    #           lastWrittenAt, revertable, onDiskChanged, missing}
+    #           lastWrittenAt, revertable, onDiskChanged, missing, replacedBy}
     # `snapshotIds` is newest-first (the revert chain). `revertable` is the SHELL's
     # answer about its session write ledger, not a permission: after a restart it is
     # false for every historic edit, and the surface says so in a sentence instead of
     # rendering a button that fails. `onDiskChanged` is TRI-STATE — true, false, or
     # null for "Addison can't tell" (a row written before digests existed, or a file
     # the shell cannot judge). `created` means Addison made the file, so BEFORE is
-    # empty and putting it back removes it.
+    # empty and putting it back removes it. `replacedBy` is "shortcut", "other-file"
+    # or null: SOMETHING ELSE now stands at the name Addison wrote, which the diff
+    # and the revert both refuse — said here so the surface can say it BEFORE
+    # offering a press that cannot succeed. A marker, never the enforcement.
     WORKSPACE_LIST_EDITS = "workspace.listEdits"
     # {path} -> {path, before, after, beforeTruncated, afterTruncated} | {ok:false, error}
     # BEFORE comes from the database (the oldest unreverted prior) and AFTER from disk,
@@ -394,7 +405,10 @@ class Method:
     # scoped like the four above) — the core confines which paths reach here (D3),
     # and the shell independently refuses Addison's own data dir + ledgers what it
     # wrote so restore can only touch a path this session created/overwrote.
-    SHELL_WRITE_WORKSPACE_FILE = "shell.writeWorkspaceFile"     # {path, content} -> {existed, prior}
+    # {path, content} -> {existed, prior, newlineRestored}. The last field says the
+    # shell put back a trailing newline the edit dropped, so what is on disk is
+    # `content` + "\n" — see tools/base.py, whose one caller hashes what landed.
+    SHELL_WRITE_WORKSPACE_FILE = "shell.writeWorkspaceFile"
     SHELL_READ_WORKSPACE_FILE = "shell.readWorkspaceFile"       # {path} -> {content}
     SHELL_RESTORE_WORKSPACE_FILE = "shell.restoreWorkspaceFile" # {path, content?|delete} -> {}
     SHELL_PICK_DIRECTORY = "shell.pickDirectory"                # {} -> {path} (native folder picker)

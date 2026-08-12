@@ -287,17 +287,25 @@ Component by component:
   **two independent dimensions**, because step 5 needed them apart: `open_only` is
   *visibility* — the tool is absent from `visible_tools(SAFE)` and refused at dispatch
   outside OPEN — while `allow_missing_undo` is the *exemption* from the undo check.
-  `dev_only=True` is the alias that sets both, and `run_command` is the only tool that
-  gets it. The harness's `read_project_file` / `write_project_file` are `open_only`
-  **and still undo-enforced**, so a future edit dropping `write_project_file.undo()`
-  fails registration. All of them live in the ONE shared registry, so routines use the
+  `dev_only=True` is the alias that sets both, and `run_command` / `disarm_automation`
+  are the tools that get it. `create_automation` and `arm_automation` are `open_only`
+  **and still undo-enforced**, so a future edit dropping either `undo()` fails
+  registration — the pairing the split exists for. (The harness's
+  `read_project_file` / `write_project_file` forced that split and held that
+  position until 2026-08-11; they now register with **no flags at all** — Simple can
+  read and change a file in a trusted folder behind a card, and the write's real
+  `undo()` is enforced by the plain rule every non-LOW tool passes.
+  [SAFETY.md](SAFETY.md) invariant 1 owns the decision.) All of them live in the ONE shared registry, so routines use the
   same instance (no second registry). Hiding is not enforcing: the SAFE boundary is
   closed at **dispatch** by `refuse_if_dev_only_outside_open`, called by both the
   orchestrator turn path and the routine step path *before* the gate and before
   `execute`, so a `tool_use` naming a hidden id cannot sail through to `get()`.
 - **PermissionGate** — consulted before every tool execution, not just the first, so
   a revoked grant takes effect immediately. It is mode-aware (`authorize`): in SAFE
-  mode it prompts for every not-yet-granted tool exactly as before; in OPEN mode it
+  mode it prompts for every not-yet-granted tool and remembers the coarse grant —
+  except for a **destructive** call, which since 2026-08-11 takes the same
+  per-invocation card OPEN gives it (the one SAFE-visible destructive tool is
+  `write_project_file`, and the card names the file each time); in OPEN mode it
   auto-allows non-destructive calls (recording them in the activity log) and prompts
   **per invocation** for destructive ones — no prior grant is consulted and none is
   recorded, so approving one destructive command never authorizes a later one, and

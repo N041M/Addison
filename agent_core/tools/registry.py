@@ -18,11 +18,14 @@ them and one new tool needs them apart:
     it, send it to the model, or run it.
   * ``allow_missing_undo`` — the EXEMPTION from the undo-at-registration check (the
     single most important invariant, spec §9). Granted ONLY to a genuinely
-    irreversible OPEN-only tool (``run_command``).
-``write_project_file`` is the tool that forced the split: it must be ``open_only``
-(hidden from SAFE) AND undo-ENFORCED (it has a real ``undo()`` and a future edit
-dropping it must fail registration). ``dev_only=True`` stays as a convenience alias
-that sets BOTH — the exact shape ``run_command`` needs.
+    irreversible OPEN-only tool (``run_command``, ``disarm_automation``).
+``write_project_file`` forced the split and no longer occupies it: it needed to be
+``open_only`` (hidden from SAFE) AND undo-ENFORCED at once, and on 2026-08-11 it
+left the SAFE boundary altogether (Simple can change a file behind a card —
+docs/SAFETY.md). The pairing it forced is still live and still load-bearing:
+``create_automation`` and ``arm_automation`` are both ``open_only`` with a real
+``undo()``, so an edit dropping either method fails registration. ``dev_only=True``
+stays as a convenience alias that sets BOTH — the exact shape ``run_command`` needs.
 
 **THREAD CONFINEMENT IS AN INVARIANT HERE, and nothing in this file locks.** Until
 the MCP client arrived, every registration happened once at startup
@@ -141,7 +144,7 @@ class ToolRegistry:
         convenience alias that sets BOTH (``run_command``'s exact shape).
 
         The undo-at-registration check still raises for any non-LOW tool without a
-        real ``undo()`` UNLESS ``allow_missing_undo`` — so ``write_project_file``
+        real ``undo()`` UNLESS ``allow_missing_undo`` — so ``create_automation``
         (``open_only=True, allow_missing_undo=False``) is hidden from SAFE yet stays
         undo-ENFORCED, the case the split exists for.
 
@@ -249,7 +252,8 @@ class ToolRegistry:
         """True for an OPEN-only tool — hidden from SAFE and refused at dispatch
         outside OPEN. Named for its original single dimension; since R3 it reports
         the ``open_only`` (visibility) set, which is what the SAFE boundary keys off
-        (``run_command`` AND the step-5 file tools all belong to it)."""
+        (``run_command``, the automation tools and every ``mcp:`` tool belong to it;
+        the step-5 file tools did until 2026-08-11)."""
         return tool_id in self._open_only
 
     def refuse_if_dev_only_outside_open(self, tool_id: str, mode: PolicyMode) -> str | None:

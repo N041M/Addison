@@ -68,7 +68,16 @@ class RoutineBuilder:
         for message in self._last_turn(conversation.messages, n_messages):
             if message.role != "assistant":
                 continue
-            for call in getattr(message, "tool_calls", []) or []:
+            # A REOPENED conversation's calls live on a second attribute
+            # (KNOWN-BUGS #5). ``conversation.load`` rebuilds them from the stored
+            # transcript onto ``past_tool_calls``, deliberately NOT onto
+            # ``tool_calls``, because a provider replays that one and an unpaired
+            # tool_use would break every later request of the session. Both are the
+            # same thing to a routine — steps the person watched happen — so this
+            # reads whichever the message carries. Still duck-typed: routines/ may
+            # not import providers/ (CLAUDE.md §2).
+            live = getattr(message, "tool_calls", None) or []
+            for call in live or (getattr(message, "past_tool_calls", None) or []):
                 step_id = f"step_{len(steps) + 1}"
                 depends_on = [previous_step_id] if previous_step_id else []
                 if call.tool_id == "run_command":

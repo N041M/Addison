@@ -14,6 +14,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Method,
+  type ActivityUpdate,
   type Automation,
   type AutomationStatus,
   type ModelRole,
@@ -425,6 +426,13 @@ export const ipc = {
       typed === undefined ? { toolId, allow } : { toolId, allow, typed },
     ),
 
+  // Stop, sent as the person presses it. Fire-and-forget by design: the webview
+  // has already let go of the turn, and a failed frame must not leave a card
+  // looking answerable — the caller greys the card out either way and the CORE is
+  // what refuses a late answer. Nothing here waits for a turn to end, because the
+  // core does not end one: it ends the turn's consent.
+  stopTurn: () => call(Method.ConversationStop),
+
   undoLastAction: () => call(Method.UndoUndoLastAction),
   redoLastAction: () => call(Method.UndoRedoLastAction),
   rewindConversation: (toMessageId: string) =>
@@ -699,6 +707,13 @@ export interface LoadedConversation {
   conversationId: string;
   title: string | null;
   messages: LoadedConversationRow[];
+  /**
+   * The steps of the reopened chat's LAST turn — the same {toolId, label, detail?}
+   * shape a live `tool.activityUpdate` carries, so "Addison's work" is one panel
+   * fed from two places rather than two panels (KNOWN-BUGS #5: it used to vanish on
+   * reload, taking "Save as routine" with it). Empty when that turn did no work.
+   */
+  work: ActivityUpdate[];
 }
 
 export interface ConversationRenameResult {
@@ -762,7 +777,7 @@ function parseConversationId(result: unknown): string {
   return id;
 }
 
-function parseLoadedConversation(result: unknown): LoadedConversation {
+export function parseLoadedConversation(result: unknown): LoadedConversation {
   const obj = asRecord(result);
   if (!obj) throw new Error("Couldn't open that conversation.");
   const conversationId =
@@ -782,10 +797,26 @@ function parseLoadedConversation(result: unknown): LoadedConversation {
       content: typeof row.content === "string" ? row.content : "",
     });
   }
+  // Fails closed, like every parser here: a garbled step is dropped rather than
+  // rendered as "undefined", and a missing `work` key (an older core, or a last
+  // turn that used no tools) is simply no steps.
+  const rawWork = Array.isArray(obj.work) ? obj.work : [];
+  const work: ActivityUpdate[] = [];
+  for (const item of rawWork) {
+    const step = asRecord(item);
+    if (!step || typeof step.label !== "string" || !step.label) continue;
+    const detail = typeof step.detail === "string" ? step.detail.trim() : "";
+    work.push({
+      label: step.label,
+      toolId: typeof step.toolId === "string" ? step.toolId : "",
+      ...(detail ? { detail } : {}),
+    });
+  }
   return {
     conversationId,
     title: typeof obj.title === "string" ? obj.title : null,
     messages,
+    work,
   };
 }
 
@@ -1450,6 +1481,9 @@ export function parseWorkspaceRoots(result: unknown): WorkspaceRoot[] {
 //   * an edit whose `onDiskChanged` is not literally `true` or `false` is `null` —
 //     "Addison can't tell" — because collapsing an unknown into `false` is the one
 //     wrong reading that lets a revert discard somebody's own work with no warning.
+//   * ...and `replacedBy` fails the OTHER way, which is not an inconsistency: an
+//     unreadable value there means "nothing was swapped", because the core refuses a
+//     swapped file regardless, and guessing a swap would hide a Revert that works.
 //   * a shape we cannot read at all becomes an error sentence, never an empty
 //     listing: a file tree that renders "nothing here" for a folder full of files
 //     is a lie in exactly the place this surface exists to tell the truth.
@@ -1553,6 +1587,15 @@ function parseEdit(item: unknown): WorkspaceEdit | null {
     onDiskChanged:
       row.onDiskChanged === true ? true : row.onDiskChanged === false ? false : null,
     missing: row.missing === true,
+    // Only the two values this side has a sentence for. Anything else — including a
+    // kind a later build invents — reads as `null`, which is the OPEN direction here
+    // and deliberately so: the core refuses a swapped file whatever this says, so an
+    // unreadable value costs a person one refused press, while inventing a swap for
+    // an ordinary edit would remove a Revert that works.
+    replacedBy:
+      row.replacedBy === "shortcut" || row.replacedBy === "other-file"
+        ? row.replacedBy
+        : null,
   };
 }
 

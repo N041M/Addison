@@ -207,7 +207,11 @@ the whole truth rather than a summary.
      `dev_only` also waives the undo-at-registration check, and this tool is
      MEDIUM with a REAL `undo()` (delete the row it created). `write_project_file`'s
      registration shape, for `write_project_file`'s reason: dropping `undo()`
-     must fail registration, not register silently.
+     must fail registration, not register silently. *(Amended 2026-08-11:
+     `write_project_file` left that shape — Simple gained it, so it registers with
+     no flags now. This tool's registration is unchanged and is now the standing
+     example of the pairing; `tools/registry.py` and [SAFETY.md](SAFETY.md)
+     invariant 1 are the authorities.)*
    - **Non-destructive, so no card in OPEN — and that is the honest tier.** A
      draft can run nothing; the ceremony belongs to arming (§5.2). The tool
      declares `command_text`, so a forbidden command is refused at every

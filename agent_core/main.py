@@ -54,7 +54,7 @@ from agent_core.policy import PolicyMode, mode_for_profile
 from agent_core.profiles import Profile, ProfileId, resolve_active_profile
 from agent_core.protocol import Method
 from agent_core.providers.anthropic_provider import AnthropicProvider
-from agent_core.providers.base import Message, ModelRole
+from agent_core.providers.base import Message, ModelRole, technical_detail
 from agent_core.providers.google_provider import GoogleProvider
 from agent_core.providers.google_provider import list_models as google_list_models
 from agent_core.providers.ollama_provider import (
@@ -74,6 +74,8 @@ from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import RoutineEngine
 from agent_core.routines.library import RoutineLibrary
 from agent_core.rpc.constants import (
+    _ANSWER_AFTER_STOP_MESSAGE,
+    _ANSWER_NOT_PENDING_MESSAGE,
     _GENERIC_TURN_ERROR,
     _LOCAL_SETUP_BUSY_MESSAGE,
     _METHOD_NOT_FOUND,
@@ -112,7 +114,11 @@ from agent_core.snapshots.snapshot_manager import (
 )
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.arm_automation import ArmAutomationTool
-from agent_core.tools.base import MAX_PERMISSION_DETAIL_CHARS, ActionSnapshot
+from agent_core.tools.base import (
+    MAX_PERMISSION_DETAIL_CHARS,
+    ActionSnapshot,
+    call_permission_sentence,
+)
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.create_automation import CreateAutomationTool
 from agent_core.tools.disarm_automation import DisarmAutomationTool
@@ -251,14 +257,24 @@ def build_registry(
     # registry; hidden from the SAFE view. Exempt from the undo check BECAUSE it is
     # dev_only and never reachable from SAFE mode (registry.register / run_command.py).
     registry.register(RunCommandTool(), dev_only=True)
-    # OPEN-mode coding harness (step 5). ALWAYS registered but open_only, so hidden
-    # from the SAFE view and refused at dispatch outside OPEN — the confinement layer
-    # (orchestrator/engine) additionally keeps them to trusted roots. The write tool
-    # is open_only but undo-ENFORCED (allow_missing_undo defaults False, R3): a real
-    # undo() is mandatory, so registration RAISES if a future edit drops it. Its undo
+    # The coding harness's two file tools (step 5), registered with NO FLAGS since
+    # 2026-08-11 — so they are in the SAFE view, and Simple can read and change a
+    # file in a folder that has been trusted. They were ``open_only`` until then, and
+    # the effect was that Simple could not edit an existing file AT ALL: it could
+    # only offer to save a new one. The owner decided that is a bug (docs/SAFETY.md
+    # owns the decision and SAFE invariant 1's wording).
+    #
+    # NOTHING WAS RELAXED TO DO IT, which is the only reason it fits inside the
+    # invariants. The write tool is MEDIUM with a real ``undo()``, so the
+    # undo-at-registration check (SAFE invariant 2) applies to it in full and
+    # registration RAISES if a future edit drops the method — it never needed the
+    # waiver, which is exactly why it can be in this view. Both stay path-bounded,
+    # so the confinement layer (orchestrator/engine) keeps them inside currently-
+    # trusted roots in both modes; the write is destructive, so in SAFE the gate
+    # cards for it EVERY time and names the file (permissions/gate.py). Its undo
     # bridge is injected here (used only by undo(), which gets no ExecutionContext).
-    registry.register(ReadProjectFileTool(), open_only=True)
-    registry.register(WriteProjectFileTool(shell_bridge=shell_bridge), open_only=True)
+    registry.register(ReadProjectFileTool())
+    registry.register(WriteProjectFileTool(shell_bridge=shell_bridge))
     # Step 8 phase 2: WRITING an automation down (never arming one — that is phase 3
     # and does not exist). ``open_only`` on write_project_file's exact terms (R3):
     # hidden from the SAFE view and refused at dispatch outside OPEN, yet
@@ -354,6 +370,29 @@ def _env_api_key() -> str:
     return os.environ["ANTHROPIC_API_KEY"]
 
 
+def _card_consequence(tool, detail: str | None) -> str:
+    """The one line a permission card puts under the tool's label.
+
+    THREE SHAPES, ONE FUNCTION, because the card and the CLI's stand-in must not
+    word the same call two ways:
+
+      * the tool wrote its own sentence for this call
+        (``call_permission_sentence`` — the file tools name the file, since
+        "wants to run: notes.txt" is a lie about what is about to happen);
+      * there is a per-call ``detail`` and no sentence — the historical idiom,
+        written for ``run_command`` and still exactly what it needs. The
+        frontend splits on this ``run: `` prefix to render the command as a
+        machine fact, so the words are load-bearing (``PermissionCard.tsx``);
+      * no detail at all — the tool's standing description, as SAFE cards have
+        always shown."""
+    sentence = call_permission_sentence(tool, detail)
+    if sentence:
+        return sentence
+    if detail:
+        return f"This time it wants to run: {detail}"
+    return tool.definition.description
+
+
 def _terminal_permission_handler(registry: ToolRegistry):
     """Terminal PermissionCard stand-in: plain-language ask, y/n answer.
 
@@ -374,11 +413,14 @@ def _terminal_permission_handler(registry: ToolRegistry):
             # to be wrong.
             print("\nSwitching an automation on has to be done in the Addison app.")
             return PermissionStatus.DENIED
-        definition = registry.get(tool_id).definition
+        tool = registry.get(tool_id)
+        definition = tool.definition
         print()
         print(f"Addison would like to: {definition.label}")
-        # The per-invocation destructive card names the exact command each time.
-        print(f"  This time it wants to run: {detail}" if detail else f"  {definition.description}")
+        # The per-invocation destructive card names the exact command each time —
+        # or, for a tool that words its own consequence line, whatever it says
+        # (``call_permission_sentence``; the file tools name the file).
+        print(f"  {_card_consequence(tool, detail)}")
         answer = input("Allow this? (y/n) ").strip().lower()
         if answer in ("y", "yes"):
             return PermissionStatus.GRANTED
@@ -705,6 +747,20 @@ class JsonRpcServer(
         self._queue: queue.Queue = queue.Queue()
         self._perm_lock = threading.Lock()
         self._permission_waiters: dict[str, dict] = {}
+        # THE CARD DIES WITH ITS TURN (KNOWN-BUGS #4, owner decision 2026-08-09).
+        # Raised by ``conversation.stop`` and lowered when the worker picks up its
+        # next job, so it always describes the job that is running RIGHT NOW. While
+        # it is up no card may be raised (``_on_permission_request``, the routine
+        # engine's ask) and every card already up has been answered "no" — a person
+        # who ended a turn has not consented to anything that turn was about to do,
+        # and a card left actionable is a way for them to consent to it minutes
+        # later, to a step whose reason has scrolled away.
+        #
+        # Guarded by ``_perm_lock``, which the read loop and the worker already
+        # share for the waiters: Stop arrives on the read loop while the worker is
+        # blocked inside ``_ask_once``, so the flag and the waiter it invalidates
+        # must move together or a card can be raised in the gap between them.
+        self._turn_stopped = False
         # Only one local-model setup may run at a time (§4.1.2); the flag is held
         # from pre-flight through the background pull/verify.
         self._local_setup_lock = threading.Lock()
@@ -1078,9 +1134,14 @@ class JsonRpcServer(
         self._write_frame({"jsonrpc": "2.0", "id": request_id, "error": error})
 
     def _raw_detail(self, exc: BaseException) -> dict | None:
-        """Developer-profile raw diagnostics for an error frame: the repr of the
-        underlying exception, or None for Simple (which is unchanged). This adds
-        VISIBILITY only — it never changes control flow or the plain message (§8.7).
+        """Developer-profile raw diagnostics for an error frame, or None for Simple
+        (which is unchanged). This adds VISIBILITY only — it never changes control
+        flow or the plain message (§8.7).
+
+        WHAT IS IN IT is ``providers.base.technical_detail``'s to decide, and it owns
+        why: for a provider failure the fold carries the provider, the HTTP status
+        and the server's own sentence beside the repr; for everything else it is the
+        repr alone, exactly as before.
 
         ``BaseException``, not ``Exception``: ``LiveDatabaseBlocked`` is one
         (live_db_guard.py) and the two handlers that name it want a raw detail like
@@ -1088,7 +1149,7 @@ class JsonRpcServer(
         ``repr`` is defined on both."""
         profile = self._active_profile
         if profile is not None and profile.raw_diagnostics:
-            return {"raw": repr(exc)}
+            return {"raw": technical_detail(exc)}
         return None
 
     # --- Core -> Frontend notifications -----------------------------------
@@ -1182,6 +1243,11 @@ class JsonRpcServer(
             Method.UNDO_UNDO_LAST_ACTION: enqueue("undo"),
             Method.UNDO_REWIND_CONVERSATION: enqueue("rewind"),
             Method.PERMISSION_RESPOND: self._handle_permission_respond,
+            # INLINE, and it has to be: Stop's whole job is to reach a worker that
+            # is blocked waiting for a permission answer. Queued behind the turn it
+            # is trying to end, it would run after that turn finished — which is to
+            # say never, for the only case it exists for.
+            Method.CONVERSATION_STOP: self._handle_conversation_stop,
             Method.MODEL_AVAILABLE_ROLES: enqueue("available_roles"),
             Method.PROFILE_GET: enqueue("profile_get"),
             Method.PROFILE_SET: enqueue("profile_set"),
@@ -1244,6 +1310,14 @@ class JsonRpcServer(
             if job is None:
                 break
             kind, params, request_id = job
+            # A new job is a new turn's worth of consent: whatever was stopped, it
+            # was the job before this one. Lowered HERE rather than in the send
+            # handler because every job that can raise a card (a routine run, a
+            # widget run, a message) has to start from an unstopped state, and jobs
+            # run one at a time — so "the job being dequeued" and "the job a Stop
+            # could have been aimed at" can never be the same one.
+            with self._perm_lock:
+                self._turn_stopped = False
             if self._build_error is not None:
                 # THE EXEMPTION. Without it this branch answers EVERY job —
                 # including the restore the message above tells the user to run —
@@ -1708,17 +1782,27 @@ class JsonRpcServer(
     ) -> PermissionStatus:
         """Runs on the worker thread: render the card, block for the answer.
 
-        ``detail`` is set on the destructive-in-OPEN per-invocation path (the exact
-        command text, already truncated by the tool) — the card's description then
-        names precisely what is being approved this time, because that approval
-        never carries over to the next destructive call.
+        ``detail`` is set on every per-invocation card — destructive-in-OPEN, and
+        since 2026-08-11 destructive-in-SAFE too — carrying the exact command text
+        or the file's name, already truncated by the tool. The card's description
+        then names precisely what is being approved this time, because that
+        approval never carries over to the next destructive call. How that fact is
+        WORDED belongs to the tool (``_card_consequence``).
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
-        by ``_ask_with_keyword`` below."""
-        definition = self.tool_registry.get(tool_id).definition
-        description = definition.description
-        if detail:
-            description = f"This time it wants to run: {detail}"
+        by ``_ask_with_keyword`` below.
+
+        A STOPPED TURN NEVER GETS A CARD. The worker keeps running after Stop (there
+        is no mid-step interrupt in v1), so without this check the turn's next tool
+        call would put a fresh, fully live card in front of somebody who has already
+        said they were done — the same defect as the card that outlived its turn,
+        one step later. Denied without emitting anything: the model is told no, and
+        nobody is asked a question they have already answered by stopping."""
+        if self._stopped():
+            return PermissionStatus.DENIED
+        tool = self.tool_registry.get(tool_id)
+        definition = tool.definition
+        description = _card_consequence(tool, detail)
         card = {
             "toolId": tool_id,
             "label": definition.label,
@@ -1740,6 +1824,14 @@ class JsonRpcServer(
         different round-trips."""
         event = threading.Event()
         with self._perm_lock:
+            # Registering the waiter and reading the stop flag under ONE lock is
+            # what makes Stop race-free: ``_handle_conversation_stop`` takes the
+            # same lock to raise the flag and to wake every waiter, so a card is
+            # either registered before the stop (and woken by it) or refused here
+            # after it. There is no ordering in which one is emitted and nothing
+            # answers it.
+            if self._turn_stopped:
+                return False, None
             self._permission_waiters[tool_id] = {"event": event, "allow": False, "typed": None}
         self._notify(Method.PERMISSION_REQUEST_GRANT, card)
         event.wait()
@@ -1805,7 +1897,15 @@ class JsonRpcServer(
         never logged, and never echoed back — this handler's whole job is to carry
         it the last few feet. It arrives as whatever the webview sent, including not
         a string at all, and ``automation_nonce.normalise`` turns anything that is
-        not one into a wrong answer rather than an exception."""
+        not one into a wrong answer rather than an exception.
+
+        An answer with NO WAITER is refused rather than swallowed (KNOWN-BUGS #4).
+        It used to answer ``{"ok": True}`` whatever it found, so a card the person
+        stopped — or one they double-pressed — reported success for an approval that
+        authorised nothing, and the two indistinguishable outcomes were the reason
+        the stopped card looked alive. Which sentence comes back depends on WHY
+        nobody is waiting: a stopped turn is the case that has a next step worth
+        naming, and an already-answered card is not a failure at all."""
         tool_id = params.get("toolId")
         allow = bool(params.get("allow"))
         with self._perm_lock:
@@ -1814,7 +1914,51 @@ class JsonRpcServer(
                 waiter["allow"] = allow
                 waiter["typed"] = params.get("typed")
                 waiter["event"].set()
+            stopped = self._turn_stopped
+        if waiter is None:
+            message = _ANSWER_AFTER_STOP_MESSAGE if stopped else _ANSWER_NOT_PENDING_MESSAGE
+            self._respond(request_id, {"ok": False, "error": message})
+            return
         self._respond(request_id, {"ok": True})
+
+    def _handle_conversation_stop(self, params: dict, request_id) -> None:
+        """conversation.stop — the person pressed Stop. THE CARD DIES WITH ITS TURN.
+
+        Answered INLINE on the read loop (see the dispatch table), because the
+        worker this has to reach is typically blocked inside ``_ask_once`` waiting
+        for the very card this ends.
+
+        What it does, and just as importantly what it does not:
+
+          * every pending permission waiter is resolved as a REFUSAL and woken, so
+            the blocked worker gets ``DENIED`` and its tool never runs. A stop is
+            not consent, so there is no other honest answer to give the gate;
+          * the stop flag stays up for the REST of this job, so the turn — which
+            keeps running, there being no mid-step interrupt in v1 — cannot raise a
+            second card at somebody who has left;
+          * a late ``permission.respond`` for one of those cards then finds no
+            waiter and is refused above. **That refusal is the enforcement.** The
+            webview greying the card out is presentation, and a stale or
+            hand-edited one is answered exactly like an honest one;
+          * it does NOT cancel the turn, undo anything, or touch grants. Stop has
+            never meant "unhappen"; it means Addison stops asking and stops acting
+            on this turn's behalf.
+
+        ``endedRequests`` is how many cards were standing when Stop landed — zero
+        for the ordinary case of stopping a turn that was merely thinking."""
+        with self._perm_lock:
+            self._turn_stopped = True
+            waiters = list(self._permission_waiters.values())
+            for waiter in waiters:
+                waiter["allow"] = False
+                waiter["typed"] = None
+                waiter["event"].set()
+        self._respond(request_id, {"ok": True, "endedRequests": len(waiters)})
+
+    def _stopped(self) -> bool:
+        """Has the running job been stopped? Read under the lock that writes it."""
+        with self._perm_lock:
+            return self._turn_stopped
 
     # --- usage recording (§4.8 substrate; orchestrator machinery) ---------
     def _record_tool_audit(self, row: dict) -> None:

@@ -54,7 +54,29 @@ export function useTurn({
   // "Screens → Chat empty state").
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isWorking, setIsWorking] = useState(false);
-  const [permission, setPermission] = useState<PermissionRequest | null>(null);
+  const [permission, setPermissionState] = useState<PermissionRequest | null>(null);
+  // The card outlived its turn (KNOWN-BUGS #4, owner decision 2026-08-09: THE CARD
+  // DIES WITH ITS TURN). Stop leaves the card on screen — a question that was asked
+  // does not un-ask itself, and blanking it would leave a person wondering what
+  // Addison had wanted — but the card becomes inert: no Allow, no Not now, one
+  // plain sentence saying it ended. Held beside `permission` rather than folded
+  // into it because `PermissionRequest` is the CORE's shape and this is a fact
+  // about this window's turn, which the core never sent.
+  //
+  // This flag is presentation. `conversation.stop` is the enforcement: the core
+  // refuses a late `permission.respond` whatever this side renders.
+  const [permissionExpired, setPermissionExpired] = useState(false);
+
+  /**
+   * Show a card — or take one away. The ONLY way `permission` is written, so the
+   * expired flag can never outlive the card it described: a fresh card arriving
+   * after a stopped one (the next turn's first ask) would otherwise render dead on
+   * arrival, which is the same bug with the answers reversed.
+   */
+  function setPermission(next: PermissionRequest | null) {
+    setPermissionExpired(false);
+    setPermissionState(next);
+  }
 
   const [currentActivity, setCurrentActivity] = useState<ActivityUpdate | null>(null);
   const [activities, setActivities] = useState<ActivityUpdate[]>([]);
@@ -206,8 +228,8 @@ export function useTurn({
   }
   // Identifies the turn whose IPC result may still touch shared turn state (the
   // assistant message, isWorking, the activity line). Stop and every new turn
-  // reassign it, so a result arriving late from an abandoned turn — the core has
-  // no cancel, so its work keeps landing after Stop (see handleStop) — is dropped
+  // reassign it, so a result arriving late from an abandoned turn — Stop ends the
+  // turn's consent, not its work, so results keep landing (see handleStop) — is dropped
   // instead of resurrecting stopped text or re-enabling the composer mid-turn.
   const currentTurnRef = useRef<string | null>(null);
 
@@ -376,10 +398,24 @@ export function useTurn({
   }
 
   function handleStop() {
-    // The v1 IPC contract has no core-side cancel method, so Stop halts the
-    // webview turn: it stops accepting streamed text and re-enables the input.
-    // Abandon the turn so its still-in-flight result can't land later and
-    // overwrite the "(Stopped.)" message (the core keeps working regardless).
+    // Stop halts the webview turn: it stops accepting streamed text and re-enables
+    // the input. Abandon the turn so its still-in-flight result can't land later
+    // and overwrite the "(Stopped.)" message (the core finishes the step it is on
+    // — there is still no mid-step interrupt).
+    //
+    // THE CARD DIES WITH ITS TURN (KNOWN-BUGS #4). Two things, and they are not
+    // the same thing:
+    //   * `conversation.stop` tells the CORE, which refuses every pending card and
+    //     will not raise another for this turn. That is the enforcement, and it
+    //     holds whatever this window renders;
+    //   * the expired flag greys the card here, so nobody presses Allow on a
+    //     question that can no longer be answered. That is presentation.
+    // The card is deliberately NOT removed: it says what Addison was asking, and
+    // now says that the asking ended.
+    if (permission) setPermissionExpired(true);
+    ipc.stopTurn().catch(() => {
+      /* The card is inert either way; nothing to retry and nothing to say. */
+    });
     currentTurnRef.current = null;
     setIsWorking(false);
     setCurrentActivity(null);
@@ -411,6 +447,7 @@ export function useTurn({
     setMessages,
     isWorking,
     permission,
+    permissionExpired,
     setPermission,
     activities,
     setActivities,
