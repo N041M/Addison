@@ -19,7 +19,36 @@ CREATE TABLE IF NOT EXISTS messages (
     role                TEXT NOT NULL CHECK(role IN ('user','assistant','tool')),
     content             TEXT NOT NULL,       -- text content, or JSON for tool calls/results
     tool_call_id        TEXT,                -- set if role='tool' or this message triggered a tool call
-    created_at          INTEGER NOT NULL
+    created_at          INTEGER NOT NULL,
+    -- What this assistant turn ASKED FOR, as JSON: a list of
+    -- {id, tool_id, args, ran, detail}. NULL on every user/tool row and on an
+    -- assistant row that requested nothing.
+    --
+    -- WHY IT IS STORED AT ALL (KNOWN-BUGS #5). "Addison's work" and the
+    -- "Save as routine" link under it were rebuilt from the LIVE turn only, and a
+    -- proposed routine is made from the conversation's tool calls
+    -- (routines/builder.py). Neither survived a relaunch, because nothing wrote a
+    -- tool call down: `insert_message` persisted role/content and dropped
+    -- `Message.tool_calls` on the floor. Reopening a chat therefore showed no work
+    -- panel and no way to save the steps — silently, which is the defect.
+    --
+    -- IT IS NOT REPLAYED TO A MODEL, and must never become that. `conversation.load`
+    -- still keeps the assistant's PROSE only: a persisted tool_use replayed without
+    -- its tool_result makes the provider reject every later request of the session
+    -- (§4.4). The decoded calls ride on `Message.past_tool_calls`, a history-only
+    -- field no provider adapter reads (providers/base.py says so beside it).
+    --
+    -- `ran` records whether the step actually happened — a call the person DENIED is
+    -- kept (the routine builder sees the same set live and after a reload) but never
+    -- redrawn in the work panel, which is a record of what Addison did. `detail` is
+    -- the exact string the panel showed at the time, stored rather than recomputed
+    -- so a reopened chat cannot re-resolve a path and describe a step differently
+    -- from the way it was described when it ran.
+    --
+    -- Args are stored on the same terms as a saved routine's `plan_json`, which has
+    -- always held them. G1 is untouched: provider keys live in the keychain and are
+    -- read at the moment of use, so no tool ever receives one in `args`.
+    tool_calls_json     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS memory_facts (

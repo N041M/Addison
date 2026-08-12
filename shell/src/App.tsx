@@ -379,6 +379,7 @@ export function App() {
     controlsBusy,
     resetTransientState,
     setMessages: turn.setMessages,
+    setActivities: turn.setActivities,
     // Loading or starting a conversation always lands on the chat view, through
     // the same transition every other route uses.
     setScreen: (screen) => changeView(screen),

@@ -369,6 +369,17 @@ class Message:
     # calling need the original tool_use blocks replayed in history so each
     # tool_call_id pairs with the tool_result that follows it.
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    # HISTORY ONLY — what this assistant turn asked for in a PREVIOUS session,
+    # rebuilt by ``conversation.load`` from ``messages.tool_calls_json``.
+    #
+    # NO PROVIDER ADAPTER MAY READ THIS, and none does: every adapter replays
+    # ``tool_calls`` alone. That separation is the whole point of the second field.
+    # A persisted tool_use put back into ``tool_calls`` would be sent without the
+    # tool_result that answered it — the pairing rule in §4.4 — and the provider
+    # would then reject every later request of the session. The routine builder,
+    # which is not talking to a model, reads it instead (KNOWN-BUGS #5: the steps
+    # of a reopened chat are still saveable).
+    past_tool_calls: list[ToolCallRequest] = field(default_factory=list)
 
 
 @dataclass

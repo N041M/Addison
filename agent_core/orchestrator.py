@@ -149,6 +149,18 @@ def _result_as_text(content: Any) -> str:
 class Conversation:
     id: str
     messages: list[Message] = field(default_factory=list)
+    #: tool_call id -> the ``detail`` line the Activity Panel showed for it, for
+    #: every step that ACTUALLY RAN this session. Not state the turn reads: it is
+    #: what ``rpc/conversation.py`` writes into ``messages.tool_calls_json`` so a
+    #: reopened chat can redraw "Addison's work" as a record of what happened
+    #: rather than of what was requested (a denied call is recorded too, marked
+    #: not-run, because the routine builder must see the same set either way).
+    #: Empty detail is stored as None — most tools have nothing to name.
+    shown_steps: dict[str, str | None] = field(default_factory=dict)
+
+    def note_step_shown(self, tool_call_id: str, detail: str | None) -> None:
+        """Record that this call reached the panel (and therefore ran)."""
+        self.shown_steps[tool_call_id] = detail or None
 
     def append_tool_result(self, tool_call_id: str, result: ToolResult) -> None:
         self.messages.append(
@@ -884,6 +896,12 @@ class Orchestrator:
                 # destination, not a familiar one being misused. Bounding WHO can be
                 # reached is a grant-scoping change and is still open.
                 self.on_activity(call.tool_id, tool.definition.label, detail)
+                # The same announcement, written down instead of emitted. A panel
+                # that is gone the moment the app closes is what made a turn's
+                # steps unsaveable after a reload (KNOWN-BUGS #5); this is the only
+                # place that knows a step both ran and was described this way, so
+                # it is the only place that can say so honestly.
+                conversation.note_step_shown(call.id, detail)
                 # A tool/bridge failure is a FAILED STEP, never a crashed turn:
                 # crashing here would leave this tool_use with no tool_result, and the
                 # provider then rejects every later request (API 400) until restart.

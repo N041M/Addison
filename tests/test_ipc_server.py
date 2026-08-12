@@ -546,9 +546,11 @@ def test_rewind_after_load_truncates_store_and_memory(tmp_path):
 
 
 def test_load_after_tool_turn_skips_tool_rows_and_empty_stubs(tmp_path):
-    # insert_message never persists assistant tool_calls, so a reload must keep
-    # only user messages and the assistant's final prose — replaying persisted
-    # tool rows would send unpaired tool_results and the provider would 400.
+    # A reload keeps only user messages and the assistant's final prose —
+    # replaying persisted tool rows would send unpaired tool_results and the
+    # provider would 400. The calls themselves ARE stored (KNOWN-BUGS #5) and come
+    # back as history, never as transcript: tests/test_reloaded_work.py owns that
+    # half, including the proof that nothing restored reaches a provider.
     responses = [_tool_call_response(), ModelResponse(text="Done.", tool_calls=[])]
     server, reader, writer, tool, thread = _server(tmp_path, responses)
     try:
