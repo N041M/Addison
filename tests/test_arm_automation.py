@@ -72,6 +72,9 @@ from agent_core.tools.arm_automation import (
     _NO_SUCH_AUTOMATION as _ARM_NO_SUCH,
 )
 from agent_core.tools.arm_automation import (
+    _AMBIGUOUS_NAME as _ARM_AMBIGUOUS,
+)
+from agent_core.tools.arm_automation import (
     _NO_USABLE_SCHEDULE,
     _NOT_READY,
     _ONLY_IN_DEVELOPER,
@@ -90,6 +93,9 @@ from agent_core.tools.base import (
 from agent_core.tools.disarm_automation import DisarmAutomationTool
 from agent_core.tools.disarm_automation import (
     _NO_SUCH_AUTOMATION as _DISARM_NO_SUCH,
+)
+from agent_core.tools.disarm_automation import (
+    _AMBIGUOUS_NAME as _DISARM_AMBIGUOUS,
 )
 from agent_core.tools.registry import DEV_ONLY_REFUSAL, LIVE_ONLY_REFUSAL, ToolRegistry
 from tests.conftest import IPC_DB_NAME, ShellBridgeStubs, _shutdown, build_server
@@ -379,7 +385,7 @@ def test_off_a_mac_the_whole_capability_says_so_plainly(store: Store, monkeypatc
     [{"id": "nope"}, {"id": ""}, {"id": 7}, {}, {"id": None}],
     ids=["unknown", "empty", "number", "missing", "none"],
 )
-def test_an_automation_that_is_not_saved_any_more_is_refused(store: Store, on_a_mac, args):
+def test_an_automation_nothing_matches_is_refused(store: Store, on_a_mac, args):
     """The id comes from a model reading a list that may have moved on — a restore,
     another window, a removal. A card for an automation nobody can name is a
     ceremony about nothing.
@@ -387,6 +393,107 @@ def test_an_automation_that_is_not_saved_any_more_is_refused(store: Store, on_a_
     Mutation: return the row unconditionally from ``_row``."""
     assert _tool(store).arming_refusal(args) == _ARM_NO_SUCH
     assert _off(store).arming_refusal(args) == _DISARM_NO_SUCH
+
+
+def test_the_refusal_never_announces_a_deletion_it_cannot_know_about(store: Store, on_a_mac):
+    """KNOWN-BUGS P1 #1, the half that made the bug a LIE rather than only a dead
+    end. Both sentences used to read "that automation isn't saved any more" — a
+    claim about a deletion, made in the one situation where nothing was deleted:
+    somebody gave a name, the row sat in Settings, and Addison told them it was gone.
+
+    Addison knows it found no match. That is all it may say, plus where the real
+    name is written down.
+
+    Mutation: put the old sentence back — the "any more" assertions fail."""
+    for sentence in (_ARM_NO_SUCH, _DISARM_NO_SUCH):
+        lowered = sentence.lower()
+        assert "any more" not in lowered
+        assert "couldn't find" in lowered
+        # The next step, which is the whole reason a person can recover from this.
+        assert "settings" in lowered
+        # Still no machinery, in either direction.
+        for jargon in ("uuid", "id from the row", "launchd", "plist", "database", "query"):
+            assert jargon not in lowered, jargon
+    # The two are not one message doing double duty: what did not happen differs.
+    assert "switched on" in _ARM_NO_SUCH and "switched off" in _DISARM_NO_SUCH
+
+
+def test_an_automation_can_be_armed_by_its_name_when_only_one_has_it(store: Store, on_a_mac):
+    """THE FIX FOR KNOWN-BUGS P1 #1. Arming took an id and nothing else, while every
+    route a person actually has carries a NAME — the Settings "Arm…" button seeds a
+    sentence with the name in it. So the one path the feature exists for could never
+    resolve anything, and every attempt was answered with the deletion sentence
+    above.
+
+    End-to-end at the tool layer: the door opens, the card previews the right row,
+    and the shell is handed that row's label.
+
+    Mutation: drop the name branch from ``resolve_automation`` — all four fail."""
+    bridge = _FakeArmBridge()
+    tool = _tool(store, bridge)
+    by_name = {"id": "Tidy up downloads"}
+
+    assert tool.arming_refusal(by_name) is None
+    card = tool.arming_card(by_name)
+    assert card is not None and card["automationName"] == "Tidy up downloads"
+    result = tool.execute(by_name, _ctx(bridge=bridge))
+    assert result.success is True
+    assert bridge.armed[0][0] == _ROW["label"]
+    # The denylist still reads the ROW's command, whichever way the row was named.
+    assert tool.command_text(by_name) == _ROW["command"]
+
+    # And back off again through the same resolution, so a person who switched
+    # something on by name can switch that same thing off by name.
+    off = _off(store).execute(by_name, _ctx(bridge=bridge))
+    assert off.success is True
+    assert bridge.disarmed == [_ROW["label"]]
+
+
+def test_a_name_matches_exactly_and_an_id_still_wins(store: Store, on_a_mac):
+    """Exact, after stripping — never a prefix, never case-folded. Arming runs a
+    command unattended and unconfined, so "closest match" is not a standard this
+    door may use: a near-miss that refuses costs one sentence, and a near-miss that
+    resolves costs the wrong job on somebody's computer.
+
+    Mutation: lower-case or ``startswith`` the comparison — the near-miss loop
+    fails."""
+    tool = _tool(store)
+    for near in ("tidy up downloads", "Tidy up", "Tidy up downloads please", "Tidy  up downloads"):
+        assert tool.arming_refusal({"id": near}) == _ARM_NO_SUCH, near
+    # Surrounding whitespace is not a different name — it is what typing looks like.
+    assert tool.arming_refusal({"id": "  Tidy up downloads  "}) is None
+    # The id is asked FIRST and answers alone: a row whose NAME is another row's id
+    # cannot divert a call that named that id.
+    store.insert_automation(**_row(id="auto-2", name="auto-1", label=f"{LABEL_PREFIX}confusing"))
+    card = tool.arming_card({"id": "auto-1"})
+    assert card is not None and card["automationName"] == "Tidy up downloads"
+
+
+def test_two_automations_with_one_name_refuse_rather_than_pick(store: Store, on_a_mac):
+    """Names are NOT unique — ``derive_label`` gives the second "Tidy up downloads"
+    a label of its own precisely so both rows can exist. Picking one would be arming
+    a command the person did not choose, so the answer is a question instead.
+
+    The sentence names nothing but the problem: no command, no label, no id — the
+    list is where those live.
+
+    Mutation: return ``matches[0]`` when several match — the refusals become None."""
+    store.insert_automation(**_row(id="auto-2", label=f"{LABEL_PREFIX}tidy-downloads-2"))
+    tool = _tool(store)
+    by_name = {"id": "Tidy up downloads"}
+
+    assert tool.arming_refusal(by_name) == _ARM_AMBIGUOUS
+    assert _off(store).arming_refusal(by_name) == _DISARM_AMBIGUOUS
+    for sentence in (_ARM_AMBIGUOUS, _DISARM_AMBIGUOUS):
+        assert "more than one" in sentence.lower()
+        assert "id" in sentence.lower()
+        assert _ROW["command"] not in sentence and _ROW["label"] not in sentence
+    # Nothing is armed by a refused call, and the card is never built for one.
+    bridge = _FakeArmBridge()
+    assert _tool(store, bridge).execute(by_name, _ctx(bridge=bridge)).success is False
+    assert bridge.armed == []
+    # ...and the id still works, which is what the sentence tells them to use.
+    assert tool.arming_refusal({"id": "auto-2"}) is None
 
 
 def test_an_id_that_is_not_a_string_never_becomes_a_database_query(on_a_mac):
