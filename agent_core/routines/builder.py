@@ -41,16 +41,31 @@ class RoutineBuilder:
         self._store = store
 
     def propose_from_recent_actions(self, conversation, n_messages: int = 10) -> Routine:
-        """Extract the tool calls (NOT the model's prose) from the last
-        ``n_messages`` and generalize per-run literals into {{variables}}.
-        Returns a DRAFT Routine — not yet saved. Raises ValueError (plain
-        message) when there's nothing automatable to extract."""
+        """Extract the tool calls (NOT the model's prose) of the LAST TURN and
+        generalize per-run literals into {{variables}}. Returns a DRAFT Routine —
+        not yet saved. Raises ValueError (plain message) when there's nothing
+        automatable to extract.
+
+        The window is ONE TURN, never "the last ``n_messages``". The person taps
+        "Save as routine" under the work panel, and that panel shows exactly one
+        turn's steps — it is cleared at every send (``useTurn.ts``) and rebuilt
+        from the last turn on reload. A message-count window let a chat that had
+        already done unrelated work (say, arming an automation) put those stale
+        steps ahead of the calculation the person was actually looking at, so the
+        proposal offered a plan nobody asked for.
+
+        A turn begins at the last ``user`` message: everything after it is what
+        this answer did, ALL of it — a long turn is not truncated, because half a
+        plan is worse than a wrong one. ``n_messages`` survives only as the
+        fallback window for a conversation with no user message at all (a
+        reloaded transcript whose rows were filtered, a synthetic one), which is
+        the widest honest guess available there.
+        """
         steps: list[RoutineStep] = []
         variables: dict[str, RoutineVariable] = {}
         previous_step_id: str | None = None
 
-        recent = conversation.messages[-n_messages:]
-        for message in recent:
+        for message in self._last_turn(conversation.messages, n_messages):
             if message.role != "assistant":
                 continue
             # A REOPENED conversation's calls live on a second attribute
@@ -93,7 +108,7 @@ class RoutineBuilder:
 
         if not steps:
             raise ValueError(
-                "I couldn't find any actions to turn into a routine in our recent chat."
+                "I couldn't find any actions to turn into a routine in what I just did."
             )
 
         return Routine(
@@ -103,6 +118,20 @@ class RoutineBuilder:
             variables=list(variables.values()),
             steps=steps,
         )
+
+    @staticmethod
+    def _last_turn(messages: list, n_messages: int) -> list:
+        """The messages of the last turn: everything from the last ``user``
+        message onward. Duck-typed like the rest of this module — ``role`` only.
+
+        The ``system`` role never appears here in practice (the transient prompt
+        is inserted at index 0 and removed when the turn ends, and the store
+        cannot hold one), and it carries no tool calls either way, so it needs no
+        special case."""
+        for index in range(len(messages) - 1, -1, -1):
+            if getattr(messages[index], "role", None) == "user":
+                return list(messages[index:])
+        return list(messages[-n_messages:])
 
     def _generalize_args(self, args: dict, variables: dict) -> dict:
         template: dict = {}

@@ -552,6 +552,87 @@ def test_builder_extracts_tool_calls_not_prose_and_generalizes():
     assert by_name["output_filename"].default == "total.txt"
 
 
+def test_builder_captures_only_the_turn_that_produced_the_answer():
+    """The window is ONE TURN, not the last N messages. A chat that already did
+    unrelated work used to put those stale steps ahead of the ones the person was
+    looking at — the plan offered two automation steps before the sum."""
+    conversation = _Conv([
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("create_automation", {"name": "backup"})]),
+        _Msg("tool", "drafted"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("tool", "armed"),
+        _Msg("assistant", "Armed."),
+        _Msg("user", "now add these numbers up"),
+        _Msg("assistant", "", [_Call("calculate", {"expression": "1+2"})]),
+        _Msg("tool", "3"),
+        _Msg("assistant", "That's 3."),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+    # First step of a fresh plan depends on nothing — the chain did not inherit
+    # the earlier turn's tail either.
+    assert draft.steps[0].depends_on == []
+
+
+def test_builder_captures_one_turn_in_a_reloaded_conversation():
+    """A reopened chat is the same question: the panel shows the last turn's
+    steps, so the proposal must too — whatever earlier turns the transcript
+    restored alongside them."""
+    conversation = _Conv([
+        # Restored from the store: earlier turns, prose kept.
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("assistant", "Armed."),
+        # This session's turn, in memory.
+        _Msg("user", "add these up"),
+        _Msg("assistant", "", [_Call("calculate", {"expression": "6000+16"})]),
+        _Msg("tool", "6016"),
+        _Msg("assistant", "That's 6016."),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+
+
+def test_builder_refuses_when_the_shown_turn_did_no_work():
+    """An earlier turn's tool calls are not this turn's, so there is nothing to
+    save — a plain refusal beats a plan the person never watched happen."""
+    conversation = _Conv([
+        _Msg("user", "arm my backup automation"),
+        _Msg("assistant", "", [_Call("arm_automation", {"id": "a1"})]),
+        _Msg("tool", "armed"),
+        _Msg("assistant", "Armed."),
+        _Msg("user", "thanks!"),
+        _Msg("assistant", "Any time."),
+    ])
+    with pytest.raises(ValueError, match="couldn't find any actions"):
+        RoutineBuilder().propose_from_recent_actions(conversation)
+
+
+def test_builder_falls_back_to_the_count_window_without_a_user_message():
+    """No user message at all (a filtered transcript, a synthetic conversation):
+    the old count window is the widest honest guess, and still works."""
+    conversation = _Conv([
+        _Msg("assistant", "", [_Call("calculate", {"expression": "1+1"})]),
+        _Msg("tool", "2"),
+    ])
+    draft = RoutineBuilder().propose_from_recent_actions(conversation)
+    assert [s.tool_id for s in draft.steps] == ["calculate"]
+
+
+def test_builder_keeps_every_step_of_a_long_turn():
+    """The turn is not truncated to ``n_messages``: half a plan is worse than a
+    wrong one, and a genuinely long turn is normal work."""
+    messages = [_Msg("user", "do the whole thing")]
+    for i in range(12):
+        messages.append(_Msg("assistant", "", [_Call("calculate", {"expression": f"{i}+1"})]))
+        messages.append(_Msg("tool", str(i + 1)))
+    draft = RoutineBuilder().propose_from_recent_actions(_Conv(messages))
+    assert len(draft.steps) == 12
+
+
 def test_builder_reads_a_reopened_conversations_restored_calls():
     """KNOWN-BUGS #5: a chat reopened after a relaunch is still saveable.
 
