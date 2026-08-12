@@ -23,12 +23,24 @@
 //      while the widening changes nothing here — see lib/sanitizeSvg.ts, which owns
 //      the reasoning and what it does not cover.
 
+//   4. IT IS NOT MERMAID'S THEME ON SCREEN (2026-08-11, KNOWN-BUGS #15). Because
+//      of 3, the `<style>` block that carries mermaid's whole palette is stripped
+//      before injection — so the SVG defaults took over and diagrams rendered
+//      black-filled, black-texted, with every edge painted as a filled blob
+//      (`.flowchart-link { fill: none }` went with the stylesheet). The paint now
+//      lives in `src/styles.css` under `.mermaid-diagram`, reading the same
+//      `--c-*` variables as the rest of the app, which is also what makes a theme
+//      flip recolour a diagram that is already drawn. `lib/mermaidTheme.ts` owns
+//      the other half — the config, above all the font mermaid MEASURES with.
+
 import { useEffect, useState } from "react";
 import { stripInjectedCss } from "../lib/sanitizeSvg";
+import { buildMermaidConfig } from "../lib/mermaidTheme";
+import { readDocumentTheme, type ResolvedTheme } from "../lib/theme";
 
-// Initialize mermaid exactly once per session, no matter how many diagrams
-// render. Guarded at module level so re-mounts don't re-initialize.
-let initialized = false;
+// Which palette mermaid was last initialized against, module-wide: initializing
+// is per-session state in the library, not per-component. `null` = never.
+let initializedFor: ResolvedTheme | null = null;
 
 // Monotonic id source: mermaid needs a unique DOM id per render call.
 let renderSeq = 0;
@@ -37,36 +49,61 @@ interface Props {
   code: string;
 }
 
+/**
+ * The palette the app has painted, as a value that changes when it changes.
+ *
+ * `monacoTheme.ts` argues against a `MutationObserver` on the `dark` class, and is
+ * right for the editor: App already computes the resolved theme and hands it to
+ * `CodeSurface` as a prop. A diagram cannot be reached that way — it is created
+ * inside model-authored markdown, several layers below any component that knows
+ * the theme, and threading a prop through `ChatThread` → `Markdown` →
+ * `ReactMarkdown`'s component map to arrive here would put the appearance setting
+ * into the signature of every message renderer in the app. What this observes is
+ * not a second computation of the CHOICE (that stays App's, `resolveTheme`), it is
+ * the class App itself wrote — the app's own output, read back.
+ */
+function useDocumentTheme(): ResolvedTheme {
+  const [theme, setTheme] = useState<ResolvedTheme>(() => readDocumentTheme());
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => setTheme(readDocumentTheme(root));
+    // The class can have moved between the first render and this effect.
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
+  return theme;
+}
+
 export function MermaidDiagram({ code }: Props) {
   const [svg, setSvg] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const theme = useDocumentTheme();
 
-  // One render per `code` value: the effect re-runs only when `code` changes,
-  // and `cancelled` keeps a stale run from setting state. (No extra "already
-  // rendered" ref guard here — under React 18 StrictMode the first dev effect
-  // run is cancelled on the simulated unmount, and a ref guard would make the
-  // second run bail too, leaving the placeholder up forever.)
+  // One render per `code` value AND per palette: the effect re-runs when either
+  // changes, and `cancelled` keeps a stale run from setting state. (No extra
+  // "already rendered" ref guard here — under React 18 StrictMode the first dev
+  // effect run is cancelled on the simulated unmount, and a ref guard would make
+  // the second run bail too, leaving the placeholder up forever.)
   useEffect(() => {
     let cancelled = false;
-    setSvg(null);
     setFailed(false);
 
     (async () => {
       try {
         // Lazy, code-split import: keeps mermaid out of the initial chunk.
         const mermaid = await import("mermaid");
-        if (!initialized) {
-          // Match the app theme at first render: "neutral" on the light
-          // `paper`, "dark" on the dark one. Mermaid initializes once per
-          // session, so already-rendered diagrams don't live-switch when the
-          // theme flips — they pick up the new theme the next time one renders.
-          const isDark = document.documentElement.classList.contains("dark");
-          mermaid.default.initialize({
-            startOnLoad: false,
-            securityLevel: "strict",
-            theme: isDark ? "dark" : "neutral",
-          });
-          initialized = true;
+        if (initializedFor !== theme) {
+          // Re-initialized on every flip, not once per session: mermaid bakes
+          // `themeVariables` in at INITIALIZE time, so a diagram drawn after the
+          // flip would otherwise be measured and marked up against the palette
+          // the app has stopped painting. (What is on screen recolours from
+          // `styles.css` regardless — see the file header.)
+          mermaid.default.initialize(buildMermaidConfig(theme));
+          initializedFor = theme;
         }
         const id = `addison-mermaid-${(renderSeq += 1)}`;
         const { svg: out } = await mermaid.default.render(id, code);
@@ -84,7 +121,11 @@ export function MermaidDiagram({ code }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [code]);
+    // The previous SVG is deliberately NOT cleared at the top of this effect: a
+    // theme flip re-renders a diagram that is already on screen and correctly
+    // coloured (the paint is CSS), so blanking it to "Preparing diagram…" for a
+    // frame would be a flash of nothing in exchange for no change at all.
+  }, [code, theme]);
 
   if (failed) {
     return (

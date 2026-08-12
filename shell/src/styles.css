@@ -443,14 +443,159 @@ summary,
     padding: 0;
   }
 
-  /* Mermaid diagrams: center, keep within the row. */
+  /* Mermaid diagrams ------------------------------------------------------
+     THE DIAGRAM'S PALETTE LIVES HERE, and it has to.
+
+     Mermaid ships its colours as a `<style>` block inside the SVG it returns,
+     and `lib/sanitizeSvg.ts` removes every stylesheet from that markup before
+     it is injected — a `<style>` element applies to the WHOLE document, so a
+     model-authored `classDef` could otherwise select the consent card. Stripped
+     of it, the SVG fell to the SVG defaults and diagrams rendered black-filled
+     with black text in both themes, and every edge as a fat black blob, because
+     `.flowchart-link { fill: none }` went with the stylesheet and an unfilled
+     curve is a filled shape (KNOWN-BUGS #15, 2026-08-11).
+
+     So the rules mermaid would have shipped are restated below against this
+     app's own tokens. Being CSS variables, they also make the flip free: a
+     diagram already on screen recolours the moment the `dark` class moves.
+     `lib/mermaidTheme.ts` owns the OTHER half — the config mermaid measures and
+     lays out with — and the font family/size here must equal the constants it
+     exports, because a label measured in one font and drawn in another is the
+     clipping half of the same bug.
+
+     NO ACCENT ANYWHERE IN HERE. Violet is for actions, selection and live
+     state; a diagram has none of the three, and a node fill would be
+     decoration. Nodes are `panel` on `paper` with a `rail` hairline; edges are
+     `muted`. NO ANIMATION either — mermaid's own sheet carries a marching-ants
+     `@keyframes dash`, and nothing in this app moves without asking
+     `prefers-reduced-motion` first. */
   .markdown-body .mermaid-diagram {
     margin: 0.75em 0;
+  }
+  /* Scrolls INSIDE its own box rather than widening the chat column. A diagram
+     is drawn at the size it was measured at (`useMaxWidth: false`) — scaling one
+     down to fit would put type below 14px in front of readers who are 54 and
+     68. */
+  .mermaid-diagram {
     overflow-x: auto;
   }
-  .markdown-body .mermaid-diagram svg {
-    max-width: 100%;
+  .mermaid-diagram svg {
+    display: block;
+    max-width: none;
     height: auto;
+    background: transparent;
+    /* Must match DIAGRAM_FONT_FAMILY / DIAGRAM_FONT_SIZE in lib/mermaidTheme.ts. */
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    fill: rgb(var(--c-ink));
+  }
+
+  /* Node shapes. */
+  .mermaid-diagram .node rect,
+  .mermaid-diagram .node circle,
+  .mermaid-diagram .node ellipse,
+  .mermaid-diagram .node polygon,
+  .mermaid-diagram .node path,
+  .mermaid-diagram .actor,
+  .mermaid-diagram .note {
+    fill: rgb(var(--c-panel));
+    stroke: rgb(var(--c-rail));
+    stroke-width: 1px;
+  }
+
+  /* Labels. `text-anchor: middle` is mermaid's own rule, and load-bearing: the
+     label group is translated to the node's centre, so without it every label
+     hangs off to the right. */
+  .mermaid-diagram text,
+  .mermaid-diagram .label,
+  .mermaid-diagram .nodeLabel,
+  .mermaid-diagram .edgeLabel,
+  .mermaid-diagram .messageText,
+  .mermaid-diagram span,
+  .mermaid-diagram p {
+    fill: rgb(var(--c-ink));
+    color: rgb(var(--c-ink));
+  }
+  .mermaid-diagram .label text,
+  .mermaid-diagram .node .label text,
+  .mermaid-diagram .nodeLabel {
+    text-anchor: middle;
+  }
+  .mermaid-diagram .node .label,
+  .mermaid-diagram .cluster-label {
+    text-align: center;
+  }
+  .mermaid-diagram p {
+    margin: 0;
+  }
+
+  /* Edges: a line, not a shape. `fill: none` is the rule whose absence painted
+     every arrow as a blob. Deliberately NOT `.edgePaths path` — the arrowhead
+     markers are defined inside that group, and a broad selector would take
+     their fill away and leave the arrows invisible. */
+  .mermaid-diagram .flowchart-link,
+  .mermaid-diagram .edgePath .path,
+  .mermaid-diagram path.relation,
+  .mermaid-diagram path.transition,
+  .mermaid-diagram .messageLine0,
+  .mermaid-diagram .messageLine1 {
+    fill: none;
+    stroke: rgb(var(--c-muted));
+    stroke-width: 1px;
+  }
+  .mermaid-diagram .edge-thickness-thick {
+    stroke-width: 2.5px;
+  }
+  .mermaid-diagram .edge-pattern-dashed {
+    stroke-dasharray: 3;
+  }
+  .mermaid-diagram .edge-pattern-dotted {
+    stroke-dasharray: 2;
+  }
+  .mermaid-diagram line.actor-line,
+  .mermaid-diagram .cluster rect {
+    stroke: rgb(var(--c-line));
+  }
+  .mermaid-diagram .cluster rect {
+    fill: rgb(var(--c-paper));
+    stroke-width: 1px;
+  }
+  .mermaid-diagram .cluster text,
+  .mermaid-diagram .cluster span {
+    fill: rgb(var(--c-ink-soft));
+    color: rgb(var(--c-ink-soft));
+  }
+
+  /* Arrowheads ARE shapes, so they keep their fill — the rule above must not
+     reach them. */
+  .mermaid-diagram marker path,
+  .mermaid-diagram marker circle,
+  .mermaid-diagram .marker,
+  .mermaid-diagram .arrowheadPath,
+  .mermaid-diagram .arrowMarkerPath {
+    fill: rgb(var(--c-muted));
+    stroke: rgb(var(--c-muted));
+    stroke-width: 1px;
+  }
+
+  /* An edge label sits ON the line it belongs to, so it needs the page under it. */
+  .mermaid-diagram .edgeLabel rect,
+  .mermaid-diagram .edgeLabel foreignObject div,
+  .mermaid-diagram .labelBkg {
+    fill: rgb(var(--c-paper));
+    background-color: rgb(var(--c-paper));
+  }
+  .mermaid-diagram rect.text {
+    fill: none;
+    stroke-width: 0;
+  }
+
+  /* Mermaid's own parse-error picture — the one place a diagram is allowed a
+     colour, because it is a real failure state. */
+  .mermaid-diagram .error-icon,
+  .mermaid-diagram .error-text {
+    fill: rgb(var(--c-danger));
+    stroke: rgb(var(--c-danger));
   }
 
   /* GFM tables: collapsed hairline grid, quiet small-caps headers, mono cells —

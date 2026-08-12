@@ -36,3 +36,19 @@ export function resolveTheme(choice: ThemeChoice, systemPrefersDark: boolean): R
   if (choice === "system") return systemPrefersDark ? "dark" : "light";
   return choice;
 }
+
+/**
+ * The palette currently PAINTED, read back off the document element.
+ *
+ * Not a second way to decide the theme — `resolveTheme` above stays the only one,
+ * and App is the only caller of it. This reads the `dark` class App wrote, for the
+ * one consumer that cannot be handed the answer as a prop: a mermaid diagram is
+ * created inside model-authored markdown, below every component that knows the
+ * appearance setting (see `MermaidDiagram.tsx`, which explains why threading it is
+ * worse than reading it).
+ */
+export function readDocumentTheme(
+  root: HTMLElement = document.documentElement,
+): ResolvedTheme {
+  return root.classList.contains("dark") ? "dark" : "light";
+}
