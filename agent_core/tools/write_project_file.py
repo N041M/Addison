@@ -1,17 +1,29 @@
-"""write_project_file — create or overwrite a text file, OPEN-only (step 5).
+"""write_project_file — create or overwrite a text file (step 5; in SAFE since 2026-08-11).
 
 The write half of the coding harness (scope amendment 2026-07-20, §8; contract §2).
 MEDIUM, with a REAL ``undo()`` (restore the prior bytes, or delete a file it
-created) — so it registers ``open_only=True, allow_missing_undo=False`` (R3): hidden
-from SAFE, yet the undo-at-registration check still enforces its undo, exactly the
-case the flag split exists for. A future edit dropping ``undo()`` fails registration.
+created), so it registers with NO flags at all: the undo-at-registration check
+applies to it in full, and it is in ``visible_tools(SAFE)`` like every other tool
+Simple can use.
+
+**IT WAS ``open_only`` UNTIL 2026-08-11** — hidden from SAFE and refused at
+dispatch outside OPEN — which meant the Simple profile could not change an
+existing file at all and could only offer to save a new one. The owner decided
+that is a bug: Simple shows the permission card first and then makes the edit
+(docs/SAFETY.md owns the decision and SAFE invariant 1's wording). Nothing that
+made the edit safe was relaxed to do it — trusted-folder confinement, the shell's
+size and binary refusals, the symlink/special-file floors and the guaranteed undo
+all apply exactly as they did, in both modes. What changed is who may ask.
 
 ``is_destructive`` returns True unconditionally (R2): an overwrite is data loss, so
-the mechanical LOW/MEDIUM rule must NOT auto-grant it. Inside a trusted workspace
-the caller passes ``trusted=True`` and the gate auto-grants it card-free (that IS
-the harness payoff — undoable, card-free editing inside a trusted project, §8.3);
-if confinement were ever bypassed and ``trusted`` were False, this belt makes the
-write CARD rather than silently auto-grant.
+the mechanical LOW/MEDIUM rule must NOT auto-grant it. It now does two jobs, one
+per mode. Inside a trusted workspace in OPEN the caller passes ``trusted=True`` and
+the gate auto-grants it card-free (that IS the harness payoff — undoable, card-free
+editing inside a trusted project, §8.3); if confinement were ever bypassed and
+``trusted`` were False, this belt makes the write CARD rather than silently
+auto-grant. In SAFE it is what routes the call to the per-invocation card, so
+Simple is asked before EVERY edit and names the file each time, rather than once
+per session through the coarse grant flow (``permissions/gate.py``).
 
 CONFINEMENT is the caller's job (D3) — see ``read_project_file``. ``execute`` acts on
 ``context.resolved_path`` (resolved ONCE by ``affected_path``, checked by the caller),
@@ -84,8 +96,8 @@ class WriteProjectFileTool:
         id="write_project_file",
         label="Edit a project file",
         description=(
-            "Creates or updates a text file in a folder you've trusted. Each change "
-            "can be undone. Available only in the Developer profile."
+            "Creates or updates a text file in a folder you've trusted. Addison "
+            "asks you first and names the file, and each change can be undone."
         ),
         risk_tier=RiskTier.MEDIUM,
         parameters_schema={
@@ -142,6 +154,25 @@ class WriteProjectFileTool:
         if not resolved_path or resolved_path == UNRESOLVABLE_PATH:
             return None
         return Path(resolved_path).name or None
+
+    def permission_sentence(self, detail: str) -> str:
+        """The card's consequence line, worded by this tool (``call_permission_sentence``).
+
+        Written for Mira and Petr (design-doc §5), and it has one job: say WHICH
+        file and WHAT will happen to it, in that order, before anybody presses
+        Allow. The caller's standing idiom is "This time it wants to run: …",
+        which was written for a command and would announce a shopping list as
+        something Addison is about to execute.
+
+        ``detail`` is the resolved file's NAME, never its path (see
+        ``permission_detail_for_path``) — the card leaves the Agent Core for the
+        webview, and a full path carries the person's account name.
+
+        The undo half is said because it is the true difference between this card
+        and a frightening one, and it is a promise the tool actually keeps: every
+        write records a snapshot the Undo button restores. Do not add a claim this
+        module does not deliver."""
+        return f"It wants to change the file “{detail}”. You can undo this afterwards."
 
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
         if context.shell_bridge is None:

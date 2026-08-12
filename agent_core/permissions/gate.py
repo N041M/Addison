@@ -4,11 +4,14 @@ The orchestrator (and routine engine) call ``authorize()`` before EVERY tool
 execution, not just the first time, so a permission revoked in Settings takes
 effect immediately AND the gate runs on every call in both modes.
 
-SAFE mode (Simple profile) is byte-for-byte the historical behaviour: a
-not-yet-granted tool prompts; consent for LOW-risk tools is remembered once
-granted; MEDIUM tools re-confirm per distinct action (design-doc §7.4 — that
-per-action policy lives in the orchestrator/frontend; this gate tracks the coarse
-grant state).
+SAFE mode (Simple profile): a not-yet-granted tool prompts, and consent is then
+remembered per tool id (the coarse grant state) — byte-for-byte the historical
+behaviour for everything non-destructive. Since 2026-08-11 a DESTRUCTIVE call in
+SAFE takes the per-invocation card instead, which is design-doc §7.4's
+"re-confirm per distinct action" finally enforced HERE rather than promised to the
+orchestrator/frontend. It arrived with the one SAFE tool that is destructive —
+``write_project_file``, which Simple gained the same day (docs/SAFETY.md owns the
+decision) — and it is a tightening: nothing that used to card stops carding.
 
 OPEN mode (Developer profile) is "open" = fewer prompts, NOT no gate: a
 non-destructive call auto-grants (recorded so the UI can still show what
@@ -167,9 +170,11 @@ class PermissionGate:
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
-        SAFE mode: identical to the historical ``check()`` -> ``request()`` flow —
-        ``destructive`` and ``guards`` are ignored, so SAFE prompts for every
-        not-yet-granted tool exactly as before. OPEN mode: a non-destructive call
+        SAFE mode: the historical ``check()`` -> ``request()`` flow for every
+        non-destructive call — SAFE prompts for every not-yet-granted tool exactly
+        as before, and ``guards`` are ignored. A DESTRUCTIVE call takes the
+        per-invocation card instead (2026-08-11; see the branch's own comment):
+        asked every time, carrying ``detail``, never remembered. OPEN mode: a non-destructive call
         auto-grants (logged); a destructive call prompts PER INVOCATION — no prior
         grant is consulted and no grant is recorded, so approving one destructive
         command never authorizes another (or a later repeat of the same one).
@@ -288,6 +293,23 @@ class PermissionGate:
             if effective.destructive_card == "session":
                 return self._request_destructive_session(tool_id, detail)
             return self._request_per_invocation(tool_id, detail)
+        if destructive:
+            # SAFE + DESTRUCTIVE (2026-08-11, the Simple-can-edit-a-file decision).
+            # The coarse flow below remembers a grant per TOOL ID with no per-call
+            # text, which is right for "may Addison read files you hand it" and
+            # wrong for "may Addison overwrite this file": one Allow would cover
+            # every later overwrite in the session, unannounced. So a destructive
+            # call in SAFE takes the same per-invocation card OPEN gives it —
+            # asked every time, carrying ``detail`` (the file's name), never
+            # remembered — which is design-doc §7.4's "re-confirm per distinct
+            # action" for the one SAFE tool that is destructive.
+            #
+            # It is a TIGHTENING of the coarse flow, never a loosening: nothing
+            # that used to card stops carding. Today the only SAFE-visible
+            # destructive tool is ``write_project_file`` (LOW/MEDIUM tools are
+            # non-destructive without their own classifier, and no HIGH tool is in
+            # the SAFE view), so the rest of SAFE is byte-for-byte what it was.
+            return self._request_per_invocation(tool_id, detail)
         return self._safe_flow(tool_id)
 
     def _safe_flow(self, tool_id: str) -> PermissionStatus:
@@ -311,8 +333,9 @@ class PermissionGate:
         return PermissionStatus.GRANTED
 
     def _request_per_invocation(self, tool_id: str, detail: str | None) -> PermissionStatus:
-        """The destructive-in-OPEN card: asked EVERY time, never remembered as a
-        grant. Only the turn-scoped denial is honoured/recorded (don't-nag rule)."""
+        """The destructive card, in BOTH modes since 2026-08-11: asked EVERY time,
+        never remembered as a grant. Only the turn-scoped denial is
+        honoured/recorded (don't-nag rule)."""
         if tool_id in self._denied:
             return PermissionStatus.DENIED
         if self._on_request is None:

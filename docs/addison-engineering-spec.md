@@ -1472,8 +1472,10 @@ These are hard constraints, not preferences — flag to the user if any of these
 > (`agent_core/tools/run_command.py`), absent from `registry.visible_tools(SAFE)`
 > and refusing to run under SAFE as a belt; (b) item 2 — a `dev_only` registration
 > may omit `undo()` (the flag split into `open_only` for visibility and
-> `allow_missing_undo` for the exemption, so `write_project_file` is hidden from
-> SAFE **and** still undo-enforced at registration); (c) a routine step or a widget
+> `allow_missing_undo` for the exemption, so `create_automation` is hidden from
+> SAFE **and** still undo-enforced at registration — `write_project_file` forced
+> that split and left the SAFE boundary on 2026-08-11, when Simple gained it behind
+> a per-edit card; [SAFETY.md](SAFETY.md) invariant 1 owns that decision); (c) a routine step or a widget
 > may carry a `command` kind; (d) the permission gate auto-grants non-destructive
 > calls, prompting only for destructive ones. Item 7's "profiles are never a
 > security boundary" framing is restated by the mode-scoped model — see the

@@ -414,8 +414,8 @@ questions were resolved during steps 1–3 and went with it):
   that NEEDS developer abilities; it stopped refusing one for where it was born.
   **The second half of the entry drove the design.** `routine_uses_dev_abilities`
   alone sees only `step.command`, so a step naming an `open_only` tool
-  (`read_project_file` / `write_project_file`, and equally `create_automation`,
-  `arm_automation`, `disarm_automation`, `run_command`, every `mcp:` tool) would have
+  (`create_automation`, `arm_automation`, `disarm_automation`, `run_command`, every
+  `mcp:` tool — and, until 2026-08-11, the two file tools) would have
   slipped through — the question needs the registry as well as the plan, and the
   module boundary rule keeps `routines/` from importing `tools/`, so it lives in the
   RPC layer. The one follow-on line landed in the same commit:
@@ -697,7 +697,10 @@ are here because somebody will meet them, and because anything built on top of
   and the ten other places where writing a file IS arming a job — and only in the
   seatbelt profile around `run_command`. So `write_project_file` naming a plist path
   is refused by the CORE (twice: `policy.workspace_trust_allows` on the grant and
-  the pre-gate denylist on the call) and by nothing in the shell.
+  the pre-gate denylist on the call) and by nothing in the shell. Both core
+  refusals are mode-independent, which is what kept this unchanged when the file
+  tools reached SAFE on 2026-08-11 — a Simple-profile edit meets exactly the same
+  two checks.
   **Left open deliberately, with the cost stated.** Closing it means ungating
   `OS_AUTOMATION_DIRS` from `#[cfg(target_os = "macos")]` and giving a hand-synced
   three-consumer list a fourth consumer in a second module — while the fence's own

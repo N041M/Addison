@@ -114,7 +114,11 @@ from agent_core.snapshots.snapshot_manager import (
 )
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.arm_automation import ArmAutomationTool
-from agent_core.tools.base import MAX_PERMISSION_DETAIL_CHARS, ActionSnapshot
+from agent_core.tools.base import (
+    MAX_PERMISSION_DETAIL_CHARS,
+    ActionSnapshot,
+    call_permission_sentence,
+)
 from agent_core.tools.calculator import CalculatorTool
 from agent_core.tools.create_automation import CreateAutomationTool
 from agent_core.tools.disarm_automation import DisarmAutomationTool
@@ -253,14 +257,24 @@ def build_registry(
     # registry; hidden from the SAFE view. Exempt from the undo check BECAUSE it is
     # dev_only and never reachable from SAFE mode (registry.register / run_command.py).
     registry.register(RunCommandTool(), dev_only=True)
-    # OPEN-mode coding harness (step 5). ALWAYS registered but open_only, so hidden
-    # from the SAFE view and refused at dispatch outside OPEN — the confinement layer
-    # (orchestrator/engine) additionally keeps them to trusted roots. The write tool
-    # is open_only but undo-ENFORCED (allow_missing_undo defaults False, R3): a real
-    # undo() is mandatory, so registration RAISES if a future edit drops it. Its undo
+    # The coding harness's two file tools (step 5), registered with NO FLAGS since
+    # 2026-08-11 — so they are in the SAFE view, and Simple can read and change a
+    # file in a folder that has been trusted. They were ``open_only`` until then, and
+    # the effect was that Simple could not edit an existing file AT ALL: it could
+    # only offer to save a new one. The owner decided that is a bug (docs/SAFETY.md
+    # owns the decision and SAFE invariant 1's wording).
+    #
+    # NOTHING WAS RELAXED TO DO IT, which is the only reason it fits inside the
+    # invariants. The write tool is MEDIUM with a real ``undo()``, so the
+    # undo-at-registration check (SAFE invariant 2) applies to it in full and
+    # registration RAISES if a future edit drops the method — it never needed the
+    # waiver, which is exactly why it can be in this view. Both stay path-bounded,
+    # so the confinement layer (orchestrator/engine) keeps them inside currently-
+    # trusted roots in both modes; the write is destructive, so in SAFE the gate
+    # cards for it EVERY time and names the file (permissions/gate.py). Its undo
     # bridge is injected here (used only by undo(), which gets no ExecutionContext).
-    registry.register(ReadProjectFileTool(), open_only=True)
-    registry.register(WriteProjectFileTool(shell_bridge=shell_bridge), open_only=True)
+    registry.register(ReadProjectFileTool())
+    registry.register(WriteProjectFileTool(shell_bridge=shell_bridge))
     # Step 8 phase 2: WRITING an automation down (never arming one — that is phase 3
     # and does not exist). ``open_only`` on write_project_file's exact terms (R3):
     # hidden from the SAFE view and refused at dispatch outside OPEN, yet
@@ -356,6 +370,29 @@ def _env_api_key() -> str:
     return os.environ["ANTHROPIC_API_KEY"]
 
 
+def _card_consequence(tool, detail: str | None) -> str:
+    """The one line a permission card puts under the tool's label.
+
+    THREE SHAPES, ONE FUNCTION, because the card and the CLI's stand-in must not
+    word the same call two ways:
+
+      * the tool wrote its own sentence for this call
+        (``call_permission_sentence`` — the file tools name the file, since
+        "wants to run: notes.txt" is a lie about what is about to happen);
+      * there is a per-call ``detail`` and no sentence — the historical idiom,
+        written for ``run_command`` and still exactly what it needs. The
+        frontend splits on this ``run: `` prefix to render the command as a
+        machine fact, so the words are load-bearing (``PermissionCard.tsx``);
+      * no detail at all — the tool's standing description, as SAFE cards have
+        always shown."""
+    sentence = call_permission_sentence(tool, detail)
+    if sentence:
+        return sentence
+    if detail:
+        return f"This time it wants to run: {detail}"
+    return tool.definition.description
+
+
 def _terminal_permission_handler(registry: ToolRegistry):
     """Terminal PermissionCard stand-in: plain-language ask, y/n answer.
 
@@ -376,11 +413,14 @@ def _terminal_permission_handler(registry: ToolRegistry):
             # to be wrong.
             print("\nSwitching an automation on has to be done in the Addison app.")
             return PermissionStatus.DENIED
-        definition = registry.get(tool_id).definition
+        tool = registry.get(tool_id)
+        definition = tool.definition
         print()
         print(f"Addison would like to: {definition.label}")
-        # The per-invocation destructive card names the exact command each time.
-        print(f"  This time it wants to run: {detail}" if detail else f"  {definition.description}")
+        # The per-invocation destructive card names the exact command each time —
+        # or, for a tool that words its own consequence line, whatever it says
+        # (``call_permission_sentence``; the file tools name the file).
+        print(f"  {_card_consequence(tool, detail)}")
         answer = input("Allow this? (y/n) ").strip().lower()
         if answer in ("y", "yes"):
             return PermissionStatus.GRANTED
@@ -1742,10 +1782,12 @@ class JsonRpcServer(
     ) -> PermissionStatus:
         """Runs on the worker thread: render the card, block for the answer.
 
-        ``detail`` is set on the destructive-in-OPEN per-invocation path (the exact
-        command text, already truncated by the tool) — the card's description then
-        names precisely what is being approved this time, because that approval
-        never carries over to the next destructive call.
+        ``detail`` is set on every per-invocation card — destructive-in-OPEN, and
+        since 2026-08-11 destructive-in-SAFE too — carrying the exact command text
+        or the file's name, already truncated by the tool. The card's description
+        then names precisely what is being approved this time, because that
+        approval never carries over to the next destructive call. How that fact is
+        WORDED belongs to the tool (``_card_consequence``).
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
         by ``_ask_with_keyword`` below.
@@ -1758,10 +1800,9 @@ class JsonRpcServer(
         nobody is asked a question they have already answered by stopping."""
         if self._stopped():
             return PermissionStatus.DENIED
-        definition = self.tool_registry.get(tool_id).definition
-        description = definition.description
-        if detail:
-            description = f"This time it wants to run: {detail}"
+        tool = self.tool_registry.get(tool_id)
+        definition = tool.definition
+        description = _card_consequence(tool, detail)
         card = {
             "toolId": tool_id,
             "label": definition.label,

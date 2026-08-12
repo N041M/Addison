@@ -593,6 +593,43 @@ def call_permission_detail(tool: Any, args: dict, resolved_path: str | None = No
     return None
 
 
+def call_permission_sentence(tool: Any, detail: str | None) -> str | None:
+    """How THIS tool wants its permission card worded around ``detail``, or None to
+    keep the caller's standing idiom.
+
+    A tool may implement ``permission_sentence(detail) -> str``. Nothing did before
+    2026-08-11, and the caller's idiom — ``"This time it wants to run: {detail}"``
+    — was written for ``run_command``, whose detail IS a command. It became wrong
+    the day a card carried a FILE NAME instead: "it wants to run: notes.txt" says
+    Addison is about to execute somebody's shopping list, and the frontend's card
+    splits on that exact ``run: `` prefix to render what follows as a machine fact
+    (``PermissionCard.tsx``), so the file name was about to be drawn as a command
+    too.
+
+    The wording belongs to the TOOL for the same reason ``permission_detail`` does:
+    the sentence a person reads before allowing an action is part of that action's
+    design, and a table of per-tool phrasings in the server is a second place for it
+    to drift from what the tool actually does.
+
+    ``detail`` is the ALREADY-CAPPED value from ``call_permission_detail`` — the
+    same string the Activity Panel and the audit row carry — so a sentence built
+    here cannot describe a different call than the panel does. A tool with no hook,
+    or one that answers nothing for this call, leaves the caller exactly where it
+    was."""
+    if not detail:
+        return None
+    provider = getattr(tool, "permission_sentence", None)
+    if not callable(provider):
+        return None
+    try:
+        value = provider(detail)
+    except Exception:
+        # A card is not the place to surface a tool's own bug: fall back to the
+        # caller's idiom rather than losing the card (or the turn).
+        return None
+    return str(value) if value else None
+
+
 def _capped_detail(value: Any) -> str | None:
     """The one cut, applied to whichever hook answered. Held here rather than
     repeated per branch so the two hooks cannot grow two different caps — the cap
