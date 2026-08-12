@@ -540,7 +540,7 @@ describe("the Snapshots surface", () => {
         snapshots={snapshotsState({ snapshots: [], lastWorkingId: undefined })}
       />,
     );
-    const section = screen.getByText("Restore points").parentElement as HTMLElement;
+    const section = screen.getByText("Saved so far").parentElement as HTMLElement;
     expect(
       within(section).getByText(
         "None yet. Addison saves the first one as soon as it has something to remember.",

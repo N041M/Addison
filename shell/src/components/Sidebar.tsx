@@ -54,7 +54,7 @@ interface Props {
   onOpenCode?: () => void;
   /** Mono hint beside "Tools" — the trusted-folder count, else the policy mode. */
   toolsHint?: string;
-  /** Mono hint beside "Snapshots" — how many restore points exist. */
+  /** Mono hint beside "Restore points" — how many restore points exist. */
   snapshotsHint?: string;
   /**
    * Plain label for the active profile, e.g. "Simple profile" — or UNDEFINED
@@ -276,7 +276,7 @@ export function Sidebar({
             onClick={onOpenTools}
           />
           <WorkspaceRow
-            label="Snapshots"
+            label="Restore points"
             hint={snapshotsHint}
             active={view === "snapshots"}
             onClick={onOpenSnapshots}

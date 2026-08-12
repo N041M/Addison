@@ -118,7 +118,7 @@ const VIEW_COMMIT_MS = 240;
 const SURFACE_TITLES: Record<Exclude<View, "chat">, string> = {
   settings: "Settings",
   tools: "Tools",
-  snapshots: "Snapshots",
+  snapshots: "Restore points",
   widgets: "Build a widget",
   code: "Code",
 };
