@@ -38,9 +38,14 @@ def test_a_relative_target_resolves_against_the_directory_a_command_starts_in():
 
 
 def test_a_home_relative_target_is_expanded():
-    assert delete_preview.delete_targets("rm -rf ~/junk", home=HOME) == [
-        str(Path("~/junk").expanduser())
-    ]
+    # Against the ``home`` PARAMETER, never the process's own HOME: the parameter is
+    # the directory a command starts in, and the two must not silently diverge.
+    assert delete_preview.delete_targets("rm -rf ~/junk", home=HOME) == [str(HOME / "junk")]
+    assert delete_preview.delete_targets("rm ~", home=HOME) == [str(HOME)]
+
+
+def test_somebody_elses_home_gets_no_preview():
+    assert delete_preview.delete_targets("rm -rf ~other/junk", home=HOME) is None
 
 
 def test_a_command_that_is_not_a_delete_is_left_alone():

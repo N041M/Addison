@@ -127,13 +127,19 @@ def delete_targets(command: str, *, home: Path | None = None) -> list[str] | Non
 def _resolve(token: str, base: Path) -> str | None:
     """One target, made absolute against the directory a command starts in.
 
-    A relative path is joined to ``base``; ``~`` is expanded. Nothing here touches
+    A relative path is joined to ``base``; a bare ``~`` or ``~/`` prefix expands to
+    ``base`` itself, never to the process's own HOME, so the contract that a test
+    can name its own home actually holds. A ``~user`` form names somebody else's
+    directory, which this cannot verify, so it gets no preview. Nothing here touches
     the filesystem, no ``resolve()``, no ``exists()``, because the core does not
     read the disk (CLAUDE.md §1.3). The shell does the looking."""
-    try:
-        path = Path(token).expanduser()
-    except (RuntimeError, ValueError):
+    if token == "~":
+        return str(base)
+    if token.startswith("~/"):
+        return str(base / token[2:]) or None
+    if token.startswith("~"):
         return None
+    path = Path(token)
     if not path.is_absolute():
         path = base / path
     text = str(path)
