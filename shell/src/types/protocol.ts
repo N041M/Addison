@@ -284,6 +284,10 @@ export const Method = {
   // one edited since. Reached only from the core, never from here.
   ShellCanRestoreWorkspaceFiles: "shell.canRestoreWorkspaceFiles",
   ShellDigestWorkspaceFiles: "shell.digestWorkspaceFiles",
+  // ...and the one way a path re-enters the shell's session write ledger, on proof
+  // that the bytes there now are the bytes Addison wrote. It is what lets a revert
+  // work after a restart. Core -> shell only, like the two above.
+  ShellAdoptWorkspacePath: "shell.adoptWorkspacePath",
   ShellRunCommand: "shell.runCommand",
   // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
   // from typed fields and never accepts a document (plan §5.8).

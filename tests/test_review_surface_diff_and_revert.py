@@ -89,6 +89,8 @@ class _FakeWorkspaceShell(ShellBridgeStubs):
         self.viewed: list[str] = []
         self.asked_to_restore: list[list[str]] = []
         self.digested: list[list[str]] = []
+        #: Every ``(path, expectedSha256)`` the core has asked this shell to re-ledger.
+        self.adoptions: list[tuple[str, str]] = []
         self.write_failure: str | None = None
 
     def _at(self, path: str) -> str:
@@ -144,6 +146,23 @@ class _FakeWorkspaceShell(ShellBridgeStubs):
         # Keyed by the path AS ASKED — the wire contract — and answered from the ledger,
         # which is a set of names.
         return {"restorable": {path: self._at(path) in self.ledger for path in paths}}
+
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
+        """The narrow way BACK INTO the ledger (the plan's deferred ``adoptWorkspacePath``).
+
+        Modelled the way the real shell answers it: a shortcut standing at the name is
+        refused whatever its target holds, and everything else is decided by hashing
+        what is there NOW against what the core says it wrote. Nothing else about the
+        path is consulted, which is what makes this narrower than persisting the
+        ledger."""
+        self.adoptions.append((path, expected_sha256))
+        if os.path.islink(path):
+            return {"adopted": False}
+        text = self.disk.get(self._on_disk(path))
+        if text is None or _sha(text) != expected_sha256:
+            return {"adopted": False}
+        self.ledger.add(self._at(path))
+        return {"adopted": True}
 
     def digest_workspace_files(self, paths: list[str]) -> dict:
         self.digested.append(list(paths))
@@ -1165,7 +1184,7 @@ def test_the_list_reports_changed_unchanged_and_cannot_tell(tmp_path, project):
         harness.close()
 
 
-def test_an_edit_is_not_revertable_after_a_restart_and_the_before_text_survives(
+def test_an_edit_is_not_revertable_after_a_restart_when_the_file_has_changed_since(
     tmp_path, project
 ):
     """THE RESTART PROBLEM. The shell's write ledger dies with the process; the rows do
@@ -1175,8 +1194,12 @@ def test_an_edit_is_not_revertable_after_a_restart_and_the_before_text_survives(
     An empty ledger over a full disk is exactly what a restart leaves behind, and it is
     unreachable in a test except by separating the two.
 
-    Mutation: hard-code ``revertable: True``, or infer it from the row rather than
-    asking the shell. The dead-button regression comes straight back."""
+    THE FILE IS EDITED HERE, which is what leaves the honest line in place now that
+    adoption recovers the untouched case (the test below): the bytes on disk are nobody
+    can prove whose, so nothing may re-ledger the path and the surface says so.
+
+    Mutation: hard-code ``revertable: True``, or read ``onDiskChanged: None``/``True``
+    as "unchanged". The dead-button regression comes straight back."""
     path = str(project / "a.py")
     shell = _FakeWorkspaceShell(disk={path: "v0\n"})
     harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
@@ -1185,10 +1208,113 @@ def test_an_edit_is_not_revertable_after_a_restart_and_the_before_text_survives(
         assert harness.call("workspace.listEdits")["edits"][0]["revertable"] is True
 
         shell.ledger.clear()   # the restart
+        shell.disk[path] = "and then I changed it myself\n"
         assert harness.call("workspace.listEdits")["edits"][0]["revertable"] is False
         # And the BEFORE text is still reachable, which is what makes the honest line
         # useful rather than merely honest: the earlier version is there to copy.
         assert harness.call("workspace.readEditDiff", {"path": path})["before"] == "v0\n"
+
+        # The button is not merely withheld, the write is refused too, and nothing on
+        # disk moves. A surface that only hid the control would still be one shell
+        # method away from overwriting somebody's own work.
+        answer = harness.call("workspace.revertFile", {"path": path})
+        assert answer["ok"] is False
+        assert shell.disk[path] == "and then I changed it myself\n"
+    finally:
+        harness.close()
+
+
+def test_a_revert_works_after_a_restart_when_the_file_is_as_addison_left_it(
+    tmp_path, project
+):
+    """THE RESTART CASE, RECOVERED, the plan's deferred ``shell.adoptWorkspacePath``.
+
+    An empty ledger over a full disk is a restart. What earns the path back into that
+    ledger is proof and nothing else: the bytes there now hash to the digest the write
+    recorded, so the file IS what Addison last wrote and putting the earlier text back
+    destroys nobody's work.
+
+    Mutation: drop the adoption call from ``revert_path`` (the revert answers the
+    shell's "Addison can only undo a file change it made" and the file stays at v1), or
+    persist/widen the ledger instead (this passes, and the two tests either side of it
+    fail, a path with edited bytes and a shortcut at the name would both be adopted)."""
+    path = str(project / "a.py")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
+    try:
+        harness.trust(project)
+        shell.ledger.clear()   # the restart
+
+        # The surface offers it, because the proof exists to be given.
+        assert harness.call("workspace.listEdits")["edits"][0]["revertable"] is True
+
+        answer = harness.call("workspace.revertFile", {"path": path})
+        assert answer["ok"] is True
+        assert shell.disk[path] == "v0\n"
+        # ASKED WITH THE DIGEST THE WRITE RECORDED, about the recorded path, never
+        # about a re-resolution of it, and never with a digest computed here.
+        assert shell.adoptions == [(path, _sha("v1\n"))]
+        # And the chain is settled, exactly as an in-session revert settles it: nothing
+        # is left for "Undo last action" to write back.
+        assert harness.call("workspace.listEdits")["edits"] == []
+    finally:
+        harness.close()
+
+
+def test_a_row_that_recorded_no_digest_is_never_adopted(tmp_path, project):
+    """A row written before ``wrote_sha256`` existed has no proof to offer, and there is
+    no weaker test adoption may fall back to: a path let into the ledger without one
+    would be a restore permission granted over bytes nobody checked.
+
+    Mutation: adopt on the path alone when the digest is missing. This shell is asked to
+    re-ledger a file whose contents were never established, which is the widening the
+    whole mechanism exists instead of."""
+    path = str(project / "legacy.py")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    harness = _Harness(
+        tmp_path, shell, edits=((path, "v1\n", 100),), legacy_paths=frozenset({path})
+    )
+    try:
+        harness.trust(project)
+        shell.ledger.clear()   # the restart
+
+        assert harness.call("workspace.listEdits")["edits"][0]["revertable"] is False
+        answer = harness.call("workspace.revertFile", {"path": path})
+        assert answer["ok"] is False
+        assert answer["error"] == "Addison can only undo a file change it made."
+        assert shell.adoptions == []
+        assert shell.disk[path] == "v1\n"
+    finally:
+        harness.close()
+
+
+def test_a_shortcut_at_the_written_path_is_never_adopted_after_a_restart(
+    tmp_path, project
+):
+    """The swap that makes adoption dangerous if it were done on bytes alone: a shortcut
+    planted at the written name reaches a file whose contents match perfectly, and
+    ledgering the NAME would let the restore write straight through it.
+
+    The core refuses before it asks (``replaced_by_a_link``) and the shell refuses again
+    if it is ever asked. Mutation: drop either check, and a revert writes a file's
+    earlier text into whatever the shortcut points at."""
+    path = str(project / "a.py")
+    elsewhere = str(project / "elsewhere.py")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
+    try:
+        harness.trust(project)
+        shell.ledger.clear()   # the restart
+        # What the shortcut points at holds exactly the bytes Addison wrote, which is
+        # what makes this the case worth proving rather than an obvious one.
+        shell.disk[elsewhere] = "v1\n"
+        _plant_a_shortcut(path, elsewhere)
+
+        answer = harness.call("workspace.revertFile", {"path": path})
+        assert answer["ok"] is False
+        assert shell.adoptions == []
+        assert shell.disk[elsewhere] == "v1\n"
+        assert shell.restored == []
     finally:
         harness.close()
 

@@ -156,6 +156,10 @@ mod tests {
             // through the core's mode gate. The second reads files to hash them.
             "shell.canRestoreWorkspaceFiles",
             "shell.digestWorkspaceFiles",
+            // ...and the one way a path re-enters that ledger. A window that could ask
+            // it directly could hand itself a restore permission for any file whose
+            // bytes it can guess the digest of.
+            "shell.adoptWorkspacePath",
         ] {
             let frame = json!({ "jsonrpc": "2.0", "method": m, "id": 1 });
             assert!(

@@ -284,6 +284,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         // a Revert only where one would actually work, and warn before it clobbers.
         "shell.canRestoreWorkspaceFiles" => can_restore_workspace_files(app, params),
         "shell.digestWorkspaceFiles" => digest_workspace_files(params),
+        // The narrow way BACK INTO the ledger after a restart, and the only one
+        // (phase-3 plan Build §3's deferred item). It adds a path to the session
+        // ledger if and only if the bytes standing there now hash to what the core
+        // recorded when it wrote them, so what it re-admits is a file Addison itself
+        // wrote and nobody has touched since, never an arbitrary path, and never a
+        // widening of `restore_workspace_path` to "inside a trusted root".
+        "shell.adoptWorkspacePath" => adopt_workspace_path(app, params),
         // NOTE: `shell.runCommand` is deliberately NOT routed here. It is OPEN-mode
         // command execution (step 5.5, items 1+2) and it lands in the shell for the
         // same reason the workspace file methods do — this is the process with OS
@@ -899,6 +906,68 @@ fn can_restore_workspace_paths(state: &FileState, params: &Value) -> Result<Valu
         }
     }
     Ok(json!({ "restorable": restorable }))
+}
+
+// shell.adoptWorkspacePath {path, expectedSha256} -> {adopted: bool}   (phase-3 §3)
+//
+// THE POST-RESTART CASE, recovered without giving anything away. The write ledger dies
+// with the process, so after a restart Addison can describe every past edit and put
+// none of them back, a review surface full of honest sentences where a person wants a
+// button. This is the one way a path re-enters that ledger, and it re-enters only on
+// PROOF: the bytes standing at the name now must hash, byte for byte, to the digest the
+// core recorded at the moment it wrote them (`wrote_sha256`).
+//
+// WHAT THAT PROOF BUYS, said exactly. A match means the file on disk IS the file
+// Addison last wrote and nobody has changed it since, so putting the earlier text back
+// destroys no work of anybody's, which is the whole risk a restore carries. A mismatch
+// is refused rather than warned about: the surface's "somebody has changed this since"
+// warning belongs to a live session, where the ledger already says yes.
+//
+// WHAT IT IS NOT, and must never become:
+//   * PERSISTING the ledger. A restore path that survives a restart on its own outlives
+//     the reason it was granted. This grants nothing until it is asked, and what it
+//     grants is one path whose contents already answer for themselves.
+//   * WIDENING to "inside a currently-trusted root". The digest is the test, not trust,
+//     and it is the narrower of the two: a trusted root holds every file in the project,
+//     while this holds only files Addison itself wrote and nobody has touched.
+// It reads a file to hash it and changes no file at all.
+fn adopt_workspace_path(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    adopt_workspace_path_in(app.state::<FileState>().inner(), params)
+}
+
+fn adopt_workspace_path_in(state: &FileState, params: &Value) -> Result<Value, RpcError> {
+    let path = PathBuf::from(required_str(params, "path", "A file path is required.")?);
+    let expected = required_str(
+        params,
+        "expectedSha256",
+        "Addison needs to know what it wrote there before it can put it back.",
+    )?
+    .to_ascii_lowercase();
+    // THE FLOOR FIRST, as every path in this file takes it. `digest_workspace_path`
+    // takes it again below; taking it here as well is what keeps the refusal a refusal
+    // rather than a `false` that reads like an ordinary mismatch.
+    refuse_addison_data_dir(&path)?;
+    // AND WHAT THE NAME REACHES, without following it. A shortcut standing where
+    // Addison wrote a file would otherwise be adopted on the strength of its TARGET's
+    // bytes, and the ledgered name would then write straight through it, the exact
+    // swap `restore_workspace_path` refuses the data dir for. `symlink_metadata`, never
+    // `metadata`: the question is what this directory entry IS.
+    if std::fs::symlink_metadata(&path).map(|meta| meta.is_symlink()).unwrap_or(false) {
+        return Ok(json!({ "adopted": false }));
+    }
+    // The same read, the same ceiling and the same "can't tell" as the surface's own
+    // digest, one hashing path in this file, so a file this cannot judge is a file the
+    // surface already says it cannot judge.
+    let digest = digest_workspace_path(&path);
+    let matches = digest
+        .get("sha256")
+        .and_then(Value::as_str)
+        .is_some_and(|found| found.eq_ignore_ascii_case(&expected));
+    if !matches {
+        return Ok(json!({ "adopted": false }));
+    }
+    lock(&state.workspace_written).insert(path);
+    Ok(json!({ "adopted": true }))
 }
 
 // shell.digestWorkspaceFiles {paths} -> {digests: {<path>: {sha256, missing}}}  (§2)
@@ -2518,6 +2587,84 @@ mod tests {
             "a file Addison created and the person then deleted is still restorable"
         );
         assert_eq!(restorable.get(&absent.to_string_lossy().to_string()), Some(&json!(false)));
+    }
+
+    /// SHA-256 of `"hello\n"`, written out rather than computed, for the reason
+    /// `digest_hashes_what_is_on_disk_now` gives: a test that hashes with the library
+    /// it is testing asserts only that the library is deterministic.
+    const HELLO_SHA: &str = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03";
+
+    #[test]
+    fn adopt_re_ledgers_a_path_whose_bytes_are_what_addison_wrote() {
+        // THE POST-RESTART CASE, recovered. The ledger starts empty exactly as it does
+        // after a restart, so `restore_workspace_path` refuses; adopting on a matching
+        // digest puts the one path back in, and the restore then works.
+        let state = FileState::default();
+        let path = temp_path();
+        std::fs::write(&path, "hello\n").expect("seed");
+        assert!(restore_workspace_path(
+            &state,
+            path.clone(),
+            &json!({ "path": path.to_string_lossy(), "content": "before\n" })
+        )
+        .is_err());
+
+        let params = json!({ "path": path.to_string_lossy(), "expectedSha256": HELLO_SHA });
+        let answer = adopt_workspace_path_in(&state, &params).unwrap();
+        assert_eq!(answer.get("adopted"), Some(&json!(true)));
+        restore_workspace_path(
+            &state,
+            path.clone(),
+            &json!({ "path": path.to_string_lossy(), "content": "before\n" }),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(&path).expect("read"), "before\n");
+    }
+
+    #[test]
+    fn adopt_refuses_bytes_that_are_not_what_addison_wrote() {
+        // Kills: adopting on the path alone, or on any test weaker than the digest,
+        // which is the whole of what makes this narrower than persisting the ledger.
+        // A file somebody has edited since is exactly the file a revert must not
+        // silently overwrite.
+        let state = FileState::default();
+        let edited = temp_path();
+        std::fs::write(&edited, "somebody's own work\n").expect("seed");
+        let params = json!({ "path": edited.to_string_lossy(), "expectedSha256": HELLO_SHA });
+        assert_eq!(
+            adopt_workspace_path_in(&state, &params).unwrap().get("adopted"),
+            Some(&json!(false))
+        );
+        assert!(!lock(&state.workspace_written).contains(&edited), "and nothing is ledgered");
+
+        // A file that is not there at all cannot answer for itself either.
+        let gone = temp_path();
+        let params = json!({ "path": gone.to_string_lossy(), "expectedSha256": HELLO_SHA });
+        assert_eq!(
+            adopt_workspace_path_in(&state, &params).unwrap().get("adopted"),
+            Some(&json!(false))
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adopt_refuses_a_shortcut_standing_at_the_name() {
+        // Kills: hashing through the link. The bytes at the far end are a perfect match
+        //, that is what makes this the dangerous case, and adopting on them would
+        // ledger a NAME that every later write follows straight through to a file
+        // nobody trusted.
+        let state = FileState::default();
+        let target = temp_path();
+        std::fs::write(&target, "hello\n").expect("seed");
+        let link = temp_path();
+        std::os::unix::fs::symlink(&target, &link).expect("link");
+
+        let params = json!({ "path": link.to_string_lossy(), "expectedSha256": HELLO_SHA });
+        assert_eq!(
+            adopt_workspace_path_in(&state, &params).unwrap().get("adopted"),
+            Some(&json!(false))
+        );
+        assert!(!lock(&state.workspace_written).contains(&link));
     }
 
     #[test]

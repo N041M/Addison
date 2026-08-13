@@ -21,8 +21,32 @@
 // pin the behaviour that IS observable; a case that separates the rules would have
 // to invent a registry, and inventing one is how a test comes to agree with itself.
 
-import { describe, it, expect } from "vitest";
-import { languageForPath } from "../lib/monaco";
+import { describe, it, expect, vi } from "vitest";
+
+// jsdom has no `CSS.escape`, and Monaco's theme service builds an icon stylesheet with
+// it the moment anything touches the editor namespace (`monaco.editor.tokenize`
+// below). `vi.hoisted` runs before the imports, which is the only place a global can
+// be put in front of a module that reads one at load. Two lines of polyfill, and it
+// says exactly what jsdom is missing rather than mocking Monaco away; the point of
+// this file is that it asks the REAL registry.
+vi.hoisted(() => {
+  const shim = globalThis as {
+    CSS?: { escape(value: string): string };
+    matchMedia?: (query: string) => unknown;
+  };
+  shim.CSS ??= { escape: (value: string) => value };
+  // ...and the OS colour-scheme query the same service subscribes to. Neither shim
+  // decides anything this file asserts: tokenizing is text in, token names out, and
+  // the theme never touches it. (Which theme is in force is deliberately NOT asserted
+  // anywhere in jsdom, `test-hardening-plan.md` §5.)
+  shim.matchMedia ??= () => ({
+    matches: false,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  });
+});
+
+import monaco, { languageForPath } from "../lib/monaco";
 
 describe("languageForPath", () => {
   it("names the language for the file types this screen actually opens", () => {
@@ -34,6 +58,11 @@ describe("languageForPath", () => {
     expect(languageForPath("/p/src/main.rs")).toBe("rust");
     expect(languageForPath("/p/src/App.tsx")).toBe("typescript");
     expect(languageForPath("/p/notes.txt")).toBe("plaintext");
+    // JSON has no Monarch grammar upstream, so `lib/monaco` declares one. Kills:
+    // deleting that registration, every `.json` file in a project (and there is one
+    // in nearly every project) goes back to rendering as plain text.
+    expect(languageForPath("/p/tsconfig.json")).toBe("json");
+    expect(languageForPath("/p/.vscode/settings.jsonc")).toBe("json");
   });
 
   it("matches a filename that has no extension at all", () => {
@@ -70,5 +99,66 @@ describe("languageForPath", () => {
     expect(languageForPath("/p/archive.zzz")).toBeUndefined();
     expect(languageForPath("/p/")).toBeUndefined();
     expect(languageForPath("")).toBeUndefined();
+  });
+});
+
+describe("the JSON grammar this build declares itself", () => {
+  /** Every token name the tokenizer puts on one line, in order. */
+  function tokensFor(line: string): string[] {
+    return monaco.editor
+      .tokenize(line, "json")[0]
+      .map((token) => token.type)
+      .filter((type) => type !== "");
+  }
+
+  it("colours a field name apart from its value", () => {
+    // The one decision in the grammar that is not mechanical: a key is a string
+    // followed by a colon, and it takes `key` (which `monacoTheme.ts` maps to
+    // `--hl-attr`) rather than `string`. Kills: dropping the lookahead rule, every
+    // key and every value becomes one hue, which is a wall rather than a structure.
+    const tokens = tokensFor('{"name": "addison"}');
+    expect(tokens[0]).toBe("delimiter.json");
+    expect(tokens[1]).toBe("key.json");
+    expect(tokens[3]).toBe("string.json");
+  });
+
+  it("names numbers, the three keywords and the punctuation", () => {
+    // Kills: token names outside the map in `monacoTheme.ts`. Under `inherit: false`
+    // an unmapped token falls silently to the editor foreground, so a typo here is
+    // invisible in every test that does not name the tokens out loud.
+    expect(tokensFor("[1, -2.5e3, true, false, null]")).toEqual([
+      "delimiter.json",
+      "number.json",
+      "delimiter.json",
+      "number.json",
+      "delimiter.json",
+      "keyword.json",
+      "delimiter.json",
+      "keyword.json",
+      "delimiter.json",
+      "keyword.json",
+      "delimiter.json",
+    ]);
+  });
+
+  it("treats a comment as a comment, not as broken JSON", () => {
+    // `tsconfig.json` and the editor settings files people open are jsonc in
+    // everything but name. Kills: removing the comment rules, which leaves the text
+    // uncoloured and (with a block comment) the rest of the file mis-tokenized.
+    expect(tokensFor("// a note")).toEqual(["comment.json"]);
+    expect(tokensFor("/* a note */")).toEqual(["comment.json"]);
+    // ...and a block comment carries across lines, which is the half a single-line
+    // rule gets wrong: the SECOND line of one must not be read as JSON.
+    const lines = monaco.editor.tokenize('/* a note\n"not a key": 1 */\n{}', "json");
+    expect(lines[1].map((token) => token.type)).toEqual(["comment.json"]);
+    expect(lines[2].map((token) => token.type)).toEqual(["delimiter.json"]);
+  });
+
+  it("brings no language service and no second worker with it", () => {
+    // THE CONSTRAINT, not a detail: the review surface is read-only and its CSP names
+    // `worker-src 'self'` as a decision, so JSON colour had to arrive as a grammar
+    // rather than as `vs/language/json`. Kills: swapping this module's registration
+    // for that import, `jsonDefaults` appears on the api the moment it is loaded.
+    expect((monaco.languages as Record<string, unknown>).json).toBeUndefined();
   });
 });

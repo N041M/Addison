@@ -246,8 +246,9 @@ Monaco cannot run without, and `img-src 'self' data:`, which the previous
 reaches the page has its CSS stripped before injection. **What remains is not code:**
 the §13c manual pass in [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md), which is
 where a real webview says what that policy actually refuses, plus the plan's follow-up
-list (an editor zoom control the 12px type size does not settle, JSON highlighting, and
-recovering the post-restart revert case).
+list, which is down to one item: an editor zoom control, which the 12px type size does
+not settle. JSON highlighting and the post-restart revert case were built on
+2026-08-13.
 
 ## Deliberately not being built
 
