@@ -76,7 +76,7 @@ class BudgetAssessment:
 
     ``known`` is False when the provider reports no usable window; then
     ``over_threshold`` is False and the caller does nothing at all. It is never a
-    guess, and False-because-unknown is never to be read as False-because-fine —
+    guess, and False-because-unknown is never to be read as False-because-fine:
     ask ``known`` first.
     """
 
@@ -118,8 +118,8 @@ def assess_budget(
 
     ``max_context_tokens`` comes from that provider's ``ProviderCapabilities``
     and is passed in rather than looked up here, so no per-provider number ever
-    lives in this module (hard rule 3). Anything unusable — None, zero, negative
-    — is "cannot tell", and so is a negative ``used_tokens``, which is nonsense
+    lives in this module (hard rule 3). Anything unusable (None, zero, negative)
+    is "cannot tell", and so is a negative ``used_tokens``, which is nonsense
     no threshold should be derived from.
     """
     if max_context_tokens is None or max_context_tokens <= 0:
@@ -208,7 +208,7 @@ def choose_cut_point(
     """Where the older portion ends and the verbatim tail begins.
 
     Keeps the last ``keep_recent_turns`` turns whole, then walks EARLIER (never
-    later) until the cut is legal — moving earlier only ever carries more
+    later) until the cut is legal. Moving earlier only ever carries more
     verbatim, which is always safe, while moving later would eat into a turn. If
     no legal cut exists, which is the honest answer for a chat shorter than the
     tail or a single enormous turn, ``found`` is False and the caller does
