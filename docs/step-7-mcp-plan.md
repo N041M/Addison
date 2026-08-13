@@ -499,7 +499,7 @@ and registration must refuse a collision rather than replace.
 - No automatic trust of a server's declared risk or undo-ability. Ever, in v1.
 - No keyword gate. That is step 8, and it governs *running* powerful actions.
 
-## 7. The deferral this makes load-bearing
+## 7. The deferral this made load-bearing (discharged 2026-08-13)
 
 Untrusted-content screening (design-doc §11, v2) was re-affirmed as deferred on
 2026-08-06 with a dated trigger. **MCP is its third trigger**, after free/gray-area
@@ -511,8 +511,8 @@ credential backstop, not a screen.
 server's text now reaches a model in three places it did not before: the tool
 DESCRIPTION and its bounded `inputSchema`, both sent as tool definitions the moment
 an `mcp:` id enters `visible_tools(OPEN)`, and the tool's ANSWER, which is the
-whole point of a call. **Screening remains v2.** That decision is unchanged and
-this phase does not reopen it. What phase 3 records instead is the backstop it
+whole point of a call. **Screening was still v2 on that day.** That decision was
+unchanged and this phase did not reopen it. What phase 3 records instead is the backstop it
 actually shipped, stated at its real strength and no higher:
 
 - **Redaction** (`agent_core/redaction.py`) removes the credential shapes somebody
@@ -538,7 +538,7 @@ actually shipped, stated at its real strength and no higher:
 
 None of that screens for a prompt injection, and pretending otherwise is the
 failure mode this section exists to prevent. What has changed since 2026-08-06 is
-that the deferral is now genuinely load-bearing rather than theoretical: it is on
+that the deferral was now genuinely load-bearing rather than theoretical: it was on
 the v2 list in CLAUDE.md and [KNOWN-GAPS.md](KNOWN-GAPS.md), with three triggers
 behind it and the third one live.
 
@@ -552,7 +552,7 @@ budget that got *tighter* rather than looser (one shared cap where phase 3 had o
 cap over one string). The parts phase 4 could have started forwarding (images,
 audio, blobs, resource links) are the parts it decided never to forward at all.
 
-**Screening remains v2, unchanged, and this phase does not reopen it.** The
+**Screening was still v2 then, unchanged, and this phase did not reopen it.** The
 backstops are the same four, at the same strength, plus one:
 
 - **Redaction, caps, dev-only visibility and the per-invocation card**, as stated
@@ -583,8 +583,8 @@ backstops are the same four, at the same strength, plus one:
   **What it is NOT, said plainly so nobody later mistakes it for the deferral being
   discharged:** it is a character filter. It does not read the text, does not look
   for instructions, and would not notice the plainest "ignore your previous
-  instructions" written in ASCII. A screen is a v2 owner decision and this is not a
-  down payment on one.
+  instructions" written in ASCII. A screen was a v2 owner decision at the time and
+  this was not a down payment on one.
 
 The re-read also confirmed one thing by checking rather than assuming, and it is
 the reason the surface is narrower than it first appears: **a server's answer never
@@ -595,6 +595,15 @@ audit row, and reaches a person only as whatever the model says about it, which 
 why phase 4 never had to consider rendering a stranger's markdown, and why it can
 refuse foreign media outright without costing anything a person could otherwise
 have seen.
+
+**DISCHARGED 2026-08-13.** The deferral this section tracked is over: the owner
+pulled screening forward and it is built, so a server's description, its schema
+strings and its answers are all screened, and an instruction-shaped passage reaches
+a model with a note in front of it and a kind in the audit row. Everything above
+stands as the record of the two re-reads and of the backstops, which are unchanged
+and still the layers doing the work. This section stops tracking the subject here;
+[`untrusted-screening-plan.md`](untrusted-screening-plan.md) owns it, including the
+honest statement of what a pattern layer is worth.
 
 **For the record, since it was checked rather than assumed at the time:** phase 2
 did not pull this trigger. A server's names and descriptions were attacker-

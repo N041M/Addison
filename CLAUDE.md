@@ -287,10 +287,12 @@ Developer custom chain ship now — see the routing section above, where balance
 is recorded), the Context Budget Manager / automatic long-conversation continuation (**v2**
 — spec §4.8; v1 ships only the schema substrate, orchestrator machinery, never a
 registry tool), messaging channels, Routine step-editing UI, a Rust rewrite of the
-Agent Core, and the two v2 items from the 2026-07 ecosystem survey — Routine
-export/import **sharing** and untrusted-content screening (design-doc §11) — do not
-pull them forward. (Untrusted-content screening becomes load-bearing once
-free/gray-area endpoints and MCP tools are in play — still v2.)
+Agent Core, and one v2 item from the 2026-07 ecosystem survey: Routine
+export/import **sharing**, which is not to be pulled forward. (The survey's other v2 item,
+**untrusted-content screening**, is no longer deferred: its triggers fired and the
+owner pulled it forward on 2026-08-13. It is **built**, and
+[`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,
+including the honest statement of its strength.)
 
 Also deferred, and specifically **not** to be solved inside the snapshot
 subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a
