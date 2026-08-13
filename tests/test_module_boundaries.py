@@ -165,6 +165,27 @@ def test_policy_does_not_import_tools():
     assert not offenders, "policy.py must not import agent_core.tools:\n" + "\n".join(offenders)
 
 
+def test_portable_imports_only_the_routine_model():
+    """``routines/portable.py`` promises, in its own docstring, to import the
+    standard library and ``routines/model.py`` and nothing else. The pairwise test
+    above already keeps it out of tools/ and providers/ by virtue of living in
+    routines/; this narrows it further, to the whole of agent_core. It is the
+    serializer for a file that leaves the machine, so every agent_core module it
+    could reach is a place a field could start travelling from without anybody
+    deciding it should."""
+    path = _AGENT_CORE / "routines" / "portable.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    offenders = [
+        f"{path}:{lineno} imports {target}"
+        for target, lineno in _imported_targets(tree, "agent_core.routines.portable")
+        if target.startswith("agent_core") and target != "agent_core.routines.model"
+    ]
+    assert not offenders, (
+        "routines/portable.py may import stdlib and routines/model.py only:\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_the_leaf_text_modules_import_none_of_the_three_packages():
     """redaction.py and screening.py each promise, in their own docstring, to be
     importable from anywhere without touching the module-boundary rule. That is
