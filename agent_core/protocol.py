@@ -459,6 +459,14 @@ class Method:
     # Core -> Shell only, and never reachable from a tool: the core asks it while
     # composing the card, for paths the command itself named.
     SHELL_PREVIEW_DELETE_PATHS = "shell.previewDeletePaths"
+    # {path, expectedSha256} -> {adopted: bool}. The ONE way a path re-enters the
+    # shell's session write ledger, and it re-enters only on proof: the bytes there now
+    # must hash to what the core recorded when it wrote them. That is what recovers the
+    # post-restart revert case without persisting the ledger (which would outlive the
+    # reason it was granted) and without widening the restore check to "inside a trusted
+    # root" (which would be broader, not narrower, every file in the project rather
+    # than only files Addison wrote and nobody has touched since).
+    SHELL_ADOPT_WORKSPACE_PATH = "shell.adoptWorkspacePath"
     # OPEN-mode command execution (step 5.5, item 1). The core does NOT run this
     # itself: run_command crosses the bridge like every other OS effect (§1.3), so
     # execution happens in the process that can apply a sandbox. `writeRoots` is the

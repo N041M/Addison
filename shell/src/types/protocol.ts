@@ -289,6 +289,10 @@ export const Method = {
   // would cost. It runs nothing and opens no file. Reached only from the core, while
   // it is composing that card.
   ShellPreviewDeletePaths: "shell.previewDeletePaths",
+  // ...and the one way a path re-enters the shell's session write ledger, on proof
+  // that the bytes there now are the bytes Addison wrote. It is what lets a revert
+  // work after a restart. Core -> shell only, like the two above.
+  ShellAdoptWorkspacePath: "shell.adoptWorkspacePath",
   ShellRunCommand: "shell.runCommand",
   // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
   // from typed fields and never accepts a document (plan §5.8).

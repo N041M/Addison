@@ -75,6 +75,7 @@ class ServerShellBridge(ShellBridge, Protocol):
     # would be a directory-walk capability the model can point anywhere. The core
     # calls it while composing a permission card, never from a tool.
     def preview_delete_paths(self, paths: list[str]) -> dict: ...
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict: ...
 
 # How long a single Core -> Shell request may wait before we give up on it. The
 # shell answers a file/clipboard/draft call from its own process, so a stall this
@@ -378,6 +379,25 @@ class IpcShellBridge:
         ``delete_preview.delete_targets`` read as a delete. A failure is a missing
         line on the card and never an error anybody sees."""
         return self._call(Method.SHELL_PREVIEW_DELETE_PATHS, {"paths": list(paths)})
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
+        """Ask the shell to take one path back into its session write ledger:
+        ``{"adopted": bool}``.
+
+        NOT A BATCH, where its two siblings are, and deliberately: this is asked once,
+        for the one file somebody has just pressed Revert on, and never for a list on
+        screen. A batch version would re-ledger two hundred paths behind a click that
+        acted on one of them.
+
+        It is answered ``True`` only when the bytes at that name hash to
+        ``expected_sha256``, the digest recorded at the moment Addison wrote them, so
+        what comes back into the ledger is a file Addison itself wrote and nobody has
+        changed since. That is what recovers a revert after a restart, when the ledger
+        is empty and every historic edit would otherwise be describable and impossible
+        to put back."""
+        return self._call(
+            Method.SHELL_ADOPT_WORKSPACE_PATH,
+            {"path": path, "expectedSha256": expected_sha256},
+        )
 
     # --- OPEN-mode command execution (step 5.5, item 1) --------------------
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:

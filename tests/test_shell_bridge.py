@@ -239,6 +239,7 @@ _BRIDGE_CALLS = (
     # from either is a wedged shell, not a slow answer.
     ("can_restore_workspace_files", (["/tmp/project/a.py"],)),
     ("digest_workspace_files", (["/tmp/project/a.py"],)),
+    ("adopt_workspace_path", ("/tmp/project/a.py", "a" * 64)),
 )
 
 # The one call whose budget is neither the default nor the person-paced one: a

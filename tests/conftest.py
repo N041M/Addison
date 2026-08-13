@@ -164,6 +164,9 @@ class ShellBridgeStubs:
     def digest_workspace_files(self, paths: list[str]) -> dict:
         raise NotImplementedError
 
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
+        raise NotImplementedError
+
     def get_app_build_ref(self) -> dict:
         return {"version": "test", "identifier": "test"}
 

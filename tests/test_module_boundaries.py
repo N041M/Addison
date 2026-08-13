@@ -22,6 +22,13 @@ the three packages stays forbidden.
 Also locks the one-way policy dependency noted in policy.py's module docstring:
 ``agent_core.policy`` must not import ``agent_core.tools`` (tools/base.py imports
 PolicyMode, so the arrow runs one way only — a cycle here would be a real bug).
+
+And it locks the leaf modules (``redaction.py`` and ``screening.py``), whose own
+docstrings promise they import nothing from the three boundary packages. Both are
+pure pattern matchers over text with no I/O, and both are meant to be usable from
+a tool, a provider or the orchestrator alike; the moment one imports a tool, it
+stops being callable from the other two without dragging the boundary along with
+it. Their docstrings say so, so a test says so too.
 """
 
 from __future__ import annotations
@@ -156,3 +163,25 @@ def test_policy_does_not_import_tools():
         if target == "agent_core.tools" or target.startswith("agent_core.tools.")
     ]
     assert not offenders, "policy.py must not import agent_core.tools:\n" + "\n".join(offenders)
+
+
+def test_the_leaf_text_modules_import_none_of_the_three_packages():
+    """redaction.py and screening.py each promise, in their own docstring, to be
+    importable from anywhere without touching the module-boundary rule. That is
+    what lets a tool, a provider and the orchestrator all call the same screen or
+    the same redactor instead of growing a second copy. A failure names the file
+    and the import line."""
+    offenders: list[str] = []
+    for name in ("redaction", "screening"):
+        path = _AGENT_CORE / f"{name}.py"
+        module = f"agent_core.{name}"
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders += [
+            f"{path}:{lineno} imports {target} ({module} must not)"
+            for target, lineno in _imported_targets(tree, module)
+            if _package_of(target) is not None
+        ]
+    assert not offenders, (
+        "redaction.py/screening.py must not import tools, providers or routines:\n"
+        + "\n".join(offenders)
+    )
