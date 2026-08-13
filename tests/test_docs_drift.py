@@ -375,13 +375,13 @@ def test_the_path_check_is_silent_on_every_shape_that_is_not_a_broken_path():
 # A box a diagram draws on purpose that the code does not have. Written inside the
 # mermaid block, beside the box it excuses, in the form
 #
-#     %% not-in-code: CapabilityTier — retired by owner decision 2026-08-06
+#     %% not-in-code: CapabilityTier, retired by owner decision 2026-08-06
 #
 # This is the `docs/README.md` rule "state what is not true yet" made checkable. It is
 # the only escape hatch from the class-name check, and it is not a mute button: the
 # reason is mandatory, an orphaned marker fails, and a marker whose class LATER shows
 # up in the code fails too.
-_NOT_IN_CODE = re.compile(r"^\s*%%\s*not-in-code:\s*(\w+)\s*—\s*(\S.*?)\s*$", re.M)
+_NOT_IN_CODE = re.compile(r"^\s*%%\s*not-in-code:\s*(\w+)\s*,\s*(\S.*?)\s*$", re.M)
 
 
 def _python_classes() -> dict[str, set[str]]:
@@ -504,7 +504,7 @@ def test_class_diagrams_name_no_class_the_code_does_not_have():
     three views are curated and say so.
 
     A box the code deliberately does not have is legal, but must SAY so, in the
-    mermaid block beside it: `%% not-in-code: Name — why`. Six boxes need one today
+    mermaid block beside it: `%% not-in-code: Name, why`. Six boxes need one today
     and all six are already explained in the surrounding prose — the marker just moves
     the fact somewhere a machine can read it.
     """
@@ -512,7 +512,7 @@ def test_class_diagrams_name_no_class_the_code_does_not_have():
     assert not problems, (
         f"docs/classes.md draws these classes and agent_core/ has no such class: "
         f"{sorted(problems)}. Rename the box to the class that replaced it, or — if "
-        "the box is deliberately ahead of the code — add `%% not-in-code: Name — why` "
+        "the box is deliberately ahead of the code — add `%% not-in-code: Name, why` "
         "inside the same mermaid block."
     )
 
@@ -568,7 +568,7 @@ target shape rather than code.
 
 ```mermaid
 classDiagram
-    %% not-in-code: McpToolAdapter — Phase-2 step 7, not built; nothing registers an MCP tool yet
+    %% not-in-code: McpToolAdapter, Phase-2 step 7, not built; nothing registers an MCP tool yet
     class ToolRegistry {
         +register(tool, dev_only, open_only, allow_missing_undo)
         +visible_tools(mode)
@@ -1183,6 +1183,35 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "model, never the values."
         ),
     },
+    "screening-is-a-backstop": {
+        "the honest form, which names what it marks and states the limit beside it": (
+            "Text a tool brought back is checked for writing shaped like an "
+            "instruction to an assistant, and anything flagged reaches the model with "
+            "a plain note in front of it. Writing in a shape nobody listed passes "
+            "untouched."
+        ),
+        "the rule stated as a rule, which must not trip the rule": (
+            "It is a backstop, not a boundary. It reduces exposure and does not "
+            "eliminate it, and no document may describe it as elimination."
+        ),
+        "the gate sentence, which is a claim about the gate and not about screening": (
+            "The permission gate remains the only authority. A flag is never a reason "
+            "to skip a card, and an absence of flags is never a reason to trust a "
+            "passage."
+        ),
+        "the audit column, which lists kinds rather than promising completeness": (
+            "`screened` carries the KINDS the screener recognised, deduplicated and "
+            "sorted, never the matched text and never a length."
+        ),
+        "prose about where it runs, with no claim about what it achieves": (
+            'Only a result carrying `content_origin == "external"` is screened, and '
+            "the mark goes in front of the serialization the model is handed."
+        ),
+        "the denylist and the sandbox, which genuinely do stop things": (
+            "The denylist and the sandbox bound what an approved command can reach, "
+            "and a snapshot reverses whatever did happen."
+        ),
+    },
     "retired-amendment-has-no-precedence": {
         "the retired rule quoted as a quotation": (
             "It kept a \"where we differ, the amendment wins\" rule long after its "
@@ -1525,6 +1554,14 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the universal, which is the over-claim a reader cannot check": (
                 "Redaction strips every credential out of a tool result before "
                 "anything reaches the model."
+            ),
+        },
+    },
+    "screening-is-a-backstop": {
+        "while_true": {
+            "the universal, which is the promise a pattern layer cannot keep": (
+                "Screening prevents prompt injection: instruction-shaped text is "
+                "stopped before a model reads it."
             ),
         },
     },

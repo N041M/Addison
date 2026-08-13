@@ -3,7 +3,7 @@
 > **Amended 2026-07-20** by the scope amendment, which was folded into the
 > authoritative docs and **retired 2026-07-27**. Floors, modes and guards are
 > owned by [`SAFETY.md`](SAFETY.md); status by [`../ROADMAP.md`](../ROADMAP.md).
-> Do not consult the amendment to settle a question — it is a historical record.
+> Do not consult the amendment to settle a question; it is a historical record.
 > Flows 1–8 are unchanged. Flows 9–15 are **new** and cover the amendment:
 > snapshot + restore (G3), the "make it cheaper" orchestration, adding an endpoint by
 > prompt, workspace-trust + the keyword-gated powerful action, building a widget
@@ -16,7 +16,7 @@
 > 8 phase 3** (2026-08-07). One thing is still unbuilt and is marked where it appears:
 > inside the now mostly-shipped **flow 13**, the code-backed widget branch. **Flow 15** (MCP, step 7)
 > is real code as of 2026-08-07, when phases 1–4 of five landed; the names in it are
-> the ones in the modules. **Flow 16** is not the amendment's at all — it is Phase 3's
+> the ones in the modules. **Flow 16** is not the amendment's at all; it is Phase 3's
 > Developer review surface, added when that shipped (2026-08-08). The `reason` slugs quoted throughout are entries of the
 > closed vocabulary in `snapshot_manager.REASONS`, so they are real even where the flow
 > around them is not.
@@ -54,7 +54,7 @@ sequenceDiagram
     SRV->>ORC: run_turn(conversation, role, model, effort)
     ORC->>PR: provider.send(messages, tools, effort, timeout)
     PR-->>ORC: response with tool_calls
-    Note over ORC: BEFORE the gate: refuse_if_dev_only_outside_open(tool_id, mode),<br/>then confinement — call_affected_path resolved once, refused if<br/>outside every trusted root, carried on context.resolved_path
+    Note over ORC: BEFORE the gate: refuse_if_dev_only_outside_open(tool_id, mode),<br/>then confinement: call_affected_path resolved once, refused if<br/>outside every trusted root, carried on context.resolved_path
     ORC->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted)
     Note over PG,WV: SAFE and not yet granted: permission.requestGrant<br/>then permission.respond, see flow 2
     PG-->>ORC: GRANTED
@@ -75,9 +75,9 @@ The orchestrator (and routine engine) call the mode-aware `authorize(tool_id, mo
 destructive, detail)` before every call (`permissions/gate.py`; `policy.py` supplies
 `PolicyMode`, `GuardConfig` and `mode_for_profile`). In SAFE mode this prompts for
 every not-yet-granted tool; in OPEN mode it auto-allows a non-destructive call
-(recorded in the activity log) and prompts **per invocation** for a destructive one —
-no prior grant carries over, and the card's description names the exact command being
-approved this time (`detail`) — "open" is fewer prompts, not no gate. When a prompt is
+(recorded in the activity log) and prompts **per invocation** for a destructive one.
+No prior grant carries over, and the card's description names the exact command being
+approved this time (`detail`); "open" is fewer prompts, not no gate. When a prompt is
 needed, the consent prompt is an IPC round-trip: the worker thread parks an event
 keyed by the tool id, emits the card, and blocks; the answering frame arrives on the
 read loop and wakes the worker. A SAFE grant is remembered (destructive-OPEN approvals
@@ -87,11 +87,11 @@ Two OPEN-path modulations the diagram folds into one branch. Under the **Custom*
 profile a `GuardConfig` shifts how often the gate asks: `auto_grant_scope='none'` sends
 *non-destructive* calls through the SAFE-style coarse flow, `'everything'` auto-grants
 everything (still recorded, still logged), and `destructive_card='session'` remembers a
-destructive approval — in a dedicated set the SAFE `check()` path structurally never
+destructive approval, in a dedicated set the SAFE `check()` path structurally never
 reads, so it can never leak into Simple. A destructive call never falls into the coarse
 flow, under any scope: a coarse grant carries no per-call text, so one approved `ls`
-would silently authorize every later `rm -rf`. And `trusted=True` — set only for a
-confined, undoable file edit inside a trusted root — makes a destructive call
+would silently authorize every later `rm -rf`. And `trusted=True` (set only for a
+confined, undoable file edit inside a trusted root) makes a destructive call
 card-free, except that it does *not* override a turn-scoped "Not now" or Custom's
 strictest `auto_grant_scope='none'`.
 
@@ -114,7 +114,7 @@ sequenceDiagram
         WV->>SRV: permission.respond, toolId and allow
         SRV->>SRV: _handle_permission_respond sets the event
         PG-->>ORC: GRANTED or DENIED
-        Note over PG: a SAFE grant is remembered — a destructive-OPEN approval is<br/>per-invocation (never remembered) — DENIED clears at the next user turn
+        Note over PG: a SAFE grant is remembered. A destructive-OPEN approval is<br/>per-invocation (never remembered). DENIED clears at the next user turn
     end
 ```
 
@@ -122,11 +122,11 @@ sequenceDiagram
 
 History landed recently. Listing counts only user and assistant rows; loading rebuilds
 the in-memory transcript from user and non-empty assistant rows and skips persisted
-tool rows on purpose — replaying them would send unpaired tool results and the provider
+tool rows on purpose: replaying them would send unpaired tool results and the provider
 would reject the next turn. The calls themselves ARE stored (`messages.tool_calls_json`,
 2026-08-09) and come back as history rather than transcript: `conversation.load` answers
 with the last turn's steps (`work`) so the work panel redraws, and hangs the calls on
-`Message.past_tool_calls`, which the routine builder reads and no provider does — so
+`Message.past_tool_calls`, which the routine builder reads and no provider does, so
 "Save as routine" survives a relaunch (KNOWN-BUGS #5). A new conversation gets a fresh uuid but no store row until its first real
 turn, and the title is written first-write-wins from the first user message.
 
@@ -192,7 +192,7 @@ A routine is a shortcut for re-issuing a sequence of tool calls. The engine runs
 the same `ToolRegistry`, `PermissionGate`, and `UndoManager` instances as the live
 loop, so it can never gain permissions the user has not already granted live. The run
 carries the current policy mode (`policy.py`): a routine that needs developer
-abilities is refused before this flow starts when in SAFE mode — asked of the plan
+abilities is refused before this flow starts when in SAFE mode, asked of the plan
 and the SAFE tool view, never of its `created_in_mode` stamp
 ([SAFETY.md](SAFETY.md)); an OPEN-mode `command` step runs through the
 `run_command` dev-only tool on those same instances, so it stops to ask **every time**.
@@ -219,7 +219,7 @@ sequenceDiagram
     loop each step
         Note over RE: same pre-gate checks as the live turn:<br/>refuse_if_dev_only_outside_open, then confinement
         RE->>PG: authorize(tool_id, mode, destructive, detail, guards, trusted=False)
-        Note over PG: SAFE prompts — OPEN auto-allows non-destructive, prompts destructive.<br/>trusted is always False here, so a saved command step always cards
+        Note over PG: SAFE prompts. OPEN auto-allows non-destructive, prompts destructive.<br/>trusted is always False here, so a saved command step always cards
         PG-->>RE: GRANTED or DENIED
         RE->>TL: execute(resolved_args, context)
         TL-->>RE: ToolResult
@@ -265,7 +265,7 @@ hands the key straight to the highest-trust Rust process (never the core), then 
 the core to validate and record the connection. The core pulls the just-stored key
 from the keychain, makes ONE tiny request to prove it works, and folds that provider's
 models into the picker union. On failure the provider is left disconnected and the
-card offers Remove to clear the stored key. Keys never cross to the core in a frame —
+card offers Remove to clear the stored key. Keys never cross to the core in a frame;
 only the provider id does, and the core reads the value from the keychain at the moment
 of use.
 
@@ -283,13 +283,13 @@ sequenceDiagram
     SRV->>BR: get_provider_key(provider)
     BR->>SH: keychain.getProviderKey {provider}
     SH-->>BR: key (core-ward only, one request)
-    SRV->>P: one tiny request — Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI GET /v1/models, custom GET {base}/models<br/>(a custom base URL normally already ends in /v1)
+    SRV->>P: one tiny request: Anthropic GET /v1/models, Google GET /v1beta/models,<br/>OpenAI GET /v1/models, custom GET {base}/models<br/>(a custom base URL normally already ends in /v1)
     P-->>SRV: 200 ok, or 401/timeout
     Note over SRV: a restore point is taken per connect ATTEMPT, before it<br/>(reason "provider_connect", or "add_endpoint" for a custom server)
-    Note over SRV: on ok — record connected + added_at + last_check_ok in provider_config,<br/>CLEAR key_rejected_at (this is the person supplying a key the provider accepts — plan §5.2),<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false and the mark is LEFT STANDING, so provider.list shows it off
-    Note over SRV: EVERY branch also records secret_presence (present/absent/unknown).<br/>That column — never the OS — answers every later presence question:<br/>provider.list, stats.get and the live-catalog gate (data-model.md)
+    Note over SRV: on ok, record connected + added_at + last_check_ok in provider_config,<br/>CLEAR key_rejected_at (this is the person supplying a key the provider accepts, plan §5.2),<br/>register the provider's models in the union. On failure the row is written<br/>with connected=false and the mark is LEFT STANDING, so provider.list shows it off
+    Note over SRV: EVERY branch also records secret_presence (present/absent/unknown).<br/>That column (never the OS) answers every later presence question:<br/>provider.list, stats.get and the live-catalog gate (data-model.md)
     SRV-->>UI: {ok: true} or {ok: false, error}
-    Note over UI,SH: on {ok:false} with a key typed — invoke restore_replaced_provider_key(provider),<br/>putting back what the save above replaced (or removing it where nothing was saved).<br/>Where the shell never READ the old value it will not guess, answers false,<br/>and the row appends one sentence saying the key was replaced (2026-08-08)
+    Note over UI,SH: on {ok:false} with a key typed, invoke restore_replaced_provider_key(provider),<br/>putting back what the save above replaced (or removing it where nothing was saved).<br/>Where the shell never READ the old value it will not guess, answers false,<br/>and the row appends one sentence saying the key was replaced (2026-08-08)
     UI->>SRV: provider.list + model.availableRoles (refresh)
 ```
 
@@ -297,13 +297,13 @@ sequenceDiagram
 
 Addison proposes widgets the same way it proposes routines: a draft is held in the
 core and nothing is saved until an explicit confirm. A widget is a **declarative**
-spec (`agent_core/widgets.py`) — a saved-routine Run pill, a whitelisted stat display,
-or one of the three interactive kinds (checklist, note, timer) — never code, validated
-at save and at render **against the current policy mode**. In OPEN mode a sixth
-`command` kind is valid (it runs `run_command` on click, so the destructive-prompt rule
-still applies when clicked); it is rejected at save in SAFE mode, and a widget that
+spec (`agent_core/widgets.py`): a saved-routine Run pill, a whitelisted stat display,
+or one of the three interactive kinds (checklist, note, timer). Never code, it is
+validated at save and at render **against the current policy mode**. In OPEN mode a
+sixth `command` kind is valid (it runs `run_command` on click, so the destructive-prompt
+rule still applies when clicked); it is rejected at save in SAFE mode, and a widget that
 NEEDS developer abilities is listed by `widget.list` while the Simple profile is active
-as a disabled row carrying a display-only reason — they were hidden until 2026-08-06,
+as a disabled row carrying a display-only reason; they were hidden until 2026-08-06,
 and the test was the `created_in_mode` stamp until 2026-08-06; [SAFETY.md](SAFETY.md)
 owns the rule. Saving is display-only (LOW-risk), so there is no permission card; a
 routine/command widget keeps its own gates when it is actually run.
@@ -317,12 +317,12 @@ sequenceDiagram
 
     Note over WV: user sends "Build me a widget that …" (composer seed)
     WV->>SRV: widget.proposeFromConversation
-    Note over SRV: draft from recent chat — a routine just run/named,<br/>or a token/latency/connections stat, else a plain refusal
+    Note over SRV: draft from recent chat: a routine just run/named,<br/>or a token/latency/connections stat, else a plain refusal
     SRV-->>WV: {title, kind, summary, spec}  (held in memory, nothing saved)
-    Note over WV: WidgetProposalCard — "Add widget" / "Not now"
+    Note over WV: WidgetProposalCard: "Add widget" / "Not now"
     WV->>SRV: widget.confirmSave {accept: true}
     SRV->>W: validate_widget_spec(draft)
-    W-->>SRV: None (valid) — reject otherwise
+    W-->>SRV: None (valid), reject otherwise
     SRV->>DB: insert_widget (pinned if under the 6-pin cap)
     SRV-->>WV: {ok: true, widgetId}
     WV->>SRV: widget.list (refresh the rail)
@@ -331,14 +331,14 @@ sequenceDiagram
 ## 9. Snapshot and restore (G3 guaranteed rollback)
 
 The load-bearing new floor (amendment §3). A snapshot is a point-in-time copy of Addison's
-mutable **config/state** — settings, provider/routing config, skills, widgets, routines —
+mutable **config/state** (settings, provider/routing config, skills, widgets, routines),
 **never the keychain** (G1 holds) and never the transcript. One is taken **automatically**
 before any risky or sweeping change and can also be taken **on command**. A config is marked
 **verified-working** once a turn completes successfully against it, and **Restore always
-targets the last verified-working snapshot**, so it lands somewhere that actually ran — the
-difference between recovery and the dead end suffered by the amendment's *friend*: the
+targets the last verified-working snapshot**, so it lands somewhere that actually ran. That
+is the difference between recovery and the dead end suffered by the amendment's *friend*: the
 non-technical user whose single "make it cheaper" request permanently broke his setup, with
-the built-in rewind giving him no way back. **Shipped in Phase-2 step 1** — the names below
+the built-in rewind giving him no way back. **Shipped in Phase-2 step 1**; the names below
 are the real ones.
 
 ```mermaid
@@ -348,29 +348,29 @@ sequenceDiagram
     participant SM as SnapshotManager
     participant ST as Store (config_snapshots)
 
-    Note over SRV,SM: auto-snapshot — before a risky/sweeping change
+    Note over SRV,SM: auto-snapshot, before a risky/sweeping change
     SRV->>SM: capture(trigger="auto", reason="mode_switch")
     SM->>ST: insert row image of the config tables (keychain excluded)
     SM->>SM: also write the payload to a 0600 JSON sidecar
     ST-->>SM: snapshotId
-    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint) —<br/>except that it flips the flag on a PERMANENT row whose<br/>fingerprint matches byte for byte (data-model.md)
+    Note over SM: when the next turn completes cleanly,<br/>mark_verified_working() captures the CURRENT<br/>config as a new verified row (deduped by fingerprint),<br/>except that it flips the flag on a PERMANENT row whose<br/>fingerprint matches byte for byte (data-model.md)
 
-    Note over WV,SRV: on-command — Settings "Restore points" card
+    Note over WV,SRV: on-command: Settings "Restore points" card
     WV->>SRV: snapshot.create
     SRV->>SM: capture(trigger="on_command", reason="user_request")
-    SM->>ST: capture (always deletable — an anchor comes only from<br/>mint_anchor, via guards.set)
+    SM->>ST: capture (always deletable. An anchor comes only from<br/>mint_anchor, via guards.set)
     SRV-->>WV: {ok: true, snapshotId}
 
-    Note over WV,SRV: the one-action button — no argument, by design
+    Note over WV,SRV: the one-action button, no argument, by design
     WV->>SRV: snapshot.restoreLastWorking
     SRV->>SM: restore_last_working()
     SM->>ST: newest verified row that DIFFERS from the current config
     ST-->>SM: state_blob
-    Note over SM: reapply in one transaction — keychain untouched, so a<br/>restored provider re-binds to its key by provider id
+    Note over SM: reapply in one transaction: keychain untouched, so a<br/>restored provider re-binds to its key by provider id
     SM-->>SRV: RestoreResult
     SRV-->>WV: {ok, snapshotId, detail, binaryMismatch?}
 
-    Note over WV,SRV: step 2 — "Restore this one", offered on permanent rows
+    Note over WV,SRV: step 2: "Restore this one", offered on permanent rows
     WV->>SRV: snapshot.restore {id}
     SRV->>SM: restore(snapshot_id)
 ```
@@ -378,18 +378,18 @@ sequenceDiagram
 Four things the diagram cannot show:
 
 - **`restore_last_working()` skips a candidate identical to the present config.** A
-  restore that changes zero bytes is a no-op dressed as a recovery — the friend's dead
+  restore that changes zero bytes is a no-op dressed as a recovery, the friend's dead
   end again. So **each click steps back one distinct proven configuration**; two bad
   changes deep, the user clicks twice.
 - **Per-row restore shipped in step 2, on permanent rows only.** `SnapshotsCard`
-  offers "Restore this one" beside a permanent row — the row a user cannot delete and
-  might most need to reach — which calls `useSnapshots.handleRestoreSnapshot` →
+  offers "Restore this one" beside a permanent row (the row a user cannot delete and
+  might most need to reach), which calls `useSnapshots.handleRestoreSnapshot` →
   `ipc.restoreSnapshot` → `snapshot.restore {id}`, and handles the outcome exactly as
-  the one-action button does — behind a two-step inline confirm that names the row
+  the one-action button does, behind a two-step inline confirm that names the row
   first, never a blind recovery. An ordinary row's only action is **Remove**; saving a
   restore point and restore-to-last-working are card-level controls, not per-row ones.
 - **A restore is an RPC path, never a registry tool, and never passes the permission
-  gate** — a gate that could deny a restore would make "the restore path is itself
+  gate**: a gate that could deny a restore would make "the restore path is itself
   unbreakable" false.
 - **The database itself may be the broken thing.** `snapshot.list` and
   `snapshot.restoreLastWorking` are the only two methods exempt from the server's
@@ -400,14 +400,14 @@ Four things the diagram cannot show:
 ## 10. "Make it cheaper" orchestration
 
 The exact request that bricked the friend becomes the *safest* thing to ask (amendment §11).
-Addison **previews** two reversible changes — a guidance **skill** and a cheaper **routing**
-choice — **auto-snapshots** before applying, and offers **one-click Restore**. The
+Addison **previews** two reversible changes (a guidance **skill** and a cheaper **routing**
+choice), **auto-snapshots** before applying, and offers **one-click Restore**. The
 bricking scenario is structurally impossible: previewed, reversible, floored by G3.
 Shipped in Phase-2 step 4, and the shape matters: **the model authors none of it.** The
 turn's reply never carries an actionable payload. After the turn, the frontend tests the
 *user's own words* against a deliberately narrow keyword pattern (`useOffers.ts`) and, if
-it matches, asks the core for the plan; the core's plan is **canned in code** — a fixed
-note and the fixed `cost_first` strategy — so a card can never be armed by the model's
+it matches, asks the core for the plan; the core's plan is **canned in code** (a fixed
+note and the fixed `cost_first` strategy), so a card can never be armed by the model's
 answer. The core needs no message read at all here: `costPlan.propose` returns constants,
 so there is nothing for the model to influence (the `role=="user"`-only read belongs to
 flow 11, where a base URL has to be extracted from somewhere).
@@ -420,25 +420,25 @@ sequenceDiagram
     participant ST as Store
 
     WV->>SRV: conversation.sendMessage ("make the models as cheap as possible")
-    SRV-->>WV: an ordinary prose answer — nothing actionable rides on it
+    SRV-->>WV: an ordinary prose answer, nothing actionable rides on it
     Note over WV: after the turn, the user's OWN text matches the cheaper pattern
     WV->>SRV: costPlan.propose
-    Note over SRV: canned constants — skill name, full instructions text,<br/>strategy "cost_first". No store read, nothing derived
+    Note over SRV: canned constants: skill name, full instructions text,<br/>strategy "cost_first". No store read, nothing derived
     SRV-->>WV: {skillName, skillInstructions, strategy}
-    Note over WV: CostPlanCard — "Apply" / "Not now"
+    Note over WV: CostPlanCard: "Apply" / "Not now"
     WV->>SRV: costPlan.apply {accept: true}
-    Note over SRV: validate the canned skill first — if already in effect,<br/>do nothing at all, no snapshot and no write
+    Note over SRV: validate the canned skill first: if already in effect,<br/>do nothing at all, no snapshot and no write
     SRV->>SM: capture(trigger="auto", reason="make_it_cheaper")
     SM->>ST: capture config/state (keys excluded)
     Note over SRV: capture FAILS -> the whole apply is REFUSED, nothing changes
-    SRV->>ST: apply_cost_plan — skill + routing_strategy in ONE commit
+    SRV->>ST: apply_cost_plan, skill + routing_strategy in ONE commit
     SRV-->>WV: {ok: true, snapshotId}
     Note over WV: one-click "Restore" -> flow 9 restore (last verified-working)
 ```
 
 Why apply refuses on a failed capture while `routing.set` merely warns: this is a
-compound, conversationally-initiated degradation for the at-risk persona — terser
-answers *and* changed model selection, in one click — whose only recovery is the restore
+compound, conversationally-initiated degradation for the at-risk persona (terser
+answers *and* changed model selection, in one click), whose only recovery is the restore
 point. A bare strategy toggle can just be flipped back. The asymmetry is deliberate.
 
 ## 11. Add an endpoint by prompting
@@ -448,7 +448,7 @@ altering Addison. Addison registers a provider row; the key goes straight to the
 G1 (as in flow 7); an auto-snapshot makes it one-click reversible. The same plumbing will
 connect an MCP server (flow 15). Shipped in Phase-2 step 4, with the same
 model-authors-nothing shape as flow 10: the **core** extracts a base URL from the current
-turn's *user* messages — never assistant content, never a pasted wall of text — validates
+turn's *user* messages (never assistant content, never a pasted wall of text), validates
 it, and returns it for an explicit confirm. It **holds nothing**: the frontend renders the
 card from that reply and sends the base URL back on `endpoint.confirmAdd`, which
 re-validates it through the same `_base_url_problem` gate. That differs from the widget
@@ -466,23 +466,23 @@ sequenceDiagram
     SRV-->>WV: an ordinary prose answer
     Note over WV: the user's own text matches the add-a-server pattern
     WV->>SRV: endpoint.proposeFromConversation
-    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it — nothing is held. Nothing to add -> {none: true}, silently
+    Note over SRV: read role=="user" messages only, extract + validate a base URL<br/>and return it, nothing is held. Nothing to add -> {none: true}, silently
     SRV-->>WV: {baseUrl, isLocalOrLan}
-    Note over WV: EndpointProposalCard — key pasted here goes to the keychain,<br/>never into a chat frame
+    Note over WV: EndpointProposalCard: key pasted here goes to the keychain,<br/>never into a chat frame
     WV->>SH: invoke store_provider_key("custom", key)
     WV->>SRV: endpoint.confirmAdd {baseUrl, accept: true}
     SRV->>SM: capture(trigger="auto", reason="add_endpoint")
-    SM->>ST: config captured — proceeds with a sticky warning if capture fails
-    Note over SRV: runs provider.connect("custom", baseUrl) — one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop). The restore point above is<br/>one per connect ATTEMPT, taken before it (as in flow 7)
-    SRV-->>WV: {ok: true} — endpoint now in the picker union
+    SM->>ST: config captured, proceeds with a sticky warning if capture fails
+    Note over SRV: runs provider.connect("custom", baseUrl), one tiny validation GET,<br/>vetted + pinned by net_vetting.py (resolve, vet the IP, connect to it,<br/>no redirects, re-vet every hop). The restore point above is<br/>one per connect ATTEMPT, taken before it (as in flow 7)
+    SRV-->>WV: {ok: true}, endpoint now in the picker union
 ```
 
-**When that connect FAILS** the key is already saved, over whatever was there before —
+**When that connect FAILS** the key is already saved, over whatever was there before;
 the ordering above requires it, since the core reads the key from the OS at connect time
 and it may never be a parameter of a core frame (G1). The address is recoverable
 (`provider_config` is snapshot-captured); the key is not. So the card asks the shell to
-put back what the save replaced — `invoke restore_replaced_provider_key("custom")`, a
-provider id out and one boolean back, no key value either way — and where the shell
+put back what the save replaced (`invoke restore_replaced_provider_key("custom")`, a
+provider id out and one boolean back, no key value either way), and where the shell
 cannot (it never read what was there, so it will not guess by deleting an item it never
 saw) the card SAYS the previous key was replaced. Closed 2026-08-08; see
 `keychain.rs`'s "PUTTING BACK WHAT A SAVE REPLACED".
@@ -492,18 +492,18 @@ saw) the card SAYS the previous key was replaced. Closed 2026-08-08; see
 The harness (Developer/OPEN) reconciles the agentic loop with the per-invocation card
 (amendment §8.2, §9). The diagram below is the OPEN path, where the `trusted` flag
 suppresses the card; **since 2026-08-11 the same two file tools are reachable from
-Simple/SAFE**, where confinement is identical and the card is never suppressed —
+Simple/SAFE**, where confinement is identical and the card is never suppressed:
 each edit cards and names the file ([SAFETY.md](SAFETY.md) invariant 1). Workspace trust shipped in Phase-2 step 5 and the keyword gate in
 step 8 phase 3 (2026-08-07). The essential correction to the amendment's framing: trust is
 **two** predicates, not one.
 
-- **Confinement — permission to *touch*.** A path-bounded tool (`read_project_file`,
+- **Confinement: permission to *touch*.** A path-bounded tool (`read_project_file`,
   `write_project_file`) may only ever act on a path inside a currently-trusted root.
   Outside, it is hard-refused at dispatch, before the gate and before `execute`, at LOW
   and MEDIUM alike. This is not a card the user can approve past.
-- **The `trusted` flag — permission to skip the *card*.** Only that: it is set only for
+- **The `trusted` flag: permission to skip the *card*.** Only that: it is set only for
   those same typed, path-bounded, undoable tools. **`run_command` always cards**, in
-  every trusted folder, because its `affected_path` is `None` — so confinement never
+  every trusted folder, because its `affected_path` is `None`, so confinement never
   governs it and the caller can never mark it trusted (owner decision 2026-07-24).
 
 Addison's own data directory can never be trusted, at grant time or at authorize time.
@@ -522,21 +522,21 @@ sequenceDiagram
 
     WV->>SRV: workspace.pickDirectory (relays the shell's native folder picker)
     WV->>SRV: workspace.grantTrust {directory}
-    Note over SRV: absolute + existing? realpath it. Addison's own data dir<br/>is refused at the door — the floor, not a warning
+    Note over SRV: absolute + existing? realpath it. Addison's own data dir<br/>is refused at the door: the floor, not a warning
     SRV->>SM: capture(trigger="auto", reason="workspace_trust")
     SRV-->>WV: {ok: true, directory} (canonical root, revocable)
 
     Note over WV,ORC: an edit inside the trusted directory
     WV->>SRV: conversation.sendMessage ("fix the failing test")
-    Note over ORC: resolve the path once — inside a trusted root, so not refused
+    Note over ORC: resolve the path once: inside a trusted root, so not refused
     ORC->>PG: authorize(write_project_file, OPEN, destructive=true, trusted=true)
-    Note over PG: card-free, still recorded + logged — the harness payoff
+    Note over PG: card-free, still recorded + logged: the harness payoff
     PG-->>ORC: GRANTED
     ORC->>TL: execute(args, context.resolved_path)
 
     Note over WV,ORC: a command in the SAME trusted directory
     ORC->>PG: authorize(run_command, OPEN, destructive=true, detail, trusted=false)
-    Note over PG: per-invocation card (flow 2), exact command shown — every time
+    Note over PG: per-invocation card (flow 2), exact command shown, every time
     PG-->>ORC: GRANTED or DENIED
 ```
 
@@ -545,17 +545,17 @@ ordinary card PLUS a **per-automation code Addison mints and the person retypes*
 (`agent_core/automation_nonce.py`; the earlier sketch was a fixed `!run` prefix, which
 was rejected because anything that can write English can tell somebody to type one).
 Because the code is a keystroke from the human and did not exist when any observed
-content was written, it cannot be forged or pre-scripted — so it doubles as an
+content was written, it cannot be forged or pre-scripted, so it doubles as an
 injection barrier. `arm_automation` raises it; the shell's `automation.rs` is what
 installs the job. It gates ARMING only; ordinary chat and one-shot commands are
 unaffected.
 
-## 13. Build a widget — SAFE safe-vocabulary vs. higher-tier code-backed
+## 13. Build a widget: SAFE safe-vocabulary vs. higher-tier code-backed
 
-**Phase-2 step 6 — the SAFE half is built (2026-08-06); the code-backed branch is not.**
+**Phase-2 step 6: the SAFE half is built (2026-08-06); the code-backed branch is not.**
 Today's vocabulary is six kinds: `routine`, `stat`, `checklist`, `note` and `timer` in
 SAFE, plus `command` in OPEN only. There is **no `required_capabilities` and no capability
-tier, by decision rather than by omission** — the closed list of kinds is the gate
+tier, by decision rather than by omission**: the closed list of kinds is the gate
 ([SAFETY.md](SAFETY.md), invariant 4). The `else` branch below is therefore still the
 target shape, not the tree: a code-backed widget is `command` and nothing else today.
 
@@ -575,21 +575,21 @@ sequenceDiagram
     participant DB as Store (widgets)
 
     WV->>SRV: widget.proposeFromConversation ("build me a to-do widget")
-    Note over SRV: draft a spec from the PERSON's own words — stamp created_in_mode
+    Note over SRV: draft a spec from the PERSON's own words, stamp created_in_mode
     SRV-->>WV: {title, kind, summary, spec}  (held in memory)
     WV->>SRV: widget.confirmSave {accept: true}
     SRV->>W: validate_widget_spec(draft, mode)
     alt a SAFE kind (checklist, note, timer, or a launcher)
-        Note over W: closed vocabulary — no code/eval, SAFE-1 + CSP hold
+        Note over W: closed vocabulary: no code/eval, SAFE-1 + CSP hold
         W-->>SRV: None (valid)
         SRV->>DB: insert_widget (created_in_mode = the ACTIVE mode)
         SRV->>DB: set_widget_state (core-derived: un-ticked / initial text / paused)
     else code-backed / system-capable (Developer / Custom)
         Note over W: kind absent from SAFE's list -> requires OPEN<br/>refused if built under Simple
-        W-->>SRV: None (valid in-tier) — else reject + plain reason
+        W-->>SRV: None (valid in-tier), else reject + plain reason
         SRV->>DB: insert_widget (created_in_mode="open")
     end
-    Note over DB: the stamp is WHERE IT WAS BORN, never what it may do:<br/>a checklist made in Developer is stamped "open" and is still<br/>an ordinary row in Simple. What Simple may use is asked of the<br/>SPEC at render (widget_uses_dev_abilities), never of this column.<br/>"custom" is a PROFILE — only snapshots ever record it as a mode.
+    Note over DB: the stamp is WHERE IT WAS BORN, never what it may do:<br/>a checklist made in Developer is stamped "open" and is still<br/>an ordinary row in Simple. What Simple may use is asked of the<br/>SPEC at render (widget_uses_dev_abilities), never of this column.<br/>"custom" is a PROFILE. Only snapshots ever record it as a mode.
     SRV-->>WV: {ok: true, widgetId}
     Note over SRV: later, a tick or an edit or a pause -> widget.setState<br/>validated per kind against the spec, and NOT snapshot-captured
     Note over WV: running/arming a system-capable widget -> workspace-trust + keyword gate (flow 12)
@@ -599,13 +599,13 @@ sequenceDiagram
 
 Shipped in Phase-2 step 3, so the names below are real. Routing is
 **strong-first, degrade-down** (amendment §10), and the chain's head is always the
-user's standing default model — a strategy orders only the fallback tail, so routing
+user's standing default model; a strategy orders only the fallback tail, so routing
 never overrides a deliberate choice. The turn falls forward on a
 **provider-unavailable** failure (429, 5xx, network) **and on a rejected key** (a
-401/403 from the provider itself — plan §5.2, built 2026-08-06: the next provider has
+401/403 from the provider itself, plan §5.2, built 2026-08-06: the next provider has
 a different key, so this one is worth walking past, and the provider is marked
 needs-attention as it goes). A rejected REQUEST, or a missing/malformed key, still
-ends the turn at once — the next provider would just get the same bad request, or the
+ends the turn at once: the next provider would just get the same bad request, or the
 same nothing. The cooldown is in-memory, and the per-attempt deadline is threaded into
 each attempt so one hanging candidate cannot stall the turn.
 
@@ -613,12 +613,12 @@ each attempt so one hanging candidate cannot stall the turn.
 sequenceDiagram
     participant ORC as Orchestrator
     participant RC as resolve_chain
-    participant A as Provider A — the head
-    participant B as Provider B — next in the chain
+    participant A as Provider A (the head)
+    participant B as Provider B (next in the chain)
 
     ORC->>RC: routing_chain(role, model_name)
-    Note over RC: head = the user's default — strategy orders the tail
-    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown —<br/>the orchestrator skips cooled providers over this result)
+    Note over RC: head = the user's default, strategy orders the tail
+    RC-->>ORC: [A, B, ...] (resolve_chain is stateless and knows no cooldown.<br/>The orchestrator skips cooled providers over this result)
     ORC->>A: send(..., timeout=budget remaining)
     alt A answers
         A-->>ORC: response
@@ -628,12 +628,12 @@ sequenceDiagram
         ORC->>B: send(..., timeout=budget remaining)
         B-->>ORC: response
         Note over ORC: activity note "A was busy, so Addison used B."
-    else ProviderKeyRejected (401 / 403 — plan §5.2)
+    else ProviderKeyRejected (401 / 403, plan §5.2)
         A-->>ORC: raises
-        Note over ORC: mark A needs-attention (key_rejected_at), ONCE — then cool and advance,<br/>the same two lines the unavailable branch runs
+        Note over ORC: mark A needs-attention (key_rejected_at), ONCE, then cool and advance,<br/>the same two lines the unavailable branch runs
         ORC->>B: send(..., timeout=budget remaining)
         B-->>ORC: response
-        Note over ORC: activity note "A rejected Addison's key — it may have been revoked.<br/>Add a new one in Settings." — and it REPLACES the "was busy" note,<br/>which would be a plain falsehood about a revoked key
+        Note over ORC: activity note "A rejected Addison's key. It may have been revoked.<br/>Add a new one in Settings.", and it REPLACES the "was busy" note,<br/>which would be a plain falsehood about a revoked key
     end
     Note over ORC: on_answered(model, label, free, routed) -> reply carries answeredWith
     Note over ORC: chip "Answered with a free model." iff free — known-free by construction<br/>(owner decision 2026-08-12. It also required routed until then, which hid the note<br/>in the commonest free case: the user PICKING their local model)
@@ -641,14 +641,14 @@ sequenceDiagram
 
 ## 15. MCP tool call through the existing gate
 
-**Phase-2 step 7 — BUILT for v1 (phases 1–4 of five, 2026-08-06 to 2026-08-07).** The
+**Phase-2 step 7: BUILT for v1 (phases 1–4 of five, 2026-08-06 to 2026-08-07).** The
 names below are the ones in the modules.
 
 Addison is an MCP **client**, not a server/gateway (amendment §8.5). External MCP tools are
-surfaced through the **existing registry and permission gate** — never a side channel — so
+surfaced through the **existing registry and permission gate** (never a side channel), so
 they are gated, logged, and undo-aware like any tool. **MCP is Developer-only for v1**
 (owner decision 2026-08-06): a discovered tool registers `dev_only=True`, so **no MCP tool
-enters the SAFE view at all** — what SAFE would ever admit is deferred rather than
+enters the SAFE view at all**; what SAFE would ever admit is deferred rather than
 answered, and invariant 2 keeps a mutating, un-undoable MCP tool out of that view
 automatically whatever is decided ([step-7-mcp-plan.md](step-7-mcp-plan.md) owns this).
 Connecting the server is reversible config (flow 11 plumbing).
@@ -671,7 +671,7 @@ sequenceDiagram
     participant SRV as External MCP server
     participant ST as Store
 
-    Note over REG: mcp_catalog registers one McpTool per discovered tool,<br/>id mcp:server:tool, dev_only — never in visible_tools(SAFE)
+    Note over REG: mcp_catalog registers one McpTool per discovered tool,<br/>id mcp:server:tool, dev_only, never in visible_tools(SAFE)
     ORC->>REG: find(tool_id)
     REG-->>ORC: McpTool, or None (refused, never raised)
     ORC->>PG: authorize(tool_id, mode, destructive=True, detail)
@@ -684,8 +684,8 @@ sequenceDiagram
     Note over MC: one call = one session = one budget:<br/>initialize, initialized, tools/call, then the session ends
     MC->>SRV: tools/call
     SRV-->>MC: result (text, structuredContent, other parts counted)
-    MC-->>MT: CallResult — nothing cut, text not yet redacted
-    Note over MT: redact, THEN compose_result cuts —<br/>a cut through a credential defeats the redactor
+    MC-->>MT: CallResult: nothing cut, text not yet redacted
+    Note over MT: redact, THEN compose_result cuts.<br/>A cut through a credential defeats the redactor
     MT-->>ORC: ToolResult + redacted_kinds
     ORC->>ST: tool_audit row (granted / failed / refused, and what was redacted)
 ```
@@ -693,16 +693,16 @@ sequenceDiagram
 **No `UndoManager` step, and that is not an omission.** An MCP tool registers
 `allow_missing_undo`: it has no `undo()`, which is why it can never be LOW and can never
 reach SAFE. The durable record of what happened is the `tool_audit` row, which is written
-on every outcome including the refusals — a call that was forbidden, one the gate said yes
+on every outcome including the refusals: a call that was forbidden, one the gate said yes
 to that never landed, and one naming a tool nothing is registered under.
 
-## 16. The review surface — seeing an edit, and putting one file back
+## 16. The review surface: seeing an edit, and putting one file back
 
-**Phase 3, the Developer review surface — BUILT 2026-08-08**
+**Phase 3, the Developer review surface, BUILT 2026-08-08**
 ([`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) owns the build).
 It belongs here for the reason this document exists: it crosses all three process
 boundaries on every action, and **none of it is a registry tool**. A person clicking
-a folder open is not the model acting, so the whole surface is `workspace.*` RPC —
+a folder open is not the model acting, so the whole surface is `workspace.*` RPC;
 routing it through the registry would hand the model a directory-listing capability
 as a side effect and put a permission card in front of a click somebody just made.
 The model gains **nothing** from this flow.
@@ -715,16 +715,16 @@ sequenceDiagram
     participant ST as Store (action_snapshots)
     participant SH as Rust shell (filesystem.rs)
 
-    Note over WV,SRV: browsing — Developer/Custom only, one resolution per call
+    Note over WV,SRV: browsing: Developer/Custom only, one resolution per call
     WV->>SRV: workspace.listDirectory {directory}
     SRV->>SH: shell.listWorkspaceDirectory
-    SH-->>SRV: entries (kind, size) — a target outside the root is marked escaping
+    SH-->>SRV: entries (kind, size), a target outside the root is marked escaping
     SRV-->>WV: {directory, root, entries, truncated}
     WV->>SRV: workspace.readFile {path}
     SRV->>SH: shell.readWorkspaceFileForView
     SRV-->>WV: {content, bytes, truncated}
 
-    Note over WV,SRV: the CHANGES list — metadata only, newest first
+    Note over WV,SRV: the CHANGES list: metadata only, newest first
     WV->>SRV: workspace.listEdits
     SRV->>FRM: pending_edits(limit=200)
     FRM->>ST: unreverted write_project_file rows, grouped per file
@@ -735,14 +735,14 @@ sequenceDiagram
     SRV-->>WV: edits + revertable + onDiskChanged (true / false / null)
 
     WV->>SRV: workspace.readEditDiff {path}
-    Note over SRV: BEFORE from the OLDEST unreverted row,<br/>AFTER read from disk now — never the intermediate write
+    Note over SRV: BEFORE from the OLDEST unreverted row,<br/>AFTER read from disk now, never the intermediate write
     SRV-->>WV: {before, after, beforeTruncated, afterTruncated}
 
-    Note over WV,SRV: putting it back — two-step inline confirm, never a dialog
+    Note over WV,SRV: putting it back: two-step inline confirm, never a dialog
     WV->>SRV: workspace.revertFile {path}
     SRV->>FRM: revert_path(resolved)
     FRM->>ST: the whole unreverted chain for that file
-    FRM->>SH: shell.restoreWorkspaceFile — ONE write, computed once
+    FRM->>SH: shell.restoreWorkspaceFile: ONE write, computed once
     FRM->>ST: mark_snapshots_reverted (write first, mark second)
     FRM-->>SRV: FileRevertResult
     SRV-->>WV: {ok, path, detail}
@@ -753,17 +753,17 @@ Four things the diagram cannot show:
 - **`FileRevertManager` is a THIRD mechanism, beside `UndoManager` and
   `SnapshotManager`, and deliberately so.** Undo is LIFO and per-action; this is
   out-of-order and per-file. It holds a store and a shell bridge and **nothing else**
-  — no registry, no `UndoManager`, no policy — which makes "never touch the redo
+  (no registry, no `UndoManager`, no policy), which makes "never touch the redo
   stack" structural rather than a rule somebody has to remember.
   [`classes.md`](classes.md) draws it; `agent_core/snapshots/file_revert.py` owns the
   semantics.
 - **Confinement and the mode gate live at the RPC layer**, exactly as they do for
-  every other path that reaches the filesystem — `workspace.*` refuses outside OPEN
+  every other path that reaches the filesystem: `workspace.*` refuses outside OPEN
   and outside a currently-trusted root, on every call. Nothing the tree drew is a
   boundary: a row marked as escaping is drawn dimmed and inert, and the refusal that
   matters is the core's on the next call.
 - **A restart makes an edit read-only rather than broken.** `revertable` comes from
-  the shell's own session ledger, which does not survive a quit — so the row keeps
+  the shell's own session ledger, which does not survive a quit, so the row keeps
   its BEFORE text and says it cannot put the file back, and `undo.undoLastAction`
   asks the same question before it attempts, so neither control is offered and then
   fails.

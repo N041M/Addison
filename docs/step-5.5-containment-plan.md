@@ -1,19 +1,19 @@
-# Phase-2 step 5.5 — containment for the OPEN harness
+# Phase-2 step 5.5: containment for the OPEN harness
 
 **Status: COMPLETE. Written 2026-07-26; all five items shipped 2026-07-31.**
 
 | Item | State |
 |---|---|
-| 1 — `run_command` behind the ShellBridge | **SHIPPED 2026-07-31** — `shell.runCommand`, `shell/src-tauri/src/exec.rs`; no `subprocess` remains in the core, pinned by a source test |
-| 2 — seatbelt profile from `workspace_trust` | **SHIPPED 2026-07-31** — generated per call from the live trusted roots; data-dir denies emitted last; `sandboxed` surfaced honestly |
-| 3 — the hardline denylist | **SHIPPED 2026-07-31** — `policy.command_denied_path`, `tools/base.call_is_forbidden`, all three dispatch sites |
-| 4 — output redaction + `tool_audit` | **SHIPPED 2026-07-31** — `agent_core/redaction.py` at the orchestrator's send boundary (one seam, every provider); `tool_audit` table written on all five outcomes at all three dispatch sites; **step 7's log dependency is satisfied** |
-| 5 — bring design-doc §9 current | **SHIPPED 2026-07-31** — bullet 1 amended in bullet 2's idiom; new §9.x *"What this does NOT defend against"* (10 named boundaries) |
+| 1. `run_command` behind the ShellBridge | **SHIPPED 2026-07-31.** `shell.runCommand`, `shell/src-tauri/src/exec.rs`; no `subprocess` remains in the core, pinned by a source test |
+| 2. seatbelt profile from `workspace_trust` | **SHIPPED 2026-07-31.** Generated per call from the live trusted roots; data-dir denies emitted last; `sandboxed` surfaced honestly |
+| 3. the hardline denylist | **SHIPPED 2026-07-31.** `policy.command_denied_path`, `tools/base.call_is_forbidden`, all three dispatch sites |
+| 4. output redaction + `tool_audit` | **SHIPPED 2026-07-31.** `agent_core/redaction.py` at the orchestrator's send boundary (one seam, every provider); `tool_audit` table written on all five outcomes at all three dispatch sites; **step 7's log dependency is satisfied** |
+| 5. bring design-doc §9 current | **SHIPPED 2026-07-31.** Bullet 1 amended in bullet 2's idiom; new §9.x *"What this does NOT defend against"* (10 named boundaries) |
 
 **G3's qualification is lifted** ([`SAFETY.md`](SAFETY.md)): the headline test
 `an_approved_command_cannot_delete_the_recovery_floor` is live and
 mutation-proven, in `exec.rs` where the boundary actually is. It moved to Rust
-because only that side can prove the property — the Python side can prove the core
+because only that side can prove the property; the Python side can prove the core
 refuses to *ask*, not that an approved command cannot escape.
 
 **Still open, and deliberately not rounded off:** a command runs unconfined on a
@@ -21,8 +21,8 @@ platform with no profile (Linux; `sandboxed: false` is surfaced, never silent),
 and the floor still protects Addison's data rather than Addison's code. Both are
 in [`KNOWN-GAPS.md`](KNOWN-GAPS.md).
 
-Build notes for all three items — including two design errors that had to be
-reverted and one test that was passing for the wrong reason — are in
+Build notes for all three items, including two design errors that had to be
+reverted and one test that was passing for the wrong reason, are in
 [`BUILD-LOG.md`](BUILD-LOG.md).
 
 **The plan as written follows, unchanged, as the record of what was planned and
@@ -33,13 +33,13 @@ written and is false now. The table above is the current state.
 Step 5 shipped a shell. The compensating boundary that the design doc's security
 model assumes did not ship with it. This plan pays that debt, and it belongs
 *adjacent to step 5* rather than appended after step 8, because it is that step's
-unfinished half — not a new feature.
+unfinished half, not a new feature.
 
 Read [`addison-design-doc.md` §9](addison-design-doc.md) first, then this.
 
 ---
 
-## Context — this is a reconciliation, not new scope
+## Context: this is a reconciliation, not new scope
 
 Design-doc §9 lists four mitigations. The first one is:
 
@@ -61,7 +61,7 @@ amendment is the model to follow:
 That is the correct discipline: name the property the removed control protected,
 and re-establish it somewhere else. Bullet 2 did it. **Bullet 1 did not.**
 `run_command` shipped, the "not a shell" rationale was left standing, and the
-property it protected — *the model cannot issue an unbounded OS effect* — is today
+property it protected (*the model cannot issue an unbounded OS effect*) is today
 protected by nothing but a permission card.
 
 ### What the card does and does not do
@@ -81,15 +81,15 @@ standard is that a single layer guarded by human attention is not a floor.
 `workspace_trust_allows` keeps the data dir un-trustable, but that predicate only
 gates path-bounded tools.
 
-So **one approved command deletes the entire recovery floor** — database, sidecars,
+So **one approved command deletes the entire recovery floor**: database, sidecars,
 genesis row, and every `undeletable` G4 anchor. The `RAISE(ABORT)` triggers protect
 rows *inside* a live database; nothing protects the file the database lives in.
 
 G3 was stated as *"Neither the user nor the model can drive Addison into an
-unrecoverable state"* and *"the restore path is itself unbreakable"* — **in OPEN mode
+unrecoverable state"* and *"the restore path is itself unbreakable"*. **In OPEN mode
 both are false.** [`SAFETY.md`](SAFETY.md) owns that wording and now carries the
 qualification; this plan is what would let the qualification be removed again. The
-code comment in `policy.py` was always honest about it — it claims only that the
+code comment in `policy.py` was always honest about it; it claims only that the
 floor cannot be erased *"with no card."* The docs were not.
 
 This has a precedent to follow: G4's promise was narrowed from "captures the app
@@ -104,7 +104,7 @@ gets narrowed. This plan does the former.
 **A sandbox is not a guard.** It never appears in the Custom guard panel, has no
 toggle, and is not user-tunable. The panel holds *prompting* guards; a
 user-disableable containment boundary would be a floor with an off switch. It
-behaves like `refuse_addison_data_dir` — invisible, and not negotiable.
+behaves like `refuse_addison_data_dir`: invisible, and not negotiable.
 
 **The card stays.** This plan changes *blast radius*, not *prompting*. It does not
 touch the owner decision that `run_command` always cards. Addison's own step-5
@@ -120,7 +120,7 @@ None. Every item is independent of steps 6, 7 and 8, and items 1–3 are indepen
 of each other.
 
 **Step 7 (MCP) is downstream of item 4.** Amendment §8.5 promises MCP tools are
-*"gated, logged, undo-aware"* — and there is no log. §8.5 also leaves *"the exact
+*"gated, logged, undo-aware"*, and there is no log. §8.5 also leaves *"the exact
 SAFE constraint (read-only only? curated allowlist? dev-only?)"* as an open question
 in §13. That question must be closed before step 7, not during it: **an MCP server
 self-declares whether its tool is read-only, and admitting a tool to SAFE on that
@@ -133,26 +133,26 @@ say-so breaks SAFE invariant 2 through a path the registry check cannot see.**
 ### 1. Move `run_command` behind the ShellBridge
 
 `run_command` is the **only** tool in Addison that performs an OS effect without
-crossing the ShellBridge. That contradicts engineering-spec §1.3 — *"The Agent Core
-has no OS permissions of its own"* — and it is why the tool has no second
+crossing the ShellBridge. That contradicts engineering-spec §1.3, *"The Agent Core
+has no OS permissions of its own"*, and it is why the tool has no second
 enforcement layer: the typed file tools get `refuse_addison_data_dir` in Rust for
 free precisely because they cross the boundary.
 
 Moving it is therefore an architecture correction that *also* puts execution in the
 process where a sandbox can be applied. One change, two problems.
 
-- **Protocol:** `SHELL_RUN_COMMAND = "shell.runCommand"` —
+- **Protocol:** `SHELL_RUN_COMMAND = "shell.runCommand"`,
   `{command, timeoutMs} -> {stdout, stderr, exitCode, sandboxed}`. Hand-sync
   `protocol.py` / `protocol.ts` (the drift test covers it).
 - **Core:** `run_command.py` drops `subprocess` entirely and calls
   `context.shell_bridge.run_command(...)`. The SAFE-mode refusal belt stays.
 - **Rust:** new `exec.rs`, shaped like `filesystem.rs`. It **independently** refuses
-  the data dir, exactly as `refuse_addison_data_dir` already does — defence in depth
+  the data dir, exactly as `refuse_addison_data_dir` already does; defence in depth
   is the point, not redundancy.
 
 `sandboxed` is in the response so the UI can say *"ran without a sandbox"* honestly
 on a platform where no profile could be applied. **A silent unsandboxed fallback is
-the failure mode to design against** — that is this project's own anti-pattern
+the failure mode to design against**: that is this project's own anti-pattern
 (a guard that reports success while doing nothing).
 
 ### 2. Seatbelt profile, generated from `workspace_trust`
@@ -163,7 +163,7 @@ The profile is derived from the live trusted roots, not hardcoded:
 (version 1)
 (deny default)
 (allow process-exec process-fork signal)
-(allow file-read*)                                   ; reads stay broad — item 3 covers exfil
+(allow file-read*)                                   ; reads stay broad (item 3 covers exfil)
 (deny file-write*)
 (allow file-write* (subpath "<each trusted root>"))
 (deny file-write* (subpath "<data dir>"))            ; after the allows; the floor always wins
@@ -173,7 +173,7 @@ The profile is derived from the live trusted roots, not hardcoded:
 Invoked as `sandbox-exec -p <profile> /bin/sh -c <command>`.
 
 This finally makes workspace trust govern the shell. Today trust bounds the typed
-file tools while `run_command` roams the whole home directory — the boundary applies
+file tools while `run_command` roams the whole home directory; the boundary applies
 to the careful tools and not to the dangerous one.
 
 **Two honesty notes, both of which belong in the threat model (item 5):**
@@ -185,14 +185,14 @@ to the careful tools and not to the dangerous one.
 
 ### 3. A hardline denylist, checked before the gate
 
-Ship this **first** — it is hours of work and it makes G3 true against the obvious
+Ship this **first**: it is hours of work and it makes G3 true against the obvious
 case immediately, without waiting for the Rust work.
 
 Addison already has the pattern: confinement hard-refuses *before the gate and
 before execute* ([`orchestrator.py`](../agent_core/orchestrator.py), the CONFINEMENT
 block). The denylist is a second predicate at that same site.
 
-In `tools/base.py` (no `providers/` or `routines/` import — the module-boundary rule
+In `tools/base.py` (no `providers/` or `routines/` import; the module-boundary rule
 holds):
 
 ```python
@@ -205,7 +205,7 @@ Minimum contents: any path resolving inside `_protected_dirs()`, plus `~/.ssh`,
 `~/.aws`, `~/.gnupg`, `.env`.
 
 **Scope the guarantee honestly in the docstring.** Pattern-matching a `shell=True`
-string is the game #48 lost three times — `ls\nrm -rf` defeated `shlex`, and it will
+string is the game #48 lost three times: `ls\nrm -rf` defeated `shlex`, and it will
 be defeated again. This is a **backstop against the obvious**, not a parser. The
 real boundary is item 2's `deny file-write*`, which no amount of quoting evades. If
 this ships without that sentence it becomes the next thing that reads stronger than
@@ -223,7 +223,7 @@ Two decisions to make deliberately rather than by accident:
 
 - **Redact toward the model, not into the store.** The transcript is the user's own
   record; scrubbing it destroys evidence. That argues for the provider translators
-  as the seam rather than `Conversation.append_tool_result`. Decide explicitly — it
+  as the seam rather than `Conversation.append_tool_result`. Decide explicitly, because it
   changes whether the user can see what leaked.
 - **Never redact silently.** Substitute `[redacted: AWS access key]` so the model
   knows something was there and the user can see it happened.
@@ -235,7 +235,7 @@ branch including refusals; `detail` reuses the already-computed
 `call_permission_detail`, so the log, the card and the Activity Panel cannot
 disagree.
 
-**It must be added to `snapshots/scope.py` as EXCLUDED, or the build fails** —
+**It must be added to `snapshots/scope.py` as EXCLUDED, or the build fails**:
 `test_capture_scope_covers_every_schema_table` forces the decision. Excluded on the
 `tool_grants` precedent: an audit log is history, and a restore that rewrote the
 record of what happened would be worse than no log.
@@ -246,7 +246,7 @@ record of which URLs it fetched.**
 
 ### 5. Bring design-doc §9 current
 
-Not a new file — §9 *is* the threat model, and it is out of date.
+Not a new file: §9 *is* the threat model, and it is out of date.
 
 - **Amend bullet 1** in bullet 2's own idiom: name the property, say where it is now
   enforced.
@@ -265,15 +265,15 @@ Not a new file — §9 *is* the threat model, and it is out of date.
 ## Deliberately NOT in this plan
 
 - **Relaxing the destructive prompt.** Auto-granting non-destructive commands the
-  way Hermes does inside its container is the natural payoff — Anthropic reports
+  way Hermes does inside its container is the natural payoff, and Anthropic reports
   sandboxing cutting prompts by up to 84%, and `run_command` currently cards for
   `ls`. But relaxing prompts *before* the sandbox exists trades away the only
   barrier there is. Revisit after item 2 lands; it is an owner decision, not a
   consequence of this plan.
 - **Untrusted-content screening** (an isolated extraction call for fetched pages).
   This is the v2 item on CLAUDE.md's do-not-pull-forward list. Noted here only
-  because the deferral was written with a trigger — *"becomes load-bearing once
-  free/gray-area endpoints and MCP tools are in play"* — step 4 is done and step 7
+  because the deferral was written with a trigger, *"becomes load-bearing once
+  free/gray-area endpoints and MCP tools are in play"*; step 4 is done and step 7
   is next, so **the trigger is arriving and the deferral needs an explicit owner
   decision rather than silent expiry.**
 - **Docker-per-agent**, the OpenClaw model. Addison is a desktop app whose default
@@ -295,7 +295,7 @@ test_an_approved_command_cannot_delete_the_recovery_floor
 
 Approve a `run_command` that targets the data dir; assert the sidecars and the
 `undeletable` rows are still there afterwards. **Write it as an `xfail` now**, before
-any of the build items — the same discipline used for
+any of the build items, the same discipline used for
 `test_the_addison_data_dir_can_never_be_workspace_trusted`, which existed as an
 `xfail` from step 1 and was flipped live at step 5. The rule should exist before the
 capability does.
@@ -304,7 +304,7 @@ Then, per item:
 
 1. A command writing outside every trusted root fails, and the file is absent from
    disk. Mutate by deleting one `deny file-write*` line.
-2. `sandboxed: false` surfaces in the UI when no profile could be applied — assert
+2. `sandboxed: false` surfaces in the UI when no profile could be applied; assert
    the honest-degradation path, not just the happy one.
 3. A forbidden call never reaches the gate: assert `PermissionGate.authorize` was not
    called, not merely that the result failed.
@@ -317,11 +317,11 @@ Then, per item:
 
 1. **G3's wording.** Land items 2–3 and keep the sentence, or narrow it now and land
    the code after? The floor is currently overclaimed either way until one happens.
-2. **Redaction seam** — provider translators (preserves the transcript) vs.
+2. **Redaction seam.** Provider translators (preserves the transcript) vs.
    `append_tool_result` (simpler, scrubs the user's own record).
-3. **Untrusted-content screening** — the v2 deferral's trigger is arriving. Pull
+3. **Untrusted-content screening.** The v2 deferral's trigger is arriving. Pull
    forward, or restate the deferral with a new condition?
-4. **`/Applications/Addison.app` in `_protected_dirs`** — currently a tracked gap and
+4. **`/Applications/Addison.app` in `_protected_dirs`.** Currently a tracked gap and
    an explicit owner call. This plan is the natural place to close it.
 5. **Sequencing against step 6.** Step 6 is companion-facing and independent; this is
    Developer-facing. They can run in parallel, or 5.5 can go first on the grounds

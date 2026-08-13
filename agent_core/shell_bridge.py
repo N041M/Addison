@@ -70,6 +70,13 @@ class ServerShellBridge(ShellBridge, Protocol):
 
     def digest_workspace_files(self, paths: list[str]) -> dict: ...
 
+    # The delete preview (5.6, first form), declared HERE for the same reason: it
+    # counts what sits under paths a command named, and a TOOL that could ask it
+    # would be a directory-walk capability the model can point anywhere. The core
+    # calls it while composing a permission card, never from a tool.
+    def preview_delete_paths(self, paths: list[str]) -> dict: ...
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict: ...
+
 # How long a single Core -> Shell request may wait before we give up on it. The
 # shell answers a file/clipboard/draft call from its own process, so a stall this
 # long means the shell is wedged: surface a retry rather than hang the turn forever.
@@ -357,6 +364,40 @@ class IpcShellBridge:
         here would ship megabytes for a payload that carries none of them — the very
         thing ``workspace.listEdits`` is metadata-only to avoid."""
         return self._call(Method.SHELL_DIGEST_WORKSPACE_FILES, {"paths": list(paths)})
+
+    # --- the delete preview (5.6, first form) ------------------------------
+    def preview_delete_paths(self, paths: list[str]) -> dict:
+        """How much sits under these paths:
+        ``{"files", "directories", "modifiedToday", "missing", "capped"}``.
+
+        A READ AND NOTHING ELSE. It opens directories, never files, never follows a
+        symlink (a link counts as one file, never as the tree it points at), and it
+        stops at the shell's own entry cap, ``capped`` true means the numbers are a
+        floor, and ``delete_preview.describe`` says "more than" when it is.
+
+        Called only while a permission card is being composed for a command that
+        ``delete_preview.delete_targets`` read as a delete. A failure is a missing
+        line on the card and never an error anybody sees."""
+        return self._call(Method.SHELL_PREVIEW_DELETE_PATHS, {"paths": list(paths)})
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
+        """Ask the shell to take one path back into its session write ledger:
+        ``{"adopted": bool}``.
+
+        NOT A BATCH, where its two siblings are, and deliberately: this is asked once,
+        for the one file somebody has just pressed Revert on, and never for a list on
+        screen. A batch version would re-ledger two hundred paths behind a click that
+        acted on one of them.
+
+        It is answered ``True`` only when the bytes at that name hash to
+        ``expected_sha256``, the digest recorded at the moment Addison wrote them, so
+        what comes back into the ledger is a file Addison itself wrote and nobody has
+        changed since. That is what recovers a revert after a restart, when the ledger
+        is empty and every historic edit would otherwise be describable and impossible
+        to put back."""
+        return self._call(
+            Method.SHELL_ADOPT_WORKSPACE_PATH,
+            {"path": path, "expectedSha256": expected_sha256},
+        )
 
     # --- OPEN-mode command execution (step 5.5, item 1) --------------------
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:

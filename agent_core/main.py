@@ -401,7 +401,10 @@ def _terminal_permission_handler(registry: ToolRegistry):
     users are non-technical — CLAUDE.md) and read a yes/no from the terminal."""
 
     def handler(
-        tool_id: str, detail: str | None = None, arming: dict | None = None
+        tool_id: str,
+        detail: str | None = None,
+        arming: dict | None = None,
+        preview: str | None = None,
     ) -> PermissionStatus:
         if arming is not None:
             # THE KEYWORD CARD HAS NO TERMINAL FORM, and inventing one here would be
@@ -421,6 +424,10 @@ def _terminal_permission_handler(registry: ToolRegistry):
         # or, for a tool that words its own consequence line, whatever it says
         # (``call_permission_sentence``; the file tools name the file).
         print(f"  {_card_consequence(tool, detail)}")
+        # The delete preview (5.6), printed as its own line for the reason the card
+        # keeps it in its own field: it describes the command, it is not part of it.
+        if preview:
+            print(f"  {preview}")
         answer = input("Allow this? (y/n) ").strip().lower()
         if answer in ("y", "yes"):
             return PermissionStatus.GRANTED
@@ -1781,7 +1788,11 @@ class JsonRpcServer(
 
     # --- permissions ------------------------------------------------------
     def _on_permission_request(
-        self, tool_id: str, detail: str | None = None, arming: dict | None = None
+        self,
+        tool_id: str,
+        detail: str | None = None,
+        arming: dict | None = None,
+        preview: str | None = None,
     ) -> PermissionStatus:
         """Runs on the worker thread: render the card, block for the answer.
 
@@ -1794,6 +1805,14 @@ class JsonRpcServer(
 
         ``arming`` (step 8 phase 3) turns this into the KEYWORD CARD and is handled
         by ``_ask_with_keyword`` below.
+
+        ``preview`` (5.6) is the delete preview: ONE extra plain line saying how much
+        a delete would take, computed by looking and never by running anything
+        (``agent_core/delete_preview.py``). It rides in its own card field rather
+        than inside ``description``, because the frontend splits that string on the
+        ``run: `` prefix to draw the command as a machine fact, text appended there
+        would be rendered as part of the command. Absent on every other card, which
+        is every card the app showed before 5.6.
 
         A STOPPED TURN NEVER GETS A CARD. The worker keeps running after Stop (there
         is no mid-step interrupt in v1), so without this check the turn's next tool
@@ -1812,6 +1831,8 @@ class JsonRpcServer(
             "description": description,
             "riskTier": definition.risk_tier.value,
         }
+        if preview:
+            card["preview"] = preview
         if arming is not None:
             return self._ask_with_keyword(tool_id, card, arming)
         allow, _ = self._ask_once(tool_id, card)

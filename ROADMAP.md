@@ -41,6 +41,16 @@ quickly; and the two model pickers are a folder tree — company, then family, t
 model, with one folder open at a time — which is what keeps them a menu now that a
 single connected provider can contribute twenty-two models.
 
+**Untrusted-content screening, built 2026-08-13.** Text a tool brings back from
+outside (a web page, a command's output, an answer or a tool description from a
+tool server) is checked for writing shaped like an instruction to an assistant, and
+anything flagged reaches the model with a plain note in front of it saying to treat
+it as information. The person sees one sentence when it happens, and the audit row
+records which kinds were recognised. It is a pattern layer and a backstop: writing
+in a shape nobody listed passes untouched, and the permission gate is still the
+only thing that decides what may run.
+[docs/untrusted-screening-plan.md](docs/untrusted-screening-plan.md) owns it.
+
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it
@@ -246,8 +256,9 @@ Monaco cannot run without, and `img-src 'self' data:`, which the previous
 reaches the page has its CSS stripped before injection. **What remains is not code:**
 the §13c manual pass in [docs/TESTING-CHECKLIST.md](docs/TESTING-CHECKLIST.md), which is
 where a real webview says what that policy actually refuses, plus the plan's follow-up
-list (an editor zoom control the 12px type size does not settle, JSON highlighting, and
-recovering the post-restart revert case).
+list, which is down to one item: an editor zoom control, which the 12px type size does
+not settle. JSON highlighting and the post-restart revert case were built on
+2026-08-13.
 
 ## Deliberately not being built
 
@@ -259,8 +270,8 @@ Not because they are hard. They were looked at and put down on purpose.
   schema and the orchestrator machinery are there. The feature is not.
 - Messaging channels, and a UI for editing the steps of a routine.
 - Rewriting the agent core in Rust.
-- Sharing routines by export and import, and screening untrusted content. Both
-  become more interesting once MCP and free endpoints are in wide use.
+- Sharing routines by export and import. It becomes more interesting once MCP and
+  free endpoints are in wide use.
 - **Running a command in a virtual machine first to see what it would do.** The
   appeal is obvious and the reasoning against it is not, so it is written down
   here rather than rediscovered. To find out what a command does you have to run
@@ -274,10 +285,13 @@ Not because they are hard. They were looked at and put down on purpose.
   the change reaching the recovery floor, and a snapshot reverses whatever did
   happen. Confining and reversing beat predicting, because neither has to be
   right about the future.
-  **Two narrower forms are NOT rejected** and are open questions in
-  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md): showing what a delete would remove
-  before you approve it, which needs no sandbox and no execution at all; and a
-  copy-on-write clone for the file-only subset. Isolating *foreign code* is also
+  **Two narrower forms are NOT rejected.** The first is now BUILT (5.6,
+  2026-08-13): when a command would delete something, the card also says how much
+  that is ("About to delete 1,240 files in 12 folders"), counted by looking at
+  the folder, with no sandbox and nothing run. The second, a copy-on-write clone
+  for the file-only subset, is still an open question in
+  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md), which owns both.
+  Isolating *foreign code* is also
   a separate and live question — it is what a stdio MCP server would need, and it
   is why v1 talks to tool servers over the web instead
   ([docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md) owns that decision).
