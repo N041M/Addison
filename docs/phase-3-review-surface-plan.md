@@ -625,10 +625,39 @@ the same pass.
 > you can copy it."* `docs/KNOWN-GAPS.md` owns the entry, and holds the tri-state wire
 > shape that would earn the cause back.
 
-*(Intended future path, not v1: `shell.adoptWorkspacePath {path, expectedSha256}` re-ledgers
-a path only if its current bytes hash to what the core recorded at write time, recovering
-the restart case without widening to arbitrary paths. This is the strongest argument for
-`wrote_sha256`.)*
+**BUILT 2026-08-13, off the follow-up list: `shell.adoptWorkspacePath {path,
+expectedSha256} -> {adopted}`.** It re-ledgers a path only if the bytes standing there
+now hash to what the core recorded at write time (`wrote_sha256`), so what comes back
+into the session ledger is a file Addison itself wrote and nobody has touched since.
+Neither of the two things this section forbids happened: the ledger is still
+session-scoped and still `Default`-constructed at launch, and the restore check is still
+the ledger rather than "inside a trusted root" (which would be the *wider* test, not the
+narrower one: every file in a trusted project, against only files Addison wrote and
+nobody has changed).
+
+Three things this makes true, and the third is the one to keep in mind when reading the
+paragraphs above:
+
+- `FileRevertManager.revert_path` asks for adoption before it writes, with the newest
+  row's digest and the **recorded** path, every time, because this process cannot know
+  what the shell's ledger holds without asking, and in a live session the answer changes
+  nothing. A refusal is not a failure: the restore below then answers exactly what it
+  answered before adoption existed.
+- `Edit.revertable` is `restorable` **or** `onDiskChanged is False`, which is the same
+  proof stated ahead of the click, so the button appears only where adoption will
+  succeed. `None` is not enough: an old row, or a file the shell could not judge, has
+  nothing to prove with, and reading it as "unchanged" would put back the dead button
+  this field exists to prevent.
+- **The honest line above still ships and still matters.** It is now shown for a file
+  somebody has edited since, a row written before `wrote_sha256` existed, and a file the
+  shell cannot judge, a smaller set than "every edit made before the last restart", and
+  every member of it is a case where nothing may re-ledger the path. `undo.undoLastAction`
+  is unchanged and still asks first; recovering the chat header's button is a different
+  question about a different mechanism and was not built here.
+
+The shell refuses to adopt a **shortcut** standing at the name whatever its target
+holds (`symlink_metadata`, never `metadata`), because ledgering the name is what every
+later write follows; the core refuses one before it asks (`replaced_by_a_link`).
 
 #### Where the code lives: **not** `UndoManager`
 
@@ -814,7 +843,12 @@ The decisions that were not already written down:
   a few hundred bytes each, and every grammar is a lazy chunk fetched the first time a
   file of that type is opened. These are Monarch tokenizers on the main thread, not the
   four worker-backed language services the api entry exists to exclude. JSON is the one
-  common type with no Monarch grammar upstream and renders as plain text.
+  common type with no Monarch grammar upstream, which is why `lib/monaco.ts` declares
+  one of its own (2026-08-13, off the follow-up list) rather than admitting
+  `vs/language/json`, that package is one of the four language SERVICES this entry
+  excludes, and it would bring a second worker to a read-only screen. Thirty lines of
+  Monarch, token names taken from the map in `monacoTheme.ts` so the colours are the
+  palette that is already there and no new hue enters the app.
 - **`worker.format` is `iife`, stated rather than defaulted.** A module worker would ask
   `new Worker(url, {type: "module"})` of three different webviews this build cannot
   check. The worker has no dynamic imports, so a classic script costs nothing.
@@ -934,10 +968,16 @@ already written down:
 - **`minimap: false` is spelled `minimap: {enabled: false}`.** Monaco's option is an
   object; same decision, the API's spelling. (The plan's other option names are exact.)
 
-**On the follow-up list, not folded in as though it were settled:** an editor zoom
-control (the 12px tension this section records); JSON highlighting, which would mean
-admitting the JSON language service and its worker; and the plan's own deferred item,
-`shell.adoptWorkspacePath`, which would recover the post-restart revert case.
+**On the follow-up list.** Two of the three are now built (2026-08-13) and each is
+recorded where it belongs rather than here: **JSON highlighting**, which turned out not
+to need the JSON language service or its worker at all (§4's basic-languages entry owns
+what shipped instead), and **`shell.adoptWorkspacePath`**, which recovers the
+post-restart revert case (§3's restart section owns it).
+
+**Still on the list, and deliberately:** an editor zoom control. The 12px tension this
+section records is a question about type size for readers aged 54 and 68, which is a
+design decision and not a config change, the brief caps mono at 10–12px and nothing in
+the tree settles what a full-file surface should do about it.
 
 ---
 

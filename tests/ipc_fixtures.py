@@ -491,6 +491,11 @@ class _FixtureEditBridge:
         }
         return {"digests": {path: answers[path] for path in paths}}
 
+    def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
+        # The post-restart recovery, which this fixture's legacy row deliberately cannot
+        # use: it recorded no digest, so nothing is ever asked about it.
+        return {"adopted": False}
+
     def read_workspace_file_for_view(self, path: str) -> dict:
         content = _APP_ON_DISK if path == _EDIT_APP else ""
         return {
