@@ -907,18 +907,26 @@ it now also *shows* what OPEN was already doing. The one real cost the plan stat
 not capability either: Monaco needs the webview CSP widened with `style-src
 'unsafe-inline'`, globally, for one window.)*
 
-### 4.8 Context budget & long-conversation continuation: planned for v2; v1 ships the substrate
+### 4.8 Context budget & long-conversation continuation: BUILT 2026-08-14
 
-**The problem.** A model's context window is a *per-request* token budget, not a per-session resource: every `provider.send()` replays the conversation, so long chats get linearly more expensive and slower each turn, degrade model attention, and eventually exceed the window outright. "Migrating to a new session" cannot escape this: a fresh conversation carrying the full transcript hits the same wall on its first request. The only real mechanisms are (a) summarize, (b) store externally and retrieve selectively, or (c) truncate. v2's continuation feature is a deliberate combination of all three; there is no fourth option, so nothing in v1 should pretend otherwise.
+> **Built 2026-08-14** (`agent_core/context_budget.py`, `agent_core/context_continuation.py`,
+> `_maybe_continue_for_budget` in `agent_core/rpc/conversation.py`, the
+> `on_context_usage` callback in `orchestrator.py` and `main.py`, and the
+> over-window sentence in `providers/base.py`). The design below holds and the five
+> hard rules hold unchanged. What shipped, what it does when a step fails, and the
+> three places it falls short of this section are owned by
+> [`context-budget-plan.md`](context-budget-plan.md); do not restate them here.
 
-**What v2 builds: the Context Budget Manager.** An orchestrator-level mechanism (in `orchestrator.py`, alongside the loop in §4.4) that watches per-turn token usage against a threshold (e.g. ~70% of the resolved provider's `max_context_tokens`, per-provider via `capabilities()`, never hardcoded). When crossed, at the next turn boundary it:
+**The problem.** A model's context window is a *per-request* token budget, not a per-session resource: every `provider.send()` replays the conversation, so long chats get linearly more expensive and slower each turn, degrade model attention, and eventually exceed the window outright. "Migrating to a new session" cannot escape this: a fresh conversation carrying the full transcript hits the same wall on its first request. The only real mechanisms are (a) summarize, (b) store externally and retrieve selectively, or (c) truncate. the continuation feature is a deliberate combination of all three; there is no fourth option, so no document should pretend otherwise.
+
+**What is built: the Context Budget Manager.** Orchestrator-level machinery (measurement in `orchestrator.py`, alongside the loop in §4.4; the decision at the turn boundary in `rpc/conversation.py`) that watches per-turn token usage against a threshold (e.g. ~70% of the resolved provider's `max_context_tokens`, per-provider via `capabilities()`, never hardcoded). When crossed, at the next turn boundary it:
 
 1. produces a summary of the older portion of the conversation (a `model_router.resolve()` call, a Routine-style summarization step, so a privacy-sensitive user can have it run on `LOCAL`),
 2. starts a continuation conversation seeded with: that summary, the user-confirmed `memory_facts`, and the most recent K turns verbatim,
 3. records lineage (`conversations.continued_from_conversation_id`) and persists the summary (`conversations.summary`), leaving the full original transcript untouched in `messages`,
 4. tells the user, in one plain sentence, that it condensed the older part of the chat and that nothing was deleted ("no hidden decisions", design doc §9). Not a modal, not a confirmation, but a visible boundary marker in the thread.
 
-**Hard rules (these carry into v2 unchanged):**
+**Hard rules (unchanged by the build, and every one of them is held by what shipped):**
 
 - It is **orchestrator machinery, not a registry tool.** It must never appear in `ToolRegistry`, never be model-invokable, and never surface a permission card; the model does not decide to rewrite its own memory. (Registry tools are user-consented *actions* with risk tiers; this is bookkeeping.)
 - **Cut only at turn boundaries.** Never split an assistant `tool_use` from its `tool_result`s: a mid-turn cut produces an API-rejected history (the exact pairing bug fixed in build step 4).
@@ -926,7 +934,12 @@ not capability either: Monaco needs the webview CSP widened with `style-src
 - **Nothing is deleted.** The full transcript remains in `messages`; the summary is an *access path*, not a replacement. "What did we say earlier?" can always be answered from the stored transcript.
 - **Same UX in both profiles.** Developer profile may additionally show token usage in raw diagnostics; the mechanism itself is identical (§4.7, §8.7).
 
-**What v1 ships (the substrate, nothing more):** the two schema columns (`conversations.summary`, `conversations.continued_from_conversation_id`, landing with the step-6 store work), full-transcript persistence (step 6), and `ProviderCapabilities.max_context_tokens` (already present, §3). v1 does **not** measure tokens, does not summarize, and does not auto-continue; a v1 conversation that outgrows the window surfaces a plain-language error suggesting a new chat. Do not build the automatic layer before the store (step 6) and the shell thread UI (step 7) exist to host the boundary marker.
+**What the substrate was, and what became of it.** Step 6 landed the two schema columns (`conversations.summary`, `conversations.continued_from_conversation_id`) and full-transcript persistence, beside `ProviderCapabilities.max_context_tokens` (§3). Nothing wrote either column until 2026-08-14; both are written now, by exactly one caller, and the transcript they point at is still the whole one. The precondition this section set is met: the store (step 6) and the thread UI (step 7) both existed before the automatic layer was built.
+
+**Two sentences this section carried that were false, recorded rather than quietly deleted.**
+
+1. *"v1 does not measure tokens, does not summarize, and does not auto-continue."* True when written and true until 2026-08-14. It described the state that PRs #120 and #122 ended, and it is replaced by the build note at the top of this section.
+2. *"A v1 conversation that outgrows the window surfaces a plain-language error suggesting a new chat."* **This was never true.** It was written as a description of shipped behaviour, and no code anywhere ever produced such a sentence: a chat too long for its model got the provider's generic rejected-request line, which names neither the cause nor anything to do about it. PR #122 built the sentence for the first time, in `exception_for_http_status` (`providers/base.py`), decided from the provider's own explanation rather than from the status code. The claim is true today because somebody built it, not because it was ever checked.
 
 ### 4.9 Amendment 2026-07-20: Snapshot / restore subsystem (G3), the guaranteed-rollback floor
 
@@ -1571,7 +1584,7 @@ Explicitly out of scope for the initial implementation pass; do not add these wi
   *build-order* instruction for the first working loop (§11 step 4), and it is spent.
 - Automatic task-based model routing / auto-switching: **planned for v2** (§4.1.1), deliberately deferred; v1 routing is explicit/user-selected only. (Multiple local models with an explicit picker, item B, *is* in v1; only the *automatic* choice among them is v2.)
 - The Model Cascade module (draft → refine, §6.8): **planned for v2**; v1 ships only its substrate (`RoutineStep.model_id`, per-step named-model pinning). It is a Routine-based *module*, never orchestrator/router core.
-- The Context Budget Manager / automatic long-conversation continuation: **planned for v2** (§4.8); v1 ships only its substrate (the `conversations.summary` + `continued_from_conversation_id` columns and full-transcript persistence, step 6). Orchestrator machinery only, never a registry tool.
+- The Context Budget Manager / automatic long-conversation continuation: **no longer deferred. BUILT 2026-08-14** (§4.8, and [`context-budget-plan.md`](context-budget-plan.md) owns what shipped). Still orchestrator machinery only, never a registry tool.
 - Messaging channel integrations (Telegram/WhatsApp)
 - Routine step-*editing* UI (delete-and-recreate is sufficient for v1). The Developer profile (§4.7) may expose a *read-only* view of the declarative plan, but structural step editing stays v2.
 - Any form of Routine scheduling/triggers (§6.7)
@@ -1611,7 +1624,7 @@ Build in this sequence; each step should be independently testable before moving
 3. `PermissionGate` (§4.3) with a minimal in-memory frontend stub (no Tauri yet) to validate the request/respond flow
 4. `AnthropicProvider` + a minimal `ModelRouter` (single role: `PRIMARY` only at this point) + the orchestration loop (§4.4), CLI-only. Get a working chat loop with tool use before touching the desktop shell at all
 5. Add remaining v1 tools (`save_file`, `draft_message`, `web_search`, `read_clipboard`, `open_link`) with their `undo()` implementations
-6. `UndoManager` (§4.5): conversational rewind first (simpler), then action rewind. This step also lands the §4.8 substrate: full-transcript persistence in `messages` and the `conversations.summary` / `continued_from_conversation_id` columns (the Context Budget Manager itself is v2, §10)
+6. `UndoManager` (§4.5): conversational rewind first (simpler), then action rewind. This step also lands the §4.8 substrate: full-transcript persistence in `messages` and the `conversations.summary` / `continued_from_conversation_id` columns (the Context Budget Manager that writes them came later, on 2026-08-14, §4.8)
 7. Tauri shell + JSON-RPC IPC (§7), wiring the CLI prototype from step 4 into a real desktop window
 8. `RoutineBuilder` + `RoutineEngine` (§6): only once steps 2-6 are solid, since Routines depend on all of them
 9. `SetupAssistantProvider` + the free relay integration (design doc §7.5.1), deliberately after the core loop works end-to-end on a known-good provider, since it's the most externally-dependent piece

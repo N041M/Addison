@@ -82,10 +82,12 @@ erDiagram
 ```
 
 - **conversations**: one row per conversation, keyed by a uuid, with its title,
-  start time, and the provider role that was active. Two columns are v2 substrate,
-  present in the schema but never written by v1 logic: `summary` (a condensed older
-  history for the future Context Budget Manager) and `continued_from_conversation_id`
-  (lineage for a continued conversation). A conversation row is created lazily on the
+  start time, and the provider role that was active. Two columns carry §4.8's
+  continuation, and both have been written since 2026-08-14 by exactly one caller
+  (`rpc/conversation.py`'s turn-boundary check, never a tool and never a model):
+  `summary` (the condensed older history a continuation was seeded with) and
+  `continued_from_conversation_id` (which conversation it continues). Both are NULL
+  for an ordinary chat. A conversation row is created lazily on the
   first turn, so an abandoned empty chat leaves nothing behind.
 - **messages**: the full transcript in insertion order. `role` is constrained to
   `user`, `assistant`, or `tool`. Reopening a conversation rebuilds the model-facing

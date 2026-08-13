@@ -875,6 +875,38 @@ are here because somebody will meet them, and because anything built on top of
   mode-scoped model and have no widgets section.** They carry amendment banners
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 
+**Opened by the Context Budget Manager (built 2026-08-14;
+[context-budget-plan.md](context-budget-plan.md) owns the subject and states all
+three of these as its honest limits):**
+
+- **The boundary marker is ephemeral, so spec §4.8 item 4 is only partly served.**
+  The one sentence a person gets when a chat is continued goes out on the Activity
+  Panel note channel, and that channel is cleared at the start of every turn and
+  never persisted (`useTurn` calls `setActivities([])` on send and on reset). So the
+  note is seen once and reopening the conversation later shows no sign that a
+  boundary is there, while §4.8 asked for "a visible boundary marker in the thread",
+  which is durable by nature. Not a bug against what was built, and a clean
+  follow-up rather than a redesign: the summary and the lineage ARE durable, both on
+  the `conversations` row, so everything a real in-thread marker would render is
+  already on disk and nothing renders it.
+- **A continuation's summary call is invisible in every cost view.** The call is
+  made at the RPC layer, which has no resolved provider id or model id to attribute
+  a row to, and `usage_log` rows are written by the orchestrator's `on_usage` at its
+  choke point with both identities in hand. A row attributed to the wrong model is
+  worse than a missing row, because `tokens_month` and the per-provider latency stat
+  are exactly the numbers somebody uses to decide what to run. So the deliberate
+  answer for now is a missing row, and the cost of it is bounded rather than
+  unbounded: at most one call per turn, with at most 60,000 characters of input. It
+  still understates what a long chat costs. Closing it means carrying the resolved
+  identity out to the boundary, which is a change to the callback shape and not a
+  patch.
+- **A continued chat is two rows in the history sidebar.** Continuing switches the
+  live conversation, which is what keeps the original transcript untouched and what
+  makes the lineage column mean anything. The visible consequence is that one chat
+  the person experienced as continuous appears as two rows sharing a title, with
+  nothing saying one came from the other. The information to draw them as one thing
+  is stored (`continued_from_conversation_id`) and nothing in the sidebar reads it.
+
 **Feature suggestions judged 2026-08-09 (owner-reviewed), recorded in their
 judged shapes so the raw suggestions are not re-litigated later:**
 

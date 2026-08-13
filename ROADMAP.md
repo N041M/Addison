@@ -51,6 +51,23 @@ in a shape nobody listed passes untouched, and the permission gate is still the
 only thing that decides what may run.
 [docs/untrusted-screening-plan.md](docs/untrusted-screening-plan.md) owns it.
 
+**The context budget manager, built 2026-08-14.** A chat that gets close to what
+the answering model can hold is condensed at the end of a turn: Addison summarises
+the older part, starts a continuation carrying that summary, the facts you have
+confirmed and the last four turns word for word, and says one plain sentence. The
+lineage and the summary are stored, and nothing is deleted: the whole original
+transcript stays where it was. If anything about it cannot be done properly, from a
+model that will not say how much it holds to a summary that comes back empty, the
+chat is left exactly as it was and you are told nothing. The relay a person uses
+before they have a key of their own is refused outright. A chat that outgrows its
+model anyway now gets a plain sentence saying so, which is a thing the spec had
+claimed for months and no code had ever produced.
+**Its limits are real**: the sentence you see is not saved, so reopening the chat
+shows no boundary; the summary call's tokens are not in the cost views; and a
+continued chat is a second row in the history list.
+[docs/context-budget-plan.md](docs/context-budget-plan.md) owns it, and
+[docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks the three limits.
+
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it
@@ -266,8 +283,6 @@ Not because they are hard. They were looked at and put down on purpose.
 
 - Automatic task classification for routing. The four named strategies ship, but
   choosing one per task by itself is a later problem.
-- The context budget manager and automatic continuation of long conversations. The
-  schema and the orchestrator machinery are there. The feature is not.
 - Messaging channels, and a UI for editing the steps of a routine.
 - Rewriting the agent core in Rust.
 - Sharing routines by export and import. It becomes more interesting once MCP and
