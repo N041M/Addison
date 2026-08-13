@@ -215,6 +215,30 @@ REDACTION_IS_A_BACKSTOP = True
 # nothing in this subsystem may appear to move it.
 SCREENING_IS_A_BACKSTOP = True
 
+# What long-conversation continuation does to a conversation (spec §4.8, built
+# 2026-08-14). NOTHING IS DELETED: a continuation summarises the older part of a
+# chat and starts a new conversation seeded with that summary, the confirmed facts
+# and the recent turns copied verbatim. The full transcript stays in `messages`, the
+# original rows are never rewritten or removed, and the summary is an ACCESS PATH,
+# never a replacement. It is also orchestrator machinery and never a registry tool:
+# nothing registers it, no model can ask for it, and it raises no permission card.
+#
+# Registered because both halves are exactly the shape of sentence a reader invents.
+# "Addison trims long conversations" is the obvious short way to describe this and it
+# is false in the way that matters: an agent that believes the transcript is trimmed
+# stops answering "what did we say earlier?" from the store, and a person told their
+# messages were dropped has been lied to about the one reassurance the note gives
+# them. The second half is worse, because it is the model-invokable shape §4.8's
+# first hard rule exists to keep shut: a document saying the model can call the
+# condensing is a document inviting somebody to register it as a tool, which would
+# hand a model the decision to rewrite its own memory of a conversation.
+#
+# Two-sided on purpose. If continuation is ever changed to genuinely remove
+# messages, every document still promising that nothing is deleted becomes the more
+# dangerous sentence, and the `while_false` arm is what fails them in that commit.
+# Flip this only if the tree genuinely starts deleting.
+CONTINUATION_DELETES_NOTHING = True
+
 # Phase 3's scope (owner decision 2026-07-25). It is TWO tracks, not one: the
 # packaging track it has always been — signing, notarisation, the auto-updater,
 # previous-binary restore, Secure-Enclave identity — AND the Developer review surface
@@ -1083,6 +1107,104 @@ CLAIMS: tuple[Claim, ...] = (
                 r"advisory|the gate remains"
             ),
             window=400,
+        ),
+    ),
+    # -- Continuation deletes nothing, and no model can ask for it ---------
+    Claim(
+        id="continuation-deletes-nothing",
+        owner="docs/context-budget-plan.md",
+        holds=CONTINUATION_DELETES_NOTHING,
+        true_state=(
+            "Long-conversation continuation deletes nothing. The full transcript "
+            "stays in `messages`, the original rows are never rewritten or removed, "
+            "and the summary is an ACCESS PATH, not a replacement. It is also "
+            "orchestrator machinery and never a registry tool: nothing registers it, "
+            "no model can ask for it, and there is no permission card for it "
+            "(spec §4.8 owns the rules; docs/context-budget-plan.md owns what "
+            "shipped)."
+        ),
+        # Anchored on continuation as the SUBJECT of a removing verb with a
+        # conversation-shaped object, on the older part of a chat as the OBJECT of
+        # one, on the summary standing in place of the transcript, and on the model
+        # being able to reach the mechanism. Deliberately silent on the three honest
+        # shapes the tree already writes: §4.8's own list of mechanisms, where
+        # "truncate" is a bare noun with nothing to remove; §4.5's Rewind, which
+        # genuinely does truncate conversation history and is a different subsystem;
+        # and the summariser's bounded INPUT, where the oldest lines of the text
+        # handed to a model are what goes, and no stored message is touched. Bare
+        # `deleted` and bare `truncate` are not patterns for that reason.
+        while_true=Wrong(
+            pattern=(
+                r"(?:continuation|continuing|continued|context budget manager|"
+                r"condens(?:es|ed|ing))\b[^.\n]{0,60}"
+                r"\b(?:trims?|drops?|deletes?|removes?|truncates?|discards?)\b"
+                r"[^.\n]{0,30}"
+                r"\b(?:conversations?|transcripts?|histor(?:y|ies)|chats?|"
+                r"messages?|turns?)\b"
+                r"|\b(?:trims?|trimmed|drops?|dropped|deletes?|deleted|removes?|"
+                r"removed|truncates?|truncated|discards?|discarded)\b[^.\n]{0,30}"
+                r"\bthe (?:older|oldest|earlier) (?:part|portion|messages|turns)\b"
+                # The short description with no continuation word in it at all
+                # ("Addison trims the conversation down to a summary"). The nearby
+                # `summary` is what separates it from §4.5's Rewind, which truncates
+                # conversation history for real and mentions no summary anywhere.
+                r"|\b(?:trims?|shortens?|truncates?|drops?|deletes?|discards?)\b"
+                r"[^.\n]{0,20}\bthe (?:conversation|chat|transcript|history)\b"
+                r"[^.\n]{0,60}\bsummary\b"
+                r"|\bsummary\b[^.\n]{0,50}\b(?:replaces?|stands? in place of|"
+                r"takes the place of)\b"
+                r"|\b(?:replaces?|replacing)\b[^.\n]{0,30}"
+                r"\b(?:the )?(?:full |original |stored )?transcript\b"
+                r"|\b(?:model|assistant)\b[^.\n]{0,60}\b(?:can|may)\b[^.\n]{0,30}"
+                r"\b(?:invoke|call|trigger|ask for|request)\b[^.\n]{0,40}"
+                r"\b(?:continuation|context budget|condensing|summarisation|"
+                r"summarization)\b"
+                r"|\b(?:continuation|condensing|context budget manager)\b"
+                r"[^.\n]{0,40}\bis a (?:registry )?tool\b"
+            ),
+            fix=(
+                "Continuation deletes nothing. Say what it ADDS (a summary, a new "
+                "conversation seeded with it, a lineage column) rather than what it "
+                "removes, and say the transcript stays in `messages` where it "
+                "always was, with the summary as an access path to it. If you mean "
+                "the model can reach the mechanism, that is spec §4.8's first hard "
+                "rule and it is false: it is orchestrator machinery, never a "
+                "registry tool, never model-invokable and never behind a permission "
+                "card. docs/context-budget-plan.md owns what shipped, spec §4.8 "
+                "owns the five hard rules, and docs/KNOWN-GAPS.md owns the three "
+                "limits: none of them is a deletion."
+            ),
+            # Prose that carries the truth in the same breath, which is how every
+            # honest passage about this subsystem already reads.
+            excused_by=(
+                r"nothing is deleted|nothing was deleted|never deleted|"
+                r"is not deleted|access path|not a replacement|"
+                r"full (?:original )?transcript (?:stays|remains|is kept)|"
+                r"stays in `messages`|never a registry tool|not a registry tool|"
+                r"never model-invokable|no permission card|"
+                r"machinery, (?:not|never) a"
+            ),
+            window=300,
+        ),
+        false_state=(
+            "Continuation genuinely removes messages, so no document may promise "
+            "that nothing is deleted or that the whole conversation is still saved."
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"nothing (?:is|was) deleted"
+                r"|the (?:whole|full|entire) (?:conversation|transcript) is still "
+                r"(?:saved|there|kept)"
+                r"|full transcript (?:stays|remains) in `?messages"
+                r"|summary is an access path"
+            ),
+            fix=(
+                "Continuation now removes messages, so this reassurance is a lie in "
+                "the other direction and it is the most load-bearing sentence in "
+                "the feature: it is what the person is told when a chat is "
+                "continued. State exactly what is removed and what survives, in "
+                "docs/context-budget-plan.md, and point every other file at it."
+            ),
         ),
     ),
     # -- The retired scope amendment ---------------------------------------

@@ -284,15 +284,17 @@ ever admit is deferred, not answered — see the step-7 entry above.
 Still deferred: **fully-automatic task classification** for routing (the *choice
 logic* that picks a strategy per task — v2; the three *named* strategies plus the
 Developer custom chain ship now — see the routing section above, where balanced's cut
-is recorded), the Context Budget Manager / automatic long-conversation continuation (**v2**
-— spec §4.8; v1 ships only the schema substrate, orchestrator machinery, never a
-registry tool), messaging channels, Routine step-editing UI, a Rust rewrite of the
+is recorded), messaging channels, Routine step-editing UI, a Rust rewrite of the
 Agent Core, and one v2 item from the 2026-07 ecosystem survey: Routine
 export/import **sharing**, which is not to be pulled forward. (The survey's other v2 item,
 **untrusted-content screening**, is no longer deferred: its triggers fired and the
 owner pulled it forward on 2026-08-13. It is **built**, and
 [`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,
-including the honest statement of its strength.)
+including the honest statement of its strength.) The **Context Budget Manager /
+automatic long-conversation continuation** left this list on 2026-08-14: it is
+**built** (spec §4.8), still orchestrator machinery and never a registry tool, and
+[`docs/context-budget-plan.md`](docs/context-budget-plan.md) owns what shipped and
+its three honest limits.
 
 Also deferred, and specifically **not** to be solved inside the snapshot
 subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a

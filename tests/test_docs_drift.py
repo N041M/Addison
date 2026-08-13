@@ -1212,6 +1212,41 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "and a snapshot reverses whatever did happen."
         ),
     },
+    "continuation-deletes-nothing": {
+        "the sentence the person is actually told, which is the fact itself": (
+            "This chat was getting long, so Addison condensed the earlier part into "
+            "a summary and carried on. Nothing was deleted: the whole conversation "
+            "is still saved."
+        ),
+        "the rule stated as a rule, which must not trip the rule": (
+            "Nothing is deleted. The full transcript remains in `messages`; the "
+            "summary is an *access path*, not a replacement."
+        ),
+        "the first hard rule stated at today's polarity": (
+            "It is orchestrator machinery, not a registry tool. It must never appear "
+            "in `ToolRegistry`, never be model-invokable, and never surface a "
+            "permission card."
+        ),
+        "§4.8's list of the only three mechanisms, where truncate is a bare noun": (
+            "The only real mechanisms are (a) summarize, (b) store externally and "
+            "retrieve selectively, or (c) truncate. The continuation feature is a "
+            "deliberate combination of all three."
+        ),
+        "Rewind, which is a different subsystem and genuinely does truncate": (
+            "§4.5 Rewind & Self-Repair undoes *tool actions* and truncates "
+            "*conversation history*. The snapshot subsystem restores Addison's own "
+            "configuration."
+        ),
+        "the bounded input to the summariser, where no stored message is touched": (
+            "The request has to fit the same window that just filled up, so the "
+            "oldest lines of the text handed to the model go rather than the newest, "
+            "and what is dropped is said out loud rather than silently cut."
+        ),
+        "the honest limit, which is about a note and not about a message": (
+            "The boundary marker is ephemeral: the note channel is cleared at the "
+            "start of every turn and never persisted, so the sentence is seen once."
+        ),
+    },
     "retired-amendment-has-no-precedence": {
         "the retired rule quoted as a quotation": (
             "It kept a \"where we differ, the amendment wins\" rule long after its "
@@ -1562,6 +1597,31 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the universal, which is the promise a pattern layer cannot keep": (
                 "Screening prevents prompt injection: instruction-shaped text is "
                 "stopped before a model reads it."
+            ),
+        },
+    },
+    "continuation-deletes-nothing": {
+        "while_true": {
+            "the obvious short description, which is false where it matters": (
+                "When a chat gets close to the model's limit, Addison trims the "
+                "conversation down to a summary plus the last few turns."
+            ),
+            "the older part written as thrown away rather than condensed": (
+                "At the turn boundary it deletes the older part of the chat and "
+                "keeps going from the summary."
+            ),
+            "the summary promoted from an access path to a stand-in": (
+                "The summary replaces the stored transcript, so a continued chat "
+                "carries one message where it used to carry two hundred."
+            ),
+            "the mechanism handed to the model, which is hard rule 1 inverted": (
+                "In a long chat the model may ask for the continuation itself, and "
+                "the person confirms it on the ordinary card."
+            ),
+        },
+        "while_false": {
+            "the reassurance kept after continuation starts removing messages": (
+                "Nothing was deleted: the whole conversation is still saved."
             ),
         },
     },
