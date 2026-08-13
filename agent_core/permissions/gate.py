@@ -33,6 +33,7 @@ this module never sees a nonce, and neither does any tool. See
 
 from __future__ import annotations
 
+import inspect
 import time
 from dataclasses import dataclass
 from enum import Enum
@@ -124,6 +125,29 @@ def call_arming_card(tool: object, args: dict) -> dict | None:
     return value if isinstance(value, dict) and value else None
 
 
+def _handler_takes_preview(handler: object) -> bool:
+    """Can this permission handler be told about the delete preview (5.6)?
+
+    Asked of the SIGNATURE rather than discovered by calling and catching a
+    ``TypeError``: a handler that raised one from somewhere inside itself would be
+    called a second time, and a permission card is not a thing to emit twice.
+    A handler this cannot read is treated as one that cannot take it, which is the
+    silent-and-unchanged direction."""
+    try:
+        parameters = inspect.signature(handler).parameters  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    for parameter in parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "preview" and parameter.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return True
+    return False
+
+
 class PermissionGate:
     def __init__(
         self,
@@ -167,6 +191,7 @@ class PermissionGate:
         trusted: bool = False,
         arming: dict | None = None,
         requires_arming: bool = False,
+        preview: str | None = None,
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
@@ -246,8 +271,16 @@ class PermissionGate:
         that cannot describe what it would arm is not a call anybody can consent to.
         See ``tool_requires_arming`` for the fail-open this closes.
 
-        ``arming=None`` with ``requires_arming=False`` ≡ every previous call
-        byte-for-byte, which is the freeze."""
+        ``preview`` (5.6, the delete preview) is ONE extra plain line for the card
+        and nothing else: "About to delete 1,240 files in 12 folders." It rides
+        with the per-invocation and session cards only, it never reaches a grant,
+        an auto-grant, an audit row or the Activity Panel, and it changes no
+        decision this method makes. The caller builds it (``delete_preview.py``)
+        and answers None whenever it cannot be sure, absence is the shipped state,
+        so a handler that does not accept it simply shows the card it always did.
+
+        ``arming=None`` with ``requires_arming=False`` and ``preview=None`` ≡ every
+        previous call byte-for-byte, which is the freeze."""
         if requires_arming and arming is None:
             # Refused, never downgraded. Nothing is recorded: there is no grant to
             # remember and no denial to nag about — the call simply could not be
@@ -291,8 +324,8 @@ class PermissionGate:
                 #    where this branch behaves exactly as step 5 built it.
                 return self._auto_grant(tool_id)
             if effective.destructive_card == "session":
-                return self._request_destructive_session(tool_id, detail)
-            return self._request_per_invocation(tool_id, detail)
+                return self._request_destructive_session(tool_id, detail, preview)
+            return self._request_per_invocation(tool_id, detail, preview)
         if destructive:
             # SAFE + DESTRUCTIVE (2026-08-11, the Simple-can-edit-a-file decision).
             # The coarse flow below remembers a grant per TOOL ID with no per-call
@@ -309,7 +342,7 @@ class PermissionGate:
             # destructive tool is ``write_project_file`` (LOW/MEDIUM tools are
             # non-destructive without their own classifier, and no HIGH tool is in
             # the SAFE view), so the rest of SAFE is byte-for-byte what it was.
-            return self._request_per_invocation(tool_id, detail)
+            return self._request_per_invocation(tool_id, detail, preview)
         return self._safe_flow(tool_id)
 
     def _safe_flow(self, tool_id: str) -> PermissionStatus:
@@ -332,7 +365,9 @@ class PermissionGate:
             self._on_auto_grant(tool_id)
         return PermissionStatus.GRANTED
 
-    def _request_per_invocation(self, tool_id: str, detail: str | None) -> PermissionStatus:
+    def _request_per_invocation(
+        self, tool_id: str, detail: str | None, preview: str | None = None
+    ) -> PermissionStatus:
         """The destructive card, in BOTH modes since 2026-08-11: asked EVERY time,
         never remembered as a grant. Only the turn-scoped denial is
         honoured/recorded (don't-nag rule)."""
@@ -340,10 +375,31 @@ class PermissionGate:
             return PermissionStatus.DENIED
         if self._on_request is None:
             raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
-        status = self._on_request(tool_id, detail)
+        status = self._ask(tool_id, detail, preview)
         if status == PermissionStatus.DENIED:
             self._denied.add(tool_id)
         return status
+
+    def _ask(
+        self, tool_id: str, detail: str | None, preview: str | None
+    ) -> PermissionStatus:
+        """Put ONE ordinary card in front of the handler, with the delete preview
+        when there is one and the handler can show it (5.6).
+
+        The extra line is passed as a KEYWORD and only when it exists, so every
+        handler written against ``on_request(tool_id, detail=None)``, the CLI
+        stand-in, every test stub, is called exactly as it was. A handler that
+        cannot take it gets the card it always got: the preview is advisory, and
+        its absence is the state this app shipped with, so degrading to silence
+        costs a line of text and no correctness.
+
+        The caller has already refused a missing handler, so the check below is a
+        type-level one rather than a second policy."""
+        if self._on_request is None:
+            raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
+        if preview and _handler_takes_preview(self._on_request):
+            return self._on_request(tool_id, detail, preview=preview)
+        return self._on_request(tool_id, detail)
 
     def _request_arming(
         self, tool_id: str, detail: str | None, arming: dict
@@ -383,7 +439,7 @@ class PermissionGate:
         return status
 
     def _request_destructive_session(
-        self, tool_id: str, detail: str | None
+        self, tool_id: str, detail: str | None, preview: str | None = None
     ) -> PermissionStatus:
         """Custom "Ask once" (destructive_card='session', D2): the FIRST destructive
         call of a tool cards (carrying its detail); an approval is then remembered
@@ -397,7 +453,7 @@ class PermissionGate:
             return PermissionStatus.DENIED
         if self._on_request is None:
             raise RuntimeError("PermissionGate has no request handler wired (frontend/IPC).")
-        status = self._on_request(tool_id, detail)
+        status = self._ask(tool_id, detail, preview)
         if status == PermissionStatus.GRANTED:
             self._destructive_session_grants.add(tool_id)
         elif status == PermissionStatus.DENIED:

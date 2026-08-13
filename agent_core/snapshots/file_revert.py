@@ -500,6 +500,25 @@ class FileRevertManager:
         # delete — the same contract ``write_project_file.undo()`` uses, because it is
         # the same question asked of the same row.
         prior = (oldest.undo_payload.get("prior") or "") if existed else None
+        # AFTER A RESTART, ASK TO BE LET BACK IN. The shell's write ledger dies with the
+        # process while these rows do not, so every edit made before the last restart is
+        # one this mechanism can describe perfectly and cannot put back. Adoption is the
+        # narrow way back: the shell re-ledgers the path only if the bytes standing there
+        # now hash to what the write recorded (``wrote_sha256``), which is a file Addison
+        # wrote and nobody has touched since, so the restore below destroys no work of
+        # anybody's, the one risk it carries.
+        #
+        # ASKED EVERY TIME rather than only when a ledger question says it is needed:
+        # this process cannot know what the shell's ledger holds without asking, and a
+        # question about the ledger followed by a write is two moments where one will do.
+        # In a live session it is answered from the same digest the surface already shows
+        # and changes nothing, the path is in the ledger either way.
+        #
+        # A REFUSAL IS NOT A FAILURE HERE. The bytes may legitimately differ (somebody
+        # edited the file, which the surface has already warned about) or the shell may
+        # be older than this method; the restore below then answers with the shell's own
+        # ledger sentence, which is what it answered before adoption existed.
+        self._adopt(target, chain[0].undo_payload.get("wrote_sha256"))
         try:
             self._shell_bridge.restore_workspace_file(target, prior)
         except RuntimeError as exc:
@@ -531,6 +550,30 @@ class FileRevertManager:
         )
 
     # --- internals ---------------------------------------------------------
+    def _adopt(self, target: str, wrote_sha256: object) -> None:
+        """Ask the shell to take ``target`` back into its session write ledger, on the
+        strength of the digest the write recorded. Best effort by design: the caller's
+        next step is the restore, and the shell's own refusal is the honest answer to
+        every way this can come back "no".
+
+        A ROW WITH NO DIGEST asks nothing. Rows written before ``wrote_sha256`` existed
+        have no proof to offer, and there is no weaker test this may fall back to, a
+        path adopted without one would be a restore permission granted for bytes nobody
+        checked, which is the widening this method exists instead of."""
+        if self._shell_bridge is None or not isinstance(wrote_sha256, str) or not wrote_sha256:
+            return
+        adopt = getattr(self._shell_bridge, "adopt_workspace_path", None)
+        if adopt is None:
+            # An older shell, or a bridge double from before this method. Nothing to
+            # recover, and the restore below is exactly what it always was.
+            return
+        try:
+            adopt(target, wrote_sha256)
+        except Exception:
+            # Including the shell's own refusals: this is an attempt to IMPROVE the next
+            # call's chances, so its failure may not become the sentence a person reads.
+            return
+
     def _read(self, limit: int) -> _Reading:
         """One read of the window, joined into chains, each chain newest-first.
 

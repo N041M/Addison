@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from agent_core import delete_preview
 from agent_core.permissions.gate import (
     PermissionGate,
     PermissionStatus,
@@ -44,6 +45,7 @@ from agent_core.tools.base import (
     ExecutionContext,
     ToolResult,
     call_affected_path,
+    call_command_text,
     call_is_destructive,
     call_permission_detail,
     default_forbidden_check,
@@ -960,6 +962,17 @@ class Orchestrator:
                 # Asked of the TOOL, so a preview that could not be built refuses
                 # instead of quietly becoming an ordinary card (gate.py owns why).
                 requires_arming=tool_requires_arming(tool),
+                # THE DELETE PREVIEW (5.6, first form; delete_preview.py owns it and
+                # its "when in doubt, say nothing" rule). One extra plain line under
+                # the command ("About to delete 1,240 files in 12 folders.") for a
+                # command this can confidently read as a delete with paths it can
+                # name. Nothing is executed and no decision here changes: it is
+                # None for every other call, which is every card the app has shown
+                # until now. run_command is the only tool with `command_text`, and
+                # it is dev_only, so this cannot reach Simple.
+                preview=delete_preview.preview_for_command(
+                    call_command_text(tool, call.args), context.shell_bridge
+                ),
             )  # may block for UI
             if status == PermissionStatus.DENIED:
                 self._audit(

@@ -68,9 +68,10 @@ reports every violation into the Developer diagnostics ring permanently, so §13
 matter of opening that panel, using the screen properly on all three platforms, and
 confirming it stays empty. The bright line, if it does not: **do not widen `script-src`
 or admit `blob:`.** The fallback the plan names is the `<pre>` + highlight.js viewer.
-Everything else outstanding is the plan's follow-up list: an editor zoom control (the
-12px type size is recorded as a tension, not a settled answer), JSON highlighting, and
-`shell.adoptWorkspacePath` for the post-restart revert case.
+Everything else outstanding is the plan's follow-up list, which is now one item: an
+editor zoom control (the 12px type size is recorded as a tension, not a settled
+answer). The other two landed on 2026-08-13, JSON highlighting, and the post-restart
+revert case via `shell.adoptWorkspacePath`.
 
 **The review surface's first prerequisite is now done (2026-08-08).** The two file
 tools' `permission_detail` read the RAW `path` argument while `affected_path`
