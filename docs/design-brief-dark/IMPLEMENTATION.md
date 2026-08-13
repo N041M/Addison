@@ -1,4 +1,4 @@
-# Addison dark redesign — implementation brief (2026-07-25)
+# Addison dark redesign: implementation brief (2026-07-25)
 
 This directory is the **authoritative design brief** for the app's look as of
 2026-07-25. It supersedes `docs/design-brief-fern` (which stays in the tree as
@@ -18,14 +18,14 @@ resolve every conflict:
    the prototype doesn't show (Stop while working, Custom profile + guard panel,
    workspace trust, offers/proposal cards, markdown rendering, the restore
    confirm flow, mobile layout, three-way appearance), it is restyled into this
-   language — never deleted, never de-wired. Safety copy and owner-decision
+   language, never deleted, never de-wired. Safety copy and owner-decision
    flows (HANDOFF.md) keep their semantics byte-for-byte; only their skin
    changes.
 
 ## Tokens (Tailwind names → values)
 
 Dark is the designed reference (exact hex from the handoff). Light is a
-**derived translation** (not in the handoff — keep structure identical, only
+**derived translation** (not in the handoff; keep structure identical, only
 swap values). CSS variables live in `styles.css` (`:root` = light, `.dark` =
 dark), `darkMode: "class"` stays.
 
@@ -49,7 +49,7 @@ dark), `darkMode: "class"` stays.
 
 > **The light column above was corrected on 2026-07-26 and the values it replaced
 > shipped nowhere.** Translating the dark ramp by eye produced text nobody could
-> read on paper — measured, `ghost` was 1.53:1, `disabled` 2.17, `faint` 2.94, all
+> read on paper. Measured, `ghost` was 1.53:1, `disabled` 2.17, `faint` 2.94, all
 > against a 4.5 floor, at 10–11px, for readers who are 54 and 68; and `track`, which
 > draws the composer's only boundary *and* the idle send-button ring, was 1.14:1, so
 > that ring was effectively invisible. Dark keeps its designed values untouched.
@@ -58,20 +58,20 @@ dark), `darkMode: "class"` stays.
 > and every rung is legible. `muted` moved with them, because leaving it at 4.61
 > would have made `ghost` its equal and inverted the ramp it heads. `track` /
 > `track-hi` are treated as UI components (3:1 floor), not decorative hairlines.
-> `styles.css` carries these ratios inline — it, not this table, is the source of
+> `styles.css` carries these ratios inline; it, not this table, is the source of
 > truth if they ever diverge again.
 
 Scrim: `rgba(0,0,0,.55)` both themes. Popover ring (dark):
-`0 0 0 .5px rgba(255,255,255,.07), 0 18px 48px rgba(0,0,0,.65)` — light uses
+`0 0 0 .5px rgba(255,255,255,.07), 0 18px 48px rgba(0,0,0,.65)`; light uses
 `0 0 0 .5px rgba(0,0,0,.08), 0 18px 48px rgba(0,0,0,.18)`. Modal shadow:
 `0 24px 64px rgba(0,0,0,.6)` (light `.2`). The composer's model menu gets its own
 shallower lift, `--shadow-menu` (`0 12px 32px rgba(0,0,0,.14)` light), rather than
 reusing the anchored popover's. Danger keeps a rose token for real
-destructive actions (delete widget/routine) — value `#E2A6A6` dark / `#B4544E`
+destructive actions (delete widget/routine), value `#E2A6A6` dark / `#B4544E`
 light; restores are NEVER danger-colored (they are recoveries, HANDOFF rule).
 
 **Fonts.** UI: `'Helvetica Neue', Helvetica, Arial, sans-serif`. Mono:
-`ui-monospace, 'SF Mono', Menlo, monospace`. System stacks only — the bundled
+`ui-monospace, 'SF Mono', Menlo, monospace`. System stacks only; the bundled
 OFL woff2 files and every `@font-face` are removed (serif is gone from the app).
 
 **Type scale** (font-size tokens; line-height only where stated):
@@ -81,7 +81,7 @@ subline 14px; rows & most labels 12px; section labels **11px/500/.04em**;
 mono meta 10–10.5px; menu header 10px. Buttons/links inherit row sizes.
 
 **Radii:** popover 7px, modal 8px, composer-menu 6px, menu rows 4–5px, send
-button 50%. **No pill radii, no 10–12px cards** — surfaces are flat hairline
+button 50%. **No pill radii, no 10–12px cards**: surfaces are flat hairline
 rows now, not floating cards.
 
 **Shape rule:** selection/active is a **2px accent left rail** (chat rows,
@@ -96,7 +96,7 @@ glyphs hover to `ink`.
 
 ## Motion
 
-- `lib/scramble.ts` — the signature character-scramble. Per-char resolve times
+- `lib/scramble.ts`: the signature character-scramble. Per-char resolve times
   spread across ~620–800ms with 25% jitter, 15% chance right-to-left;
   unresolved chars re-randomize every 38ms from ONE of the three pools
   (`ABCDEFGHIKLMNOPRSTUVXYZ0234689`, `abcdefghikmnoprstuvxyz<>/`,
@@ -104,7 +104,7 @@ glyphs hover to `ink`.
   load (staggered), clicking any leaf text element (global click handler),
   view-title change, switching chats (labels + bodies staggered 70ms/40ms),
   greeting change.
-- **Streaming reply:** the same language applied to REAL streamed text — a
+- **Streaming reply:** the same language applied to REAL streamed text: a
   ~14-char scrambled window trails the incoming tail and resolves left→right
   (advance ~5 chars per 38ms tick, never ahead of received text); a 7×14px
   blinking block cursor rides while `working`.
@@ -118,7 +118,7 @@ glyphs hover to `ink`.
   Left: `←` back (surfaces only, returns to chat) OR sidebar chevron `«`/`»`
   (chat only), then the view title (13px/500 `ink-soft`, scrambles on change).
   Right: "Undo last action" (accent 12px; kept **conditional on
-  hasUndoableActions** — real function) + rail chevron (chat only).
+  hasUndoableActions**, a real function) + rail chevron (chat only).
 - **Main:** `display:flex; gap:44px; padding:0 40px`. Sidebar 212px, right
   rail 232px, both collapse by animating width/opacity/margin/translateX over
   .35s/.25s ease. Chat column max-width 580px (thread) / 840px (composer row).
@@ -127,12 +127,12 @@ glyphs hover to `ink`.
   calc(100% - 20px), transparent)`), hidden scrollbars.
 - **Sidebar:** top "Workspace" block (2px rail + 11px label) with rows →
   **Tools** (mono hint: trusted-root count or mode note), **Snapshots**
-  (mono hint: restore-point count) — **naming divergence, deliberate (owner
+  (mono hint: restore-point count). **Naming divergence, deliberate (owner
   decision 2026-08-12):** the prototype's "Snapshots" row and surface ship as
   **"Restore points"**; the user-facing name says what the thing is for, while
   "snapshot" stays the internal vocabulary (code, schema, technical docs). The
-  prototype is a frozen reference and was not edited — and — under the Developer and Custom profiles
-  only — **Code**, the review surface (no mono hint today; see the code-surface
+  prototype is a frozen reference and was not edited. Then, under the Developer and Custom profiles
+  only, **Code**, the review surface (no mono hint today; see the code-surface
   section below). The Code row is rendered only when `App` hands `Sidebar` an
   `onOpenCode` handler, so in Simple there is no disabled control inviting a
   question about why. Then "＋ New chat" (accent, 12px); then
@@ -148,8 +148,8 @@ glyphs hover to `ink`.
 - **Right rail** (chat only): "Addison's work" step list during a task (5px
   dots, current blinks, done rows dim `muted`, real ActivityUpdates), then
   "Save as routine" accent link (real propose-routine); hairline-separated
-  widget rows (token meter "Tokens this month" with 2px track/`ink` fill —
-  real stats.get; routine widgets as `name — Run` rows; stat widgets as
+  widget rows (token meter "Tokens this month" with 2px track/`ink` fill,
+  real stats.get; routine widgets as `name, Run` rows; stat widgets as
   name/value rows); footer "＋ Ask Addison to build a widget" (`disabled`
   color) opens the **widgets surface**. The permission/consent card and
   offer/proposal cards keep their rail/inline placement logic.
@@ -158,13 +158,13 @@ glyphs hover to `ink`.
 
 ## Screens
 
-- **Chat empty state:** centered greeting stack — time-of-day greeting (26px
+- **Chat empty state:** centered greeting stack: time-of-day greeting (26px
   `ink`, scramble-in; "Still up?" <5h, "Good morning." <12, "Good afternoon."
   <18, else "Good evening."), subline 14px `muted` "Ask anything, or hand me a
   chore. Everything can be undone." (fadeRise .6s delay .6s), three accent
   suggestion chips ("Tidy my Downloads folder", "Draft an email", "Plan the
   weekend") that fill the composer (fadeRise delay .9s). The prototype's faint
-  dotted starfield behind it is NOT shipped — removed by owner decision
+  dotted starfield behind it is NOT shipped; removed by owner decision
   2026-07-26. Five 1px dots over a 464x276 box never read as a field, and two of
   them landed within 20px of the type (one level with the subline), where a lone
   speck beside a word reads as a dead pixel. Reported from the running app as
@@ -179,9 +179,9 @@ glyphs hover to `ink`.
   / rewind-to-here affordances survive as small accent/mono actions.
 - **Composer** (chat only): borderless textarea (15px) over a 1px top border
   `track` → `track-hi` on focus; right: model label (mono 10.5px `disabled`,
-  click → menu) + 30px circular send — idle transparent/`track` border,
+  click → menu) + 30px circular send, idle transparent/`track` border,
   enabled accent fill + `on-accent` ↑; **while working it becomes the Stop
-  control** (border circle, ■ glyph, title "Stop") — real function, not in
+  control** (border circle, ■ glyph, title "Stop"), a real function, not in
   the prototype. Below: mono 10px `ghost` microcopy "enter to send ·
   everything can be undone". Placeholder flips to "Addison is working…".
 - **Composer model menu:** opens above the label, bottom-right anchored,
@@ -196,27 +196,27 @@ glyphs hover to `ink`.
 - **Surfaces** (Settings / Tools / Snapshots / Build a widget) replace the
   chat column: centered max-580px, scrollable, fade-masked; 20px title, 13px
   `muted` description, sections = 11px label on 2px `rail` rule + rows with
-  1px `line` top borders. Row anatomy: name (12px `ink-soft`) — spacer —
-  mono value (10.5px `muted`) — accent action link. Entering: children
+  1px `line` top borders. Row anatomy: name (12px `ink-soft`), then spacer, then
+  mono value (10.5px `muted`), then accent action link. Entering: children
   fadeRise .35s staggered 40ms; leaving: fadeDrop .25s, commit ~240ms.
   Surface state machine: `view: chat | settings | tools | snapshots |
   widgets` (previous-view tracked). Escape still returns to chat.
 - **Settings sections, in order** (each backed by the REAL hook it has
   today): Where Addison thinks (role rows; cloud model + "change" → model
-  popup); Which model answers (routing strategies — full picker on
+  popup); Which model answers (routing strategies: full picker on
   Developer/Custom, the two-option toggle rendered in the same row idiom on
   Simple; custom chain builder survives, restyled); API keys (Anthropic /
-  OpenAI / Google add–remove, Your own server connect — real provider flows,
+  OpenAI / Google add–remove, Your own server connect; real provider flows,
   key input stays a `panel` inline row, keys go keychain-only as today);
   Run a model on this computer (real local setup states + progress);
   Routines (real list; delete keeps danger color + confirm); Skills (real
   editor restyled); Profile (Simple ↔ Developer switch, the **Advanced…
   disclosure + two-step Custom confirm survives**, guard panel restyled into
   rows with its exact copy; Appearance row cycles Light / Dark / Match this
-  computer — REAL three-way theme, default **Match this computer**);
-  Folders Addison may work in (workspace trust — real rows, "choose a
+  computer, a REAL three-way theme, default **Match this computer**);
+  Folders Addison may work in (workspace trust, real rows, "choose a
   folder…" via the OS picker, Stop trusting action; in EVERY profile since
-  2026-08-12, with the standing line and grant confirm worded per mode —
+  2026-08-12, with the standing line and grant confirm worded per mode,
   it was Developer/Custom only when this mapping was written); Restore points (summary row "Going back to {target}" +
   "restore", and "All restore points / open" → the modal); Diagnostics
   (Developer raw ring preserved; Simple sees "nothing to show yet").
@@ -225,7 +225,7 @@ glyphs hover to `ink`.
   positioned so the selected row sits near the click, clamped ≥12px from
   viewport edges; rows 12px with hairline separators, selected = 2px accent
   rail + bright name + accent note; click outside closes.
-- **Tools surface:** "What Addison can reach on this computer." — REAL data
+- **Tools surface:** "What Addison can reach on this computer." REAL data
   only: Connected = providers with keys, trusted folders (each with revoke),
   local model when ready; Available = providers without keys ("add key" →
   Settings API-keys section). No fake IDE/Email/Calendar rows.
@@ -241,7 +241,7 @@ glyphs hover to `ink`.
   no-verified-target sentences. "restored ✓" is shown only after a real
   successful restore.
 - **Build a widget surface:** description + "Ideas to start from" rows whose
-  "use" seeds the composer ("Build me a widget: …") and returns to chat —
+  "use" seeds the composer ("Build me a widget: …") and returns to chat;
   the existing propose→card→confirm flow is unchanged.
 
 ## Explicitly out / kept as-is
@@ -250,19 +250,19 @@ glyphs hover to `ink`.
 - `FirstRunBanner`'s pine block, the serif voice, and the bundled fonts are
   retired.
 - **Brand (added 2026-07-26):** the bell is retired too. The mark is the
-  lowercase-a tile with the lavender dot — `brand/Addison Logo Mark.dc.html` in
+  lowercase-a tile with the lavender dot; `brand/Addison Logo Mark.dc.html` in
   this directory is the final sheet (`Addison Logo.dc.html` is exploration
   history, `Addison Brandbook.dc.html` the wider system). Implemented as
   `shell/src/components/AddisonMark.tsx` (construction ratios + the sheet's
-  exact sampled sizes; the tile stays dark in BOTH themes — fixed hex, never
-  tokens), used in the header (22px, **mark only** — see the owner decision below;
+  exact sampled sizes; the tile stays dark in BOTH themes, fixed hex, never
+  tokens), used in the header (22px, **mark only**; see the owner decision below;
   this clause read "22px + wordmark, brandbook §10" until the wordmark was dropped)
   and the first-run splash (44px above the greeting). The favicon is
   **`shell/public/favicon.png`**, a raster deliberately: the SVG version drew the
   "a" with a `<text>` element, so its letterform and size depended on whichever
   font the rasterising platform resolved (measured: a 15–20% bbox difference off
   macOS). It is rendered once from `brand/favicon-master.svg` in this directory
-  and is therefore identical everywhere. **The header shows the mark ALONE** — the brandbook's APP
+  and is therefore identical everywhere. **The header shows the mark ALONE.** The brandbook's APP
   HEADER application pairs it with an "Addison" wordmark, but that is redundant
   in the app's own chrome and it spent the view title's width budget (owner
   decision 2026-07-26). The **Tauri OS icon set is regenerated** from the mark
@@ -275,7 +275,7 @@ glyphs hover to `ink`.
 - All permission/consent flows, offers (endpoint/cost-plan), widget/routine
   proposal cards: same logic, restyled (hairline rows on `panel`/flat, accent
   actions, mono values).
-- Tests are UPDATED to the new design honestly — never deleted to go green;
+- Tests are UPDATED to the new design honestly, never deleted to go green;
   behavior assertions (confirm flows, honesty copy, G-floor guards) keep
   their teeth.
 
@@ -300,14 +300,14 @@ mapping against a stale picture. None of them change the design language.
   motion language covers the case the brief only described for streaming: the first
   frame is emitted **synchronously**, in the same commit that sets the target, so
   the finished text is never painted before being hidden. The reveal **rate adapts**
-  to the answer's length (`revealAdvanceFor`) — at a fixed rate a long answer is not
-  an animation, it is a wait — and it can never display text that has not been
+  to the answer's length (`revealAdvanceFor`), because at a fixed rate a long answer is not
+  an animation, it is a wait. And it can never display text that has not been
   committed. `onDone` fires exactly once and a finished engine is not reused.
 - **The view title is not the only thing that scrambles on a switch.** The sidebar
   title scrambles on chat switch too; the stagger survives remounts and is capped at
   the viewport, and adopting the launch conversation's id does not replay it.
 - **Motion has a cleanup and a scroll contract.** The animation path cleans up on
-  unmount, and a reveal never scroll-jails the thread — auto-scroll follows only a
+  unmount, and a reveal never scroll-jails the thread; auto-scroll follows only a
   reader already at the bottom.
 - **The restore modal's footer claim is mode-scoped.** "everything can be undone ·
   restores never delete your files" is true under SAFE; under OPEN it reads "some
@@ -327,12 +327,12 @@ mapping against a stale picture. None of them change the design language.
   answers have real hit targets, with Allow dominant by **fill** rather than hue.
 - **The favicon is a raster on purpose** (already recorded above): the SVG drew the
   "a" with `<text>`, so its letterform depended on whichever font the rasterising
-  platform resolved — measured at a 15–20% bbox difference off macOS.
+  platform resolved; measured at a 15–20% bbox difference off macOS.
 - **Two surfaces have grown since (2026-08-06), and the sections above do not list
   the additions.** Settings gained a **Tool servers** section (Developer/Custom only,
   between "Folders Addison may work in" and "Restore points") for the MCP client's
-  configuration; the right rail gained three **interactive** widget kinds — a
-  checklist you tick, a note you edit and a timer you start and pause — beside the
+  configuration; the right rail gained three **interactive** widget kinds (a
+  checklist you tick, a note you edit and a timer you start and pause) beside the
   routine and stat rows. Both use the existing row idiom and neither changes the
   design language; `../../ROADMAP.md` owns their status.
 - **The two model lists are a FOLDER TREE, and that is a deviation from the
@@ -342,74 +342,74 @@ mapping against a stale picture. None of them change the design language.
   is not a menu, it is a scroll. So the Settings popup and the composer menu both draw
   company → family → model, **one folder open at a time**, from one engine
   (`shell/src/lib/modelGroups.ts`) so the two cannot disagree. Everything else in §8
-  and §9 is unchanged — the geometry, the hairline rows, the accent rail on the
+  and §9 is unchanged: the geometry, the hairline rows, the accent rail on the
   selected row, the notes, the footer hint. Three consequences worth writing down:
   the popup's vertical placement is **measured** rather than computed from a row
   index, because folders sit between the top of the panel and the selected row and
   index × row-height stopped describing anything; each panel opens with the model in
   effect already revealed, which is what keeps the macOS-select promise a folder tree
   could otherwise break; and the rows are a `role="tree"` with the WAI-ARIA keyboard,
-  one tab stop for the whole list, with a single deliberate departure — Up and Down
+  one tab stop for the whole list, with a single deliberate departure: Up and Down
   **wrap**, because that is what a menu does. **This supersedes the sidebar's "3 rows
   + N more…" preview idiom for these two panels only**; §4's chat list keeps it, where
   a preview is still right because those rows have no hierarchy to stand for them.
 
-## The code surface (Phase 3) — the mapping, written before the build
+## The code surface (Phase 3): the mapping, written before the build
 
-The Developer **review surface** — file tree, read-only viewer, a diff of every edit
-Addison has made that is still live on disk, per-file revert — **shipped 2026-08-08**;
+The Developer **review surface** (file tree, read-only viewer, a diff of every edit
+Addison has made that is still live on disk, per-file revert) **shipped 2026-08-08**;
 [`../phase-3-review-surface-plan.md`](../phase-3-review-surface-plan.md) owns the build
 and everything about it that is not design. This section is the **design mapping**, and
 it is written first for the reason the rest of this file exists: the brief above has
 **no vocabulary for code**. Nothing in the prototype is a document surface, and a code
-editor is the one component that arrives with somebody else's theme already attached —
+editor is the one component that arrives with somebody else's theme already attached,
 the place a second look leaks into an app that has exactly one.
 
 **It shipped as written**, across five files: `shell/src/components/CodeSurface.tsx`
-(the screen — tree, changes list, viewer/diff pane, the put-it-back control),
+(the screen: tree, changes list, viewer/diff pane, the put-it-back control),
 `shell/src/components/CodeEditor.tsx` (the two thin wrappers around Monaco's viewer
 and diff-viewer, holding the read-only narrowings and the plain-text fallback),
 `shell/src/lib/monaco.ts` (the ESM-only entry, imported lazily so nobody who avoids
 the screen downloads it), `shell/src/lib/monacoTheme.ts` (the mapping below), and
-`shell/src/hooks/useCodeReview.ts` (every `workspace.*` call the screen makes —
+`shell/src/hooks/useCodeReview.ts` (every `workspace.*` call the screen makes;
 [`../flows.md`](../flows.md) flow 16 draws them). No new token entered `styles.css`,
 no new hue entered the app, and the editor reads the `--hl-*` variables the markdown
 code blocks already use. Three notes the mapping did not anticipate, none of which changes the
-design language. `editor.foreground` had to be mapped as well (to `ink`) — with
+design language. `editor.foreground` had to be mapped as well (to `ink`), and with
 `inherit: false`, it is what every unmapped token falls to, so leaving it unset would
 have let Visual Studio's default through the one gap. `--hl-builtin` and `--hl-link`
 stay unmapped, because Monaco has no token corresponding to either and inventing a
 mapping would put a colour on screen that no rule here puts anywhere else. And the
 screen is **not** a `<Surface>`: that component is the 580px centred reading column, and
-a two-pane diff does not survive inside one — so the code screen is the first full-width
+a two-pane diff does not survive inside one, so the code screen is the first full-width
 view in the app. It keeps everything else: hairline separators, the 2px accent left rail
 on the selected row, section labels on a 2px `rail` rule, and the surface enter/leave
 motion.
 
 **One palette, zero new tokens.** `shell/src/styles.css` already carries a full
-highlight.js token theme for both themes — `--hl-comment` / `keyword` / `string` /
+highlight.js token theme for both themes: `--hl-comment` / `keyword` / `string` /
 `number` / `title` / `attr` / `builtin` / `type` / `name` / `link` / `addition` /
-`deletion` — tuned toward the violet accent when markdown code blocks were restyled.
+`deletion`, tuned toward the violet accent when markdown code blocks were restyled.
 The viewer reads **those exact variables** and converts them for the editor, so the
 repo carries one code palette rather than two that drift apart. Chrome maps onto the
 existing tokens with nothing added: editor background → `panel` (what
 `.markdown-body pre` already uses, so code keeps looking the way code looks here),
-line numbers → `faint`, current line → `line` (the hairline value — the nearest thing
+line numbers → `faint`, current line → `line` (the hairline value, the nearest thing
 this direction has to a raised row), selection → `accent` at low alpha, whitespace →
 `ghost`, cursor → `accent`. Two of those are shape decisions, not colour ones:
 **no current-line border**, because a box around the caret line is chrome this
 direction does not own; and selection is a *tint* only here, the single place the
 2px accent rail cannot be used, because an editor has no row to hang it on.
 **Weights stay 400.** The app is on system stacks now, so a bold token would resolve
-to a real face rather than a synthetic one — but the direction's mono is a machine
+to a real face rather than a synthetic one, but the direction's mono is a machine
 voice at one weight, and this palette deliberately carries emphasis in hue alone.
 
-**The diff alpha ladder — the one genuinely new concept, and still no new
+**The diff alpha ladder: the one genuinely new concept, and still no new
 variables.** `--hl-addition` and `--hl-deletion` exist as *foregrounds* only, and a
 diff needs backgrounds. They are derived as an alpha ladder over those same
 foregrounds: whole changed line ≈ .10 light / .16 dark, the changed characters
 *within* a line ≈ .22 / .30, the overview ruler ≈ .70. The ladder belongs with the
-theme converter and **not** in `styles.css` — putting it in the token file would
+theme converter and **not** in `styles.css`; putting it in the token file would
 create the second palette this whole approach exists to avoid. What keeps it inside
 the "one accent plus danger" rule is worth writing down: `--hl-deletion` is
 `180 84 78` light and `226 166 166` dark, **byte-identical to `--c-danger` in both
@@ -421,12 +421,12 @@ an editor theme is *defined*, so Light / Dark / Match-this-computer must redefin
 not merely re-select it. `MermaidDiagram.tsx` reads the dark class once per session;
 that is tolerable for a diagram already drawn and wrong for a persistent document
 somebody is reading when they change Appearance. The resolved theme is a fact the app
-already computes each time it applies one — pass it down, rather than adding an
+already computes each time it applies one; pass it down, rather than adding an
 observer as a second source of truth for it.
 
 **The tension, recorded rather than settled: mono at 12px for a document surface.**
-The type scale above puts mono at **10–10.5px, and calls it meta** — machine facts,
-never prose — and by that definition a code viewer is machine facts. It is also a
+The type scale above puts mono at **10–10.5px, and calls it meta**: machine facts,
+never prose, and by that definition a code viewer is machine facts. It is also a
 *whole file*, read continuously, by personas aged 54 and 68, whose legibility the
 design doc treats as a constraint and not a preference. The mapping ships **12px with
 a 19px line-height**, and records that this does not settle the question: an editor
@@ -434,7 +434,7 @@ zoom control belongs on the follow-up list rather than folded in as though 12px 
 the answer. One correction was made to the plan while writing this down, and it is
 worth carrying here too: the plan justified 12px as *"matching `.markdown-body pre
 code`'s existing 12px"*, and that rule is **11.5px** in the tree. So 12px is a
-deliberate step **up** from the nearest precedent rather than a match to it — which
+deliberate step **up** from the nearest precedent rather than a match to it, which
 is defensible for a surface read as a document instead of as an excerpt inside a
 message, and still better than inventing a size token. The reasoning survived the
 correction; the number did not.

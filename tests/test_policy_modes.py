@@ -431,6 +431,12 @@ class _FakeExecBridge(ShellBridgeStubs):
     assertions depend on. The real boundary is tested where it lives:
     ``shell/src-tauri/src/exec.rs``."""
 
+    def preview_delete_paths(self, paths: list[str]) -> dict:
+        # The delete preview's walk (5.6). Nothing here counts anything: these tests
+        # are not about the card's extra line, and an empty answer is the no-preview
+        # state every card had before it existed.
+        return {"files": 0, "directories": 0, "modifiedToday": 0, "missing": 0, "capped": False}
+
 
     def run_command(self, command: str, timeout_ms: int, write_roots: list[str]) -> dict:
         return {"stdout": "ok", "stderr": "", "exitCode": 0, "sandboxed": True}

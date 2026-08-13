@@ -638,4 +638,8 @@ class ReadWebPageTool:
                 "length_note": _SHORTENED_NOTE if shortened else _FULL_TEXT_NOTE,
                 "untrusted_note_repeated": _UNTRUSTED_REMINDER,
             },
+            # A page is somebody else's writing, always. The note above says so in
+            # prose to the model; this says so as data, to the one caller that
+            # screens what came back (orchestrator, immediately after execute).
+            content_origin="external",
         )

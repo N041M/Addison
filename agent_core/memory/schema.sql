@@ -510,6 +510,19 @@ CREATE TABLE IF NOT EXISTS tool_audit (
     -- (kinds only, comma-separated, e.g. "AWS access key"). Empty = nothing
     -- matched. This is the only durable evidence that a leak was caught.
     redacted        TEXT,
+    -- What the SCREENER recognised in THIS call's output as instruction-shaped text
+    -- addressed to an assistant (agent_core/screening.py, design-doc §11). Kind
+    -- names only, comma-separated, e.g. "instruction override"; NULL = nothing was
+    -- recognised, which includes every result Addison itself wrote (only an
+    -- external-origin result is screened at all). NEVER the matched text: this table
+    -- is durable and never pruned, so quoting a payload here would keep it forever.
+    -- A flag is evidence, never an authorisation: nothing about the gate's decision
+    -- for this call depended on it, and the ``outcome`` column beside it is unchanged
+    -- by screening.
+    -- ADDED 2026-08-13 by ALTER (Store._apply_schema) as well as here, because
+    -- `CREATE TABLE IF NOT EXISTS` does nothing to a database that already exists;
+    -- the outcome rebuild carries it too (Store._TOOL_AUDIT_COLUMNS).
+    screened        TEXT,
     created_at      INTEGER NOT NULL
 );
 

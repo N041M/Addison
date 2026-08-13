@@ -152,6 +152,14 @@ export function PermissionCard({ request, onRespond, expired }: Props) {
           {command}
         </p>
       )}
+      {/* THE DELETE PREVIEW (5.6). One plain sentence about what the command would
+          take, written whole by the core and rendered verbatim: it is prose about
+          the command, so it sits below the command block and never inside it, and
+          it is styled as words rather than as a machine fact. Absent on every card
+          the core does not send it with, which is every card but a delete's. */}
+      {request.preview && (
+        <p className="m-0 mt-2 text-[12px] leading-[1.55] text-ink-soft">{request.preview}</p>
+      )}
       {/* Both answers are REAL targets, on every screen. These two buttons are
           what authorises a destructive command, and they were 14.5px tall on
           desktop — under WCAG 2.2 SC 2.5.8's 24×24 floor, and separated only by

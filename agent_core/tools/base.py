@@ -70,6 +70,21 @@ class ToolResult:
     # (unreachable, too slow, a server that is no longer saved): "approved, and
     # nothing happened" is a different history from "approved, and it ran".
     audit_outcome: str | None = None
+    # WHERE THIS CONTENT WAS WRITTEN: "local" (Addison computed it) or "external"
+    # (a stranger wrote it — a web page, a search snippet, a command's output, a
+    # tool server's answer). DATA, NEVER BEHAVIOUR: nothing in a tool reads this,
+    # and setting it grants and removes nothing. It exists so the ONE place that
+    # screens for instruction-shaped text (the orchestrator, immediately after
+    # execute) can tell a passage somebody else chose from one Addison made, and
+    # so the answer is given by the tool that knows rather than by a list of tool
+    # ids kept somewhere else, which would silently omit the next tool added.
+    #
+    # Default "local" like ``redacted_kinds`` is empty and ``audit_outcome`` is
+    # None: every existing tool keeps its shape and no existing row changes.
+    # Exactly four places say "external" today — read_web_page, web_search,
+    # run_command and MCP dispatch — and a source-level test holds that line for
+    # anything in ``agent_core/tools/`` that reaches the network.
+    content_origin: str = "local"
 
 
 class ShellBridge(Protocol):
@@ -539,6 +554,29 @@ BROWSER_USER_AGENT = (
 # read_web_page's is the host out of a URL the model chose, and that URL normally
 # arrived FROM a web page — so an uncapped string could push the rest of the work
 # list off the screen, which defeats the visibility the field exists to provide.
+def call_command_text(tool: Any, args: dict) -> str | None:
+    """The raw text this call would hand to a shell, or None.
+
+    The SAME hook the hardline denylist reads (``command_text``, declared today by
+    ``run_command`` alone), exposed as a named function so a second reader does not
+    reach for the attribute itself. The delete preview (5.6) is that second reader:
+    it needs the UNTRUNCATED command, because ``permission_detail`` is capped for
+    the card and a classifier reading a cut string would be reading a different
+    command than the one about to run.
+
+    Never raises: a tool whose hook fails answers None, which the preview treats as
+    "nothing to say", the state every card was in before 5.6.
+    """
+    provider = getattr(tool, "command_text", None)
+    if not callable(provider):
+        return None
+    try:
+        value = provider(args)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
 MAX_PERMISSION_DETAIL_CHARS = 120
 
 

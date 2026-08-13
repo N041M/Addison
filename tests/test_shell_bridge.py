@@ -227,6 +227,10 @@ _BRIDGE_CALLS = (
     # 256 KiB. A minute of silence from either means the shell is wedged, which is
     # exactly what the default budget is for.
     ("list_workspace_directory", ("/tmp/project",)),
+    # The delete preview's walk (5.6). DEFAULT budget for the listing's reason and
+    # bounded the same way: the shell stops after its own entry cap, so a minute of
+    # silence means a wedged shell rather than a big folder.
+    ("preview_delete_paths", (["/tmp/project/build"],)),
     ("read_workspace_file_for_view", ("/tmp/project/a.py",)),
     # The review surface's revert half (Build §2/§3). DEFAULT budget for the same
     # reason, and these two are bounded harder than anything above: the first reads
@@ -235,6 +239,7 @@ _BRIDGE_CALLS = (
     # from either is a wedged shell, not a slow answer.
     ("can_restore_workspace_files", (["/tmp/project/a.py"],)),
     ("digest_workspace_files", (["/tmp/project/a.py"],)),
+    ("adopt_workspace_path", ("/tmp/project/a.py", "a" * 64)),
 )
 
 # The one call whose budget is neither the default nor the person-paced one: a

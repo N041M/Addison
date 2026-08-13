@@ -644,6 +644,7 @@ class WorkspaceMixin(ServerContext):
         ``roots`` is passed IN rather than read here: this runs once per edit, and the
         caller has already read them once for the whole list."""
         root = _root_for(edit.path, roots)
+        disk = _disk_state(edit.wrote_sha256, digest)
         return {
             "path": edit.path,
             "root": root,
@@ -654,17 +655,26 @@ class WorkspaceMixin(ServerContext):
             "created": edit.created,
             "firstWrittenAt": edit.first_written_at,
             "lastWrittenAt": edit.last_written_at,
-            # The SHELL's answer about its own session ledger, never a permission and
-            # never an inference: false here means "Addison cannot put this back", which
-            # after a restart is true of every historic edit.
-            "revertable": bool(restorable),
+            # The SHELL's answer about its own session ledger, OR the one thing that
+            # can still earn a place in it. A path the ledger already holds is
+            # revertable, and so is one whose bytes on disk are exactly what Addison
+            # wrote, because ``shell.adoptWorkspacePath`` takes that path back into the
+            # ledger on precisely that proof before the revert writes.
+            #
+            # ``is False`` and never ``not``: ``onDiskChanged`` is TRI-STATE, and
+            # ``None``, an old row, a file the shell could not judge, no shell at all,
+            # is the case where nothing can be proved and the honest answer is the
+            # sentence rather than the button. Reading it as "unchanged" would put a
+            # button in front of every edit adoption is going to refuse, which is the
+            # dead button this field exists to prevent.
+            "revertable": bool(restorable) or disk["onDiskChanged"] is False,
             # Something else at the name Addison wrote, named — see ``_replaced_by``.
             # Its own field rather than a fourth value of ``onDiskChanged``: that one
             # is about the file's CONTENTS and this one is about which file it is,
             # and folding them together would make "changed since" answer a question
             # it was never asked.
             "replacedBy": _replaced_by(edit),
-            **_disk_state(edit.wrote_sha256, digest),
+            **disk,
         }
 
     def _workspace_read_edit_diff(self, params: dict) -> dict:

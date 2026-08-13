@@ -198,6 +198,23 @@ AUTOMATION_ARMING_BUILT = True
 # a reader has no way to check.
 REDACTION_IS_A_BACKSTOP = True
 
+# Screening's strength (built 2026-08-13, `agent_core/screening.py`). Same shape as
+# the row above and for the same reason: it is a pattern matcher over six enumerated
+# shapes, so an injection written as ordinary prose passes untouched and unmarked. It
+# reduces exposure and does not eliminate it, it decides nothing, and the permission
+# gate remains the only authority. The module's own docstring says it in those words,
+# which makes it a rule this registry can execute.
+#
+# One-directional, like redaction's: there is no opposite state worth a pattern,
+# because no finite list of instruction shapes would ever be complete.
+#
+# The failure it guards is specific and was foreseeable the day screening shipped: a
+# document that says screening PREVENTS prompt injection is a document that stops the
+# next person building the control that would, and it invites an agent to treat a
+# clean screen as a reason to relax a card. The gate is where that decision lives and
+# nothing in this subsystem may appear to move it.
+SCREENING_IS_A_BACKSTOP = True
+
 # Phase 3's scope (owner decision 2026-07-25). It is TWO tracks, not one: the
 # packaging track it has always been — signing, notarisation, the auto-updater,
 # previous-binary restore, Secure-Enclave identity — AND the Developer review surface
@@ -1017,6 +1034,53 @@ CLAIMS: tuple[Claim, ...] = (
                 r"backstop|not a boundary|does not eliminate|passes untouched|"
                 r"reduces exposure|enumerat|it knows|recognis|nobody has (?:listed|"
                 r"enumerated)|KNOWN-GAPS"
+            ),
+            window=400,
+        ),
+    ),
+    # -- Screening: a backstop, never a boundary ---------------------------
+    Claim(
+        id="screening-is-a-backstop",
+        owner="docs/untrusted-screening-plan.md",
+        holds=SCREENING_IS_A_BACKSTOP,
+        true_state=(
+            "Untrusted-content screening is a pattern matcher over six enumerated "
+            "shapes: a BACKSTOP, not a boundary. Prose it has no pattern for passes "
+            "untouched and unmarked. It is advisory, it reduces exposure and does not "
+            "eliminate anything, and the permission gate remains the only authority "
+            "(docs/untrusted-screening-plan.md owns the subject)."
+        ),
+        # Anchored on screening as the subject of a preventing verb, and on the two
+        # nouns an over-claim reaches for (a boundary, a guarantee). Silent on the
+        # honest forms the tree already writes, which name what it MARKS rather than
+        # what it stops. `blocking` and `boundary` on their own are deliberately not
+        # patterns: the plan's own "no blocking, refusing, dropping" and the tree's
+        # constant "not a boundary" are both correct sentences.
+        while_true=Wrong(
+            pattern=(
+                r"screen(?:s|ing|ed)?\b[^.\n]{0,60}"
+                r"\b(?:prevents?|blocks?|stops?|eliminates?|guarantees?|ensures?)\b"
+                r"|\b(?:prevents?|blocks?|stops?|eliminates?)\b[^.\n]{0,40}"
+                r"\bprompt injections?\b"
+                r"|screen(?:s|ing|ed)?\b[^.\n]{0,40}\bis a (?:boundary|guarantee)\b"
+                r"|\b(?:every|all|any)\s+(?:prompt\s+)?injections?\b[^.\n]{0,50}"
+                r"\b(?:caught|flagged|detected|screened|marked)\b"
+            ),
+            fix=(
+                "Screening is a backstop, not a boundary. Say what it MARKS (the "
+                "instruction shapes somebody enumerated) rather than what it "
+                "prevents, and never write it as a reason to relax a card. "
+                "agent_core/screening.py's docstring owns the rule and states it in "
+                "those words; docs/untrusted-screening-plan.md owns the subject and "
+                "the owner decisions of 2026-08-13. The permission gate is the only "
+                "authority: if a document needs the strong sentence, it is a claim "
+                "about the gate and belongs to docs/SAFETY.md."
+            ),
+            # Prose that carries the limit in the same breath, which is how every
+            # honest passage about this subsystem already reads.
+            excused_by=(
+                r"backstop|not a boundary|does not eliminate|reduces exposure|"
+                r"advisory|the gate remains"
             ),
             window=400,
         ),

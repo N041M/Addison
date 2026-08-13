@@ -100,6 +100,14 @@ class Store:
         # "no calls recorded" is exactly what a reopened chat should conclude
         # rather than inventing steps for a turn nobody wrote down.
         self._add_column_if_missing("messages", "tool_calls_json", "TEXT")
+        # Untrusted-content screening (design-doc §11). The ``redacted`` sibling: kind
+        # names, comma-joined, NULL when nothing was recognised. An ALTER rather than
+        # a second rebuild because nothing about the table's CHECKs changes — the
+        # rebuild above exists only because SQLite cannot alter a CHECK, and it
+        # carries this column too (``_TOOL_AUDIT_COLUMNS``) so a database that takes
+        # both paths ends up with one shape either way. NULL is the only honest
+        # default: a row written before this column was screened by nothing.
+        self._add_column_if_missing("tool_audit", "screened", "TEXT")
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -143,6 +151,7 @@ class Store:
         "destructive",
         "outcome",
         "redacted",
+        "screened",
         "created_at",
     )
 
@@ -222,6 +231,17 @@ class Store:
         # Oldest first, so the rows land in the order they were written and a
         # duplicate id resolves to the copy that was made before the interruption.
         sources = [name for name in ("tool_audit_old", "tool_audit") if name in tables]
+        # THE COPY BELOW NAMES EVERY COLUMN IN ``_TOOL_AUDIT_COLUMNS``, so every
+        # source has to have every one of them or the whole rebuild raises "no such
+        # column" and takes all the rows with it. A column added after a database
+        # was written (``screened``, 2026-08-13) is exactly that case, and a table
+        # STRANDED by an interrupted older rebuild is the case the ordinary ALTER
+        # in ``_apply_schema`` cannot reach — it only ever touches ``tool_audit``.
+        # Adding it here, before the transaction opens (ALTER commits), keeps the
+        # copy a fixed list: what a source did not record stays NULL, which is the
+        # honest reading of a row written before the column existed.
+        for source in sources:
+            self._add_column_if_missing(source, "screened", "TEXT")
         # Nothing else may be mid-write when a rebuild starts: BEGIN IMMEDIATE takes
         # the write lock now (inside busy_timeout) rather than discovering halfway
         # through that it cannot have it.
@@ -251,6 +271,7 @@ class Store:
                 "    destructive     INTEGER NOT NULL DEFAULT 0,"
                 f"    outcome         TEXT NOT NULL CHECK(outcome IN ({allowed})),"
                 "    redacted        TEXT,"
+                "    screened        TEXT,"
                 "    created_at      INTEGER NOT NULL"
                 ")"
             )
@@ -974,6 +995,7 @@ class Store:
         outcome: str,
         redacted: str | None,
         created_at: int,
+        screened: str | None = None,
     ) -> None:
         """Record one tool DECISION (step 5.5, item 4) — including the ones that
         never ran. Written by orchestrator/engine/rail machinery only, never by a
@@ -1004,7 +1026,7 @@ class Store:
         self._conn.execute(
             "INSERT INTO tool_audit "
             "(id, conversation_id, tool_id, detail, mode, destructive, outcome, "
-            " redacted, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " redacted, screened, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 id,
                 conversation_id,
@@ -1014,6 +1036,12 @@ class Store:
                 1 if destructive else 0,
                 outcome,
                 redacted or None,
+                # KINDS ONLY, never the text that tripped a rule — the same promise
+                # ``redacted`` makes, in a table nothing prunes. A default of None
+                # keeps the three callers that have nothing to say about screening
+                # (the routine engine, the widget rail, and every existing test)
+                # writing exactly the row they wrote before.
+                screened or None,
                 created_at,
             ),
         )
@@ -1025,7 +1053,7 @@ class Store:
         of the form "what did it actually do?"."""
         rows = self._conn.execute(
             "SELECT id, conversation_id, tool_id, detail, mode, destructive, "
-            "       outcome, redacted, created_at "
+            "       outcome, redacted, screened, created_at "
             "FROM tool_audit ORDER BY created_at DESC, rowid DESC LIMIT ?",
             (int(limit),),
         ).fetchall()
