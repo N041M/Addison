@@ -354,6 +354,12 @@ class McpTool:
                 other=answer.other,
             ),
             redacted_kinds=scrubbed.kinds + answer.structured_kinds,
+            # Somebody else's program wrote every byte of this. Data, never
+            # behaviour: this method's four refusals and the gate above it are
+            # unchanged by it, and the screening it enables happens once, in the
+            # orchestrator, on the far side of the cap this line's `compose_result`
+            # applies.
+            content_origin="external",
         )
 
 

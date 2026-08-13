@@ -93,6 +93,10 @@ class WebSearchTool:
         return ToolResult(
             success=True,
             content={"untrusted_note": _UNTRUSTED_NOTE, "results": results},
+            # Titles and snippets written by whoever owns the page — the same
+            # provenance the note states in prose, said as data for the caller
+            # that screens it (orchestrator, immediately after execute).
+            content_origin="external",
         )
 
 

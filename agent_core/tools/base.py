@@ -70,6 +70,21 @@ class ToolResult:
     # (unreachable, too slow, a server that is no longer saved): "approved, and
     # nothing happened" is a different history from "approved, and it ran".
     audit_outcome: str | None = None
+    # WHERE THIS CONTENT WAS WRITTEN: "local" (Addison computed it) or "external"
+    # (a stranger wrote it — a web page, a search snippet, a command's output, a
+    # tool server's answer). DATA, NEVER BEHAVIOUR: nothing in a tool reads this,
+    # and setting it grants and removes nothing. It exists so the ONE place that
+    # screens for instruction-shaped text (the orchestrator, immediately after
+    # execute) can tell a passage somebody else chose from one Addison made, and
+    # so the answer is given by the tool that knows rather than by a list of tool
+    # ids kept somewhere else, which would silently omit the next tool added.
+    #
+    # Default "local" like ``redacted_kinds`` is empty and ``audit_outcome`` is
+    # None: every existing tool keeps its shape and no existing row changes.
+    # Exactly four places say "external" today — read_web_page, web_search,
+    # run_command and MCP dispatch — and a source-level test holds that line for
+    # anything in ``agent_core/tools/`` that reaches the network.
+    content_origin: str = "local"
 
 
 class ShellBridge(Protocol):

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from agent_core.permissions.gate import (
@@ -38,6 +38,7 @@ from agent_core.providers.base import (
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.redaction import redact, redacted_for_model
+from agent_core.screening import mark_untrusted, screen
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
@@ -107,6 +108,19 @@ _FALLBACK_BUDGET_SECONDS = 120.0  # a real per-attempt deadline ([MF-A]), not a 
 # The fallback note surfaces on the SAME Activity Panel channel as tool activity
 # (D4); a synthetic id keeps _emit_activity's tool-agnostic contract intact.
 _ROUTING_ACTIVITY_ID = "routing"
+# Untrusted-content screening (design-doc §11). The same Activity Panel channel the
+# routing notes use, with its own synthetic id: this is a note ABOUT a step, not a
+# step, and _emit_activity's contract is tool-agnostic on purpose.
+_SCREENING_ACTIVITY_ID = "screening"
+# Said to the PERSON, in their words, whenever a tool brought back text shaped like
+# an instruction. Plain language: no "prompt injection", no rule names, no quote of
+# what was found (quoting it would reproduce the payload on the screen). It says what
+# happened and what Addison did about it, and nothing about what to do next, because
+# there is nothing the person has to do.
+_SCREENING_NOTE = (
+    "This page or tool result contained text that looks like instructions to "
+    "Addison. Addison will treat it as information only."
+)
 _FALLBACK_NOTE = "{busy} was busy, so Addison used {used}."  # D8 frozen copy
 # Plan §5.2, and the copy table in §6 — said ONCE per revoked key, not once per turn.
 # It names the provider (not the model), because a key belongs to a provider and
@@ -153,6 +167,34 @@ def _result_as_text(content: Any) -> str:
             return json.dumps(content, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             return json.dumps(str(content), ensure_ascii=False)
+    return str(content)
+
+
+def _screenable_text(content: Any) -> str:
+    """One string carrying every piece of text in ``content``, AS IT WAS WRITTEN.
+
+    The screener's input, and deliberately not ``_result_as_text``'s output. That
+    function's job is to make a tool result safe to hand a model, and the escaping
+    that does it — a newline becoming the two characters backslash-n — destroys
+    exactly what the screening rules anchor on: a line start, and the word boundary
+    in front of the first word of a line. An injection at the head of a line
+    survives the escape unreadable to every anchored rule while remaining perfectly
+    readable to the model, which is the one combination that must not exist.
+
+    So the leaves are read as strings and rejoined with real newlines. Keys as well
+    as values, on ``mcp_client._scrub_strings``' precedent: a page-supplied field
+    name is page-supplied text. Nothing is truncated here — this string is never
+    returned to anybody, it is looked at once and dropped."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return "\n".join(
+            _screenable_text(part)
+            for item in content.items()
+            for part in item
+        )
+    if isinstance(content, list):
+        return "\n".join(_screenable_text(item) for item in content)
     return str(content)
 
 
@@ -671,7 +713,8 @@ class Orchestrator:
             )
 
     def _audit(
-        self, conversation, tool_id, detail, mode, destructive, outcome, redacted=None
+        self, conversation, tool_id, detail, mode, destructive, outcome, redacted=None,
+        screened=None,
     ) -> None:
         """Record one tool decision. BEST-EFFORT, ALWAYS: a failure to write history
         must never be the reason a person's turn dies, so every exception is
@@ -697,6 +740,11 @@ class Orchestrator:
                     # repeated, in a table that is excluded from snapshots and
                     # never pruned. Sorted so the same set is always the same row.
                     "redacted": ", ".join(sorted(set(redacted))) if redacted else None,
+                    # KINDS ONLY, exactly like ``redacted`` beside it and for the
+                    # same reason: the row is durable and never pruned, so quoting
+                    # what was found would persist somebody's payload forever.
+                    # Deduplicated and sorted so one set is always one row value.
+                    "screened": ", ".join(sorted(set(screened))) if screened else None,
                     "created_at": int(time.time()),
                 }
             )
@@ -968,6 +1016,53 @@ class Orchestrator:
                         result.snapshot.tool_call_id = call.id
                         self.undo_manager.record(result.snapshot)
                     result = self._gate_image_result(result, provider)
+                # UNTRUSTED-CONTENT SCREENING (design-doc §11), the one place it
+                # happens. ORDER, and it is the order the code reads in: a tool
+                # cleans and trims its own output where it already does that
+                # (mcp_client), THEN this screens what actually came back, THEN the
+                # redact-classify below describes the same bytes for the audit row.
+                # Screening before the cap would examine text the model never sees;
+                # after the append it would be a note about a passage already read.
+                #
+                # Only ``content_origin == "external"`` is screened — a stranger's
+                # writing. Addison's own sentences (a refusal, a calculator answer,
+                # the denied-step steer above) are not screened for the same reason
+                # the redactor's own markers are not: marking Addison's words as
+                # untrusted teaches the model to discount the mark.
+                #
+                # The mark PREFIXES, never removes (screening.py owns why), and it
+                # survives ``redacted_for_model``'s per-turn re-walk by
+                # construction: that walk rewrites message text only where a
+                # credential pattern matches, and the marker contains none.
+                screened_kinds: tuple[str, ...] = ()
+                if result.content_origin == "external":
+                    as_text = _result_as_text(result.content)
+                    # SCREENED ON THE STRINGS, MARKED ON THE SERIALIZATION. Both
+                    # halves matter and the first one is not obvious: every rule in
+                    # screening.py is anchored on a word boundary or a line start,
+                    # and `json.dumps` turns a newline into the two characters
+                    # backslash-n — which GLUES that "n" onto the next word. A page
+                    # whose injection opens a line ("…Italy.\nIgnore all previous
+                    # instructions") serializes to "…Italy.\\nIgnore…", where
+                    # "nIgnore" is one token, no boundary precedes "Ignore", and the
+                    # override rule stops matching. Every line-anchored rule is lost
+                    # the same way, since the document becomes one line. So the
+                    # screener reads the leaves as the page wrote them
+                    # (`_screenable_text`) and the MARK goes in front of the text the
+                    # model is actually handed.
+                    found = screen(_screenable_text(result.content))
+                    if found.flagged:
+                        screened_kinds = found.kinds
+                        # The MODEL's copy is the marked text. A dict result becomes
+                        # its own JSON with the note in front — the same string
+                        # ``append_tool_result`` would have produced, so nothing but
+                        # the note changes about what is read.
+                        result = replace(
+                            result, content=mark_untrusted(as_text)
+                        )
+                        # The PERSON hears about it once per flagged step, on the
+                        # channel the free-model and fallback notes already use.
+                        self.on_activity(_SCREENING_ACTIVITY_ID, _SCREENING_NOTE)
                 # The granted branch, audited AFTER execution so the row can name
                 # what THIS call's output contained. Attributing it to the previous
                 # outbound send was wrong by one round: a tool's output is scrubbed
@@ -1001,6 +1096,7 @@ class Orchestrator:
                             else None
                         )
                     ),
+                    screened=screened_kinds or None,
                 )
             conversation.append_tool_result(call.id, result)
         return calls_made, budget_spent
