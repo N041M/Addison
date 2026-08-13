@@ -192,8 +192,21 @@ def screen(text: str) -> ScreeningResult:
     return ScreeningResult(kinds=found, flagged=bool(found))
 
 
-def mark_untrusted(text: str) -> str:
+def mark_untrusted(text: str, verdict: ScreeningResult | None = None) -> str:
     """``text`` with :data:`UNTRUSTED_MARKER` in front of it, if it was flagged.
+
+    ``verdict`` is the caller's own :func:`screen` answer, and a caller that has
+    one MUST pass it. The two strings are allowed to differ: the orchestrator
+    screens a result's string leaves as they were written and then marks the
+    SERIALIZATION of the whole result, and serializing is exactly what defeats
+    the rules (``json.dumps`` turns a newline into backslash-n, gluing the next
+    word shut and erasing every line start). Re-screening the serialized text
+    here would therefore un-find what the caller just found, and the model would
+    read an unmarked injection while the audit row says it was marked, which is
+    the one combination this module exists to prevent.
+
+    Without a ``verdict`` this screens ``text`` itself, which is right whenever
+    the text being marked is the text that was screened.
 
     Unflagged text is returned unchanged, and identically (the same object), so
     the common case allocates nothing. Text that already opens with the marker is
@@ -203,6 +216,7 @@ def mark_untrusted(text: str) -> str:
     """
     if text.startswith(UNTRUSTED_MARKER):
         return text
-    if not screen(text).flagged:
+    flagged = verdict.flagged if verdict is not None else screen(text).flagged
+    if not flagged:
         return text
     return f"{UNTRUSTED_MARKER}\n\n{text}"

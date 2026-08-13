@@ -201,4 +201,7 @@ class RunCommandTool:
         # rather than the sandbox's absence being invisible.
         if not result.get("sandboxed", False):
             output = f"{_UNSANDBOXED_NOTE}\n\n{output}"
-        return ToolResult(success=success, content=output)
+        # A command prints whatever the program it ran decided to print, and that
+        # program's input is often a file somebody else wrote. Origin is data only:
+        # nothing here reads it, and the orchestrator screens what it labels.
+        return ToolResult(success=success, content=output, content_origin="external")

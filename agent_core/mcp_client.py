@@ -77,6 +77,7 @@ import httpx
 
 from agent_core import net_vetting
 from agent_core.redaction import redact
+from agent_core.screening import UNTRUSTED_MARKER, screen
 
 # --- Frozen plain-language copy (CLAUDE.md: no jargon, personas 54/68) --------
 #
@@ -325,6 +326,14 @@ class DiscoveredTool:
     name: str
     description: str
     schema: dict = field(default_factory=empty_schema)
+    #: What the screener recognised in the DESCRIPTION or the SCHEMA this server
+    #: sent (agent_core/screening.py) — kind names only, empty when nothing was.
+    #: A tool's description reaches a model as the tool's own documentation and a
+    #: person as the text on its permission card, so a server can address either
+    #: audience through it without ever being called. A flag MARKS the description
+    #: and NEVER drops the tool: dropping it would hide the attempt and cost the
+    #: person a tool over text they never asked to trust.
+    screened_kinds: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -537,6 +546,69 @@ def _clean_description(value: object) -> str:
     if len(text) > MAX_TOOL_DESCRIPTION_CHARS:
         return text[:MAX_TOOL_DESCRIPTION_CHARS].rstrip() + "…"
     return text
+
+
+def _schema_strings(value: object) -> list[str]:
+    """Every string in a schema — keys as well as values, iteratively.
+
+    Keys because a server names its own fields, so a property NAME is a place to
+    write a sentence exactly as a ``description`` is. Iterative for the reason
+    :func:`_too_deep` is: this walks a document a stranger sent, and a recursive
+    walk over one is the bug being guarded against one level up. Depth is already
+    bounded by ``_clean_schema`` before anything reaches here, which is what makes
+    the walk cheap as well as safe."""
+    found: list[str] = []
+    pending: list[object] = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, str):
+            found.append(node)
+        elif isinstance(node, dict):
+            pending.extend(node.keys())
+            pending.extend(node.values())
+        elif isinstance(node, list):
+            pending.extend(node)
+    return found
+
+
+def _screen_offer(description: str, schema: dict) -> tuple[str, tuple[str, ...]]:
+    """``(description, kinds)`` for one offered tool, AFTER it has been cleaned.
+
+    CLEAN FIRST, THEN SCREEN, always — the order the caller reads in and a source
+    test pins. ``_clean_description`` removes the control characters, and
+    ``_clean_schema`` decides whether the schema is admitted at all; screening
+    ahead of either would examine bytes that never become the description, and
+    would miss an override sentence hidden behind a run of them.
+
+    BOTH TEXTS, ONE ANSWER. A schema's field names and its ``description`` strings
+    are handed to a model exactly as the tool's description is, so an instruction
+    parked in a property description is the same attempt through a quieter door.
+    The mark goes on the DESCRIPTION either way, because that is the string both
+    audiences read, and rewriting a schema would break the document a provider's
+    translator needs.
+
+    Nothing is dropped and nothing is refused here: this function adds a sentence
+    and reports kinds."""
+    # THE SCHEMA'S STRINGS, JOINED BY REAL NEWLINES — never its serialization.
+    # ``json.dumps`` escapes a newline into the two characters backslash-n, which
+    # glues that "n" onto the first word of the next line and takes the word
+    # boundary every rule anchors on with it; the line-anchored rules lose their
+    # line starts entirely, since the whole document becomes one line. The strings
+    # are already bounded by ``_clean_schema`` before they get here.
+    found = screen("\n".join([description, *_schema_strings(schema)]))
+    if not found.flagged:
+        return description, ()
+    # PREFIXED HERE RATHER THAN THROUGH ``mark_untrusted``, deliberately: that
+    # function marks text that is ITSELF flagged, and the schema half of this
+    # answer is not in the string being marked. A schema-only hit would come back
+    # unmarked from it, which is the one case the note is most needed in.
+    # Idempotence still holds — the marker is checked for first, and the marker
+    # matches no rule, so re-screening this description finds nothing new.
+    if description.startswith(UNTRUSTED_MARKER):
+        return description, found.kinds
+    if not description:
+        return UNTRUSTED_MARKER, found.kinds
+    return f"{UNTRUSTED_MARKER}\n\n{description}", found.kinds
 
 
 def _too_deep(value: object, limit: int) -> bool:
@@ -1098,17 +1170,25 @@ class _Session:
                     skipped += 1
                     continue
                 seen_names.add(name)
+                # CLEAN, THEN SCREEN — in that order, on both texts at once. The
+                # cleaning decides what the string IS (control characters out, the
+                # cap applied, a schema admitted or replaced by the empty one); the
+                # screen then reads exactly what the model and the person will.
+                described = _clean_description(entry.get("description"))
+                cleaned_schema = _clean_schema(entry.get("inputSchema"))
+                described, screened_kinds = _screen_offer(described, cleaned_schema)
                 admitted.append(
                     DiscoveredTool(
                         name,
-                        _clean_description(entry.get("description")),
+                        described,
                         # Phase 3 keeps the schema — bounded (see ``_clean_schema``)
                         # — because a model cannot form a call to a tool whose
                         # arguments nobody described. Phase 2 deliberately did not,
                         # for the equal and opposite reason: it called nothing, so
                         # an unused JSON Schema from a stranger was text held for
                         # no purpose.
-                        _clean_schema(entry.get("inputSchema")),
+                        cleaned_schema,
+                        screened_kinds,
                     )
                 )
             next_cursor = result.get("nextCursor")
