@@ -108,6 +108,20 @@ class Store:
         # both paths ends up with one shape either way. NULL is the only honest
         # default: a row written before this column was screened by nothing.
         self._add_column_if_missing("tool_audit", "screened", "TEXT")
+        # §4.8's two columns. schema.sql has carried them since step 6, so on any
+        # database made since then these are no-ops, but ``CREATE TABLE IF NOT
+        # EXISTS`` does nothing to a table that already exists, so a database
+        # created BEFORE step 6 has a ``conversations`` table without them, and the
+        # continuation write would fail with "no such column" on the one machine
+        # that has been running Addison longest. Verified rather than assumed, which
+        # is why these lines exist at all. NULL is the only honest default: a chat
+        # written before this column is not a continuation of anything.
+        self._add_column_if_missing("conversations", "summary", "TEXT")
+        self._add_column_if_missing(
+            "conversations",
+            "continued_from_conversation_id",
+            "TEXT REFERENCES conversations(id)",
+        )
 
     def _add_column_if_missing(self, table: str, column: str, decl: str) -> None:
         cols = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -474,20 +488,25 @@ class Store:
         provider_id: str,
         started_at: int,
         continued_from: str | None = None,
+        summary: str | None = None,
     ) -> None:
         """Insert a conversation row, or leave the existing one untouched.
 
         Idempotent on purpose: the server and CLI use fixed ids ("main"/"cli"),
         so on any launch after the first the row already exists on disk — that
-        is resumption, not an error, and turns must keep working. ``continued_from``
-        populates the §4.8 lineage column (``continued_from_conversation_id``);
-        ``summary`` is left NULL — v1 never writes it (the Context Budget Manager
-        that would is v2, spec §10)."""
+        is resumption, not an error, and turns must keep working.
+
+        ``continued_from`` and ``summary`` are §4.8's two columns: the lineage of a
+        continuation and the condensed older history it was seeded with. Both stay
+        NULL for an ordinary chat, and both are written by exactly ONE caller
+        (``rpc/conversation.py``'s turn-boundary check), never by a tool, and never
+        by a model. This layer only stores what it is given: it neither counts
+        tokens nor summarises anything."""
         self._conn.execute(
             "INSERT OR IGNORE INTO conversations "
-            "(id, title, started_at, provider_id, continued_from_conversation_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (id, title, started_at, provider_id, continued_from),
+            "(id, title, started_at, provider_id, continued_from_conversation_id, summary) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id, title, started_at, provider_id, continued_from, summary),
         )
         self._conn.commit()
 
@@ -588,15 +607,36 @@ class Store:
         return [dict(row) for row in rows]
 
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
-        """One conversation's header row (id/title/started_at/provider_id), or
-        None if there is no such conversation. Used to validate a load request
-        before rebuilding its transcript."""
+        """One conversation's header row, or None if there is no such conversation.
+        Used to validate a load request before rebuilding its transcript.
+
+        The two §4.8 columns ride along (``summary``,
+        ``continued_from_conversation_id``): they are what says a chat is the
+        continuation of another one and what was carried across. Additive, every
+        existing caller reads by key and is unaffected."""
         row = self._conn.execute(
-            "SELECT id, title, started_at, provider_id "
+            "SELECT id, title, started_at, provider_id, summary, "
+            "continued_from_conversation_id "
             "FROM conversations WHERE id = ?",
             (conversation_id,),
         ).fetchone()
         return dict(row) if row is not None else None
+
+    def confirmed_memory_facts(self, limit: int = 50) -> list[str]:
+        """The facts the person has explicitly confirmed, newest first.
+
+        READ ONLY, and the whole point of it: §4.8 seeds a continuation with the
+        user-confirmed ``memory_facts``, and doing that must not become a way for
+        the mechanism to write any. There is deliberately no insert helper beside
+        this one, ``memory_facts`` stays confirmation-only (design-doc §7.6), so
+        the row has to already exist and to already say ``confirmed_by_user = 1``.
+        An unconfirmed row is not a fact yet and never enters a seed."""
+        rows = self._conn.execute(
+            "SELECT fact FROM memory_facts WHERE confirmed_by_user = 1 "
+            "ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [row["fact"] for row in rows if row["fact"]]
 
     def set_conversation_title(self, conversation_id: str, title: str) -> None:
         """First-write-wins auto-title: set the title only while it is still NULL.

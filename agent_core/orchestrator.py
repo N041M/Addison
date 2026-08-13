@@ -311,6 +311,7 @@ class Orchestrator:
         stream_to_frontend=lambda text: None,
         on_activity=lambda tool_id, label, detail=None: None,
         on_usage=lambda usage, latency_ms, provider_id, model_id: None,
+        on_context_usage=lambda used_tokens, max_context_tokens: None,
         shell_bridge=None,
         guards_provider=lambda: None,
         routing_chain=lambda requested_role, model_name: None,
@@ -346,6 +347,15 @@ class Orchestrator:
         # mis-attribution). Orchestrator machinery, the single choke point every
         # turn's model calls pass through — NEVER a registry tool.
         self.on_usage = on_usage
+        # The Context Budget Manager's measurement half (§4.8 item 1), wired exactly
+        # like on_usage and for the same reason: the orchestrator watches, the server
+        # decides what to do with what it saw. Called after each provider call with
+        # (used_tokens, max_context_tokens), the second value taken from the RESOLVED
+        # provider's own ProviderCapabilities, never from a table anywhere, and None
+        # when that provider reports no window (then the caller does nothing at all,
+        # silently). Machinery, NEVER a registry tool: the model neither sees this nor
+        # can ask for it.
+        self.on_context_usage = on_context_usage
         self.shell_bridge = shell_bridge
         # The ordered fallback chain for a turn (D4), built by the server from the
         # active strategy + catalog + router pools (resolve_chain). Returns None when
@@ -483,6 +493,9 @@ class Orchestrator:
             latency_ms = int((time.monotonic() - started) * 1000)
             # Record this call's usage + latency at the single choke point (§4.8).
             self.on_usage(response.usage, latency_ms, provider_id, model_id)
+            # The Context Budget Manager's measurement, at the same choke point and
+            # against the RESOLVED provider's own window (§4.8 item 1).
+            self._report_context_usage(response.usage, provider)
             if response.tool_calls:
                 calls_made, budget_spent = self._run_tool_calls(
                     conversation, response, context, guards, mode, provider, calls_made
@@ -666,6 +679,11 @@ class Orchestrator:
             # The inner loop only breaks with both set (every other path raises).
             assert candidate is not None and response is not None
             self.on_usage(response.usage, latency_ms, candidate.provider_id, candidate.model_id)
+            # …and the same call measured against THIS candidate's own window (§4.8).
+            # ``provider`` is the resolved provider of the candidate that answered, so
+            # a turn that fell forward is judged by the window of the model that
+            # actually ran, never the one the settings preferred.
+            self._report_context_usage(response.usage, provider)
             # The fallback note, once: emitted when a candidate other than the one the
             # user expected (the preferred head) produced the answer (D4/D8).
             if (
@@ -1180,6 +1198,29 @@ class Orchestrator:
             busy=self._model_label(busy.model_id), used=self._model_label(used.model_id)
         )
         self.on_activity(_ROUTING_ACTIVITY_ID, note)
+
+    def _report_context_usage(self, usage, provider) -> None:
+        """Hand one call's size and the answering model's window to the watcher (§4.8).
+
+        Best-effort by design, and it is the FIRST rule of §4.8 that makes it so: a
+        provider that cannot say how much it holds means "cannot tell", and cannot-tell
+        means do nothing, silently. So a missing usage report, a provider whose
+        ``capabilities()`` raises, and a window of None all end the same way, nothing
+        reported, nothing decided, and the turn entirely unaffected.
+
+        ``used_tokens`` is input plus output because that sum is what the NEXT request
+        replays: this turn's prompt plus the answer just added to it."""
+        if usage is None:
+            return
+        try:
+            limit = provider.capabilities().max_context_tokens
+        except Exception:
+            return
+        try:
+            used = int(usage.input_tokens or 0) + int(usage.output_tokens or 0)
+        except (TypeError, ValueError):
+            return
+        self.on_context_usage(used, limit)
 
     def _single_identity(self, requested_role, model_name) -> tuple[str, str]:
         """Best-effort (provider_id, model_id) for the unwired single path — used only
