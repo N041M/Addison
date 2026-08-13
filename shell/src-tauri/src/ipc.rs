@@ -156,6 +156,10 @@ mod tests {
             // through the core's mode gate. The second reads files to hash them.
             "shell.canRestoreWorkspaceFiles",
             "shell.digestWorkspaceFiles",
+            // The delete preview's walk (5.6). A window that could ask it directly
+            // could count any folder on the disk without the core deciding anything
+            // about which paths were named.
+            "shell.previewDeletePaths",
             // ...and the one way a path re-enters that ledger. A window that could ask
             // it directly could hand itself a restore permission for any file whose
             // bytes it can guess the digest of.

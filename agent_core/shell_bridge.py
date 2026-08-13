@@ -70,6 +70,11 @@ class ServerShellBridge(ShellBridge, Protocol):
 
     def digest_workspace_files(self, paths: list[str]) -> dict: ...
 
+    # The delete preview (5.6, first form), declared HERE for the same reason: it
+    # counts what sits under paths a command named, and a TOOL that could ask it
+    # would be a directory-walk capability the model can point anywhere. The core
+    # calls it while composing a permission card, never from a tool.
+    def preview_delete_paths(self, paths: list[str]) -> dict: ...
     def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict: ...
 
 # How long a single Core -> Shell request may wait before we give up on it. The
@@ -360,6 +365,20 @@ class IpcShellBridge:
         thing ``workspace.listEdits`` is metadata-only to avoid."""
         return self._call(Method.SHELL_DIGEST_WORKSPACE_FILES, {"paths": list(paths)})
 
+    # --- the delete preview (5.6, first form) ------------------------------
+    def preview_delete_paths(self, paths: list[str]) -> dict:
+        """How much sits under these paths:
+        ``{"files", "directories", "modifiedToday", "missing", "capped"}``.
+
+        A READ AND NOTHING ELSE. It opens directories, never files, never follows a
+        symlink (a link counts as one file, never as the tree it points at), and it
+        stops at the shell's own entry cap, ``capped`` true means the numbers are a
+        floor, and ``delete_preview.describe`` says "more than" when it is.
+
+        Called only while a permission card is being composed for a command that
+        ``delete_preview.delete_targets`` read as a delete. A failure is a missing
+        line on the card and never an error anybody sees."""
+        return self._call(Method.SHELL_PREVIEW_DELETE_PATHS, {"paths": list(paths)})
     def adopt_workspace_path(self, path: str, expected_sha256: str) -> dict:
         """Ask the shell to take one path back into its session write ledger:
         ``{"adopted": bool}``.

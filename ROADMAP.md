@@ -275,10 +275,13 @@ Not because they are hard. They were looked at and put down on purpose.
   the change reaching the recovery floor, and a snapshot reverses whatever did
   happen. Confining and reversing beat predicting, because neither has to be
   right about the future.
-  **Two narrower forms are NOT rejected** and are open questions in
-  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md): showing what a delete would remove
-  before you approve it, which needs no sandbox and no execution at all; and a
-  copy-on-write clone for the file-only subset. Isolating *foreign code* is also
+  **Two narrower forms are NOT rejected.** The first is now BUILT (5.6,
+  2026-08-13): when a command would delete something, the card also says how much
+  that is ("About to delete 1,240 files in 12 folders"), counted by looking at
+  the folder, with no sandbox and nothing run. The second, a copy-on-write clone
+  for the file-only subset, is still an open question in
+  [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md), which owns both.
+  Isolating *foreign code* is also
   a separate and live question — it is what a stdio MCP server would need, and it
   is why v1 talks to tool servers over the web instead
   ([docs/step-7-mcp-plan.md](docs/step-7-mcp-plan.md) owns that decision).
