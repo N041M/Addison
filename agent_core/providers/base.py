@@ -155,6 +155,38 @@ class ProviderKeyRejected(ProviderAuthFailed):
     tell somebody to replace a key that works."""
 
 
+#: Said when a chat no longer fits the model that is answering it (§4.8). Plain
+#: language, one next step, and no numbers: "128000 tokens" is not a thing anybody
+#: can act on, and the person did not choose the window.
+_OVER_WINDOW_MESSAGE = (
+    "This chat has got too long for this model to read in one go. "
+    "Start a new chat to keep going, this one stays saved."
+)
+
+#: Phrases the four supported APIs use when a request exceeds the context window.
+#: Matched case-insensitively against the provider's own explanation, and kept
+#: deliberately narrow: a phrase that also fits an ordinary bad request would put
+#: "start a new chat" in front of somebody whose problem is something else.
+_OVER_WINDOW_HINTS = (
+    "context length",
+    "context window",
+    "maximum context",
+    "context_length_exceeded",
+    "prompt is too long",
+    "too many tokens",
+    "token count exceeds",
+    "input token count",
+)
+
+
+def _reads_as_over_window(server_detail: str | None) -> bool:
+    """Whether a provider's own explanation says the request was too big to read."""
+    if not isinstance(server_detail, str):
+        return False
+    lowered = server_detail.lower()
+    return any(hint in lowered for hint in _OVER_WINDOW_HINTS)
+
+
 def exception_for_http_status(
     status_code: int, message: str, server_detail: str | None = None
 ) -> RuntimeError:
@@ -183,7 +215,22 @@ def exception_for_http_status(
     elif status_code == 429 or status_code >= 500:
         exc = ProviderUnavailable(message)
     else:
-        exc = ProviderRequestRejected(message)
+        # §4.8's oldest promise, and until now an unkept one: "a conversation that
+        # outgrows the window surfaces a plain-language error suggesting a new chat".
+        # No such sentence existed anywhere, a chat too long for its model got the
+        # provider's generic rejected-request line ("that request wasn't accepted"),
+        # which names neither the cause nor anything to do about it. The automatic
+        # layer now condenses most chats before they reach this point, but it cannot
+        # reach two cases BY DESIGN, a provider that reports no window (cannot tell)
+        # and a summary call that failed, so the sentence still has to exist, and
+        # this is the one place every provider's error status passes through.
+        #
+        # The provider's OWN words decide (``server_detail``), never the status code
+        # alone: a 400 is mostly not this, and telling somebody with a malformed
+        # request to start a new chat would send them off to repeat the failure.
+        exc = ProviderRequestRejected(
+            _OVER_WINDOW_MESSAGE if _reads_as_over_window(server_detail) else message
+        )
     exc.status_code = status_code  # type: ignore[attr-defined]
     # The provider's own words, for the log only — never for the screen, which
     # keeps the plain sentence ``message`` already carries.

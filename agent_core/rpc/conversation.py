@@ -7,6 +7,13 @@ import json
 import time
 from uuid import uuid4
 
+from agent_core.context_budget import assess_budget, choose_cut_point
+from agent_core.context_continuation import (
+    CONTINUATION_NOTE,
+    build_seed_messages,
+    build_summary_request,
+    usable_summary,
+)
 from agent_core.orchestrator import Conversation
 from agent_core.providers.base import Message, ModelRole, ToolCallRequest
 from agent_core.providers.router import LOCAL_ONLY
@@ -43,6 +50,15 @@ _LOCAL_ONLY_EMPTY_POOL = (
 # somebody's transcript. A guard whose only proof is "nothing calls it wrongly" is
 # not a guard.
 _NOTHING_TO_SEND = "There's nothing to send yet — write a message first."
+
+# The Activity Panel channel the routing and screening notes already use, with its
+# own synthetic id (orchestrator._ROUTING_ACTIVITY_ID / _SCREENING_ACTIVITY_ID are
+# the precedent). A continuation is a note ABOUT the conversation rather than a
+# step in it, and _emit_activity's contract is tool-agnostic on purpose, so this
+# needs no new IPC method and no new visual vocabulary, which is why §4.8's
+# "boundary marker in the thread" is served by the marker channel that exists
+# rather than by a second one invented for it.
+_CONTEXT_ACTIVITY_ID = "context"
 
 
 def _encode_tool_calls(message: Message, shown_steps: dict[str, str | None]) -> str | None:
@@ -302,6 +318,10 @@ class ConversationMixin(ServerContext):
         # turn's answeredWith (the error path never reads it); set by _record_answered
         # (orchestrator on_answered, D5) when a turn produces a final answer.
         self._answered_with = None
+        # Cleared for the same reason: the §4.8 check at the end of this method must
+        # read THIS turn's measurement or none at all. A stale one from a previous
+        # turn could continue a conversation on evidence about a different one.
+        self._turn_context_usage = None
         try:
             self.orchestrator.run_turn(
                 self.conversation,
@@ -340,6 +360,13 @@ class ConversationMixin(ServerContext):
         # because a predicate that has to observe the future could not be cheap,
         # idempotent and non-raising, which this one must be.
         self._mark_verified_working()
+        # THE TURN BOUNDARY (§4.8). Here and nowhere else: the turn has finished, the
+        # whole exchange is on disk, and nothing is mid-flight, the only moment at
+        # which a conversation may be continued without splitting a turn in half. It
+        # runs after _mark_verified_working for the same reason it runs after the
+        # persist loop: this turn's success is a fact about the configuration that
+        # answered it, and must not depend on what the bookkeeping does next.
+        self._maybe_continue_for_budget(requested_role, model_name)
         # The persisted ids let the frontend anchor "Rewind to here" on REAL
         # store ids — its own display ids mean nothing to the core.
         result = {
@@ -353,6 +380,129 @@ class ConversationMixin(ServerContext):
         if self._answered_with is not None:
             result["answeredWith"] = self._answered_with
         self._respond(request_id, result)
+
+    # --- the Context Budget Manager (§4.8) ---------------------------------
+    def _maybe_continue_for_budget(self, requested_role, model_name) -> None:
+        """Condense the older part of a long chat and carry on in a new one.
+
+        §4.8's four numbered behaviours, in order: watch usage against the
+        threshold, summarise the older portion through ``model_router.resolve()``,
+        start a continuation conversation seeded with the summary + the confirmed
+        facts + the recent turns verbatim, and tell the person one plain sentence.
+
+        MACHINERY, NEVER A REGISTRY TOOL (hard rule 1). It is a private method on
+        the server, reached only from the end of a turn. Nothing registers it, no
+        model can ask for it, and it raises no permission card, the model does not
+        get to decide when its own memory of a conversation is rewritten.
+
+        NOTHING IS DELETED (hard rule 4). The original conversation's rows are not
+        read for editing, not rewritten and not removed; the tail is COPIED into a
+        new conversation. "What did we say earlier?" is still answerable from the
+        stored transcript, which is exactly what the summary is an access path to.
+
+        SAME UX IN BOTH PROFILES (hard rule 5). Nothing here reads the profile or
+        the policy mode: Simple and Developer take this identical path and see the
+        identical sentence. Developer's raw diagnostics show token counts already;
+        that is a different surface reading the same numbers, not a second
+        mechanism.
+
+        EVERY FAILURE MEANS DO NOTHING, silently, leaving the conversation exactly
+        as it was. That covers: a provider that cannot say how big its window is,
+        no measurement at all, a chat with no legal cut point, a summary call that
+        raises, and a summary that comes back empty or too short to stand in for
+        anything. In none of those cases is the person told a story about a
+        condensing that did not happen."""
+        measurement = self._turn_context_usage
+        if measurement is None:
+            return  # nothing measured: cannot tell, so do nothing
+        used_tokens, limit_tokens = measurement
+        # (1) Watch usage against the threshold, using the RESOLVED provider's own
+        # max_context_tokens for THIS turn. ``assess_budget`` owns the arithmetic and
+        # the cannot-tell rule; a limit of None comes back as known=False.
+        assessment = assess_budget(used_tokens, limit_tokens)
+        if not assessment.known or not assessment.over_threshold:
+            return
+        # The relay is off limits. A turn with no key yet runs on the shared Setup
+        # Assistant service (§4.6), and summarising would put the OLDER PART OF
+        # SOMEBODY'S CHAT on an external service they never chose, to save tokens
+        # nobody is paying for. Not a floor, a judgement, and the honest place for
+        # it is here, before any transcript is assembled.
+        if requested_role is ModelRole.SETUP_ASSISTANT:
+            return
+        # (2a) Where the older portion ends. DELEGATED ENTIRELY: hard rule 2 says cut
+        # only at turn boundaries, and this file never re-derives, widens or trims
+        # what choose_cut_point returned. No legal cut means do nothing.
+        cut = choose_cut_point(self.conversation.messages)
+        if not cut.found or cut.index is None:
+            return
+        older = list(self.conversation.messages[: cut.index])
+        tail = list(self.conversation.messages[cut.index :])
+        # (2b) The summary itself: one ``model_router.resolve()`` call with the SAME
+        # role and model the turn used, so somebody who set Addison to local models
+        # has this run locally too, that is the reason §4.8 specifies resolve()
+        # rather than a hardcoded provider. It is a summarisation request and not a
+        # tool: no registry, no gate, no card.
+        try:
+            provider = self.model_router.resolve(requested_role, model_name)
+            response = provider.send(
+                messages=build_summary_request(older),
+                # No tools, ever. This call is not a turn: there is nobody to ask for
+                # permission and nothing it may be allowed to do.
+                tools=[],
+            )
+            summary = usable_summary(getattr(response, "text", None))
+        except Exception:
+            # Includes an unreachable provider, a rejected request, and a provider
+            # that raises on send. A turn that has already answered the person must
+            # not fail because bookkeeping after it did.
+            return
+        if summary is None:
+            return  # nothing usable came back: never continue with a summary we do not have
+        # (3) The continuation conversation. The confirmed facts are READ (hard rule
+        # 3: memory_facts is confirmation-only, there is no write path here, and the
+        # store offers no insert helper to reach for). An unreadable memory table
+        # yields no facts rather than failing the continuation.
+        try:
+            facts = self.store.confirmed_memory_facts()
+        except Exception:
+            facts = []
+        seed = build_seed_messages(summary, facts, tail)
+        previous = self.conversation
+        previous_ids = self._message_ids
+        previous_titled = self._conversation_titled
+        header = self.store.get_conversation(previous.id) or {}
+        new_id = str(uuid4())
+        try:
+            self.store.create_conversation(
+                id=new_id,
+                title=header.get("title"),
+                provider_id="primary",
+                started_at=int(time.time()),
+                # Lineage and summary, §4.8 item 3, the two columns the v1 substrate
+                # landed and nothing has written until now.
+                continued_from=previous.id,
+                summary=summary,
+            )
+            # Switch the live conversation FIRST so _persist_message writes the seed
+            # into the new conversation, and rebuild _message_ids as it goes: the 1:1
+            # alignment between messages and ids is what rewind indexes by.
+            self.conversation = Conversation(id=new_id, messages=seed)
+            self._message_ids = []
+            self._conversation_created = True
+            self._conversation_titled = header.get("title") is not None
+            for message in seed:
+                self._persist_message(message)
+        except Exception:
+            # A half-made continuation is worse than none: put the person back in the
+            # conversation they were in, which still has every message it had.
+            self.conversation = previous
+            self._message_ids = previous_ids
+            self._conversation_created = True
+            self._conversation_titled = previous_titled
+            return
+        # (4) Tell the person. One plain sentence, on the existing note channel, only
+        # once everything above actually happened.
+        self._emit_activity(_CONTEXT_ACTIVITY_ID, CONTINUATION_NOTE)
 
     def _ensure_conversation(self) -> None:
         if self._conversation_created:

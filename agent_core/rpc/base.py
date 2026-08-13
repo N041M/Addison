@@ -92,6 +92,8 @@ class ServerContext:
         _next_model_name: str | None
         _next_effort: str | None
         _answered_with: dict | None       # step 3 (D5): answeredWith for the in-flight turn
+        # §4.8: (used_tokens, max_context_tokens|None) for the in-flight turn.
+        _turn_context_usage: tuple[int, int | None] | None
         _cloud_catalog: list[CloudModel]
         _cloud_fetcher: Callable[[], list[CloudModel]] | None
         _cloud_provider_factory: Callable[[CloudModel], Any] | None

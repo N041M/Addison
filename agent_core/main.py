@@ -744,7 +744,12 @@ class JsonRpcServer(
         # The answering candidate for the in-flight turn (D5), stashed by
         # _record_answered (orchestrator on_answered) and attached to the reply.
         self._answered_with: dict | None = None
-        self._draft_routine = None             # pending §6.3 proposal awaiting confirmSave
+        # (used_tokens, max_context_tokens|None) for the in-flight turn (§4.8),
+        # stashed by _record_context_usage and read once at the turn boundary. None
+        # means nothing was measured at all (a provider that reported no usage),
+        # which is a cannot-tell like any other.
+        self._turn_context_usage: tuple[int, int | None] | None = None
+        self._draft_routine = None            # pending §6.3 proposal awaiting confirmSave
         self._draft_widget = None              # pending widget proposal awaiting confirmSave
         # The most recently RUN saved routine this session — a widget proposed
         # right after a run offers that routine (mirrors "the last turn ran a
@@ -1018,6 +1023,10 @@ class JsonRpcServer(
             stream_to_frontend=self._emit_stream_chunk,
             on_activity=self._emit_activity,
             on_usage=self._record_usage,
+            # §4.8's watcher half. Same shape and same reason as on_usage: the
+            # orchestrator measures at the choke point, the server remembers what it
+            # saw, and the DECISION happens at the turn boundary in rpc/conversation.py.
+            on_context_usage=self._record_context_usage,
             on_tool_audit=self._record_tool_audit,
             # The two halves of "what did the model layer do": on_usage records the
             # calls that worked, this one the calls that did not. Only the first
@@ -2099,6 +2108,23 @@ class JsonRpcServer(
         if self._usage_records_since_prune >= _USAGE_PRUNE_EVERY:
             self._usage_records_since_prune = 0
             self.store.prune_usage_log(now - _USAGE_RETENTION_SECONDS)
+
+    def _record_context_usage(self, used_tokens, max_context_tokens) -> None:
+        """Remember the biggest measurement this turn produced (§4.8 item 1).
+
+        The LARGEST, not the last: a turn that called tools makes several requests,
+        each replaying more history than the one before, and the one that came
+        closest to the window is the honest reading of how full the chat is. It is
+        also the reading that survives a last round which happened to be small.
+
+        A ``max_context_tokens`` of None is "cannot tell" and is recorded as such
+        rather than dropped, so the turn boundary can tell "no measurement" from
+        "a measurement with no limit to compare it to". Both do nothing; only one
+        of them would be worth a diagnostic. Machinery, never a registry tool."""
+        previous = self._turn_context_usage
+        if previous is not None and previous[0] >= used_tokens:
+            return
+        self._turn_context_usage = (used_tokens, max_context_tokens)
 
     def _record_answered(self, model_id, label, free, routed) -> None:
         """Orchestrator ``on_answered`` sink (D5): stash the answering candidate so
