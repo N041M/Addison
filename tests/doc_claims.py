@@ -1156,9 +1156,16 @@ CLAIMS: tuple[Claim, ...] = (
                 r"|\b(?:replaces?|replacing)\b[^.\n]{0,30}"
                 r"\b(?:the )?(?:full |original |stored )?transcript\b"
                 r"|\b(?:model|assistant)\b[^.\n]{0,60}\b(?:can|may)\b[^.\n]{0,30}"
-                r"\b(?:invoke|call|trigger|ask for|request)\b[^.\n]{0,40}"
-                r"\b(?:continuation|context budget|condensing|summarisation|"
-                r"summarization)\b"
+                # ``ask`` on its own, not only ``ask for``: "the model can ask
+                # Addison to condense the conversation" is the same false claim in
+                # the sentence shape somebody is most likely to write it in, and it
+                # was silent here until it was tested for. Same for ``decide`` and
+                # ``choose``, which is how the spec's own hard rule phrases the
+                # thing being denied ("the model does not decide to rewrite its own
+                # memory").
+                r"\b(?:invoke|call|trigger|ask|request|decide|choose)\b[^.\n]{0,40}"
+                r"\b(?:continuation|context budget|condensing|condense|summarisation|"
+                r"summarization|summarise|summarize)\b"
                 r"|\b(?:continuation|condensing|context budget manager)\b"
                 r"[^.\n]{0,40}\bis a (?:registry )?tool\b"
             ),

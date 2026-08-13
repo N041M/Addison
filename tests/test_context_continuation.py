@@ -263,14 +263,27 @@ def test_usable_summary_rejects_what_cannot_stand_in_for_a_conversation():
 
 def test_the_seed_is_the_summary_the_facts_and_the_exact_verbatim_tail(tmp_path):
     provider = _BudgetProvider(max_context_tokens=1_000, per_turn_tokens=[10] * 5 + [900])
-    harness = build_server(tmp_path, provider=provider, register_tool=False)
     # A confirmed fact, and an unconfirmed one that must never be read as a fact.
-    store = Store(tmp_path / IPC_DB_NAME)
-    store._conn.execute(
-        "INSERT INTO memory_facts (id, fact, confirmed_by_user, created_at) VALUES "
-        "('f1', 'Lives in Brno', 1, 1), ('f2', 'Might get a dog', 0, 2)"
-    )
-    store._conn.commit()
+    #
+    # SEEDED BEFORE THE SERVER EXISTS, and the order is the whole point. This used to
+    # sit after ``build_server`` and flaked about one run in three, in two ways that
+    # look unrelated and are the same race: the server's own ``Store`` is built on a
+    # thread, so a moment too early there is no schema yet ("no such table:
+    # memory_facts"), and a moment too late its connection is holding the file while
+    # ``Store.__init__`` here runs ``PRAGMA journal_mode=WAL``, which wants a brief
+    # exclusive lock ("database is locked"). Opening first is the only ordering with
+    # no window at all: this call creates the schema, closes, and the server then
+    # opens a file that is already complete.
+    seed_store = Store(tmp_path / IPC_DB_NAME)
+    try:
+        seed_store._conn.execute(
+            "INSERT INTO memory_facts (id, fact, confirmed_by_user, created_at) VALUES "
+            "('f1', 'Lives in Brno', 1, 1), ('f2', 'Might get a dog', 0, 2)"
+        )
+        seed_store._conn.commit()
+    finally:
+        seed_store.close()
+    harness = build_server(tmp_path, provider=provider, register_tool=False)
     try:
         for i in range(5):
             _send(harness.reader, harness.writer, i + 1, f"message {i}")
@@ -323,12 +336,20 @@ def test_the_cut_is_never_re_derived_here():
 
 def test_memory_facts_is_read_and_never_written(tmp_path):
     provider = _BudgetProvider(max_context_tokens=1_000, per_turn_tokens=[10] * 5 + [900])
+    # A ``Store`` here and NOT a plain connection, which is the opposite of the
+    # seeding test above, and the difference is which one opens the file first.
+    # Nothing has built a server yet at this line, so there is no contention to
+    # lose and, more to the point, this call is what CREATES the schema. A plain
+    # connection would make an empty file and the insert would find no table.
     store = Store(tmp_path / IPC_DB_NAME)
-    store._conn.execute(
-        "INSERT INTO memory_facts (id, fact, confirmed_by_user, created_at) "
-        "VALUES ('f1', 'Lives in Brno', 1, 1)"
-    )
-    store._conn.commit()
+    try:
+        store._conn.execute(
+            "INSERT INTO memory_facts (id, fact, confirmed_by_user, created_at) "
+            "VALUES ('f1', 'Lives in Brno', 1, 1)"
+        )
+        store._conn.commit()
+    finally:
+        store.close()
     _drive(tmp_path, provider)
     conn = sqlite3.connect(tmp_path / IPC_DB_NAME)
     facts = conn.execute("SELECT id, fact, confirmed_by_user FROM memory_facts").fetchall()
