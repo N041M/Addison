@@ -939,8 +939,10 @@ Claude Code says outright that no system is immune. Addison's boundaries:
   readable, and a model that can request `run_command` can be steered into
   requesting one. The card is the human checkpoint; the denylist and the sandbox
   bound what an approved command can reach. What none of them do is make the
-  *request* not happen. Untrusted-content screening is a v2 item, and step 5.5's
-  network grant (below) makes that deferral load-bearing rather than theoretical.
+  *request* not happen. Untrusted-content screening shipped on 2026-08-13
+  ([`untrusted-screening-plan.md`](untrusted-screening-plan.md)) and marks
+  instruction-shaped text on the way in, which reduces this and does not close it:
+  it is a backstop over enumerated patterns, and the card is still the checkpoint.
 - **Exfiltration through a legitimately-approved command.** The Seatbelt profile
   grants `network-outbound` deliberately: denying it broke `git fetch`,
   `npm install` and `pip install` while buying nothing, because a command's
@@ -1092,6 +1094,16 @@ three bars: persona fit (§5), full compatibility with every safety invariant
    Addison already does (Goose's injection detection / adversary-reviewer
    pattern). Screening advises and flags; the permission gate remains the only
    authority. → *v2.*
+
+   > *Pulled forward and BUILT, 2026-08-13.* The v2 deferral expired: its triggers
+   > fired and the owner took the decision. The body above stays as written, since
+   > it is the survey entry that started it and it is history now.
+   > [`untrusted-screening-plan.md`](untrusted-screening-plan.md) owns the subject:
+   > what shipped, the six decisions of that day, and the honest statement of the
+   > strength (a backstop over enumerated patterns, not a boundary; prose it has no
+   > pattern for passes untouched). One line above is worth keeping in mind rather
+   > than re-reading: it advises and flags, and the gate is still the only
+   > authority.
 
 **Explicitly deferred beyond Phase 5:** multi-agent orchestration, scheduled/always-on agents, shell-level tool access.
 

@@ -134,17 +134,24 @@ the block's look.
   accidental default and it broke `git fetch` / `npm install` / `pip install`
   while buying nothing: the command's output already travels to a cloud provider,
   so blocking `curl` closes only the useful half. **This makes item 4 (output
-  redaction) and the v2 untrusted-content screening deferral load-bearing rather
-  than theoretical**: they are now the only things standing between a prompt-
-  injected command and a deliberate exfiltration. The CLAUDE.md deferral for
-  screening was written with a trigger ("becomes load-bearing once free/gray-area
-  endpoints and MCP tools are in play"); this is a second trigger arriving early,
-  and it needs an explicit owner decision rather than silent expiry. **The THIRD
-  trigger went live 2026-08-07** when step 7 phase 3 shipped dispatch: a tool
-  server's descriptions, schemas and answers now reach a model's context. Screening
-  is still v2 and that is unchanged; what shipped instead is a recorded backstop
-  (redaction, caps and a card on every single call), stated at its real strength in
-  [step-7-mcp-plan.md](step-7-mcp-plan.md) §7, which owns that re-read. **Phase 4
+  redaction) and untrusted-content screening load-bearing rather than
+  theoretical**: they are the only things standing between a prompt-injected
+  command and a deliberate exfiltration. The CLAUDE.md deferral for screening was
+  written with a trigger ("becomes load-bearing once free/gray-area endpoints and
+  MCP tools are in play"); this was a second trigger arriving early, and it needed
+  an explicit owner decision rather than silent expiry. **The THIRD trigger went
+  live 2026-08-07** when step 7 phase 3 shipped dispatch: a tool server's
+  descriptions, schemas and answers now reach a model's context. **The owner took
+  that decision on 2026-08-13 and screening is BUILT**
+  ([untrusted-screening-plan.md](untrusted-screening-plan.md) owns it): a command's
+  output is external content, so it is screened, and instruction-shaped text
+  reaches the model with a note in front of it and a kind in the audit row.
+  **This gap is REDUCED, not closed.** Screening is a pattern layer over six
+  enumerated shapes, an injection written as ordinary prose passes untouched, and
+  nothing about it changes what an approved command may reach: the network grant is
+  exactly as wide as it was. The other backstops are unchanged and are still the
+  ones doing the work (redaction, caps and a card on every single call), stated at
+  their real strength in [step-7-mcp-plan.md](step-7-mcp-plan.md) §7. **Phase 4
   re-read it again the same day** against the wider surface it opened, reached the
   same answer, and added ONE thing: a cleaning pass over a server's answer that
   runs BEFORE the redactor, because a credential with a zero-width space in the
@@ -552,9 +559,14 @@ are here because somebody will meet them, and because anything built on top of
   machine)*, and the audit row honestly records that nothing was.
   **What it costs:** getting a key past this pass costs a server one
   keystroke, so no later control may assume the text it receives has been cleared.
-  **What would close it** is not a wider character class; it is the untrusted-
-  content screening deferred to v2, which three separate triggers already point at
-  (above, and §7 of the plan).
+  **What would close it** is not a wider character class. Screening was the answer
+  written down here, and screening was built on 2026-08-13
+  ([untrusted-screening-plan.md](untrusted-screening-plan.md)) **without closing
+  this gap**, which is worth stating plainly rather than leaving a reader to infer:
+  screening looks for writing shaped like an instruction to an assistant, and a
+  split credential is not shaped like one. It reduces the surrounding exposure by
+  marking the passage a split key may have arrived in; the key itself still passes
+  the redactor. **STILL OPEN**, and it needs a control that reads credentials.
 - **A fullwidth or homoglyph credential (`ＡＫＩＡ…`) is not caught, and NFKC
   normalization was deliberately not half-built.** Folding a copy of the text and
   matching against the fold finds the key and then cannot say where it was: the
@@ -891,16 +903,22 @@ follows. None is scheduled and none blocks anything.
   never an `isinstance`. Deliberately NOT an always-present "make it longer":
   §7.9.1 keeps the command set short on purpose, and a generic Continue invites
   padding rather than completing a cut-off answer.
-- **Knowledge: retrieval over person-attached files. v2, and it must land WITH
-  untrusted-content screening, not before it.** The suggestion is right that
+- **Knowledge: retrieval over person-attached files. v2. Its screening
+  prerequisite is now met** (screening shipped 2026-08-13,
+  [untrusted-screening-plan.md](untrusted-screening-plan.md)), **with one thing to
+  settle when this is built**: retrieved passages are local file content, and
+  decision 5 of that day says local file reads are not screened for now. A
+  knowledge base is exactly the case that decision names as the reason to revisit.
+  The suggestion is right that
   "search the file" beats "read the whole file", and nothing on any roadmap does
   retrieval. The clean shape when it comes: files enter through the existing picker
   consent; indexing is local-only (an embedding model through the Ollama path that
   already exists; cloud embeddings would ship file contents to a provider, a new
   privacy surface needing its own plain sentence); the index lives in SQLite; and
   retrieved passages enter context marked with their source. A knowledge base is a
-  standing channel for a poisoned document to speak in every session, which makes
-  this the FOURTH trigger for the screening deferral (three are recorded above).
+  standing channel for a poisoned document to speak in every session, which was the
+  FOURTH trigger written against the screening deferral before that deferral
+  expired.
   One structural note so it is not rediscovered: a retrieval TOOL must not import
   `providers/` (module boundary rule), so indexing belongs to an
   orchestrator-owned service and the tool only queries the index it left behind.

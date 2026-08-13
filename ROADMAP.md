@@ -41,6 +41,16 @@ quickly; and the two model pickers are a folder tree — company, then family, t
 model, with one folder open at a time — which is what keeps them a menu now that a
 single connected provider can contribute twenty-two models.
 
+**Untrusted-content screening, built 2026-08-13.** Text a tool brings back from
+outside (a web page, a command's output, an answer or a tool description from a
+tool server) is checked for writing shaped like an instruction to an assistant, and
+anything flagged reaches the model with a plain note in front of it saying to treat
+it as information. The person sees one sentence when it happens, and the audit row
+records which kinds were recognised. It is a pattern layer and a backstop: writing
+in a shape nobody listed passes untouched, and the permission gate is still the
+only thing that decides what may run.
+[docs/untrusted-screening-plan.md](docs/untrusted-screening-plan.md) owns it.
+
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it
@@ -260,8 +270,8 @@ Not because they are hard. They were looked at and put down on purpose.
   schema and the orchestrator machinery are there. The feature is not.
 - Messaging channels, and a UI for editing the steps of a routine.
 - Rewriting the agent core in Rust.
-- Sharing routines by export and import, and screening untrusted content. Both
-  become more interesting once MCP and free endpoints are in wide use.
+- Sharing routines by export and import. It becomes more interesting once MCP and
+  free endpoints are in wide use.
 - **Running a command in a virtual machine first to see what it would do.** The
   appeal is obvious and the reasoning against it is not, so it is written down
   here rather than rediscovered. To find out what a command does you have to run

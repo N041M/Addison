@@ -1183,6 +1183,35 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "model, never the values."
         ),
     },
+    "screening-is-a-backstop": {
+        "the honest form, which names what it marks and states the limit beside it": (
+            "Text a tool brought back is checked for writing shaped like an "
+            "instruction to an assistant, and anything flagged reaches the model with "
+            "a plain note in front of it. Writing in a shape nobody listed passes "
+            "untouched."
+        ),
+        "the rule stated as a rule, which must not trip the rule": (
+            "It is a backstop, not a boundary. It reduces exposure and does not "
+            "eliminate it, and no document may describe it as elimination."
+        ),
+        "the gate sentence, which is a claim about the gate and not about screening": (
+            "The permission gate remains the only authority. A flag is never a reason "
+            "to skip a card, and an absence of flags is never a reason to trust a "
+            "passage."
+        ),
+        "the audit column, which lists kinds rather than promising completeness": (
+            "`screened` carries the KINDS the screener recognised, deduplicated and "
+            "sorted, never the matched text and never a length."
+        ),
+        "prose about where it runs, with no claim about what it achieves": (
+            'Only a result carrying `content_origin == "external"` is screened, and '
+            "the mark goes in front of the serialization the model is handed."
+        ),
+        "the denylist and the sandbox, which genuinely do stop things": (
+            "The denylist and the sandbox bound what an approved command can reach, "
+            "and a snapshot reverses whatever did happen."
+        ),
+    },
     "retired-amendment-has-no-precedence": {
         "the retired rule quoted as a quotation": (
             "It kept a \"where we differ, the amendment wins\" rule long after its "
@@ -1525,6 +1554,14 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the universal, which is the over-claim a reader cannot check": (
                 "Redaction strips every credential out of a tool result before "
                 "anything reaches the model."
+            ),
+        },
+    },
+    "screening-is-a-backstop": {
+        "while_true": {
+            "the universal, which is the promise a pattern layer cannot keep": (
+                "Screening prevents prompt injection: instruction-shaped text is "
+                "stopped before a model reads it."
             ),
         },
     },
