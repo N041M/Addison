@@ -1071,7 +1071,7 @@ class Orchestrator:
                         # ``append_tool_result`` would have produced, so nothing but
                         # the note changes about what is read.
                         result = replace(
-                            result, content=mark_untrusted(as_text)
+                            result, content=mark_untrusted(as_text, found)
                         )
                         # The PERSON hears about it once per flagged step, on the
                         # channel the free-model and fallback notes already use.
