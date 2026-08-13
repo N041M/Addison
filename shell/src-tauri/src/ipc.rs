@@ -156,6 +156,10 @@ mod tests {
             // through the core's mode gate. The second reads files to hash them.
             "shell.canRestoreWorkspaceFiles",
             "shell.digestWorkspaceFiles",
+            // The delete preview's walk (5.6). A window that could ask it directly
+            // could count any folder on the disk without the core deciding anything
+            // about which paths were named.
+            "shell.previewDeletePaths",
         ] {
             let frame = json!({ "jsonrpc": "2.0", "method": m, "id": 1 });
             assert!(

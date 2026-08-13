@@ -539,6 +539,29 @@ BROWSER_USER_AGENT = (
 # read_web_page's is the host out of a URL the model chose, and that URL normally
 # arrived FROM a web page — so an uncapped string could push the rest of the work
 # list off the screen, which defeats the visibility the field exists to provide.
+def call_command_text(tool: Any, args: dict) -> str | None:
+    """The raw text this call would hand to a shell, or None.
+
+    The SAME hook the hardline denylist reads (``command_text``, declared today by
+    ``run_command`` alone), exposed as a named function so a second reader does not
+    reach for the attribute itself. The delete preview (5.6) is that second reader:
+    it needs the UNTRUNCATED command, because ``permission_detail`` is capped for
+    the card and a classifier reading a cut string would be reading a different
+    command than the one about to run.
+
+    Never raises: a tool whose hook fails answers None, which the preview treats as
+    "nothing to say", the state every card was in before 5.6.
+    """
+    provider = getattr(tool, "command_text", None)
+    if not callable(provider):
+        return None
+    try:
+        value = provider(args)
+    except Exception:
+        return None
+    return str(value) if value else None
+
+
 MAX_PERMISSION_DETAIL_CHARS = 120
 
 

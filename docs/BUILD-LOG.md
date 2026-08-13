@@ -2304,3 +2304,40 @@ on the `retire-step1-ledger` branch, each with mutation-proven tests:
   (accepted, commented in the component); the wire's `why` field is the future
   fix if that distinction ever has to be drawn. (Salvaged from the scrapped
   "doctor command"; see git history for why doctor contradicted G3.)
+
+## What shipped 2026-08-13: 5.6, the delete preview (first form)
+
+The KNOWN-GAPS entry *"the permission card shows the command, not its
+consequences"* had two narrower forms under it. The first one is now built; the
+copy-on-write clone form is untouched and still open, and KNOWN-GAPS owns both.
+
+What a person sees: a permission card for a command that deletes paths now
+carries one extra plain line under the command, for example *"About to delete
+1,240 files in 12 folders. 3 of them were changed in the last day."* Developer
+and Custom only, because it reads `run_command` and that tool is dev-only.
+
+How it is computed: by looking, never by running. `agent_core/delete_preview.py`
+reads the command text (the untruncated `command_text` hook the hardline denylist
+already uses, not the capped card detail) and answers either a list of absolute
+target paths or nothing at all. The walk itself is `shell.previewDeletePaths` in
+`shell/src-tauri/src/filesystem.rs`: a bounded, link-free directory walk that
+opens no file, refuses Addison's own data directory like every other read there,
+and stops after 5,000 entries with `capped` set, which the sentence reports as
+"more than". It lives in the shell because the core has no filesystem of its own
+(spec §1.3), and it is Core to Shell only, refused from the webview in `ipc.rs`.
+
+The one decision worth re-reading: **the classifier fails towards silence.** A
+pipeline, a glob, a variable, a substitution, a flag it does not know or a target
+it cannot resolve produces no line, and the card is byte-for-byte the card the app
+showed before. `run_command`'s own docstring records why a verb-list classifier
+was removed from a REFUSAL decision: it was wrong in the permissive direction, and
+the failure landed outside the G3 floor. Here the direction is inverted. The
+preview is advisory, it sits beside a command the card already shows in full and
+an approval it still requires, so the failure worth engineering against is a
+confident wrong number rather than a missing line.
+
+Nothing else moved. The gate carries the line as a new `preview` argument that
+reaches the ordinary and session cards only, never the arming card, never a grant,
+never the Activity Panel and never an audit row, and it changes no decision the
+gate makes. A handler that does not accept the argument gets exactly the call it
+got before, which is what keeps every existing stub and the CLI stand-in working.

@@ -284,6 +284,11 @@ export const Method = {
   // one edited since. Reached only from the core, never from here.
   ShellCanRestoreWorkspaceFiles: "shell.canRestoreWorkspaceFiles",
   ShellDigestWorkspaceFiles: "shell.digestWorkspaceFiles",
+  // The delete preview (5.6). A bounded directory walk that counts what sits under
+  // the paths a delete command named, so the permission card can say what the delete
+  // would cost. It runs nothing and opens no file. Reached only from the core, while
+  // it is composing that card.
+  ShellPreviewDeletePaths: "shell.previewDeletePaths",
   ShellRunCommand: "shell.runCommand",
   // Arming (step 8 phase 3). Core -> shell only; the shell builds the plist itself
   // from typed fields and never accepts a document (plan §5.8).
@@ -328,6 +333,19 @@ export interface PermissionRequest {
   label: string;
   description: string;
   riskTier: RiskTier;
+  /**
+   * THE DELETE PREVIEW (5.6, first form). One plain sentence about what this
+   * command would delete ("About to delete 1,240 files in 12 folders.") computed
+   * in the core by WALKING the paths, never by running anything. Present only when
+   * the core could read the command as a delete with paths it could name, which is
+   * deliberately a narrow set: it says nothing rather than a wrong number.
+   *
+   * Its own field, not part of `description`, because the card splits that string
+   * on the `run: ` prefix to draw the command as a machine fact, a sentence
+   * appended there would be rendered as though it were part of the command.
+   * Mirrored in protocol.py (`shell.previewDeletePaths` is the walk behind it).
+   */
+  preview?: string;
   /**
    * ARMING ONLY (step 8 phase 3). Present when this card is the keyword gate: the
    * person must retype `nonce` before the approval counts, and the fields beside it

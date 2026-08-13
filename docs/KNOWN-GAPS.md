@@ -99,23 +99,36 @@ the block's look.
   Claude Code and Codex CLI both rely on. Acceptable; not permanent. **Recorded in
   design-doc §9.x (2026-07-31)**, so it is documented rather than rediscovered;
   the gap is now the dependency itself, not the silence about it.
-- **The permission card shows the command, not its consequences (open, 2026-08-06).**
-  A card for `rm -rf build` says `rm -rf build`, which is the least informative
+- **The permission card shows the command, not its consequences (PARTLY CLOSED
+  2026-08-13; the clone form is still open).**
+  A card for `rm -rf build` said `rm -rf build`, which is the least informative
   true thing that could be shown. Two narrower forms of "preview before you
-  approve" are open, and both are cheaper than they sound and neither is the
-  VM-dry-run idea [`ROADMAP.md`](../ROADMAP.md) rejects (that one runs a
-  side-effecting command twice; these run nothing):
-  - **Compute the affected set, execute nothing.** For a delete, walk the path
-    and put the count on the card: "1,240 files, 3 modified today". No sandbox,
-    no clone, no execution; it is a directory read. This is the one worth
-    building, and it is a day rather than a subsystem.
-  - **A copy-on-write clone for the file-only subset.** APFS `clonefile` is
+  approve" were open, and neither is the VM-dry-run idea
+  [`ROADMAP.md`](../ROADMAP.md) rejects (that one runs a side-effecting command
+  twice; these run nothing):
+  - ~~**Compute the affected set, execute nothing.**~~ **BUILT 2026-08-13 (5.6,
+    first form).** A card for a command this can confidently read as a delete now
+    carries one extra plain line, "About to delete 1,240 files in 12 folders. 3
+    of them were changed in the last day." The count comes from a bounded,
+    link-free directory walk in the shell (`shell.previewDeletePaths`, capped at
+    5,000 entries; over the cap the line says "more than"), because the core has
+    no filesystem of its own. Nothing is executed, copied or sandboxed.
+    **The classifier fails towards SILENCE** (`agent_core/delete_preview.py`): a
+    pipeline, a glob, a variable, a substitution, an unknown flag or an
+    unresolvable target produces NO line and a card identical to yesterday's.
+    That is the opposite direction from the verb list `run_command` rejected for
+    REFUSAL decisions, and deliberately so: this preview is advisory, it adds a
+    line to a card that still shows the command and still requires an approval,
+    and the failure worth avoiding is a wrong number rather than no number.
+    Developer/Custom only, because `run_command` is the only tool it reads and
+    that tool is dev-only.
+  - **A copy-on-write clone for the file-only subset. STILL OPEN.** APFS `clonefile` is
     instant and free, so the command could run against a clone under the existing
     seatbelt with `network-outbound` denied, and the diff shown. Honest limits:
     it covers only commands that need no network, and it must SAY it skipped the
     preview rather than silently showing none.
-  If ever scheduled this is **5.6**, not a new step: it is card and containment
-  work on the step-5 harness, the same shape 5.5 was.
+  It was **5.6**, not a new step: card and containment work on the step-5 harness,
+  the same shape 5.5 was. The clone form, if ever built, is the rest of it.
 - **A sandboxed command can reach the network, deliberately.** `network-outbound`
   is granted; `network-bind` is not. Denying outbound was the first draft's
   accidental default and it broke `git fetch` / `npm install` / `pip install`

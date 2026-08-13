@@ -284,6 +284,13 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         // a Revert only where one would actually work, and warn before it clobbers.
         "shell.canRestoreWorkspaceFiles" => can_restore_workspace_files(app, params),
         "shell.digestWorkspaceFiles" => digest_workspace_files(params),
+        // The delete preview (5.6, first form). A bounded directory walk that opens
+        // no file, follows no link and changes nothing, it answers "how much is
+        // under here" so a permission card for a delete can say what the delete
+        // costs. It belongs in this table rather than off the loop because the cap
+        // is what bounds it: it stops after `MAX_PREVIEW_ENTRIES`, unlike a command,
+        // which can hold its task for a whole budget.
+        "shell.previewDeletePaths" => preview_delete_paths(params),
         // NOTE: `shell.runCommand` is deliberately NOT routed here. It is OPEN-mode
         // command execution (step 5.5, items 1+2) and it lands in the shell for the
         // same reason the workspace file methods do — this is the process with OS
@@ -1006,6 +1013,106 @@ fn digest_workspace_path(path: &Path) -> Value {
         let _ = write!(hex, "{byte:02x}");
     }
     json!({ "sha256": hex, "missing": false })
+}
+
+/// How many entries one delete preview may walk before it stops counting
+/// (`shell.previewDeletePaths`).
+///
+/// CAPPED HERE for `MAX_DIR_ENTRIES`'s reason, plus one of its own: this walk is
+/// awaited INLINE on the core's stdout pump while somebody is waiting to read a
+/// permission card. A `node_modules` tree or a home directory would hold every frame
+/// in the app for as long as the disk took, and the card is worth exactly one extra
+/// line, never a pause. Hitting the cap is not a failure: the answer comes back with
+/// `capped` true and the core says "more than N files", which is a true sentence and
+/// an honest one.
+const MAX_PREVIEW_ENTRIES: u64 = 5_000;
+
+/// How recent "changed in the last day" is. A rolling 24 hours rather than local
+/// midnight, because a rolling window needs no timezone and no calendar, and the
+/// sentence it produces is true either way.
+const RECENTLY_CHANGED_SECONDS: u64 = 24 * 60 * 60;
+
+// shell.previewDeletePaths {paths} -> {files, directories, modifiedToday, missing, capped}
+//
+// THE DELETE PREVIEW (5.6, first form). Counts what sits under paths a command named,
+// so the permission card for that command can say what it would cost. It runs NOTHING,
+// copies nothing and opens no file: it reads directory entries and their metadata.
+//
+// The core decided these paths are a delete's targets (`agent_core/delete_preview.py`)
+// and it fails towards silence, so a wrong answer here is worse than no answer: this
+// handler never guesses either. A path it cannot see is counted as missing, and the
+// walk stops at `MAX_PREVIEW_ENTRIES` with `capped` set rather than running long.
+fn preview_delete_paths(params: &Value) -> Result<Value, RpcError> {
+    let paths = params
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| RpcError::app("A list of paths is required."))?;
+    refuse_oversize_batch(paths)?;
+
+    let mut files: u64 = 0;
+    let mut directories: u64 = 0;
+    let mut recent: u64 = 0;
+    let mut missing: u64 = 0;
+    let mut capped = false;
+    let now = std::time::SystemTime::now();
+
+    for entry in paths {
+        let Some(text) = entry.as_str() else { continue };
+        let path = PathBuf::from(text);
+        // The floor, first: Addison's own memory is not a place this answers questions
+        // about either. Folded into `missing` rather than raised, a card is not the
+        // place to explain a refusal, and the line is dropped entirely when nothing
+        // could be counted.
+        if refuse_addison_data_dir(&path).is_err() {
+            missing += 1;
+            continue;
+        }
+        let mut stack = vec![path];
+        while let Some(current) = stack.pop() {
+            if files + directories >= MAX_PREVIEW_ENTRIES {
+                capped = true;
+                break;
+            }
+            // `symlink_metadata`, NEVER `metadata`, for `list_workspace_path`'s reason
+            // and a sharper one: `rm` removes a link, it does not walk into it, so
+            // counting the target's tree would report a number the delete would never
+            // touch, and a link into `/` would walk the disk.
+            let meta = match std::fs::symlink_metadata(&current) {
+                Ok(meta) => meta,
+                Err(_) => {
+                    missing += 1;
+                    continue;
+                }
+            };
+            if meta.is_dir() {
+                directories += 1;
+                if let Ok(reader) = std::fs::read_dir(&current) {
+                    for child in reader.flatten() {
+                        stack.push(child.path());
+                    }
+                }
+                continue;
+            }
+            files += 1;
+            if let Ok(modified) = meta.modified() {
+                if now
+                    .duration_since(modified)
+                    .map(|age| age.as_secs() < RECENTLY_CHANGED_SECONDS)
+                    .unwrap_or(true)
+                {
+                    recent += 1;
+                }
+            }
+        }
+    }
+
+    Ok(json!({
+        "files": files,
+        "directories": directories,
+        "modifiedToday": recent,
+        "missing": missing,
+        "capped": capped,
+    }))
 }
 
 /// "Addison can't tell" — the answer for every file this cannot judge, whatever the
