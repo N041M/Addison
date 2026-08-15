@@ -123,7 +123,7 @@ class RunTaint:
     def line_for(self, tool_id: str, resolved_args: dict) -> str | None:
         """The extra card line for the step about to run, or None.
 
-        THE TRIGGER IS EXACT CONTAINMENT — the file's output appearing verbatim
+        THE TRIGGER IS EXACT CONTAINMENT: the file's output appearing verbatim
         inside one of the resolved argument strings. No fuzzy matching, no
         similarity, no token overlap: a card that claims a flow that is not there
         teaches people that cards are noise, and that costs far more than the

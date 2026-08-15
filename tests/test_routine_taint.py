@@ -43,8 +43,8 @@ _FILE_TEXT = "Bank sort code 40-11-58, account 61094422"
 
 
 class _StubTool:
-    """A tool registered under a REAL id — the ids are how taint classifies, so a
-    stub has to wear one — with scripted output and no network of its own."""
+    """A tool registered under a REAL id (the ids are how taint classifies, so a
+    stub has to wear one) with scripted output and no network of its own."""
 
     def __init__(self, tool_id: str, label: str, output: str = "done"):
         self.definition = ToolDefinition(
@@ -149,7 +149,7 @@ def test_the_card_shows_the_basename_not_the_path(tmp_path):
 
 def test_the_line_fires_in_developer_mode_too(tmp_path):
     """The card is the control in both profiles, so the step must be carded in
-    OPEN as well — where a non-destructive call would otherwise auto-grant."""
+    OPEN as well, where a non-destructive call would otherwise auto-grant."""
     tools, steps = _read_then(
         RoutineStep("search", "web_search", {"query": "{{read.result}}"}),
         _StubTool("web_search", "Search the web"),
@@ -287,7 +287,7 @@ def test_every_tool_that_imports_httpx_is_named_as_network_bound():
     added tomorrow that makes requests and is not named here would simply never
     raise the line, and every test above would still pass.
 
-    This holds the direction that CAN be held automatically — a module importing
+    This holds the direction that CAN be held automatically: a module importing
     httpx is unambiguously making requests. The other direction stays a judgement
     call: ``open_link`` is network-bound with no httpx in it (the browser makes the
     request), and ``draft_message`` composes without sending."""
