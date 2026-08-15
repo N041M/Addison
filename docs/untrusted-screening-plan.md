@@ -37,11 +37,15 @@ opens with it).
 into a result, a log or an audit row would reproduce the payload in a second place.
 This is the same rule `agent_core/redaction.py` keeps.
 
-**The four external origins.** Screening in the orchestrator runs on tool results
-carrying `content_origin == "external"`, which today is exactly four tools:
-`web_search`, `read_web_page`, `run_command`, and any tool discovered from an MCP
-server (`mcp_catalog`). Addison's own sentences (a refusal, a calculator answer, a
-steer after a denied step) are not screened, for the same reason the redactor's own
+**The five origins.** Screening in the orchestrator runs on tool results carrying
+`content_origin == "external"`, which today is exactly four tools: `web_search`,
+`read_web_page`, `run_command`, and any tool discovered from an MCP server
+(`mcp_catalog`). **The fifth is not a tool result** and was added on 2026-08-15: the
+text of a routine file somebody else wrote, screened at
+`routine.importPreview` and again at `routine.importConfirm`
+(`agent_core/rpc/routines.py`; [routine-sharing-plan.md](routine-sharing-plan.md)
+owns that feature). Addison's own sentences (a refusal, a calculator answer, a steer
+after a denied step) are not screened, for the same reason the redactor's own
 markers are not: marking Addison's words as untrusted teaches the model to discount
 the mark.
 
@@ -149,6 +153,16 @@ as decisions rather than as options.
    marking them would spend the false-positive budget where the threat is weakest.
    Revisit if either becomes a standing channel for a document the person did not
    write.
+
+   > *Refined 2026-08-15 by owner decision 2A, which is this decision's revisit
+   > condition being met rather than a reversal of it.* A shared routine file is
+   > picked by the person, through the person's own consent, exactly like any other
+   > local file. What makes it different is the half this decision turned on: it was
+   > **written by somebody else**, which is the standing channel the last sentence
+   > above asked to be told about. So import screens the picked file's text, and
+   > ordinary local file reads and clipboard content are unchanged and still
+   > unscreened. The cost is near zero, because a routine file is short and its
+   > prose is a description.
 6. **Detection is pattern-only. No model-assisted second reader.** Rules can be
    read, reviewed and tested; a second model's judgement can only be sampled.
 

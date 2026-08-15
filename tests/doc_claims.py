@@ -239,6 +239,27 @@ SCREENING_IS_A_BACKSTOP = True
 # Flip this only if the tree genuinely starts deleting.
 CONTINUATION_DELETES_NOTHING = True
 
+# What importing a shared routine does and does not do (built 2026-08-15). It grants
+# NOTHING. A routine is a plan, the plan is data, and every action in it goes through
+# the same permission gate it would if the person had asked out loud: an imported
+# routine carries zero permissions and asks like any first run. Nothing verifies,
+# vets or vouches for the plan, and nothing sandboxes it, because there is nothing
+# between it and the gate to sandbox it with. The refusals that do exist are narrow
+# and named (a command step in either direction, an MCP-backed step, a folder path
+# on the way out, the reader's ceilings), and the taint card is one exact edge, not
+# exfiltration coverage.
+#
+# Registered because the over-claim is the natural sentence and it is the dangerous
+# one. "Addison checks a shared routine before adding it" is what a writer reaches
+# for when describing a preview card that shows steps, screens wording and names a
+# profile, and every one of those is a DESCRIPTION rather than a check. A person who
+# believes it approves the run cards faster, which is precisely the control the
+# feature rests on, and an agent who believes it stops writing the honest sentences
+# on the card. The taint half is the same failure one level down: 4B is exact
+# containment inside one run, and a document promising it catches exfiltration
+# retires three attacks that are wide open.
+IMPORT_GRANTS_NO_PERMISSIONS = True
+
 # Phase 3's scope (owner decision 2026-07-25). It is TWO tracks, not one: the
 # packaging track it has always been — signing, notarisation, the auto-updater,
 # previous-binary restore, Secure-Enclave identity — AND the Developer review surface
@@ -1212,6 +1233,66 @@ CLAIMS: tuple[Claim, ...] = (
                 "continued. State exactly what is removed and what survives, in "
                 "docs/context-budget-plan.md, and point every other file at it."
             ),
+        ),
+    ),
+    # -- Importing a shared routine grants it nothing ----------------------
+    Claim(
+        id="import-grants-no-permissions",
+        owner="docs/routine-sharing-plan.md",
+        holds=IMPORT_GRANTS_NO_PERMISSIONS,
+        true_state=(
+            "Importing a shared routine grants it nothing. Nobody verifies, vets or "
+            "vouches for the plan and nothing sandboxes it: it carries zero "
+            "permissions and asks like any first run, at the same gate. Addison has "
+            "not checked what it is for, and the taint card is ONE exact edge "
+            "(file text appearing verbatim in a network step's arguments, one run) "
+            "and never exfiltration coverage "
+            "(docs/routine-sharing-plan.md owns the subject)."
+        ),
+        # Anchored on import/sharing/an imported routine as the SUBJECT of a
+        # checking or vouching verb, on the two adjectives an over-claim reaches for
+        # (trusted, sandboxed), and on the taint line promoted from one edge to
+        # coverage. Bare `checks` is deliberately not a pattern: the strict reader
+        # genuinely checks a file's shape, its ceilings and its dependencies, and
+        # every one of those sentences is correct.
+        while_true=Wrong(
+            pattern=(
+                r"\b(?:import(?:s|ing|ed)?|sharing|shared routines?|"
+                r"imported routines?)\b[^.\n]{0,70}"
+                r"\b(?:verif(?:y|ies|ied)|vets?|vetted|vouch(?:es)?|"
+                r"makes? (?:it|them|the routine) safe|"
+                r"checks? (?:that )?(?:it|they|the routine|the plan) (?:is|are) safe)\b"
+                r"|\b(?:an? |the )?(?:imported|shared) routines?\b[^.\n]{0,50}"
+                r"\b(?:is|are|runs?) (?:trusted|sandboxed|safe|vetted|verified|"
+                r"pre-approved|approved already)\b"
+                r"|\b(?:taint|the extra card line|the flow line|4B)\b[^.\n]{0,70}"
+                r"\b(?:catch(?:es)?|prevents?|stops?|blocks?)\b[^.\n]{0,40}"
+                r"\b(?:every|all|any) (?:exfiltration|leaks?|flows?)\b"
+                r"|\b(?:every|all|any) (?:exfiltration|data leaks?)\b[^.\n]{0,50}"
+                r"\b(?:caught|flagged|blocked|prevented|detected)\b"
+            ),
+            fix=(
+                "Importing grants nothing. Say what import DESCRIBES (the steps in "
+                "plain verbs, what the routine will ask for, whether it needs "
+                "Developer) rather than what it checks, and keep the three "
+                "sentences the card is required to carry: it can do nothing you "
+                "haven't approved, Addison hasn't checked what it is for, and you "
+                "can delete it with a restore point already taken. If you mean the "
+                "taint card, it is exact containment inside ONE run and three "
+                "shapes of the same attack are outside it by design. "
+                "docs/routine-sharing-plan.md owns the subject, its four owner "
+                "decisions of 2026-08-15 and the list of what remains uncaught; "
+                "the permission gate is the only authority and belongs to "
+                "docs/SAFETY.md."
+            ),
+            # Prose that carries the limit in the same breath, which is how every
+            # honest passage about this feature already reads.
+            excused_by=(
+                r"asks like any first run|zero permissions|"
+                r"Addison ha(?:s not|sn't) checked|has not checked what|"
+                r"one edge|exact containment|not a containment boundary"
+            ),
+            window=400,
         ),
     ),
     # -- The retired scope amendment ---------------------------------------

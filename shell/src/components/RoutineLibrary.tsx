@@ -9,12 +9,21 @@
 // Remove is the one control on this surface that keeps the `danger` token — it
 // really does destroy something the person made, and the two-press confirm
 // ("Really remove?") is unchanged.
+//
+// SHARING lives here too, in both directions and in every profile (owner decision
+// 2026-08-15, 1A): "Share" on each row writes the routine out as a file, and one
+// row at the end reads one back in. Export is not a destructive control and not a
+// second Run, so it is an ordinary accent action; a routine the shareable format
+// cannot express comes back refused, and the refusal is a sentence naming the
+// field, shown under that routine's own row rather than anywhere global.
+// docs/routine-sharing-plan.md owns the subject.
 
 import { useEffect, useState } from "react";
 import { ipc, isEngineConnected, subscribe } from "../ipc/client";
 import { asRecord, normalizeUnavailable, normalizeVariables } from "../lib/parse";
 import { Method } from "../types/protocol";
 import type { ArtifactUnavailable } from "../types/ui";
+import { RoutineImportCard, type RoutineImportPreview } from "./RoutineImportCard";
 import { RowAction, SurfaceRow, WaitingTag } from "./Surface";
 
 // One step of a routine's declarative plan (spec §6.1). The core sends these on
@@ -126,6 +135,19 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
   // blinking away with nothing saying it is stopped on an answer.
   const [awaitingAnswer, setAwaitingAnswer] = useState(false);
   const [planOpen, setPlanOpen] = useState<Record<string, boolean>>({}); // Developer: expanded plans
+  // What sharing a routine out answered, per routine: either "saved here" or the
+  // format's own refusal sentence. Kept beside the row it belongs to: a refusal
+  // names a field of THAT routine, and a global banner would make the person hunt
+  // for which one it meant.
+  const [shareNote, setShareNote] = useState<Record<string, string>>({});
+  const [sharing, setSharing] = useState<string | null>(null);
+  // The import half. `importPreview` is what the core read out of the file the
+  // person picked; holding it changes NOTHING on disk, on either side, because the core
+  // has saved nothing at this point and neither has this.
+  const [importPreview, setImportPreview] = useState<RoutineImportPreview | null>(null);
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     if (!connected) {
@@ -240,6 +262,111 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
       });
   }
 
+  // --- sharing out ---------------------------------------------------------
+  // The core does the whole of it: it decides whether the routine can travel at
+  // all, and the shell puts up the save dialog. Everything this function may do
+  // with the answer is show the sentence that came back.
+  async function shareRoutine(routine: RoutineRow) {
+    setSharing(routine.id);
+    setShareNote((prev) => ({ ...prev, [routine.id]: "" }));
+    try {
+      const res = asRecord(await ipc.exportRoutine(routine.id));
+      const note =
+        res?.ok === true
+          ? "Saved. You can send that file to anyone using Addison."
+          : typeof res?.error === "string" && res.error
+            ? // The format's own refusal, word for word: it names the step or the
+              // setting to change, and a summary of it would name nothing.
+              res.error
+            : "That routine couldn't be saved to a file.";
+      setShareNote((prev) => ({ ...prev, [routine.id]: note }));
+    } catch (err) {
+      setShareNote((prev) => ({
+        ...prev,
+        [routine.id]:
+          err instanceof Error ? err.message : "That routine couldn't be saved to a file.",
+      }));
+    } finally {
+      setSharing(null);
+    }
+  }
+
+  // --- sharing in ----------------------------------------------------------
+  async function startImport() {
+    setImporting(true);
+    setImportNote(null);
+    setImportPreview(null);
+    try {
+      const res = asRecord(await ipc.previewRoutineImport());
+      if (res?.ok === true) {
+        setImportPreview(normalizeImportPreview(res));
+      } else {
+        setImportNote(
+          typeof res?.error === "string" && res.error
+            ? res.error
+            : "Addison couldn't read that file.",
+        );
+      }
+    } catch (err) {
+      setImportNote(err instanceof Error ? err.message : "Addison couldn't read that file.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
+  async function confirmImport() {
+    setAdding(true);
+    try {
+      const res = asRecord(await ipc.confirmRoutineImport());
+      if (res?.ok === true) {
+        setImportPreview(null);
+        setImportNote("Added. It's in the list above.");
+        refresh();
+      } else {
+        // Includes the second press of Add it: the core has already used what it
+        // was holding and says so plainly. Its answer is the one shown.
+        setImportPreview(null);
+        setImportNote(
+          typeof res?.error === "string" && res.error
+            ? res.error
+            : "Addison couldn't add that routine.",
+        );
+      }
+    } catch (err) {
+      setImportNote(err instanceof Error ? err.message : "Addison couldn't add that routine.");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  // The way IN, listed as a row of its own so it reads as part of the library
+  // rather than as new chrome above it. Present in every profile.
+  const importRow = connected ? (
+    <SurfaceRow
+      key="import-a-routine"
+      name="Add a routine someone shared"
+      action={importing ? "Reading…" : "Choose a file"}
+      onAction={() => void startImport()}
+      actionDisabled={importing}
+      actionAriaLabel="Add a routine someone shared with you"
+    >
+      {importNote && (
+        <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">{importNote}</p>
+      )}
+      {importPreview && (
+        <RoutineImportCard
+          preview={importPreview}
+          busy={adding}
+          onAdd={() => void confirmImport()}
+          onCancel={() => {
+            setImportPreview(null);
+            setImportNote(null);
+          }}
+        />
+      )}
+    </SurfaceRow>
+  ) : null;
+
   if (!loaded) {
     return <SurfaceRow wrap name="Looking for your routines…" />;
   }
@@ -251,7 +378,13 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
     // sections all keep this distinction), so the disconnected case gets its own
     // sentence and no count-like value beside it.
     return connected ? (
-      <SurfaceRow name="None yet" value="saved steps appear here" />
+      <>
+        <SurfaceRow name="None yet" value="saved steps appear here" />
+        {/* The way in stays, precisely because there is nothing here yet: a first
+            routine arriving from somebody else is one of the ways this list stops
+            being empty. */}
+        {importRow}
+      </>
     ) : (
       <SurfaceRow wrap name="You can see and run your saved routines here once Addison's engine is connected." />
     );
@@ -287,6 +420,17 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
                   {running === routine.id ? "Running…" : "Run"}
                 </RowAction>
               )}
+              {/* Sharing works in every profile and on a routine this profile
+                  can't run: sending somebody a plan is not running it, and a
+                  waiting routine is exactly the one a person may want to pass to
+                  a machine that can use it. */}
+              <RowAction
+                disabled={sharing === routine.id}
+                ariaLabel={`Share ${routine.name}`}
+                onClick={() => void shareRoutine(routine)}
+              >
+                {sharing === routine.id ? "Saving…" : "Share"}
+              </RowAction>
               <RowAction
                 tone="danger"
                 ariaLabel={`Remove ${routine.name}`}
@@ -300,6 +444,14 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
           {routine.unavailable && (
             <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">
               {routine.unavailable.message}
+            </p>
+          )}
+
+          {/* Why this routine could not be shared, in the format's own words, under
+              the row it is about. */}
+          {shareNote[routine.id] && (
+            <p className="m-0 mt-2 text-[12px] leading-[1.55] text-muted">
+              {shareNote[routine.id]}
             </p>
           )}
 
@@ -352,8 +504,33 @@ export function RoutineLibrary({ exposeRoutinePlan = false, developer = false, r
           )}
         </SurfaceRow>
       ))}
+      {importRow}
     </>
   );
+}
+
+/**
+ * The core's import preview, read defensively.
+ *
+ * The `assurances` are taken AS SENT and nothing here supplies a default for them:
+ * they are the honest description of a file somebody else wrote, and a frontend
+ * that invented its own would be reassuring the person on its own authority. If
+ * the core ever sent none, the card shows none, which is visible; a hardcoded copy
+ * here would be invisible and could drift out of step with what the core means.
+ */
+function normalizeImportPreview(res: Record<string, unknown>): RoutineImportPreview {
+  return {
+    name: typeof res.name === "string" ? res.name : "",
+    description: typeof res.description === "string" ? res.description : "",
+    steps: Array.isArray(res.steps) ? res.steps.filter((s): s is string => typeof s === "string") : [],
+    variables: normalizeVariables(res.variables),
+    needsDeveloper: res.needsDeveloper === true,
+    screeningNote:
+      typeof res.screeningNote === "string" && res.screeningNote ? res.screeningNote : undefined,
+    assurances: Array.isArray(res.assurances)
+      ? res.assurances.filter((s): s is string => typeof s === "string")
+      : [],
+  };
 }
 
 /**

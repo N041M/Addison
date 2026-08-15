@@ -1217,6 +1217,34 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "and a snapshot reverses whatever did happen."
         ),
     },
+    "import-grants-no-permissions": {
+        "the fact itself, stated as the card states it": (
+            "An imported routine carries zero permissions and asks like any first "
+            "run. Addison hasn't checked what this routine is for."
+        ),
+        "the strict reader described doing what it really does": (
+            "The reader checks the file's shape, its version, its ceilings and its "
+            "dependency graph, and refuses with one plain sentence rather than "
+            "repairing anything."
+        ),
+        "the narrow rule stated with its own limit beside it": (
+            "The trigger is exact containment: the file's output appearing verbatim "
+            "inside one of the resolved argument strings. It is one edge, and a "
+            "chain across two runs is outside it."
+        ),
+        "the refusals that genuinely are complete for their shape": (
+            "A command step is refused in both directions, and a step naming a tool "
+            "from somebody else's server is refused on the way in."
+        ),
+        "sharing described as what it moves, with no claim about trust": (
+            "A routine leaves this machine as a whitelist of fields: the version, "
+            "the name, the description, the variables and the steps."
+        ),
+        "the gate sentence, which is a claim about the gate and not about import": (
+            "Every action in the plan goes through the same permission gate it "
+            "would if the person had asked for it out loud."
+        ),
+    },
     "continuation-deletes-nothing": {
         "the sentence the person is actually told, which is the fact itself": (
             "This chat was getting long, so Addison condensed the earlier part into "
@@ -1602,6 +1630,25 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             "the universal, which is the promise a pattern layer cannot keep": (
                 "Screening prevents prompt injection: instruction-shaped text is "
                 "stopped before a model reads it."
+            ),
+        },
+    },
+    "import-grants-no-permissions": {
+        "while_true": {
+            "the reassurance a preview card invites, with import as the subject": (
+                "Import verifies a shared routine before it is added, so a plan that "
+                "reached your library has been looked at."
+            ),
+            "the same claim with sharing as the subject": (
+                "Sharing vets the plan on the way in and again on the way out."
+            ),
+            "the adjective, with an imported routine as the subject": (
+                "An imported routine is sandboxed, so it cannot reach anything you "
+                "have not already opened."
+            ),
+            "the taint line promoted from one edge to coverage": (
+                "The taint card catches every exfiltration a shared routine could "
+                "attempt."
             ),
         },
     },

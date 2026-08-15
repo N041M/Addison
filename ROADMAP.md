@@ -68,6 +68,26 @@ continued chat is a second row in the history list.
 [docs/context-budget-plan.md](docs/context-budget-plan.md) owns it, and
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks the three limits.
 
+**Sharing a routine, built 2026-08-15.** A routine can be saved as a file and sent
+to anyone else using Addison, and a file somebody sends you can be added from the
+routine list in any profile. Before anything is added you see what the routine says
+it does, step by step, what it will ask you for each time, and three sentences that
+do not change: it can do nothing you haven't approved, Addison hasn't checked what
+it is for, and you can delete it, with a restore point already saved. **Adding a
+routine grants it nothing** and it asks like any first run. A routine that runs a
+command on your computer cannot be shared or added at all, in either direction; one
+that needs the Developer profile arrives listed and switched off, saying so; and
+wording in the file that reads like an instruction to Addison gets the same plain
+note any web page would. One extra line appears on a card when a step would put text
+from a file the same run just read onto the web.
+**Its limits are real**: that line is exact matching inside one run, so text that was
+reworded on the way, a chain across two routines, and contents somebody pasted in by
+hand produce no line; wording shaped as ordinary prose is not flagged; and a plan
+whose danger is entirely in the values it substitutes looks unremarkable at the
+moment you add it. The run card, which shows those values, is the control.
+[docs/routine-sharing-plan.md](docs/routine-sharing-plan.md) owns it, and
+[docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks what remains uncaught.
+
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it
@@ -285,8 +305,6 @@ Not because they are hard. They were looked at and put down on purpose.
   choosing one per task by itself is a later problem.
 - Messaging channels, and a UI for editing the steps of a routine.
 - Rewriting the agent core in Rust.
-- Sharing routines by export and import. It becomes more interesting once MCP and
-  free endpoints are in wide use.
 - **Running a command in a virtual machine first to see what it would do.** The
   appeal is obvious and the reasoning against it is not, so it is written down
   here rather than rediscovered. To find out what a command does you have to run
