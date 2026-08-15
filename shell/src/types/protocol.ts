@@ -40,7 +40,17 @@ export const Method = {
   // its own, with the same sentence, whatever this field says. Mirrored in
   // protocol.py; the parsed shape lives in types/ui.ts (ArtifactUnavailable).
   RoutineList: "routine.list",
+  // The reply carries `answer` — the last text the run produced (owner decision
+  // 2026-08-12). A routine's steps are tool calls, so that is the last succeeding
+  // step's content: Quick Sums' 6016, which used to appear nowhere because the row
+  // showed only "Done — every step finished". Empty when a run produced no text.
   RoutineRun: "routine.run",
+  // Live per-step progress while a routine runs, twice per step ('running', then
+  // 'ok' | 'failed'). The Settings routine row opens a small panel on these — the
+  // same idiom as the chat's "Addison's work", on the surface the person is
+  // already looking at. Notification only; the run's own reply is the truth about
+  // how it ended.
+  RoutineStepUpdate: "routine.stepUpdate",
   RoutineDelete: "routine.delete",
   ProfileGet: "profile.get",
   ProfileSet: "profile.set",

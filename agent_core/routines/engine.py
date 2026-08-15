@@ -48,12 +48,28 @@ _RUN_COMMAND_TOOL_ID = "run_command"
 _PLACEHOLDER = re.compile(r"\{\{\s*([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?)\s*\}\}")
 
 
+# The routine's answer, capped where it is BUILT rather than at the boundary that
+# shows it — the same rule ``call_permission_detail`` follows for the activity
+# line. A step can return a whole page of text; what a person needs back from
+# "Quick Sums" is the sum, and a panel is not a transcript.
+MAX_ROUTINE_ANSWER_CHARS = 2000
+
+
 @dataclass
 class RoutineRunResult:
     run_id: str
     status: str                                   # 'completed' | 'failed' | 'cancelled'
     step_results: dict = field(default_factory=dict)
     detail: str = ""
+    # THE THING THE PERSON RAN IT FOR (owner decision 2026-08-12). A routine's
+    # steps are tool calls, so the last text a run produced is the last SUCCEEDING
+    # step's content — Quick Sums' 6016. It used to exist only inside
+    # ``step_results`` keyed by step id, which no surface read, so a run reported
+    # "Done — every step finished" and its answer appeared nowhere.
+    #
+    # Empty string when nothing textual came back (a run of nothing but file
+    # writes), which is not a failure and must not read as one.
+    answer: str = ""
 
 
 def topologically_sorted(steps: list[RoutineStep]) -> list[RoutineStep]:
@@ -126,6 +142,7 @@ class RoutineEngine:
         on_ask_user: Callable[[RoutineStep, str, str], bool] | None = None,
         store=None,
         on_activity=None,
+        on_step=None,
         guards_provider=None,
         trust_check=None,
         forbidden_check=None,
@@ -170,6 +187,21 @@ class RoutineEngine:
         # naming it, which would leave the destination visible on the path the user
         # is watching and invisible on the path that runs by itself.
         self.on_activity = on_activity or (lambda tool_id, label, detail=None: None)
+        # PER-STEP PROGRESS (owner decision 2026-08-12) — one dict per step, as the
+        # step starts and again when it ends. Its consumer is the small panel the
+        # Settings routine row opens while a run is going, which is the same idiom
+        # as the chat's "Addison's work": a run that only reports its terminal row
+        # is a run nobody can watch, and a routine is the path that runs with
+        # nobody watching by construction.
+        #
+        # IT CARRIES TOOL IDS, NEVER LABELS. Every step emits one of these,
+        # including the branches that refuse BEFORE a tool is in hand (an id
+        # nothing is registered under is the commonest of them), so an event that
+        # promised a label would have to invent one for exactly the steps a person
+        # most needs named. The RPC layer holds the registry and labels the id
+        # there (``main.py::_label``, which falls back to the id itself) — the same
+        # path the OPEN-mode auto-grant notification takes.
+        self.on_step = on_step or (lambda event: None)
         # on_ask_user(step, run_id, message) -> True to continue past the failed
         # step, False to stop. Rendered by the frontend with the same card
         # pattern as a permission request (§6.2). Default: stop.
@@ -248,6 +280,12 @@ class RoutineEngine:
         except ValueError as exc:
             return self._finish(run_id, "failed", step_results, str(exc), step_log)
 
+        total = len(ordered)
+        # The last text the run produced (owner decision 2026-08-12). Kept as the run
+        # walks rather than reconstructed at the end: ``step_results`` holds refusals
+        # beside answers, so "the last entry" is not the same question.
+        answer = ""
+
         for index, step in enumerate(ordered):
             # A command step (OPEN mode only) runs through run_command; an ordinary
             # step names its own tool. Either way the SAME registry + gate handle it.
@@ -258,10 +296,17 @@ class RoutineEngine:
                 tool_id = step.tool_id
                 args_template = step.args_template
 
+            # Announced BEFORE the first thing that can refuse it, so a step that
+            # never gets off the ground is still a step the panel names.
+            self._step_event(run_id, routine, index, total, step, tool_id, "running")
+
             try:
                 resolved_args = resolve_template(args_template, variables, step_results)
             except ValueError as exc:
-                return self._finish(run_id, "failed", step_results, str(exc), step_log)
+                self._step_event(
+                    run_id, routine, index, total, step, tool_id, "failed", str(exc)
+                )
+                return self._finish(run_id, "failed", step_results, str(exc), step_log, answer)
 
             # AN ID NOTHING IS REGISTERED UNDER — the live loop's twin, and the case
             # a saved routine meets most often. A step keeps the tool id it was
@@ -279,16 +324,20 @@ class RoutineEngine:
                 self._audit(routine, tool_id, None, mode, False, "not_callable")
                 result = ToolResult(success=False, content=UNKNOWN_TOOL_REFUSAL)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, UNKNOWN_TOOL_REFUSAL))
+                self._step_done(
+                    step_log, index, step, UNKNOWN_TOOL_REFUSAL,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
                     return self._finish(
-                        run_id, "failed", step_results, UNKNOWN_TOOL_REFUSAL, step_log
+                        run_id, "failed", step_results, UNKNOWN_TOOL_REFUSAL, step_log, answer
                     )
                 if step.on_failure == "ask_user" and not self._on_ask_user(
                     step, run_id, UNKNOWN_TOOL_REFUSAL
                 ):
                     return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                        run_id, "cancelled", step_results, "Stopped at your request.",
+                        step_log, answer,
                     )
                 continue
             # SAFE-1 at dispatch, before the gate: a routine step naming a dev-only
@@ -319,16 +368,19 @@ class RoutineEngine:
                 self._audit(routine, tool_id, None, mode, destructive, "dev_only")
                 result = ToolResult(success=False, content=dev_only_refusal)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, dev_only_refusal))
+                self._step_done(
+                    step_log, index, step, dev_only_refusal,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
                     return self._finish(
-                        run_id, "failed", step_results, dev_only_refusal, step_log
+                        run_id, "failed", step_results, dev_only_refusal, step_log, answer
                     )
                 if step.on_failure == "ask_user":
                     if not self._on_ask_user(step, run_id, dev_only_refusal):
                         return self._finish(
                             run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log,
+                            step_log, answer,
                         )
                 continue
             # DISCOVERED BUT NOT WIRED. The live loop's twin, here because a
@@ -344,16 +396,19 @@ class RoutineEngine:
                 self._audit(routine, tool_id, None, mode, destructive, "not_callable")
                 result = ToolResult(success=False, content=not_callable_refusal)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, not_callable_refusal))
+                self._step_done(
+                    step_log, index, step, not_callable_refusal,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
                     return self._finish(
-                        run_id, "failed", step_results, not_callable_refusal, step_log
+                        run_id, "failed", step_results, not_callable_refusal, step_log, answer
                     )
                 if step.on_failure == "ask_user":
                     if not self._on_ask_user(step, run_id, not_callable_refusal):
                         return self._finish(
                             run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log,
+                            step_log, answer,
                         )
                 continue
             # NOT FROM A SAVED SPEC (step 8 phase 3, plan §5.10). Switching an
@@ -377,16 +432,20 @@ class RoutineEngine:
                 self._audit(routine, tool_id, None, mode, destructive, "not_callable")
                 result = ToolResult(success=False, content=live_only_refusal)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, live_only_refusal))
+                self._step_done(
+                    step_log, index, step, live_only_refusal,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
                     return self._finish(
-                        run_id, "failed", step_results, live_only_refusal, step_log
+                        run_id, "failed", step_results, live_only_refusal, step_log, answer
                     )
                 if step.on_failure == "ask_user" and not self._on_ask_user(
                     step, run_id, live_only_refusal
                 ):
                     return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                        run_id, "cancelled", step_results, "Stopped at your request.",
+                        step_log, answer,
                     )
                 continue
             # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
@@ -401,14 +460,18 @@ class RoutineEngine:
                             mode, destructive, "forbidden")
                 result = ToolResult(success=False, content=forbidden)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, forbidden))
+                self._step_done(
+                    step_log, index, step, forbidden,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
-                    return self._finish(run_id, "failed", step_results, forbidden, step_log)
+                    return self._finish(run_id, "failed", step_results, forbidden, step_log, answer)
                 if step.on_failure == "ask_user" and not self._on_ask_user(
                     step, run_id, forbidden
                 ):
                     return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                        run_id, "cancelled", step_results, "Stopped at your request.",
+                        step_log, answer,
                     )
                 continue
             # CONFINEMENT (step 5, D3): a path-bounded step may only run inside a
@@ -422,14 +485,20 @@ class RoutineEngine:
                             mode, destructive, "confined_out")
                 result = ToolResult(success=False, content=_OUTSIDE_TRUST)
                 step_results[step.step_id] = result
-                step_log.append(self._log_entry(index, step, _OUTSIDE_TRUST))
+                self._step_done(
+                    step_log, index, step, _OUTSIDE_TRUST,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                )
                 if step.on_failure == "abort":
-                    return self._finish(run_id, "failed", step_results, _OUTSIDE_TRUST, step_log)
+                    return self._finish(
+                        run_id, "failed", step_results, _OUTSIDE_TRUST, step_log, answer
+                    )
                 if step.on_failure == "ask_user" and not self._on_ask_user(
                     step, run_id, _OUTSIDE_TRUST
                 ):
                     return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.", step_log
+                        run_id, "cancelled", step_results, "Stopped at your request.",
+                        step_log, answer,
                     )
                 continue
             context.resolved_path = affected
@@ -455,10 +524,17 @@ class RoutineEngine:
             )
             if status == PermissionStatus.DENIED:
                 self._audit(routine, tool_id, detail, mode, destructive, "denied")
-                step_log.append(self._log_entry(index, step, "permission denied"))
+                # The log's word is "permission denied"; the PERSON reads the same
+                # sentence the run's terminal state uses, so the step that stopped
+                # the run and the reason it stopped say one thing.
+                self._step_done(
+                    step_log, index, step, "permission denied",
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                    message="You said no, so this step didn't run.",
+                )
                 return self._finish(
                     run_id, "failed", step_results, "You declined a permission it needs.",
-                    step_log,
+                    step_log, answer,
                 )
 
             # A tool/bridge failure is a FAILED STEP, never a crashed run — mirror
@@ -493,25 +569,105 @@ class RoutineEngine:
                 result.snapshot.tool_call_id = f"{run_id}:{step.step_id}"
                 self.undo_manager.record(result.snapshot)   # Routine runs are undoable too
             step_results[step.step_id] = result
-            step_log.append(
-                self._log_entry(index, step, "ok" if result.success else str(result.content))
+            self._step_done(
+                step_log, index, step,
+                "ok" if result.success else str(result.content),
+                run_id=run_id, routine=routine, total=total, tool_id=tool_id,
+                ok=result.success,
             )
+            # THE ANSWER, kept from the last step that actually produced text. A
+            # later step that returns nothing (a file write, a snapshot) does not
+            # erase it — a person asked for the sum, not for the last thing to
+            # happen after it.
+            if result.success:
+                text = str(result.content or "").strip()
+                if text:
+                    answer = text[:MAX_ROUTINE_ANSWER_CHARS]
 
             if not result.success:
                 if step.on_failure == "abort":
                     return self._finish(
-                        run_id, "failed", step_results, str(result.content), step_log
+                        run_id, "failed", step_results, str(result.content), step_log, answer
                     )
                 if step.on_failure == "ask_user":
                     keep_going = self._on_ask_user(step, run_id, str(result.content))
                     if not keep_going:
                         return self._finish(
                             run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log,
+                            step_log, answer,
                         )
                 # "skip" falls through to the next step
 
-        return self._finish(run_id, "completed", step_results, "", step_log)
+        return self._finish(run_id, "completed", step_results, "", step_log, answer)
+
+    # --- live progress (owner decision 2026-08-12) ---------------------------
+    def _step_event(
+        self,
+        run_id: str,
+        routine: Routine,
+        index: int,
+        total: int,
+        step: RoutineStep,
+        tool_id: str,
+        status: str,
+        message: str | None = None,
+    ) -> None:
+        """One progress event, best-effort — a panel must never be the reason a run
+        dies, the same stance ``_audit`` takes about history.
+
+        ``status`` is a closed vocabulary: 'running' (the step has begun), 'ok', and
+        'failed'. A step that a person is being asked about is still 'running' here
+        — the card itself is what says somebody is waiting, and the surface showing
+        both already knows it raised one."""
+        try:
+            self.on_step(
+                {
+                    "run_id": run_id,
+                    "routine_id": routine.id,
+                    "step_id": step.step_id,
+                    "index": index,
+                    "total": total,
+                    "tool_id": tool_id,
+                    "status": status,
+                    "message": message,
+                }
+            )
+        except Exception:
+            pass
+
+    def _step_done(
+        self,
+        step_log: list[dict],
+        index: int,
+        step: RoutineStep,
+        summary: str,
+        *,
+        run_id: str,
+        routine: Routine,
+        total: int,
+        tool_id: str,
+        ok: bool,
+        message: str | None = None,
+    ) -> None:
+        """A step's outcome, recorded in the run log AND announced, in one call.
+
+        The two used to be one call because only the log existed; they are one call
+        still because a run log that says a step failed while the panel says it
+        finished is the disagreement this surface exists to prevent. ``message`` is
+        what a PERSON reads (the log's own summary is for the log — "ok",
+        "permission denied"), defaulting to the summary where they are the same
+        sentence."""
+        step_log.append(self._log_entry(index, step, summary))
+        self._step_event(
+            run_id,
+            routine,
+            index,
+            total,
+            step,
+            tool_id,
+            "ok" if ok else "failed",
+            None if ok else (message or summary),
+        )
 
     # --- run log (§6.4: backs "show what you just did" for Routine runs) -----
     def _log_entry(self, index: int, step: RoutineStep, summary: str) -> dict:
@@ -523,7 +679,9 @@ class RoutineEngine:
                 id=run_id, routine_id=routine_id, started_at=int(time.time())
             )
 
-    def _finish(self, run_id, status, step_results, detail, step_log) -> RoutineRunResult:
+    def _finish(
+        self, run_id, status, step_results, detail, step_log, answer: str = ""
+    ) -> RoutineRunResult:
         if self._store is not None:
             self._store.finish_routine_run(
                 id=run_id,
@@ -531,4 +689,4 @@ class RoutineEngine:
                 completed_at=int(time.time()),
                 step_log=step_log,
             )
-        return RoutineRunResult(run_id, status, step_results, detail)
+        return RoutineRunResult(run_id, status, step_results, detail, answer)

@@ -179,7 +179,7 @@ class _RaisingTool:
         raise self._exc
 
 
-def _engine(tmp_path, tool=None, gate=None, on_ask_user=None, on_activity=None):
+def _engine(tmp_path, tool=None, gate=None, on_ask_user=None, on_activity=None, on_step=None):
     registry = ToolRegistry()
     tool = tool or _FlakyTool()
     registry.register(tool)
@@ -199,6 +199,7 @@ def _engine(tmp_path, tool=None, gate=None, on_ask_user=None, on_activity=None):
         on_ask_user=on_ask_user,
         store=store,
         on_activity=on_activity,
+        on_step=on_step,
     )
     return engine, tool, gate, store
 
@@ -278,6 +279,116 @@ def test_a_declined_routine_step_is_never_announced_as_done(tmp_path):
 
     assert result.status == "failed"
     assert seen == []
+
+
+# --- live progress + the answer (owner decision 2026-08-12) -------------------
+#
+# The QA artifact's §06 open question: a routine reported "Done — every step
+# finished" and the thing it computed appeared nowhere. Two halves — the run
+# ANNOUNCES itself step by step while it goes, and it hands back what it produced.
+
+
+def test_the_engine_announces_every_step_as_it_walks_the_plan(tmp_path):
+    """Two events per step, in plan order: 'running' as it begins, then its outcome.
+
+    The 'running' event is what makes the panel LIVE rather than a report — it is
+    emitted before anything can refuse the step, so a step that never gets off the
+    ground is still a step the person sees named.
+
+    IDS, NEVER LABELS. A label is the registry's word for a tool, and the RPC layer
+    puts it on (``main.py::_emit_routine_step``); the engine emitting one would be a
+    second labelling rule, and the branches that refuse before a tool is in hand
+    have nothing to label with."""
+    events: list[dict] = []
+    engine, _, gate, _ = _engine(tmp_path, on_step=events.append)
+    gate.grant("flaky")
+
+    result = engine.run(
+        _routine([
+            RoutineStep("s1", "flaky", {"value": "first"}),
+            RoutineStep("s2", "flaky", {"value": "second"}, depends_on=["s1"]),
+        ]),
+        {},
+    )
+
+    assert result.status == "completed"
+    assert [(e["step_id"], e["status"]) for e in events] == [
+        ("s1", "running"), ("s1", "ok"), ("s2", "running"), ("s2", "ok"),
+    ]
+    assert {e["tool_id"] for e in events} == {"flaky"}
+    assert all(e["total"] == 2 for e in events)
+    assert [e["index"] for e in events] == [0, 0, 1, 1]
+    assert "label" not in events[0]
+
+
+def test_a_run_carries_back_the_last_text_its_steps_produced(tmp_path):
+    """THE ANSWER. A routine's steps are tool calls, so what it "said" is the last
+    succeeding step's content — and a later step that returns nothing does not
+    erase it."""
+    engine, _, gate, _ = _engine(tmp_path)
+    gate.grant("flaky")
+
+    result = engine.run(
+        _routine([
+            RoutineStep("s1", "flaky", {"value": "6016"}),
+            RoutineStep("s2", "flaky", {"value": ""}, depends_on=["s1"]),
+        ]),
+        {},
+    )
+
+    assert result.status == "completed"
+    assert result.answer == "6016"
+
+
+def test_a_failed_step_is_announced_as_failed_with_a_plain_sentence(tmp_path):
+    """FAILURE HONESTY. The panel must name WHICH step didn't work and say why in a
+    sentence — a run that reports only its terminal row is what this replaces."""
+    events: list[dict] = []
+    engine, _, gate, _ = _engine(tmp_path, on_step=events.append)
+    gate.grant("flaky")
+
+    result = engine.run(
+        _routine([RoutineStep("s1", "flaky", {"fail": True}, on_failure="abort")]), {}
+    )
+
+    assert result.status == "failed"
+    assert [e["status"] for e in events] == ["running", "failed"]
+    assert events[-1]["message"] == "That step didn't work."
+
+
+def test_a_denied_step_reports_honestly_and_never_as_done(tmp_path):
+    """A DENIAL IS NOT A STEP THAT WORKED. The gate refuses, the run stops, and the
+    step says so in the person's own terms — the panel's twin of the rule that a
+    declined step is never announced on the activity line."""
+    events: list[dict] = []
+    engine, _, _, _ = _engine(
+        tmp_path,
+        gate=PermissionGate(on_request=lambda tool_id: PermissionStatus.DENIED),
+        on_step=events.append,
+    )
+
+    result = engine.run(_routine([RoutineStep("s1", "flaky", {})]), {})
+
+    assert result.status == "failed"
+    assert result.detail == "You declined a permission it needs."
+    assert [e["status"] for e in events] == ["running", "failed"]
+    assert events[-1]["message"] == "You said no, so this step didn't run."
+    assert result.answer == ""
+
+
+def test_a_panel_that_explodes_never_takes_the_run_down(tmp_path):
+    """Best-effort, like the audit sink: a surface is not allowed to be the reason a
+    routine dies half-way through."""
+    def boom(event):
+        raise RuntimeError("the panel is on fire")
+
+    engine, tool, gate, _ = _engine(tmp_path, on_step=boom)
+    gate.grant("flaky")
+
+    result = engine.run(_routine([RoutineStep("s1", "flaky", {"value": "ok"})]), {})
+
+    assert result.status == "completed"
+    assert len(tool.executed) == 1
 
 
 def test_on_failure_abort_stops_the_run(tmp_path):
@@ -939,6 +1050,46 @@ def test_the_rail_and_the_library_never_disagree_about_one_routine(tmp_path):
             assert ("unavailable" in widgets[widget_id]) == (
                 "unavailable" in routines[routine_id]
             ), widget_id
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
+def test_a_run_reaches_the_person_with_its_steps_and_its_answer(tmp_path):
+    """END TO END, over the real IPC (owner decision 2026-08-12, closing the QA
+    artifact's §06). "Quick Sums" is the case the question was filed about: the run
+    reported "Done — every step finished" and 6016 appeared nowhere.
+
+    Three things are asserted because three things were missing: the step
+    notifications ARRIVE, in order, LABELLED with the registry's plain name for the
+    tool (the engine sends ids — this is the RPC layer's half), and the reply
+    carries the answer."""
+    h = _seeded(
+        tmp_path,
+        [(_plan("sums", [RoutineStep("s1", "calculator", {"expression": "3008*2"})]), "safe")],
+    )
+    try:
+        h.reader.feed({"jsonrpc": "2.0", "id": 1, "method": Method.ROUTINE_RUN,
+                       "params": {"routineId": "sums"}})
+        h.writer.wait_for(lambda f: f.get("method") == Method.PERMISSION_REQUEST_GRANT)
+        h.reader.feed({"jsonrpc": "2.0", "id": 2, "method": Method.PERMISSION_RESPOND,
+                       "params": {"toolId": "calculator", "allow": True}})
+        result = h.writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)["result"]
+
+        assert result["ok"] is True
+        assert "6016" in result["answer"]
+
+        updates = [
+            f["params"] for f in h.writer.frames
+            if f.get("method") == Method.ROUTINE_STEP_UPDATE
+        ]
+        assert [u["status"] for u in updates] == ["running", "ok"]
+        assert all(u["routineId"] == "sums" and u["stepId"] == "s1" for u in updates)
+        # The label the CHAT panel would show for the same tool — one labelling
+        # rule, in the layer that holds the registry.
+        assert updates[0]["label"] == "Do math and unit conversions"
+        assert updates[0]["toolId"] == "calculator"
+        # Nothing to explain about a step that worked.
+        assert "message" not in updates[-1]
     finally:
         _shutdown(h.reader, h.thread)
 
