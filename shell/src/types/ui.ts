@@ -29,10 +29,13 @@ export interface DisplayMessage extends ChatMessage {
   failed?: boolean;
   /**
    * Which model actually answered this turn (Phase-2 step 3). Rides on the
-   * sendMessage reply. The free-model disclaimer chip renders ONLY when
-   * `answeredWith.free && answeredWith.routed` — both booleans are computed by
-   * the core (routed = the answering model wasn't the user's explicit pick); the
-   * frontend just reads them, never re-derives (contract D5 [S-b]).
+   * sendMessage reply. The free-model disclaimer chip renders on
+   * `answeredWith.free` alone — known-free BY CONSTRUCTION, owner decision
+   * 2026-08-12 (it also required `routed` until then, which hid the note in the
+   * commonest free case: the user picking their local model). `routed` still
+   * rides along — the answering model wasn't the user's explicit pick — and is
+   * what the fallback note reasons about. Both booleans are computed by the
+   * core; the frontend just reads them, never re-derives (contract D5).
    */
   answeredWith?: AnsweredWith;
   /**
@@ -512,7 +515,7 @@ export interface RoutingState {
  * Which model answered a turn (rides on the sendMessage reply; contract D5).
  * `free` is whether that model is a free one; `routed` is whether it differs
  * from the user's explicit pick for this message — BOTH computed by the core.
- * The free-model chip renders only when both are true.
+ * The free-model chip renders on `free` alone (owner decision 2026-08-12).
  */
 export interface AnsweredWith {
   modelId: string;

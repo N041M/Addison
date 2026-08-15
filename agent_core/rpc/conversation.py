@@ -375,7 +375,8 @@ class ConversationMixin(ServerContext):
             "assistantMessageId": assistant_message_id,
         }
         # answeredWith (D5): {modelId, label, free, routed}. The transcript chip
-        # renders on ``free && routed`` — a free model the user did not choose.
+        # renders on ``free`` alone — known-free by construction (owner decision
+        # 2026-08-12).
         # Absent when the turn produced no final answer (e.g. an over-budget stop).
         if self._answered_with is not None:
             result["answeredWith"] = self._answered_with

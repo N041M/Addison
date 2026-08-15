@@ -364,8 +364,9 @@ class Orchestrator:
         # with no locals) and fails plainly; it never silently falls to a cloud call.
         self._routing_chain = routing_chain
         # Reports the answering candidate so the reply can carry answeredWith (D5): the
-        # chip renders on ``free && routed``. ``model_label`` maps a model_id to its
-        # human label for that chip and the fallback note.
+        # chip renders on ``free`` alone (known-free by construction, owner decision
+        # 2026-08-12). ``model_label`` maps a model_id to its human label for that chip
+        # and the fallback note.
         self.on_answered = on_answered
         self._model_label = model_label
         # Plan §5.2. Called with a provider id when THAT PROVIDER answered a send with
@@ -514,7 +515,13 @@ class Orchestrator:
                 # relay drops empty text, so nothing is shown and no break is minted.)
                 relay(response.text or "")
             # A single-path answer is the model the caller picked, so it is not routed.
-            self.on_answered(model_id, self._model_label(model_id), False, False)
+            # It can still be FREE: this path has no candidate to read ``free`` off,
+            # so it asks the one thing that is free by construction — an Ollama local
+            # (2026-08-12; it used to report False unconditionally, which is a claim
+            # about cost, not an absence of one).
+            self.on_answered(
+                model_id, self._model_label(model_id), provider_id == "ollama", False
+            )
             break
         else:
             # Rounds exhausted. Close the turn honestly rather than leaving the
@@ -725,8 +732,10 @@ class Orchestrator:
         if answered is not None:
             # [S-b] routed == (the answering model differs from the user's explicit
             # pick). No explicit pick (model_name None) -> routed True; an explicit
-            # pick that ANSWERED -> False; one that FELL FORWARD -> True. The chip
-            # renders on ``free && routed`` (a free answer the user did not choose).
+            # pick that ANSWERED -> False; one that FELL FORWARD -> True. ``routed`` no
+            # longer gates the free-model chip (owner decision 2026-08-12 — the note is
+            # about what the answer COST, not about who chose the model); it still says
+            # whether the person got the model they asked for.
             routed = answered.model_id != model_name
             self.on_answered(
                 answered.model_id, self._model_label(answered.model_id), answered.free, routed

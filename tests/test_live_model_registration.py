@@ -47,7 +47,10 @@ def test_only_what_the_provider_listed_can_be_registered():
     drift that broke Gemini. Under the old code the picker got Pro and Flash and
     registered two models that answer 404; it must now hold what Google said and
     nothing else."""
-    listed = ["gemini-3-pro-preview", "gemini-3-flash"]
+    # Ids the curated table has never heard of — the same drift that broke Gemini.
+    # (They were `gemini-3-*` until 2026-08-12, when the table was refreshed and
+    # grew those; the test needs ids OUTSIDE it, so it moved a generation on.)
+    listed = ["gemini-4-pro-preview", "gemini-4-flash"]
 
     registered = [m.id for m in catalog_from_live_ids("google", listed)]
 

@@ -62,8 +62,10 @@ class CloudModel:
     # rank == stronger; it orders quality_first's tail and breaks cross-provider ties.
     # ``None`` means "unknown rank" and sorts directly BEHIND the chain head, ahead of
     # every ranked model (D2 unknown-rank rule) — a just-released model must never be
-    # demoted below known-weak ones. Live-fetched Anthropic entries, ADDISON_MODEL
-    # injections, and custom-endpoint models all carry ``None`` ([N-c]).
+    # demoted below known-weak ones. ADDISON_MODEL injections and custom-endpoint
+    # models carry ``None`` ([N-c]); live-fetched entries used to as well, and that is
+    # the flat-rank bug fixed on 2026-08-12 — they now go through
+    # ``quality_rank_for_live_id`` (exact curated -> family inference -> unranked).
     quality_rank: int | None = None
     # True only for a genuinely free tier. Every curated cloud model here is PAID, so
     # this stays False for them; Ollama locals (built as RoutingCandidates directly,
@@ -178,11 +180,27 @@ def provider_label(provider_id: str) -> str:
 # "answer style" is an Anthropic knob only; every other provider ignores effort).
 # Each catalog's strongest entry is marked ``default``; the union-builder keeps at
 # most one default across all connected providers.
+#
+# RANKS AGREE WITH THE FAMILY FORMULA below (``_infer_quality_rank``). That is a
+# rule, not a coincidence: a curated rank that is BETTER than what the formula
+# would give the same id sets a trap, because the *next* generation — which only
+# the formula can rank — would then sort behind this hand-written entry forever.
+# A curated rank may be WORSE than the formula's (gpt-4o and gpt-4o-mini are, on
+# purpose: the formula cannot tell 4o from 4.1, and hand knowledge may).
 OPENAI_CLOUD_MODELS: tuple[CloudModel, ...] = (
     CloudModel(
-        id="gpt-4.1", label="GPT-4.1", description="", provider="openai",
+        id="gpt-5", label="GPT-5", description="", provider="openai",
         default=True, quality_rank=15,
     ),
+    CloudModel(id="gpt-5-mini", label="GPT-5 mini", description="", provider="openai",
+               quality_rank=45),
+    CloudModel(id="o3", label="o3", description="", provider="openai", quality_rank=17),
+    CloudModel(id="o4-mini", label="o4-mini", description="", provider="openai",
+               quality_rank=46),
+    CloudModel(id="gpt-4.1", label="GPT-4.1", description="", provider="openai",
+               quality_rank=16),
+    CloudModel(id="gpt-4.1-mini", label="GPT-4.1 mini", description="", provider="openai",
+               quality_rank=46),
     CloudModel(id="gpt-4o", label="GPT-4o", description="", provider="openai", quality_rank=35),
     CloudModel(
         id="gpt-4o-mini", label="GPT-4o mini", description="", provider="openai", quality_rank=70,
@@ -191,12 +209,24 @@ OPENAI_CLOUD_MODELS: tuple[CloudModel, ...] = (
 
 GOOGLE_CLOUD_MODELS: tuple[CloudModel, ...] = (
     CloudModel(
+        id="gemini-3-pro", label="Gemini 3 Pro", description="", provider="google",
+        default=True, quality_rank=19,
+    ),
+    CloudModel(
+        id="gemini-3-flash", label="Gemini 3 Flash", description="", provider="google",
+        quality_rank=49,
+    ),
+    CloudModel(
         id="gemini-2.5-pro", label="Gemini 2.5 Pro", description="", provider="google",
-        default=True, quality_rank=20,
+        quality_rank=20,
     ),
     CloudModel(
         id="gemini-2.5-flash", label="Gemini 2.5 Flash", description="", provider="google",
         quality_rank=50,
+    ),
+    CloudModel(
+        id="gemini-2.5-flash-lite", label="Gemini 2.5 Flash-Lite", description="",
+        provider="google", quality_rank=64,
     ),
 )
 
@@ -287,6 +317,189 @@ def _is_redundant_alias(model_id: str, available: set[str]) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Rank resolution for a live id (the flat-rank fix, 2026-08-12)
+# ---------------------------------------------------------------------------
+# THE BUG THIS EXISTS FOR. Matching a live id against the curated tables was an
+# EXACT string match, so `claude-sonnet-5-20260203`, `gemini-3-pro-preview` and
+# every id newer than the tables all landed on ``_UNRANKED_QUALITY_RANK``. In
+# practice that was nearly the whole picker: one rank, one tier, and quality-first
+# / cost-first degraded to insertion order.
+#
+# Three steps, in this order, and each is strictly more speculative than the last:
+#   1. EXACT curated id  -> the hand-assigned label AND rank.
+#   2. NORMALIZED curated id (a dated/pinned/preview variant of a curated entry)
+#      -> that entry's RANK ONLY. The label stays the raw id, because a provider
+#      can list the base and the dated variant side by side and two rows reading
+#      "Claude Sonnet 5" would be a picker asking somebody to choose between two
+#      identical-looking things. Raw names is this file's rule anyway.
+#   3. FAMILY inference -> a rank derived from a recognised family + size word.
+#   ...and otherwise ``_UNRANKED_QUALITY_RANK``, exactly as before.
+#
+# CONSERVATIVE ON PURPOSE. A wrong confident rank is worse than no rank: the
+# router's D2 rule already sorts unknown-rank models AHEAD of every ranked one, so
+# an unrecognised model is *favoured*, never buried. Nothing below invents a family
+# it does not recognise, and none of it can resurrect a curated id the provider did
+# not list — every one of these functions is asked ABOUT AN ID THE PROVIDER LISTED
+# and answers with a number, never with a model.
+
+# Suffixes that mean "this is a particular build of a model named earlier in the
+# id". The first two mirror ``_PINNED_SNAPSHOT`` / ``_PREVIEW_OF`` above (same
+# reasoning, reused rather than re-invented); the date forms are what Anthropic and
+# Google actually append (`-20260203`, `-10-2025`, `-2024-08-06`).
+_VERSION_SUFFIXES: tuple[re.Pattern[str], ...] = (
+    re.compile(r"-\d{3}$"),              # pinned snapshot, cf. _PINNED_SNAPSHOT
+    re.compile(r"-preview$"),            # cf. _PREVIEW_OF
+    re.compile(r"-latest$"),
+    re.compile(r"-\d{8}$"),              # claude-sonnet-5-20260203
+    re.compile(r"-\d{4}-\d{2}-\d{2}$"),  # gpt-4o-2024-08-06
+    re.compile(r"-\d{2}-\d{4}$"),        # gemini-…-10-2025
+)
+
+
+def _normalized_id(model_id: str) -> str:
+    """A live id with its build/date/preview suffixes stripped, so a dated variant
+    can be recognised as the model it is a build of. Purely textual; it never
+    consults any table, and it is only ever used to LOOK UP a rank."""
+    out = model_id.lower()
+    # Bounded loop: ids stack at most a couple of these (`…-preview-10-2025`), and
+    # an unbounded while over regexes on provider-supplied text is not worth it.
+    for _ in range(3):
+        for pattern in _VERSION_SUFFIXES:
+            stripped = pattern.sub("", out)
+            if stripped != out and stripped:
+                out = stripped
+                break
+        else:
+            break
+    return out
+
+
+def curated_entries(provider_id: str) -> tuple[CloudModel, ...]:
+    """The curated table for a provider — labels and ranks ONLY.
+
+    Separate from ``static_catalog_for`` on purpose: that one is the *registerable*
+    catalog and returns nothing for Anthropic, because registering ids Anthropic
+    did not list is the 404 bug (`tests/test_live_model_registration.py`). This one
+    is the metadata table, so it includes the Anthropic entries — a live Anthropic
+    id gets its hand-assigned rank, and an id Anthropic never listed still cannot
+    reach the picker through it."""
+    if provider_id == "anthropic":
+        return FALLBACK_CLOUD_MODELS
+    if provider_id == "openai":
+        return OPENAI_CLOUD_MODELS
+    if provider_id == "google":
+        return GOOGLE_CLOUD_MODELS
+    return ()
+
+
+# --- family inference (step 3) ---------------------------------------------
+# Each entry is (size words, base rank). LOWER is stronger, as everywhere here.
+# The final rank is ``base - min(major_version, 9)``, so a later generation of the
+# same size sorts ahead of an earlier one (gemini-3-pro 19 < gemini-2.5-pro 20)
+# while a size boundary is never crossed by version alone (any pro beats any
+# flash). The bases are chosen so a family-inferred rank lands beside the curated
+# entry for the same class rather than leapfrogging a whole tier.
+#
+# Size words are checked IN ORDER, most specific first: "flash-lite" contains
+# "flash", and reading it as a flash would rank a Lite model a whole tier too high.
+_ANTHROPIC_TIERS: tuple[tuple[str, int], ...] = (
+    ("opus", 14), ("sonnet", 34), ("haiku", 64),
+)
+_GOOGLE_SIZES: tuple[tuple[tuple[str, ...], int], ...] = (
+    (("flash-lite", "-lite", "nano"), 66),
+    (("flash",), 52),
+    (("ultra", "pro"), 22),
+)
+_OPENAI_SIZES: tuple[tuple[tuple[str, ...], int], ...] = (
+    (("nano",), 62),
+    (("mini", "small"), 50),
+)
+_OPENAI_BASE = 20          # a plain gpt-N / o-N with no size word
+_MAX_VERSION_BONUS = 9     # bounded, so a "gpt-77" can never rank below zero
+
+_ANTHROPIC_MAJOR = re.compile(r"^claude-(?:[a-z]+-)*?(\d+)")
+_GEMINI_MAJOR = re.compile(r"^gemini-(\d+)")
+_GPT_MAJOR = re.compile(r"^gpt-(\d+)")
+_O_SERIES_MAJOR = re.compile(r"^o(\d+)(?:-|$)")
+
+
+def _version_bonus(match: re.Match[str] | None) -> int:
+    """How much a generation number improves a family rank — capped, and 0 when the
+    id carries no number at all (`gemini-flash-latest`)."""
+    if match is None:
+        return 0
+    try:
+        return min(int(match.group(1)), _MAX_VERSION_BONUS)
+    except ValueError:   # pragma: no cover - the group is \d+
+        return 0
+
+
+def _size_base(model_id: str, sizes: tuple[tuple[tuple[str, ...], int], ...]) -> int | None:
+    """The base rank for the first size word this id carries, or None when it
+    carries none of them."""
+    for words, base in sizes:
+        if any(word in model_id for word in words):
+            return base
+    return None
+
+
+def _infer_quality_rank(model_id: str) -> int | None:
+    """A rank inferred from a RECOGNISED family + size, or None.
+
+    ID-BASED, not provider-based: the family lives in the name, and the same names
+    turn up behind an OpenAI-compatible proxy. Returning None is always allowed and
+    is what an unrecognised name gets — see the conservatism note above."""
+    mid = model_id.lower()
+
+    if mid.startswith("claude"):
+        # Anthropic names the tier outright, which is the whole reason this family
+        # is worth inferring at all. Both orderings occur: `claude-sonnet-5` and
+        # the older `claude-3-5-sonnet-…`, so the tier word is searched anywhere
+        # and the first number after "claude-" is the generation.
+        for tier, base in _ANTHROPIC_TIERS:
+            if tier in mid:
+                return base - _version_bonus(_ANTHROPIC_MAJOR.search(mid))
+        return None
+
+    if mid.startswith("gemini"):
+        base = _size_base(mid, _GOOGLE_SIZES)
+        if base is None:
+            return None
+        return base - _version_bonus(_GEMINI_MAJOR.search(mid))
+
+    if mid.startswith("gpt-") or _O_SERIES_MAJOR.match(mid):
+        # OpenAI's names say size ("mini"/"nano") far more reliably than they say
+        # strength — gpt-4.1 and gpt-4o are the same generation and not the same
+        # model — so a plain id gets ONE base and the tie is broken by insertion
+        # order, which is the honest answer.
+        base = _size_base(mid, _OPENAI_SIZES)
+        if base is None:
+            base = _OPENAI_BASE
+        major = _GPT_MAJOR.search(mid) or _O_SERIES_MAJOR.match(mid)
+        return base - _version_bonus(major)
+
+    return None
+
+
+def quality_rank_for_live_id(provider_id: str, model_id: str) -> int:
+    """The rank for an id THE PROVIDER LISTED: exact curated, else the curated entry
+    this is a dated/pinned/preview build of, else family inference, else unranked.
+
+    Never returns None: an id that reaches here exists, and ``_UNRANKED_QUALITY_RANK``
+    is the "nobody has assessed this" answer the picker has always used for it."""
+    curated = curated_entries(provider_id)
+    for entry in curated:
+        if entry.id == model_id:
+            return entry.quality_rank if entry.quality_rank is not None else _UNRANKED_QUALITY_RANK
+    normalized = _normalized_id(model_id)
+    for entry in curated:
+        if _normalized_id(entry.id) == normalized and entry.quality_rank is not None:
+            return entry.quality_rank
+    inferred = _infer_quality_rank(model_id)
+    return inferred if inferred is not None else _UNRANKED_QUALITY_RANK
+
+
 def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
     """The picker's entries for a provider, built from THE IDS IT ACTUALLY SERVES.
 
@@ -327,14 +540,17 @@ def catalog_from_live_ids(provider_id: str, ids: list[str]) -> list[CloudModel]:
             continue
         seen.add(model_id)
         # Raw id as the label: this file's rule is real names, never invented
-        # copy, and a prettifier would be inventing one.
+        # copy, and a prettifier would be inventing one. The RANK, unlike the
+        # label, can be improved for an id the curated table half-recognises —
+        # see quality_rank_for_live_id (2026-08-12: without it every id newer
+        # than the table shared one rank and routing had one tier).
         out.append(
             CloudModel(
                 id=model_id,
                 label=model_id,
                 description="",
                 provider=provider_id,
-                quality_rank=_UNRANKED_QUALITY_RANK,
+                quality_rank=quality_rank_for_live_id(provider_id, model_id),
             )
         )
     return out
@@ -591,6 +807,11 @@ def _parse_model_entry(raw) -> tuple[float, CloudModel] | None:
             _branch(_branch(capabilities, "thinking"), "types"), "adaptive"
         ),
         effort_levels=_effort_levels(capabilities),
+        # The live list still decides WHICH Anthropic models exist — this only
+        # ranks one it just listed. Before 2026-08-12 every live Anthropic entry
+        # carried rank None, so Opus, Sonnet and Haiku were one undifferentiated
+        # bucket to quality-first routing.
+        quality_rank=quality_rank_for_live_id("anthropic", model_id),
     )
     return (_created_sort_key(raw.get("created_at")), model)
 
