@@ -220,3 +220,33 @@ def mark_untrusted(text: str, verdict: ScreeningResult | None = None) -> str:
     if not flagged:
         return text
     return f"{UNTRUSTED_MARKER}\n\n{text}"
+
+
+def screenable_text(content: object) -> str:
+    """One string carrying every piece of text in ``content``, AS IT WAS WRITTEN.
+
+    The correct input to :func:`screen` for structured data, and deliberately not
+    a serialization: ``json.dumps`` writes a newline as the two characters
+    backslash-n, which glues the "n" onto the next word and turns the document
+    into one line, so an injection at the head of a line survives the escape
+    unreadable to every anchored rule while remaining perfectly readable to the
+    model. That is the one combination this module must not allow.
+
+    So the leaves are read as strings and rejoined with real newlines. Keys as
+    well as values, on the precedent of ``mcp_client``'s string scrub: a
+    page-supplied field name is page-supplied text. Nothing is truncated: this
+    string is looked at once and dropped, never returned to anybody.
+
+    It lives here rather than in the orchestrator because every screener needs
+    it (the orchestrator's tool-result seam and the routine-file import both do),
+    and a caller that serializes instead has quietly disabled half the rules.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return "\n".join(
+            screenable_text(part) for item in content.items() for part in item
+        )
+    if isinstance(content, list):
+        return "\n".join(screenable_text(item) for item in content)
+    return str(content)

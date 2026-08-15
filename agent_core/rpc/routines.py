@@ -1,18 +1,75 @@
 """routine.* handlers — propose a routine from the conversation, confirm-save it,
-list, run, and delete (engineering-spec §7, §6)."""
+list, run, delete, and share it in and out of this machine (spec §7, §6).
+
+THE SHARING HALF, in one paragraph, because it is the part that reads a file a
+stranger wrote. A routine leaves as the portable format
+(``routines/portable.py``) and comes back through it, and the reader there is
+strict and refuses rather than repairs. What this module adds on top is
+everything the pure reader deliberately does not do: the picker round-trip (so
+the core never learns a path), the check that every step names an action THIS
+build actually holds, the availability question the library already asks, the
+screening of the file's wording, and a preview that saves nothing at all. Only
+``routine.importConfirm`` writes, and it writes through ``RoutineBuilder.save``
+like every other routine.
+"""
 
 from __future__ import annotations
 
+import json
 import threading
+import time
 
 from agent_core.policy import PolicyMode
 from agent_core.protocol import Method
 from agent_core.routines.model import Routine, RoutineStep, routine_uses_dev_abilities
+from agent_core.routines.portable import parse_portable, to_portable
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
     _ROUTINE_DEV_ABILITIES_MESSAGE,
     _SERVER_ERROR,
     _unavailable_marker,
+)
+from agent_core.screening import mark_untrusted, screen, screenable_text
+
+# --- plain sentences for the sharing paths ---------------------------------
+# Personas 54 and 68 (design-doc §5): every one of these is something a person can
+# act on, and none of them names a file format, a rule, or a field of a payload.
+
+_NEEDS_SHELL_MESSAGE = (
+    "Addison can only open and save files from the desktop app. Try again there."
+)
+_FILE_UNREADABLE_MESSAGE = (
+    "Addison couldn't read that file. Ask the person who sent it to share it again."
+)
+_NOTHING_TO_ADD_MESSAGE = (
+    "There's no shared routine waiting to be added. Choose the file again."
+)
+_NO_RESTORE_POINT_MESSAGE = (
+    "Addison couldn't save a restore point just now, so it didn't add anything. "
+    "Try again in a moment."
+)
+
+#: Said when the file's wording is shaped like an instruction to Addison. ONE
+#: SENTENCE, and deliberately toothless-sounding: it never names which rule fired
+#: and never quotes what was found, because both would reproduce the payload on a
+#: screen people photograph, and neither helps the person decide anything. What
+#: helps them decide is knowing Addison will read it as text.
+_SCREENING_NOTE = (
+    "Some of the wording in this file is written as if it were an instruction to "
+    "Addison. Addison will treat it as text."
+)
+
+#: The three sentences a person must be able to read before they say yes. They are
+#: MANDATORY and they ride on every preview, flagged or not: the honest thing to
+#: say about a file from somebody else is the same whether or not a pattern
+#: matcher happened to recognise something in it.
+_IMPORT_ASSURANCES = (
+    "This routine can't do anything you haven't approved. Addison still asks "
+    "before each action, exactly as it does now.",
+    "Addison hasn't checked what this routine is for. Only add it if you trust "
+    "the person who sent it.",
+    "You can delete it at any time, and Addison saves a restore point before "
+    "adding it.",
 )
 
 
@@ -53,6 +110,233 @@ class RoutinesMixin(ServerContext):
             return
         self._draft_routine = None
         self._respond(request_id, {"ok": True, "routineId": draft.id})
+
+    # --- sharing: out ---------------------------------------------------------
+
+    def _handle_routine_export(self, params: dict, request_id) -> None:
+        """routine.export: hand the shell a file to save, or say why not.
+
+        ``to_portable`` is the whole of the policy about what may leave: a command
+        step and a default pointing at a folder on this machine each come back as a
+        sentence naming the field, and this method's only job when that happens is
+        to say it. It never scrubs and never exports a repaired version, the author
+        would learn on somebody else's machine that their routine had quietly
+        changed."""
+        routine_id = params.get("routineId")
+        if not isinstance(routine_id, str):
+            routine_id = ""
+        try:
+            routine = self.routine_library.get(routine_id)
+        except KeyError as exc:
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+
+        portable = to_portable(routine)
+        if isinstance(portable, str):
+            # A refusal from the format itself, already a plain sentence.
+            self._respond(request_id, {"ok": False, "error": portable})
+            return
+
+        bridge = self._shell_bridge
+        if bridge is None:
+            self._respond(request_id, {"ok": False, "error": _NEEDS_SHELL_MESSAGE})
+            return
+        try:
+            path = bridge.save_new_file(
+                _export_filename(routine.name), json.dumps(portable, indent=2)
+            )
+        except RuntimeError as exc:
+            # Includes the person cancelling the save dialog. The bridge's messages
+            # are already plain (shell_bridge.py), so they are passed through.
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+        self._respond(request_id, {"ok": True, "path": path})
+
+    # --- sharing: in ----------------------------------------------------------
+
+    def _handle_routine_import_preview(self, request_id) -> None:
+        """routine.importPreview: read the file the person chooses and DESCRIBE it.
+
+        Nothing here writes. That is the safety property the three-method split
+        exists for: everything that reads a stranger's bytes happens in a call that
+        cannot leave a row behind, so a file that is refused halfway through, or a
+        person who changes their mind at the card, leaves the database exactly as it
+        was.
+
+        The order of the checks is deliberate and each one ends the call:
+
+          1. the strict reader (``parse_portable``), a refusal is the WHOLE answer,
+             because nothing else about a file it will not read is worth computing;
+          2. every step names an action this build holds. The reader cannot ask
+             this: ``routines/`` may not import ``tools/`` (CLAUDE.md §2), and the
+             set of actions is the registry's to know;
+          3. does it need Developer, asked with ``_routine_needs_dev``, the same
+             function the library list and dispatch ask, so the preview cannot
+             promise something the row will then contradict;
+          4. screening, which NEVER refuses. A flagged file is added if the person
+             says yes; what changes is that the description is stored marked and the
+             preview says so in one sentence.
+        """
+        bridge = self._shell_bridge
+        if bridge is None:
+            self._respond(request_id, {"ok": False, "error": _NEEDS_SHELL_MESSAGE})
+            return
+        try:
+            # THE CORE NEVER SEES A PATH. The shell puts up the picker and answers
+            # with an opaque handle scoped to the one file the person chose, so
+            # nothing read out of that file can be used to reach a second one.
+            handle = bridge.pick_file()
+            content = bridge.read_scoped_file(handle).get("content", "")
+        except RuntimeError as exc:
+            # Cancelling the picker lands here too, which is right: there is nothing
+            # to preview and the shell's own sentence says so.
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+
+        try:
+            data = json.loads(content)
+        except (ValueError, TypeError):
+            self._respond(request_id, {"ok": False, "error": _FILE_UNREADABLE_MESSAGE})
+            return
+
+        routine = parse_portable(data)
+        if isinstance(routine, str):
+            self._respond(request_id, {"ok": False, "error": routine})
+            return
+
+        unknown = self._unknown_tool_refusal(routine)
+        if unknown is not None:
+            self._respond(request_id, {"ok": False, "error": unknown})
+            return
+
+        verdict = screen(_routine_screenable_text(routine))
+
+        # HELD, not answered with. The confirm re-reads this and re-parses it, so
+        # the only thing that can reach the database is what this call actually
+        # read off the disk, never a payload that went out to the webview and came
+        # back. See _handle_routine_import_confirm.
+        self._draft_import = data
+
+        payload = {
+            "ok": True,
+            "name": routine.name,
+            # AS WRITTEN. The person is being asked to judge this file, so they see
+            # its own words; the marker goes on the copy a MODEL will later read
+            # (the stored description), which is a different reader with a different
+            # problem.
+            "description": routine.description,
+            "steps": [
+                f"{index + 1}. {self._label(step.tool_id)}"
+                for index, step in enumerate(routine.steps)
+            ],
+            "variables": [
+                {"name": v.name, "prompt": v.prompt, "default": v.default}
+                for v in routine.variables
+            ],
+            "needsDeveloper": self._routine_needs_dev(routine),
+            "assurances": list(_IMPORT_ASSURANCES),
+        }
+        if verdict.flagged:
+            # Kinds are NEVER on the wire (screening.py owns that rule), one plain
+            # sentence, or the key is absent entirely.
+            payload["screeningNote"] = _SCREENING_NOTE
+        self._respond(request_id, payload)
+
+    def _handle_routine_import_confirm(self, request_id) -> None:
+        """routine.importConfirm: add the routine the preview described.
+
+        IT TRUSTS NOTHING THE PREVIEW SAID, and takes no parameters at all. What it
+        holds between the two calls is the file's own parsed bytes, and it runs the
+        entire preview again over them: parse, screen, save. So the row that lands
+        is built from what was read off the disk, not from a payload that made a
+        round trip through the lowest-trust process in the system, a webview that
+        edited a name, a step or a screening verdict on the way back changes
+        nothing here, because none of those cross the wire.
+
+        Re-parsing is also what makes two adds of the same file two routines rather
+        than one: ``parse_portable`` mints the id, so each call mints a fresh one
+        and neither can take the place of a row somebody already has.
+        """
+        data = self._draft_import
+        if data is None:
+            self._respond(request_id, {"ok": False, "error": _NOTHING_TO_ADD_MESSAGE})
+            return
+
+        routine = parse_portable(data)
+        if isinstance(routine, str):
+            self._draft_import = None
+            self._respond(request_id, {"ok": False, "error": routine})
+            return
+        unknown = self._unknown_tool_refusal(routine)
+        if unknown is not None:
+            self._draft_import = None
+            self._respond(request_id, {"ok": False, "error": unknown})
+            return
+
+        # SCREENED AGAIN, HERE, and the verdict used is this one. The preview's
+        # answer is a fact about a moment that has passed, and the caller of
+        # ``mark_untrusted`` has to be the one that screened the text it is marking
+        # (screening.py says why the verdict parameter exists). Routine-file import
+        # is the fifth origin of screened text alongside the web tools, the file
+        # tools and MCP results, owner decision 2026-08-15, "import screens the
+        # picked file's text"; docs/untrusted-screening-plan.md owns the list.
+        verdict = screen(_routine_screenable_text(routine))
+        # The stored description is what a MODEL reads when the routine is later
+        # run or described, so that is the copy the note goes in front of. It is
+        # marked and never dropped: removing the passage would leave the model
+        # answering from a hole, and would destroy the evidence that somebody tried.
+        routine.description = mark_untrusted(routine.description, verdict)
+
+        # G3: the restore point comes FIRST, and a failure REFUSES the import. This
+        # is the routine_delete rule pointed the other way, adding somebody else's
+        # routine is exactly the change a person may want undone in one action, and
+        # doing it with no way back is the outcome the floor exists to prevent.
+        if not self._snapshot_auto("routine_import"):
+            self._respond(request_id, {"ok": False, "error": _NO_RESTORE_POINT_MESSAGE})
+            return
+
+        try:
+            self.routine_builder.save(
+                routine,
+                # NO conversation id: this routine was not made in a conversation on
+                # this machine, and a made-up one would be a lie a surface reads.
+                conversation_id=None,
+                # THE RECEIVER'S mode, never the sender's, the portable format does
+                # not carry ``created_in_mode`` at all (portable.py says why), and
+                # this stamp is about where the row was born, which is here.
+                mode=self._mode(),
+                imported_at=int(time.time()),
+            )
+        except ValueError as exc:
+            # RoutineBuilder.save stays the single writer, refusals included. The
+            # format cannot express a command step, so this arm is unreachable
+            # today; it is here because "the writer refuses" must be a sentence and
+            # never a traceback if that ever changes.
+            self._draft_import = None
+            self._respond(request_id, {"ok": False, "error": str(exc)})
+            return
+
+        self._draft_import = None
+        self._respond(request_id, {"ok": True, "routineId": routine.id})
+
+    def _unknown_tool_refusal(self, routine: Routine) -> str | None:
+        """One plain sentence when a step names an action this build does not have.
+
+        ``find`` rather than ``visible_tools``: the question here is whether the
+        action EXISTS at all, which is what makes a file unreadable. Whether the
+        active profile may use it is a different question, asked by
+        ``_routine_needs_dev`` below, and answered by listing the row disabled
+        rather than by refusing the file (owner decision 2026-08-15: any profile may
+        import).
+        """
+        for step in routine.steps:
+            if self.tool_registry.find(step.tool_id) is None:
+                return (
+                    f"This shared routine uses an action Addison doesn't have, called "
+                    f"\"{step.tool_id}\". Ask the person who sent it to share it again "
+                    "from the same version of Addison."
+                )
+        return None
 
     # --- the ONE availability question (owner decision 2026-08-08) -------------
 
@@ -166,6 +450,10 @@ class RoutinesMixin(ServerContext):
                 # Display-only mode provenance: lets the frontend badge dev-created
                 # routines ("DEV" tag). Never consulted for permissions.
                 "createdInMode": entry.get("createdInMode"),
+                # The other display-only provenance field, on identical terms: when
+                # this routine arrived from a shared file, or null when it was made
+                # here. Nothing reads it to decide anything, here or anywhere else.
+                "importedAt": entry.get("importedAt"),
                 "variables": [
                     {"name": v.name, "prompt": v.prompt, "default": v.default}
                     for v in routine.variables
@@ -293,3 +581,54 @@ class RoutinesMixin(ServerContext):
         with self._perm_lock:
             waiter = self._permission_waiters.pop(waiter_key, None)
         return bool(waiter and waiter["allow"])
+
+
+# --- module helpers ---------------------------------------------------------
+
+
+def _routine_screenable_text(routine: Routine) -> str:
+    """Every piece of text in ``routine``, AS IT WAS WRITTEN, joined by REAL newlines.
+
+    The screener's input, and the joining is the whole point rather than a detail.
+    Screening ``json.dumps`` of the routine would be screening a different string:
+    the escape turns a newline into the two characters backslash-n, which glues the
+    next word shut and erases every line start, and a line start is exactly what
+    the anchored rules key on (``screening.py``: an authority header, a forged turn
+    marker). An instruction at the head of a line would survive that escape
+    unreadable to every rule and perfectly readable to the model, which is the one
+    combination that must not exist. Same reasoning, and the same technique, as the
+    the tool-result seam, ``screening.screenable_text``; ``args_template`` is a
+    nested structure, so its leaves are read by that function itself.
+
+    Which fields: the name, the description, every variable's question and suggested
+    answer, and every leaf of every step's arguments. That is all the free text the
+    portable format carries, the rest of it is ids, a version number and a closed
+    vocabulary of failure modes.
+    """
+    parts: list[str] = [routine.name, routine.description]
+    for variable in routine.variables:
+        parts.append(variable.name)
+        parts.append(variable.prompt)
+        if variable.default is not None:
+            parts.append(variable.default)
+    for step in routine.steps:
+        parts.append(screenable_text(step.args_template))
+    return "\n".join(parts)
+
+
+def _export_filename(name: str) -> str:
+    """A safe, recognisable filename stem for an exported routine.
+
+    The person names the file in their own save dialog; this is only the suggestion
+    that appears in it. Reduced to letters, digits, spaces and hyphens because the
+    name is the routine's own free text and a suggestion containing a slash or a
+    ``..`` would be a path proposal rather than a filename. Empty after that (a
+    name written entirely in punctuation) falls back to a fixed stem rather than an
+    empty one.
+    """
+    kept = "".join(
+        character if (character.isalnum() or character in " -_") else " "
+        for character in name
+    )
+    stem = " ".join(kept.split())[:60].strip()
+    return f"{stem or 'routine'}.json"

@@ -84,6 +84,11 @@ class ServerContext:
         _active_profile: Profile | None
         _draft_routine: Routine | None
         _draft_widget: dict | None
+        # Routine sharing: the PARSED BYTES of the file routine.importPreview read,
+        # held until routine.importConfirm re-parses them. The file's own content and
+        # never a payload the webview could edit, which is what lets the confirm
+        # take no parameters at all (rpc/routines.py says why).
+        _draft_import: dict | None
         _last_run_routine_id: str | None
         _message_ids: list[str]
         _conversation_created: bool

@@ -204,6 +204,10 @@ _BRIDGE_CALLS = (
     ("read_workspace_file", ("/tmp/project/a.py",)),
     ("restore_workspace_file", ("/tmp/project/a.py", "print()")),
     ("pick_directory", ()),
+    # The file picker joins its folder sibling on the DEFAULT budget, and for the
+    # same reason the note below records: a person is in front of both dialogs, and
+    # whether that deserves the human-paced budget is a separate call from this one.
+    ("pick_file", ()),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
     ("get_device_key", ()),
@@ -271,7 +275,7 @@ class _RecordingBridge(IpcShellBridge):
         self.calls.append((method, timeout))
         # One dict that satisfies every caller's unwrapping.
         return {"path": "/tmp/x", "draftRef": "d", "text": "t", "content": "c", "key": "",
-                "existed": False, "prior": None}
+                "existed": False, "prior": None, "fileHandle": "h"}
 
 
 def test_only_the_keychain_calls_wait_at_a_persons_pace():

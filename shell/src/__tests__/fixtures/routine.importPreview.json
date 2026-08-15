@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "name": "Morning news",
+  "description": "Looks up one topic each morning.",
+  "steps": [
+    "1. Search the web"
+  ],
+  "variables": [
+    {
+      "name": "topic",
+      "prompt": "What should I look up?",
+      "default": null
+    }
+  ],
+  "needsDeveloper": false,
+  "assurances": [
+    "This routine can't do anything you haven't approved. Addison still asks before each action, exactly as it does now.",
+    "Addison hasn't checked what this routine is for. Only add it if you trust the person who sent it.",
+    "You can delete it at any time, and Addison saves a restore point before adding it."
+  ]
+}

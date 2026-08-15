@@ -39,6 +39,9 @@ export const Method = {
   // a boolean, so a later cause slots in. DISPLAY ONLY: `routine.run` refuses on
   // its own, with the same sentence, whatever this field says. Mirrored in
   // protocol.py; the parsed shape lives in types/ui.ts (ArtifactUnavailable).
+  // A row also carries `importedAt`: the epoch second it arrived from a shared
+  // file, or null when it was made here. Display-only provenance, on the same
+  // terms as `createdInMode`, and nothing decides anything from it.
   RoutineList: "routine.list",
   // The reply carries `answer` — the last text the run produced (owner decision
   // 2026-08-12). A routine's steps are tool calls, so that is the last succeeding
@@ -52,6 +55,29 @@ export const Method = {
   // how it ended.
   RoutineStepUpdate: "routine.stepUpdate",
   RoutineDelete: "routine.delete",
+
+  // Routine sharing. A routine travels as the PORTABLE format
+  // (agent_core/routines/portable.py), a whitelist of fields, never the stored
+  // row, and the three methods split so that reading a stranger's file can never
+  // write anything.
+  //
+  // {routineId} -> {ok, path} | {ok:false, error}. The core serialises and the
+  // shell's ordinary save-a-new-file dialog lets the person name the file. A
+  // routine the format cannot express (a command step, a default pointing at a
+  // folder on this machine) comes back with one plain sentence naming the field.
+  RoutineExport: "routine.export",
+  // {} -> {ok, name, description, steps, variables, needsDeveloper,
+  //        screeningNote?, assurances} | {ok:false, error}
+  // The picker is opened by the SHELL and the core never sees a path. Nothing is
+  // saved by this call. `screeningNote` appears only when the file's wording was
+  // flagged as instruction-shaped, and is one plain sentence, never a rule name
+  // and never a quote of the text. `assurances` are the three sentences shown
+  // above the Add button.
+  RoutineImportPreview: "routine.importPreview",
+  // {} -> {ok, routineId} | {ok:false, error}. Carries no routine content: the
+  // parsed file is held in the core between the two calls, so nothing edited in
+  // the webview can reach the database. A restore point is taken first.
+  RoutineImportConfirm: "routine.importConfirm",
   ProfileGet: "profile.get",
   ProfileSet: "profile.set",
   ModelAvailableRoles: "model.availableRoles",

@@ -978,6 +978,31 @@ def test_available_roles_answers_without_store(tmp_path):
         _shutdown(reader, thread)
 
 
+def test_the_three_sharing_methods_are_dispatched_and_answer_plainly(tmp_path):
+    """The jobs table, not the behaviour (tests/test_routine_import.py owns that).
+
+    A method that exists in protocol.py but is missing from the dispatch table
+    answers "method not found" forever, and the drift test cannot see it because the
+    NAME is present on both sides. So: each of the three is routed, and each answers
+    a result frame rather than an error, even with no shell to pick a file with."""
+    server, reader, writer, _, thread = _server(tmp_path, [])
+    try:
+        for request_id, method, params in (
+            (40, Method.ROUTINE_EXPORT, {"routineId": "nope"}),
+            (41, Method.ROUTINE_IMPORT_PREVIEW, {}),
+            (42, Method.ROUTINE_IMPORT_CONFIRM, {}),
+        ):
+            reader.feed(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            )
+            frame = writer.wait_for(lambda f, i=request_id: f.get("id") == i)
+            assert "result" in frame, f"{method} is not wired into the dispatch table"
+            assert frame["result"]["ok"] is False
+            assert frame["result"]["error"]
+    finally:
+        _shutdown(reader, thread)
+
+
 def test_routine_propose_confirm_list_run_round_trip(tmp_path):
     """§6.3/§6.4 over IPC: a live tool turn becomes a saved routine, and running
     it reuses the live grant — the permission card appears exactly once."""

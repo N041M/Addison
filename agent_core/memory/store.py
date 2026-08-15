@@ -70,6 +70,11 @@ class Store:
         self._add_column_if_missing(
             "widgets", "created_in_mode", "TEXT NOT NULL DEFAULT 'safe'"
         )
+        # Routine sharing. Same idiom, same guard: schema.sql carries it on a fresh
+        # database (no-op), an older one gets it added. NULL is the only honest
+        # default, every routine that predates importing was made here, and a NULL
+        # says exactly that rather than inventing an arrival time.
+        self._add_column_if_missing("routines", "imported_at", "INTEGER")
         # Presence leaves the keychain (plan §4.1). Same idiom, same guard: a fresh
         # DB already has the column from schema.sql (no-op); an older one gets it
         # with the ONLY safe default. 'unknown' — never 'absent' — because a row
@@ -670,26 +675,33 @@ class Store:
         created_from_conversation_id: str | None,
         created_at: int,
         created_in_mode: str = "safe",
+        imported_at: int | None = None,
     ) -> None:
         """Persist a confirmed Routine (§6.3 — only ever after explicit user
         confirmation). ``plan_json`` is the §6.2 declarative plan; it is stored
         as JSON text and never contains code by construction. ``created_in_mode``
         records the policy mode it was saved under ('safe' | 'open') as display
         provenance; availability is decided from the plan, never from this column
-        (``rpc/routines.py::_routine_needs_dev``, owner decision 2026-08-08)."""
+        (``rpc/routines.py::_routine_needs_dev``, owner decision 2026-08-08).
+
+        ``imported_at`` is the second display-only column and follows the same rule:
+        it says this row arrived from a file somebody else wrote, and it decides
+        nothing. NULL (the default) means it was made here."""
         self._conn.execute(
             "INSERT INTO routines "
             "(id, name, description, plan_json, created_from_conversation_id, "
-            " created_at, updated_at, created_in_mode) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            " created_at, updated_at, created_in_mode, imported_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (id, name, description, json.dumps(plan_json),
-             created_from_conversation_id, created_at, created_at, created_in_mode),
+             created_from_conversation_id, created_at, created_at, created_in_mode,
+             imported_at),
         )
         self._conn.commit()
 
     def list_routines(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, name, description, plan_json, run_count, last_run_at, created_in_mode "
+            "SELECT id, name, description, plan_json, run_count, last_run_at, "
+            "created_in_mode, imported_at "
             "FROM routines ORDER BY created_at ASC, rowid ASC"
         ).fetchall()
         return [
@@ -698,7 +710,8 @@ class Store:
 
     def get_routine(self, routine_id: str) -> dict[str, Any] | None:
         row = self._conn.execute(
-            "SELECT id, name, description, plan_json, run_count, last_run_at, created_in_mode "
+            "SELECT id, name, description, plan_json, run_count, last_run_at, "
+            "created_in_mode, imported_at "
             "FROM routines WHERE id = ?",
             (routine_id,),
         ).fetchone()

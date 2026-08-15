@@ -42,6 +42,7 @@ from agent_core.snapshots.scope import _CAPTURED_TABLES
 from agent_core.snapshots.snapshot_manager import _canonical, _fingerprint
 from agent_core.tools.base import ActionSnapshot, call_permission_detail
 from agent_core.tools.read_web_page import ReadWebPageTool
+from agent_core.tools.web_search import WebSearchTool
 from agent_core.tools.registry import ToolRegistry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -346,10 +347,75 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         # automation it holds (step 8 phase 4), and no single call can show both.
         "automation.list.simple": _automation_list_simple_fixture(server),
         "automation.disarmOrphan": _automation_disarm_orphan_fixture(server),
+        "routine.importPreview": _routine_import_preview_fixture(server),
         "costPlan.propose": server._cost_plan_propose(),
         "endpoint.proposeFromConversation": server._endpoint_propose(),
         "tool.activityUpdate": _activity_notification(server),
     }
+
+
+# The shared-routine file the import fixture previews. A fixed literal, so the
+# committed payload is byte-stable, and deliberately CLEAN: the flagged shape is
+# pinned in pytest (tests/test_routine_import.py), where an injection string can
+# live without being copied into a file the frontend suite reads on every run.
+_IMPORT_FIXTURE_FILE = json.dumps(
+    {
+        "addison_routine": {"version": 1},
+        "name": "Morning news",
+        "description": "Looks up one topic each morning.",
+        "variables": [{"name": "topic", "prompt": "What should I look up?", "default": None}],
+        "steps": [
+            {
+                "step_id": "step_1",
+                "tool_id": "web_search",
+                "args_template": {"query": "{{topic}}"},
+                "depends_on": [],
+                "on_failure": "abort",
+                "model_role": None,
+            }
+        ],
+    }
+)
+
+
+class _FixtureFileBridge:
+    """The shell's half of the import picker, answering one fixed file."""
+
+    def pick_file(self) -> str:
+        return "fixture-handle"
+
+    def read_scoped_file(self, file_handle: str) -> dict:
+        return {"content": _IMPORT_FIXTURE_FILE, "kind": "text"}
+
+
+def _routine_import_preview_fixture(server: JsonRpcServer) -> dict:
+    """A ``routine.importPreview`` payload with every optional part decided.
+
+    Generated through the real handler, which is the point: the assurances, the
+    numbered step list and the absent `screeningNote` are what the frontend renders,
+    and a hand-written copy of them is exactly the drift this module exists to catch.
+    The registry has to hold the step's tool for the preview to succeed, so the
+    server is given the real one for the length of this call and put back after.
+
+    NOTHING IS SAVED by a preview, so this leaves no row behind and the fixtures
+    after it are unaffected.
+    """
+    previous_bridge = server._shell_bridge
+    previous_registry = server.tool_registry
+    registry = ToolRegistry()
+    registry.register(WebSearchTool())
+    server._shell_bridge = _FixtureFileBridge()  # type: ignore[assignment]
+    server.tool_registry = registry
+    captured: list[dict] = []
+    original = server._write_frame
+    server._write_frame = captured.append  # type: ignore[method-assign]
+    try:
+        server._handle_routine_import_preview(1)
+    finally:
+        server._write_frame = original  # type: ignore[method-assign]
+        server.tool_registry = previous_registry
+        server._shell_bridge = previous_bridge
+    return captured[0]["result"]
 
 
 def _workspace_list_fixture(server: JsonRpcServer) -> dict:

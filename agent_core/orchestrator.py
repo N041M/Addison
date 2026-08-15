@@ -39,7 +39,7 @@ from agent_core.providers.base import (
 )
 from agent_core.providers.router import ModelRouter, RoutingCandidate
 from agent_core.redaction import redact, redacted_for_model
-from agent_core.screening import mark_untrusted, screen
+from agent_core.screening import mark_untrusted, screen, screenable_text
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
@@ -169,34 +169,6 @@ def _result_as_text(content: Any) -> str:
             return json.dumps(content, ensure_ascii=False, default=str)
         except (TypeError, ValueError):
             return json.dumps(str(content), ensure_ascii=False)
-    return str(content)
-
-
-def _screenable_text(content: Any) -> str:
-    """One string carrying every piece of text in ``content``, AS IT WAS WRITTEN.
-
-    The screener's input, and deliberately not ``_result_as_text``'s output. That
-    function's job is to make a tool result safe to hand a model, and the escaping
-    that does it — a newline becoming the two characters backslash-n — destroys
-    exactly what the screening rules anchor on: a line start, and the word boundary
-    in front of the first word of a line. An injection at the head of a line
-    survives the escape unreadable to every anchored rule while remaining perfectly
-    readable to the model, which is the one combination that must not exist.
-
-    So the leaves are read as strings and rejoined with real newlines. Keys as well
-    as values, on ``mcp_client._scrub_strings``' precedent: a page-supplied field
-    name is page-supplied text. Nothing is truncated here — this string is never
-    returned to anybody, it is looked at once and dropped."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):
-        return "\n".join(
-            _screenable_text(part)
-            for item in content.items()
-            for part in item
-        )
-    if isinstance(content, list):
-        return "\n".join(_screenable_text(item) for item in content)
     return str(content)
 
 
@@ -1088,9 +1060,9 @@ class Orchestrator:
                     # override rule stops matching. Every line-anchored rule is lost
                     # the same way, since the document becomes one line. So the
                     # screener reads the leaves as the page wrote them
-                    # (`_screenable_text`) and the MARK goes in front of the text the
+                    # (`screening.screenable_text`) and the MARK goes in front of the text the
                     # model is actually handed.
-                    found = screen(_screenable_text(result.content))
+                    found = screen(screenable_text(result.content))
                     if found.flagged:
                         screened_kinds = found.kinds
                         # The MODEL's copy is the marked text. A dict result becomes

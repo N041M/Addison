@@ -270,7 +270,7 @@ def test_an_injection_at_the_head_of_a_line_is_not_lost_to_the_serializer():
     way, so screening the serialization screens a form only the screener sees.
 
     Mutation: screen ``_result_as_text(result.content)`` instead of
-    ``_screenable_text(result.content)`` — the two kinds below are gone and only
+    ``screening.screenable_text(result.content)``: the two kinds below are gone and only
     the rules that happen to be boundary-free still fire."""
     conv, rows, _, _ = _run_turn()
     kinds = [r for r in rows if r["outcome"] == "granted"][0]["screened"] or ""

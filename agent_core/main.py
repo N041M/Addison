@@ -751,6 +751,9 @@ class JsonRpcServer(
         self._turn_context_usage: tuple[int, int | None] | None = None
         self._draft_routine = None            # pending §6.3 proposal awaiting confirmSave
         self._draft_widget = None              # pending widget proposal awaiting confirmSave
+        # The parsed shared-routine file routine.importPreview read, awaiting
+        # routine.importConfirm. Never persisted and dropped on confirm.
+        self._draft_import = None
         # The most recently RUN saved routine this session — a widget proposed
         # right after a run offers that routine (mirrors "the last turn ran a
         # saved routine" heuristic; display-only signal, never a permission input).
@@ -1409,6 +1412,12 @@ class JsonRpcServer(
                     self._handle_routine_run(params, request_id)
                 elif kind == "routine_delete":
                     self._handle_routine_delete(params, request_id)
+                elif kind == "routine_export":
+                    self._handle_routine_export(params, request_id)
+                elif kind == "routine_import_preview":
+                    self._handle_routine_import_preview(request_id)
+                elif kind == "routine_import_confirm":
+                    self._handle_routine_import_confirm(request_id)
                 elif kind == "profile_get":
                     self._respond(request_id, self._profile_get())
                 elif kind == "profile_set":
@@ -2309,6 +2318,12 @@ _ROUTINE_JOBS = {
     Method.ROUTINE_LIST: "routine_list",
     Method.ROUTINE_RUN: "routine_run",
     Method.ROUTINE_DELETE: "routine_delete",
+    # Sharing. All three touch the Store or the shell (or both), so they queue with
+    # the rest: the preview blocks on a file picker a person has to answer, and the
+    # read loop is the thread that has to deliver the reply.
+    Method.ROUTINE_EXPORT: "routine_export",
+    Method.ROUTINE_IMPORT_PREVIEW: "routine_import_preview",
+    Method.ROUTINE_IMPORT_CONFIRM: "routine_import_confirm",
 }
 
 # conversation.new/load/list also run on the worker: load/list read the Store,
