@@ -22,6 +22,7 @@ from typing import Callable
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.policy import PolicyMode
 from agent_core.routines.model import Routine, RoutineStep
+from agent_core.routines.taint import RunTaint
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
@@ -262,6 +263,11 @@ class RoutineEngine:
         guards = self._guards_provider()
         step_results: dict[str, ToolResult] = {}
         step_log: list[dict] = []
+        # THE ONE FLOW EDGE (owner decision 4B, 2026-08-15). Per run, in memory,
+        # gone when the run returns — file-read output going into a network-bound
+        # step gets one extra line on that step's card. What it is and what it
+        # deliberately does not catch live in ``routines/taint.py``.
+        taint = RunTaint()
         context = ExecutionContext(
             conversation_id=f"routine:{routine.id}",
             shell_bridge=self.shell_bridge,
@@ -514,6 +520,15 @@ class RoutineEngine:
             # Asked once and used twice, exactly as the live loop does it: the
             # permission card and the Activity Panel must describe the SAME step.
             detail = call_permission_detail(tool, resolved_args, affected)
+            # THE FLOW LINE, decided AT THE MOMENT OF SUBSTITUTION — here, where
+            # the resolved values are known — and never at import or save time,
+            # when the arguments are still placeholders and there is nothing to
+            # compare. It rides the delete preview's mechanism (``preview``), so
+            # it is one extra plain line on the card and reaches nothing else: not
+            # ``detail``, not the audit row below, not a grant. ``force_card``
+            # makes sure there IS a card to carry it, in every profile — the card
+            # is the control in both.
+            taint_line = taint.line_for(tool_id, resolved_args)
             status = self.permission_gate.authorize(
                 tool_id,
                 mode=mode,
@@ -521,6 +536,8 @@ class RoutineEngine:
                 detail=detail,
                 guards=guards,
                 trusted=False,
+                preview=taint_line,
+                force_card=taint_line is not None,
             )
             if status == PermissionStatus.DENIED:
                 self._audit(routine, tool_id, detail, mode, destructive, "denied")
@@ -565,6 +582,10 @@ class RoutineEngine:
                 result.audit_outcome or "granted",
                 redacted=result.redacted_kinds or None,
             )
+            # Remembered only from a step that SUCCEEDED: a refusal's content is a
+            # sentence Addison wrote, not anything out of a file.
+            if result.success:
+                taint.record(tool_id, resolved_args, affected, result.content)
             if result.snapshot:
                 result.snapshot.tool_call_id = f"{run_id}:{step.step_id}"
                 self.undo_manager.record(result.snapshot)   # Routine runs are undoable too
