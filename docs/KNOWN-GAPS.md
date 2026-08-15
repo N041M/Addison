@@ -907,6 +907,45 @@ three of these as its honest limits):**
   nothing saying one came from the other. The information to draw them as one thing
   is stored (`continued_from_conversation_id`) and nothing in the sidebar reads it.
 
+**Opened by routine sharing (built 2026-08-15;
+[routine-sharing-plan.md](routine-sharing-plan.md) owns the subject and states all
+four of these as what remains uncaught):**
+
+These are attacks a shared routine can carry that nothing in the feature catches.
+They are tracked rather than closed because each has a real answer that is bigger
+than the feature was, and because the honest sentence about all four is the same:
+the plan carries zero permissions and every action in it still takes its card, so
+what is missing is the WARNING, never the gate.
+
+- **Injection phrased as ordinary prose is not flagged at import.** Screening is six
+  enumerated shapes, and a description written as plain, reasonable text that a model
+  will nonetheless act on reaches the model unmarked. Same standing limit as every
+  other screening origin ([untrusted-screening-plan.md](untrusted-screening-plan.md)
+  owns it); listed here because a routine description is read by a model on every
+  later run, which is a longer-lived exposure than one web page in one turn.
+- **The taint card is one edge, and three shapes of the same attack sit outside
+  it.** Its trigger is exact containment of a file-read output inside a
+  network-bound step's resolved arguments within one run. Text that a middle step
+  reworded, summarised or translated is a new string and is not found; a chain
+  across two routines is two runs and taint dies with the run; and contents a person
+  pasted into a variable by hand never passed through a file-reading step at all. In
+  every case the ordinary card still appears and only the flow sentence is missing.
+  Widening it means general taint tracking, which owner decision 4B declined for a
+  stated reason: a card line that guesses wrong is a card people learn to click
+  through.
+- **A plan whose danger is entirely in substituted values looks unremarkable at
+  import.** The preview can show the steps and the questions, and cannot show
+  resolved arguments, because they do not exist until the routine runs and the
+  person answers. The run card is where those values appear, per invocation, and is
+  the control this rests on. Anything that tried to close it at import would be
+  guessing at values nobody has entered.
+- **`tool_grants` capture is still open, and sharing makes it sharper.** It is the
+  last step-1 deferral (listed above) and would have to be an INTERSECT. A restore
+  that put grants back is one thing on a machine where every grant was made by the
+  person; it is another beside a library that can now contain a plan somebody else
+  wrote. Nothing has changed about the deferral itself, and this is the argument for
+  which side it must fail towards when it is built.
+
 **Feature suggestions judged 2026-08-09 (owner-reviewed), recorded in their
 judged shapes so the raw suggestions are not re-litigated later:**
 

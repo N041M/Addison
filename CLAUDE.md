@@ -284,13 +284,19 @@ ever admit is deferred, not answered — see the step-7 entry above.
 Still deferred: **fully-automatic task classification** for routing (the *choice
 logic* that picks a strategy per task — v2; the three *named* strategies plus the
 Developer custom chain ship now — see the routing section above, where balanced's cut
-is recorded), messaging channels, Routine step-editing UI, a Rust rewrite of the
-Agent Core, and one v2 item from the 2026-07 ecosystem survey: Routine
-export/import **sharing**, which is not to be pulled forward. (The survey's other v2 item,
-**untrusted-content screening**, is no longer deferred: its triggers fired and the
-owner pulled it forward on 2026-08-13. It is **built**, and
+is recorded), messaging channels, Routine step-editing UI, and a Rust rewrite of the
+Agent Core. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
+more.** **Untrusted-content screening** was pulled forward on 2026-08-13, its
+triggers having fired, and is **built**;
 [`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,
-including the honest statement of its strength.) The **Context Budget Manager /
+including the honest statement of its strength. **Routine export/import sharing**
+was pulled forward on 2026-08-15 and is **built**, in the narrow form four owner
+decisions of that day settled: any profile may import (a routine needing Developer
+lands listed and switched off), a command step is refused in both directions, the
+picked file's text is screened, and one exact card line rides on a network step
+carrying an earlier file-read's text.
+[`docs/routine-sharing-plan.md`](docs/routine-sharing-plan.md) owns it, including
+what remains uncaught. The **Context Budget Manager /
 automatic long-conversation continuation** left this list on 2026-08-14: it is
 **built** (spec §4.8), still orchestrator machinery and never a registry tool, and
 [`docs/context-budget-plan.md`](docs/context-budget-plan.md) owns what shipped and

@@ -451,6 +451,23 @@ export const ipc = {
     call(Method.RoutineConfirmSave, { name, description }),
   deleteRoutine: (routineId: string) => call(Method.RoutineDelete, { routineId }),
 
+  // Sharing a routine out and in. All three answer {ok:false, error} rather than
+  // rejecting, because every refusal here is a plain sentence the person is meant
+  // to read (a step that runs a command, a default pointing at a folder on this
+  // machine, a file that is not a routine) and a thrown Error would lose it.
+  //
+  // Both import calls put up an OS dialog inside the core's own turn (a picker,
+  // then nothing), so they take the long timeout for the same reason `sendMessage`
+  // does: a person deciding in a file dialog is not a slow engine.
+  exportRoutine: (routineId: string) =>
+    call(Method.RoutineExport, { routineId }, TURN_TIMEOUT_MS),
+  // Reads the file the person picks and DESCRIBES it. Saves nothing.
+  previewRoutineImport: () => call(Method.RoutineImportPreview, {}, TURN_TIMEOUT_MS),
+  // Adds what the preview described. Deliberately parameterless: the core holds
+  // the file's own bytes between the two calls, so nothing this process could
+  // edit reaches the database.
+  confirmRoutineImport: () => call(Method.RoutineImportConfirm),
+
   // Profiles (§4.7). `getProfile` returns the active profile, the pickable
   // profiles (label/description authored by the core), and the frontend feature
   // flags. `setProfile` switches immediately (no restart); callers re-fetch

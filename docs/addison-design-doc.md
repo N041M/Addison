@@ -1088,6 +1088,14 @@ three bars: persona fit (§5), full compatibility with every safety invariant
    ecosystems). Plans are data (§7.9/no-code invariant); an imported routine
    carries **zero permissions** and asks like any first run; §6.4's
    no-escalation rule travels with it. No marketplace. → *v2.*
+
+   > *Pulled forward and BUILT, 2026-08-15.* Four owner decisions of that day
+   > settled the shape: any profile may import, a command step is refused in both
+   > directions, the picked file's text is screened, and one exact card line rides
+   > on a network step carrying an earlier file-read's text. The body above stays as
+   > written, since it is the survey entry that started it and it is history now.
+   > [`routine-sharing-plan.md`](routine-sharing-plan.md) owns the subject, what
+   > shipped, and what remains uncaught.
 6. **Untrusted-content screening**: an advisory defense-in-depth layer that
    inspects tool-returned content (web results, file text) for instruction-like
    payloads before the model consumes it, building on the untrusted-wrapping
