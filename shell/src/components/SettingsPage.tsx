@@ -15,7 +15,8 @@
 // Sections, in the brief's order: Where Addison thinks · Which model answers ·
 // API keys · Run a model on this computer · Routines · Skills · Profile · How
 // careful Addison is (Custom only) · Folders Addison may work in
-// (Developer/Custom only) · Tool servers (Developer/Custom only) · Automations
+// (EVERY profile since 2026-08-12 — the copy differs by mode) · Tool servers
+// (Developer/Custom only) · Automations
 // (EVERY profile — Simple lists them disabled, saying why) · Restore points ·
 // Diagnostics.
 //
@@ -85,8 +86,8 @@ interface Props {
   routing?: RoutingCardState;
   /** The workspace-trust bundle (useWorkspace; Phase-2 step 5). Optional so a
    * partial caller (older tests) still renders — the section is simply omitted
-   * then. It shows ONLY on the Developer/Custom surfaces (keyed off the active
-   * profile, never the mode); Simple never sees it. */
+   * then. It shows in EVERY profile since 2026-08-12 (owner decision); the mode
+   * decides the panel's copy, never whether it is on screen. */
   workspace?: WorkspaceCardState;
   /** The MCP tool-server bundle (useMcpServers; Phase-2 step 7 phase 1). Optional
    * so a partial caller (older tests) still renders — the section is simply
@@ -270,11 +271,14 @@ export function SettingsPage({
     return () => clearTimeout(t);
   }, [scrollTarget, onScrolled]);
 
-  // Developer/Custom only, keyed off the ACTIVE PROFILE and never the policy mode
-  // — the same gate the workspace-trust section uses, for the same reason.
+  // Developer/Custom only, keyed off the ACTIVE PROFILE and never the policy mode.
+  // Tool servers still live behind it; workspace trust does NOT, since 2026-08-12.
   const developerSurface =
     profile?.activeProfile === "developer" || profile?.activeProfile === "custom";
-  const showWorkspace = Boolean(workspace) && developerSurface;
+  // Workspace trust renders in EVERY profile now (owner decision 2026-08-12) — the
+  // gate is only that the profile has LOADED, because the panel's copy is chosen
+  // from the policy mode and `null` means "not answered yet", never "Simple".
+  const showWorkspace = Boolean(workspace) && Boolean(profile);
   const showMcp = Boolean(mcp) && developerSurface;
 
   return (
@@ -348,12 +352,21 @@ export function SettingsPage({
         </SurfaceSection>
       )}
 
-      {/* Workspace trust — the coding-harness boundary (Phase-2 step 5). Shown
-          ONLY on the Developer and Custom surfaces (keyed off the active profile,
-          never the policy mode); Simple never sees it. */}
+      {/* Folders Addison may work in — the trust boundary the two path-bounded file
+          tools scope by (Phase-2 step 5). It was Developer/Custom only until
+          2026-08-12; it renders in EVERY profile now, because Simple has had those
+          tools since 2026-08-11 and could otherwise never grant the one thing they
+          need (docs/SAFETY.md invariant 1 owns the decision). The ceremony is
+          identical in every profile — OS folder picker, then Addison's own
+          "Trust this folder?" confirm. What the profile changes is the COPY: the
+          panel takes the policy mode and tells the honest story for it. */}
       {showWorkspace && workspace && (
         <SurfaceSection label="Folders Addison may work in">
-          <WorkspaceTrustPanel connected={connected} workspace={workspace} />
+          <WorkspaceTrustPanel
+            connected={connected}
+            workspace={workspace}
+            asksBeforeEachChange={profile?.mode !== "open"}
+          />
         </SurfaceSection>
       )}
 

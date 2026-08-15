@@ -309,7 +309,8 @@ chat from any of them.
 **Settings sections, in order:** Where Addison thinks · Which model answers ·
 API keys · Run a model on this computer · Routines · Skills · Profile · How
 careful Addison is (Custom only) · Folders Addison may work in
-(Developer/Custom) · **Tool servers** (Developer/Custom) · Restore points ·
+(every profile since 2026-08-12; the copy differs by mode) · **Tool servers**
+(Developer/Custom) · Restore points ·
 Diagnostics. The description reads
 "Everything lives on this computer. Nothing leaves it without asking you
 first." Selecting a model role opens the **model popup**: a fixed-position

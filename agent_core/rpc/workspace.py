@@ -1,10 +1,18 @@
-"""workspace.* handlers — the OPEN-mode coding harness's trust boundary (step 5).
+"""workspace.* handlers — the trust boundary the typed file tools scope by (step 5).
 
-A "trusted folder" lets Addison read and edit files inside it WITHOUT a card for
-every change — each edit is still logged and undoable, and commands it runs still
-ask every time (owner decision 2026-07-24; contract §3/§4). Outside a trusted
-folder the typed file tools are hard-refused before they run (confinement, D3);
-``run_command`` is never affected either way (its ``affected_path`` is None).
+A "trusted folder" is where those tools may read and edit AT ALL. In OPEN they do
+it WITHOUT a card for every change — each edit is still logged and undoable, and
+commands Addison runs still ask every time (owner decision 2026-07-24; contract
+§3/§4). In SAFE, where the two file tools have lived since 2026-08-11, every
+change still takes a card that names the file, so what trust buys there is the
+reach and never the silence. Outside a trusted folder the typed file tools are
+hard-refused before they run (confinement, D3); ``run_command`` is never affected
+either way (its ``affected_path`` is None).
+
+GRANTING IS NOT MODE-GATED, and never has been: ``grantTrust`` / ``revokeTrust`` /
+``list`` / ``pickDirectory`` answer in either mode, which is what let the Settings
+panel reach every profile on 2026-08-12 with no change here. The mode gate below
+belongs to the review surface's read paths alone.
 
 This module owns:
   * the RPC (``grantTrust`` / ``revokeTrust`` / ``list`` / ``pickDirectory``, plus the

@@ -439,11 +439,21 @@ relaxes exactly these four, and only as spelled out above.
 
    **What this costs, said plainly:** design-doc §9's *"filesystem scope by picker,
    not by path"* no longer describes the whole of Simple. Simple's own tools still
-   scope by picker (`read_file`, `save_file`); these two scope by **trusted root**,
-   and a Simple person has no surface for granting one today: the workspace-trust
-   panel is Developer/Custom only, so in practice this reaches a Simple person only
-   for folders trusted while Developer was active. Giving Simple its own way to
-   trust a folder is a UX decision that has not been taken.
+   scope by picker (`read_file`, `save_file`); these two scope by **trusted root**.
+
+   **The follow-up this left open is CLOSED (owner decision, 2026-08-12): Simple
+   has the "Folders Addison may work in" panel.** For a day it did not: the panel
+   was Developer/Custom only, so the capability reached a Simple person only for
+   folders trusted while Developer was active, and a Simple-only person could not
+   grant one at all. The panel now renders in every profile
+   (`shell/src/components/SettingsPage.tsx`), and the Tools surface lists trusted
+   folders in every profile with it. **Nothing about the ceremony was relaxed to do
+   it**: the same two steps in every profile (the OS folder picker, then Addison's
+   own inline "Trust this folder?" confirm) and the same core-side floors behind
+   them (the data-dir refusal, the automation-dir refusal, absolute paths). What
+   differs by profile is the *copy*, because the truth differs: in OPEN the panel
+   says Addison reads and edits without asking first, and in SAFE it says Addison
+   asks before every change, which is what the per-invocation card actually does.
 2. **Every `risk_tier != LOW` tool must have a real `undo()`**, enforced at
    registration in `tools/registry.py` (it raises otherwise). Do NOT satisfy this
    with a no-op `undo()`; a tool that genuinely can't be undone stays LOW and

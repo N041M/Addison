@@ -61,7 +61,7 @@ function renderTools(over: Partial<Parameters<typeof ToolsSurface>[0]> = {}) {
       providers={PROVIDERS}
       roles={[]}
       trustedRoots={[]}
-      showTrustedFolders={false}
+      showToolServers={false}
       onAddKey={vi.fn()}
       onStopTrusting={onStopTrusting}
       {...over}
@@ -97,21 +97,28 @@ describe("the Tools surface", () => {
     expect(screen.getByText("on this computer")).toBeTruthy();
   });
 
-  it("hides trusted folders unless the profile is Developer or Custom", () => {
-    // Trust rows outlive a profile switch core-side, so Tools must apply the same
-    // gate Settings does — otherwise it is a back door to a surface Simple hides.
-    renderTools({ trustedRoots: ROOTS, showTrustedFolders: false });
-    expect(screen.queryByText("/Users/someone/project")).toBeNull();
-    cleanup();
-    renderTools({ trustedRoots: ROOTS, showTrustedFolders: true });
+  it("lists trusted folders in EVERY profile, tool servers only on the Developer surface", () => {
+    // FLIPPED 2026-08-12. This used to assert the opposite for folders ("hides
+    // trusted folders unless the profile is Developer or Custom"), which was right
+    // while Settings hid the granting panel from Simple. Simple has that panel now
+    // and its file tools genuinely read inside these folders, so a Tools page that
+    // left them out would understate Addison's reach on the one page whose job is
+    // stating it. The Developer gate survives for tool servers, which Simple truly
+    // cannot reach.
+    renderTools({ trustedRoots: ROOTS, showToolServers: false, mcpServers: [SERVER] });
     expect(screen.getByText("/Users/someone/project")).toBeTruthy();
+    expect(screen.queryByText("search_notes")).toBeNull();
+    cleanup();
+    renderTools({ trustedRoots: ROOTS, showToolServers: true, mcpServers: [SERVER] });
+    expect(screen.getByText("/Users/someone/project")).toBeTruthy();
+    expect(screen.getByText("search_notes")).toBeTruthy();
   });
 
   it("counts a tool server among the things it can reach", () => {
     // "Connected" is a claim about the whole page, and a Developer who had added
     // a server before any provider key read "Nothing yet" directly above that
     // server's own discovered tools.
-    renderTools({ providers: [], showTrustedFolders: true, mcpServers: [SERVER] });
+    renderTools({ providers: [], showToolServers: true, mcpServers: [SERVER] });
     expect(
       screen.queryByText("Nothing yet — Addison can only reach what you connect below."),
     ).toBeNull();
@@ -119,7 +126,7 @@ describe("the Tools surface", () => {
   });
 
   it("revokes the folder it names", () => {
-    const onStopTrusting = renderTools({ trustedRoots: ROOTS, showTrustedFolders: true });
+    const onStopTrusting = renderTools({ trustedRoots: ROOTS, showToolServers: true });
     fireEvent.click(screen.getByRole("button", { name: "Stop trusting /Users/someone/project" }));
     expect(onStopTrusting).toHaveBeenCalledWith("/Users/someone/project");
   });

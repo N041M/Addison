@@ -117,8 +117,10 @@ export const Method = {
   GuardsSet: "guards.set",
 
   // Workspace trust — the coding-harness trust boundary (Phase-2 step 5). A
-  // trusted folder lets Addison's typed, undoable file tools read and edit inside
-  // it WITHOUT a per-change card; commands it runs still ask every time. `grant`
+  // trusted folder is where Addison's typed, undoable file tools may read and
+  // edit at all: in OPEN they do it WITHOUT a per-change card (commands it runs
+  // still ask every time); in SAFE every change still takes a card that names the
+  // file, so what trust buys there is the reach, not the silence. `grant`
   // takes an absolute directory (the core floor-checks it and refuses Addison's
   // own data dir); `revoke` drops one; `list` returns the currently-trusted
   // roots. `pickDirectory` opens the OS folder picker through the Rust shell and
@@ -254,8 +256,9 @@ export const Method = {
   RoutingGet: "routing.get",
   RoutingSet: "routing.set",
 
-  // Workspace trust (step 5) — the OPEN-mode coding harness's trust boundary.
-  // Developer/Custom surfaces only. grantTrust floor-refuses Addison's own data dir.
+  // Workspace trust (step 5) — the trust boundary the two path-bounded file tools
+  // scope by, in every profile since 2026-08-12 (the panel that grants a folder is
+  // no longer Developer/Custom). grantTrust floor-refuses Addison's own data dir.
 
   // Core -> Shell (handled in Rust, NEVER callable from this webview — spec
   // §1.3, §5). Mirrored from protocol.py only so the golden-file drift test

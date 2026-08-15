@@ -60,10 +60,11 @@ is only defects with a known wrong behaviour.
    `undo()`), amending the SAFE-invariant wording and the workspace-trust pin in
    the same commit — docs/SAFETY.md invariant 1 owns the decision and its terms.
    Trusted-folder confinement and the size/symlink floors apply unchanged.
-   Remaining before this is struck: the artifact §03 red-railed check re-runs
-   green, and the owner decides the follow-up recorded in SAFETY.md (Simple has
-   no trust-granting surface, so the capability reaches only folders trusted
-   while Developer was active).
+   The follow-up recorded in SAFETY.md is DECIDED and BUILT (owner decision
+   2026-08-12): Simple has the "Folders Addison may work in" panel, same two-step
+   ceremony, with copy that says what SAFE actually does — so the capability no
+   longer reaches only folders trusted while Developer was active. Remaining
+   before this is struck: the artifact §03 red-railed check re-runs green.
    `agent_core/tools/write_project_file.py` · `agent_core/tools/registry.py` · artifact §03
 
 ## P3 — quality

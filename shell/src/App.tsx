@@ -964,15 +964,15 @@ export function App() {
   // acknowledgement that the safety posture is different. Nothing louder.
   const profileModeNote = profile?.mode === "open" ? "open" : undefined;
 
-  // Workspace trust is a Developer/Custom surface, keyed off the ACTIVE PROFILE
-  // and never the policy mode (Phase-2 step 5). Trust rows outlive a profile
-  // switch core-side, so a Simple-profile person must not see them here either —
-  // the Tools page is not a back door to a surface Settings hides. The same
-  // predicate gates the code screen; it is computed once, above the hooks that
-  // read it, so the two can never answer differently.
-  const showTrustedFolders = developerSurfaces;
-  const trustedRoots =
-    showTrustedFolders && workspaceState.rootsLoaded ? workspaceState.roots : [];
+  // Trusted folders are listed in EVERY profile since 2026-08-12, on this page as
+  // in Settings (owner decision; docs/SAFETY.md invariant 1). They were a
+  // Developer/Custom surface until then, and the reason was that Settings hid the
+  // panel — this page was not to be a back door to it. Settings shows it to
+  // everyone now, and a Simple person's file tools genuinely read inside these
+  // folders, so leaving them off the page that answers "what can Addison reach"
+  // would understate its reach. What is still Developer/Custom is the TOOL SERVERS
+  // list below and the code screen; `developerSurfaces` gates those.
+  const trustedRoots = workspaceState.rootsLoaded ? workspaceState.roots : [];
   const connectedProviders = models.providers.filter((p) => p.connected);
   const readyLocalModels =
     models.roles.find((r) => r.role === "local" && r.configured)?.models ?? [];
@@ -1367,7 +1367,7 @@ export function App() {
                 providers={models.providers}
                 roles={models.roles}
                 trustedRoots={trustedRoots}
-                showTrustedFolders={showTrustedFolders}
+                showToolServers={developerSurfaces}
                 mcpServers={mcpState.servers}
                 workspaceBusy={workspaceState.busy}
                 onAddKey={handleStartSetup}

@@ -213,10 +213,11 @@ glyphs hover to `ink`.
   editor restyled); Profile (Simple ↔ Developer switch, the **Advanced…
   disclosure + two-step Custom confirm survives**, guard panel restyled into
   rows with its exact copy; Appearance row cycles Light / Dark / Match this
-  computer; REAL three-way theme, default **Match this computer**);
-  Folders Addison may work in (workspace trust; real rows, "choose a
-  folder…" via the OS picker, Stop trusting action; Developer/Custom only,
-  as today); Restore points (summary row "Going back to {target}" +
+  computer, a REAL three-way theme, default **Match this computer**);
+  Folders Addison may work in (workspace trust, real rows, "choose a
+  folder…" via the OS picker, Stop trusting action; in EVERY profile since
+  2026-08-12, with the standing line and grant confirm worded per mode,
+  it was Developer/Custom only when this mapping was written); Restore points (summary row "Going back to {target}" +
   "restore", and "All restore points / open" → the modal); Diagnostics
   (Developer raw ring preserved; Simple sees "nothing to show yet").
 - **Model select popup** (Settings "change"): fixed-position anchored panel,

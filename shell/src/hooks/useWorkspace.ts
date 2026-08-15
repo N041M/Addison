@@ -11,8 +11,9 @@
 // is honesty about what trusting a folder costs (Addison stops asking before each
 // file change there), not a gate the core relies on.
 //
-// The card is rendered only on the Developer/Custom surfaces (keyed off the active
-// profile, never the mode) — that gate lives in SettingsPage, not here.
+// The card is rendered in every profile since 2026-08-12 (owner decision;
+// docs/SAFETY.md invariant 1) — what the mode decides there is the panel's copy,
+// not whether it appears. That lives in SettingsPage, not here.
 
 import { useCallback, useEffect, useState } from "react";
 import type { WorkspaceRoot } from "../types/ui";
