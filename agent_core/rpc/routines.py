@@ -19,7 +19,6 @@ import json
 import threading
 import time
 
-from agent_core.orchestrator import _screenable_text
 from agent_core.policy import PolicyMode
 from agent_core.protocol import Method
 from agent_core.routines.model import Routine, RoutineStep, routine_uses_dev_abilities
@@ -30,7 +29,7 @@ from agent_core.rpc.constants import (
     _SERVER_ERROR,
     _unavailable_marker,
 )
-from agent_core.screening import mark_untrusted, screen
+from agent_core.screening import mark_untrusted, screen, screenable_text
 
 # --- plain sentences for the sharing paths ---------------------------------
 # Personas 54 and 68 (design-doc §5): every one of these is something a person can
@@ -598,7 +597,7 @@ def _routine_screenable_text(routine: Routine) -> str:
     marker). An instruction at the head of a line would survive that escape
     unreadable to every rule and perfectly readable to the model, which is the one
     combination that must not exist. Same reasoning, and the same technique, as the
-    orchestrator's ``_screenable_text`` over a tool result; ``args_template`` is a
+    the tool-result seam, ``screening.screenable_text``; ``args_template`` is a
     nested structure, so its leaves are read by that function itself.
 
     Which fields: the name, the description, every variable's question and suggested
@@ -613,7 +612,7 @@ def _routine_screenable_text(routine: Routine) -> str:
         if variable.default is not None:
             parts.append(variable.default)
     for step in routine.steps:
-        parts.append(_screenable_text(step.args_template))
+        parts.append(screenable_text(step.args_template))
     return "\n".join(parts)
 
 
