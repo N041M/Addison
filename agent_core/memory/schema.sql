@@ -270,7 +270,22 @@ CREATE TABLE IF NOT EXISTS routines (
     -- this routine was SAVED under ('safe' | 'open'). A routine created in OPEN
     -- (Developer) mode is HIDDEN and REFUSED in SAFE mode — never listed, never
     -- runnable — and returns untouched when Developer mode is active again.
-    created_in_mode TEXT NOT NULL DEFAULT 'safe'
+    created_in_mode TEXT NOT NULL DEFAULT 'safe',
+    -- Routine sharing: when this row arrived from a file somebody else wrote, as
+    -- an epoch second. NULL means it was made here, in a conversation.
+    --
+    -- EXPLICIT, never inferred. The tempting alternative is to read a NULL
+    -- `created_from_conversation_id` as "imported", and it is wrong twice: a
+    -- routine whose conversation has since been deleted also has a NULL there, and
+    -- an imported routine that is later edited would still have one. Provenance
+    -- that a surface will show a person has to be a fact the writer recorded, not a
+    -- deduction from the absence of something else.
+    --
+    -- It decides NOTHING. Like `created_in_mode` beside it this is display-only:
+    -- what an imported routine may do is asked of its plan, in exactly the same
+    -- place and by exactly the same function as for every other routine
+    -- (`rpc/routines.py::_routine_needs_dev`).
+    imported_at    INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS routine_runs (

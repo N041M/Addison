@@ -26,7 +26,12 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
                         "created_in_mode"),
     "routines":        ("id", "name", "description", "plan_json",
                         "created_from_conversation_id", "created_at", "updated_at",
-                        "run_count", "last_run_at", "created_in_mode"),
+                        "run_count", "last_run_at", "created_in_mode",
+                        # Routine sharing. CAPTURED because it is part of the row's
+                        # own description of itself: a restore that brought an
+                        # imported routine back without its provenance would put a
+                        # row on screen claiming to have been made here.
+                        "imported_at"),
     # Step 7 phase 1. CAPTURED, because spec §4.12 calls an MCP server connection
     # reversible config — snapshotted, revocable, addable by prompting — and it is
     # exactly the `provider_config` shape: a name, an address, and a flag, none of

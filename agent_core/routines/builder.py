@@ -179,6 +179,7 @@ class RoutineBuilder:
         draft: Routine,
         conversation_id: str | None = None,
         mode: PolicyMode = PolicyMode.SAFE,
+        imported_at: int | None = None,
     ) -> Routine:
         """Persist to the routines table — only ever called after the user's
         explicit confirmation (routine.confirmSave), never silently.
@@ -188,7 +189,14 @@ class RoutineBuilder:
         sentence. ``created_in_mode`` records the mode as DISPLAY PROVENANCE (the
         frontend's DEV badge) and decides nothing: what a profile may list and run is
         asked of the routine itself, one layer up, where the registry is also in
-        scope (``rpc/routines.py::_routine_needs_dev``; owner decision 2026-08-08)."""
+        scope (``rpc/routines.py::_routine_needs_dev``; owner decision 2026-08-08).
+
+        ``imported_at`` marks a routine that arrived from a shared file, and passing
+        it changes NOTHING else about this method. That is the point of routing the
+        import through here rather than around it: an imported routine is saved by
+        the same writer, under the same refusal, as one drafted from a conversation.
+        A second insert path would be a second place for that refusal to be
+        forgotten."""
         if self._store is None:
             raise RuntimeError("Routines can't be saved in this mode.")
         if mode is not PolicyMode.OPEN and routine_uses_dev_abilities(draft):
@@ -204,5 +212,6 @@ class RoutineBuilder:
             created_from_conversation_id=conversation_id,
             created_at=int(time.time()),
             created_in_mode=mode.value,
+            imported_at=imported_at,
         )
         return draft

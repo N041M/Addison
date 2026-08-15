@@ -54,6 +54,10 @@ REASONS: dict[str, str] = {
     "provider_connect": "Before connecting a service",
     "provider_disconnect": "Before disconnecting a service",
     "routine_delete": "Before deleting a routine",
+    # Routine sharing. Adding somebody else's routine is exactly the change a
+    # person may want undone in one action, so it gets a restore point of its own
+    # rather than collapsing into "other" and a label that says nothing.
+    "routine_import": "Before adding a routine from a file",
     "widget_delete": "Before deleting a widget",
     "skill_delete": "Before deleting a note",
     "skill_update": "Before changing a note",

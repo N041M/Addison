@@ -120,6 +120,9 @@ class ShellBridgeStubs:
     def read_scoped_file(self, file_handle: str) -> dict:
         raise NotImplementedError
 
+    def pick_file(self) -> str:
+        raise NotImplementedError
+
     def write_workspace_file(self, path: str, content: str) -> dict:
         raise NotImplementedError
 

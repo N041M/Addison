@@ -53,6 +53,12 @@ class ServerShellBridge(ShellBridge, Protocol):
 
     def resolve_response(self, req_id, result, error) -> bool: ...
 
+    # Routine import (sharing, PR 2). Declared HERE and not on ``ShellBridge`` for
+    # the reason that Protocol's own docstring gives: a tool must never be able to
+    # put a file dialog on screen by itself. A person clicking Import is what opens
+    # this picker, and the handler that answers that click calls it.
+    def pick_file(self) -> str: ...
+
     # The review surface's read paths (Phase-3 plan Build §1). They are declared HERE
     # and not on ``ShellBridge`` for the reason that Protocol's own docstring gives —
     # it is "exactly the surface the v1 tools need", and no tool may ever have these.
@@ -275,6 +281,15 @@ class IpcShellBridge:
     def read_scoped_file(self, file_handle: str) -> dict:
         # The shell owns format extraction and hands back {"content", "kind"}.
         return self._call(Method.SHELL_READ_SCOPED_FILE, {"fileHandle": file_handle})
+
+    def pick_file(self) -> str:
+        """Native file picker; returns an OPAQUE handle, never a path.
+
+        The handle is the whole point: the core asks to read what the person chose
+        and never learns where it lives, so nothing in the core can be pointed at a
+        second file by anything it read in the first. ``read_scoped_file`` resolves
+        it. Raises (RuntimeError) if the person cancels, like ``pick_directory``."""
+        return self._call(Method.SHELL_PICK_FILE, {})["fileHandle"]
 
     # --- workspace-trust file surface (step 5, OPEN harness) ---------------
     def write_workspace_file(self, path: str, content: str) -> dict:

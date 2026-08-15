@@ -34,6 +34,11 @@ class RoutineLibrary:
                     "runCount": row["run_count"],
                     "lastRunAt": row["last_run_at"],
                     "createdInMode": row["created_in_mode"],
+                    # The second display-only provenance column: when this row
+                    # arrived from a file somebody else wrote, or None when it was
+                    # made here. On the same terms as the stamp above, it is a
+                    # badge, and nothing reads it to decide anything.
+                    "importedAt": row["imported_at"],
                 }
             )
         return rows

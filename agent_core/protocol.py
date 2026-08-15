@@ -90,7 +90,10 @@ class Method:
     ROUTINE_PROPOSE_FROM_CONVERSATION = "routine.proposeFromConversation"
     ROUTINE_CONFIRM_SAVE = "routine.confirmSave"
     # routine.list rows: {id, name, description, runCount, lastRunAt, createdInMode,
-    # variables, planSteps?} — plus `unavailable` {reason, message} on a row the
+    # importedAt, variables, planSteps?} (`importedAt` is the epoch second a routine
+    # arrived from a shared file, null when it was made here: display-only
+    # provenance on the same terms as `createdInMode`, read by nothing that decides
+    # anything) — plus `unavailable` {reason, message} on a row the
     # ACTIVE profile can't use (owner decision 2026-08-06: a dev-created routine is
     # listed in Simple, visibly disabled, instead of vanishing). The key is ABSENT
     # on a usable row. `reason` is an open slug vocabulary ("developer_abilities"
@@ -114,6 +117,36 @@ class Method:
     # otherwise runs with nothing on screen until it is over.
     ROUTINE_STEP_UPDATE = "routine.stepUpdate"
     ROUTINE_DELETE = "routine.delete"
+
+    # --- Routine sharing (export / import) --------------------------------
+    # A routine leaves and enters this machine as the PORTABLE format
+    # (agent_core/routines/portable.py), which is a whitelist and never
+    # `routine_to_json`. Three methods, and the split is the safety property: a
+    # preview reads a stranger's file and SAVES NOTHING, and the confirm is the
+    # only thing that writes.
+    #
+    # {routineId} -> {ok, path} | {ok:false, error}. The core serialises the
+    # portable form and hands it to the shell's ordinary save-a-new-file flow, so
+    # the person names the file in their own OS dialog. A routine the format
+    # cannot express (a command step, a default that points at a folder on this
+    # machine) comes back {ok:false} with one plain sentence saying which field.
+    ROUTINE_EXPORT = "routine.export"
+    # {} -> {ok, name, description, steps, variables, needsDeveloper,
+    #        screeningNote?, assurances} | {ok:false, error}
+    # Opens the file picker through the shell (shell.pickFile + shell.readScopedFile)
+    # so the CORE never sees a path, parses the bytes with the strict reader, checks
+    # every step names an action this build actually has, and SCREENS the wording
+    # (agent_core/screening.py). NOTHING IS SAVED. `screeningNote` rides only when
+    # the wording was flagged, and is one plain sentence: never a rule name, never a
+    # quote of what was found. `assurances` are the three sentences the person must
+    # be able to read before they say yes.
+    ROUTINE_IMPORT_PREVIEW = "routine.importPreview"
+    # {} -> {ok, routineId} | {ok:false, error}. Persists what the preview
+    # described. It carries NO routine content: the file's own parsed bytes are held
+    # in the core between the two calls, so nothing a frontend edited in between can
+    # reach the database. A restore point is taken first, and the row is stamped
+    # with the RECEIVER's current mode.
+    ROUTINE_IMPORT_CONFIRM = "routine.importConfirm"
     # profile.get profiles entries are {id,label,description}; the Custom entry ALSO
     # carries "advanced": true (D4) — Simple/Developer entries never grow the key.
     PROFILE_GET = "profile.get"      # {} -> {activeProfile, mode, profiles: [...], flags}
