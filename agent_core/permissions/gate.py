@@ -192,6 +192,7 @@ class PermissionGate:
         arming: dict | None = None,
         requires_arming: bool = False,
         preview: str | None = None,
+        force_card: bool = False,
     ) -> PermissionStatus:
         """The single mode-aware entry every tool call passes through.
 
@@ -279,8 +280,22 @@ class PermissionGate:
         and answers None whenever it cannot be sure, absence is the shipped state,
         so a handler that does not accept it simply shows the card it always did.
 
-        ``arming=None`` with ``requires_arming=False`` and ``preview=None`` ≡ every
-        previous call byte-for-byte, which is the freeze."""
+        ``force_card`` (owner decision 4B, 2026-08-15) says this call must be put
+        in front of a person THIS TIME, whatever the mode or the guards would
+        otherwise have done: the per-invocation card, carrying ``preview``, never
+        remembered. Its one caller is the routine engine, for a network-bound step
+        whose arguments carry text an earlier file-read step in the same run
+        produced (``agent_core/routines/taint.py``). The line IS the control, so a
+        step that auto-granted or rode a coarse remembered grant would carry it
+        onto a card nobody was ever shown.
+
+        It is a TIGHTENING and only ever that: it can turn no card into a card, and
+        can never turn a card into no card. It cannot reach the arming ceremony,
+        which is settled above it. ``force_card=False`` ≡ every previous call.
+
+        ``arming=None`` with ``requires_arming=False``, ``preview=None`` and
+        ``force_card=False`` ≡ every previous call byte-for-byte, which is the
+        freeze."""
         if requires_arming and arming is None:
             # Refused, never downgraded. Nothing is recorded: there is no grant to
             # remember and no denial to nag about — the call simply could not be
@@ -288,6 +303,12 @@ class PermissionGate:
             return PermissionStatus.DENIED
         if arming is not None:
             return self._request_arming(tool_id, detail, arming)
+        if force_card:
+            # Below the arming branch on purpose: the ceremony is the stronger
+            # card, and a flow line must never be the reason somebody gets the
+            # weaker one. Above everything else for the reason in the docstring —
+            # the card is where the extra line lives, so there has to be a card.
+            return self._request_per_invocation(tool_id, detail, preview)
         if mode is PolicyMode.OPEN:
             effective = guards if guards is not None else GuardConfig()
             if effective.auto_grant_scope == "everything":
