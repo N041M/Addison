@@ -1,15 +1,20 @@
-// The one rendering rule the whole-answer reveal depends on (owner request
-// 2026-07-26): while a message's text is resolving out of the scramble, its
-// body renders as PLAIN pre-wrap text — markdown only takes over on the frame
-// the reveal lands.
+// The one rendering rule an answer that formats itself as it arrives depends on
+// (owner request 2026-08-21, replacing the 2026-07-26 shape of the same rule):
+// NO SCRAMBLED GLYPH EVER REACHES THE MARKDOWN PARSER. A block becomes markdown
+// only once it is complete AND lies entirely behind the resolved edge — the
+// prefix the frame and the true text still agree on — so what is left over, the
+// part the glyphs are in, stays plain pre-wrap text.
 //
 // This is not a style preference. The scramble writes random glyphs into the
 // text 26 times a second, and markdown is structural: a stray `#` at the start
 // of a frame becomes an <h1> for 38ms, a stray `-` becomes a list item, and the
 // answer visibly reflows under the reader's eyes while they are trying to read
-// it. The guard is one `&& !revealing` in ChatThread, and it was proven
-// necessary the hard way — with the guard reverted, the entire 235-test suite
-// still passed, so nothing but this file is watching it.
+// it. The guard used to be one `&& !revealing` in ChatThread and is now the
+// common-prefix gate in `lib/streamMarkdown.ts`; either way it was proven
+// necessary the hard way — with the old guard reverted, the entire suite still
+// passed, so nothing but this file and streamMarkdown.test.tsx is watching it.
+// The frames used below share only a short prefix with the answer, which is why
+// nothing settles in them and the whole frame is on screen verbatim.
 //
 // Mermaid is stubbed: it is irrelevant here and pulls a heavy async renderer
 // into jsdom. Nothing else is mocked — the real Markdown component is what has
@@ -66,8 +71,11 @@ function renderThread(extra: Partial<React.ComponentProps<typeof ChatThread>>) {
 }
 
 describe("a message whose text is still resolving", () => {
-  it("renders plain text, never markdown, while the scramble is over it", () => {
-    // A frame mid-reveal: the leading `#` is present, as it is in the real text.
+  it("parses nothing the scramble is still standing in", () => {
+    // A frame mid-reveal: the leading `#` is present, as it is in the real text,
+    // and the frame diverges from the answer inside the very first block — so
+    // the resolved edge is five characters in, no block is behind it, and the
+    // whole frame is still tail.
     const frame = "# Tid%&d\n\nI m*ved **24** f#les.";
     const { container } = renderThread({
       streamMessageId: "a1",

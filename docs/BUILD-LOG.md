@@ -12,6 +12,65 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-21: an answer that formats itself as it arrives
+
+Owner request. A streaming answer used to be plain pre-wrap text that turned into
+markdown in one frame, when the turn had settled AND its scramble reveal had
+landed — so a person watched asterisks and hashes for the length of the answer and
+then watched the whole thing re-lay itself out. It now formats block by block as
+it arrives. What a reader sees: headings, bold, lists and code blocks appear as
+soon as each block is finished, while the sentence still being written stays plain
+text with the cursor after it.
+
+- **THE OLD RULE WAS RIGHT ABOUT THE DANGER AND WRONG ABOUT THE REMEDY.** The
+  scramble writes random glyphs 26 times a second, and a stray `#` reaching the
+  parser is a heading for 38ms and a reflow under the reader's eyes. Keeping the
+  parser away from the whole message avoided that by giving up formatting
+  entirely. The replacement gates on the two edges that actually bound the
+  danger: a block is parsed only if it is COMPLETE (never the last node) and ends
+  at or before the resolved edge — the length of the prefix the frame and the
+  true text still agree on. Glyphs live in plain text, or in the literal content
+  of a fence they cannot close, because the glyph pools hold no backtick and no
+  newline. Nothing else is special-cased; a half-written link or a table mid-row
+  is just "the last node".
+- **AN EDGE MEASURED BY COMPARISON WOBBLES, AND A WOBBLE IS A FLICKER.** The edge
+  is a common-prefix length, so a glyph that happens to match the character it
+  stands in for lengthens it for one frame and the next frame takes it back. A
+  block ending inside that wobble would settle into markdown and fall out of it
+  repeatedly. The clamp is monotonic and it is on the EDGE, not on the boundary
+  the edge produces: raising a boundary past the blocks that justify it would
+  drop the text in between.
+- **THE PARSE IS THROTTLED, THE TEXT IS NOT.** Re-parsing a long answer every
+  38ms is work nobody asked for, so a recompute is coalesced into one
+  `requestAnimationFrame` — but between frames the last boundaries are rendered
+  against the CURRENT frame, so only the block structure lags. A boundary one
+  frame old is invisible; a tail one frame old is not.
+- **A CUT THAT MOVES TEXT MUST NOT LOSE IT.** Settled slices run
+  boundary-to-boundary rather than node-start-to-node-end, so the blank line
+  between two blocks rides inside a slice instead of falling in the gap; the
+  slices plus the tail reconstruct the input byte for byte, and a test says so
+  over eight shapes. `lib/streamMarkdown.ts` is pure and owns the cut;
+  `StreamingMarkdown.tsx` owns when to ask for it.
+- **AN ASSERTION CAN OUTLIVE THE THING IT DESCRIBED.** One useTurn test read the
+  paragraph break out of a single pre-wrap body, because a streaming answer WAS a
+  single body; the property (the frontend never fuses two utterances into a
+  run-on) is unchanged, but it is now two blocks and has to be read per block —
+  `textContent` glues siblings together with nothing between them, so on the
+  container the halves read as a run-on that is not on screen. Rewritten to pin
+  the property, and mutated to prove it still kills a fusion.
+- **THE REVIEW ROUND CAUGHT THE FENCE CLAIM BEING TOO EAGER.** The first build
+  called the tail "a fence" whenever the LAST node was one — so a frame whose
+  earlier paragraph was still resolving, or whose opener line was still glyphs,
+  handed scrambled text to the parser through the very branch built to be safe.
+  The claim now requires the opener line fully behind the edge (which by
+  arithmetic also refuses a tail holding unsettled text ahead of the fence), and
+  the render cuts a fence tail at its own closing line, because the split is a
+  frame old by design and a fence can close — with a new block after it — before
+  the re-parse runs. Both pinned by mutation; the glyph pools holding no
+  backtick, tilde or newline is what makes a close in the display trustworthy.
+
+---
+
 ## What shipped 08-08 (third): the hunt over the FIXES, which is where the worst of it was
 
 PRs #89–#93. The first hunt's fixes were merged with the orchestrator verifying one

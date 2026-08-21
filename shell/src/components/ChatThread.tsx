@@ -19,11 +19,19 @@
 //
 // TWO THINGS THAT ARE DELIBERATE, not stylistic:
 //
-//   * While a message is `pending` its body renders as PLAIN pre-wrap text, and
-//     it becomes markdown the moment the turn settles. The streaming scramble
-//     puts random glyphs in the tail; feeding those to a markdown parser 26
-//     times a second would make a stray `#` a heading for one frame and reflow
-//     the answer under the reader's eyes.
+//   * An arriving answer FORMATS ITSELF AS IT LANDS (owner request 2026-08-21),
+//     block by block, and the rule that makes that safe is two-sided: a block
+//     becomes markdown only once it is COMPLETE and lies entirely behind the
+//     scramble's resolved edge. The streaming scramble puts random glyphs in the
+//     tail, and feeding those to a markdown parser 26 times a second would make
+//     a stray `#` a heading for one frame and reflow the answer under the
+//     reader's eyes — so the scrambled window only ever lives in plain pre-wrap
+//     text, or inside the literal content of a fence it cannot close (the glyph
+//     pools hold no backtick and no newline). A glyph can never become
+//     structure. `StreamingMarkdown` renders it; `lib/streamMarkdown.ts` owns
+//     where the cut is made. The reveal of a settled answer runs through the
+//     same component, so it formats behind the resolved edge too, rather than
+//     arriving whole on the frame the reveal lands.
 //   * Switching conversations staggers the rows in and re-scrambles them, but a
 //     body is only scrambled when it is a single text node. A rendered markdown
 //     body has element children, and the engine's leaf guard would skip it
@@ -40,6 +48,7 @@ import {
 } from "react";
 import type { DisplayMessage } from "../types/ui";
 import { Markdown } from "./Markdown";
+import { StreamingMarkdown } from "./StreamingMarkdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
 import { AddisonMark } from "./AddisonMark";
 
@@ -643,15 +652,18 @@ function MessageRow({
   // comes from the core and is free-by-construction only (a local Ollama model);
   // the frontend never derives it. Not an error, so no danger tone.
   const showFreeChip = message.answeredWith?.free === true;
-  // Markdown once the turn has settled AND its text has finished resolving.
-  // Feeding scrambled glyphs to the markdown parser 26×/s makes a stray `#` a
-  // heading for one frame, so a revealing answer stays plain pre-wrap text and
-  // swaps to markdown on the last frame (see the file header).
+  // The settled answer, rendered whole: nothing is arriving and nothing is
+  // resolving, so there is no edge to hold anything back.
   const asMarkdown = isAddison && !message.failed && !message.pending && !revealing;
   // Nothing has arrived yet. The blinking block alone would be a shrug; the
   // honest sentence stays, and the block rides after it (pending copy is kept
   // word for word from the Fern build).
   const showWriting = message.pending && display.length === 0;
+  // Text is still arriving, or still resolving out of the scramble. It formats
+  // block by block behind that edge — see the file header, and note that a
+  // FAILED turn is excluded: an error is one plain sentence that must read at
+  // once, not something to animate structure into.
+  const asStream = isAddison && !message.failed && (message.pending || revealing) && !showWriting;
 
   return (
     <div className="group shrink-0 animate-[fadeRise_.4s_ease_both]">
@@ -682,6 +694,12 @@ function MessageRow({
       {asMarkdown ? (
         <div className="mt-2 text-[15.5px] leading-[1.65] text-ink">
           <Markdown content={message.content} pending={false} />
+        </div>
+      ) : asStream ? (
+        <div className="mt-2 text-[15.5px] leading-[1.65] text-ink">
+          {/* `display` is the scramble's frame while one is over this message,
+              and the true content otherwise (motion off, or between reveals). */}
+          <StreamingMarkdown content={message.content} display={display} showCursor />
         </div>
       ) : (
         <p

@@ -570,15 +570,15 @@ describe("revealing an answer that arrived whole", () => {
 // ---------------------------------------------------------------------------
 // The seam: the hook's overlay state, and what the reader actually SEES.
 //
-// ChatThread's two halves are already pinned in chatThread.test.tsx — a revealing
-// message renders plain pre-wrap text, a settled one renders markdown — but both
-// take the overlay as a PROP. Neither can see the state useTurn really leaves
-// behind, and the stuck-overlay bug lived in exactly that gap: the component
-// rendered its props precisely as documented, over an overlay that never came
-// down, so an answer stayed as `**checklist or note widget**` on screen. These
-// two tests drive the hook and render its output, so the property (markdown once
-// it settles) and its deliberate exception (never mid-reveal) are enforced end to
-// end rather than described.
+// ChatThread's two halves are already pinned in chatThread.test.tsx — text the
+// scramble is still standing in renders plain, everything complete behind it
+// renders as markdown — but both take the overlay as a PROP. Neither can see the
+// state useTurn really leaves behind, and the stuck-overlay bug lived in exactly
+// that gap: the component rendered its props precisely as documented, over an
+// overlay that never came down, so an answer stayed as `**checklist or note
+// widget**` on screen. These two tests drive the hook and render its output, so
+// the property (markdown once it settles) and its deliberate exception (never
+// over the glyphs) are enforced end to end rather than described.
 // ---------------------------------------------------------------------------
 describe("what the thread shows for a turn useTurn has driven", () => {
   beforeEach(() => {
@@ -639,8 +639,9 @@ describe("what the thread shows for a turn useTurn has driven", () => {
 
   // The exception, taken at the ONLY moment it decides anything: the turn has
   // settled — so `pending` is already false and no longer suppresses anything —
-  // while the reveal plays on over text that has fully arrived. That window is
-  // what `!revealing` exists for, and it is where the asterisks are correct.
+  // while the reveal plays on over text that has fully arrived. A reveal starts
+  // at character zero, so on this frame the resolved edge is a handful of
+  // characters in, no block is behind it, and the asterisks are correct.
   it("keeps a settled answer plain while its reveal is still running", async () => {
     const { result } = renderHook(() => useTurn(makeArgs()));
     act(() => {
@@ -660,9 +661,10 @@ describe("what the thread shows for a turn useTurn has driven", () => {
     expect(result.current.streamDisplay).not.toBe(HEAD + TAIL);
 
     const { container } = thread(result.current, result.current.isWorking);
-    // …and NO markdown structure is parsed over it. A stray `#` in a frame would
-    // be a heading for 38ms and reflow the answer under the reader's eyes, which
-    // is why the frame is shown verbatim instead (ChatThread's file header).
+    // …and NO markdown structure is parsed over the part the glyphs are in. A
+    // stray `#` in a frame would be a heading for 38ms and reflow the answer
+    // under the reader's eyes, which is why the frame is shown verbatim until
+    // the edge has passed a whole block (ChatThread's file header).
     expect(container.querySelector("strong")).toBeNull();
     // The LAST body in the thread — the first one is what the person typed.
     const bodies = container.querySelectorAll("[data-msg-text]");
@@ -680,6 +682,12 @@ describe("what the thread shows for a turn useTurn has driven", () => {
   const SAID_BEFORE = "I'll read the file first to see the current state of the add function.";
   const SAID_AFTER = "Now I'll add a docstring.";
 
+  // The assertion changed shape on 2026-08-21 and the property did not. It used
+  // to read the separator out of one pre-wrap body, because a streaming answer
+  // was one pre-wrap body; now the first half is a COMPLETE block behind the
+  // resolved edge, so it is already a paragraph of its own and the second half is
+  // the tail. Two blocks is the separator, rendered — and the run-on it exists to
+  // prevent is still what the last line refuses.
   it("keeps the two halves apart while they are still streaming in", () => {
     setMotionEnabled(false); // no overlay: the message content IS what is rendered
     const { result } = renderHook(() => useTurn(makeArgs()));
@@ -698,10 +706,17 @@ describe("what the thread shows for a turn useTurn has driven", () => {
       content: `${SAID_BEFORE}\n\n${SAID_AFTER}`,
     });
     const { container } = thread(result.current, result.current.isWorking);
+    const paragraphs = [...container.querySelectorAll("p")].map((p) => p.textContent ?? "");
+    expect(paragraphs).toContain(SAID_BEFORE);
+    // The still-arriving half is the tail, and the tail is the leaf the switch
+    // scramble animates — so it is also what `data-msg-text` must be on.
     const bodies = container.querySelectorAll("[data-msg-text]");
-    const shown = bodies[bodies.length - 1]?.textContent ?? "";
-    expect(shown).toContain("add function.\n\nNow I'll add");
-    expect(shown).not.toContain("add function.Now");
+    expect(bodies[bodies.length - 1]?.textContent).toBe(SAID_AFTER);
+    // Read PER BLOCK, not off the container: `textContent` glues sibling blocks
+    // together with nothing between them, so on the container the two halves
+    // read as a run-on that is not on screen. Fusing them really would put both
+    // in one block, which is what this refuses.
+    expect(paragraphs.some((text) => text.includes("add function.Now"))).toBe(false);
   });
 
   it("renders the settled turn as two paragraphs, not one run-on line", async () => {
