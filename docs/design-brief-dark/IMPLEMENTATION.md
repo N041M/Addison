@@ -303,6 +303,16 @@ mapping against a stale picture. None of them change the design language.
   to the answer's length (`revealAdvanceFor`), because at a fixed rate a long answer is not
   an animation, it is a wait. And it can never display text that has not been
   committed. `onDone` fires exactly once and a finished engine is not reused.
+- **An answer formats itself as it arrives, block by block.** The brief shows a
+  streamed reply as running text and a finished one as a formatted answer; between
+  those two the app used to show plain text until the reveal landed, and the whole
+  answer re-laid itself out in one frame. It now formats each block as soon as the
+  block is COMPLETE and the scramble's resolved edge has passed it — so the glyphs
+  are always in plain text, never in structure, and a heading that has already
+  resolved is a heading. The block still being written stays plain, except a fenced
+  code block, which the parser closes at the end of the input so an open fence reads
+  as code while it grows. A mermaid fence is still drawn only once the turn lands: a
+  diagram redrawing itself mid-answer is the reflow this avoids, wearing a picture.
 - **The view title is not the only thing that scrambles on a switch.** The sidebar
   title scrambles on chat switch too; the stagger survives remounts and is capped at
   the viewport, and adopting the launch conversation's id does not replay it.

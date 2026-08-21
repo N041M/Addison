@@ -22,6 +22,15 @@ interface Props {
   content: string;
   /** The containing assistant message is still streaming. */
   pending?: boolean;
+  /**
+   * Render without the `.markdown-body` wrapper. For a caller that renders an
+   * answer as SEVERAL of these (StreamingMarkdown, one per settled block) and
+   * puts them all inside one wrapper of its own: react-markdown v9 emits its
+   * children with no element around them, so the blocks land in that wrapper as
+   * one flow — and `.markdown-body > :first-child` / `> :last-child` trim the
+   * answer's margins once instead of every block's margins separately.
+   */
+  bare?: boolean;
 }
 
 // The fence language className react-markdown/rehype leave on a code element,
@@ -71,19 +80,18 @@ function buildComponents(pending: boolean): Components {
   };
 }
 
-function MarkdownImpl({ content, pending = false }: Props) {
-  return (
-    <div className="markdown-body">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: false }]]}
-        skipHtml
-        components={buildComponents(pending)}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
+function MarkdownImpl({ content, pending = false, bare = false }: Props) {
+  const rendered = (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={[[rehypeHighlight, { detect: false }]]}
+      skipHtml
+      components={buildComponents(pending)}
+    >
+      {content}
+    </ReactMarkdown>
   );
+  return bare ? rendered : <div className="markdown-body">{rendered}</div>;
 }
 
 export const Markdown = memo(MarkdownImpl);
