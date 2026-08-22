@@ -8,7 +8,17 @@ import type { ArtifactUnavailable } from "./ui";
 export const Method = {
   ConversationSendMessage: "conversation.sendMessage",
   ConversationNew: "conversation.new",
+  // {conversationId} -> {conversationId, title, messages, work?, continuedFrom?,
+  // summary?}. The last two are §4.8's stored lineage, sent ONLY for a chat that
+  // continues another one: the id it carried on from and the summary it was seeded
+  // with. They come off the `conversations` row, so the thread's boundary marker
+  // survives a reload — unlike the note said once on the Activity Panel channel,
+  // which is per-turn and never persisted.
   ConversationLoad: "conversation.load",
+  // {} -> {conversations}. A row carries `continuedFrom` when it is a continuation,
+  // so the history list can draw one continued chat as one thing. Both
+  // conversations stay in the list and stay openable: the lineage groups them, it
+  // never hides either half.
   ConversationList: "conversation.list",
   ConversationRename: "conversation.rename",
   ConversationStreamChunk: "conversation.streamChunk",

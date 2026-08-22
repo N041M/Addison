@@ -49,8 +49,18 @@ class JsonRpcResponse:
 class Method:
     CONVERSATION_SEND_MESSAGE = "conversation.sendMessage"
     CONVERSATION_NEW = "conversation.new"    # {} -> {conversationId}
-    CONVERSATION_LOAD = "conversation.load"  # {conversationId} -> {conversationId, title, messages}
-    CONVERSATION_LIST = "conversation.list"  # {} -> {conversations}
+    # {conversationId} -> {conversationId, title, messages, work?, continuedFrom?,
+    # summary?}. The last two are §4.8's stored lineage, sent ONLY for a chat that
+    # continues another one: the id it carried on from and the summary it was
+    # seeded with. They are read from the `conversations` row, so the thread's
+    # boundary marker survives a reload — unlike the note said once on the
+    # Activity Panel channel, which is per-turn and never persisted.
+    CONVERSATION_LOAD = "conversation.load"
+    # {} -> {conversations}. A row carries `continuedFrom` when it is a
+    # continuation, so the history list can draw one continued chat as one thing.
+    # Both conversations stay in the list and stay openable: the lineage groups
+    # them, it never hides either half.
+    CONVERSATION_LIST = "conversation.list"
     CONVERSATION_RENAME = "conversation.rename"  # {conversationId, title} -> {ok, title?, error?}
     CONVERSATION_STREAM_CHUNK = "conversation.streamChunk"
     # {} -> {ok, endedRequests}. The person pressed Stop. The v1 contract still has

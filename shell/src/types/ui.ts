@@ -75,6 +75,26 @@ export interface ConversationSummary {
    * does not control — not because the core sometimes omits it.
    */
   messageCount?: number;
+  /**
+   * The chat this one carried on from, when a long conversation was condensed and
+   * continued (§4.8). Absent on an ordinary row — the core sends the key only for
+   * a continuation. The sidebar draws the pair as ONE chat with the older part
+   * nested under it; it never hides either half, and both stay openable.
+   */
+  continuedFrom?: string;
+}
+
+/**
+ * The boundary at the top of a chat that continues an earlier one (§4.8), as the
+ * thread renders it. Built from the stored `conversations` row that
+ * `conversation.load` sends back, which is the whole point: the one sentence said
+ * on the Activity Panel channel when a chat is condensed is cleared at the start
+ * of the next turn, and this is the same fact still on screen when the chat is
+ * reopened next month. `summary` is null when the row has none.
+ */
+export interface ThreadContinuation {
+  fromId: string;
+  summary: string | null;
 }
 
 /**
@@ -100,6 +120,11 @@ export function parseConversationSummaries(result: unknown): ConversationSummary
       title: typeof obj.title === "string" && obj.title ? obj.title : "Untitled conversation",
       startedAt: typeof obj.startedAt === "number" ? obj.startedAt : 0,
       ...(typeof obj.messageCount === "number" ? { messageCount: obj.messageCount } : {}),
+      // Kept only when it is a non-empty string: a lineage pointing at nothing is
+      // no lineage, and the grouping ignores an id no row in the list carries.
+      ...(typeof obj.continuedFrom === "string" && obj.continuedFrom
+        ? { continuedFrom: obj.continuedFrom }
+        : {}),
     });
   }
   return out;

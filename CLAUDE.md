@@ -300,7 +300,9 @@ what remains uncaught. The **Context Budget Manager /
 automatic long-conversation continuation** left this list on 2026-08-14: it is
 **built** (spec §4.8), still orchestrator machinery and never a registry tool, and
 [`docs/context-budget-plan.md`](docs/context-budget-plan.md) owns what shipped and
-its three honest limits.
+the honest limits it has left (two of the original three were closed 2026-08-22,
+when the thread gained a durable boundary marker and the sidebar started reading
+the lineage).
 
 Also deferred, and specifically **not** to be solved inside the snapshot
 subsystem: **restoring a previous app binary** (owner decision 2026-07-20 — a

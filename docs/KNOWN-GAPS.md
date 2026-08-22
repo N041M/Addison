@@ -918,19 +918,14 @@ are here because somebody will meet them, and because anything built on top of
   and precedence notes, but a dedicated reconciliation pass would be worthwhile.
 
 **Opened by the Context Budget Manager (built 2026-08-14;
-[context-budget-plan.md](context-budget-plan.md) owns the subject and states all
-three of these as its honest limits):**
+[context-budget-plan.md](context-budget-plan.md) owns the subject and states its
+honest limits — two of the three below are now closed):**
 
-- **The boundary marker is ephemeral, so spec §4.8 item 4 is only partly served.**
-  The one sentence a person gets when a chat is continued goes out on the Activity
-  Panel note channel, and that channel is cleared at the start of every turn and
-  never persisted (`useTurn` calls `setActivities([])` on send and on reset). So the
-  note is seen once and reopening the conversation later shows no sign that a
-  boundary is there, while §4.8 asked for "a visible boundary marker in the thread",
-  which is durable by nature. Not a bug against what was built, and a clean
-  follow-up rather than a redesign: the summary and the lineage ARE durable, both on
-  the `conversations` row, so everything a real in-thread marker would render is
-  already on disk and nothing renders it.
+- ~~**The boundary marker is ephemeral, so spec §4.8 item 4 is only partly
+  served.**~~ **CLOSED 2026-08-22**: `conversation.load` now sends the stored
+  `continued_from_conversation_id` and `summary`, and the thread draws a marker
+  from them above the first message — the same fact the per-turn note says once,
+  still on screen on the tenth reopening, with the summary behind a disclosure.
 - **A continuation's summary call is invisible in every cost view.** The call is
   made at the RPC layer, which has no resolved provider id or model id to attribute
   a row to, and `usage_log` rows are written by the orchestrator's `on_usage` at its
@@ -942,12 +937,12 @@ three of these as its honest limits):**
   still understates what a long chat costs. Closing it means carrying the resolved
   identity out to the boundary, which is a change to the callback shape and not a
   patch.
-- **A continued chat is two rows in the history sidebar.** Continuing switches the
-  live conversation, which is what keeps the original transcript untouched and what
-  makes the lineage column mean anything. The visible consequence is that one chat
-  the person experienced as continuous appears as two rows sharing a title, with
-  nothing saying one came from the other. The information to draw them as one thing
-  is stored (`continued_from_conversation_id`) and nothing in the sidebar reads it.
+- ~~**A continued chat is two rows in the history sidebar.**~~ **CLOSED
+  2026-08-22**: `conversation.list` rows carry `continuedFrom`, and the sidebar
+  folds a lineage into one entry — the newest part keeps the row, each older part
+  sits under it indented and marked `earlier`, and the group counts the chat once.
+  Nothing is hidden: both conversations are still drawn and still open, which is
+  what keeps the untouched original transcript reachable.
 
 **Opened by routine sharing (built 2026-08-15;
 [routine-sharing-plan.md](routine-sharing-plan.md) owns the subject and states all

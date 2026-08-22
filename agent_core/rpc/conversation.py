@@ -628,6 +628,18 @@ class ConversationMixin(ServerContext):
             "title": header["title"],
             "messages": wire_messages,
         }
+        # THE BOUNDARY, from disk. Both keys are the ones §4.8 wrote to the
+        # conversations row and nothing had ever read back: the chat this one
+        # carried on from, and the summary it was seeded with. They are what a
+        # durable in-thread marker renders, in place of the Activity-Panel note
+        # that is cleared at the start of every turn and never persisted — the
+        # note is still said live, this is the same fact still being true a week
+        # later. Present only on a continuation, so an ordinary chat's payload is
+        # unchanged.
+        if header.get("continued_from_conversation_id"):
+            result["continuedFrom"] = header["continued_from_conversation_id"]
+            if header.get("summary"):
+                result["summary"] = header["summary"]
         # Same three fields as a live tool.activityUpdate, so the frontend renders
         # one shape through one component. Omitted entirely when the last turn did
         # no work — an absent key is what the panel already treats as "no steps".
@@ -686,16 +698,23 @@ class ConversationMixin(ServerContext):
     def _conversation_rows(self) -> list[dict]:
         """History rows for conversation.list. The title is never null: stored
         title, else the trimmed first user message (legacy rows that predate
-        auto-titling), else "Untitled"."""
+        auto-titling), else "Untitled".
+
+        ``continuedFrom`` is the §4.8 lineage: the id of the chat this one carried
+        on from. Present only on a continuation, like every other optional key in
+        this file, so an ordinary row is byte-identical to what it always was. It
+        is what lets the sidebar show one continued chat as one thing; nothing is
+        hidden by it, both conversations stay in the list and stay openable."""
         rows = []
         for row in self.store.list_conversations():
             title = row["title"] or _auto_title(row["first_user_message"] or "") or "Untitled"
-            rows.append(
-                {
-                    "id": row["id"],
-                    "title": title,
-                    "startedAt": row["started_at"],
-                    "messageCount": row["message_count"],
-                }
-            )
+            entry = {
+                "id": row["id"],
+                "title": title,
+                "startedAt": row["started_at"],
+                "messageCount": row["message_count"],
+            }
+            if row.get("continued_from_conversation_id"):
+                entry["continuedFrom"] = row["continued_from_conversation_id"]
+            rows.append(entry)
         return rows

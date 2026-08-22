@@ -478,3 +478,59 @@ def test_a_chat_too_long_for_its_model_says_to_start_a_new_chat():
     assert str(plain) == "That request wasn't accepted."
     none_detail = exception_for_http_status(400, "That request wasn't accepted.")
     assert str(none_detail) == "That request wasn't accepted."
+
+
+# --- (8) the boundary, on the wire -----------------------------------------
+
+
+def _request(harness, request_id: int, method: str, params: dict | None = None) -> dict:
+    frame: dict = {"jsonrpc": "2.0", "id": request_id, "method": method}
+    if params is not None:
+        frame["params"] = params
+    harness.reader.feed(frame)
+    return harness.writer.wait_for(
+        lambda f: f.get("id") == request_id and "result" in f
+    )["result"]
+
+
+def test_the_stored_boundary_reaches_the_surfaces_that_draw_it(tmp_path):
+    """The lineage and the summary come back on ``conversation.list`` and
+    ``conversation.load`` (the two KNOWN-GAPS entries closed 2026-08-22).
+
+    Both columns had been written since 2026-08-14 and nothing read them back,
+    which is exactly why the only boundary a person saw was the per-turn note.
+    What this asserts is that the DURABLE facts are on the wire: the thread can
+    say a boundary is here every time the chat is opened, and the sidebar can draw
+    a continued chat as one thing. Neither half is hidden by either payload — both
+    conversations are still listed, and the original still opens in full."""
+    provider = _BudgetProvider(max_context_tokens=1_000, per_turn_tokens=[10] * 5 + [900])
+    harness = build_server(tmp_path, provider=provider, register_tool=False)
+    try:
+        for i in range(5):
+            _send(harness.reader, harness.writer, i + 1, f"message {i}")
+        original_id = harness.server.conversation.id
+        _send(harness.reader, harness.writer, 6, "the long one")
+        continuation_id = harness.server.conversation.id
+        listing = _request(harness, 7, Method.CONVERSATION_LIST)["conversations"]
+        loaded = _request(
+            harness, 8, Method.CONVERSATION_LOAD, {"conversationId": continuation_id}
+        )
+        # Loaded last: it makes the original the live conversation again.
+        original = _request(
+            harness, 9, Method.CONVERSATION_LOAD, {"conversationId": original_id}
+        )
+    finally:
+        _shutdown(harness.reader, harness.thread)
+
+    assert continuation_id != original_id
+    rows = {row["id"]: row for row in listing}
+    assert set(rows) == {original_id, continuation_id}   # neither half is hidden
+    assert rows[continuation_id]["continuedFrom"] == original_id
+    assert "continuedFrom" not in rows[original_id]      # an ordinary row is unchanged
+
+    assert loaded["continuedFrom"] == original_id
+    assert loaded["summary"] == _SUMMARY_TEXT
+    assert "continuedFrom" not in original and "summary" not in original
+    # The older transcript is still reachable, in full: the marker is an access
+    # path to it, and this is the path.
+    assert original["messages"]
