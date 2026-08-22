@@ -723,6 +723,63 @@ export interface Channel {
   addedAt?: number;
 }
 
+/**
+ * What a connection is doing RIGHT NOW — the core's closed vocabulary
+ * (agent_core/channel_service.py). Not the same question as `Channel.enabled`,
+ * which is what the person last chose and is saved: nothing starts listening when
+ * the app opens, so a connection switched on yesterday is "stopped" today until
+ * it is switched on again. The panel says so in plain words rather than showing
+ * a switch that lies about which way it is pointing.
+ */
+export type ChannelState =
+  | "stopped"
+  | "listening"
+  | "backing_off"
+  | "token_rejected"
+  | "no_token";
+
+/** The live picture of one connection, from `channel.status`. */
+export interface ChannelStatus {
+  state: ChannelState;
+  /** The bot Addison's token turned out to belong to ("connected as …"). Learned
+   * by asking the transport, held in memory by the core, and gone on restart. */
+  connectedAs?: string;
+  /** Unix seconds of the last poll that answered. */
+  lastPollAt?: number;
+  /** How long the core is currently waiting between attempts. Non-zero is the
+   * difference between *quiet* and *broken*, which is the whole reason it shows. */
+  backoffSeconds: number;
+  /** How many messages arrived from phones that are not paired. A COUNT and never
+   * the messages: unpaired senders are ignored in silence, and this is the only
+   * trace they leave. */
+  unknownSenders: number;
+  /** One plain sentence from the core. Never a transport's own error text. */
+  error?: string;
+}
+
+/** One paired phone, from `channel.pairings`.
+ *
+ * The transport's id for the person is deliberately NOT here: it authorises
+ * nothing on this side, and it is the one field that would let this window
+ * identify somebody on an outside service. */
+export interface ChannelPairing {
+  /** What `channel.revokePairing` takes. */
+  id: string;
+  /** The display name the transport supplied. Untrusted text: shown as plain
+   * text, never through the markdown renderer. */
+  label: string;
+  /** Unix seconds when this phone paired. */
+  pairedAt?: number;
+}
+
+/** An open pairing window, from `channel.beginPairing`. The code is shown on THIS
+ * screen and typed on the phone; it is never stored anywhere. */
+export interface ChannelPairingWindow {
+  channelId: string;
+  code: string;
+  expiresAt: number;
+}
+
 /** The full profile picture from `profile.get`. */
 export interface ProfileState {
   activeProfile: string;

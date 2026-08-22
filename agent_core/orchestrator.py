@@ -23,7 +23,7 @@ from agent_core.permissions.gate import (
     call_arming_refusal,
     tool_requires_arming,
 )
-from agent_core.policy import PolicyMode
+from agent_core.policy import PolicyMode, TurnSurface
 from agent_core.providers.base import (
     Message,
     ModelRole,
@@ -43,6 +43,7 @@ from agent_core.screening import mark_untrusted, screen, screenable_text
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
+    ToolDefinition,
     ToolResult,
     call_affected_path,
     call_command_text,
@@ -137,6 +138,14 @@ _KEY_REJECTED_NOTE = (
 _NO_MODEL_REACHABLE = (
     "Addison couldn't reach a model to answer just now. Please try again in a moment."
 )
+
+# The "you did not pass one" sentinel for ``run_turn(stream_to=...)`` (messaging
+# channels phase 2). It cannot be None, because None is a MEANINGFUL value there —
+# "stream nowhere", which is what a turn answering a phone passes — and it cannot be
+# the orchestrator's own sink, because the parameter has to be resolvable before any
+# instance is in hand. So: a private object, compared by identity, and every caller
+# that predates this parameter keeps the sink it always had.
+_INHERIT_STREAM = object()
 
 
 def _result_as_text(content: Any) -> str:
@@ -243,6 +252,10 @@ class _DeltaRelay:
     """
 
     def __init__(self, sink) -> None:
+        # None means NOWHERE, and it is a real value rather than a missing one
+        # (messaging channels phase 2): a turn answering a phone has no reader
+        # watching prose arrive, and its deltas must not be pushed into whatever
+        # conversation the desktop happens to have open. See ``__call__``.
         self._sink = sink
         self.shown_this_send = False
         self.shown_this_turn = False
@@ -256,6 +269,13 @@ class _DeltaRelay:
 
     def __call__(self, text: str) -> None:
         if not text:
+            return
+        # NO SINK, NOTHING SHOWN — and the flags stay down, which is the part that
+        # matters. ``shown_this_turn`` is what forbids the routed path from falling
+        # forward, on the grounds that half an answer is already on the reader's
+        # screen; with nowhere to stream, nothing is on anybody's screen, so a
+        # remote turn keeps the fallback it would otherwise silently lose.
+        if self._sink is None:
             return
         # First output of a send, with something already on screen from an earlier
         # one: separate them. Top-up only — a segment ending "…\n" needs one more
@@ -404,6 +424,8 @@ class Orchestrator:
         model_name: str | None = None,
         effort: str | None = None,
         mode: PolicyMode = PolicyMode.SAFE,
+        surface: TurnSurface = TurnSurface.DESK,
+        stream_to: Any = _INHERIT_STREAM,
     ) -> None:
         # Per-turn resolution (§4.1.1). ``model_name`` is an EXPLICIT pick — among
         # several LOCAL models (item B) or several cloud models (§6.8) — a user toggle
@@ -416,6 +438,17 @@ class Orchestrator:
         # a settings change lands on the worker thread serialised with the turn, so
         # it cannot shift mid-turn. None ≡ the fixed defaults ≡ today's gate.
         guards = self._guards_provider()
+        # WHERE THE ANSWER GOES, resolved once (messaging channels phase 2, plan
+        # §3.5). The sentinel is what keeps every existing caller byte-identical:
+        # unset means "the sink this orchestrator was built with", which is the
+        # server's ``_emit_stream_chunk``, exactly as before this parameter existed.
+        # An explicit None means NOWHERE — a remote turn's deltas must not be pushed
+        # into the desktop thread by the server-level wiring, which would be the same
+        # class of mistake as reusing the active conversation. ``_DeltaRelay`` treats
+        # a None sink as "nothing was shown", so a remote turn also keeps the routed
+        # path's freedom to fall forward: there is no reader whose screen already has
+        # half an answer on it.
+        sink = self.stream_to_frontend if stream_to is _INHERIT_STREAM else stream_to
         # A "Not now" from an earlier turn must not silently deny this one:
         # each new user message may ask again (grants, by contrast, persist).
         self.permission_gate.clear_denials()
@@ -430,18 +463,36 @@ class Orchestrator:
             # Unwired (CLI/tests): today's single-provider path, byte-for-byte —
             # one resolution, no fallback, no per-call timeout (existing fake
             # providers accept no ``timeout`` kwarg, and a healthy turn is identical).
-            self._run_single(conversation, context, guards, mode, requested_role, model_name, effort)
+            self._run_single(
+                conversation, context, guards, mode, requested_role, model_name, effort,
+                surface, sink,
+            )
         else:
             # The routed path (D4): walk the ordered chain, falling forward on
             # ProviderUnavailable within the per-turn budget, and report the
             # answering candidate (answeredWith, D5).
             self._run_with_fallback(
-                conversation, context, guards, mode, chain, requested_role, model_name, effort
+                conversation, context, guards, mode, chain, requested_role, model_name, effort,
+                surface, sink,
             )
+
+    def _tools_for(self, mode: PolicyMode, surface: TurnSurface) -> list[ToolDefinition]:
+        """What the model is OFFERED this turn.
+
+        The desk gets the mode's view, byte-for-byte as it always has. A turn that
+        arrived from a phone gets ``remote_tools(mode)``, which is an INTERSECTION
+        with that same view and therefore a subset of it in every mode — a remote
+        turn is never offered a tool Simple could not be offered. Offering is not
+        enforcing: ``refuse_if_not_remote`` below is what refuses an id the model
+        names anyway."""
+        if surface is TurnSurface.REMOTE:
+            return self.tool_registry.remote_tools(mode)
+        return self.tool_registry.visible_tools(mode)
 
     # --- single-provider path (freeze: CLI/tests, no routing chain) ---------
     def _run_single(
-        self, conversation, context, guards, mode, requested_role, model_name, effort
+        self, conversation, context, guards, mode, requested_role, model_name, effort,
+        surface, sink,
     ) -> None:
         provider = self.model_router.resolve(requested_role, model_name)
         provider_id, model_id = self._single_identity(requested_role, model_name)
@@ -451,7 +502,7 @@ class Orchestrator:
         # many at once" may be the page's decision.
         calls_made = 0
         budget_spent = False
-        relay = _DeltaRelay(self.stream_to_frontend)
+        relay = _DeltaRelay(sink)
         for _round in range(_MAX_TOOL_ROUNDS):
             started = time.monotonic()
             relay.begin_send()
@@ -465,7 +516,9 @@ class Orchestrator:
                 messages=outbound,
                 # The model only ever sees the tools visible in this mode — SAFE
                 # hides every dev-only tool, so it can't even request run_command.
-                tools=self.tool_registry.visible_tools(mode),
+                # A turn that arrived from a phone sees the REMOTE view of the same
+                # mode, which is a subset of it (``_tools_for``).
+                tools=self._tools_for(mode, surface),
                 effort=effort,
                 on_delta=relay,
             )
@@ -477,7 +530,7 @@ class Orchestrator:
             self._report_context_usage(response.usage, provider)
             if response.tool_calls:
                 calls_made, budget_spent = self._run_tool_calls(
-                    conversation, response, context, guards, mode, provider, calls_made
+                    conversation, response, context, guards, mode, provider, calls_made, surface
                 )
                 if budget_spent:
                     break
@@ -515,7 +568,8 @@ class Orchestrator:
 
     # --- routed path with graceful fallback + cooldown (D4) -----------------
     def _run_with_fallback(
-        self, conversation, context, guards, mode, chain, requested_role, model_name, effort
+        self, conversation, context, guards, mode, chain, requested_role, model_name, effort,
+        surface, sink,
     ) -> None:
         turn_started = time.monotonic()
         # Cooldown-filter the chain, but never lock: if EVERYTHING is cooled, try the
@@ -547,7 +601,7 @@ class Orchestrator:
         answered_truncated = False
         calls_made = 0
         budget_spent = False
-        relay = _DeltaRelay(self.stream_to_frontend)
+        relay = _DeltaRelay(sink)
 
         for _round in range(_MAX_TOOL_ROUNDS):
             response = None
@@ -579,7 +633,7 @@ class Orchestrator:
                     outbound, _ = redacted_for_model(conversation.messages)
                     response = provider.send(
                         messages=outbound,
-                        tools=self.tool_registry.visible_tools(mode),
+                        tools=self._tools_for(mode, surface),
                         effort=effort,
                         # [MF-A] a real per-attempt deadline: the provider clamps this
                         # to its own default, so a healthy first send is byte-identical
@@ -692,7 +746,7 @@ class Orchestrator:
 
             if response.tool_calls:
                 calls_made, budget_spent = self._run_tool_calls(
-                    conversation, response, context, guards, mode, provider, calls_made
+                    conversation, response, context, guards, mode, provider, calls_made, surface
                 )
                 # A tool round just completed against this candidate: from here on a
                 # mid-turn failure may only advance within the same provider id.
@@ -794,7 +848,7 @@ class Orchestrator:
         relay(_TOO_MANY_STEPS)
 
     def _run_tool_calls(
-        self, conversation, response, context, guards, mode, provider, calls_made
+        self, conversation, response, context, guards, mode, provider, calls_made, surface
     ) -> tuple[int, bool]:
         """Run one response's tool_calls (shared by both turn paths). Returns the
         updated ``calls_made`` and whether the per-turn CALL budget was spent."""
@@ -864,6 +918,32 @@ class Orchestrator:
             # None for every tool without an `affected_path` — run_command included —
             # which is what leaves those tools completely unaffected.
             affected = call_affected_path(tool, call.args)
+            # THE REMOTE FLOOR AT DISPATCH (messaging channels phase 2, plan §3.6),
+            # and FIRST among the refusals, because "not from there" is the true
+            # reason and ORDER IS BEHAVIOUR: a phone naming `run_command` in the
+            # Developer profile would otherwise fall through to a check that has
+            # nothing to say (dev-only is satisfied in OPEN) and be refused for a
+            # reason that is not the reason.
+            #
+            # Above the gate and above every effect, exactly as its siblings are: the
+            # card is the thing that must never be raised here at all, because a
+            # remote turn's card would block the worker thread forever (`_ask_once`
+            # waits with no timeout) and take every desktop turn down with it.
+            #
+            # The audit outcome is `not_callable` — schema.sql's vocabulary for "the
+            # request named something that could not run, and nothing about it was
+            # examined, approved or reached", which is this word for word. Widening
+            # that CHECK to a dedicated value is a migration, and this does not earn
+            # one; the routine engine's live_only refusal made the same call.
+            remote_refusal = self.tool_registry.refuse_if_not_remote(call.tool_id, surface)
+            if remote_refusal is not None:
+                self._audit(
+                    conversation, call.tool_id, None, mode, destructive, "not_callable"
+                )
+                conversation.append_tool_result(
+                    call.id, ToolResult(success=False, content=remote_refusal)
+                )
+                continue
             if dev_only_refusal is not None:
                 self._audit(conversation, call.tool_id, None, mode, destructive, "dev_only")
                 conversation.append_tool_result(

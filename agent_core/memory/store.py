@@ -1672,6 +1672,104 @@ class Store:
         ).fetchone()
         return int(row["n"]) if row is not None else 0
 
+    # --- phase 2: what a person switched on, and which phones may speak --------
+
+    def set_channel_enabled(self, channel_id: str, enabled: bool) -> None:
+        """Record that a channel was switched on or off.
+
+        SAVED INTENT, NOT LIVE TRUTH. Whether Addison is actually listening is the
+        ChannelService's answer (``channel_service.py``), because that is where a
+        running thread lives; nothing starts a loop at launch, so a restored or
+        remembered 1 in this column means "the person had this on", never "a poll
+        is open right now". Every surface reads the live state from ``channel.status``
+        — the step-8 lesson (ask what is really running) in a different costume."""
+        self._conn.execute(
+            "UPDATE channels SET enabled = ? WHERE id = ?", (1 if enabled else 0, channel_id)
+        )
+        self._conn.commit()
+
+    def set_channel_token_present(self, channel_id: str, presence: str) -> None:
+        """Record whether a token is BELIEVED to exist for this channel.
+
+        The ``provider_config.secret_presence`` vocabulary — 'present' | 'absent' |
+        'unknown' — and never any part of a token (G1). Written after a
+        ``channel.connect`` has ASKED the transport, which is the only thing that
+        turns 'unknown' into an answer. Excluded from snapshot capture, so a restore
+        never claims a token the keychain may no longer hold."""
+        self._conn.execute(
+            "UPDATE channels SET token_present = ? WHERE id = ?", (presence, channel_id)
+        )
+        self._conn.commit()
+
+    def insert_channel_pairing(
+        self, *, id: str, channel_id: str, sender_id: str, label: str, paired_at: int
+    ) -> None:
+        """Bind one phone to one channel. THE ROW IS THE AUTHORIZATION — there is
+        nothing outside SQLite that holds this truth, which is exactly why the table
+        is excluded from snapshot capture (a one-action restore must never put back
+        an authorization somebody revoked).
+
+        ``label`` is the display name the TRANSPORT supplied, i.e. text somebody else
+        wrote. It arrives already cleaned and capped (``channels/adapter.py``); it is
+        never rendered as markdown and never an input to anything."""
+        self._conn.execute(
+            "INSERT INTO channel_pairings (id, channel_id, sender_id, label, paired_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (id, channel_id, sender_id, label, paired_at),
+        )
+        self._conn.commit()
+
+    def find_channel_pairing(self, channel_id: str, sender_id: str) -> dict[str, Any] | None:
+        """The pairing row for one sender on one channel, or None.
+
+        THE ONE AUTHORIZATION QUESTION the whole feature asks. Keyed by both columns
+        because a pairing authorises a sender ON A CHANNEL: the same person on a
+        second connection is a second decision."""
+        row = self._conn.execute(
+            "SELECT id, channel_id, sender_id, label, paired_at FROM channel_pairings "
+            "WHERE channel_id = ? AND sender_id = ? LIMIT 1",
+            (channel_id, sender_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "channel_id": row["channel_id"],
+            "sender_id": row["sender_id"],
+            "label": row["label"],
+            "paired_at": row["paired_at"],
+        }
+
+    def list_channel_pairings(self, channel_id: str) -> list[dict[str, Any]]:
+        """Every paired device on one channel, oldest first. What the desk's
+        Revoke list is drawn from — the whole control surface a pairing has."""
+        rows = self._conn.execute(
+            "SELECT id, channel_id, sender_id, label, paired_at FROM channel_pairings "
+            "WHERE channel_id = ? ORDER BY paired_at ASC, rowid ASC",
+            (channel_id,),
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "channel_id": row["channel_id"],
+                "sender_id": row["sender_id"],
+                "label": row["label"],
+                "paired_at": row["paired_at"],
+            }
+            for row in rows
+        ]
+
+    def delete_channel_pairing(self, pairing_id: str) -> bool:
+        """Revoke one device. Returns True if a row was removed.
+
+        No mode check and no profile check anywhere near this: revocation answers in
+        EVERY profile, because a tightening must never be what a profile switch
+        traps (docs/SAFETY.md owns that rule; step 8 phase 4 followed it when Simple
+        kept Remove and only Remove)."""
+        cur = self._conn.execute("DELETE FROM channel_pairings WHERE id = ?", (pairing_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
     # --- automations (step 8 phase 1; what the OS will run, once armed) --------
     # A row is a DRAFT: nothing in the tree authors one (phase 2) and nothing arms one
     # (phase 3), so the table stays empty except by hand. CAPTURED by snapshots

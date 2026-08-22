@@ -57,6 +57,9 @@ import {
   type McpDiscoveredTool,
   type Channel,
   type ChannelKind,
+  type ChannelPairing,
+  type ChannelState,
+  type ChannelStatus,
   type ChannelTokenPresence,
 } from "../types/ui";
 
@@ -703,6 +706,27 @@ export const ipc = {
     call(Method.ChannelAdd, { kind, name }).then(parseChannelMutation),
   removeChannel: (id: string): Promise<ChannelMutationResult> =>
     call(Method.ChannelRemove, { id }).then(parseChannelMutation),
+
+  // Phase 2. `connectChannel` asks Telegram who the saved token belongs to and
+  // starts nothing; `setChannelEnabled` is the one control that makes a connection
+  // live. Both are refusals-as-values: a resolved {ok:false} carrying the core's
+  // own plain sentence, never a reject and never a stack trace.
+  connectChannel: (id: string): Promise<ChannelConnectResult> =>
+    call(Method.ChannelConnect, { id }).then(parseChannelConnect),
+  setChannelEnabled: (id: string, enabled: boolean): Promise<ChannelMutationResult> =>
+    call(Method.ChannelSetEnabled, { id, enabled }).then(parseChannelMutation),
+  channelStatus: (id: string): Promise<ChannelStatus> =>
+    call(Method.ChannelStatus, { id }).then(parseChannelStatus),
+  // Pairing. The code comes back to THIS window and is shown on this screen; it is
+  // never sent anywhere, never stored, and gone when the window closes.
+  beginChannelPairing: (id: string): Promise<ChannelPairingResult> =>
+    call(Method.ChannelBeginPairing, { id }).then(parseChannelPairingStart),
+  cancelChannelPairing: (id: string): Promise<ChannelMutationResult> =>
+    call(Method.ChannelCancelPairing, { id }).then(parseChannelMutation),
+  listChannelPairings: (id: string): Promise<ChannelPairing[]> =>
+    call(Method.ChannelPairings, { id }).then(parseChannelPairings),
+  revokeChannelPairing: (pairingId: string): Promise<ChannelMutationResult> =>
+    call(Method.ChannelRevokePairing, { pairingId }).then(parseChannelMutation),
 
   // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
   // NOT ONE OF THESE CAN START ANYTHING. `listAutomations` reads saved rows,
@@ -1917,6 +1941,95 @@ function parseChannelRow(value: unknown): Channel | null {
     addedAt:
       typeof row.addedAt === "number" && Number.isFinite(row.addedAt) ? row.addedAt : undefined,
   };
+}
+
+/** `channel.connect` → {ok, connectedAs?} | {ok:false, error}. */
+export interface ChannelConnectResult {
+  ok: boolean;
+  connectedAs?: string;
+  error?: string;
+}
+
+function parseChannelConnect(result: unknown): ChannelConnectResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    connectedAs: typeof obj?.connectedAs === "string" ? obj.connectedAs : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/** `channel.beginPairing` → {ok, code, expiresAt} | {ok:false, error}. */
+export interface ChannelPairingResult {
+  ok: boolean;
+  code?: string;
+  expiresAt?: number;
+  error?: string;
+}
+
+function parseChannelPairingStart(result: unknown): ChannelPairingResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    code: typeof obj?.code === "string" ? obj.code : undefined,
+    expiresAt: typeof obj?.expiresAt === "number" ? obj.expiresAt : undefined,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/** The states a connection can be in — the core's closed set. Anything else reads
+ * as "stopped", which is the only safe direction: an unknown state must never be
+ * rendered as "listening", because that would tell somebody their phone is
+ * connected when this window has no idea. */
+const CHANNEL_STATES = new Set<string>([
+  "stopped",
+  "listening",
+  "backing_off",
+  "token_rejected",
+  "no_token",
+]);
+
+/** Parse `channel.status`. Junk degrades to "stopped, nothing known". */
+export function parseChannelStatus(result: unknown): ChannelStatus {
+  const obj = asRecord(result);
+  const state =
+    typeof obj?.state === "string" && CHANNEL_STATES.has(obj.state)
+      ? (obj.state as ChannelState)
+      : "stopped";
+  return {
+    state,
+    connectedAs: typeof obj?.connectedAs === "string" ? obj.connectedAs : undefined,
+    lastPollAt: typeof obj?.lastPollAt === "number" ? obj.lastPollAt : undefined,
+    backoffSeconds:
+      typeof obj?.backoffSeconds === "number" && Number.isFinite(obj.backoffSeconds)
+        ? obj.backoffSeconds
+        : 0,
+    unknownSenders:
+      typeof obj?.unknownSenders === "number" && Number.isFinite(obj.unknownSenders)
+        ? obj.unknownSenders
+        : 0,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/** Parse `channel.pairings` → the paired phones. A row without an id is dropped:
+ * the panel would render a Revoke button it could not act on. A row with no label
+ * keeps a plain placeholder rather than an empty line — the transport does not
+ * always supply a name, and "this phone" is still a thing you can revoke. */
+export function parseChannelPairings(result: unknown): ChannelPairing[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.pairings) ? (obj.pairings as unknown[]) : [];
+  const out: ChannelPairing[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    if (!row || typeof row.id !== "string" || !row.id) continue;
+    out.push({
+      id: row.id,
+      label: typeof row.label === "string" && row.label ? row.label : "This phone",
+      pairedAt: typeof row.pairedAt === "number" ? row.pairedAt : undefined,
+    });
+  }
+  return out;
 }
 
 /** Parse `channel.list` → the saved connections. Unusable rows are dropped; junk

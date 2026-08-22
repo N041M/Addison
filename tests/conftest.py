@@ -176,6 +176,13 @@ class ShellBridgeStubs:
     def resolve_response(self, req_id, result, error) -> bool:
         return False
 
+    def get_channel_key(self, kind: str) -> str:
+        # Messaging channels (phase 1's read seam, phase 2's first caller). Raising
+        # like every other stub: a fake that quietly answered "" would let a test
+        # believe a channel had no token saved when the test never meant to say
+        # anything about tokens at all.
+        raise NotImplementedError
+
 
 class _PipeReader:
     """Blocking readline() fed frame-by-frame from the test."""

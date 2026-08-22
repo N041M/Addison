@@ -771,3 +771,82 @@ Four things the diagram cannot show:
   cannot disagree about where a chain begins. Rows arrive newest-first, so anything
   outside the window is strictly older: a truncated chain still lands on a real
   earlier state, and leftovers can only move a file further back, never forward.
+
+## 17. A message arrives from a paired phone
+
+**Messaging channels, phase 2 of three (2026-08-22).** The claim this flow draws, and
+only this: *a paired phone can hold a conversation with Addison, and Addison can use no
+tools at all while doing it.* `REMOTE_TOOL_IDS` is EMPTY in this phase.
+[messaging-channel-plan.md](messaging-channel-plan.md) owns the design; §3.4 owns the
+G2 argument the first two lines below stand on.
+
+**Outbound only, no listener of any kind.** The core has no OS permissions of its own
+and the seatbelt grants nothing inbound, so there is no webhook, no port and no tunnel:
+the poll thread ASKS Telegram and Telegram holds the request open until somebody sends
+something. That thread touches **no store, ever** — the worker is the only SQLite
+thread — so it hands each message to the same queue every RPC method uses, with no
+request id, because nothing is waiting for a JSON-RPC reply.
+
+```mermaid
+sequenceDiagram
+    participant PH as A paired phone
+    participant TG as Telegram Bot API
+    participant CS as ChannelService (poll thread)
+    participant SH as Rust shell (keychain)
+    participant WK as Turn worker
+    participant ORC as Orchestrator
+    participant REG as ToolRegistry
+    participant ST as Store
+    participant WV as Webview (Settings)
+
+    Note over CS: started ONLY by channel.setEnabled — a person's switch.<br/>Nothing starts a loop when the app opens.
+    CS->>SH: keychain.getChannelKey {kind}
+    Note over SH,CS: G1: read at the moment of use, held for one request,<br/>never stored, never logged, never in an exception
+    SH-->>CS: token
+    CS->>TG: getUpdates (long poll, offset = the acknowledgement)
+    PH->>TG: "what's on my calendar?"
+    TG-->>CS: one message update
+    Note over CS: screen(text) at the door — kinds only, never the text.<br/>The verdict travels WITH the message.
+    CS->>WK: enqueue ("channel_turn", {...}, request_id = None)
+
+    Note over WK: from here it is an ordinary turn on the ordinary thread
+    WK->>ST: find_channel_pairing (channel, sender)
+    Note over WK: an UNKNOWN sender ends here, in silence.<br/>A reply is an oracle, so only a counter moves.
+    WK->>WK: arrived while asleep, or guards set to ask before everything
+    WK->>WK: mark_untrusted(text, verdict)
+    WK->>ST: the channel's own conversation ("From your phone")
+    WK->>ORC: run_turn(remote_conversation, surface = REMOTE, stream_to = None)
+    ORC->>REG: remote_tools(mode)
+    REG-->>ORC: empty in phase 2, and a subset of the SAFE view in every phase
+    Note over ORC: a tool_use naming anything is refused BEFORE the gate<br/>(refuse_if_not_remote) and leaves a tool_audit row
+    ORC-->>WK: the assistant's final text
+    WK->>ST: the turn's messages, in the channel's conversation only
+    WK->>CS: deliver(channel, chat, text)
+    CS->>TG: sendMessage (split at 4096 on a paragraph break)
+    TG-->>PH: the answer, in one or more messages
+    WK->>WV: channel.remoteTurn {id, phase}
+```
+
+Four things the diagram cannot show:
+
+- **`self.conversation` is never touched.** `run_turn` takes a `Conversation` OBJECT,
+  not an id, so the channel job owns one — the desktop's thread, its 1:1
+  `_message_ids` alignment and its rewind anchors are untouched by construction. That
+  is also why `channel.remoteTurn` is deliberately **not**
+  `conversation.streamChunk` and **not** `tool.activityUpdate`: both of those are read
+  by the frontend as belonging to the thread on screen.
+- **No card can be raised here, and that is a design constraint rather than a
+  coincidence.** `_ask_once` waits with **no timeout**, so a card raised for a phone
+  would park the worker thread forever and take every desktop turn with it. The empty
+  remote view plus the pre-gate refusal make it structurally unreachable, and the one
+  setting that could still route a LOW call to the asking flow
+  (`auto_grant_scope = "none"`) makes the channel refuse the turn instead — a
+  narrowing, which is the permitted direction.
+- **Delivery is at-least-once.** Telegram's `offset` is the acknowledgement, and the
+  cursor advances only after the messages have been handed on, so a crash in between
+  re-delivers. On a floor with no tools a duplicated turn costs a duplicated answer;
+  the moment anything with an effect joins the floor, deduplication by `update_id`
+  stops being a nicety (owner decision 9).
+- **The Mac has to be awake and Addison has to be running.** There is no proxy and no
+  daemon. Messages that arrived while it was not are DECLINED with one plain sentence
+  (owner decision 8's default), once per chat rather than once per message.

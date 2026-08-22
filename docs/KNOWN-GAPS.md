@@ -1166,18 +1166,21 @@ follows. None is scheduled and none blocks anything.
   transport's servers see the conversation, a stolen unlocked phone is a paired
   identity, and the Mac has to be awake — which is where it parts company with
   design-doc §7.10's managed-proxy assumption, deliberately and at a stated cost.
-  - **OPEN, found building phase 1 (2026-08-22): two connections of one transport
-    share one saved token.** The plan's §3.9 namespaces the keychain account by
+  - **CLOSED 2026-08-22 (phase 2), decided: the account stays `channel-key:{kind}`
+    for v1.** Two connections of one transport share one saved token. The plan's
+    §3.9 namespaces the keychain account by
     TRANSPORT KIND — `channel-key:telegram` — while `channels` permits several rows
     of a kind (owner decision 11 restricts what may be *enabled*, not what may be
     saved). So a second Telegram row's token overwrites the first's, and removing
     either row would take the other's token with it. Phase 1 handles both directions
     honestly rather than silently: the panel says the token is shared when a second
     row of that kind exists, and a removal deletes the keychain item only when the
-    last row of its kind goes. **What is still open is whether the account should be
-    keyed by CHANNEL ID instead**, which would make each row's token its own — a
-    change to §3.9's naming, so it belongs to the plan and to phase 2, before
-    anything reads a token. Keying by kind is not obviously wrong (one bot per
-    transport is the common case, and it keeps the account name readable in
-    Keychain Access); it is just a decision the plan made without stating this
-    consequence.
+    last row of its kind goes. **Phase 2 answered the question it left open** — should
+    the account be keyed by CHANNEL ID instead? — and the answer is **no, not for
+    v1**. The shared-token consequence only becomes REAL when two connections of one
+    transport can both be live, and owner decision 11 says exactly one channel may be
+    enabled at a time; multi-channel is the v2 feature, and it is the feature that
+    would revisit this. Keying by kind is also not obviously wrong on its own merits:
+    one bot per transport is the common case, and it keeps the account name readable
+    in Keychain Access. The plan's §3.9 records the decision in one sentence, so the
+    v2 diff that lifts decision 11 finds it there rather than here.

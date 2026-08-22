@@ -52,6 +52,32 @@ class PolicyMode(str, Enum):
     OPEN = "open"   # Developer/Custom profile — real execution, prompts only for destructive
 
 
+class TurnSurface(str, Enum):
+    """WHERE a turn came from — the desk, or a message from a paired phone.
+
+    A second axis beside :class:`PolicyMode`, and deliberately not folded into it.
+    The mode answers *what is this profile allowed to do*; the surface answers
+    *who is in the room*. They are independent: a Developer profile is OPEN at the
+    desk and OPEN from a phone, and the phone is narrower for a reason that has
+    nothing to do with the profile — nobody is watching the screen, so a permission
+    card would block the worker thread forever (``_ask_once`` waits with no
+    timeout), and a read-only tool can still put local material on a transport's
+    servers. See docs/messaging-channel-plan.md §2(d) and §3.6.
+
+    It lives HERE, beside PolicyMode, because ``tools/registry.py`` and
+    ``orchestrator.py`` both need it and ``policy.py`` is the module they already
+    share — the same placement argument PolicyMode itself has.
+
+    DESK is the default everywhere, and with it every path is byte-identical to
+    what it was before this enum existed: the remote refusal answers None for DESK
+    and nothing else in the loop reads the value. REMOTE narrows, and narrowing is
+    the only direction it can move (SAFE invariant 3's permitted direction).
+    """
+
+    DESK = "desk"       # a person at this computer, watching the answer arrive
+    REMOTE = "remote"   # a message from a paired phone, over a messaging channel
+
+
 def mode_for_profile(profile: Profile | None) -> PolicyMode:
     """The mode a profile runs under. Developer OR Custom -> OPEN, else SAFE.
 

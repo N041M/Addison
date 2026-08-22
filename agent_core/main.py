@@ -36,6 +36,8 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from agent_core import automation_nonce, live_db_guard
+from agent_core.channel_service import ChannelService
+from agent_core.channels.telegram import TelegramAdapter
 from agent_core.mcp_catalog import McpCatalog
 from agent_core.mcp_client import call_tool as mcp_call_tool
 from agent_core.mcp_client import discover_tools
@@ -106,6 +108,7 @@ from agent_core.rpc.widgets import WidgetsMixin
 from agent_core.rpc.workspace import WorkspaceMixin
 from agent_core.secret_presence import SecretPresence
 from agent_core.shell_bridge import IpcShellBridge, ServerShellBridge
+from agent_core.screening import screen
 from agent_core.snapshots.file_revert import FileRevertManager
 from agent_core.snapshots.snapshot_manager import (
     SnapshotManager,
@@ -770,6 +773,33 @@ class JsonRpcServer(
         self._last_run_routine_id: str | None = None
 
         self._queue: queue.Queue = queue.Queue()
+        # Messaging channels phase 2 (docs/messaging-channel-plan.md §3.4). Built
+        # HERE, beside the orchestrator and the registry, because the outer server is
+        # what wires everything and this service is a SECOND CALLER OF A TURN —
+        # exactly the kind of thing that belongs where the wiring is.
+        #
+        # CONSTRUCTING IT STARTS NOTHING. No thread, no socket, no keychain read: the
+        # adapter is an object that knows an API shape, and `channel.setEnabled` is
+        # the only thing that ever starts a loop. Everything the service needs is
+        # injected, which is what keeps it store-free (constraint b: the worker
+        # thread is the only SQLite thread) and testable against a fake transport.
+        self._channel_service = ChannelService(
+            adapters={TelegramAdapter.kind: TelegramAdapter()},
+            # G1: the token is fetched at the moment of use, through the shell, and
+            # never retained here.
+            token_for=self._channel_token,
+            enqueue_turn=self._queue.put,
+            notify=self._notify,
+            # The SIXTH origin of screened text, and the first that is not a tool
+            # result (docs/untrusted-screening-plan.md owns the list). Injected
+            # rather than imported inside the service so a test can prove the door
+            # was used.
+            screen_text=screen,
+        )
+        # One Conversation per channel, owned by the channel jobs and NEVER
+        # `self.conversation` (plan constraint c). In memory for the life of the
+        # process, exactly like the desktop's own per-launch conversation.
+        self._channel_conversations: dict[str, Conversation] = {}
         self._perm_lock = threading.Lock()
         self._permission_waiters: dict[str, dict] = {}
         # THE CARD DIES WITH ITS TURN (KNOWN-BUGS #4, owner decision 2026-08-09).
@@ -808,6 +838,30 @@ class JsonRpcServer(
         # Method -> handler, built once (see _build_dispatch_table). Built last so
         # every handler it references (and self._queue) already exists.
         self._dispatch_table = self._build_dispatch_table()
+
+    def _channel_token(self, kind: str) -> str:
+        """The bot token for one transport, read from the OS keychain THROUGH THE
+        SHELL at the moment of use (G1).
+
+        Resolved per call rather than bound once at construction, for two reasons
+        that are both about honesty at the edges. The bridge is a constructor
+        argument and may be absent (the CLI, most tests) or partial, and a service
+        that could not be BUILT because of a bridge's shape would take the whole
+        process with it. And a token read is a live question: binding a method at
+        startup would answer it against whatever the bridge was then.
+
+        NO BRIDGE, OR ONE THAT CANNOT READ A CHANNEL KEY, MEANS NO TOKEN — which the
+        service reads as "nothing saved" and stops on. Never an error, and never a
+        reason to keep polling something there is no credential for."""
+        bridge = self._shell_bridge
+        reader = getattr(bridge, "get_channel_key", None) if bridge is not None else None
+        if not callable(reader):
+            return ""
+        answer = reader(kind)
+        # A bridge is a boundary, so what comes back over it is checked rather than
+        # trusted to be a string — the same reason `_automation_status` projects the
+        # armed list instead of passing it along.
+        return answer if isinstance(answer, str) else ""
 
     @property
     def store(self) -> Store:
@@ -899,6 +953,11 @@ class JsonRpcServer(
         worker = threading.Thread(target=self._worker_loop, name="turn-worker", daemon=True)
         worker.start()
         self._read_loop()
+        # EVERY POLL LOOP OFF, before the worker is told to stop. A channel thread
+        # outliving the queue it feeds would hand messages to nothing; and a thread
+        # that repeats is a thing that must be switched off, which is the honest half
+        # of the G2 argument in channel_service.py rather than an afterthought.
+        self._channel_service.stop_all()
         self._queue.put(None)   # stop the worker once stdin closes
 
     def _database_created_by_this_launch(self) -> bool | None:
@@ -1594,6 +1653,29 @@ class JsonRpcServer(
                     self._respond(request_id, self._channel_add(params))
                 elif kind == "channel_remove":
                     self._respond(request_id, self._channel_remove(params))
+                elif kind == "channel_connect":
+                    self._respond(request_id, self._channel_connect(params))
+                elif kind == "channel_set_enabled":
+                    self._respond(request_id, self._channel_set_enabled(params))
+                elif kind == "channel_status":
+                    self._respond(request_id, self._channel_status(params))
+                elif kind == "channel_begin_pairing":
+                    self._respond(request_id, self._channel_begin_pairing(params))
+                elif kind == "channel_cancel_pairing":
+                    self._respond(request_id, self._channel_cancel_pairing(params))
+                elif kind == "channel_pairings":
+                    self._respond(request_id, self._channel_pairings(params))
+                elif kind == "channel_revoke_pairing":
+                    self._respond(request_id, self._channel_revoke_pairing(params))
+                elif kind == "channel_turn":
+                    # THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging
+                    # channels phase 2). It is put on this queue by the channel
+                    # service's poll thread, never by a frame, and `request_id` is
+                    # None because nothing is waiting for a reply — the answer goes
+                    # to a phone. From here it is an ordinary turn on the ordinary
+                    # thread, which is the whole point of handing it over rather
+                    # than running it where it arrived.
+                    self._run_channel_turn(params)
             except live_db_guard.LiveDatabaseBlocked as exc:
                 # A job can reach _ensure_built() too (conversation.list, and every
                 # mixin handler that calls it), so the same rule as the startup build
@@ -2576,14 +2658,24 @@ _AUTOMATION_JOBS = {
 # on the read loop would put a store read on the wrong thread and a snapshot capture
 # beside an in-flight turn.
 #
-# NONE OF THEM REACHES A NETWORK, in this phase, at all. `channel.connect` — the one
-# that will — arrives with the adapter in phase 2 and belongs here for the second
-# half of `mcp.refresh`'s reason as well: a stranger's server must never hold the
-# IPC pump. Messaging channels phase 1; docs/messaging-channel-plan.md.
+# PHASE 2 ADDED THE ONES THAT REACH A NETWORK OR A THREAD, and they belong here for
+# the second half of `mcp.refresh`'s reason as well: a stranger's server must never
+# hold the IPC pump. `channel.connect` asks a transport; `channel.setEnabled` starts
+# or stops a poll loop, and a thread started from the read loop would be a thread
+# started from the one place that must stay free to deliver frames — including the
+# permission card that would end the turn underneath it.
+# Messaging channels phases 1-2; docs/messaging-channel-plan.md.
 _CHANNEL_JOBS = {
     Method.CHANNEL_LIST: "channel_list",
     Method.CHANNEL_ADD: "channel_add",
     Method.CHANNEL_REMOVE: "channel_remove",
+    Method.CHANNEL_CONNECT: "channel_connect",
+    Method.CHANNEL_SET_ENABLED: "channel_set_enabled",
+    Method.CHANNEL_STATUS: "channel_status",
+    Method.CHANNEL_BEGIN_PAIRING: "channel_begin_pairing",
+    Method.CHANNEL_CANCEL_PAIRING: "channel_cancel_pairing",
+    Method.CHANNEL_PAIRINGS: "channel_pairings",
+    Method.CHANNEL_REVOKE_PAIRING: "channel_revoke_pairing",
 }
 
 

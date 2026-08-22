@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
+    from agent_core.channel_service import ChannelService
     from agent_core.mcp_catalog import McpCatalog
     from agent_core.mcp_client import Discovery
     from agent_core.memory.store import Store
@@ -117,6 +118,16 @@ class ServerContext:
         # carries the two dispatch seams (``endpoint_for``, ``call_tool``), which
         # main.py hands it — ``_mcp_endpoint_for`` below is the first of them.
         _mcp_catalog: McpCatalog
+        # Messaging channels phase 2. The poll loops, the pairing windows and the
+        # send side — everything about a channel that is not a row. Constructed in
+        # main.py beside the orchestrator, store-free by construction, and the ONLY
+        # thing in this process allowed to start a channel thread.
+        _channel_service: ChannelService
+        # One Conversation per channel, owned by the channel jobs. NEVER
+        # `self.conversation`: the desktop's thread, its 1:1 `_message_ids`
+        # alignment and its rewind anchors must be untouched by a phone (plan
+        # constraint c).
+        _channel_conversations: dict[str, Conversation]
         _mcp_discover: Callable[[str], Discovery]
         _setup_prompt: str | None
         _primary_prompt: str | None

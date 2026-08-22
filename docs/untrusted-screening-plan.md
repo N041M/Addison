@@ -37,14 +37,18 @@ opens with it).
 into a result, a log or an audit row would reproduce the payload in a second place.
 This is the same rule `agent_core/redaction.py` keeps.
 
-**The five origins.** Screening in the orchestrator runs on tool results carrying
+**The six origins.** Screening in the orchestrator runs on tool results carrying
 `content_origin == "external"`, which today is exactly four tools: `web_search`,
 `read_web_page`, `run_command`, and any tool discovered from an MCP server
 (`mcp_catalog`). **The fifth is not a tool result** and was added on 2026-08-15: the
 text of a routine file somebody else wrote, screened at
 `routine.importPreview` and again at `routine.importConfirm`
 (`agent_core/rpc/routines.py`; [routine-sharing-plan.md](routine-sharing-plan.md)
-owns that feature). Addison's own sentences (a refusal, a calculator answer, a steer
+owns that feature). **The sixth arrived on 2026-08-22 and is not a tool result
+either**: the text of a message somebody sent from a paired phone, screened at the
+door by `agent_core/channel_service.py` (the verdict travels with the message to the
+worker, which marks the copy the model is handed) — see
+[messaging-channel-plan.md](messaging-channel-plan.md) §3.5. Addison's own sentences (a refusal, a calculator answer, a steer
 after a denied step) are not screened, for the same reason the redactor's own
 markers are not: marking Addison's words as untrusted teaches the model to discount
 the mark.
@@ -163,6 +167,18 @@ as decisions rather than as options.
    > ordinary local file reads and clipboard content are unchanged and still
    > unscreened. The cost is near zero, because a routine file is short and its
    > prose is a description.
+
+   > *Refined again 2026-08-22, building messaging channels phase 2, and for the
+   > same reason.* A chat with Addison from a phone is **the standing channel this
+   > decision named, in its plainest form**: the messages arrive continuously, from
+   > outside the machine, and a person forwards things — a pasted page, a quoted
+   > email, somebody else's message — as a matter of course. So inbound channel text
+   > is screened. Local file reads and clipboard content are still unchanged and
+   > still unscreened; what moved is not this decision's line but the arrival of a
+   > case that was always on the other side of it. The honest statement is unchanged
+   > too, and the channel plan's §6 repeats it rather than raising it: screening is a
+   > backstop and not a boundary — prose in a shape nobody enumerated passes
+   > unmarked, and a mark changes nothing at the gate.
 6. **Detection is pattern-only. No model-assisted second reader.** Rules can be
    read, reviewed and tested; a second model's judgement can only be sampled.
 

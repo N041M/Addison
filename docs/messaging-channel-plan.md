@@ -718,6 +718,16 @@ so a channel key read needs **no change to the shell's dispatch at all**. On the
 Python side, `IpcShellBridge` gains `get_channel_key(kind: str) -> str`, modelled on
 `get_provider_key`, using `_KEYCHAIN_TIMEOUT` and returning `result.get("key", "")`.
 
+**The account stays keyed by KIND for v1 — decided 2026-08-22, building phase 2.**
+Phase 1 found the consequence this section had not stated: `channels` permits several
+rows of one transport, so two Telegram connections share one saved token
+([`KNOWN-GAPS.md`](KNOWN-GAPS.md) holds the finding and the two honest behaviours
+phase 1 gave it). Re-keying the account by CHANNEL ID was considered and rejected for
+v1: the shared token only becomes a real problem when two connections of one transport
+can both be *live*, and owner decision 11 permits exactly one enabled channel at a
+time — so multi-channel v2 is the feature that would revisit this, and it should
+revisit it here.
+
 **G1 holds by construction**: the token is written by the webview straight to the OS
 keychain and never travels back; the core reads it at the moment of use; `channel.list`
 carries `token_present` and never a key; nothing writes it to SQLite; and no snapshot

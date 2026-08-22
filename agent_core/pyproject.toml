@@ -34,6 +34,11 @@ build-backend = "setuptools.build_meta"
 package-dir = { "agent_core" = "." }
 packages = [
     "agent_core",
+    # The messaging-channel transports (phases 1-3). A subpackage has to be listed
+    # here or the built distribution silently omits it — the editable install
+    # resolves it by path either way, which is exactly how that omission stays
+    # invisible until somebody builds.
+    "agent_core.channels",
     "agent_core.memory",
     "agent_core.permissions",
     "agent_core.providers",

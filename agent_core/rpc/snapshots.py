@@ -176,6 +176,21 @@ class SnapshotsMixin(ServerContext):
             self._resync_mcp_after_restore()
         except Exception:
             pass
+        # (g) A poll loop is IN MEMORY, and the rows it was started from are not
+        #     (messaging channels phase 2). A restore can roll a channel's `enabled`
+        #     back, or take the row away entirely — and a thread left running against
+        #     a configuration that no longer exists is a thread nothing on the panel
+        #     can switch off, because there is no row left to switch. Same posture
+        #     argument as revoking the grants above: after a rollback the session
+        #     must not be doing more than the configuration it rolled back to says.
+        #
+        #     Stopping is the only correct direction. STARTING loops for whatever the
+        #     restored rows say would make a rollback a way to make Addison start
+        #     listening to a phone, which is a thing only a person's switch may do.
+        try:
+            self._channel_service.stop_all()
+        except Exception:
+            pass
         # (e) A restored provider row comes back saying connected, but keys are
         #     excluded from snapshots by design (G1) — so one whose keychain entry
         #     was removed since would look fine and fail every turn. Report it;

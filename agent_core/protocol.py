@@ -408,9 +408,49 @@ class Method:
     CHANNEL_REMOVE = "channel.remove"  # {id} -> {ok} | {ok:false, error}
     # <row> = {id, kind, name, enabled, tokenPresent, pairedDevices, addedAt}
     # `pairedDevices` is a COUNT and never the rows: a pairing carries a display name
-    # the TRANSPORT supplied, i.e. text somebody else wrote. Nothing here says a
-    # channel is running, because nothing can run one yet; `channel.status` arrives
-    # with the service in phase 2.
+    # the TRANSPORT supplied, i.e. text somebody else wrote. The row says what is
+    # SAVED and never what is running: `enabled` is the person's stored intent, and
+    # whether Addison is actually listening comes from `channel.status` below, which
+    # asks the service. Nothing starts a poll loop at launch, so those two answers
+    # legitimately differ after a restart, and the live one is the one a surface
+    # shows (step 8's "ask what is really running", one subsystem over).
+    #
+    # PHASE 2 — connect, pair, and answer with words only. Everything below reaches
+    # a transport or a running loop, and every one of them is a worker job for the
+    # `mcp.refresh` reason: a stranger's server must never hold the IPC pump.
+    CHANNEL_CONNECT = "channel.connect"        # {id} -> {ok, connectedAs} | {ok:false, error}
+    CHANNEL_SET_ENABLED = "channel.setEnabled"  # {id, enabled} -> {ok} | {ok:false, error}
+    # {id} -> {state, connectedAs?, lastPollAt?, backoffSeconds, unknownSenders, error?}
+    # `state` is a CLOSED vocabulary (channel_service.py): "stopped" | "listening" |
+    # "backing_off" | "token_rejected" | "no_token". `unknownSenders` is the count of
+    # messages from senders that are not paired — the ONLY thing an unpaired message
+    # produces, because a reply is an oracle. `error` is one of Addison's own frozen
+    # sentences and NEVER a transport's error text.
+    CHANNEL_STATUS = "channel.status"
+    # Pairing: the desktop shows a code, the phone sends it. The code is minted at
+    # the moment of asking (agent_core/channel_pairing.py, over automation_nonce), so
+    # no observed content could have written it down in advance. The window lives in
+    # memory on the service and is gone on restart — a pairing window is a moment,
+    # not a setting.
+    CHANNEL_BEGIN_PAIRING = "channel.beginPairing"    # {id} -> {ok, code, expiresAt}
+    CHANNEL_CANCEL_PAIRING = "channel.cancelPairing"  # {id} -> {ok}
+    CHANNEL_PAIRINGS = "channel.pairings"             # {id} -> {pairings: [<pairing>]}
+    # <pairing> = {id, label, pairedAt}. The transport's own id for the human is
+    # deliberately NOT on the wire: it authorises nothing on this side, and it is the
+    # one field that would let a webview surface identify a person on a service.
+    CHANNEL_REVOKE_PAIRING = "channel.revokePairing"  # {pairingId} -> {ok}
+    # Answers in EVERY profile, like `remove`: revoking is a tightening, and a
+    # tightening must never be what a profile switch traps.
+    #
+    # Core -> Webview notifications.
+    CHANNEL_STATE_CHANGED = "channel.stateChanged"  # {id, state, error?}
+    # {id, phase, summary?} — a phone turn started or finished, for the panel.
+    # DELIBERATELY NOT `conversation.streamChunk` AND NOT `tool.activityUpdate`: both
+    # of those are read by the frontend as belonging to the thread on screen, and a
+    # phone turn's words appearing inside somebody's desktop conversation is the
+    # failure the whole design exists to avoid. `summary` is Addison's own short line
+    # about what happened, never the message and never the answer.
+    CHANNEL_REMOTE_TURN = "channel.remoteTurn"
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
@@ -591,8 +631,9 @@ class Method:
     # use (G1). A PARALLEL command to the provider one and never a call into it: the
     # account namespace is `channel-key:<kind>` on the same keychain service, and the
     # provider path's mint ledger, replace-detection and legacy-account migration are
-    # deliberately out of reach (plan §3.9). NOTHING CALLS THIS IN PHASE 1 — the read
-    # side exists so the phase that adds the adapter needs no new shell surface.
+    # deliberately out of reach (plan §3.9). ONE CALLER since phase 2: the channel
+    # service, before each poll and before each answer it sends. Phase 1 shipped the
+    # read side uncalled so the adapter needed no new shell surface, and it needed none.
     KEYCHAIN_GET_CHANNEL_KEY = "keychain.getChannelKey"
     # {payload} -> {signature, deviceId}. The shell signs relay requests with the
     # device private key, which never leaves the OS keychain (§5) — the core sends

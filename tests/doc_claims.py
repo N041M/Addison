@@ -331,6 +331,23 @@ FILE_TOOLS_ARE_IN_THE_SAFE_VIEW = True
 # Flip this only if an owner decision makes a pairing restorable.
 CHANNEL_PAIRINGS_ARE_NEVER_RESTORED = True
 
+# Messaging channels, phase 2 (2026-08-22). The remote view — what a turn that
+# arrived from a phone is offered — is an INTERSECTION with `visible_tools(mode)`,
+# so it is a subset of the SAFE view in every mode: *a remote turn is never offered
+# a tool Simple could not be offered.* That one sentence is what the whole floor is
+# made of, and it survives phase 3 filling the set, because it is a property of the
+# SHAPE of `remote_tools` rather than of the set being empty.
+#
+# Registered because the failure is silent and lands three directories away: writing
+# `remote_tools` as a union over REMOTE_TOOL_IDS (rather than a filter over
+# visible_tools) breaks no build and produces no card — it just quietly offers a
+# phone something the desk's own mode hides. The plan (messaging-channel-plan.md §8)
+# asked for this row by name.
+#
+# Flip this only if an owner decision genuinely gives a phone something Simple
+# cannot have, which no phase of the plan proposes.
+THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -869,6 +886,55 @@ CLAIMS: tuple[Claim, ...] = (
                 "Pairings are captured now — this line still says a restore leaves no phone "
                 "paired. Amend it, or link to docs/messaging-channel-plan.md §3.8, which "
                 "owns the capture decision."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    Claim(
+        id="remote-view-is-a-subset-of-the-safe-view",
+        owner="docs/messaging-channel-plan.md",
+        holds=THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW,
+        true_state=(
+            "`registry.remote_tools(mode)` is an INTERSECTION with `visible_tools(mode)`, "
+            "so what a phone is offered is a subset of the SAFE view in every mode: a "
+            "remote turn is never offered a tool Simple could not be offered. It is empty "
+            "in phase 2, and adding an id can only ever move something from the desk's "
+            "view into a smaller one."
+        ),
+        false_state=(
+            "The remote view can carry a tool the SAFE view does not, so a phone may be "
+            "offered something Simple cannot have."
+        ),
+        # Anchored on a claim that the remote/phone view EXCEEDS or is independent of
+        # the desk's, which is the shape a summary would take if somebody rewrote
+        # `remote_tools` as a union. Narrow on purpose: the tree says the true
+        # neighbouring things constantly ("a phone gets fewer tools", "the floor is
+        # empty"), and a wider pattern would catch those.
+        while_true=Wrong(
+            pattern=(
+                r"remote_tools\b[^.\n]{0,80}\b(?:union|superset)"
+                r"|(?:remote|phone)[^.\n]{0,40}\bview\b[^.\n]{0,60}\b(?:not|never)\s+a subset"
+                r"|(?:a\s+)?phone[^.\n]{0,60}\btools?\b[^.\n]{0,40}\bSimple (?:cannot|can't|could not) "
+                r"be offered"
+            ),
+            fix=(
+                "The remote view is an INTERSECTION with visible_tools(mode) and therefore a "
+                "subset of the SAFE view in every mode. Amend the sentence, or link to "
+                "docs/messaging-channel-plan.md §3.6, which owns the floor. If an owner "
+                "decision genuinely widened it, flip "
+                "THE_REMOTE_VIEW_IS_A_SUBSET_OF_THE_SAFE_VIEW in tests/doc_claims.py in the "
+                "SAME commit."
+            ),
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"subset of (?:the )?(?:SAFE|Simple)(?: view)?"
+                r"|never offered a tool Simple could not be offered"
+            ),
+            fix=(
+                "The remote view is no longer a subset of the SAFE view — this line still "
+                "says it is. Amend it, or link to docs/messaging-channel-plan.md §3.6, which "
+                "owns the floor."
             ),
         ),
         exempt=FROZEN,
