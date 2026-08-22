@@ -4,6 +4,9 @@
 //   (a) The fail-closed parsers: a roots list drops any row without a usable
 //       directory, a picker result that isn't a non-empty string is `null`, and a
 //       mutation whose shape we can't read is {ok:false} (never a false success).
+//       The picker answer also carries an optional plain sentence for the one case
+//       the core can name — it stopped waiting on a picker still open — which is
+//       what stopped a timeout looking exactly like Cancel (2026-08-22).
 //   (b) The panel, rendered for real: the frozen standing line byte-for-byte, and
 //       — load-bearing — NO false claim that the commands Addison runs are undoable
 //       or restore-covered (contract D6 [F2]).
@@ -76,6 +79,12 @@ const DATA_DIR_REFUSAL =
 const AUTOMATION_DIR_REFUSAL =
   "That folder is where this computer keeps jobs it runs on a schedule, so " +
   "Addison never trusts it. Pick a project folder instead.";
+// The picker's "nobody answered" sentence (rpc/workspace.py `_PICKER_TIMED_OUT`,
+// 2026-08-22). It rides the SAME error line as the refusals above, which is why
+// the panel needed no new slot for it.
+const PICKER_TIMED_OUT =
+  "Addison stopped waiting for the folder picker, so nothing was chosen and " +
+  "nothing changed. Open it again and pick a folder.";
 const CARD_TITLE = "Folders Addison may work in";
 
 const DIR = "/Users/me/project";
@@ -134,16 +143,32 @@ describe("parseWorkspaceRoots", () => {
 });
 
 describe("parseWorkspaceDirectory", () => {
-  it("returns the chosen path", () => {
-    expect(parseWorkspaceDirectory({ directory: DIR })).toBe(DIR);
+  it("returns the chosen path, with no sentence attached", () => {
+    expect(parseWorkspaceDirectory({ directory: DIR })).toEqual({ directory: DIR, error: null });
   });
 
   it("is null on a cancelled/unavailable picker (anything not a non-empty string)", () => {
-    expect(parseWorkspaceDirectory({ directory: "" })).toBeNull();
-    expect(parseWorkspaceDirectory({ directory: 42 })).toBeNull();
-    expect(parseWorkspaceDirectory({})).toBeNull();
-    expect(parseWorkspaceDirectory(null)).toBeNull();
-    expect(parseWorkspaceDirectory("nope")).toBeNull();
+    for (const junk of [{ directory: "" }, { directory: 42 }, {}, null, "nope"]) {
+      expect(parseWorkspaceDirectory(junk)).toEqual({ directory: null, error: null });
+    }
+  });
+
+  it("carries the core's sentence when it stopped waiting on an open picker", () => {
+    // The gap this closed: a timeout used to arrive as a bare {directory: null},
+    // i.e. byte-identical to Cancel, and the person saw nothing happen at all.
+    expect(parseWorkspaceDirectory({ directory: null, error: PICKER_TIMED_OUT })).toEqual({
+      directory: null,
+      error: PICKER_TIMED_OUT,
+    });
+    // Junk in `error` is not a sentence — never render a non-string as one.
+    expect(parseWorkspaceDirectory({ directory: null, error: 42 })).toEqual({
+      directory: null,
+      error: null,
+    });
+    expect(parseWorkspaceDirectory({ directory: null, error: "" })).toEqual({
+      directory: null,
+      error: null,
+    });
   });
 });
 
@@ -340,7 +365,7 @@ vi.mock("../ipc/client", async (importOriginal) => {
       listWorkspaceRoots: vi.fn(async () => []),
       revokeWorkspaceTrust: vi.fn(async () => ({ ok: true })),
       grantWorkspaceTrust: vi.fn(async () => ({ ok: true })),
-      pickWorkspaceDirectory: vi.fn(async () => DIR),
+      pickWorkspaceDirectory: vi.fn(async () => ({ directory: DIR, error: null })),
     },
   };
 });
@@ -372,6 +397,48 @@ describe("useWorkspace (real hook, mocked ipc)", () => {
     });
     expect(landed).toBe(false);
     expect(result.current.error).toBe(DATA_DIR_REFUSAL);
+  });
+
+  it("puts the core's picker-timeout sentence on the error line, and still picks nothing", async () => {
+    // The half of the gap the frontend owns. The core stopping its wait used to be
+    // indistinguishable from Cancel here, so "Choose a folder…" looked like a dead
+    // button. Same error line as a refused grant — no new slot, no new component.
+    const { ipc } = await import("../ipc/client");
+    (ipc.pickWorkspaceDirectory as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      directory: null,
+      error: PICKER_TIMED_OUT,
+    });
+    const { result } = renderHook(() => useWorkspace({ connected: true }));
+    let picked: string | null = "not-null";
+    await act(async () => {
+      picked = await result.current.pickDirectory();
+    });
+    expect(picked).toBeNull();
+    expect(result.current.error).toBe(PICKER_TIMED_OUT);
+  });
+
+  it("clears a previous error when the next pick starts, and a plain cancel says nothing", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.grantWorkspaceTrust as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: DATA_DIR_REFUSAL,
+    });
+    const { result } = renderHook(() => useWorkspace({ connected: true }));
+    await act(async () => {
+      await result.current.handleGrant("/Users/me/.addison");
+    });
+    expect(result.current.error).toBe(DATA_DIR_REFUSAL);
+
+    // A cancelled picker: {directory: null, error: null} — the sentence from the
+    // last refusal must not sit there looking like this pick's outcome.
+    (ipc.pickWorkspaceDirectory as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      directory: null,
+      error: null,
+    });
+    await act(async () => {
+      await result.current.pickDirectory();
+    });
+    expect(result.current.error).toBeNull();
   });
 });
 

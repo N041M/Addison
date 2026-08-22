@@ -99,6 +99,11 @@ _REVIEWED_THREAD_TARGETS = {
     # main.py — one model pull, started by an inbound model.startLocalSetup and
     # finished; it never starts a turn or a tool call.
     "self._run_local_setup",
+    # main.py — one folder picker, started by an inbound workspace.pickDirectory
+    # (a person clicking "Choose a folder") and finished when they answer the
+    # dialog. It relays one shell call and responds; it never starts a turn, runs
+    # a tool, or schedules anything.
+    "self._run_workspace_pick_directory",
 }
 
 _ADD_TARGET_HINT = (

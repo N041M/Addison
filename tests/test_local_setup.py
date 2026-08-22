@@ -1,7 +1,9 @@
 """Local-model setup flow + item-B threading + the item-A vision gate (§4.1.2, §4.1.1).
 
 Server level (harness style from tests/test_ipc_server.py): ``model.startLocalSetup``
-runs its reachability/hardware pre-flight on the read loop and answers via the RPC
+runs its reachability/hardware pre-flight on the WORKER thread (it was inline on the
+read loop until 2026-08-22 — the reachability probe is a five-second HTTP call, and
+a read loop making it delivers no frames while it waits) and answers via the RPC
 response, then pulls/verifies/registers on a background thread emitting
 ``model.localSetupProgress`` notifications; once verified, ModelRole.LOCAL and the
 model appear in ``model.availableRoles``. Ollama-not-running and insufficient-disk
@@ -288,6 +290,56 @@ def test_start_local_setup_busy_rejects_second_request(tmp_path, monkeypatch):
         )
         error = writer.wait_for(lambda f: f.get("id") == 2 and "error" in f)
         assert "already setting up" in error["error"]["message"]
+    finally:
+        release.set()
+        _shutdown(reader, thread)
+
+
+# --- the pre-flight is OFF the read loop (KNOWN-GAPS, closed 2026-08-22) ----
+def test_start_local_setup_preflight_does_not_stall_frame_delivery(tmp_path, monkeypatch):
+    """``model.startLocalSetup`` was an INLINE dispatch handler, and step 1 of its
+    pre-flight is ``is_running()`` — an HTTP call to Ollama with a five-second
+    ceiling. Inline means the read loop itself made that call, so for as long as it
+    took, no inbound frame was parsed at all: not ``permission.respond``, not
+    ``conversation.stop``, not a shell response the worker was parked on.
+
+    So this test holds the Ollama probe open and asks a DIFFERENT question on the
+    same connection — ``setRoleForNextMessage``, which is answered inline on the
+    read loop and touches no store. It must come back while the probe is still
+    hanging. Mutation: put ``Method.MODEL_START_LOCAL_SETUP`` back to
+    ``self._handle_start_local_setup`` in ``_build_dispatch_table`` and the read
+    loop never reaches frame 2, so the wait_for times out.
+
+    The five-second real ceiling is not waited on here: the probe is released as
+    soon as the second answer proves the point."""
+    _plenty_of_hardware(monkeypatch)
+    probing = threading.Event()
+    release = threading.Event()
+
+    def slow_probe(request: httpx.Request) -> httpx.Response:
+        probing.set()
+        release.wait(timeout=5)
+        return httpx.Response(200, json={"models": []})
+
+    client = _ollama_client({"/api/tags": slow_probe})
+    server, reader, writer, thread = _server(tmp_path, ollama_client=client)
+    try:
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 1, "method": Method.MODEL_START_LOCAL_SETUP,
+             "params": {"modelName": "llama3:8b"}}
+        )
+        assert probing.wait(timeout=5), "the pre-flight probe never started"
+
+        # The read loop is the thing under test: it must still be parsing frames.
+        reader.feed(
+            {"jsonrpc": "2.0", "id": 2, "method": Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE,
+             "params": {"role": "primary"}}
+        )
+        answered = writer.wait_for(lambda f: f.get("id") == 2 and "result" in f)
+        assert answered["result"] == {"ok": True}
+        # ...and the setup itself is genuinely still mid-probe, so the answer above
+        # is not just a fast probe finishing first.
+        assert not any(f.get("id") == 1 and ("result" in f or "error" in f) for f in writer.frames)
     finally:
         release.set()
         _shutdown(reader, thread)

@@ -160,8 +160,11 @@ export const Method = {
   // takes an absolute directory (the core floor-checks it and refuses Addison's
   // own data dir); `revoke` drops one; `list` returns the currently-trusted
   // roots. `pickDirectory` opens the OS folder picker through the Rust shell and
-  // returns the chosen path (or nothing if cancelled) — no key material, no file
-  // contents ever ride these payloads.
+  // returns `{directory, error?}`: the chosen path, or nothing if cancelled, or
+  // nothing PLUS one plain sentence when the picker was left open past the
+  // bridge's ceiling and the core stopped waiting (a cancel carries no sentence —
+  // the person already knows). No key material, no file contents ever ride these
+  // payloads.
   WorkspaceGrantTrust: "workspace.grantTrust",
   WorkspaceRevokeTrust: "workspace.revokeTrust",
   WorkspaceList: "workspace.list",

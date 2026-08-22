@@ -26,7 +26,7 @@ import threading
 from typing import Protocol
 
 from agent_core.protocol import Method
-from agent_core.tools.base import ShellBridge
+from agent_core.tools.base import ShellBridge, ShellCallTimeout
 
 
 class ServerShellBridge(ShellBridge, Protocol):
@@ -224,15 +224,20 @@ class IpcShellBridge:
 
         self._send({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params})
 
+        # ShellCallTimeout, not a bare RuntimeError: the sentence is the same one,
+        # but "the shell never answered" is a different fact from "the shell said
+        # no", and a caller that can say which (workspace.pickDirectory) must not
+        # have to tell them apart by comparing copy. Every existing
+        # ``except RuntimeError`` still catches it — it is a subclass.
         if not event.wait(timeout=self._timeout if timeout is None else timeout):
             with self._lock:
                 self._pending.pop(req_id, None)
-            raise RuntimeError(_TIMEOUT_MESSAGE)
+            raise ShellCallTimeout(_TIMEOUT_MESSAGE)
 
         with self._lock:
             record = self._pending.pop(req_id, None)
         if record is None:
-            raise RuntimeError(_TIMEOUT_MESSAGE)
+            raise ShellCallTimeout(_TIMEOUT_MESSAGE)
         if record["error"] is not None:
             raise RuntimeError(_error_message(record["error"]))
         return record["result"] or {}
