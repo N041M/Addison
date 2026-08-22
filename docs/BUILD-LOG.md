@@ -12,6 +12,62 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (fourth): Highlight → Ask / Explain, and the three silences that make it safe
+
+The first of the features judged on 2026-08-09 got built, in the shape it was
+judged in and no larger: highlight a sentence in a message you have already read
+and a small panel offers **Ask** and **Explain**. Both write the same thing into
+the composer — a markdown blockquote of the selection, a blank line, and, for
+Explain, the one canned question — and then stop. The person presses Send.
+`shell/src/components/SelectionAsk.tsx` is the whole of it; `ChatThread` mounts it
+and marks which bodies may be quoted.
+
+Two things were reused rather than invented, and that is the reason this is ~280
+lines, comments and all. The insertion is App's one-shot `composerSeed`, which the empty-state
+suggestion chips have used since the v4 restyle and which already focuses the
+textarea — so "put it in the composer, do not send it" is not new behaviour that
+could drift from the chips'. And the panel is ordinary floating chrome (`panel`
+fill, `rail` hairline, 6px, `shadow-popover`), which the direction already
+sanctions as the one bordered element left; no new furniture was designed.
+
+**The rigor pass. The feature is the seed string, and the safety is in what is
+NOT offered** — three silences, each of which fails without a symptom if it goes:
+
+- **A selection that is not inside ONE settled message body offers nothing.** The
+  check is a single `closest("[data-ask-selectable]")` from the range's
+  `commonAncestorContainer` — which is the deepest node holding the WHOLE range,
+  so finding a marked body above it proves both ends are in that same body. Drop
+  it and a drag from the end of one answer into the next quotes "both, partly",
+  which reads as a quote and is not one. Eight tests go red when it is removed.
+- **Membership comes from the row's state, never from the glyphs.** A row still
+  arriving (or still resolving out of the scramble) has random characters in its
+  tail, and the marker is simply absent while `pending || revealing`. Marking the
+  streaming branch selectable turns one test red; making every row selectable
+  turns another.
+- **The selection string is captured when the panel appears, not read back when a
+  button is pressed.** Between those two moments the thread can re-render around a
+  streaming answer elsewhere, and the browser can drop a selection for reasons of
+  its own. What is quoted must be what was on screen when the person let go.
+
+**The interaction that had to be checked was the click-to-scramble handler**, and
+the finding is that it was never a threat: `installScrambleClickHandler` scrambles
+only a LEAF carrying `data-scramble`, `data-scramble-live` or
+`data-scramble-click`, and in a message row that is the sender label alone — the
+BODY (`data-msg-text`) is not in that selector, so ending a drag inside an answer
+has never started a resolve loop over the text just highlighted, and a press on
+Ask walks up from the button and finds no target. No guard was added; the existing
+selector is the guard, and two tests now say so out loud, because the property
+would break the day the panel were moved inside a label.
+
+Three limits are recorded honestly in [KNOWN-GAPS.md](KNOWN-GAPS.md) rather than
+papered over: touch is untested (the panel rides `mouseup` + `selectionchange`),
+there is no cap on quote length (the ceiling is one message body, and silently
+truncating a person's own quote is worse than a long draft they can see), and the
+seed REPLACES the composer's contents, which is what `composerSeed` has always
+done — quoting on top of a half-typed sentence loses the sentence.
+
+---
+
 ## What shipped 08-22 (third): the composer says which model answered
 
 One line, and the reason it is one line. The QA re-run pass caught a turn

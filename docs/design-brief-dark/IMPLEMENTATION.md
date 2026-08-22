@@ -177,6 +177,22 @@ glyphs hover to `ink`.
   messages keep **Markdown/Mermaid rendering**, restyled to the same type
   scale (code/tables in mono on `panel` blocks with `line` hairlines). Retry
   / rewind-to-here affordances survive as small accent/mono actions.
+- **Selection popover** (thread only, shipped 2026-08-22 — `SelectionAsk.tsx`):
+  highlight text inside ONE settled message body and a small floating panel
+  appears beside the selection with two accent actions, **Ask** and **Explain**.
+  Floating chrome, so it takes the sanctioned bordered-panel treatment: `panel`
+  bg, `rail` border, radius 6px, `shadow-popover`, rows hover `line` — the same
+  idiom as the composer model menu, at two rows. It is placed above the selection
+  when there is room and below it otherwise, clamped to the thread column so it
+  never covers what was highlighted and never hangs off the edge; it appears on
+  `fadeRise .15s` (dead under `prefers-reduced-motion`, like everything else) and
+  leaves on Escape, a press elsewhere, a collapsed selection, any scroll, a
+  resize, or a conversation switch. It appears for **settled** message text only —
+  never over a reply that is still arriving or still resolving out of the
+  scramble — and never for a selection that crosses two messages or takes in a
+  sender label. Neither button sends anything: both fill the composer with the
+  selection as a markdown blockquote, the same one-shot seed the empty-state
+  suggestion chips use.
 - **Composer** (chat only): borderless textarea (15px) over a 1px top border
   `track` → `track-hi` on focus; right: model label (mono 10.5px `disabled`,
   click → menu) + 30px circular send, idle transparent/`track` border,

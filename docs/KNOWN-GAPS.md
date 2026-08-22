@@ -1030,7 +1030,8 @@ a profile rather than a switch (`run_command` is absent from `visible_tools(SAFE
 a Simple-profile toggle for it would break SAFE invariant 1). The rest survive, as
 follows. None is scheduled and none blocks anything.
 
-- **Highlight → Ask / Explain: the one worth building first.** Selecting text in a
+- ~~**Highlight → Ask / Explain: the one worth building first.**~~ **BUILT
+  2026-08-22, in the judged shape.** Selecting text in a
   past message offers Ask (type a question about the selection) and Explain (the
   same mechanism with a canned prompt: one feature, two labels). The judged shape:
   a selection popover (floating chrome, the sanctioned bordered-panel element in
@@ -1041,6 +1042,25 @@ follows. None is scheduled and none blocks anything.
   frontend-only, no new tool, no gate or registry work, works in every profile,
   and the best persona fit on the list, because an unclear sentence is exactly what
   a non-technical person cannot phrase a follow-up about.
+  `shell/src/components/SelectionAsk.tsx` is what shipped: both buttons take the
+  SAME path — App's one-shot `composerSeed`, the mechanism the empty-state chips
+  already used — so what lands is a markdown blockquote of the selection, a blank
+  line, and (Explain only) "What does this mean, in plain language?". Nothing
+  sends: the person reads, edits and presses Send. It is offered only for a
+  selection contained in ONE settled message body, decided from the row's state
+  (`data-ask-selectable`) and never from the characters, so streaming text and a
+  drag across two messages get no panel at all.
+  **Three things are honestly still open, none of them blocking:**
+  **(a) touch is untested.** The panel is driven by `mouseup` plus
+  `selectionchange`; a touch selection reaches the second of those, but nothing
+  was built for the OS's own selection callout and nothing was tried on a
+  touchscreen — this is a desktop app, so it was left rather than guessed at.
+  **(b) There is no cap on how much you may quote.** A selection cannot cross a
+  message, so the ceiling is one message's body; truncating a person's own quote
+  silently seemed worse than a long draft they can see and edit.
+  **(c) The seed REPLACES whatever was in the composer**, because that is what
+  `composerSeed` has always done (a suggestion chip does it too). Quoting on top
+  of a half-typed sentence loses the sentence.
 - **Continue: truncation-aware only.** A button beside Retry that appears when the
   provider's stop reason says the response hit its output cap, and asks the model
   to resume. Per-provider spellings of that fact belong on `ProviderCapabilities`,
