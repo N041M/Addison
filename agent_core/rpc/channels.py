@@ -670,6 +670,59 @@ class ChannelsMixin(ServerContext):
             return None
         return self.store.get_channel(channel_id)
 
+    # --- the worker's channel arm ------------------------------------------
+
+    def _run_channel_job(self, kind: str, params: dict, request_id) -> None:
+        """Every ``channel_*`` worker job, dispatched here instead of in the worker
+        loop's own chain.
+
+        LIFTED OUT WHOLE on 2026-08-23, and the reason is worth writing down because
+        it will happen again: the loop in ``main.py`` had grown past what pyright
+        will analyse, and the gate stopped with "code is too complex to analyze" —
+        so the NEXT job kind anybody adds fails the type gate, whatever it is
+        (image-attach phase 3 was the one that found it). Fourteen of the branches
+        were this namespace's, and this mixin already owns all fourteen handlers, so
+        they came here.
+
+        NOTHING ABOUT THEM CHANGED. Same order, same handlers, same one-job-at-a-time
+        worker, and the call is still made from inside the loop's ``try``, so every
+        except arm there still catches what it always caught. A kind this method does
+        not recognise does nothing, exactly as an unmatched kind did in the chain."""
+        if kind == "channel_list":
+            self._respond(request_id, self._channel_list())
+        elif kind == "channel_add":
+            self._respond(request_id, self._channel_add(params))
+        elif kind == "channel_remove":
+            self._respond(request_id, self._channel_remove(params))
+        elif kind == "channel_connect":
+            self._respond(request_id, self._channel_connect(params))
+        elif kind == "channel_set_enabled":
+            self._respond(request_id, self._channel_set_enabled(params))
+        elif kind == "channel_set_on_wake":
+            self._respond(request_id, self._channel_set_on_wake(params))
+        elif kind == "channel_status":
+            self._respond(request_id, self._channel_status(params))
+        elif kind == "channel_begin_pairing":
+            self._respond(request_id, self._channel_begin_pairing(params))
+        elif kind == "channel_cancel_pairing":
+            self._respond(request_id, self._channel_cancel_pairing(params))
+        elif kind == "channel_pairings":
+            self._respond(request_id, self._channel_pairings(params))
+        elif kind == "channel_revoke_pairing":
+            self._respond(request_id, self._channel_revoke_pairing(params))
+        elif kind == "channel_pending_requests":
+            self._respond(request_id, self._channel_pending_requests(params))
+        elif kind == "channel_dismiss_request":
+            self._respond(request_id, self._channel_dismiss_request(params))
+        elif kind == "channel_turn":
+            # THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging channels
+            # phase 2). It is put on the queue by the channel service's poll thread,
+            # never by a frame, and ``request_id`` is None because nothing is waiting
+            # for a reply — the answer goes to a phone. From here it is an ordinary
+            # turn on the ordinary thread, which is the whole point of handing it
+            # over rather than running it where it arrived.
+            self._run_channel_turn(params)
+
     # =====================================================================
     # WHAT A REMOTE MESSAGE BECOMES (plan §3.5)
     # =====================================================================

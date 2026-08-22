@@ -31,6 +31,7 @@ Back to the [README](../README.md); see also [architecture.md](architecture.md) 
 ```mermaid
 erDiagram
     conversations ||--o{ messages : contains
+    messages ||--o{ message_attachments : "pictures on"
     conversations ||--o{ memory_facts : sources
     conversations ||--o{ routines : "created from"
     routines ||--o{ routine_runs : logs
@@ -51,6 +52,16 @@ erDiagram
         TEXT tool_call_id
         INTEGER created_at
         TEXT tool_calls_json "history only, never replayed"
+    }
+    message_attachments {
+        TEXT id PK
+        TEXT conversation_id FK
+        TEXT message_id FK
+        TEXT name "the person's own filename, display only"
+        TEXT media_type "png|jpeg|gif|webp"
+        INTEGER byte_size "of the encoded bytes"
+        TEXT data_b64
+        INTEGER created_at
     }
     memory_facts {
         TEXT id PK
@@ -99,6 +110,20 @@ erDiagram
   redraw "Addison's work" and still offer "Save as routine", both of which used to
   vanish on relaunch. The decoded calls ride on `Message.past_tool_calls`, a field no
   provider adapter reads.
+- **message_attachments**: pictures the person attached to one of their own
+  messages ([image-attach plan](image-attach-plan.md) §5), written beside the
+  message row by the same caller in the same turn. The bytes are stored, not a
+  path: what is remembered has to be what was actually sent, and a path is a
+  promise about a file Addison does not own. They are read back on
+  `conversation.load` in both directions — onto the wire for the thumbnails, and
+  onto `Message.images` so the replayed history still carries the pictures to the
+  model. Bounded by construction: the shell downscales every picture under 2 MiB
+  and a message may carry four, so the worst a message adds is ~8 MiB and only
+  because somebody chose four pictures by hand. A rewind deletes a message's
+  pictures in the same transaction as the message (`Store.truncate_messages`);
+  with `PRAGMA foreign_keys = ON` that is not tidiness but the difference between
+  a rewind and an aborted COMMIT. Nothing model-addressed can mint, list or read a
+  row: the only writer is the person's own picker (`conversation.pickAttachment`).
 - **memory_facts**: the second tier of memory: durable facts to be written only on
   explicit user confirmation (`confirmed_by_user`), never silently. **Inert today**:
   the table is created, but `Store` has no method that reads or writes it, so nothing

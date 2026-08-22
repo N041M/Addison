@@ -7,6 +7,7 @@ test (§9) compares the two.
 METHODS (representative subset, §7):
   Frontend -> Core:
     conversation.sendMessage
+    conversation.pickAttachment, conversation.discardAttachment
     permission.respond, permission.pending
     undo.rewindConversation, undo.undoLastAction
     routine.proposeFromConversation, routine.confirmSave
@@ -47,6 +48,10 @@ class JsonRpcResponse:
 
 # Method name constants — keep in lockstep with protocol.ts.
 class Method:
+    # {text, role?, modelId?, effort?, attachments?} -> {ok, userMessageId, ...}.
+    # `attachments` names ids minted by `conversation.pickAttachment` below and
+    # NOTHING ELSE — never bytes, never a path (image-attach plan §5). At most four,
+    # each spent by the send that names it.
     CONVERSATION_SEND_MESSAGE = "conversation.sendMessage"
     CONVERSATION_NEW = "conversation.new"    # {} -> {conversationId}
     # {conversationId} -> {conversationId, title, messages, work?, continuedFrom?,
@@ -55,7 +60,26 @@ class Method:
     # seeded with. They are read from the `conversations` row, so the thread's
     # boundary marker survives a reload — unlike the note said once on the
     # Activity Panel channel, which is per-turn and never persisted.
+    #
+    # A message row carries `attachments: [{id, name, mediaType, dataB64}]` when the
+    # person attached pictures to it, so a reopened thread draws the thumbnails it
+    # had. The same rows rebuild `Message.images` in memory, which is the half that
+    # matters to the model: the history IS its memory of the chat.
     CONVERSATION_LOAD = "conversation.load"
+    # {} -> {attachmentId, name, mediaType, byteSize, dataB64} (image-attach plan §5).
+    # The core opens the shell's picture picker, reads the picked file ONCE, and
+    # holds the encoded bytes in memory under an id of its own minting. The webview
+    # is given the base64 FOR DISPLAY and never sends it back: `sendMessage` names
+    # ids, so nothing the webview holds can become what the model saw.
+    #
+    # NOT A TOOL, and it cannot become one. No model can ask for a picture, mint an
+    # id or read one; this is the person's own hands on their own file, like
+    # `workspace.pickDirectory`.
+    CONVERSATION_PICK_ATTACHMENT = "conversation.pickAttachment"
+    # {attachmentId} -> {ok}. The person removed a pending picture before sending.
+    # Frees the slot; an id nothing is holding is a silent no-op, because there is
+    # nothing to say about a thing that is already gone.
+    CONVERSATION_DISCARD_ATTACHMENT = "conversation.discardAttachment"
     # {} -> {conversations}. A row carries `continuedFrom` when it is a
     # continuation, so the history list can draw one continued chat as one thing.
     # Both conversations stay in the list and stay openable: the lineage groups

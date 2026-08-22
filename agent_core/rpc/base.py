@@ -90,6 +90,11 @@ class ServerContext:
         # never a payload the webview could edit, which is what lets the confirm
         # take no parameters at all (rpc/routines.py says why).
         _draft_import: dict | None
+        # Image attach phase 3: pictures picked for the message being written, keyed
+        # by the id the core minted (main.py holds the reasoning). In memory only, at
+        # most MAX_ATTACHMENTS_PER_MESSAGE of them, and nothing model-addressed can
+        # mint, list or read one.
+        _pending_attachments: dict[str, dict]
         _last_run_routine_id: str | None
         _message_ids: list[str]
         _conversation_created: bool

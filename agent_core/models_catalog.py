@@ -89,9 +89,16 @@ class CloudModel:
     def to_wire(self) -> dict:
         """The ``cloudModels`` entry shape the frontend renders (§4.1.1 contract):
         ``{id, label, description, effortLevels: [{id, label, default}], default,
-        provider, providerLabel}``. ``effortLevels`` is empty when the model has no
-        answer-style control; ``providerLabel`` is the plain provider name for the
-        picker's attribution."""
+        provider, providerLabel, vision?}``. ``effortLevels`` is empty when the model
+        has no answer-style control; ``providerLabel`` is the plain provider name for
+        the picker's attribution.
+
+        ``vision`` is the ``truncation_finish_reasons`` pattern (image-attach plan
+        §5): a capability carried out as structured data rather than as prose, so the
+        composer can say "this model can't look at pictures" without any frontend
+        deciding it from a model name. It is absent for a provider this build has
+        never heard of — absent means UNKNOWN, and the composer only says anything
+        when it knows the answer is no."""
         return {
             "id": self.id,
             "label": self.label,
@@ -106,6 +113,11 @@ class CloudModel:
             # Absent when the model is fine, so an older frontend sees exactly the
             # payload it always saw — the `unavailable` widget idiom.
             **({"unavailable": self.unavailable} if self.unavailable else {}),
+            **(
+                {"vision": PROVIDER_VISION[self.provider]}
+                if self.provider in PROVIDER_VISION
+                else {}
+            ),
         }
 
 
@@ -172,6 +184,30 @@ def provider_label(provider_id: str) -> str:
     """Plain-language name for a provider id (the picker's attribution, the API-keys
     card row title). Unknown ids fall back to the id itself rather than raising."""
     return _PROVIDER_LABELS.get(provider_id, provider_id)
+
+
+#: Can a model from this provider look at pictures? (image-attach plan §5, read by
+#: ``CloudModel.to_wire``.)
+#:
+#: THE ANSWER IS THE ADAPTER'S, NOT THIS TABLE'S. Each entry is the ``vision=`` line
+#: in that provider's own ``capabilities()`` — anthropic/openai/google say True, and
+#: ``custom`` is the OpenAI adapter pointed at somebody's own server, so it answers
+#: with it. This module cannot ASK them: a capability is an instance method, the
+#: instance is per-model, and the picker's list path must not grow a round-trip per
+#: row. So the table is a copy, and
+#: ``tests/test_image_attach_wire.py::test_provider_vision_matches_the_adapters``
+#: asks the four adapters themselves and fails the moment one of them disagrees.
+#:
+#: LOCAL MODELS ARE ABSENT ON PURPOSE and are not CloudModels at all: Ollama's answer
+#: is per model (``"vision" in declared``, from ``POST /api/show``) and the list path
+#: does not fetch it. An honest "unknown" is a field that is not sent; the composer
+#: only ever says something when it knows the answer is no.
+PROVIDER_VISION: dict[str, bool] = {
+    "anthropic": True,
+    "openai": True,
+    "google": True,
+    "custom": True,
+}
 
 
 # Static catalogs for the non-Anthropic cloud providers. Unlike Anthropic (whose

@@ -574,7 +574,10 @@ class JsonRpcServer(
     Shell key probe and an outbound HTTPS call — both block on frames the read loop
     must stay free to deliver, so they can never run on the read loop itself.
     ``model.startLocalSetup`` joined it there on 2026-08-22 for the same reason (its
-    reachability pre-flight is a five-second HTTP call).
+    reachability pre-flight is a five-second HTTP call), and
+    ``conversation.pickAttachment`` on 2026-08-23 (a modal picture picker, then a
+    decode that takes seconds) — it queues like ``routine.importPreview``, whose
+    picker has the same shape.
 
     ONE call belongs to NEITHER loop: ``workspace.pickDirectory`` answers on a
     short-lived thread of its own (``_handle_workspace_pick_directory``). A modal
@@ -762,6 +765,17 @@ class JsonRpcServer(
         # means nothing was measured at all (a provider that reported no usage),
         # which is a cannot-tell like any other.
         self._turn_context_usage: tuple[int, int | None] | None = None
+        # Pictures the person has picked for the message they are writing, by the id
+        # the core minted for each (image-attach plan §5). IN MEMORY ONLY and for the
+        # life of the process: an attachment is read once at pick time, and holding it
+        # here is what makes "what was previewed is what is sent" true. Entries leave
+        # exactly three ways — spent by the send that names them, taken off with
+        # `conversation.discardAttachment`, or dropped whole by `conversation.new` —
+        # and there are never more than MAX_ATTACHMENTS_PER_MESSAGE of them.
+        #
+        # NOTHING MODEL-ADDRESSED CAN REACH IT. No tool mints, lists or reads an
+        # attachment; the only writer is the person's own picker.
+        self._pending_attachments: dict[str, dict] = {}
         self._draft_routine = None            # pending §6.3 proposal awaiting confirmSave
         self._draft_widget = None              # pending widget proposal awaiting confirmSave
         # The parsed shared-routine file routine.importPreview read, awaiting
@@ -1557,6 +1571,10 @@ class JsonRpcServer(
                     self._respond(request_id, {"conversations": self._conversation_rows()})
                 elif kind == "conversation_rename":
                     self._handle_rename_conversation(params, request_id)
+                elif kind == "conversation_pick_attachment":
+                    self._handle_pick_attachment(request_id)
+                elif kind == "conversation_discard_attachment":
+                    self._handle_discard_attachment(params, request_id)
                 elif kind == "provider_list":
                     self._respond(request_id, self._provider_list())
                 elif kind == "provider_connect":
@@ -1647,41 +1665,16 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_status())
                 elif kind == "automation_disarm_orphan":
                     self._respond(request_id, self._automation_disarm_orphan(params))
-                elif kind == "channel_list":
-                    self._respond(request_id, self._channel_list())
-                elif kind == "channel_add":
-                    self._respond(request_id, self._channel_add(params))
-                elif kind == "channel_remove":
-                    self._respond(request_id, self._channel_remove(params))
-                elif kind == "channel_connect":
-                    self._respond(request_id, self._channel_connect(params))
-                elif kind == "channel_set_enabled":
-                    self._respond(request_id, self._channel_set_enabled(params))
-                elif kind == "channel_set_on_wake":
-                    self._respond(request_id, self._channel_set_on_wake(params))
-                elif kind == "channel_status":
-                    self._respond(request_id, self._channel_status(params))
-                elif kind == "channel_begin_pairing":
-                    self._respond(request_id, self._channel_begin_pairing(params))
-                elif kind == "channel_cancel_pairing":
-                    self._respond(request_id, self._channel_cancel_pairing(params))
-                elif kind == "channel_pairings":
-                    self._respond(request_id, self._channel_pairings(params))
-                elif kind == "channel_revoke_pairing":
-                    self._respond(request_id, self._channel_revoke_pairing(params))
-                elif kind == "channel_pending_requests":
-                    self._respond(request_id, self._channel_pending_requests(params))
-                elif kind == "channel_dismiss_request":
-                    self._respond(request_id, self._channel_dismiss_request(params))
-                elif kind == "channel_turn":
-                    # THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging
-                    # channels phase 2). It is put on this queue by the channel
-                    # service's poll thread, never by a frame, and `request_id` is
-                    # None because nothing is waiting for a reply — the answer goes
-                    # to a phone. From here it is an ordinary turn on the ordinary
-                    # thread, which is the whole point of handing it over rather
-                    # than running it where it arrived.
-                    self._run_channel_turn(params)
+                elif kind.startswith("channel_"):
+                    # Fourteen branches, lifted out WHOLE (see _run_channel_job).
+                    # Nothing about their behaviour changes: the call is still made
+                    # from inside this try, so every except arm below still catches
+                    # what it always caught.
+                    self._run_channel_job(kind, params, request_id)
+                elif kind == "conversation_pick_attachment":
+                    self._handle_pick_attachment(request_id)
+                elif kind == "conversation_discard_attachment":
+                    self._handle_discard_attachment(params, request_id)
             except live_db_guard.LiveDatabaseBlocked as exc:
                 # A job can reach _ensure_built() too (conversation.list, and every
                 # mixin handler that calls it), so the same rule as the startup build
@@ -2510,11 +2503,22 @@ _ROUTINE_JOBS = {
 # conversation.new/load/list also run on the worker: load/list read the Store,
 # and new swaps the worker-owned active conversation, which must serialize
 # behind any in-flight turn. Method -> worker job kind.
+#
+# The two attachment methods join them (image-attach plan §5) and pickAttachment
+# is the one with an argument of its own: it opens a MODAL DIALOG and then decodes
+# what was chosen, so an inline handler would hold the read loop — and with it
+# `permission.respond` and `conversation.stop` — for as long as somebody browses.
+# That is the reason `model.startLocalSetup` moved here on 2026-08-22, and the
+# picker half is `routine.importPreview`'s shape exactly. discardAttachment is
+# store-free and instant, and queues with it so the two can never race over the
+# same pending set.
 _CONVERSATION_JOBS = {
     Method.CONVERSATION_NEW: "conversation_new",
     Method.CONVERSATION_LOAD: "conversation_load",
     Method.CONVERSATION_LIST: "conversation_list",
     Method.CONVERSATION_RENAME: "conversation_rename",
+    Method.CONVERSATION_PICK_ATTACHMENT: "conversation_pick_attachment",
+    Method.CONVERSATION_DISCARD_ATTACHMENT: "conversation_discard_attachment",
 }
 
 # provider.list/connect/disconnect run on the worker (Store + router + connect ping).

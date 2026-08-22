@@ -15,7 +15,13 @@ from agent_core.context_continuation import (
     usable_summary,
 )
 from agent_core.orchestrator import Conversation
-from agent_core.providers.base import Message, ModelRole, ToolCallRequest
+from agent_core.providers.base import (
+    ALLOWED_IMAGE_MEDIA_TYPES,
+    ImageAttachment,
+    Message,
+    ModelRole,
+    ToolCallRequest,
+)
 from agent_core.providers.router import LOCAL_ONLY
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
@@ -50,6 +56,42 @@ _LOCAL_ONLY_EMPTY_POOL = (
 # somebody's transcript. A guard whose only proof is "nothing calls it wrongly" is
 # not a guard.
 _NOTHING_TO_SEND = "There's nothing to send yet — write a message first."
+
+# --- attaching a picture (image-attach plan §5) -----------------------------
+#: How many pictures may ride on one message. ONE NUMBER for two jobs, deliberately:
+#: it caps what a send may name AND how many picks the core will hold at once, and
+#: those are the same limit seen from two ends — the pending set exists only to
+#: become a message. A separate pending cap could only be wrong in one direction
+#: (hold five, refuse to send them) or the other (hold three, refuse a fourth pick).
+#:
+#: Four is the plan's number and it is a memory bound as much as a UX one: what is
+#: held is decoded bytes, up to 2 MiB each (the shell's own ceiling), so the pending
+#: set can never be more than ~8 MiB no matter how long somebody sits in the picker.
+MAX_ATTACHMENTS_PER_MESSAGE = 4
+
+# Frozen copy for the attach paths. Personas 54 and 68: each of these says what
+# happened and what to do, and none of them names an id, a media type as a MIME
+# string, a cache or a byte count.
+# One sentence for both ends of the cap — a fifth pick and a send naming five — because
+# it is one limit, and "take one off" is the thing to do in either case.
+_TOO_MANY_PICTURES = (
+    "You can send up to four pictures at a time. Take one off and try again."
+)
+# Said for an id the core is not holding: never picked, already sent with an earlier
+# message, taken off with the ✕, or left behind by a restart (the pending set lives
+# in memory only). All four are the same thing from the person's side — the picture
+# they are pointing at is not here — and the same sentence is the honest answer.
+_PICTURE_GONE = "That picture isn't ready any more. Attach it again and send."
+# The second reader of ALLOWED_IMAGE_MEDIA_TYPES, and the one place a violation can
+# still be answered in a plain sentence (providers/base.py says so at the constant).
+# The shell enforces the closed four at encode time, so reaching this means the shell
+# and the core disagree — which is exactly why it is a sentence and not an assert.
+_PICTURE_KIND_REFUSED = (
+    "Addison can't use that kind of picture. Try a PNG, JPEG, GIF or WebP one."
+)
+_NEEDS_DESKTOP_FOR_PICTURE = (
+    "Addison can only attach pictures from the desktop app. Try again there."
+)
 
 # The Activity Panel channel the routing and screening notes already use, with its
 # own synthetic id (orchestrator._ROUTING_ACTIVITY_ID / _SCREENING_ACTIVITY_ID are
@@ -130,6 +172,37 @@ def _decode_tool_calls(raw) -> list[tuple[ToolCallRequest, bool, str | None]]:
     return out
 
 
+def _decoded_size(data_b64: str) -> int:
+    """How many bytes a base64 string stands for, without decoding it.
+
+    Exact for well-formed base64 (four characters carry three bytes, minus the
+    padding), and it never allocates the image to find out — this runs inside a
+    persist loop. A malformed string cannot go negative here; it just answers a
+    number nobody displays for bytes nobody can decode."""
+    return max(0, len(data_b64) // 4 * 3 - data_b64.count("="))
+
+
+def _rows_from_images(message: Message) -> list[dict]:
+    """Attachment rows derived from a message's own pictures, for the caller that
+    has no record to hand (``_persist_message`` says which one and why).
+
+    No filename: ``ImageAttachment`` carries none, and the empty string is the
+    honest answer — the same reasoning phase 1 used for the ``[picture]`` marker,
+    where an invented name would have a model answering about a receipt it never
+    saw. The size is derived from the base64 rather than remembered, because the
+    bytes are the only thing that survived the copy."""
+    return [
+        {
+            "id": str(uuid4()),
+            "name": "",
+            "media_type": image.media_type,
+            "byte_size": _decoded_size(image.data_b64),
+            "data_b64": image.data_b64,
+        }
+        for image in message.images
+    ]
+
+
 def _auto_title(text: str) -> str | None:
     """Derive a conversation title from its first user message: whitespace runs
     collapsed to single spaces, trimmed to the first 60 characters (with an
@@ -160,12 +233,133 @@ class ConversationMixin(ServerContext):
         except Exception:
             return False
 
+    # --- attaching a picture (image-attach plan §5) ------------------------
+    def _handle_pick_attachment(self, request_id) -> None:
+        """conversation.pickAttachment — the person chooses a picture to send.
+
+        A WORKER JOB, not an inline handler, and that is not a detail: this opens a
+        modal dialog somebody may leave sitting there, and phase 2's decode
+        (a Lanczos3 resample plus a re-encode) takes real time afterwards. On the
+        read loop it would hold up every frame in the app, ``permission.respond`` and
+        ``conversation.stop`` included — the exact reason ``model.startLocalSetup``
+        was moved here on 2026-08-22. It queues behind an in-flight turn like
+        ``routine.importPreview``, whose picker has the same shape.
+
+        THE CORE MINTS THE ID, never the shell's file handle. A handle is the shell's
+        way of naming a file it will let itself read; an attachment id names bytes
+        this process is holding. Passing the handle out would let the layers reach
+        past each other and would put a file-scoped capability in the webview.
+
+        READ ONCE, AT PICK (plan §5). What the person previewed is byte-for-byte what
+        is sent: the file is read here and never again, so a file edited, moved or
+        deleted between the pick and the send changes nothing about the message.
+
+        What comes back carries the base64 FOR DISPLAY. It never comes back to the
+        core: the send names ids, so nothing the webview holds can become what the
+        model saw."""
+        bridge = self._shell_bridge
+        if bridge is None:
+            self._respond_error(request_id, _SERVER_ERROR, _NEEDS_DESKTOP_FOR_PICTURE)
+            return
+        # Checked BEFORE the dialog opens, so a person cannot be sent to find a file
+        # and then told there was never room for it. It also bounds the memory this
+        # holds: an abandoned pick (chosen, never sent, never removed) costs a slot
+        # and nothing more, and there are four slots.
+        if len(self._pending_attachments) >= MAX_ATTACHMENTS_PER_MESSAGE:
+            self._respond_error(request_id, _SERVER_ERROR, _TOO_MANY_PICTURES)
+            return
+        try:
+            picked = bridge.pick_image()
+            image = bridge.read_picked_image(picked["fileHandle"])
+        except RuntimeError as exc:
+            # Closing the picker without choosing lands here, and so does a file that
+            # will not decode. The shell's own sentence is passed through unchanged —
+            # it is the only thing that knows which of those happened (the routine
+            # import path does exactly this with the same picker).
+            self._respond_error(request_id, _SERVER_ERROR, str(exc))
+            return
+        media_type = image.get("mediaType")
+        if media_type not in ALLOWED_IMAGE_MEDIA_TYPES:
+            self._respond_error(request_id, _SERVER_ERROR, _PICTURE_KIND_REFUSED)
+            return
+        attachment_id = str(uuid4())
+        record = {
+            "id": attachment_id,
+            "name": str(image.get("name") or ""),
+            "media_type": media_type,
+            "byte_size": int(image.get("byteSize") or 0),
+            "data_b64": image["content"],
+        }
+        self._pending_attachments[attachment_id] = record
+        self._respond(
+            request_id,
+            {
+                "attachmentId": attachment_id,
+                "name": record["name"],
+                "mediaType": record["media_type"],
+                "byteSize": record["byte_size"],
+                "dataB64": record["data_b64"],
+            },
+        )
+
+    def _handle_discard_attachment(self, params: dict, request_id) -> None:
+        """conversation.discardAttachment — the person took a pending picture off
+        again (the ✕ on a composer chip). Frees the slot.
+
+        An id the core is not holding is a SILENT no-op: there is nothing to say
+        about a thing that is already gone, and the one caller is a control the
+        person can only reach for a chip that is on their screen. It answers ``ok``
+        either way, so removing twice cannot produce an error nobody caused."""
+        attachment_id = params.get("attachmentId")
+        if isinstance(attachment_id, str):
+            self._pending_attachments.pop(attachment_id, None)
+        self._respond(request_id, {"ok": True})
+
+    def _pending_pictures(self, requested) -> tuple[list[dict], str | None]:
+        """Resolve the ids a send named into the records the core is holding.
+
+        Returns ``(records, refusal)`` and never both: a send either gets every
+        picture it named or is refused whole. Partial is not an option — a message
+        that quietly went without one of its pictures is the failure a person cannot
+        see and the model answers wrongly about.
+
+        NOTHING IS SPENT HERE. This only looks, so it is safe to call before the
+        refusals further down; the caller pops the entries at the point of no return.
+        A repeated id is refused rather than sent twice: the second mention has
+        nothing behind it, which is what the sentence says."""
+        if requested is None:
+            return [], None
+        if not isinstance(requested, list):
+            return [], _PICTURE_GONE
+        if len(requested) > MAX_ATTACHMENTS_PER_MESSAGE:
+            return [], _TOO_MANY_PICTURES
+        records: list[dict] = []
+        seen: set[str] = set()
+        for attachment_id in requested:
+            if not isinstance(attachment_id, str) or attachment_id in seen:
+                return [], _PICTURE_GONE
+            record = self._pending_attachments.get(attachment_id)
+            if record is None:
+                return [], _PICTURE_GONE
+            seen.add(attachment_id)
+            records.append(record)
+        return records, None
+
     def _run_send_message(self, params: dict, request_id) -> None:
         text = params.get("text", "")
-        # FIRST, and before anything is read, cleared or written. An empty turn has
-        # no honest outcome further down: `_ensure_conversation` would create the
-        # conversation row, `_persist_message` would write a blank `user` message,
-        # and neither is removed by a rollback or by the failed-turn cleanup below
+        # The pictures FIRST, because the guard below needs to know whether there are
+        # any — and, like that guard, before anything is read, cleared or written. An
+        # id the core is not holding refuses the whole send here, with no conversation
+        # row, no message row and no spent role pick behind it.
+        pictures, picture_refusal = self._pending_pictures(params.get("attachments"))
+        if picture_refusal is not None:
+            self._respond_error(request_id, _SERVER_ERROR, picture_refusal)
+            return
+        # SECOND, behind the picture check above and ahead of everything else: those
+        # two are the whole of what runs before anything is read, cleared or written.
+        # An empty turn has no honest outcome further down: `_ensure_conversation`
+        # would create the conversation row, `_persist_message` would write a blank
+        # `user` message, and neither is removed by a rollback or by the cleanup below
         # (which only trims what the TURN appended, from `pre_turn` on).
         #
         # Ahead of the pending-pick reset too: a refusal must not silently consume a
@@ -173,10 +367,23 @@ class ConversationMixin(ServerContext):
         # about to write. Nothing happened, so nothing is spent.
         #
         # A non-string `text` is refused by the same sentence rather than coerced —
-        # `str(None)` persists the four characters "None" as somebody's message.
-        if not isinstance(text, str) or not text.strip():
+        # `str(None)` persists the four characters "None" as somebody's message, and
+        # that is true whether or not a picture came with it.
+        #
+        # RELAXED BY EXACTLY ONE CASE (image-attach plan §5): empty or whitespace text
+        # WITH pictures is an ordinary message — somebody sending just a photo — so it
+        # goes on as "" plus those pictures. Empty text with nothing attached still
+        # refuses, and the argument above is untouched: what the guard exists to stop
+        # is a turn with NOTHING in it leaving a blank row no rollback removes, and a
+        # message carrying four pictures is not that turn.
+        if not isinstance(text, str) or (not text.strip() and not pictures):
             self._respond_error(request_id, _SERVER_ERROR, _NOTHING_TO_SEND)
             return
+        if not text.strip():
+            # Whitespace-only text with pictures is stored as "", not as the spaces:
+            # the adapters omit the text block entirely when there is nothing to say
+            # (phase 1), and " " would be something to say.
+            text = ""
         requested_role = self._role_from(params.get("role")) or self._next_role
         # §4.1.1 / §6.8: thread the explicit model pick (per-message param or the last
         # setRole) into resolve(); resolve() picks the named LOCAL/cloud model and
@@ -268,16 +475,38 @@ class ConversationMixin(ServerContext):
             return
 
         self._ensure_conversation()
-        user_msg = Message(role="user", content=text)
+        user_msg = Message(
+            role="user",
+            content=text,
+            # The pictures, in the order the person attached them. From here on this
+            # is an ordinary message: phase 1's gate asks the resolved provider
+            # whether it can see, and each adapter says "picture" in its own API's
+            # words. Nothing below this line knows an attachment from a paragraph.
+            images=tuple(
+                ImageAttachment(media_type=p["media_type"], data_b64=p["data_b64"])
+                for p in pictures
+            ),
+        )
         self.conversation.messages.append(user_msg)
-        user_message_id = self._persist_message(user_msg)
+        # SPENT HERE, at the point of no return, and never at any of the refusals
+        # above: the message is in the conversation and about to be written down, so
+        # this is the first moment at which the pending copy has been superseded
+        # rather than merely inspected. Spending earlier would consume somebody's
+        # pictures on a turn that was then refused, and they would have to go and
+        # find every one of them again.
+        for record in pictures:
+            self._pending_attachments.pop(record["id"], None)
+        user_message_id = self._persist_message(user_msg, attachments=pictures)
 
         # Auto-title on the first user message. The store call is first-write-wins
         # (title IS NULL guard), so the flag is only an optimization that skips the
         # write on every later turn. ``_auto_title`` still answers None for an
         # effectively empty message and the flag still stays down when it does — the
         # guard at the top of this method means no send can reach here that way any
-        # more, but ``_conversation_rows`` calls the same function on legacy rows.
+        # more EXCEPT the one case it now admits (pictures with no words), and that
+        # case is exactly why the None branch still matters: a picture-only first
+        # message simply does not title the chat, and the next turn with words in it
+        # does. ``_conversation_rows`` calls the same function on legacy rows.
         if not self._conversation_titled:
             title = _auto_title(text)
             if title is not None:
@@ -290,6 +519,14 @@ class ConversationMixin(ServerContext):
         # hold a "system" role — messages.role CHECK is user/assistant/tool). Once a
         # key exists, the probe passes and turns go to PRIMARY, history untouched —
         # that IS the handoff; no transcript rewrite, no state to flip.
+        #
+        # A picture sent on this path is refused by phase 1's gate — the relay
+        # declares no vision — and it is refused AFTER the message above was
+        # persisted. That is correct and is left alone: nothing external was called,
+        # the person's message and their picture are in their own transcript where
+        # they can be sent again once a key exists, and the refusal sentence is in the
+        # thread saying why. Special-casing it here would mean this method deciding
+        # what a provider can see, which is the gate's job and not the wire's.
         system_msg = None
         if primary_role and not primary_key_available:
             requested_role = ModelRole.SETUP_ASSISTANT
@@ -518,17 +755,40 @@ class ConversationMixin(ServerContext):
         )
         self._conversation_created = True
 
-    def _persist_message(self, message: Message) -> str:
+    def _persist_message(self, message: Message, attachments: list[dict] | None = None) -> str:
+        """Write one message down, with its pictures beside it.
+
+        ``attachments`` are the records the send path spent — they carry the person's
+        own filename and the encoded size, which the message itself does not hold
+        (``ImageAttachment`` is media type + bytes and nothing else, deliberately:
+        a name is display-only and never reaches a model).
+
+        WHEN NOTHING IS PASSED the rows are derived from ``message.images``, and that
+        fallback is not decoration — it is what the §4.8 continuation needs. A
+        continuation copies the last few turns VERBATIM into a new conversation and
+        persists them here, so without it a chat that condensed itself would keep the
+        words of those turns and silently lose their pictures on the next reopen. The
+        derived rows have no filename (there is none to be had, and inventing one is
+        worse than none) and are new rows: the old conversation keeps its own, exactly
+        as it keeps its own copy of the carried text."""
         message_id = str(uuid4())
+        now = int(time.time())
         self.store.insert_message(
             id=message_id,
             conversation_id=self.conversation.id,
             role=message.role,
             content=str(message.content),
-            created_at=int(time.time()),
+            created_at=now,
             tool_call_id=message.tool_call_id,
             # NULL for every row but an assistant turn that asked for tools.
             tool_calls_json=_encode_tool_calls(message, self.conversation.shown_steps),
+        )
+        rows = attachments if attachments is not None else _rows_from_images(message)
+        self.store.insert_message_attachments(
+            conversation_id=self.conversation.id,
+            message_id=message_id,
+            attachments=rows,
+            created_at=now,
         )
         self._message_ids.append(message_id)
         return message_id
@@ -543,6 +803,11 @@ class ConversationMixin(ServerContext):
         self._conversation_created = False
         self._conversation_titled = False
         self._draft_routine = None
+        # Pending pictures belong to the message being composed, and a new chat means
+        # that message is gone (the frontend clears its chips on the same action, the
+        # ``composerSeed`` line in App.tsx). Held bytes with nothing left to ride on
+        # would be four slots nobody can see, use or free.
+        self._pending_attachments.clear()
         self._respond(request_id, {"conversationId": self.conversation.id})
 
     def _handle_conversation_load(self, params: dict, request_id) -> None:
@@ -568,7 +833,14 @@ class ConversationMixin(ServerContext):
         also carries ``work``: the LAST turn's steps, which is exactly what the
         live panel shows (it is cleared at the start of every turn), so reopening
         a chat redraws the panel it had instead of an accumulation of everything
-        the conversation ever did."""
+        the conversation ever did.
+
+        The same pass rebuilds attached PICTURES, in both directions (image-attach
+        plan §5): onto the wire so the thread redraws its thumbnails, and onto
+        ``Message.images`` so the replayed history still carries them to the model.
+        The second is the load-bearing half — this history IS the model's memory of
+        the chat, and a reopened conversation that had quietly dropped its pictures
+        would go on being asked about them."""
         self._ensure_built()
         conversation_id = params.get("conversationId")
         header = (
@@ -591,6 +863,16 @@ class ConversationMixin(ServerContext):
         # where a turn starts. Only calls that RAN go in; a denied step is history,
         # not work Addison did.
         turns: list[list[dict]] = [[]]
+        # The chat's pictures, in one query, grouped by the message they belong to.
+        # Both halves of the loop below need them and they answer different questions:
+        # the WIRE half redraws the thumbnails the person saw, and the HISTORY half
+        # rebuilds ``Message.images`` so the model can still see what it was shown.
+        # The second is the one that would fail silently — a reopened chat would
+        # replay the words of a message whose picture had vanished, and the model
+        # would answer confidently about something it never received.
+        pictures_by_message: dict[str, list[dict]] = {}
+        for picture in self.store.attachments_for_conversation(conversation_id):
+            pictures_by_message.setdefault(picture["message_id"], []).append(picture)
         for row in self.store.messages_for_conversation(conversation_id):
             decoded = _decode_tool_calls(row.get("tool_calls_json"))
             if row["role"] == "user":
@@ -602,13 +884,41 @@ class ConversationMixin(ServerContext):
             if not keep:
                 pending.extend(call for call, _ran, _detail in decoded)
                 continue
-            message = Message(role=row["role"], content=row["content"])
+            row_pictures = pictures_by_message.get(row["id"], [])
+            message = Message(
+                role=row["role"],
+                content=row["content"],
+                images=tuple(
+                    ImageAttachment(media_type=p["media_type"], data_b64=p["data_b64"])
+                    for p in row_pictures
+                ),
+            )
             if row["role"] == "assistant":
                 message.past_tool_calls = pending + [c for c, _r, _d in decoded]
                 pending = []
             conversation.messages.append(message)
             message_ids.append(row["id"])
-            wire_messages.append({"id": row["id"], "role": row["role"], "content": row["content"]})
+            wire_message: dict = {
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+            }
+            if row_pictures:
+                # Present only on a message that has any — the optional-key idiom the
+                # rest of this file uses, so an ordinary message's payload is
+                # byte-identical to what it always was. ``dataB64`` is what the
+                # thumbnail renders from (a `data:` URI, which the pinned CSP already
+                # allows); the size stays out because the thread does not show it.
+                wire_message["attachments"] = [
+                    {
+                        "id": p["id"],
+                        "name": p["name"],
+                        "mediaType": p["media_type"],
+                        "dataB64": p["data_b64"],
+                    }
+                    for p in row_pictures
+                ]
+            wire_messages.append(wire_message)
         if pending:
             # A conversation that ends on a tool-only turn (stopped mid-answer, say)
             # has calls with no prose of their own to sit on. They stay with the

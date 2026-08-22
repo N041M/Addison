@@ -69,6 +69,12 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
 _EXCLUDED_TABLES: dict[str, str] = {
     "conversations":    "transcript — append-only history, orthogonal to config (§3.1)",
     "messages":         "transcript — rollback restores config, never erases chats",
+    # Image attach, phase 3. EXCLUDED on the `messages` line's own terms, which is
+    # the only classification available to it: an attachment is part of a message,
+    # so capturing one without the other could only produce a picture whose message
+    # is gone, or a message whose picture is. It is the person's own content, never
+    # configuration.
+    "message_attachments": "transcript — a person's own pictures, attached to their messages",
     "memory_facts":     "user-confirmed memory, not configuration",
     "usage_log":        "telemetry substrate (§4.8); rewinding it would falsify the meter",
     "action_snapshots": "the per-tool-call undo window (§4.5) — an independent mechanism",
