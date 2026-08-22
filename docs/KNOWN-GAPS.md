@@ -447,6 +447,19 @@ questions were resolved during steps 1–3 and went with it):
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain
   "X was busy, so Addison used Y" note. The CONFIDENCE half, quality-based
   escalation, remains v2 substrate, untouched.
+- **The answering model must be disclosed beside the picker (owner directive,
+  2026-08-21).** Evidence from the QA re-run pass: with Claude Haiku 4.5
+  explicitly picked and strategy Cost first, an offline turn's Technical
+  details showed the router attempting `provider: google · gemma-4-31b-it` —
+  the explicit pick does not win, and no surface says which model actually
+  answers a given turn. The owner's words: the picker system reads as broken
+  when this happens; the answering model should be shown on a tab/indicator
+  next to the model picker. This is the cost-first-vs-explicit-pick question
+  (KNOWN-BUGS.md, open questions) grown an answer for its UI half; the
+  precedence rule itself is still the owner's to settle. Same pass, same
+  register: the "Tools" page reads as "what Addison can reach" (providers,
+  folders, servers) while its name promises the tool registry — recorded as a
+  naming observation, not scheduled.
 
 **Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)**: that file had become a
 second live-issue register holding items this one did not have. All checked
