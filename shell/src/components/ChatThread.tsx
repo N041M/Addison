@@ -52,6 +52,7 @@ import { Markdown } from "./Markdown";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
 import { AddisonMark } from "./AddisonMark";
+import { SelectionAsk } from "./SelectionAsk";
 
 interface Props {
   messages: DisplayMessage[];
@@ -77,7 +78,10 @@ interface Props {
   streamMessageId?: string | null;
   /** Which conversation is on screen; a change staggers + re-scrambles the rows. */
   conversationKey?: string | null;
-  /** Fills the composer from an empty-state suggestion chip. */
+  /**
+   * Fills the composer, once, without sending anything: an empty-state
+   * suggestion chip, and the selection popover's Ask / Explain (SelectionAsk).
+   */
   onSuggestion?: (text: string) => void;
   /** Rendered with the empty stack, and above the messages once there are any. */
   header?: ReactNode;
@@ -507,50 +511,66 @@ export function ChatThread({
   }
 
   return (
-    <div
-      ref={listRef}
-      onScroll={handleScroll}
-      className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-8 overflow-y-auto pb-6 pt-9"
-    >
-      {header}
+    <>
+      <div
+        ref={listRef}
+        onScroll={handleScroll}
+        className="no-scrollbar fade-mask-y flex min-h-0 w-full max-w-[580px] flex-1 flex-col gap-8 overflow-y-auto pb-6 pt-9"
+      >
+        {header}
 
-      {/* Above everything: the boundary is where this chat begins, and the
-          "Show N earlier messages" control below it is about THIS chat's own
-          messages, which all come after it. */}
-      {continuation && <ContinuationMarker continuation={continuation} />}
+        {/* Above everything: the boundary is where this chat begins, and the
+            "Show N earlier messages" control below it is about THIS chat's own
+            messages, which all come after it. */}
+        {continuation && <ContinuationMarker continuation={continuation} />}
 
-      {hiddenCount > 0 && (
-        // Without this the thread simply starts 30 messages ago, and the fade
-        // mask at the top of the column makes that cut read as the beginning of
-        // the conversation. Same idiom as "Retry this answer" — a plain accent
-        // action inside the thread, not a new piece of furniture.
-        <button
-          type="button"
-          onClick={handleShowEarlier}
-          className="shrink-0 self-center text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
-        >
-          {hiddenCount === 1 ? "Show 1 earlier message" : `Show ${hiddenCount} earlier messages`}
-        </button>
-      )}
+        {hiddenCount > 0 && (
+          // Without this the thread simply starts 30 messages ago, and the fade
+          // mask at the top of the column makes that cut read as the beginning of
+          // the conversation. Same idiom as "Retry this answer" — a plain accent
+          // action inside the thread, not a new piece of furniture.
+          <button
+            type="button"
+            onClick={handleShowEarlier}
+            className="shrink-0 self-center text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+          >
+            {hiddenCount === 1 ? "Show 1 earlier message" : `Show ${hiddenCount} earlier messages`}
+          </button>
+        )}
 
-      {windowed.map((m) => (
-        <MessageRow
-          key={m.id}
-          message={m}
-          revealing={m.id === streamMessageId && streamDisplay != null}
-          display={m.id === streamMessageId && streamDisplay != null ? streamDisplay : m.content}
-          canRewind={m.role === "user" && Boolean(m.storeId)}
-          canRetry={m.id === lastAssistantId && retryAvailable}
-          onRewindTo={onRewindTo}
-          onRetry={handleRetry}
-          showTechnicalDetails={showTechnicalDetails}
+        {windowed.map((m) => (
+          <MessageRow
+            key={m.id}
+            message={m}
+            revealing={m.id === streamMessageId && streamDisplay != null}
+            display={m.id === streamMessageId && streamDisplay != null ? streamDisplay : m.content}
+            canRewind={m.role === "user" && Boolean(m.storeId)}
+            canRetry={m.id === lastAssistantId && retryAvailable}
+            onRewindTo={onRewindTo}
+            onRetry={handleRetry}
+            showTechnicalDetails={showTechnicalDetails}
+          />
+        ))}
+
+        {footer}
+
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Highlight → Ask / Explain. It renders nothing until a selection lands
+          inside ONE settled message body, and it only ever writes into the
+          composer — the same one-shot seed the suggestion chips use. A SIBLING of
+          the scroll container, not a child: the switch stagger animates that
+          container's last twelve children, and a panel that is not a turn must not
+          take one of those slots. */}
+      {onSuggestion && (
+        <SelectionAsk
+          containerRef={listRef}
+          onSeed={onSuggestion}
+          conversationKey={conversationKey}
         />
-      ))}
-
-      {footer}
-
-      <div ref={bottomRef} />
-    </div>
+      )}
+    </>
   );
 }
 
@@ -724,6 +744,12 @@ function MessageRow({
   // FAILED turn is excluded: an error is one plain sentence that must read at
   // once, not something to animate structure into.
   const asStream = isAddison && !message.failed && (message.pending || revealing) && !showWriting;
+  // Whether this body may be quoted into the composer (SelectionAsk). SETTLED
+  // TEXT ONLY: a row that is still arriving, or still resolving out of the
+  // scramble, has random glyphs in its tail, and "Addison is writing…" is not a
+  // sentence anybody wants to ask about. Read from the row's state, never from
+  // the characters on screen.
+  const askSelectable = !message.pending && !revealing;
 
   return (
     <div className="group shrink-0 animate-[fadeRise_.4s_ease_both]">
@@ -752,7 +778,10 @@ function MessageRow({
       </div>
 
       {asMarkdown ? (
-        <div className="mt-2 text-[15.5px] leading-[1.65] text-ink">
+        <div
+          data-ask-selectable={askSelectable ? "" : undefined}
+          className="mt-2 text-[15.5px] leading-[1.65] text-ink"
+        >
           <Markdown content={message.content} pending={false} />
         </div>
       ) : asStream ? (
@@ -763,6 +792,7 @@ function MessageRow({
         </div>
       ) : (
         <p
+          data-ask-selectable={askSelectable ? "" : undefined}
           className={
             "m-0 mt-2 whitespace-pre-wrap text-[15.5px] leading-[1.65] " +
             (message.failed
