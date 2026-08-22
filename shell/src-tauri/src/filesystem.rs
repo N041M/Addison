@@ -253,6 +253,50 @@ fn refuse_non_regular_file(meta: &std::fs::Metadata) -> Result<(), RpcError> {
     Ok(())
 }
 
+/// Worded once because the two paths that ask it — the viewer's read and the undo's
+/// write-back — must read the same to a person: which one refused is not their business,
+/// and it is the same fact about the same name in both.
+const A_SHORTCUT_STANDS_THERE: &str =
+    "That name is a shortcut to somewhere else, so Addison won't follow it.";
+
+/// A SHORTCUT standing at the recorded name, refused before anything opens or writes it.
+///
+/// WHAT IT CLOSES (KNOWN-GAPS, "The shell follows a shortcut planted at a path it once
+/// wrote"). `restore_workspace_path` checks its session ledger against the NAME and then
+/// `fs::write`s that name; `read_workspace_view` opens it. Both of those follow a link,
+/// so a path Addison legitimately wrote is a write-through — or a read-through — to
+/// wherever that name later points, and it takes no attacker to arrive, only somebody
+/// moving a config file into a dotfiles folder and linking it back.
+///
+/// DEFENCE IN DEPTH, and it is the shell's own half. The core refuses first for both
+/// shipped callers (`file_revert.replaced_by_a_link` for the review surface,
+/// `another_file_stands_there` for the chat header's Undo). What that leaves is a future
+/// caller that has not asked core-side, and a row written before `wrote_ident` existed,
+/// which cannot ask. Neither of those reaches a core guard; both reach this one.
+///
+/// `symlink_metadata`, NEVER `metadata` — the question is what this directory entry IS,
+/// and the whole failure being closed is a check that resolved the name and then acted on
+/// the resolution. Nothing here follows the link, and nothing here acts on its target.
+///
+/// A PATH THAT IS NOT THERE IS NOT REFUSED, the same "cannot judge yet" every other check
+/// in this file treats as carry-on: an undo legitimately creates a file again when the
+/// write overwrote one that has since been removed, and a read that is not there already
+/// has its own sentence.
+///
+/// ONLY THE NAME ITSELF. A link somewhere in the parent chain is a different question with
+/// a different owner — `refuse_addison_data_dir` walks the whole chain for the one thing
+/// containment has to know — and this refusal deliberately does not answer it.
+///
+/// `adopt_workspace_path_in` asks the same question and answers `adopted: false` instead
+/// of raising: it is a query about whether a restore WOULD be allowed, so a refusal there
+/// is a `false`, not a sentence a person reads.
+fn refuse_shortcut_at_path(path: &Path) -> Result<(), RpcError> {
+    if std::fs::symlink_metadata(path).map(|meta| meta.is_symlink()).unwrap_or(false) {
+        return Err(RpcError::app(A_SHORTCUT_STANDS_THERE));
+    }
+    Ok(())
+}
+
 /// Route a `shell.*` request from the core to its handler. Returns the JSON-RPC
 /// `result` value, or an `RpcError` the core relays as plain language.
 pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Value, RpcError> {
@@ -689,6 +733,11 @@ fn read_workspace_file_for_view(params: &Value) -> Result<Value, RpcError> {
 
 fn read_workspace_view(path: &Path) -> Result<Value, RpcError> {
     refuse_addison_data_dir(path)?;
+    // AND WHAT STANDS AT THE NAME, before the stat that would follow it. `stat_on_disk`
+    // below resolves the link on purpose — it measures what would be LOADED — so by the
+    // time this file has a size in hand it is already describing somewhere else. The
+    // question has to be asked of the name itself, and asked first.
+    refuse_shortcut_at_path(path)?;
     // The size is asked FIRST, exactly as every other read path here asks it — but this
     // one is not deciding a refusal with it, so it is not load-bearing for the wedge:
     // the read below is bounded by `take` no matter what metadata claims, which is the
@@ -853,6 +902,23 @@ fn restore_workspace_path(
     if let Some(meta) = stat_on_disk(&path) {
         refuse_non_regular_file(&meta)?;
     }
+    // AND WHETHER THE NAME IS STILL A NAME, which the stat above cannot say: it follows
+    // the link, so a shortcut planted over a ledgered path answers for its TARGET and
+    // comes back an ordinary file. Both branches below take it. `fs::write` would put the
+    // prior bytes into whatever that shortcut reaches — a private key, in the test that
+    // plants one — and `remove_file` would take away a shortcut this session never
+    // created, which is not an undo of anything either.
+    //
+    // AFTER THE LEDGER, so the sentence a person gets for a path Addison never wrote is
+    // still the one about the ledger. This one only ever speaks about a path that was
+    // Addison's to put back and has since stopped being it.
+    //
+    // A LEDGERED PATH CAN BECOME THIS HONESTLY: `write_workspace_path` follows a link,
+    // so a config file linked back from a dotfiles folder is written through and the LINK
+    // is the name that is ledgered. Its undo is refused here from now on — which is what
+    // the core already answers for both shipped callers, and the point of the refusal is
+    // that the shell says it too, for a caller that never asked the core.
+    refuse_shortcut_at_path(&path)?;
     if params.get("delete").and_then(Value::as_bool).unwrap_or(false) {
         // Undo of a created file: remove it. A file already gone is a no-op success —
         // the point is that it is not there after undo.
@@ -2364,6 +2430,35 @@ mod tests {
     }
 
     #[test]
+    fn the_viewer_refuses_a_shortcut_and_never_shows_what_it_points_at() {
+        // THE SHELL'S OWN HALF of the shortcut gap (KNOWN-GAPS). The listing has said
+        // `kind: "symlink"` since it shipped, but the VIEWER opened whatever the name
+        // reached: point one at `~/.ssh/id_rsa` and the private key came back as the
+        // pane's text. The core refuses first for the shipped caller; this is the floor
+        // underneath a caller that never asked it.
+        //
+        // The assertion that matters is the second one: the refusal is not merely an
+        // error, it is an error INSTEAD OF the target's bytes.
+        let dir = temp_dir_path();
+        let secret = dir.join("id_rsa");
+        std::fs::write(&secret, "PRIVATE KEY").expect("seed the target");
+        let link = dir.join("notes.txt");
+        std::os::unix::fs::symlink(&secret, &link).expect("plant the shortcut");
+
+        let err = read_workspace_view(&link).unwrap_err();
+        assert_eq!(err.message, "That name is a shortcut to somewhere else, so Addison won't follow it.");
+
+        // And an ordinary file in the same folder still reads, so this refuses the
+        // shortcut and not the surface.
+        let plain = dir.join("plain.txt");
+        std::fs::write(&plain, "hello").expect("seed a plain file");
+        let result = read_workspace_view(&plain).unwrap();
+        assert_eq!(result.get("content").and_then(Value::as_str), Some("hello"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn restore_workspace_refuses_a_path_it_did_not_write() {
         // The undo guard: restore may only touch a path THIS session wrote. A path
         // not in the ledger is refused and no file written — inverting the check
@@ -2391,6 +2486,64 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn restore_workspace_refuses_a_ledgered_path_that_became_a_shortcut() {
+        // THE SHELL'S OWN HALF of the shortcut gap (KNOWN-GAPS). The ledger is checked
+        // against the NAME and `fs::write` FOLLOWS a link, so a ledgered path swapped for
+        // a shortcut put the prior text into whatever it reached — the private key here,
+        // and the file need not be under the data dir for that to be the harm, so the
+        // floor above does not catch it.
+        //
+        // Delete `refuse_shortcut_at_path` from `restore_workspace_path` and the second
+        // assertion fails with the target holding "PLANTED".
+        let state = FileState::default();
+        let dir = temp_dir_path();
+        let secret = dir.join("id_rsa");
+        std::fs::write(&secret, "PRIVATE KEY").expect("seed the target");
+        let ledgered = dir.join("edited.txt");
+        std::os::unix::fs::symlink(&secret, &ledgered).expect("plant the shortcut");
+        // The ledger says yes: this is a name Addison wrote this session.
+        lock(&state.workspace_written).insert(ledgered.clone());
+
+        let params = json!({ "path": ledgered.to_string_lossy(), "content": "PLANTED" });
+        let err = restore_workspace_path(&state, ledgered.clone(), &params).unwrap_err();
+        assert_eq!(err.message, "That name is a shortcut to somewhere else, so Addison won't follow it.");
+        assert_eq!(
+            std::fs::read_to_string(&secret).unwrap(),
+            "PRIVATE KEY",
+            "an undo must not write through a shortcut"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn restore_workspace_refuses_to_delete_a_ledgered_path_that_became_a_shortcut() {
+        // THE OTHER BRANCH. `remove_file` does not follow the link, so nothing is
+        // written anywhere — but a shortcut somebody else put at that name is not the
+        // file the write created, and taking it away is not an undo of anything. Exactly
+        // the reasoning `refuse_non_regular_file` already applies to both branches, for a
+        // kind that stat cannot report because stat follows it.
+        let state = FileState::default();
+        let dir = temp_dir_path();
+        let target = dir.join("kept.txt");
+        std::fs::write(&target, "somebody else's file").expect("seed the target");
+        let ledgered = dir.join("created.txt");
+        std::os::unix::fs::symlink(&target, &ledgered).expect("plant the shortcut");
+        lock(&state.workspace_written).insert(ledgered.clone());
+
+        let params = json!({ "path": ledgered.to_string_lossy(), "delete": true });
+        let err = restore_workspace_path(&state, ledgered.clone(), &params).unwrap_err();
+        assert_eq!(err.message, "That name is a shortcut to somewhere else, so Addison won't follow it.");
+        assert!(
+            std::fs::symlink_metadata(&ledgered).is_ok(),
+            "an undo must not remove a shortcut it did not create"
+        );
+        assert!(target.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
