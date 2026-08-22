@@ -24,8 +24,9 @@ interface Props {
   pending?: boolean;
   /**
    * Render without the `.markdown-body` wrapper. For a caller that renders an
-   * answer as SEVERAL of these (StreamingMarkdown, one per settled block) and
-   * puts them all inside one wrapper of its own: react-markdown v9 emits its
+   * answer as SEVERAL of these (StreamingMarkdown, one per top-level block of
+   * the prefix it has parsed) and puts them all inside one wrapper of its own:
+   * react-markdown v9 emits its
    * children with no element around them, so the blocks land in that wrapper as
    * one flow — and `.markdown-body > :first-child` / `> :last-child` trim the
    * answer's margins once instead of every block's margins separately.

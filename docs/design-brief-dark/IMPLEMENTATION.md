@@ -303,15 +303,18 @@ mapping against a stale picture. None of them change the design language.
   to the answer's length (`revealAdvanceFor`), because at a fixed rate a long answer is not
   an animation, it is a wait. And it can never display text that has not been
   committed. `onDone` fires exactly once and a finished engine is not reused.
-- **An answer formats itself as it arrives, block by block.** The brief shows a
+- **An answer formats itself as it arrives, line by line.** The brief shows a
   streamed reply as running text and a finished one as a formatted answer; between
   those two the app used to show plain text until the reveal landed, and the whole
-  answer re-laid itself out in one frame. It now formats each block as soon as the
-  block is COMPLETE and the scramble's resolved edge has passed it — so the glyphs
-  are always in plain text, never in structure, and a heading that has already
-  resolved is a heading. The block still being written stays plain, except a fenced
-  code block, which the parser closes at the end of the input so an open fence reads
-  as code while it grows. A mermaid fence is still drawn only once the turn lands: a
+  answer re-laid itself out in one frame. It now formats everything up to the last
+  completed line the scramble's resolved edge has passed — so the glyphs are always
+  in plain text, never in structure, and a heading that has already resolved is a
+  heading. A table appears as soon as its header and separator lines are in, and
+  grows a row at a time; an open code fence reads as code while it grows. Only the
+  half-written line stays plain, because its meaning is not decided yet. Every
+  frame's structure is a fresh parse, so a block the document reinterprets — a
+  paragraph that a line of dashes turns into a heading — corrects itself mid-stream
+  instead of at the end. A mermaid fence is still drawn only once the turn lands: a
   diagram redrawing itself mid-answer is the reflow this avoids, wearing a picture.
 - **The view title is not the only thing that scrambles on a switch.** The sidebar
   title scrambles on chat switch too; the stagger survives remounts and is capped at
