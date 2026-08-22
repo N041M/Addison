@@ -30,7 +30,8 @@
       ],
       "default": true,
       "provider": "anthropic",
-      "providerLabel": "Anthropic"
+      "providerLabel": "Anthropic",
+      "vision": true
     },
     {
       "id": "claude-haiku-4-5-20251001",
@@ -39,7 +40,8 @@
       "effortLevels": [],
       "default": false,
       "provider": "anthropic",
-      "providerLabel": "Anthropic"
+      "providerLabel": "Anthropic",
+      "vision": true
     },
     {
       "id": "gpt-fixture",
@@ -48,7 +50,8 @@
       "effortLevels": [],
       "default": false,
       "provider": "openai",
-      "providerLabel": "OpenAI"
+      "providerLabel": "OpenAI",
+      "vision": true
     }
   ]
 }

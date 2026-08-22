@@ -193,6 +193,20 @@ export interface CloudModel {
    * core does send it, the note is the core's fact rather than our guess.
    */
   free?: boolean;
+  /**
+   * Whether this model can look at pictures, as the CORE reports it from the
+   * owning provider adapter's own `capabilities()` (image-attach plan §5) — the
+   * `truncation_finish_reasons` pattern: a capability carried as structured data,
+   * never inferred here from a model name.
+   *
+   * Optional on the `free` precedent above, and absent means UNKNOWN rather than
+   * false: a model on this computer has a per-model answer the list path does not
+   * fetch, so its row simply carries nothing. The composer therefore says "this
+   * model can't look at pictures" only where this is explicitly `false`, and the
+   * core's refusal at send is the enforcement either way — the line is a warning
+   * and never a gate (spec §4.1.1 item A).
+   */
+  vision?: boolean;
 }
 
 /**

@@ -550,6 +550,65 @@ class Store:
         )
         self._conn.commit()
 
+    def insert_message_attachments(
+        self,
+        conversation_id: str,
+        message_id: str,
+        attachments: Sequence[dict[str, Any]],
+        created_at: int,
+    ) -> None:
+        """Write one message's attached pictures (image-attach plan §5).
+
+        Called straight after ``insert_message`` for the same row, by the one caller
+        that has them (``rpc/conversation.py``). One statement and one commit for
+        the whole set: a message either has the pictures it was sent with or the
+        write failed and nothing is half-remembered.
+
+        Each dict carries ``id``, ``name``, ``media_type``, ``byte_size`` and
+        ``data_b64`` — the record the core minted at pick time, stored as it stands.
+        This layer validates nothing about them: the media type was checked where a
+        violation could still be answered with a plain sentence (``pickAttachment``),
+        and the bytes were bounded by the shell that encoded them. An empty sequence
+        writes nothing at all, so the ordinary message costs no statement."""
+        if not attachments:
+            return
+        self._conn.executemany(
+            "INSERT INTO message_attachments "
+            "(id, conversation_id, message_id, name, media_type, byte_size, data_b64, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    a["id"],
+                    conversation_id,
+                    message_id,
+                    a["name"],
+                    a["media_type"],
+                    a["byte_size"],
+                    a["data_b64"],
+                    created_at,
+                )
+                for a in attachments
+            ],
+        )
+        self._conn.commit()
+
+    def attachments_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
+        """Every attached picture in one conversation, oldest first.
+
+        ONE QUERY for the whole chat rather than one per message: the load handler
+        groups these by ``message_id`` itself, in the pass it already makes over the
+        transcript. Ordering is the messages' own — (created_at, rowid) — so the
+        pictures of a message come back in the order they were attached, which is
+        the order the person sees them in."""
+        rows = self._conn.execute(
+            "SELECT id, conversation_id, message_id, name, media_type, byte_size, "
+            "data_b64, created_at "
+            "FROM message_attachments WHERE conversation_id = ? "
+            "ORDER BY created_at ASC, rowid ASC",
+            (conversation_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def messages_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
         """The full transcript of one conversation in stable insertion order
         (``created_at`` ascending, rowid ascending as the same-second tiebreaker).
@@ -590,11 +649,25 @@ class Store:
                 f"'{conversation_id}'; cannot rewind to it."
             )
         comparison = ">=" if not keep_anchor else ">"
-        self._conn.execute(
-            "DELETE FROM messages WHERE conversation_id = ? AND "
-            f"(created_at > ? OR (created_at = ? AND rowid {comparison} ?))",
-            (conversation_id, anchor["created_at"], anchor["created_at"], anchor["rowid"]),
+        after = (
+            "conversation_id = ? AND "
+            f"(created_at > ? OR (created_at = ? AND rowid {comparison} ?))"
         )
+        bounds = (conversation_id, anchor["created_at"], anchor["created_at"], anchor["rowid"])
+        # The pictures of the messages about to go, FIRST and in the same transaction
+        # (image-attach plan §5). Not tidiness: `PRAGMA foreign_keys = ON` is set on
+        # every connection, so leaving them would abort this rewind at COMMIT and the
+        # person would be told nothing useful about why. The same explicit-delete
+        # shape `apply_config_state` uses for `widget_state` (snapshots/scope.py says
+        # why there), and it is one commit with the messages, so a rewind can never
+        # leave a picture pointing at a message that no longer exists.
+        self._conn.execute(
+            f"DELETE FROM message_attachments WHERE message_id IN ("
+            f"  SELECT id FROM messages WHERE {after}"
+            f")",
+            bounds,
+        )
+        self._conn.execute(f"DELETE FROM messages WHERE {after}", bounds)
         self._conn.commit()
 
     def list_conversations(self) -> list[dict[str, Any]]:

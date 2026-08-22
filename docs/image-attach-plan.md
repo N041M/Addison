@@ -158,7 +158,18 @@ names this plan as the image path that made it text-only.
   between pick and send changes nothing. The webview gets the base64 *for
   display* and never sends bytes back — at send time it names ids only, so
   nothing the webview holds can become "what the model saw". The cache dies
-  with the process and is cleared on send and on `conversation.new`.
+  with the process and is cleared on send and on `conversation.new`. It is also
+  **capped at the same 4**, which phase 3 added: the pending set exists only to
+  become a message, so a fifth pick is refused in a sentence rather than growing
+  memory, and an abandoned pick costs one of four slots and nothing more.
+  A **worker job**, not an inline handler — it opens a modal dialog and then
+  decodes, and the read loop has to stay free to deliver `permission.respond` and
+  `conversation.stop` (`model.startLocalSetup`'s 2026-08-22 move, and
+  `routine.importPreview`'s shape).
+- **`conversation.discardAttachment {attachmentId} → {ok}`** (phase 3, not in the
+  original plan). The ✕ on a composer chip frees the slot it was holding. An id
+  the core is not holding is a silent no-op: there is nothing to say about a thing
+  that is already gone, and clicking ✕ twice must not produce an error.
 - **`conversation.sendMessage` gains `attachments?: [id, …]`** (cap: **4**).
   Unknown or already-spent ids refuse the send with a plain sentence. The
   empty-text guard (closed 2026-08-08) is **relaxed by exactly one case**:
@@ -172,14 +183,26 @@ names this plan as the image path that made it text-only.
   the image blocks forward. Downscaled-only (≤2 MiB each, ≤4 per message), so
   the store grows by bounded, person-caused amounts. No credential ever has a
   path into this table; G1 is not in play.
-- **The context budget** counts each image as a flat 1,600-token estimate — a
-  stated approximation (provider tiling differs), erring high. The honest
-  limit rides in this plan: the budget's image arithmetic is an estimate and
-  says so at the constant.
+- ~~**The context budget** counts each image as a flat 1,600-token estimate.~~
+  **CUT in phase 3, because there is nothing to count in.** This plan assumed a
+  turn-size estimator that walks messages; there is none, and never was. §4.8
+  measures a turn from the **provider's own usage report**
+  (`orchestrator._report_context_usage`: `input_tokens + output_tokens`, handed to
+  `assess_budget`), and that number already counts the pictures — each provider
+  bills its own tiling, which is exactly the thing a flat 1,600 could only
+  approximate. Adding an estimate on top would not improve the measurement, it
+  would double-count it, and `context_budget.py` would grow a seam it does not
+  have (it is two pure functions over data, and reads no message content at all).
+  So the budget is unchanged and its arithmetic stays the provider's.
 - **`model.availableRoles` model rows gain `vision: bool`** (from the owning
-  adapter's capabilities; Ollama's per-model answer where it has one), the
-  `truncation_finish_reasons` pattern: a capability carried out as structured
-  data, never prose.
+  adapter's capabilities), the `truncation_finish_reasons` pattern: a capability
+  carried out as structured data, never prose. `models_catalog.PROVIDER_VISION`
+  holds the four answers and a test asks the four adapters themselves, so the copy
+  cannot drift. **Local models carry no such field**, which is phase 3's one
+  amendment here: Ollama's answer is per model (`POST /api/show`), the list path
+  does not fetch it, and adding a request per row to a list path to find out is
+  the wrong trade. Absent means *unknown*, and the composer says something only
+  where it knows the answer is no.
 
 ## 6. Phase 4 — the frontend
 
@@ -236,7 +259,16 @@ edge.
 
 - A text-only model mid-history gets `[picture]`, not pixels and not a filename
   (§3) — degrade, disclosed by the "Answered by" line, never an auto-switch.
-- The budget's image cost is a flat estimate.
+- A picture sent while there is **no key yet** routes to the Setup Assistant relay
+  (§4.6), which cannot see, so phase 1's gate refuses it — *after* the message is
+  persisted. Left as it is deliberately: nothing external was called, the message
+  and its picture are in the person's own transcript to send again once a key
+  exists, and the refusal sentence is in the thread saying why.
+- A **§4.8 continuation** copies the last few turns verbatim into a new
+  conversation, pictures included. Those copies are written as new rows and lose
+  the person's filename (`Message.images` carries none — §3), so a continued chat
+  shows the picture and not its name. The bytes are duplicated, exactly as the
+  carried text is.
 - Attachments live in SQLite as base64; a person who attaches many large
   photos grows their database by up to ~8 MiB a message, bounded but real.
 - The composer's warning appears only for explicit picks; strategy-routed

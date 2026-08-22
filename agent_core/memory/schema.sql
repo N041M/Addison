@@ -51,6 +51,41 @@ CREATE TABLE IF NOT EXISTS messages (
     tool_calls_json     TEXT
 );
 
+-- Pictures the person attached to one of their own messages (image-attach plan §5).
+-- Written beside the message row, by the same caller, in the same turn.
+--
+-- WHY THE BYTES LIVE HERE. A thumbnail has to survive a reopen, and so does what
+-- the model could SEE: `conversation.load` rebuilds `Message.images` from these
+-- rows, and without them a reopened chat replays a person's words with the picture
+-- silently missing — the model would answer about something it was never shown.
+-- Storing a path instead would be a promise about a file Addison does not own; the
+-- person may have moved, renamed or deleted it, and provenance says what is
+-- remembered must be the bytes that were actually sent.
+--
+-- BOUNDED BY CONSTRUCTION, which is what makes base64 in SQLite defensible: the
+-- shell downscales and re-encodes every picture under 2 MiB (plan §4) and a message
+-- carries at most four, so the worst a message can add is ~8 MiB and only because a
+-- person chose four pictures with their own hands. Nothing here grows on its own.
+--
+-- G1 is not in play: the only writer is the person's own pick path, no tool and no
+-- model can mint a row, and no credential has a route into this table.
+--
+-- `id` is the id the core minted at pick time (never the shell's file handle — the
+-- layers stay layered), so a chip drawn in the composer and the row it becomes are
+-- the same thing. Deleting a message deletes its pictures explicitly, in the same
+-- transaction (Store.truncate_messages) — the `widget_state` precedent, and here it
+-- is not tidiness: `PRAGMA foreign_keys = ON` would abort the rewind at COMMIT.
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id              TEXT PRIMARY KEY,       -- uuid4, minted core-side at pick time
+    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+    message_id      TEXT NOT NULL REFERENCES messages(id),
+    name            TEXT NOT NULL,          -- the person's own filename; DISPLAY ONLY
+    media_type      TEXT NOT NULL,          -- one of providers/base.py ALLOWED_IMAGE_MEDIA_TYPES
+    byte_size       INTEGER NOT NULL,       -- of the ENCODED bytes, never the file on disk
+    data_b64        TEXT NOT NULL,          -- base64 of those bytes
+    created_at      INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS memory_facts (
     id                          TEXT PRIMARY KEY,
     fact                        TEXT NOT NULL,
@@ -621,6 +656,11 @@ CREATE TABLE IF NOT EXISTS tool_audit (
 -- §4.8 usage widgets (usage_totals_since, latest_latency_per_provider).
 CREATE INDEX IF NOT EXISTS idx_messages_conversation_created
     ON messages(conversation_id, created_at);
+-- Backs the other half of transcript replay: `attachments_for_conversation` reads
+-- one chat's pictures in a single query and the load handler groups them by
+-- message, rather than asking per message row.
+CREATE INDEX IF NOT EXISTS idx_message_attachments_conversation
+    ON message_attachments(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_usage_log_created
     ON usage_log(created_at);
 CREATE INDEX IF NOT EXISTS idx_usage_log_provider_created

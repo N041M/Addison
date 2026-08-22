@@ -6,6 +6,10 @@ import type { ArtifactUnavailable } from "./ui";
 // requirement. Keep method names and shapes in lockstep with protocol.py.
 
 export const Method = {
+  // {text, role?, modelId?, effort?, attachments?} -> {ok, userMessageId, ...}.
+  // `attachments` names ids minted by `conversation.pickAttachment` below and
+  // NOTHING ELSE — never bytes, never a path (image-attach plan §5). At most four,
+  // each spent by the send that names it.
   ConversationSendMessage: "conversation.sendMessage",
   ConversationNew: "conversation.new",
   // {conversationId} -> {conversationId, title, messages, work?, continuedFrom?,
@@ -14,7 +18,23 @@ export const Method = {
   // with. They come off the `conversations` row, so the thread's boundary marker
   // survives a reload — unlike the note said once on the Activity Panel channel,
   // which is per-turn and never persisted.
+  //
+  // A message row carries `attachments: [{id, name, mediaType, dataB64}]` when the
+  // person attached pictures to it, so a reopened thread draws the thumbnails it
+  // had. The same rows rebuild the core's in-memory history, which is the half that
+  // matters to the model: that history IS its memory of the chat.
   ConversationLoad: "conversation.load",
+  // {} -> {attachmentId, name, mediaType, byteSize, dataB64} (image-attach plan §5).
+  // The CORE opens the picker (the webview may never call `shell.*`, spec §1.3),
+  // reads the picked file once, and holds the encoded bytes under an id of its own
+  // minting. What comes back here is base64 FOR DISPLAY — a `data:` thumbnail, which
+  // the pinned CSP already allows — and it never goes back: `sendMessage` names ids,
+  // so nothing this side holds can become what the model saw.
+  ConversationPickAttachment: "conversation.pickAttachment",
+  // {attachmentId} -> {ok}. The person removed a pending picture before sending
+  // (the ✕ on a composer chip). Frees the slot; an id the core is not holding is a
+  // silent no-op, because there is nothing to say about a thing already gone.
+  ConversationDiscardAttachment: "conversation.discardAttachment",
   // {} -> {conversations}. A row carries `continuedFrom` when it is a continuation,
   // so the history list can draw one continued chat as one thing. Both
   // conversations stay in the list and stay openable: the lineage groups them, it
@@ -459,6 +479,29 @@ export interface ChatMessage {
   role: "user" | "assistant" | "tool";
   content: string;
   toolCallId?: string;
+  /**
+   * Pictures the person attached to this message (image-attach plan §5). Present
+   * on a `conversation.load` user row that has any, absent otherwise — the same
+   * optional-key idiom as `continuedFrom`, so an ordinary message's payload is
+   * byte-identical to what it always was.
+   */
+  attachments?: MessageAttachment[];
+}
+
+/**
+ * One attached picture as it crosses the wire, from `conversation.pickAttachment`
+ * (pending, in the composer) or `conversation.load` (stored, in the thread).
+ *
+ * `dataB64` is base64 of the ENCODED image the shell produced — downscaled and
+ * re-encoded to one of four media types, at most 2 MiB — and it is here to be
+ * RENDERED, as a `data:` URI. It is never sent back to the core: a send names
+ * `id`s only. Mirrored in protocol.py.
+ */
+export interface MessageAttachment {
+  id: string;
+  name: string;
+  mediaType: string;
+  dataB64: string;
 }
 
 export interface PermissionRequest {
