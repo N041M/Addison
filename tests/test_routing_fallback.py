@@ -203,7 +203,7 @@ def test_routed_free_answer_reports_the_chip():
     answered = []
     orch, conv = _build(
         {"b": b}, [_cand("b", "ollama", role=ModelRole.LOCAL, free=True, local=True)],
-        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, free, routed)),
     )
     orch.run_turn(conv)
     assert answered == [("b", True, True)]         # free -> the disclaimer renders
@@ -220,7 +220,7 @@ def test_a_free_model_the_user_PICKED_still_reports_free():
     answered = []
     orch, conv = _build(
         {"b": b}, [_cand("b", "ollama", role=ModelRole.LOCAL, free=True, local=True)],
-        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, free, routed)),
     )
     orch.run_turn(conv, model_name="b")            # the user picked the local model
     assert answered == [("b", True, False)]
@@ -233,7 +233,7 @@ def test_a_paid_answer_never_reports_free():
     answered = []
     orch, conv = _build(
         {"a": a}, [_cand("a", "anthropic")],
-        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, free, routed)),
     )
     orch.run_turn(conv)
     assert answered == [("a", False, True)]
@@ -252,7 +252,7 @@ def test_an_ollama_answer_on_the_unrouted_path_is_free_too():
         tool_registry=registry,
         permission_gate=gate,
         undo_manager=UndoManager(store=_FakeStore(), tool_registry=registry),
-        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, free, routed)),
         # routing_chain deliberately UNWIRED -> the single-provider path.
     )
     conv = Conversation(id="c")
@@ -266,7 +266,7 @@ def test_explicit_pick_that_answered_is_not_routed():
     answered = []
     orch, conv = _build(
         {"a": a}, [_cand("a", "pa")],
-        on_answered=lambda mid, label, free, routed: answered.append((mid, free, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, free, routed)),
     )
     orch.run_turn(conv, model_name="a")            # user explicitly picked "a"
     assert answered == [("a", False, False)]       # answered the pick -> not routed
@@ -279,7 +279,7 @@ def test_explicit_pick_that_fell_forward_is_routed():
     answered = []
     orch, conv = _build(
         {"a": a, "b": b}, [_cand("a", "pa"), _cand("b", "pb")],
-        on_answered=lambda mid, label, free, routed: answered.append((mid, routed)),
+        on_answered=lambda mid, label, free, routed, truncated: answered.append((mid, routed)),
     )
     orch.run_turn(conv, model_name="a")            # picked A, but A was busy
     assert answered == [("b", True)]               # answered by B -> routed

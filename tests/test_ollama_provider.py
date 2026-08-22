@@ -327,3 +327,72 @@ def test_response_usage_none_when_counts_absent():
     )
     res = OllamaProvider("m:8b", client=client).send([Message(role="user", content="hi")], [])
     assert res.usage is None
+
+
+# --- the output cap ("Continue this answer", 2026-08-22) --------------------
+
+
+def test_an_answer_cut_off_at_the_cap_keeps_ollamas_own_word():
+    # /api/chat reports ``done_reason: "length"`` at the TOP level, beside the
+    # token counts. Every answer was reported as "stop" until 2026-08-22, so a
+    # cut-off local answer looked like a finished one.
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (
+                200,
+                {
+                    "message": {"content": "The first three reasons are"},
+                    "done": True,
+                    "done_reason": "length",
+                },
+            ),
+        }
+    )
+    provider = OllamaProvider("m:8b", client=client)
+    res = provider.send([Message(role="user", content="list ten reasons")], [])
+    assert res.finish_reason == "length"
+    assert res.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_the_cap_is_kept_on_the_fenced_json_fallback_path_too():
+    # A model with no native tool calling answers through a different translation.
+    # Both paths read the same top-level field, so neither can quietly lose it.
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": []}),
+            "/api/chat": (
+                200,
+                {"message": {"content": "The first three"}, "done": True, "done_reason": "length"},
+            ),
+        }
+    )
+    res = OllamaProvider("m:8b", client=client).send([Message(role="user", content="hi")], [])
+    assert res.finish_reason == "length"
+
+
+def test_an_ordinary_ending_is_not_the_cap():
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (
+                200,
+                {"message": {"content": "Done."}, "done": True, "done_reason": "stop"},
+            ),
+        }
+    )
+    provider = OllamaProvider("m:8b", client=client)
+    res = provider.send([Message(role="user", content="hi")], [])
+    assert res.finish_reason == "stop"
+    assert res.finish_reason not in provider.capabilities().truncation_finish_reasons
+
+
+def test_a_response_that_names_no_reason_reads_as_an_ordinary_stop():
+    client, _ = _client(
+        {
+            "/api/show": (200, {"capabilities": ["tools"]}),
+            "/api/chat": (200, {"message": {"content": "Done."}}),
+        }
+    )
+    res = OllamaProvider("m:8b", client=client).send([Message(role="user", content="hi")], [])
+    assert res.finish_reason == "stop"

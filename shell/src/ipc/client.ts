@@ -1362,8 +1362,14 @@ function parseRoutingSet(result: unknown): RoutingSetResult {
 /**
  * Parse the optional `answeredWith` block on a sendMessage reply (contract D5).
  * Fails CLOSED: a missing block, or one without a usable `modelId`, yields
- * `undefined` so the transcript shows no chip. `free`/`routed` are trusted only
- * on a strict boolean `true` — the chip must never fire on a truthy-ish value.
+ * `undefined` so the transcript shows no chip. `free`/`routed`/`truncated` are
+ * trusted only on a strict boolean `true` — the chip must never fire on a
+ * truthy-ish value, and neither must the offer to carry an answer on.
+ *
+ * `truncated` is the newest of the three and is read exactly like the others,
+ * which is what keeps this parser BACKWARD-COMPATIBLE: a reply from a core that
+ * does not send the field leaves it `false`, so nothing new appears. Absent is
+ * "no claim", never "cut off".
  */
 export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
   const obj = asRecord(result);
@@ -1374,6 +1380,7 @@ export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
     label: typeof raw.label === "string" && raw.label ? raw.label : raw.modelId,
     free: raw.free === true,
     routed: raw.routed === true,
+    truncated: raw.truncated === true,
   };
 }
 

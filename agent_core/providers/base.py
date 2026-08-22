@@ -479,6 +479,24 @@ class ProviderCapabilities:
     audio: bool = False          # can analyze audio input
     # v2 auto-routing (§4.1.1) reads these flags to pick a capable model per task;
     # in v1 they only drive an explicit warning + manual switch, never an auto-switch.
+    #
+    # THIS PROVIDER'S SPELLINGS OF "the answer stopped because it hit its output
+    # cap", as they appear in ``ModelResponse.finish_reason`` after this adapter
+    # has translated the wire. Every API says the same thing differently
+    # ("max_tokens", "length", "MAX_TOKENS"), and the orchestrator must not know
+    # which is which: it asks the capability whether the reason it holds is in
+    # here, and never branches on the concrete provider (CLAUDE.md — no
+    # ``isinstance``, capability differences go through this dataclass).
+    #
+    # A disclosure input, exactly like the flags above: it lets the reply say the
+    # answer was cut off, so the thread can offer to carry on. It never picks a
+    # model and never switches one.
+    #
+    # EMPTY BY DEFAULT, and that default is the honest one — a provider that
+    # declares nothing simply never claims truncation. Silence beats a guess: an
+    # offer to continue an answer that was actually finished is worse than no
+    # offer at all.
+    truncation_finish_reasons: tuple[str, ...] = ()
 
 
 @dataclass
@@ -532,6 +550,11 @@ class Usage:
 class ModelResponse:
     text: str | None
     tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    # Why the model stopped, IN THE ANSWERING PROVIDER'S OWN SPELLING — this is
+    # not a normalised vocabulary and must not be compared against a literal
+    # anywhere outside an adapter. The one thing anybody asks of it is "did this
+    # answer hit its output cap", and that question is answered by testing
+    # membership in the answering provider's ``truncation_finish_reasons``.
     finish_reason: str = "stop"
     # Token usage for the call that produced this response, when the provider
     # reports it (None otherwise). Orchestrator machinery records it into

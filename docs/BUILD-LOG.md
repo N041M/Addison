@@ -12,6 +12,58 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (fifth): Continue, and the two adapters that were throwing the fact away
+
+The judged feature (KNOWN-GAPS, 2026-08-09) was a button beside Retry that appears
+when the provider's stop reason says the answer hit its output cap. Building it
+turned out to be mostly *repair*: the fact it needs was already on the wire and
+two adapters were deleting it on arrival.
+
+- **The feature is one boolean and one button.**
+  `ProviderCapabilities.truncation_finish_reasons` — a tuple, empty by default —
+  holds each provider's own word for "ran out of output room". The orchestrator
+  asks the ANSWERING provider's capability whether the reason it is holding is in
+  there, and that is the whole decision: no spelling and no provider name appears
+  in `orchestrator.py`, which is what keeps the file provider-agnostic (CLAUDE.md).
+  It rides the existing `on_answered` seam (D5) rather than a second one, because
+  it is a fact about the same thing — the answer this turn produced — and arrives
+  on the reply as `answeredWith.truncated`.
+- **THE FINDING: two adapters reported "stop" for every answer they ever
+  returned.** `google_provider` never read `finishReason` and `ollama_provider`
+  never read `done_reason`, so a Gemini or a local answer that Gemini/Ollama had
+  cut off at the cap was indistinguishable from one that finished — not a
+  regression this work introduced, a fact that had never been captured. OpenAI was
+  worse in a subtler way: its STREAMED fold kept `finish_reason` and its plain
+  `_translate_response` collapsed it to `"stop"`, so the same answer read
+  differently depending on whether the reader was streaming. Every adapter now has
+  a test on BOTH of its translations, because a fact preserved by one path and
+  dropped by the other is a bug only some people can see.
+- **The lockstep test is the load-bearing one.** A per-provider declaration and a
+  per-provider translation are two places to say the same word, and nothing else in
+  the system can tell when they drift.
+  `tests/test_truncation_continue.py` drives each real adapter with a realistic
+  cap-hit payload and asserts the emitted spelling is the declared one. Changing
+  either half alone goes red; that is the only reason the pair is trustworthy.
+- **The mutation that mattered.** A hardcoded `("max_tokens", "length",
+  "MAX_TOKENS")` in the orchestrator passes every test written with real-looking
+  words — it is exactly the `isinstance`-shaped mistake the capability exists to
+  prevent, and it looks correct. The guard is a fake provider whose declared
+  spelling is a word no API uses: answering True for it requires having ASKED.
+- **The rule for a mid-loop round, written at the code.** Only the FINAL response —
+  the one whose text became the message on screen — can be claimed as cut off. A
+  tool round that hit its cap is a different situation: the person never read it,
+  the loop carried on, and an offer to "carry on" would resume from text nobody
+  saw. Structural, not incidental: `on_answered` is only reached after a
+  no-tool-calls response has been appended. (Every adapter also reports a tool
+  round as `"tool_use"`, which would hide the question — that coincidence is not
+  what holds the rule.)
+- **What Continue is not.** Not a repair: the cut-off answer stays exactly where it
+  is and the resume is an ordinary, visible user message, so the result is two
+  messages rather than a splice whose seam would have to be guessed. Not a "make it
+  longer": it appears only on the truncation fact, per design-doc §7.9.1.
+
+---
+
 ## What shipped 08-22 (fourth): Highlight → Ask / Explain, and the three silences that make it safe
 
 The first of the features judged on 2026-08-09 got built, in the shape it was

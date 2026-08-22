@@ -177,6 +177,12 @@ glyphs hover to `ink`.
   messages keep **Markdown/Mermaid rendering**, restyled to the same type
   scale (code/tables in mono on `panel` blocks with `line` hairlines). Retry
   / rewind-to-here affordances survive as small accent/mono actions.
+  Under the LAST answer that accent row can hold a second action,
+  **"Continue this answer"** (2026-08-22), and only when the core reported that
+  answer as having stopped at the model's output cap. Same 12px accent idiom,
+  16px apart, Retry first; it carries **no** rail-and-label annotation — an
+  answer that stopped mid-sentence shows that by itself, and a second annotation
+  would compete with the free-model chip on the same message.
 - **Selection popover** (thread only, shipped 2026-08-22 — `SelectionAsk.tsx`):
   highlight text inside ONE settled message body and a small floating panel
   appears beside the selection with two accent actions, **Ask** and **Explain**.

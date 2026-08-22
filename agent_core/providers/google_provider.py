@@ -76,6 +76,10 @@ class GoogleProvider:
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # Gemini models can analyze images
+            # Gemini's own word, upper-case on the wire and kept that way by
+            # ``_finish_reason`` below rather than translated into somebody else's
+            # vocabulary. The capability spells it exactly as the adapter emits it.
+            truncation_finish_reasons=("MAX_TOKENS",),
         )
 
     def send(
@@ -294,9 +298,29 @@ def _tool_call_from_part(part: dict) -> ToolCallRequest | None:
     )
 
 
+def _finish_reason(candidate: dict) -> str | None:
+    """The candidate's ``finishReason``, VERBATIM, or None when it says nothing.
+
+    Gemini's ordinary end is ``"STOP"``, which this maps to Addison's ``"stop"``
+    so a plain answer reads the same as every other provider's. Anything else —
+    ``"MAX_TOKENS"`` above all — is passed through in Gemini's own upper-case
+    spelling rather than translated: the only reader is
+    ``ProviderCapabilities.truncation_finish_reasons``, which is declared per
+    provider precisely so no adapter has to invent a shared vocabulary.
+
+    Until 2026-08-22 this whole field was dropped and every answer reported
+    ``"stop"``, so an answer Gemini had cut off at its cap looked finished.
+    """
+    reason = candidate.get("finishReason")
+    if not (isinstance(reason, str) and reason):
+        return None
+    return "stop" if reason == "STOP" else reason
+
+
 def _translate_response(data: dict) -> ModelResponse:
     candidates = data.get("candidates") or []
-    content = (candidates[0].get("content") if candidates else None) or {}
+    candidate = (candidates[0] if candidates else None) or {}
+    content = candidate.get("content") or {}
     text_parts: list[str] = []
     tool_calls: list[ToolCallRequest] = []
     for part in content.get("parts") or []:
@@ -312,10 +336,15 @@ def _translate_response(data: dict) -> ModelResponse:
     text = "".join(text_parts) if text_parts else None
     usage = _translate_usage(data.get("usageMetadata"))
     if tool_calls:
+        # A turn that asked for tools is reported as such, exactly as before: what
+        # stopped it is the tool call, and the answer the person reads has not been
+        # written yet.
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+    return ModelResponse(
+        text=text, tool_calls=[], finish_reason=_finish_reason(candidate) or "stop", usage=usage
+    )
 
 
 def _translate_stream(frames, on_delta) -> ModelResponse:
@@ -331,13 +360,21 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
     text_parts: list[str] = []
     tool_calls: list[ToolCallRequest] = []
     usage: Usage | None = None
+    # The stream declares why it ended on its LAST frame; earlier frames carry no
+    # finishReason at all. Last one that says anything wins, for the same reason
+    # usage does: an incremental stream reports the end once, at the end.
+    finish_reason: str | None = None
 
     for frame in frames:
         frame_usage = _translate_usage(frame.get("usageMetadata"))
         if frame_usage is not None:
             usage = frame_usage
         candidates = frame.get("candidates") or []
-        content = (candidates[0].get("content") if candidates else None) or {}
+        candidate = (candidates[0] if candidates else None) or {}
+        frame_reason = _finish_reason(candidate)
+        if frame_reason is not None:
+            finish_reason = frame_reason
+        content = candidate.get("content") or {}
         for part in content.get("parts") or []:
             if not isinstance(part, dict):
                 continue
@@ -355,7 +392,9 @@ def _translate_stream(frames, on_delta) -> ModelResponse:
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+    return ModelResponse(
+        text=text, tool_calls=[], finish_reason=finish_reason or "stop", usage=usage
+    )
 
 
 def _translate_usage(usage) -> Usage | None:

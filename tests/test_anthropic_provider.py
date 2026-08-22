@@ -264,3 +264,30 @@ def test_response_carries_usage_when_reported():
 def test_response_usage_none_when_absent():
     provider, _, _ = _make({"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"})
     assert provider.send([Message(role="user", content="hi")], []).usage is None
+
+
+# --- the output cap ("Continue this answer", 2026-08-22) --------------------
+
+
+def test_an_answer_cut_off_at_the_cap_keeps_the_wires_own_word():
+    # The Messages API reports ``stop_reason: "max_tokens"`` when the answer ran
+    # out of room. This adapter passes it through, which is what lets the reply
+    # tell the person the answer was cut off rather than finished.
+    provider, _, _ = _make(
+        {
+            "content": [{"type": "text", "text": "The first three reasons are"}],
+            "stop_reason": "max_tokens",
+        }
+    )
+    res = provider.send([Message(role="user", content="list ten reasons")], [])
+    assert res.finish_reason == "max_tokens"
+    assert res.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_an_ordinary_ending_is_not_the_cap():
+    provider, _, _ = _make(
+        {"content": [{"type": "text", "text": "Done."}], "stop_reason": "end_turn"}
+    )
+    res = provider.send([Message(role="user", content="hi")], [])
+    assert res.finish_reason == "end_turn"
+    assert res.finish_reason not in provider.capabilities().truncation_finish_reasons

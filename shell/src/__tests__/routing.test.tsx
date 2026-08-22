@@ -96,8 +96,39 @@ describe("parseRouting", () => {
 describe("parseAnsweredWith", () => {
   it("reads a well-formed block", () => {
     expect(
-      parseAnsweredWith({ answeredWith: { modelId: "m-x", label: "Free Model", free: true, routed: true } }),
-    ).toEqual({ modelId: "m-x", label: "Free Model", free: true, routed: true });
+      parseAnsweredWith({
+        answeredWith: {
+          modelId: "m-x",
+          label: "Free Model",
+          free: true,
+          routed: true,
+          truncated: true,
+        },
+      }),
+    ).toEqual({
+      modelId: "m-x",
+      label: "Free Model",
+      free: true,
+      routed: true,
+      truncated: true,
+    });
+  });
+
+  // BACKWARD COMPATIBILITY. `truncated` arrived on 2026-08-22; a reply without it
+  // is not a reply claiming the answer was cut off. Absent must read as false, or
+  // "Continue this answer" would appear under answers that finished perfectly.
+  it("reads a block with no truncated field at all as not truncated", () => {
+    expect(
+      parseAnsweredWith({
+        answeredWith: { modelId: "m-x", label: "Free Model", free: true, routed: true },
+      }),
+    ).toEqual({
+      modelId: "m-x",
+      label: "Free Model",
+      free: true,
+      routed: true,
+      truncated: false,
+    });
   });
 
   it("returns undefined when the block is absent or unusable", () => {
@@ -107,12 +138,13 @@ describe("parseAnsweredWith", () => {
     expect(parseAnsweredWith(null)).toBeUndefined();
   });
 
-  it("trusts free/routed only on a strict boolean true", () => {
+  it("trusts free/routed/truncated only on a strict boolean true", () => {
     const parsed = parseAnsweredWith({
-      answeredWith: { modelId: "m-x", free: 1, routed: "yes" },
+      answeredWith: { modelId: "m-x", free: 1, routed: "yes", truncated: "yes" },
     });
     expect(parsed?.free).toBe(false);
     expect(parsed?.routed).toBe(false);
+    expect(parsed?.truncated).toBe(false);
     // Missing label falls back to the model id.
     expect(parsed?.label).toBe("m-x");
   });
@@ -301,7 +333,14 @@ describe("the routing card's guards", () => {
 // (e) the free-model chip in the transcript
 // ---------------------------------------------------------------------------
 function answered(over: Partial<AnsweredWith>): AnsweredWith {
-  return { modelId: "m-free", label: "A Free Model", free: false, routed: false, ...over };
+  return {
+    modelId: "m-free",
+    label: "A Free Model",
+    free: false,
+    routed: false,
+    truncated: false,
+    ...over,
+  };
 }
 
 function renderThreadWith(answeredWith: AnsweredWith | undefined) {
@@ -309,7 +348,13 @@ function renderThreadWith(answeredWith: AnsweredWith | undefined) {
     { id: "a1", role: "assistant", content: "Here is your answer.", answeredWith },
   ];
   render(
-    <ChatThread messages={messages} onRetry={vi.fn()} retryAvailable={false} onRewindTo={vi.fn()} />,
+    <ChatThread
+      messages={messages}
+      onRetry={vi.fn()}
+      retryAvailable={false}
+      onContinue={vi.fn()}
+      onRewindTo={vi.fn()}
+    />,
   );
 }
 

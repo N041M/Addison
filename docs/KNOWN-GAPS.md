@@ -1061,12 +1061,48 @@ follows. None is scheduled and none blocks anything.
   **(c) The seed REPLACES whatever was in the composer**, because that is what
   `composerSeed` has always done (a suggestion chip does it too). Quoting on top
   of a half-typed sentence loses the sentence.
-- **Continue: truncation-aware only.** A button beside Retry that appears when the
-  provider's stop reason says the response hit its output cap, and asks the model
-  to resume. Per-provider spellings of that fact belong on `ProviderCapabilities`,
-  never an `isinstance`. Deliberately NOT an always-present "make it longer":
-  §7.9.1 keeps the command set short on purpose, and a generic Continue invites
-  padding rather than completing a cut-off answer.
+- ~~**Continue: truncation-aware only.** A button beside Retry that appears when
+  the provider's stop reason says the response hit its output cap, and asks the
+  model to resume.~~ **BUILT 2026-08-22, in the judged shape.**
+  `ProviderCapabilities.truncation_finish_reasons` holds each provider's own
+  spelling of "the answer ran out of output room" (Anthropic `max_tokens`,
+  OpenAI and the custom OpenAI-compatible server `length`, Gemini `MAX_TOKENS`,
+  Ollama `length`); the orchestrator tests membership against the ANSWERING
+  provider's declaration and never names a provider or a spelling, and reports
+  the result through the existing `on_answered` seam, so the reply's
+  `answeredWith` gains one boolean and the thread grows one 12px accent action
+  under the last answer. Three adapters were LOSING the fact before anything could
+  read it and were fixed in the same change: Gemini dropped `finishReason`
+  entirely, Ollama dropped `done_reason`, and OpenAI's non-streaming path
+  collapsed its `finish_reason` to `"stop"` while its streamed path kept it.
+  Deliberately still NOT an always-present "make it longer" (§7.9.1 keeps the
+  command set short, and a generic Continue invites padding rather than
+  completing a cut-off answer). **What it honestly does not do:**
+  - **A provider that never reports a cap is never offered.** The declaration
+    defaults to empty and every step fails toward silence — an undeclared
+    provider, a `capabilities()` that raises (Ollama's is a live HTTP call), a
+    reason nobody declared. A cut-off answer from such a provider looks exactly
+    like a finished one, which is the harmless failure; the harmful one would be
+    offering to continue an answer that was complete.
+  - **A resumed answer is TWO messages, not a repaired one.** The fixed sentence
+    goes into the thread as an ordinary message from the person, and what comes
+    back is a new answer under it. Nothing is spliced onto the end of the first:
+    guessing where one stopped and the other began would silently rewrite what
+    someone was told.
+  - **Only the FINAL answer can claim it.** A mid-loop tool round that hit its cap
+    makes no claim — the person is reading the last round's prose, so an offer to
+    carry on would resume from text they never saw.
+  - **Nothing tells the model where it stopped.** The resume message asks in plain
+    words; whether the model picks up cleanly, repeats itself, or starts over is
+    the model's business, and the answer that was cut off stays on screen either
+    way.
+  - **Reopening a chat loses the offer.** The fact rides on the reply, not on the
+    stored message row, so a conversation loaded from history never shows it — the
+    same property the free-model chip has, and fail-closed in the same direction.
+  - **No disclosure line rides with it.** Decided rather than skipped: an answer
+    that stops mid-sentence shows that by itself, and a second rail-and-label
+    annotation would compete with the free-model chip on exactly the messages
+    likeliest to carry both.
 - **Knowledge: retrieval over person-attached files. v2. Its screening
   prerequisite is now met** (screening shipped 2026-08-13,
   [untrusted-screening-plan.md](untrusted-screening-plan.md)), **with one thing to

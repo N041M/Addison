@@ -66,6 +66,7 @@ function threadOf(messages: DisplayMessage[], conversationKey: string, retry = f
     <ChatThread
       messages={messages}
       onRetry={vi.fn()}
+      onContinue={vi.fn()}
       retryAvailable={retry}
       onRewindTo={vi.fn()}
       conversationKey={conversationKey}

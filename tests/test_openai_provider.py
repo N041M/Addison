@@ -305,3 +305,60 @@ def test_response_carries_usage_when_reported():
 def test_response_usage_none_when_absent():
     provider, _, _ = _make({"choices": [{"message": {"content": "ok"}}]})
     assert provider.send([Message(role="user", content="hi")], []).usage is None
+
+
+# --- the output cap ("Continue this answer", 2026-08-22) --------------------
+
+
+def test_an_answer_cut_off_at_the_cap_keeps_the_wires_own_word():
+    # chat.completions says ``finish_reason: "length"`` when the answer ran into
+    # ``max_tokens``. This path COLLAPSED every ending to "stop" until 2026-08-22,
+    # which threw the fact away before anything could read it.
+    provider, _, _ = _make(
+        {"choices": [{"message": {"content": "The first three reasons are"},
+                      "finish_reason": "length"}]}
+    )
+    res = provider.send([Message(role="user", content="list ten reasons")], [])
+    assert res.finish_reason == "length"
+    assert res.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_an_ordinary_ending_is_not_the_cap():
+    provider, _, _ = _make(
+        {"choices": [{"message": {"content": "Done."}, "finish_reason": "stop"}]}
+    )
+    res = provider.send([Message(role="user", content="hi")], [])
+    assert res.finish_reason == "stop"
+    assert res.finish_reason not in provider.capabilities().truncation_finish_reasons
+
+
+def test_a_reply_that_names_no_reason_at_all_reads_as_an_ordinary_stop():
+    # No claim on the wire is no claim here — never a guess that it was cut off.
+    provider, _, _ = _make({"choices": [{"message": {"content": "Done."}}]})
+    assert provider.send([Message(role="user", content="hi")], []).finish_reason == "stop"
+
+
+def test_a_tool_round_is_still_reported_as_a_tool_round():
+    # A turn that asked for a tool is "tool_use" whatever the choice says ended
+    # it: what the person will read has not been written yet.
+    provider, _, _ = _make(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+    )
+    res = provider.send([Message(role="user", content="read a.txt")], [])
+    assert res.finish_reason == "tool_use"

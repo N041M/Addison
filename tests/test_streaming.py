@@ -767,3 +767,82 @@ def test_the_out_of_steps_sentence_does_not_fuse_onto_what_was_said(monkeypatch)
     shown = "".join(emitted)
     assert shown.startswith(f"{BEFORE}\n\n")
     assert "more steps than I should take" in shown
+
+
+# --- the output cap, on the streamed paths ("Continue this answer") ---------
+#
+# Every adapter has TWO translations, and a fact preserved by one and dropped by
+# the other is a bug that only shows up for people who stream — which, in the
+# desktop app, is everyone. One test per adapter, each pinning that the streamed
+# fold reports the same word its plain sibling does.
+
+
+def test_anthropic_streamed_answer_reports_the_cap():
+    body = sse(
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "The first three"},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}},
+    )
+    provider = AnthropicProvider(
+        model="claude-opus-4-8", api_key_getter=lambda: "k", client=client_for(body)
+    )
+    response = provider.send(HELLO, [], on_delta=Sink())
+    assert response.finish_reason == "max_tokens"
+    assert response.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_openai_streamed_answer_reports_the_cap():
+    body = sse(
+        {"choices": [{"delta": {"content": "The first three"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "length"}]},
+    )
+    provider = OpenAIProvider(model="m", api_key_getter=lambda: "k", client=client_for(body))
+    response = provider.send(HELLO, [], on_delta=Sink())
+    assert response.finish_reason == "length"
+    assert response.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_google_streamed_answer_reports_the_cap():
+    # The reason arrives on the LAST frame; the earlier ones say nothing at all.
+    body = sse(
+        {"candidates": [{"content": {"parts": [{"text": "The first "}]}}]},
+        {
+            "candidates": [
+                {"content": {"parts": [{"text": "three"}]}, "finishReason": "MAX_TOKENS"}
+            ]
+        },
+    )
+    provider = GoogleProvider(
+        model="gemini-x", api_key_getter=lambda: "k", client=client_for(body)
+    )
+    response = provider.send(HELLO, [], on_delta=Sink())
+    assert response.finish_reason == "MAX_TOKENS"
+    assert response.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_ollama_streamed_answer_reports_the_cap():
+    body = ndjson(
+        {"message": {"content": "The first three"}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "length"},
+    )
+    provider = _ollama(body, native=True)
+    response = provider.send(HELLO, [], on_delta=Sink())
+    assert response.finish_reason == "length"
+    assert response.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_a_streamed_answer_that_ended_normally_claims_no_cap():
+    # The other half of each pair above, once: an ordinary ending must not read as
+    # a cut-off one, or "Continue this answer" would sit under every reply.
+    body = ndjson(
+        {"message": {"content": "Done."}, "done": False},
+        {"message": {"content": ""}, "done": True, "done_reason": "stop"},
+    )
+    provider = _ollama(body, native=True)
+    response = provider.send(HELLO, [], on_delta=Sink())
+    assert response.finish_reason not in provider.capabilities().truncation_finish_reasons

@@ -599,6 +599,7 @@ describe("what the thread shows for a turn useTurn has driven", () => {
       <ChatThread
         messages={turn.messages}
         onRetry={() => {}}
+        onContinue={() => {}}
         retryAvailable={!working}
         onRewindTo={() => {}}
         streamDisplay={turn.streamDisplay}

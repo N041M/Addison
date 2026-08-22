@@ -541,12 +541,17 @@ export interface RoutingState {
  * `free` is whether that model is a free one; `routed` is whether it differs
  * from the user's explicit pick for this message — BOTH computed by the core.
  * The free-model chip renders on `free` alone (owner decision 2026-08-12).
+ * `truncated` (2026-08-22) is whether the answer stopped because it hit the
+ * answering model's output cap — the core decided it from that provider's own
+ * declared spelling of that fact, and the frontend never re-derives it. It is
+ * the only thing that puts "Continue this answer" beside Retry.
  */
 export interface AnsweredWith {
   modelId: string;
   label: string;
   free: boolean;
   routed: boolean;
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
