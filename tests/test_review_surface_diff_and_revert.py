@@ -1378,6 +1378,70 @@ def test_undo_last_action_still_works_normally_when_the_ledger_holds_the_file(
         harness.close()
 
 
+def test_undo_last_action_shows_a_deliberate_refusal_word_for_word(tmp_path, project):
+    """The chat header now says what Revert has always said (KNOWN-GAPS, closed
+    2026-08-22). A different file stands at the written name, ``undo()`` raises
+    ``UndoRefused`` with the sentence ``file_revert`` owns, and it arrives intact.
+
+    The two doors are the same refusal for the same fact, so this asserts the SAME
+    string ``test_a_hard_link_swap...`` asserts of ``workspace.revertFile`` — if they
+    ever drift, one of the two is wrong.
+
+    Mutation: raise a plain ``RuntimeError`` in ``WriteProjectFileTool.undo()`` instead,
+    or test ``result.detail`` rather than ``result.refusal`` in ``_undo_last_action``.
+    The first puts the generic sentence back and reopens the gap; the second passes here
+    and fails the next test, which is why both exist."""
+    a = str(project / "a.txt")
+    b = str(project / "b.txt")
+    (project / "a.txt").write_text("A0\n", encoding="utf-8")
+    (project / "b.txt").write_text("B0\n", encoding="utf-8")
+    shell = _FakeWorkspaceShell(disk={a: "A0\n", b: "B0\n"})
+    harness = _Harness(tmp_path, shell, edits=((a, "addison a\n", 100),))
+    try:
+        harness.trust(project)
+        os.unlink(a)
+        os.link(b, a)
+
+        answer = harness.call("undo.undoLastAction")
+        assert answer["ok"] is False
+        assert answer["detail"] == (
+            "A different file is at that name now, so Addison won't put the old text "
+            "there. Nothing was changed."
+        )
+        assert shell.restored == [], "and nothing was written through it"
+    finally:
+        harness.close()
+
+
+def test_an_unplanned_undo_failure_still_gets_the_generic_sentence(tmp_path, project):
+    """The other side of the type, and the reason it is a type: an exception nobody
+    wrote for a person must not reach one, whatever it stringifies to.
+
+    The shell fails the restore with text shaped like a diagnostic. It is a real
+    failure — the row is left unreverted, the answer is not ok — but what the person
+    reads is the generic sentence, and the diagnostic stays in ``UndoResult.detail``
+    for logs and tests.
+
+    Mutation: surface ``result.detail`` whenever it is non-empty. This test fails with
+    ``KeyError: 'prior'`` on screen, which is exactly the thing CLAUDE.md forbids."""
+    path = str(project / "a.py")
+    shell = _FakeWorkspaceShell(disk={path: "v0\n"})
+    shell.write_failure = "KeyError: 'prior' in restore_workspace_path"
+    harness = _Harness(tmp_path, shell, edits=((path, "v1\n", 100),))
+    try:
+        harness.trust(project)
+
+        answer = harness.call("undo.undoLastAction")
+        assert answer["ok"] is False
+        assert answer["detail"] == (
+            "Couldn't undo the last action. You may need to reverse it yourself."
+        )
+        # Still a real failure: the row stays outstanding, so the way back survives.
+        assert harness.call("workspace.listEdits")["edits"][0]["path"] == path
+    finally:
+        harness.close()
+
+
 # ============================================================================
 # THE WIRE — mode gate, resolution, and what crosses to the shell
 # ============================================================================

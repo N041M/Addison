@@ -699,14 +699,22 @@ are here because somebody will meet them, and because anything built on top of
   to keep overwriting whatever now stands there, which is the harm. **If this proves
   annoying in practice**, the honest widening is a confirm that names the file, never a
   silent overwrite.
-- **A refused undo says less than it knows.** `WriteProjectFileTool.undo()` raises a plain
+- ~~**A refused undo says less than it knows.** `WriteProjectFileTool.undo()` raises a plain
   sentence for the case above; `rpc/undo.py::_undo_last_action` replaces every failure with
   *"Couldn't undo the last action. You may need to reverse it yourself."*, as it already
   did for the no-shell refusal. The review surface's Revert shows the real sentence. Redo
   already surfaces `result.detail`; undo cannot simply copy that, because an undo failure
   can also be a bug's exception text and no stack trace may reach a person (CLAUDE.md).
   The fix is a refusal that is typed rather than stringly (a flag on `UndoResult`), which
-  is a change to a shared mechanism and is written down here rather than made in passing.
+  is a change to a shared mechanism and is written down here rather than made in passing.~~
+  **CLOSED 2026-08-22**, typed exactly as prescribed: a tool that means to speak raises
+  `tools/base.py::UndoRefused`, `UndoManager` flags that one arm as `UndoResult.refusal`,
+  and `_undo_last_action` shows a flagged detail verbatim while every unflagged failure
+  keeps the generic sentence — so the default stays safe and a new failure mode is generic
+  until somebody writes its words. Seven refusals across five `undo()` implementations moved
+  over (`write_project_file` ×2, `save_file`, `draft_message`, `arm_automation` ×2,
+  `create_automation`); Redo is untouched, and the response shape did not change, so the
+  frontend renders the sentence through the `detail` it already read.
 - ~~**The shell follows a shortcut planted at a path it once wrote** (2026-08-08).~~
   **CLOSED 2026-08-22, the shell's own half last.**
   `restore_workspace_path` checked its session ledger against the NAME and then

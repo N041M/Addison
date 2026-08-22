@@ -79,6 +79,7 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
 )
 
 _NO_SHELL_MESSAGE = "Editing project files needs the desktop shell; not available in this mode."
@@ -88,6 +89,10 @@ _UNDO_NO_SHELL = "Can't undo that file change — the desktop shell isn't availa
 #: refused for the same reason, and ``file_revert`` owns the sentence. Raised rather than
 #: returned — ``undo()`` has no result type, and ``UndoManager`` puts the exception's text
 #: into ``UndoResult.detail``, which is why it has to be a sentence and not a diagnostic.
+#: Raised as ``UndoRefused``, the type that says the sentence was MEANT, so the chat
+#: header shows it instead of "Couldn't undo the last action" — the review surface's
+#: Revert has always shown it, and the two refusals now say the same thing to the person
+#: as well as in the source.
 _UNDO_ANOTHER_FILE = ANOTHER_FILE_STANDS_THERE_WRITE
 
 
@@ -249,13 +254,13 @@ class WriteProjectFileTool:
         that is simply GONE still reverts, and a row from before the identity existed
         cannot trigger the check at all."""
         if self._undo_bridge is None:
-            raise RuntimeError(_UNDO_NO_SHELL)
+            raise UndoRefused(_UNDO_NO_SHELL)
         payload = snapshot.undo_payload
         path = payload["path"]
         identity = payload.get(IDENTITY_KEY)
         known = frozenset({identity}) if isinstance(identity, str) and identity else frozenset()
         if another_file_stands_there(path, known):
-            raise RuntimeError(_UNDO_ANOTHER_FILE)
+            raise UndoRefused(_UNDO_ANOTHER_FILE)
         if payload.get("existed"):
             self._undo_bridge.restore_workspace_file(path, payload.get("prior") or "")
         else:

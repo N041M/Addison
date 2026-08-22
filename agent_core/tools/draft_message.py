@@ -22,6 +22,7 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
 )
 
 _NO_SHELL_MESSAGE = "Drafting needs the desktop shell; not available in this mode."
@@ -67,7 +68,10 @@ class DraftMessageTool:
         return ToolResult(success=True, content=draft_ref, snapshot=snapshot)
 
     def undo(self, snapshot: ActionSnapshot) -> None:
-        """Discard the draft this action opened."""
+        """Discard the draft this action opened.
+
+        ``UndoRefused`` for the missing bridge: a deliberate sentence about a thing
+        that did not happen, which the person may read as written."""
         if self._undo_bridge is None:
-            raise RuntimeError("Can't discard that draft — the desktop shell isn't available.")
+            raise UndoRefused("Can't discard that draft — the desktop shell isn't available.")
         self._undo_bridge.discard_draft(snapshot.undo_payload["draft_ref"])

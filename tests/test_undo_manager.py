@@ -32,6 +32,7 @@ from agent_core.tools.base import (
     RiskTier,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
 )
 from agent_core.tools.registry import ToolRegistry
 
@@ -78,6 +79,32 @@ class _FailingTool:
 
     def undo(self, snapshot: ActionSnapshot) -> None:
         raise RuntimeError("could not revert: backup missing")
+
+
+class _RefusingTool:
+    """MEDIUM tool whose ``undo`` DELIBERATELY declines, in a sentence written for a
+    person — the ``UndoRefused`` half of the pair above.
+
+    A ``RuntimeError`` subclass, exactly as the real refusals are, so a test that
+    passes here only because the manager caught it in the broad arm would be a test
+    that proves nothing."""
+
+    REFUSAL = "A different file is at that name now. Nothing was changed."
+
+    def __init__(self, tool_id: str = "refusing"):
+        self.definition = ToolDefinition(
+            id=tool_id,
+            label="Refusing tool",
+            description="Fake mutating tool whose undo refuses on purpose.",
+            risk_tier=RiskTier.MEDIUM,
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        return ToolResult(success=True, content="did a thing")
+
+    def undo(self, snapshot: ActionSnapshot) -> None:
+        raise UndoRefused(self.REFUSAL)
 
 
 # --- fixtures / helpers ----------------------------------------------------
@@ -172,6 +199,49 @@ def test_failing_undo_isolated_others_still_revert(store: Store):
     # The failed snapshot was NOT marked reverted — it alone remains outstanding.
     remaining = store.recent_unreverted_snapshots(limit=10)
     assert [s.id for s in remaining] == ["s_b"]
+
+    # And it is NOT a deliberate refusal, which is what keeps its text off the screen.
+    assert by_id["s_b"].refusal is False
+
+
+def test_a_deliberate_refusal_is_flagged_and_an_unplanned_failure_is_not(store: Store):
+    """The whole of the typed refusal at this layer (KNOWN-GAPS, closed 2026-08-22):
+    ``refusal`` separates a sentence a tool CHOSE to say from whatever an exception
+    happened to stringify to, so ``rpc/undo.py`` can show the first and withhold the
+    second. Both carry a ``detail``; only one of them may be read out.
+
+    Asserted as a PAIR against one manager, because the property is a distinction and a
+    test of either half alone cannot see it.
+
+    Mutation: catch ``UndoRefused`` in the broad ``except Exception`` arm (delete the
+    typed arm), and both come back unflagged — the refusal goes silent again. Set
+    ``refusal=True`` in the broad arm, and the diagnostic below becomes something a
+    person is shown."""
+    registry = ToolRegistry()
+    registry.register(_RefusingTool("refusing"))
+    registry.register(_FailingTool("failing"))
+    manager = UndoManager(store=store, tool_registry=registry)
+
+    _record(manager, "s_refused", "refusing", created_at=1)
+    _record(manager, "s_broke", "failing", created_at=2)
+
+    by_id = {r.snapshot_id: r for r in manager.undo_last(n=2)}
+
+    refused = by_id["s_refused"]
+    assert refused.success is False
+    assert refused.refusal is True
+    assert refused.detail == _RefusingTool.REFUSAL, "verbatim, not summarised"
+
+    broke = by_id["s_broke"]
+    assert broke.success is False
+    assert broke.refusal is False
+    assert "backup missing" in broke.detail, "kept for logs, never for the person"
+
+    # Neither was marked reverted: a refusal changed nothing, so the row stays live.
+    assert {s.id for s in store.recent_unreverted_snapshots(limit=10)} == {
+        "s_refused",
+        "s_broke",
+    }
 
 
 # --- retention (§4.5) — owner decision 2026-08-08 ---------------------------

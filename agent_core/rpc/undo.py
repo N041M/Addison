@@ -26,6 +26,21 @@ _CANNOT_AFTER_RESTART = (
     "back for you."
 )
 
+# THE LAST RESORT, and only that (KNOWN-GAPS "A refused undo says less than it knows",
+# closed 2026-08-22).
+#
+# Every undo failure used to end here, including the ones where a tool had written a
+# perfectly good sentence explaining itself — the review surface's Revert showed that
+# sentence and the chat header did not. It could not simply copy Redo, which passes
+# ``result.detail`` through: an undo failure is also where an unplanned exception lands,
+# and its text is a diagnostic no person may be shown (CLAUDE.md).
+#
+# So the difference is TYPED, not guessed from the string: a tool that means to speak
+# raises ``UndoRefused``, ``UndoManager`` flags it, and only a flagged detail is shown.
+# Anything unflagged gets this sentence, which is the safe default and stays the default
+# — a new failure mode is generic until somebody deliberately writes its words.
+_COULDNT_UNDO = "Couldn't undo the last action. You may need to reverse it yourself."
+
 
 class UndoMixin(ServerContext):
     def _write_edit_lost_to_a_restart(self) -> bool:
@@ -89,11 +104,11 @@ class UndoMixin(ServerContext):
                 "detail": f"Undid the last action ({self._label(result.tool_id)}).",
                 "canRedo": can_redo,
             }
-        return {
-            "ok": False,
-            "detail": "Couldn't undo the last action. You may need to reverse it yourself.",
-            "canRedo": can_redo,
-        }
+        # A DELIBERATE refusal is shown as the tool wrote it; everything else is not.
+        # ``refusal`` is the whole test — never ``if result.detail``, which would put
+        # the next unplanned exception's text in front of a person.
+        detail = result.detail if result.refusal and result.detail.strip() else _COULDNT_UNDO
+        return {"ok": False, "detail": detail, "canRedo": can_redo}
 
     def _redo_last_action(self) -> dict:
         results = self.undo_manager.redo_last(1)

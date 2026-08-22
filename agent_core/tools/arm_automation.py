@@ -98,6 +98,7 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
     call_is_forbidden,
 )
 
@@ -531,11 +532,11 @@ class ArmAutomationTool:
         it off from the Automations surface in between."""
         bridge = self._shell_bridge
         if bridge is None:
-            raise RuntimeError(_UNDO_NOT_READY)
+            raise UndoRefused(_UNDO_NOT_READY)
         label = snapshot.undo_payload.get("label")
         if not isinstance(label, str) or not label.startswith(LABEL_PREFIX):
             # A payload that does not name one of Addison's own labels is not a
             # payload this may act on. The shell validates the prefix too; refusing
             # here means a malformed snapshot never becomes a request at all.
-            raise RuntimeError(_UNDO_NOT_READY)
+            raise UndoRefused(_UNDO_NOT_READY)
         bridge.disarm_automation(label)

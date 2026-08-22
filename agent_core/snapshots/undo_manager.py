@@ -16,7 +16,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from agent_core.tools.base import ActionSnapshot, RedoableTool, UndoableTool
+from agent_core.tools.base import ActionSnapshot, RedoableTool, UndoableTool, UndoRefused
 from agent_core.tools.registry import ToolRegistry
 
 
@@ -26,6 +26,13 @@ class UndoResult:
     tool_id: str
     success: bool
     detail: str = ""
+    #: TRUE only when ``detail`` is a sentence a tool DELIBERATELY said (it raised
+    #: ``UndoRefused``), and is therefore safe to put in front of a person exactly as
+    #: written. False for every other failure, whose ``detail`` is whatever an
+    #: unplanned exception stringified to — kept for logs and tests, never shown.
+    #: Typed rather than stringly on purpose: the caller cannot tell the two apart by
+    #: reading them, and guessing wrong in one direction leaks a stack trace.
+    refusal: bool = False
 
 
 class UndoManager:
@@ -61,7 +68,15 @@ class UndoManager:
                 self._store.mark_snapshot_reverted(snapshot.id)
                 self._redo_stack.append(snapshot)
                 results.append(UndoResult(snapshot.id, snapshot.tool_id, True))
-            except Exception as exc:  # surfaced to the user in plain language upstream
+            except UndoRefused as exc:
+                # The tool MEANT to say this. Flagged, so the caller can show it
+                # verbatim instead of the generic sentence — see ``UndoRefused``.
+                # Caught first: it is a RuntimeError, so the broad arm below would
+                # swallow the distinction.
+                results.append(
+                    UndoResult(snapshot.id, snapshot.tool_id, False, str(exc), refusal=True)
+                )
+            except Exception as exc:  # detail kept for logs/tests; NEVER shown verbatim
                 results.append(UndoResult(snapshot.id, snapshot.tool_id, False, str(exc)))
         return results
 

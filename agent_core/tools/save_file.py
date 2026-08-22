@@ -24,6 +24,7 @@ from agent_core.tools.base import (
     ShellBridge,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
 )
 
 _NO_SHELL_MESSAGE = "Saving files needs the desktop shell; not available in this mode."
@@ -68,9 +69,13 @@ class SaveFileTool:
 
     def undo(self, snapshot: ActionSnapshot) -> None:
         """Delete the file this action created. Trivial because save_file only
-        ever creates — it never overwrites (design-doc §7.4.1)."""
+        ever creates — it never overwrites (design-doc §7.4.1).
+
+        No bridge is a REFUSAL, not a fault: nothing was attempted and nothing
+        changed, and the sentence says so — hence ``UndoRefused``, which is what
+        lets the person read it instead of the generic "couldn't undo"."""
         if self._undo_bridge is None:
-            raise RuntimeError("Can't undo saving that file — the desktop shell isn't available.")
+            raise UndoRefused("Can't undo saving that file — the desktop shell isn't available.")
         self._undo_bridge.delete_file(snapshot.undo_payload["created_file"])
 
     def redo(self, snapshot: ActionSnapshot) -> None:
