@@ -499,6 +499,41 @@ class ProviderCapabilities:
     truncation_finish_reasons: tuple[str, ...] = ()
 
 
+#: The media types an attached picture may carry (image-attach plan §3). A CLOSED
+#: set, and closed to exactly the four every vision API on this list accepts: a
+#: fifth type would work for whichever provider happened to answer and be refused
+#: by the other three, which is a turn that fails for some people and not others.
+#:
+#: WHERE IT IS ENFORCED is the shell, at encode time (plan §4): decoding the file
+#: IS the validation, and the re-encode lands on one of these by construction. The
+#: adapters below therefore never re-check it — a picture that got this far was
+#: minted by that path, and an assertion here could only turn a shell bug into a
+#: stack trace in the middle of somebody's sentence. Phase 3's ``pickAttachment``
+#: is the one place a violation can still be answered with a plain sentence, and
+#: this constant is what it will read.
+ALLOWED_IMAGE_MEDIA_TYPES = frozenset(
+    {"image/png", "image/jpeg", "image/gif", "image/webp"}
+)
+
+
+@dataclass(frozen=True)
+class ImageAttachment:
+    """One picture the person attached to their own message (image-attach plan §3).
+
+    FROZEN, because "what was previewed is what is sent" is the whole provenance
+    argument: the bytes are read once, at pick time, and nothing between there and
+    the wire may edit them — a file changed after the pick changes nothing, and no
+    later stage can substitute a different picture for the one on screen.
+
+    ``data_b64`` is base64 of the ENCODED image, never a path and never a file
+    handle. The provider adapters are its only readers, and each wraps it in its
+    own block shape; nothing else in the core opens it.
+    """
+
+    media_type: str   # one of ALLOWED_IMAGE_MEDIA_TYPES
+    data_b64: str
+
+
 @dataclass
 class ToolCallRequest:
     id: str
@@ -534,6 +569,20 @@ class Message:
     # which is not talking to a model, reads it instead (KNOWN-BUGS #5: the steps
     # of a reopened chat are still saveable).
     past_tool_calls: list[ToolCallRequest] = field(default_factory=list)
+    # PICTURES THE PERSON ATTACHED to this message (image-attach plan §3).
+    #
+    # Beside ``content``, not a parts union replacing it. A union was considered
+    # and rejected: every consumer of ``content`` today assumes a string, and a
+    # tuple that is empty on every message but a user turn with attachments leaves
+    # all of them untouched — including the redaction pass, the transcript
+    # builders and the budget estimator.
+    #
+    # A USER TURN ONLY. A ``tool`` or ``assistant`` message never carries pictures
+    # in v1, and an adapter that finds them on one IGNORES them rather than
+    # inventing a shape half these APIs would refuse (OpenAI's tool role takes no
+    # images at all). The tool path's own picture handling is unchanged and lives
+    # where it always did — ``orchestrator._gate_image_result``.
+    images: tuple[ImageAttachment, ...] = ()
 
 
 @dataclass

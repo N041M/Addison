@@ -124,8 +124,13 @@ class OllamaProvider:
     ) -> ModelResponse:
         # ``effort`` is a cloud-model "answer style" (§4.1.1); local models have no
         # such control, so it is accepted and ignored for a uniform provider call.
-        native = self.capabilities().native_tool_calling
-        history = _translate_history(messages)
+        # One read of the (cached) metadata for both questions it answers this send.
+        capabilities = self.capabilities()
+        native = capabilities.native_tool_calling
+        # ``vision`` drives the HISTORY DEGRADE in ``_translate_history``, and this
+        # is the only adapter that needs it: the three cloud adapters can all see,
+        # so only a local model can be handed a picture it cannot look at.
+        history = _translate_history(messages, vision=capabilities.vision)
         body: dict = {"model": self._model, "messages": history, "stream": False}
 
         if tools and native:
@@ -244,12 +249,18 @@ def _translate_tools(tools: list) -> list[dict]:
     ]
 
 
-def _translate_history(messages: list[Message]) -> list[dict]:
+def _translate_history(messages: list[Message], vision: bool = True) -> list[dict]:
     """Map Addison's flat message list to Ollama's chat ``messages`` array.
 
     Ollama uses distinct ``system``/``user``/``assistant``/``tool`` roles inline
     (no top-level system field, unlike Anthropic). Assistant turns that requested
     tools carry a ``tool_calls`` array; tool results are ``tool`` messages.
+
+    ``vision`` is THIS MODEL's answer to "can you look at pictures", from
+    ``capabilities()``; it decides whether an attached picture goes out as pixels
+    or as the marker ``_picture_entry`` substitutes. It defaults to True so that a
+    caller with no model in hand (and every existing one, which passes messages
+    alone) gets the untouched translation.
     """
     out: list[dict] = []
     for m in messages:
@@ -261,10 +272,59 @@ def _translate_history(messages: list[Message]) -> list[dict]:
             out.append(entry)
         elif m.role == "tool":
             out.append({"role": "tool", "content": str(m.content)})
+        elif m.role == "user" and m.images:
+            # Guarded on the role too: pictures only ever ride a user turn (base.py),
+            # and one that turned up elsewhere is ignored rather than passed on.
+            out.append(_picture_entry(m, vision))
         else:
             # system / user / plain assistant
             out.append({"role": m.role, "content": m.content or ""})
     return out
+
+
+#: What stands in for a picture a model cannot look at. Deliberately plain and
+#: deliberately nameless: ``ImageAttachment`` carries no filename (the plan wrote
+#: ``[picture: {name}]`` before the shape was settled), and inventing one would be
+#: worse than saying nothing — a model told a file was called "receipt.png" will
+#: answer about a receipt it never saw.
+_PICTURE_MARKER = "[picture]"
+
+
+def _picture_entry(m: Message, vision: bool) -> dict:
+    """A user turn carrying pictures, for a local model that may or may not see.
+
+    THE HISTORY DEGRADE (image-attach plan §3, §9) lives here, and only here. This
+    is the one adapter whose answer varies per model — Anthropic, OpenAI and
+    Google can all see, by construction — so it is the one adapter that can be
+    handed a picture it has no way to pass on.
+
+    Refusing would be the wrong move at THIS point. The turn gate
+    (``orchestrator``) already refuses a NEW message whose pictures the answering
+    model cannot look at, and that refusal is about something the person just did
+    and can immediately undo. What reaches here instead is an OLDER message, mid
+    conversation, arriving at a blind model because routing degraded or the person
+    switched — nobody chose that, so the pixels are dropped, a marker says a
+    picture was there, and the "Answered by" line names who answered. A degraded
+    answer beats a dead turn the person did nothing to cause.
+
+    The marker goes IN FRONT of the text because that is where the picture was:
+    the sentence "what does this say?" reads as a non-sequitur with nothing before
+    it, and reads as a description of a missing thing with the marker there.
+    """
+    if not vision:
+        markers = " ".join(_PICTURE_MARKER for _ in m.images)
+        return {
+            "role": "user",
+            "content": f"{markers}\n\n{m.content}" if m.content else markers,
+        }
+    # Ollama's own shape: base64 strings on the message, no media type — it sniffs
+    # the format itself, which is why the closed media-type set (base.py) is a
+    # cross-provider rule rather than something this adapter needs to send.
+    return {
+        "role": "user",
+        "content": m.content or "",
+        "images": [image.data_b64 for image in m.images],
+    }
 
 
 def _with_tool_instructions(history: list[dict], tools: list) -> list[dict]:

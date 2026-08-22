@@ -75,9 +75,16 @@ Two defaults ratified with the decisions, both forced by recorded rules:
 beside its `content: str` — a parts union was considered and rejected: every
 consumer of `content` today assumes a string, and an optional tuple that is
 empty everywhere but a user turn with attachments leaves all of them untouched.
-`ImageAttachment` is `{media_type: str, data_b64: str}`, media types closed to
-**png / jpeg / gif / webp** (the set all four vision APIs accept; the shell
-enforces it at encode time, the adapters assert it).
+`ImageAttachment` is `{media_type: str, data_b64: str}` and is **frozen** (what
+the person previewed is byte-for-byte what is sent), media types closed to
+**png / jpeg / gif / webp** — the set all four vision APIs accept, named by
+`ALLOWED_IMAGE_MEDIA_TYPES` in `providers/base.py`. The shell enforces it at
+encode time (§4: decoding IS the validation, and the re-encode lands on one of
+the four by construction). The adapters were to *assert* it as well and
+deliberately do not: an assertion there can only turn a shell bug into a stack
+trace in the middle of somebody's sentence, which the house rule forbids. The one
+place a bad type can still be answered with a plain sentence is §5's
+`pickAttachment`, and that is the constant's second reader.
 
 Each adapter translates a user message carrying images into its own block
 shape; a `tool`/`assistant` message never carries them in v1:
@@ -97,8 +104,15 @@ again.") and nothing is sent. Same rule, same voice as `_gate_image_result`,
 which stays untouched for the tool path. History replay is quieter: when an
 *older* message's images reach a text-only model mid-conversation (routing
 degraded, the person switched), the adapter drops the pixels and substitutes
-`[picture: {name}]` in the text — a degraded answer beats a refused turn the
-person did nothing to cause, and the disclosure line (§5) says who answered.
+`[picture]` in the text, one per image — a degraded answer beats a refused turn
+the person did nothing to cause, and the disclosure line (§5) says who answered.
+The marker lost its filename when phase 1 was built: `ImageAttachment` carries
+`media_type` and `data_b64` and no name (a name is display-only, so it rides the
+attachment *record* in §5 and never the wire), and an invented one is worse than
+none — a model told the file was "receipt.png" will answer about a receipt it
+never saw. The degrade is implemented **only in `ollama_provider`**, the one
+adapter whose answer to "can you see" varies per model; for the three cloud
+adapters `vision` is True by construction, so the same code there would be dead.
 
 ## 4. Phase 2 — the shell (downscale and the image read)
 
@@ -209,8 +223,8 @@ edge.
 
 ## 9. Limits that survive success
 
-- A text-only model mid-history gets `[picture: name]`, not pixels — degrade,
-  disclosed by the "Answered by" line, never an auto-switch.
+- A text-only model mid-history gets `[picture]`, not pixels and not a filename
+  (§3) — degrade, disclosed by the "Answered by" line, never an auto-switch.
 - The budget's image cost is a flat estimate.
 - Attachments live in SQLite as base64; a person who attaches many large
   photos grows their database by up to ~8 MiB a message, bounded but real.
