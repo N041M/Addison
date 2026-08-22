@@ -58,7 +58,10 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     # joins because every other captured table's tuple carries it; `token_present` is
     # the one column left out, in _EXCLUDED_COLUMNS below, for `secret_presence`'s
     # reason. `channel_pairings` is EXCLUDED — see below; that half is the decision.
-    "channels":        ("id", "kind", "name", "enabled", "created_at"),
+    # `on_wake` (phase 3, owner decision 8) joins the captured columns because it is
+    # exactly what the decision called it: ordinary configuration, a choice somebody
+    # made, restorable without asserting anything about the world outside SQLite.
+    "channels":        ("id", "kind", "name", "enabled", "on_wake", "created_at"),
 }
 
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of

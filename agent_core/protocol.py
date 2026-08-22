@@ -406,7 +406,7 @@ class Method:
     CHANNEL_LIST = "channel.list"      # {} -> {channels: [<row>]}, oldest first
     CHANNEL_ADD = "channel.add"        # {kind, name} -> {ok, channel} | {ok:false, error}
     CHANNEL_REMOVE = "channel.remove"  # {id} -> {ok} | {ok:false, error}
-    # <row> = {id, kind, name, enabled, tokenPresent, pairedDevices, addedAt}
+    # <row> = {id, kind, name, enabled, tokenPresent, onWake, pairedDevices, addedAt}
     # `pairedDevices` is a COUNT and never the rows: a pairing carries a display name
     # the TRANSPORT supplied, i.e. text somebody else wrote. The row says what is
     # SAVED and never what is running: `enabled` is the person's stored intent, and
@@ -442,6 +442,27 @@ class Method:
     # Answers in EVERY profile, like `remove`: revoking is a tightening, and a
     # tightening must never be what a profile switch traps.
     #
+    # PHASE 3 — the remote floor's three read-only ids, and the desk queue. When a
+    # turn from a phone names anything else it is refused in one plain sentence and
+    # the request is WRITTEN DOWN for the desk.
+    CHANNEL_PENDING_REQUESTS = "channel.pendingRequests"  # {} -> {requests: [<request>]}
+    # <request> = {id, channelId, askedAt, toolLabel, whatWasAsked}. A RECORD, NEVER A
+    # RESUMABLE ACTION: there is no tool id, no arguments and no call id on this wire
+    # shape, so there is nothing to replay from it. The desk offers "Ask this here",
+    # which writes `whatWasAsked` into the desktop composer for the person to send
+    # live with the ordinary card — never a second dispatch path. `toolLabel` is the
+    # tool's plain-language label and never its id.
+    CHANNEL_DISMISS_REQUEST = "channel.dismissRequest"    # {requestId} -> {ok}
+    # Owner decision 8's SETTING: what happens to a message that arrived while this
+    # Mac was asleep. 'decline' (the DEFAULT, and the safe direction) answers each one
+    # with a plain sentence; 'answer' runs the turn anyway. Choosing 'answer' is a
+    # widening and is Developer-only; choosing 'decline' answers in every profile,
+    # because a tightening must never be what a profile switch traps.
+    CHANNEL_SET_ON_WAKE = "channel.setOnWake"  # {id, onWake} -> {ok} | {ok:false, error}
+    # The only other thing that happens to a request. The queue lives in memory on
+    # the core and is empty after a restart (owner decision 7), and it is bounded by
+    # age and by count with the oldest falling off.
+    #
     # Core -> Webview notifications.
     CHANNEL_STATE_CHANGED = "channel.stateChanged"  # {id, state, error?}
     # {id, phase, summary?} — a phone turn started or finished, for the panel.
@@ -451,6 +472,10 @@ class Method:
     # failure the whole design exists to avoid. `summary` is Addison's own short line
     # about what happened, never the message and never the answer.
     CHANNEL_REMOTE_TURN = "channel.remoteTurn"
+    # {request} — a phone asked for something the floor omits and it is now on the
+    # desk queue. Carries the same <request> shape as `channel.pendingRequests`, so a
+    # panel that is already open shows the note without asking for the list again.
+    CHANNEL_REQUEST_QUEUED = "channel.requestQueued"
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"

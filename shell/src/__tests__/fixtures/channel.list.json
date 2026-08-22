@@ -6,6 +6,7 @@
       "name": "My phone",
       "enabled": false,
       "tokenPresent": "unknown",
+      "onWake": "decline",
       "pairedDevices": 0,
       "addedAt": 4102444800
     },
@@ -15,6 +16,7 @@
       "name": "The kitchen tablet",
       "enabled": false,
       "tokenPresent": "unknown",
+      "onWake": "decline",
       "pairedDevices": 0,
       "addedAt": 4102444801
     }

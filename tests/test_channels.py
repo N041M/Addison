@@ -172,7 +172,17 @@ def test_a_channel_row_has_no_column_that_could_hold_a_command(store: Store):
 
     Mutation: add a ``command TEXT`` column to ``channels`` — this fails."""
     columns = {row["name"] for row in store._conn.execute("PRAGMA table_info(channels)")}
-    assert columns == {"id", "kind", "name", "enabled", "token_present", "created_at"}
+    assert columns == {
+        "id",
+        "kind",
+        "name",
+        "enabled",
+        "token_present",
+        # Owner decision 8's setting (phase 3): 'decline' | 'answer', CHECKed by the
+        # schema. Two words, and neither of them can name a program.
+        "on_wake",
+        "created_at",
+    }
 
 
 def test_the_database_refuses_a_transport_with_no_adapter(store: Store):
@@ -255,7 +265,16 @@ def test_the_wire_shape_is_the_one_the_frontend_parses(tmp_path):
     try:
         _developer(h)
         added = _call(h, "channel.add", {"kind": "telegram", "name": "My phone"}, 1)
-        expected = {"id", "kind", "name", "enabled", "tokenPresent", "pairedDevices", "addedAt"}
+        expected = {
+            "id",
+            "kind",
+            "name",
+            "enabled",
+            "tokenPresent",
+            "onWake",
+            "pairedDevices",
+            "addedAt",
+        }
         assert set(added["channel"]) == expected
         (row,) = _call(h, "channel.list", {}, 2)["channels"]
         assert set(row) == expected
@@ -280,7 +299,9 @@ def test_the_channels_table_is_captured_and_token_presence_is_not():
 
     Mutation: add "token_present" to the captured tuple — this fails, and so does the
     restore test below."""
-    assert _CAPTURED_TABLES["channels"] == ("id", "kind", "name", "enabled", "created_at")
+    assert _CAPTURED_TABLES["channels"] == (
+        "id", "kind", "name", "enabled", "on_wake", "created_at",
+    )
     assert _EXCLUDED_COLUMNS["channels"] == ("token_present",)
 
 
@@ -495,12 +516,16 @@ def test_no_channel_method_may_be_answered_inline_on_the_read_loop():
     from agent_core import main as main_module
     from agent_core.protocol import Method
 
-    # The two OUTBOUND notifications are not requests and have no handler: nothing
+    # The OUTBOUND notifications are not requests and have no handler: nothing
     # dispatches them, main.py never names them, and they are emitted by the service
-    # (`channel.stateChanged`) and by the remote turn (`channel.remoteTurn`). They are
-    # named here so that adding a third notification is a deliberate edit rather than
-    # something this test quietly swallows.
-    notifications = {Method.CHANNEL_STATE_CHANGED, Method.CHANNEL_REMOTE_TURN}
+    # (`channel.stateChanged`) and by the remote turn (`channel.remoteTurn`, and
+    # phase 3's `channel.requestQueued`). They are named here so that adding another
+    # one is a deliberate edit rather than something this test quietly swallows.
+    notifications = {
+        Method.CHANNEL_STATE_CHANGED,
+        Method.CHANNEL_REMOTE_TURN,
+        Method.CHANNEL_REQUEST_QUEUED,
+    }
     named = {
         name
         for name, value in vars(Method).items()

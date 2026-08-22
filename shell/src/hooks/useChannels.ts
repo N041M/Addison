@@ -1,14 +1,19 @@
-// Messaging channels — the phone connections a person has saved (phases 1-2 of
-// three; docs/messaging-channel-plan.md). This hook owns the list, the add/remove
+// Messaging channels — the phone connections a person has saved (phases 1–3, all
+// that ship; docs/messaging-channel-plan.md). This hook owns the list, the add/remove
 // handlers, the token save, the live status of each connection, the pairing window,
-// the paired-device list, and the two transient lines the panel shows — a plain
+// the paired-device list, the desk queue, and the two transient lines the panel shows — a plain
 // error (the core's own refusal sentence, or the shell's) and a plain notice. It
 // mirrors useMcpServers, which is the surface this one is modelled on throughout.
 //
 // PHASE 2: A CONNECTION CAN NOW BE LIVE. `handleConnect` asks Telegram who the
-// saved token belongs to; `handleSetEnabled` starts or stops the listening. What
-// Addison can do from a phone is still WORDS ONLY — no tool, in any profile, by any
-// path — and the panel says so as a standing line rather than as a promise.
+// saved token belongs to; `handleSetEnabled` starts or stops the listening.
+//
+// PHASE 3: THE DESK QUEUE. From a phone Addison can look things up and do the maths
+// — three read-only tools, a closed list the core owns — and everything else comes
+// back as a plain sentence plus a note waiting here. A note is a RECORD: this hook
+// can read it and dismiss it, and there is no third verb on either side. "Ask this
+// here" belongs to the panel and writes the person's own sentence into the composer;
+// the turn then runs live, with the ordinary permission card.
 //
 // TWO DIFFERENT QUESTIONS, KEPT APART. `Channel.enabled` is what the person last
 // chose and is saved; `ChannelStatus.state` is whether Addison is listening RIGHT
@@ -35,8 +40,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   Channel,
   ChannelKind,
+  ChannelOnWake,
   ChannelPairing,
   ChannelPairingWindow,
+  ChannelPendingRequest,
   ChannelStatus,
 } from "../types/ui";
 import {
@@ -85,6 +92,11 @@ export function useChannels({ connected }: UseChannelsArgs) {
   // v1 listens to one connection at a time.
   const [pairing, setPairing] = useState<ChannelPairingWindow | null>(null);
   const [lastRemoteTurn, setLastRemoteTurn] = useState<RemoteTurnNote | null>(null);
+  // The desk queue (phase 3): what a phone asked for that Addison only does at this
+  // computer. Read from the core rather than remembered, like everything else here,
+  // and kept in one flat list because the core's own queue is one — bounded by age
+  // and by count, and empty after a restart.
+  const [pendingRequests, setPendingRequests] = useState<ChannelPendingRequest[]>([]);
   // Which row a check is in flight for, so its own action can say "Checking…"
   // without disabling the rest of the panel.
   const [checking, setChecking] = useState<string | null>(null);
@@ -111,6 +123,17 @@ export function useChannels({ connected }: UseChannelsArgs) {
     }
   }, []);
 
+  const refreshRequests = useCallback(() => {
+    if (!isEngineConnected()) return;
+    ipc
+      .channelPendingRequests()
+      .then(setPendingRequests)
+      .catch(() => {
+        // Keep the notes already on screen: a dropped answer is not evidence that
+        // somebody's request stopped waiting.
+      });
+  }, []);
+
   const refreshChannels = useCallback(() => {
     if (!isEngineConnected()) return;
     ipc
@@ -129,10 +152,18 @@ export function useChannels({ connected }: UseChannelsArgs) {
 
   useEffect(() => {
     refreshChannels();
+    refreshRequests();
     // Every "ready" is a fresh engine — re-read, like the other data hooks. A fresh
     // engine is also listening to nothing, which the status re-read is what shows.
     const stopCoreState = subscribeCoreState((state) => {
-      if (state === "ready") refreshChannels();
+      if (state === "ready") {
+        refreshChannels();
+        // A fresh engine has an EMPTY queue — the notes live in memory on the core
+        // and a restart is what clears them (owner decision 7). Re-reading is what
+        // makes the panel say so, rather than leaving yesterday's notes on screen
+        // with a Dismiss that answers nothing.
+        refreshRequests();
+      }
     });
     // The core says when a connection's state moves, so the panel re-renders
     // without polling. Nothing here is authoritative: the frame carries the new
@@ -158,12 +189,20 @@ export function useChannels({ connected }: UseChannelsArgs) {
       // may have changed the unknown-sender count.
       refreshStatuses([id]);
     });
+    // A phone asked for something Addison only does at this computer, and it is now
+    // waiting on the desk. The frame CARRIES the note, so a panel that is already
+    // open shows it without a round trip — and the list is re-read anyway, because
+    // the core's queue is the truth and this frame is only ever a prompt to look.
+    const stopQueued = subscribe(Method.ChannelRequestQueued, () => {
+      refreshRequests();
+    });
     return () => {
       stopCoreState();
       stopState();
       stopTurn();
+      stopQueued();
     };
-  }, [connected, refreshChannels, refreshStatuses]);
+  }, [connected, refreshChannels, refreshRequests, refreshStatuses]);
 
   /** Save a connection. A refusal is a resolved {ok:false} carrying the core's plain
    * sentence, which we surface as one calm line — never a stack trace. Returns
@@ -337,6 +376,30 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshChannels],
   );
 
+  /** Choose what happens to a message that arrived while the Mac was asleep (owner
+   * decision 8). The core refuses "answer" outside Developer in its own words and
+   * accepts "decline" in every profile — this hook prints whichever sentence comes
+   * back and never writes a second one. */
+  const handleSetOnWake = useCallback(
+    async (channel: Channel, onWake: ChannelOnWake): Promise<void> => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await ipc.setChannelOnWake(channel.id, onWake);
+        if (!res.ok) {
+          setError(res.error ?? "Addison couldn't change that just now.");
+        }
+      } catch {
+        setError("Addison couldn't change that just now.");
+      } finally {
+        setBusy(false);
+        refreshChannels();
+      }
+    },
+    [refreshChannels],
+  );
+
   /** Ask for a pairing code. It is shown on THIS screen and typed on the phone —
    * the secret stays on the trusted surface and only the proof goes over the wire. */
   const handleBeginPairing = useCallback(
@@ -401,6 +464,28 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshStatuses],
   );
 
+  /** Take one note off the desk. THE ONLY THING THIS HOOK DOES TO A REQUEST besides
+   * reading it: there is no "run it now" here and none in the core either. The
+   * panel's other affordance, "Ask this here", writes the person's own sentence into
+   * the composer and returns to chat — they press Send, and the turn runs live with
+   * the ordinary permission card. */
+  const handleDismissRequest = useCallback(
+    async (requestId: string): Promise<void> => {
+      // Optimistic, and safe to be: the core is idempotent about a note that is
+      // already gone, and the list is re-read either way.
+      setPendingRequests((prev) => prev.filter((row) => row.id !== requestId));
+      try {
+        await ipc.dismissChannelRequest(requestId);
+      } catch {
+        // Nothing to say: the note is gone from this screen and the re-read below
+        // is what decides whether it stays gone.
+      } finally {
+        refreshRequests();
+      }
+    },
+    [refreshRequests],
+  );
+
   return {
     channels,
     channelsLoaded: loaded,
@@ -412,12 +497,16 @@ export function useChannels({ connected }: UseChannelsArgs) {
     pairings,
     pairing,
     lastRemoteTurn,
+    pendingRequests,
     refreshChannels,
+    refreshRequests,
+    handleDismissRequest,
     handleAdd,
     handleRemove,
     handleSaveToken,
     handleConnect,
     handleSetEnabled,
+    handleSetOnWake,
     handleBeginPairing,
     handleCancelPairing,
     handleRevokePairing,

@@ -1,5 +1,5 @@
-// Your phone — the messaging channels' surfaces (phases 1-2 of three;
-// docs/messaging-channel-plan.md). Four parts:
+// Your phone — the messaging channels' surfaces (phases 1–3, all that ship;
+// docs/messaging-channel-plan.md). Five parts:
 //
 //   (a) The fail-closed parsers: a row without a usable id, name or known transport
 //       is DROPPED, junk never throws, `tokenPresent` fails towards "unknown" —
@@ -9,12 +9,15 @@
 //       the standing list of what Addison will and will not do from a phone, the
 //       live status in plain words, the pairing code, and the paired-device list
 //       with its Revoke.
-//   (c) What phase 2 STILL deliberately does NOT draw: no approve/deny, no card, no
-//       queue of waiting requests, and nothing that suggests a phone can make
-//       something happen on this computer.
+//   (c) The DESK QUEUE, and what it deliberately is not: a note carries the person's
+//       own words and the plain name of the thing Addison would have used, "Ask this
+//       here" seeds the composer and asks the core for nothing at all, and there is
+//       no approve, no card and no way to run a stored request.
 //   (d) The page-level gate: the section renders ONLY on the Developer/Custom
 //       surfaces (keyed off the active profile, never the mode); Simple never sees
 //       it — and the core refuses `channel.add` outside Developer independently.
+//   (e) Owner decision 8's sleep setting: what happens now is a sentence, the other
+//       behaviour is the button, and an unrecognised value reads as the safe one.
 //
 // G1 runs through all of it: the token field's value goes to the Rust command and
 // nowhere else. The hook test below asserts it never reaches the core.
@@ -29,7 +32,12 @@ import {
   renderHook,
   act,
 } from "@testing-library/react";
-import { parseChannels, parseChannelStatus, parseChannelPairings } from "../ipc/client";
+import {
+  parseChannels,
+  parseChannelStatus,
+  parseChannelPairings,
+  parseChannelRequests,
+} from "../ipc/client";
 import { ChannelsPanel, PRIVACY_LINE, WHAT_IT_WILL_DO } from "../components/ChannelsPanel";
 import { SettingsPage } from "../components/SettingsPage";
 import { useChannels, type ChannelsCardState } from "../hooks/useChannels";
@@ -48,13 +56,15 @@ afterEach(cleanup);
 const PRIVACY_SENTENCE =
   "Messages you send from your phone travel through Telegram's servers, the way any " +
   "other Telegram message does. Everything else stays on this computer.";
-/** The standing list — the remote floor in the person's own vocabulary. In this
- * phase the floor is EMPTY, so the honest version says words only. Frozen here in
- * full for the reason the privacy sentence is: the point of the test is that these
- * exact words are on screen. */
+/** The standing list — the remote floor in the person's own vocabulary. Since phase
+ * 3 the floor carries three read-only tools, so the honest version names them the
+ * way a person would say them and then says what happens to everything else. Frozen
+ * here in full for the reason the privacy sentence is: the point of the test is that
+ * these exact words are on screen. */
 const STANDING_LIST =
-  "From your phone, Addison answers in words. It can't change a file, run anything, " +
-  "or touch your computer from a message — that all waits until you're back.";
+  "From your phone, Addison answers in words, looks things up on the web, and does " +
+  "the maths. Anything that changes a file, runs a command, or touches your computer " +
+  "waits until you're back — Addison says so, and leaves the request here.";
 const SECTION_TITLE = "Your phone";
 const ADD_ACTION = "add a connection";
 const DEV_ONLY =
@@ -68,6 +78,7 @@ function channel(over: Partial<Channel> = {}): Channel {
     name: "My phone",
     enabled: false,
     tokenPresent: "unknown",
+    onWake: "decline",
     pairedDevices: 0,
     ...over,
   };
@@ -89,12 +100,16 @@ function stateWith(over: Partial<ChannelsCardState> = {}): ChannelsCardState {
     pairings: {},
     pairing: null,
     lastRemoteTurn: null,
+    pendingRequests: [],
     refreshChannels: vi.fn(),
+    refreshRequests: vi.fn(),
+    handleDismissRequest: vi.fn(async () => {}),
     handleAdd: vi.fn(async () => true),
     handleRemove: vi.fn(async () => {}),
     handleSaveToken: vi.fn(async () => true),
     handleConnect: vi.fn(async () => {}),
     handleSetEnabled: vi.fn(async () => {}),
+    handleSetOnWake: vi.fn(async () => {}),
     handleBeginPairing: vi.fn(async () => {}),
     handleCancelPairing: vi.fn(async () => {}),
     handleRevokePairing: vi.fn(async () => {}),
@@ -128,6 +143,7 @@ describe("parseChannels", () => {
         name: "My phone",
         enabled: false,
         tokenPresent: "unknown",
+        onWake: "decline",
         pairedDevices: 0,
         addedAt: undefined,
       },
@@ -559,25 +575,180 @@ describe("parseChannelStatus / parseChannelPairings", () => {
       expect(parseChannelPairings(junk)).toEqual([]);
     }
   });
+
+  it("keeps a note it could dismiss and drops one it could not", () => {
+    expect(
+      parseChannelRequests({
+        requests: [
+          {
+            id: "r1",
+            channelId: "a",
+            askedAt: 5,
+            toolLabel: "Change a file",
+            whatWasAsked: "write hello into notes.md",
+          },
+          // No id: the panel would render a Dismiss it could not act on.
+          { channelId: "a", toolLabel: "Change a file" },
+          { id: "r2" },
+          "nonsense",
+        ],
+      }),
+    ).toEqual([
+      {
+        id: "r1",
+        channelId: "a",
+        askedAt: 5,
+        toolLabel: "Change a file",
+        whatWasAsked: "write hello into notes.md",
+      },
+      {
+        id: "r2",
+        channelId: "",
+        askedAt: undefined,
+        toolLabel: "Something Addison does at your computer",
+        whatWasAsked: "",
+      },
+    ]);
+    for (const junk of [null, 42, {}, { requests: "no" }]) {
+      expect(parseChannelRequests(junk)).toEqual([]);
+    }
+  });
+
+  it("ignores a tool id or arguments if a payload ever carried them", () => {
+    // The shape is the guarantee: a note is a RECORD, so there is nothing on this
+    // side to replay even if something upstream started sending one.
+    const [parsed] = parseChannelRequests({
+      requests: [
+        {
+          id: "r1",
+          toolId: "run_command",
+          args: { command: "rm -rf /" },
+          toolLabel: "Run a command",
+          whatWasAsked: "clean up my disk",
+        },
+      ],
+    });
+    expect(Object.keys(parsed).sort()).toEqual(
+      ["askedAt", "channelId", "id", "toolLabel", "whatWasAsked"].sort(),
+    );
+    expect(JSON.stringify(parsed)).not.toContain("rm -rf");
+  });
 });
 
 // ---------------------------------------------------------------------------
-// (c) what phase 2 STILL deliberately does not ship
+// (c) what the desk queue is, and what it deliberately is not
 // ---------------------------------------------------------------------------
-describe("the phase-2 boundary", () => {
-  it("offers no approval, no card and no queue of waiting requests", () => {
-    // The plan's phase-2 "deliberately does not ship" list, as a test. A phone can
-    // hold a conversation and nothing more: there is no tool it may use, so there is
-    // nothing to approve, nothing to card, and nothing to queue. Every control on
-    // this panel by name — an allow-list rather than a hunt for forbidden words,
-    // because the honest copy legitimately contains "connection" and "message".
+// ---------------------------------------------------------------------------
+// (c) the desk queue — a record, never a resumable action
+// ---------------------------------------------------------------------------
+const REQUEST = {
+  id: "r1",
+  channelId: "a",
+  askedAt: 4102444800,
+  toolLabel: "Change a file",
+  whatWasAsked: "please write hello into notes.md",
+};
+
+describe("pending requests", () => {
+  it("is absent entirely when nothing is waiting", () => {
+    // A block that renders empty is a block that teaches somebody to stop reading
+    // it. Nothing waiting, nothing drawn.
+    render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
+    expect(document.body.textContent ?? "").not.toContain("Waiting for you");
+  });
+
+  it("shows what the phone asked, in the person's own words and the tool's plain name", () => {
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], pendingRequests: [REQUEST] })}
+      />,
+    );
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("Waiting for you");
+    expect(text).toContain("please write hello into notes.md");
+    expect(text).toContain("Change a file");
+    // NEVER A TOOL ID. The wire shape does not carry one; this is the second half of
+    // that rule, on the screen where a person reads it.
+    expect(text).not.toContain("write_project_file");
+  });
+
+  it('"Ask this here" seeds the composer and asks the core for nothing at all', async () => {
+    // THE WHOLE POINT OF THE QUEUE BEING A RECORD. The button writes the person's own
+    // sentence into the composer and returns to chat; they press Send, and the turn
+    // runs live through the ordinary gate with the ordinary card. It does NOT dispatch
+    // the stored request — there is no method on either side that could.
+    //
+    // Mutation: make it call an ipc method — `asked` stops being the only effect and
+    // the second assertion fails.
+    const onAsk = vi.fn();
+    const dismiss = vi.fn(async () => {});
+    const state = stateWith({
+      channels: [channel()],
+      pendingRequests: [REQUEST],
+      handleDismissRequest: dismiss,
+    });
+    render(<ChannelsPanel connected channels={state} onAsk={onAsk} />);
+    fireEvent.click(screen.getByRole("button", { name: /Ask this here/ }));
+    expect(onAsk).toHaveBeenCalledWith("please write hello into notes.md");
+    // Nothing else moved: the note is still there (only the person can clear it),
+    // and no handler on the bundle was touched.
+    expect(dismiss).not.toHaveBeenCalled();
+    for (const handler of [
+      state.handleSetEnabled,
+      state.handleConnect,
+      state.handleAdd,
+      state.handleRemove,
+    ]) {
+      expect(handler).not.toHaveBeenCalled();
+    }
+  });
+
+  it("offers only Dismiss when there is nowhere for a composer seed to go", () => {
+    // A partial caller (no `onAsk`) gets the note and the Dismiss and no button that
+    // leads nowhere — the Automations section's rule for the same seam.
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], pendingRequests: [REQUEST] })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /Ask this here/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Dismiss/ })).toBeTruthy();
+  });
+
+  it("dismisses one note by id", () => {
+    const dismiss = vi.fn(async () => {});
     render(
       <ChannelsPanel
         connected
         channels={stateWith({
+          channels: [channel()],
+          pendingRequests: [REQUEST],
+          handleDismissRequest: dismiss,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Dismiss/ }));
+    expect(dismiss).toHaveBeenCalledWith("r1");
+  });
+});
+
+describe("the phase-3 boundary", () => {
+  it("offers no approval and no card — only asking here, and dismissing", () => {
+    // The plan's "deliberately does not ship" list, as a test: no approval from a
+    // phone, no card, and NO REPLAY of a queued request. Every control on this panel
+    // by name — an allow-list rather than a hunt for forbidden words, because the
+    // honest copy legitimately contains "connection" and "message".
+    render(
+      <ChannelsPanel
+        connected
+        onAsk={vi.fn()}
+        channels={stateWith({
           channels: [channel({ tokenPresent: "present" })],
           statuses: { a: status({ state: "listening" }) },
           pairings: { a: [{ id: "p1", label: "petr" }] },
+          pendingRequests: [REQUEST],
         })}
       />,
     );
@@ -592,19 +763,25 @@ describe("the phase-2 boundary", () => {
         "Remove",
         "Pair a phone",
         "Revoke",
+        "Ask this here",
+        "Dismiss",
+        "answer late messages",
         "add a connection",
       ].sort(),
     );
     const text = (document.body.textContent ?? "").toLowerCase();
-    for (const absent of ["approve", "allow this", "deny", "waiting on your screen", "ask this here"]) {
-      expect(text, `phase 2 must not offer "${absent}"`).not.toContain(absent);
+    for (const absent of ["approve", "allow this", "deny", "run it now", "do it now"]) {
+      expect(text, `the panel must not offer "${absent}"`).not.toContain(absent);
     }
   });
 
   it("never suggests a phone can make something happen on this computer", () => {
     render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
     const text = document.body.textContent ?? "";
-    expect(text).toContain("It can't change a file, run anything, or touch your computer");
+    expect(text).toContain(
+      "Anything that changes a file, runs a command, or touches your computer waits " +
+        "until you're back",
+    );
   });
 });
 
@@ -647,9 +824,12 @@ vi.mock("../ipc/client", async (importOriginal) => {
       listChannelPairings: vi.fn(async () => []),
       connectChannel: vi.fn(async () => ({ ok: true, connectedAs: "addison_bot" })),
       setChannelEnabled: vi.fn(async () => ({ ok: true })),
+      setChannelOnWake: vi.fn(async () => ({ ok: true })),
       beginChannelPairing: vi.fn(async () => ({ ok: true, code: "ABC-DEF", expiresAt: 9 })),
       cancelChannelPairing: vi.fn(async () => ({ ok: true })),
       revokeChannelPairing: vi.fn(async () => ({ ok: true })),
+      channelPendingRequests: vi.fn(async () => []),
+      dismissChannelRequest: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -805,7 +985,7 @@ describe("useChannels (real hook, mocked ipc)", () => {
     await act(async () => {
       await result.current.handleSetEnabled(
         { id: "b", kind: "telegram", name: "Tablet", enabled: false,
-          tokenPresent: "present", pairedDevices: 0 },
+          tokenPresent: "present", onWake: "decline", pairedDevices: 0 },
         true,
       );
     });
@@ -820,7 +1000,7 @@ describe("useChannels (real hook, mocked ipc)", () => {
     await act(async () => {
       await result.current.handleConnect({
         id: "a", kind: "telegram", name: "My phone", enabled: false,
-        tokenPresent: "unknown", pairedDevices: 0,
+        tokenPresent: "unknown", onWake: "decline", pairedDevices: 0,
       });
     });
     expect(ipc.connectChannel).toHaveBeenCalledWith("a");
@@ -831,7 +1011,7 @@ describe("useChannels (real hook, mocked ipc)", () => {
     const { ipc } = await import("../ipc/client");
     const row = {
       id: "a", kind: "telegram" as const, name: "My phone", enabled: false,
-      tokenPresent: "unknown" as const, pairedDevices: 0,
+      tokenPresent: "unknown" as const, onWake: "decline" as const, pairedDevices: 0,
     };
     const { result } = renderHook(() => useChannels({ connected: true }));
     await act(async () => {
@@ -847,6 +1027,40 @@ describe("useChannels (real hook, mocked ipc)", () => {
     });
     expect(result.current.pairing).toBeNull();
     expect(ipc.cancelChannelPairing).toHaveBeenCalledWith("a");
+  });
+
+  it("reads the desk queue on mount and again when the core says one arrived", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.channelPendingRequests as ReturnType<typeof vi.fn>).mockResolvedValue([REQUEST]);
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await waitFor(() => expect(result.current.pendingRequests).toHaveLength(1));
+    (ipc.channelPendingRequests as ReturnType<typeof vi.fn>).mockClear();
+    // The frame carries the note, and the hook asks for the list anyway: the core's
+    // queue is the truth and a notification is only ever a prompt to look. A dropped
+    // frame therefore costs a stale panel and never a lost request.
+    act(() => {
+      for (const handler of notificationHandlers) handler({ request: REQUEST });
+    });
+    await waitFor(() => expect(ipc.channelPendingRequests).toHaveBeenCalled());
+  });
+
+  it("dismisses a note through the core and never asks it to run one", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.channelPendingRequests as ReturnType<typeof vi.fn>).mockResolvedValue([REQUEST]);
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await waitFor(() => expect(result.current.pendingRequests).toHaveLength(1));
+    (ipc.channelPendingRequests as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    await act(async () => {
+      await result.current.handleDismissRequest("r1");
+    });
+    expect(ipc.dismissChannelRequest).toHaveBeenCalledWith("r1");
+    await waitFor(() => expect(result.current.pendingRequests).toEqual([]));
+    // THE WHOLE CORE-SIDE SURFACE A NOTE HAS. There is no third call this hook could
+    // make, because there is no third method: "Ask this here" is a composer seed.
+    expect(Object.keys(ipc).filter((name) => name.toLowerCase().includes("request"))).toEqual([
+      "channelPendingRequests",
+      "dismissChannelRequest",
+    ]);
   });
 });
 
@@ -958,5 +1172,73 @@ describe("the Settings section", () => {
   it("is omitted when no channels bundle is supplied (older callers)", () => {
     renderSettings({ ...PROFILE, activeProfile: "developer", mode: "open" }, false);
     expect(screen.queryByText(SECTION_TITLE)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (e) owner decision 8's setting — what happens to a message sent while asleep
+// ---------------------------------------------------------------------------
+describe("the sleep setting", () => {
+  it("says what happens now, and offers the other one", () => {
+    // The line is the CURRENT behaviour and the button is what pressing it would
+    // change to — the idiom the rest of the panel uses ("Stop listening" over a
+    // connection that is listening). Neither says "queue": what a person has is a
+    // message sent while their Mac was shut.
+    const onWake = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], handleSetOnWake: onWake })}
+      />,
+    );
+    expect(document.body.textContent).toContain(
+      "If a message arrives while this Mac is asleep, Addison says it wasn't there",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /answer late messages/ }));
+    expect(onWake).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), "answer");
+  });
+
+  it("offers the way back when it is set to answer", () => {
+    const onWake = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel({ onWake: "answer" })],
+          handleSetOnWake: onWake,
+        })}
+      />,
+    );
+    expect(document.body.textContent).toContain(
+      "Addison answers messages that arrived while this Mac was asleep.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /say you weren't there/ }));
+    expect(onWake).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), "decline");
+  });
+
+  it("reads an unrecognised value as the safe one", async () => {
+    // "decline" is the safe direction AND the core's default. Reading junk as
+    // "answer" would tell somebody Addison will work through whatever was waiting —
+    // the half they have to opt into.
+    const [row] = parseChannels({
+      channels: [
+        { id: "a", kind: "telegram", name: "My phone", onWake: "whatever-you-think" },
+      ],
+    });
+    expect(row.onWake).toBe("decline");
+  });
+
+  it("prints the core's own refusal when the profile does not allow the wider one", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.setChannelOnWake as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: DEV_ONLY,
+    });
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleSetOnWake(channel(), "answer");
+    });
+    expect(ipc.setChannelOnWake).toHaveBeenCalledWith("a", "answer");
+    expect(result.current.error).toBe(DEV_ONLY);
   });
 });

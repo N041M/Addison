@@ -263,10 +263,11 @@ export const Method = {
   // every profile, so a saved connection never disappears on a profile switch and
   // can always be removed. Mirrored in protocol.py.
   //
-  // PHASE 2 — connect, pair, and answer with words only. Your phone can hold a
-  // conversation with Addison, and Addison uses NO TOOLS AT ALL while doing it:
-  // nothing that changes a file, runs a command, or touches your computer can
-  // happen from a message. Answers only, in words.
+  // PHASE 2 — connect and pair. Your phone can hold a conversation with Addison.
+  // Nothing that changes a file, runs a command, or touches your computer can
+  // happen from a message, in any profile and by any route; since phase 3 Addison
+  // can look something up on the web and do the maths from a phone, and that is the
+  // whole of it.
   //
   // `setEnabled` is the one control that makes a connection live, and it only ever
   // listens for THIS session — nothing starts listening when the app opens. So a
@@ -288,12 +289,26 @@ export const Method = {
   ChannelCancelPairing: "channel.cancelPairing",
   ChannelPairings: "channel.pairings",
   ChannelRevokePairing: "channel.revokePairing",
+  // PHASE 3 — from your phone Addison can look things up and do the maths, and
+  // everything else comes back as a plain sentence plus a note waiting here. A note
+  // is a RECORD and never a resumable action: it carries what you asked in your own
+  // words and the plain name of the thing Addison would have used, and no tool, no
+  // arguments and no way to run it. "Ask this here" writes your sentence into the
+  // composer for you to send yourself, with the ordinary permission card.
+  ChannelPendingRequests: "channel.pendingRequests",
+  ChannelDismissRequest: "channel.dismissRequest",
+  // What happens to a message that arrived while this Mac was asleep. Addison can
+  // say it wasn't there (the default), or answer it when it comes back. Choosing to
+  // answer is only offered on the Developer surface; choosing to decline works in
+  // every profile, because it is the safer of the two.
+  ChannelSetOnWake: "channel.setOnWake",
   // Core -> this window. `stateChanged` re-renders the panel without polling;
-  // `remoteTurn` says a phone turn started or finished. Deliberately NOT the
-  // streaming or activity channels: a phone turn's words must never appear inside
-  // the conversation on this screen.
+  // `remoteTurn` says a phone turn started or finished; `requestQueued` carries one
+  // new note. Deliberately NOT the streaming or activity channels: a phone turn's
+  // words must never appear inside the conversation on this screen.
   ChannelStateChanged: "channel.stateChanged",
   ChannelRemoteTurn: "channel.remoteTurn",
+  ChannelRequestQueued: "channel.requestQueued",
 
   McpList: "mcp.list",
   McpAdd: "mcp.add",

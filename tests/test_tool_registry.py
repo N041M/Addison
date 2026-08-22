@@ -196,3 +196,34 @@ def test_a_real_undo_actually_reverses_the_effect(tmp_path):
         assert store.recent_unreverted_snapshots(limit=10) == []
     finally:
         store.close()
+
+
+def test_the_remote_floor_is_a_subset_of_the_safe_view():
+    """THE SENTENCE THE REMOTE FLOOR IS MADE OF, asserted beside the registry's own
+    tests because that is where it belongs (messaging channels, plan §3.6 and §4):
+    *a turn that arrived from a phone is never offered a tool Simple could not be
+    offered.*
+
+    `REMOTE_TOOL_IDS` is a closed, hard-coded list and `remote_tools(mode)` is an
+    INTERSECTION with `visible_tools(mode)` — so the property is structural, and it
+    holds for whatever the list is edited to contain. Asked here of the registry the
+    app actually builds, in the profile whose view is the narrowest, so that adding a
+    dev-only id to the list fails at the registry's own boundary rather than only in
+    the channel suite.
+
+    `tests/test_channel_remote_floor.py` holds this and the other three properties of
+    §3.6; `tests/doc_claims.py` holds the documents to it.
+
+    Mutation: add `run_command` (registered dev_only, absent from the SAFE view) to
+    REMOTE_TOOL_IDS — this fails, naming it."""
+    from agent_core.main import build_registry
+    from agent_core.profiles import SIMPLE
+    from agent_core.tools.registry import REMOTE_TOOL_IDS
+
+    registry = build_registry(profile=SIMPLE)
+    safe_ids = {d.id for d in registry.visible_tools(PolicyMode.SAFE)}
+    assert REMOTE_TOOL_IDS <= safe_ids, sorted(REMOTE_TOOL_IDS - safe_ids)
+    # And the view over it agrees with the set, in both modes — the intersection is
+    # what makes the assertion above about the VIEW and not only about the list.
+    for mode in (PolicyMode.SAFE, PolicyMode.OPEN):
+        assert {d.id for d in registry.remote_tools(mode)} <= safe_ids

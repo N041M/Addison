@@ -331,7 +331,7 @@ FILE_TOOLS_ARE_IN_THE_SAFE_VIEW = True
 # Flip this only if an owner decision makes a pairing restorable.
 CHANNEL_PAIRINGS_ARE_NEVER_RESTORED = True
 
-# Messaging channels, phase 2 (2026-08-22). The remote view — what a turn that
+# Messaging channels, phases 2–3 (2026-08-22). The remote view — what a turn that
 # arrived from a phone is offered — is an INTERSECTION with `visible_tools(mode)`,
 # so it is a subset of the SAFE view in every mode: *a remote turn is never offered
 # a tool Simple could not be offered.* That one sentence is what the whole floor is
@@ -343,6 +343,10 @@ CHANNEL_PAIRINGS_ARE_NEVER_RESTORED = True
 # visible_tools) breaks no build and produces no card — it just quietly offers a
 # phone something the desk's own mode hides. The plan (messaging-channel-plan.md §8)
 # asked for this row by name.
+#
+# It became LOAD-BEARING in phase 3, when the set stopped being empty: three
+# read-only ids are on the floor now, and "subset of the SAFE view" is the assertion
+# that decides whether a fourth may join them.
 #
 # Flip this only if an owner decision genuinely gives a phone something Simple
 # cannot have, which no phase of the plan proposes.
@@ -897,9 +901,9 @@ CLAIMS: tuple[Claim, ...] = (
         true_state=(
             "`registry.remote_tools(mode)` is an INTERSECTION with `visible_tools(mode)`, "
             "so what a phone is offered is a subset of the SAFE view in every mode: a "
-            "remote turn is never offered a tool Simple could not be offered. It is empty "
-            "in phase 2, and adding an id can only ever move something from the desk's "
-            "view into a smaller one."
+            "remote turn is never offered a tool Simple could not be offered. It carries "
+            "`calculator`, `web_search` and `read_web_page` since phase 3, and adding an id "
+            "can only ever move something from the desk's view into a smaller one."
         ),
         false_state=(
             "The remote view can carry a tool the SAFE view does not, so a phone may be "

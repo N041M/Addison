@@ -209,9 +209,8 @@ mixins in `agent_core/rpc/`, one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
 `snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, `mcp` (the external
 tool servers of step 7), `automations` (the rows step 8 authors for the OS to run)
-and `channels`, the phone connections of the messaging-channel plan's phase 1 —
-configuration that connects to nothing yet), each of which is also the sole
-camelCase mapper at the wire boundary for its own namespace.
+and `channels`, the phone connections of the messaging-channel plan), each of which
+is also the sole camelCase mapper at the wire boundary for its own namespace.
 
 ```mermaid
 flowchart LR
@@ -507,7 +506,7 @@ Component by component:
   credential defeats the redactor), and every outcome writes a `tool_audit` row from
   BOTH dispatch paths, including the two values the vocabulary gained for it,
   `not_callable` and `failed`.
-- **ChannelService** *(messaging channels, phases 1–2 of three, 2026-08-22.
+- **ChannelService** *(messaging channels, phases 1–3, 2026-08-22.
   [messaging-channel-plan.md](messaging-channel-plan.md) owns the design)*: how a
   paired phone reaches Addison. `agent_core/channels/` is a **fourth sibling** under
   the module-boundary rule — it holds the transport contract (`adapter.py`) and the
@@ -524,10 +523,14 @@ Component by component:
   never is (`channel_pairing.py`, over the arming nonce; an unknown sender is ignored
   in SILENCE, because a reply is an oracle). What a phone may USE is the **remote
   floor** — `registry.remote_tools(mode)`, an intersection with `visible_tools(mode)`
-  and therefore a subset of the SAFE view in every mode, **empty in phase 2** — with
-  `refuse_if_not_remote` enforcing it at both dispatch paths before the gate. G2 is
-  unmoved: the poll loop is a second inbound edge, not a second author, and Addison
-  never sends a first message. Phase 3 fills the floor and adds the desk queue.
+  and therefore a subset of the SAFE view in every mode, carrying `calculator`,
+  `web_search` and `read_web_page` since phase 3 — with `refuse_if_not_remote`
+  enforcing it at both dispatch paths before the gate. Anything else is refused in one
+  plain sentence AND written down: the phase-3 **desk queue** (`PendingRequest`, in
+  memory on the service, bounded by age and count) is what the person finds in
+  Settings, and it is a RECORD — it carries no tool id and no arguments, and its one
+  affordance seeds the desktop composer. G2 is unmoved: the poll loop is a second
+  inbound edge, not a second author, and Addison never sends a first message.
 - **SnapshotManager** is the G3 machinery described above: it captures app-state
   snapshots (config/DB rows, keys excluded) automatically before risky changes and on
   command, marks a configuration verified-working after a turn completes against it,

@@ -11,9 +11,17 @@
 // §3.12 which fixes the wording).
 //
 // WHAT ADDISON WILL AND WILL NOT DO FROM A PHONE is a standing list rather than a
-// link (§3.12 item 4), and in this phase it says the honest thing: Addison answers
-// in words and uses no tools at all. When phase 3 gives the remote floor its three
-// ids, THIS LIST is what changes with it — the person's vocabulary, not the code's.
+// link (§3.12 item 4). Since phase 3 it names the remote floor's three read-only
+// tools in the person's own vocabulary — look things up, read the page, do the maths
+// — and says what happens to everything else: it waits, and the request is left on
+// this screen. THIS LIST is what moves when the floor moves; the closed set lives in
+// the core (`REMOTE_TOOL_IDS`) and this is its plain-language half.
+//
+// PENDING REQUESTS (§3.12 item 5) are the other half of that promise. A request is a
+// RECORD, never a resumable action: "Ask this here" writes the person's own sentence
+// into the composer and goes back to chat, where they press Send and the turn runs
+// live with the ordinary card. There is no button on this screen, and no method in
+// the core, that runs a stored request.
 //
 // TWO DIFFERENT QUESTIONS, KEPT APART, and this panel is where a person would
 // otherwise be lied to about them. `Channel.enabled` is what they last chose and is
@@ -46,12 +54,17 @@ export const PRIVACY_LINE =
   "other Telegram message does. Everything else stays on this computer.";
 
 /** THE STANDING LIST (§3.12 item 4) — the remote floor in the person's own
- * vocabulary. In this phase the floor is EMPTY, so the honest version of this list
- * is one sentence about words and one about everything else. Phase 3 is the commit
- * that adds "look things up on the web" and "do the maths" to the first line. */
+ * vocabulary, which is the only vocabulary this list is allowed to use: not "remote
+ * floor", not "tool tier", not "read-only". Two sentences, because there are two
+ * facts: what Addison WILL do from a phone, and what waits.
+ *
+ * IT IS THE COPY THAT MOVES WHEN THE FLOOR MOVES. The core owns the closed list
+ * (`REMOTE_TOOL_IDS`); this is the person's version of the same three, and the day a
+ * fourth id is added this sentence is edited in the same commit. */
 export const WHAT_IT_WILL_DO =
-  "From your phone, Addison answers in words. It can't change a file, run anything, " +
-  "or touch your computer from a message — that all waits until you're back.";
+  "From your phone, Addison answers in words, looks things up on the web, and does " +
+  "the maths. Anything that changes a file, runs a command, or touches your computer " +
+  "waits until you're back — Addison says so, and leaves the request here.";
 
 /** Under the token field. Says where the token goes, in the words the API-keys
  * section already uses for the same journey. */
@@ -71,6 +84,37 @@ const SHARED_TOKEN_NOTE = (label: string) =>
 const PAIRING_EXPLAINER =
   "Send this code to your bot from the phone you want to use. Only that phone will " +
   "be able to message Addison, and you can undo it here at any time.";
+
+/** Over the pending block. Says what these are and, in the same breath, what the
+ * button under them does — because "Ask this here" would otherwise read as "do it
+ * now", which is exactly what it is not. */
+const PENDING_HEADING = "Waiting for you";
+const PENDING_EXPLAINER =
+  "Your phone asked for these, and Addison left them here rather than doing them " +
+  "while you were away. “Ask this here” puts the message in the box on the " +
+  "chat screen — you send it yourself, and Addison asks before it does anything.";
+
+const ASK_HERE_ACTION = "Ask this here";
+const DISMISS_ACTION = "Dismiss";
+
+/** Owner decision 8's setting, in plain words on both sides of the switch. The LINE
+ * says what happens now; the ACTION says what pressing it would change to — the
+ * idiom the rest of the panel's row actions use ("Stop listening" over a connection
+ * that is listening).
+ *
+ * Neither sentence uses the word "queue": what a person has is a phone that was sent
+ * a message while their Mac was shut, and the two things Addison can do about it are
+ * say so, or answer it late. */
+const ON_WAKE_LINE = {
+  decline:
+    "If a message arrives while this Mac is asleep, Addison says it wasn't there " +
+    "rather than answering late.",
+  answer: "Addison answers messages that arrived while this Mac was asleep.",
+} as const;
+const ON_WAKE_ACTION = {
+  decline: "answer late messages",
+  answer: "say you weren't there",
+} as const;
 
 const ADD_ACTION = "add a connection";
 const CHECK_ACTION = "Check now";
@@ -134,9 +178,18 @@ function formatWhen(at?: number): string {
 export function ChannelsPanel({
   connected,
   channels: state,
+  onAsk,
 }: {
   connected: boolean;
   channels: ChannelsCardState;
+  /** Writes one sentence into the composer and returns to chat (App's `seedAsk`) —
+   * the person still presses Send. It is what "Ask this here" does with a waiting
+   * request, and it is deliberately the ONLY thing that can be done with one: a
+   * button that re-ran a stored request would be a second dispatch path, raising a
+   * card written for a moment that has passed. Optional, so a partial caller (older
+   * tests) still renders — the action is simply absent then, which is honest,
+   * because there would be nowhere for it to lead. */
+  onAsk?: (text: string) => void;
 }) {
   const {
     channels,
@@ -149,11 +202,14 @@ export function ChannelsPanel({
     pairings,
     pairing,
     lastRemoteTurn,
+    pendingRequests,
+    handleDismissRequest,
     handleAdd,
     handleRemove,
     handleSaveToken,
     handleConnect,
     handleSetEnabled,
+    handleSetOnWake,
     handleBeginPairing,
     handleCancelPairing,
     handleRevokePairing,
@@ -308,6 +364,25 @@ export function ChannelsPanel({
               </p>
               <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{statusLine(status)}</p>
               <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{tokenLine(channel)}</p>
+              {/* Owner decision 8's setting. It sits under the status lines because
+                  it is a fact about this connection rather than an action on it, and
+                  its own action is beside it rather than up in the row's actions —
+                  the row's four are about the connection existing and listening. */}
+              <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">
+                {ON_WAKE_LINE[channel.onWake]}{" "}
+                <RowAction
+                  onClick={() =>
+                    void handleSetOnWake(
+                      channel,
+                      channel.onWake === "answer" ? "decline" : "answer",
+                    )
+                  }
+                  disabled={busy}
+                  ariaLabel={`For ${channel.name}, ${ON_WAKE_ACTION[channel.onWake]}`}
+                >
+                  {ON_WAKE_ACTION[channel.onWake]}
+                </RowAction>
+              </p>
               {status?.error && (
                 <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{status.error}</p>
               )}
@@ -428,6 +503,53 @@ export function ChannelsPanel({
             </SurfaceRow>
           );
         })
+      )}
+
+      {/* PENDING REQUESTS (§3.12 item 5). What the phone asked for and Addison did
+          not do. Each one carries the plain name of the thing it would have used and
+          the person's own words back — never a tool id, and never a paraphrase.
+
+          "ASK THIS HERE" IS A COMPOSER SEED AND NOTHING ELSE: it writes the sentence
+          into the box on the chat screen and goes there, and the person presses
+          Send. The turn then runs live, through the ordinary gate, with the ordinary
+          card. Nothing on this screen — and nothing in the core — can run a stored
+          request, which is why there is no third button here. */}
+      {pendingRequests.length > 0 && (
+        <SurfaceRow wrap name={PENDING_HEADING} value={`${pendingRequests.length} waiting`}>
+          <p className="m-0 mt-1 text-[12px] leading-[1.55] text-muted">{PENDING_EXPLAINER}</p>
+          <div className="mt-2.5 flex flex-col gap-2.5">
+            {pendingRequests.map((request) => (
+              <div key={request.id} className="flex flex-col gap-1">
+                <p className="m-0 font-mono text-[11px] text-muted">
+                  {request.toolLabel}
+                  {request.askedAt ? ` · ${formatWhen(request.askedAt)}` : ""}
+                </p>
+                <p className="m-0 text-[12px] leading-[1.55] text-ink">
+                  “{request.whatWasAsked}”
+                </p>
+                <div className="flex items-baseline gap-5">
+                  {onAsk && (
+                    <RowAction
+                      onClick={() => onAsk(request.whatWasAsked)}
+                      disabled={busy || !request.whatWasAsked}
+                      ariaLabel={`Ask this here: ${request.whatWasAsked}`}
+                    >
+                      {ASK_HERE_ACTION}
+                    </RowAction>
+                  )}
+                  <RowAction
+                    tone="muted"
+                    onClick={() => void handleDismissRequest(request.id)}
+                    disabled={busy}
+                    ariaLabel={`Dismiss ${request.toolLabel}`}
+                  >
+                    {DISMISS_ACTION}
+                  </RowAction>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SurfaceRow>
       )}
 
       {adding ? (

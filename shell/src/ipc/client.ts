@@ -57,7 +57,9 @@ import {
   type McpDiscoveredTool,
   type Channel,
   type ChannelKind,
+  type ChannelOnWake,
   type ChannelPairing,
+  type ChannelPendingRequest,
   type ChannelState,
   type ChannelStatus,
   type ChannelTokenPresence,
@@ -715,6 +717,10 @@ export const ipc = {
     call(Method.ChannelConnect, { id }).then(parseChannelConnect),
   setChannelEnabled: (id: string, enabled: boolean): Promise<ChannelMutationResult> =>
     call(Method.ChannelSetEnabled, { id, enabled }).then(parseChannelMutation),
+  // Owner decision 8's setting. The core refuses "answer" outside Developer with its
+  // own plain sentence, and accepts "decline" in every profile.
+  setChannelOnWake: (id: string, onWake: ChannelOnWake): Promise<ChannelMutationResult> =>
+    call(Method.ChannelSetOnWake, { id, onWake }).then(parseChannelMutation),
   channelStatus: (id: string): Promise<ChannelStatus> =>
     call(Method.ChannelStatus, { id }).then(parseChannelStatus),
   // Pairing. The code comes back to THIS window and is shown on this screen; it is
@@ -727,6 +733,16 @@ export const ipc = {
     call(Method.ChannelPairings, { id }).then(parseChannelPairings),
   revokeChannelPairing: (pairingId: string): Promise<ChannelMutationResult> =>
     call(Method.ChannelRevokePairing, { pairingId }).then(parseChannelMutation),
+
+  // Phase 3 — the desk queue. `channelPendingRequests` reads the notes a phone left
+  // behind when it asked for something Addison only does at this computer;
+  // `dismissChannelRequest` takes one off the desk. There is deliberately no third
+  // method: "Ask this here" is a composer seed on this side, not a request to run
+  // anything, so nothing here can dispatch a stored request.
+  channelPendingRequests: (): Promise<ChannelPendingRequest[]> =>
+    call(Method.ChannelPendingRequests).then(parseChannelRequests),
+  dismissChannelRequest: (requestId: string): Promise<ChannelMutationResult> =>
+    call(Method.ChannelDismissRequest, { requestId }).then(parseChannelMutation),
 
   // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
   // NOT ONE OF THESE CAN START ANYTHING. `listAutomations` reads saved rows,
@@ -1934,6 +1950,10 @@ function parseChannelRow(value: unknown): Channel | null {
     name: row.name,
     enabled: row.enabled === true,
     tokenPresent: presence,
+    // Anything unrecognised is "decline", which is the safe direction and the core's
+    // own default: reading a junk value as "answer" would promise that Addison will
+    // work through whatever was waiting, which is the half a person has to opt into.
+    onWake: row.onWake === "answer" ? "answer" : "decline",
     pairedDevices:
       typeof row.pairedDevices === "number" && Number.isFinite(row.pairedDevices)
         ? row.pairedDevices
@@ -2027,6 +2047,37 @@ export function parseChannelPairings(result: unknown): ChannelPairing[] {
       id: row.id,
       label: typeof row.label === "string" && row.label ? row.label : "This phone",
       pairedAt: typeof row.pairedAt === "number" ? row.pairedAt : undefined,
+    });
+  }
+  return out;
+}
+
+/** Parse `channel.pendingRequests` → the notes waiting on the desk (phase 3).
+ *
+ * A row without an id is dropped, on `parseChannelPairings`' reasoning: the panel
+ * would render a Dismiss it could not act on. Everything else fails towards a
+ * readable note — a missing label becomes the core's own plain fallback rather than
+ * an empty line, because a note that says nothing is still a note somebody has to
+ * be able to clear.
+ *
+ * ANY TOOL ID OR ARGUMENTS ON THE WIRE ARE IGNORED, because the shape carries none:
+ * a note is a record and there is nothing here to replay. */
+export function parseChannelRequests(result: unknown): ChannelPendingRequest[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.requests) ? (obj.requests as unknown[]) : [];
+  const out: ChannelPendingRequest[] = [];
+  for (const item of list) {
+    const row = asRecord(item);
+    if (!row || typeof row.id !== "string" || !row.id) continue;
+    out.push({
+      id: row.id,
+      channelId: typeof row.channelId === "string" ? row.channelId : "",
+      askedAt: typeof row.askedAt === "number" ? row.askedAt : undefined,
+      toolLabel:
+        typeof row.toolLabel === "string" && row.toolLabel
+          ? row.toolLabel
+          : "Something Addison does at your computer",
+      whatWasAsked: typeof row.whatWasAsked === "string" ? row.whatWasAsked : "",
     });
   }
   return out;

@@ -395,15 +395,21 @@ export function SettingsPage({
         </SurfaceSection>
       )}
 
-      {/* Your phone — the messaging channels (phase 1 of three). Same
+      {/* Your phone — the messaging channels (phases 1–3, all that ship). Same
           Developer/Custom gate as Tool servers, and it sits beside it because both
-          answer "what may reach Addison". NOTHING HERE CONNECTS: there is no
-          adapter, no background thread and no pairing in this build, and the panel
-          says so in its own second line — under the privacy sentence, which comes
-          first and every time (docs/messaging-channel-plan.md §3.12). */}
+          answer "what may reach Addison". The privacy sentence comes first and every
+          time, and the standing list of what a phone may ask for comes second
+          (docs/messaging-channel-plan.md §3.12).
+
+          `onAskAddison` is what "Ask this here" uses on a waiting request: it writes
+          the person's own sentence into the composer and returns to chat, where they
+          press Send. It is the SAME seam the Automations section's Arm / Disarm use,
+          and for the same reason — a Settings button never starts a turn behind
+          somebody's back, and there is deliberately no route from this page that
+          runs a stored request. */}
       {showChannels && channels && (
         <SurfaceSection label="Your phone">
-          <ChannelsPanel connected={connected} channels={channels} />
+          <ChannelsPanel connected={connected} channels={channels} onAsk={onAskAddison} />
         </SurfaceSection>
       )}
 

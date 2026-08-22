@@ -1657,6 +1657,8 @@ class JsonRpcServer(
                     self._respond(request_id, self._channel_connect(params))
                 elif kind == "channel_set_enabled":
                     self._respond(request_id, self._channel_set_enabled(params))
+                elif kind == "channel_set_on_wake":
+                    self._respond(request_id, self._channel_set_on_wake(params))
                 elif kind == "channel_status":
                     self._respond(request_id, self._channel_status(params))
                 elif kind == "channel_begin_pairing":
@@ -1667,6 +1669,10 @@ class JsonRpcServer(
                     self._respond(request_id, self._channel_pairings(params))
                 elif kind == "channel_revoke_pairing":
                     self._respond(request_id, self._channel_revoke_pairing(params))
+                elif kind == "channel_pending_requests":
+                    self._respond(request_id, self._channel_pending_requests(params))
+                elif kind == "channel_dismiss_request":
+                    self._respond(request_id, self._channel_dismiss_request(params))
                 elif kind == "channel_turn":
                     # THE ONE JOB KIND WITH NO RPC METHOD BEHIND IT (messaging
                     # channels phase 2). It is put on this queue by the channel
@@ -2671,11 +2677,18 @@ _CHANNEL_JOBS = {
     Method.CHANNEL_REMOVE: "channel_remove",
     Method.CHANNEL_CONNECT: "channel_connect",
     Method.CHANNEL_SET_ENABLED: "channel_set_enabled",
+    Method.CHANNEL_SET_ON_WAKE: "channel_set_on_wake",
     Method.CHANNEL_STATUS: "channel_status",
     Method.CHANNEL_BEGIN_PAIRING: "channel_begin_pairing",
     Method.CHANNEL_CANCEL_PAIRING: "channel_cancel_pairing",
     Method.CHANNEL_PAIRINGS: "channel_pairings",
     Method.CHANNEL_REVOKE_PAIRING: "channel_revoke_pairing",
+    # Phase 3. Neither touches the store or a network, and both are jobs anyway:
+    # nothing in this namespace runs on the read loop, and the queue they read is
+    # written from the worker thread by a channel turn — answering them inline would
+    # be a second thread walking a list the worker mutates.
+    Method.CHANNEL_PENDING_REQUESTS: "channel_pending_requests",
+    Method.CHANNEL_DISMISS_REQUEST: "channel_dismiss_request",
 }
 
 
