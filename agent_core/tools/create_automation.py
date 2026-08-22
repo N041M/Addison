@@ -92,6 +92,7 @@ from agent_core.tools.base import (
     RiskTier,
     ToolDefinition,
     ToolResult,
+    UndoRefused,
     call_is_forbidden,
 )
 
@@ -451,7 +452,7 @@ class CreateAutomationTool:
         registration, which is the invariant, not a convention."""
         store = self._store_ref()
         if store is None:
-            raise RuntimeError(_UNDO_NOT_READY)
+            raise UndoRefused(_UNDO_NOT_READY)
         store.delete_automation(snapshot.undo_payload["automation_id"])
 
 

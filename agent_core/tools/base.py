@@ -306,6 +306,30 @@ class Tool(Protocol):
     def execute(self, args: dict, context: ExecutionContext) -> ToolResult: ...
 
 
+class UndoRefused(RuntimeError):
+    """A DELIBERATE refusal from a tool's ``undo()``, whose text is safe to show.
+
+    ``undo()`` returns nothing, so its only way to say why is to raise — and
+    ``UndoManager`` puts the exception's text into ``UndoResult.detail``. That put
+    two unlike things in one channel: a sentence a tool *chose* to say to a person
+    ("a different file is at that name now"), and whatever a bug happens to
+    stringify. The caller could not tell them apart, so it showed neither and said
+    "Couldn't undo the last action" for both — a refusal that knew the reason and
+    withheld it (KNOWN-GAPS, opened by steps 4 + 5).
+
+    Raising THIS is the tool asserting the first thing: the message is plain
+    language, written for Mira and Petr, and it says what happened and that nothing
+    changed. ``UndoManager`` flags it (``UndoResult.refusal``) and ``rpc/undo.py``
+    passes it through verbatim. Every other exception keeps the generic sentence,
+    which is the point of typing this rather than sniffing the string: an unexpected
+    failure is unexpected precisely because nobody wrote its text for a person to
+    read, and no stack trace may reach one (CLAUDE.md).
+
+    So do NOT raise it to report a bug, and do NOT widen it to "any undo failure".
+    Raise a plain ``RuntimeError`` (or let the real exception fly) for anything the
+    tool did not mean to say out loud."""
+
+
 @runtime_checkable
 class UndoableTool(Tool, Protocol):
     """A ``Tool`` with a real ``undo`` — mandatory for risk_tier MEDIUM+.
