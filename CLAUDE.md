@@ -284,8 +284,13 @@ ever admit is deferred, not answered — see the step-7 entry above.
 Still deferred: **fully-automatic task classification** for routing (the *choice
 logic* that picks a strategy per task — v2; the three *named* strategies plus the
 Developer custom chain ship now — see the routing section above, where balanced's cut
-is recorded), messaging channels, Routine step-editing UI, and a Rust rewrite of the
-Agent Core. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
+is recorded), Routine step-editing UI, and a Rust rewrite of the
+Agent Core. **Messaging channels left this list on 2026-08-22**: the owner asked for
+phone control, [`docs/messaging-channel-plan.md`](docs/messaging-channel-plan.md)
+was written and its eleven owner decisions answered the same day, and phases 1–3
+are **scheduled** (Telegram default, plural adapters, the closed remote floor;
+phase 4 — approving actions from a phone — stays deferred, the owner's horizon
+being a bespoke phone app). That plan owns the design; ROADMAP owns status. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
 more.** **Untrusted-content screening** was pulled forward on 2026-08-13, its
 triggers having fired, and is **built**;
 [`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,

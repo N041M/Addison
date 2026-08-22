@@ -108,6 +108,20 @@ widened content-security policy is enforced by a real webview, on all three plat
 See the note further down and
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
+**Scheduled 2026-08-22, beside those tracks: messaging channels — controlling
+Addison from a phone.** The owner asked for it, the design was written and its
+eleven decisions answered the same day
+([docs/messaging-channel-plan.md](docs/messaging-channel-plan.md) owns all of it).
+What ships is phases 1–3 of that plan: channel configuration with the token in the
+keychain and nothing connecting; then Telegram connected, a phone paired with a
+code Addison shows on the desktop, and conversation with **no tools at all**; then
+the remote floor — three read-only tools, a closed set proven a subset of Simple's
+own view — with everything else refused in one plain sentence and left waiting on
+the desk. Phase 4 (approving an action from the phone) is **deferred**: the
+owner's horizon for that is a bespoke phone app, which is not designed anywhere
+yet. One channel enabled at a time in v1 (multiple is v2); the approved menu-bar
+popup chat is added scope that gets its own design section before it is built.
+
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 until the following morning; all are finished. Their entries
 stay below, in place, because they are recent enough that people still ask what

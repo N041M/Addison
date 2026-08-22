@@ -1145,12 +1145,15 @@ follows. None is scheduled and none blocks anything.
   and that is the Knowledge entry above wearing a smaller hat: once retrieval
   lands, a note is a small attachable document that is already local and already
   trusted. Until then, nothing to build.
-- **Messaging channels: still deferred, but the design now has an owner.** The
-  deferral in [`CLAUDE.md`](../CLAUDE.md) is unchanged and nothing is scheduled;
-  what changed on 2026-08-22 is that the owner asked for phone control of Addison
-  (WhatsApp named), so the design was written down before anything could be built
-  opportunistically. [`messaging-channel-plan.md`](messaging-channel-plan.md)
-  (2026-08-22, proposed, not scheduled) owns it: outbound-only transport with no
+- **Messaging channels: SCHEDULED 2026-08-22, the same day the design was
+  written.** The owner asked for phone control of Addison (WhatsApp named), the
+  plan was written, and all eleven of its owner decisions were answered that
+  evening — Telegram default with plural adapters, phases 1–3 scheduled, phase 4
+  (approving actions from a phone) deferred toward a bespoke phone app, one
+  enabled channel in v1, and two pieces of added scope recorded in the plan (the
+  menu-bar popup chat, which needs its own design section before build, and the
+  queue-or-decline sleep setting). [`messaging-channel-plan.md`](messaging-channel-plan.md)
+  owns it: outbound-only transport with no
   listener of any kind, Telegram's Bot API first behind a plural adapter protocol,
   pairing as the authorization boundary (the automation-nonce code, shown on the
   desktop and sent from the phone) with unknown senders ignored in silence, and a

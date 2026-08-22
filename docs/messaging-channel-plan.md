@@ -1,11 +1,16 @@
 # Messaging channels: controlling Addison from a phone
 
-**Status: PROPOSED 2026-08-22. Not scheduled.** Messaging channels are on
-[`CLAUDE.md`](../CLAUDE.md)'s *"Do NOT build yet"* list and **this document does not
-take them off it**. It is the design that would have to exist first, written in the
-mold of [`model-assignments-plan.md`](model-assignments-plan.md): it settles
-structure, enumerates what only the owner can decide, and schedules nothing.
-[`ROADMAP.md`](../ROADMAP.md) owns whether that changes.
+**Status: DECIDED AND SCHEDULED 2026-08-22.** Proposed and answered the same day:
+the owner took all eleven decisions in §5 (each records its answer beside the
+recommendation), messaging channels left [`CLAUDE.md`](../CLAUDE.md)'s
+*"Do NOT build yet"* list, and the build order is **phases 1–3 as written**, with
+phase 4 **deferred** — the owner's horizon for approving actions from a phone is a
+bespoke phone app (§5, decisions 2–3), not the reflected card. Two answers added
+scope this document did not propose, and each is recorded where it can be held:
+a **menu-bar popup chat window with background operation** (decision 4 — approved
+in direction, and it gets its own design section here before anything builds it),
+and a **queue-or-decline setting** for messages that arrived while the Mac slept
+(decision 8). [`ROADMAP.md`](../ROADMAP.md) owns status from here.
 
 The ask it answers, in the owner's words: OpenClaw-style control of Addison from a
 phone. WhatsApp was named. The design is **transport-plural by construction** — a
@@ -965,9 +970,10 @@ so the undo question cannot arise. SAFE 3: `remote_tools` is a filtered view ove
 same registry; a test asserts it is not a second registry by identity. SAFE 4:
 untouched.
 
-### Phase 4 — A card on the phone *(owner-gated; may never ship)*
+### Phase 4 — A card on the phone *(DEFERRED, owner decision 2 of 2026-08-22: the
+horizon for approving actions from a phone is a bespoke phone app, not this)*
 
-**Ships, if the owner says so.** The gate reflects its own card to the phone: the
+**Ships only if that horizon changes.** The gate reflects its own card to the phone: the
 card's title and description **as the gate composed them**, plus a freshly minted
 code. Replying with that code approves **that one invocation** and nothing else.
 Mechanically this is `_ask_with_keyword`'s shape with the answer arriving from a
@@ -1008,63 +1014,79 @@ phase changes what a stolen phone is worth (§6).
 
 ---
 
-## 5. Decisions for the owner
+## 5. Decisions for the owner — ANSWERED 2026-08-22
 
-Recommendations are given because a decision with no recommendation is a question
-asked twice.
+All eleven were answered the day the plan was written. Each entry keeps the
+question and the recommendation as history, and records the owner's answer as the
+decision. Where an answer added scope the plan had not proposed, that is said
+plainly rather than folded in quietly.
 
 1. **Transport order.** Telegram first, WhatsApp as an adapter only if a Business
    API account is something the owner wants to pay for and operate; no bridge
    adapter, documented on GitHub only, never surfaced in-app (the OmniRoute stance).
-   *Recommended: yes.* Design-doc §14's open question 6 asks the sharper version —
-   whether the target persona lives in WhatsApp so completely that Telegram is
-   technically easy and practically unused — and it is worth answering with the
-   Phase-1 testers rather than by assuming.
+   *Recommended: yes.*
+   **ANSWERED: Telegram is the default, and other connections stay allowed** — the
+   adapter protocol remains plural and a second transport is a welcome later
+   adapter, under the same bridge stance, which the answer did not overrule.
 2. **Phase 4: build it, or stop at phase 3?** *Recommended: decide after living with
    phase 3.* Phase 3 is genuinely useful on its own and phase 4 is the only part of
    this design that lets a phone cause an effect.
+   **ANSWERED: the channel stays conversational — the phone can query and be
+   answered (phases 1–3) — and approving actions from a phone waits for a bespoke
+   phone app**, which the owner named as the horizon. Phase 4 is therefore
+   **deferred, not scheduled**: it stays in this document as the design that would
+   be reached for if the reflected-card path is ever wanted before or instead of
+   an app. A bespoke phone app is a new product surface with its own trust story
+   and is deliberately NOT designed here.
 3. **May a remote turn see the desktop's conversation history?** *Recommended: no,
-   and the default written into §3.5 is no.* Two reasons: a phone is the likelier
-   thing to be lost, and a shared history means an injected instruction in a
-   desktop-fetched page can reach the surface with the weakest consent.
-4. **Background / menu-bar mode**, so a channel answers with the window closed. Out
-   of scope here and listed as its own decision because it is a different feature
-   with its own trust questions (a process that lives when nobody opened it). *No
-   recommendation; it is a product question.*
+   and the default written into §3.5 is no.*
+   **ANSWERED: no — until an app is made.** The messaging channel never sees
+   desktop history; whether a bespoke app should is that app's design question,
+   not this plan's.
+4. **Background / menu-bar mode**, so a channel answers with the window closed.
+   *No recommendation; it is a product question.*
+   **ANSWERED: yes — and with a menu-bar popup chat window.** This is approved
+   direction and **added scope**: a resident presence that answers channels with
+   the main window closed, plus a small popup chat on the menu-bar item. It is a
+   different feature with its own trust questions (a process that lives when
+   nobody opened it; a second chat surface on the desktop), so **it gets its own
+   design section in this document before any phase builds it** — it is not part
+   of phases 1–3, and nothing in them depends on it.
 5. **What is on the remote floor's list?** The plan proposes `calculator`,
-   `web_search`, `read_web_page`. Each omission is a decision: `read_clipboard` and
-   `open_link` (§3.6), `read_file` and `read_project_file` (local contents leaving
-   the machine on the strength of one message), `snapshot_now` (a write, though a
-   tightening — the most arguable of the five). *Recommended: the three, and revisit
-   `snapshot_now` only if somebody actually wants it.*
-6. **Custom-guard interaction.** The plan refuses to answer a phone while
+   `web_search`, `read_web_page`; omissions argued in §3.6.
+   **ANSWERED: the three as proposed.**
+6. **Custom-guard interaction.** Refuse to answer a phone while
    `auto_grant_scope == "none"`, rather than raising a card nobody is there to
-   answer. *Recommended: yes, and note that phase 4 is what dissolves the
-   restriction.*
-7. **Does the desk queue survive a restart?** *Recommended: no* (§3.11), because
-   persisting it means writing a phone message and a model's arguments into SQLite.
-8. **Messages that arrived while the Mac was asleep.** The transport holds them and
-   delivers a burst on wake. Answer them late, or decline each with one sentence
-   (*"Addison was asleep when this arrived — send it again if you still want it"*)?
-   *Recommended: decline*, because a late answer to a question whose moment has
-   passed is worse than no answer, and a burst of them is a burst of turns nobody
-   asked for now.
-9. **Duplicate delivery.** At-least-once is inherent to the cursor (§3.3). Dedupe by
-   `update_id`, or accept a duplicated answer? *Recommended: accept for phase 3
-   (a repeated lookup is harmless), and make dedupe a hard requirement of phase 4,
-   where a duplicate is a duplicated approval prompt.*
-10. **Profile surfacing.** Dev-only for v1, the MCP precedent, because a channel is
-    a new trust surface and Developer is where new trust surfaces land first. If it
-    is ever widened, what Simple would get is the same remote floor with a plainer
-    surface — the floor is already a subset of Simple's own tool view, so nothing
-    about SAFE would have to move; what would need writing is the onboarding, the
-    plain-language pairing screen, and one more sentence about the transport.
-    *Recommended: dev-only for v1, widen on evidence.*
-11. **The module name `automation_nonce.py`** now has a second caller that is not an
-    automation. Rename it (a mechanical change touching `main.py` and two tests), or
-    leave it and let `channel_pairing.py`'s import be the documentation? *Recommended:
-    leave it; a rename of a floor-adjacent module to improve a noun is not worth the
-    diff.*
+   answer.
+   **ANSWERED: as recommended.** (With phase 4 deferred, the restriction simply
+   stands; the sentence the phone gets is §3.6's.)
+7. **Does the desk queue survive a restart?**
+   **ANSWERED: no**, as recommended (§3.11's reasoning).
+8. **Messages that arrived while the Mac was asleep.** *Recommended: decline each
+   with one sentence.*
+   **ANSWERED: a SETTING — queue them, or decline them.** Added scope, small and
+   contained: a per-channel choice between answering held messages on wake and
+   declining each with the plain sentence. **Default: decline** (the recommended
+   direction), because the safe behaviour should be the out-of-box one; the
+   setting lives with the channel row and is ordinary captured configuration.
+   Phase 2 ships the default; the setting itself may land in phase 2 or 3,
+   whichever diff it fits.
+9. **Duplicate delivery.** *Recommended: accept for phase 3; dedupe mandatory in
+   phase 4.*
+   **ANSWERED: as recommended.** (Phase 4's deferral makes the second half moot
+   until it isn't.)
+10. **Profile surfacing.** *Recommended: dev-only for v1, widen on evidence.*
+    **ANSWERED: as recommended.**
+11. **The module name `automation_nonce.py`** — rename, or leave it?
+    *Recommended: leave it.*
+    **ANSWERED — the owner's answer went to a different question**, and both halves
+    are recorded: the rename stands as recommended (leave it), and the answer given
+    — *"allow an option for multiple connections as a v2/future step"* — is a real
+    decision this list had not asked: **v1 runs ONE enabled channel at a time;
+    multiple simultaneously-enabled channels are v2.** The schema and the service
+    already permit several rows and several threads, so this is a v1 *surface*
+    restriction (enabling one channel disables the others, said plainly), kept so
+    the first release has one pairing story and one status line to get right.
 
 ## 6. Honest limits
 
@@ -1140,11 +1162,13 @@ Registered before the fact, the way step 8 §7 was, because the value is that a
 landing diff has a list at all:
 
 - [`CLAUDE.md`](../CLAUDE.md) — the *"Do NOT build yet"* list loses "messaging
-  channels" and the build-order section gains the entry. **Not touched by this
-  document**: the deferral stands until the owner schedules it.
-- [`ROADMAP.md`](../ROADMAP.md) — status, in plain words, per phase.
-- [`KNOWN-GAPS.md`](KNOWN-GAPS.md) — the pointer entry this document adds becomes a
-  status line, and any limit in §6 that a person hits becomes its own row.
+  channels". **DONE 2026-08-22**, when the owner answered §5 and scheduled
+  phases 1–3.
+- [`ROADMAP.md`](../ROADMAP.md) — status, in plain words, per phase. **The
+  scheduling entry landed 2026-08-22**; per-phase status follows the builds.
+- [`KNOWN-GAPS.md`](KNOWN-GAPS.md) — the pointer entry this document adds became a
+  status line on 2026-08-22, and any limit in §6 that a person hits becomes its
+  own row.
 - [`SAFETY.md`](SAFETY.md) — G2's text gains the sentence about an inbound edge that
   is not the keyboard, and SAFE invariant 3 gains the remote view as a second example
   of a filtered view over the same registry. Both belong to that file and are written
