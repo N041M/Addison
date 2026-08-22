@@ -62,6 +62,7 @@ function renderThread(messages: DisplayMessage[], extra = {}) {
     <ChatThread
       messages={messages}
       onRetry={() => {}}
+      onContinue={() => {}}
       retryAvailable={false}
       onRewindTo={() => {}}
       onSuggestion={onSuggestion}
@@ -231,6 +232,7 @@ describe("selecting text in a settled message", () => {
       <ChatThread
         messages={[ANSWER, later]}
         onRetry={() => {}}
+        onContinue={() => {}}
         retryAvailable={false}
         onRewindTo={() => {}}
         onSuggestion={onSuggestion}
@@ -396,6 +398,7 @@ describe("dismissal", () => {
       <ChatThread
         messages={[ANSWER]}
         onRetry={() => {}}
+        onContinue={() => {}}
         retryAvailable={false}
         onRewindTo={() => {}}
         onSuggestion={onSuggestion}
