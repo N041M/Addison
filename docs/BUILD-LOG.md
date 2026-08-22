@@ -12,6 +12,53 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22: the frame clock that can stop, and the fossil that wore the app's face
+
+Two findings from chasing one report. The owner streamed the styling test and the
+answer stayed plain to the end — and the chase went through a wrong theory whose
+correction is itself the more valuable half of this entry.
+
+- **WHAT THE OWNER ACTUALLY SAW was a checkout without the feature.** The
+  progressive renderer merged from a WORKTREE; the main checkout — the one
+  `tauri dev` serves — was still on the pre-merge commit. Nothing was broken;
+  the code being watched simply wasn't the code that shipped. A pull fixed that
+  half in one command.
+- **WHAT THE REMOTE SESSION THEN "CONFIRMED" was a fossil.** Every screenshot
+  that seemed to prove the merged feature broken live was of the STALE DEBUG
+  BUNDLE (`target/debug/bundle/macos/Addison.app`, built 16:44 — hours before
+  the merge): `open_application`'s bundle-id resolution launches it, the
+  screenshot filter hides the real unbundled dev binary's window, and the fossil
+  runs the CURRENT core against an EMBEDDED pre-merge frontend, so it streams
+  convincingly and renders yesterday. The whole-app pass had already documented
+  this exact trap (whole-app-test-pass memory, 2026-08-21) and it still cost
+  this session an hour. The remedy is unchanged: delete `target/debug/bundle`,
+  `tauri build --debug --bundles app`, drive the fresh bundle.
+- **THE REAL WEAKNESS THE WRONG THEORY UNCOVERED: the re-parse trusted a clock
+  that is allowed to stop.** It was throttled into one `requestAnimationFrame`
+  and nothing else; a webview whose page believes it is not visible — an
+  occluded window, a hidden tab, and demonstrably this repo's own frontend in a
+  headless browser pane — books every rAF callback and fires none, which leaves
+  the split at its mount value and the ENTIRE answer as plain tail, silently,
+  forever. No jsdom test can catch that: jsdom's rAF is timer-driven, and every
+  component test hand-delivered the tick it was assuming (`await new
+  Promise(requestAnimationFrame)` both assumes and IS the tick). Not proven to
+  be what anyone saw in the app — but real, cheap to hit, and invisible to the
+  whole suite.
+- **THE FIX IS A BOOKING ON TWO CLOCKS.** Each recompute schedules a rAF *and* a
+  40ms timer; the first to fire runs it and cancels the other. Where the frame
+  clock is alive, rAF wins at ~16ms and the timer dies unfired — behavior
+  unchanged. Where it is dead, the timer carries the parse at the scramble's own
+  cadence (timers run where rAF stops — the scramble itself is a 38ms interval).
+  Pinned by a test that stubs rAF to book-and-never-fire; mutated (timer booked
+  only when rAF is absent — the trusting shape) → red.
+- **TWO LESSONS.** A throttle's clock is a load-bearing dependency, and a green
+  suite says nothing about whether that clock ticks where the app runs. And a
+  live-verification session MUST begin by proving which build it is looking at —
+  a marker string through HMR costs thirty seconds and would have saved the
+  hour; the documented trap documented itself a second time.
+
+---
+
 ## What shipped 08-21: an answer that formats itself as it arrives
 
 Owner request. A streaming answer used to be plain pre-wrap text that turned into

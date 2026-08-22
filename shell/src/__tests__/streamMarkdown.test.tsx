@@ -334,6 +334,40 @@ describe("StreamingMarkdown", () => {
     expect(container.querySelector("h1")?.textContent).toBe("Tidied");
   });
 
+  // The live failure of 2026-08-21, pinned. wry's WKWebView leaves the page
+  // believing it is hidden, so `requestAnimationFrame` ACCEPTS every callback
+  // and fires none — and a re-parse throttled on that clock alone never settled
+  // one block in the real app while this whole file stayed green (every other
+  // test here flushes the frame by hand, which is exactly the tick the webview
+  // never delivered). The timer backstop is what this pins: with a dead frame
+  // clock, one timer tick must still bring the parse.
+  it("still settles when the frame clock never ticks", async () => {
+    const realRaf = window.requestAnimationFrame;
+    const realCaf = window.cancelAnimationFrame;
+    window.requestAnimationFrame = (() => 1) as typeof window.requestAnimationFrame;
+    window.cancelAnimationFrame = () => {};
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(
+        <StreamingMarkdown content="# Tid" display="# Tid" showCursor />,
+      );
+      const content = "# Tidied\n\nStill arriving";
+      rerender(<StreamingMarkdown content={content} display={content} showCursor />);
+      // The recompute is booked and the frame clock is dead: nothing yet.
+      expect(container.querySelector("h1")).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(50);
+      });
+
+      expect(container.querySelector("h1")?.textContent).toBe("Tidied");
+    } finally {
+      vi.useRealTimers();
+      window.requestAnimationFrame = realRaf;
+      window.cancelAnimationFrame = realCaf;
+    }
+  });
+
   it("keeps the tail per-frame fresh between re-parses", () => {
     // No frame is flushed here at all: the boundaries are whatever the last
     // parse decided, and the tail is still sliced out of the CURRENT display.

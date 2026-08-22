@@ -11,7 +11,9 @@
 //
 //   * THE PARSE IS THROTTLED TO A FRAME, THE TEXT IS NOT. The scramble emits a
 //     frame every 38ms and re-parsing a long answer at that rate is work nobody
-//     asked for, so a recompute is coalesced into one `requestAnimationFrame`.
+//     asked for, so a recompute is coalesced into one `requestAnimationFrame` —
+//     with a 40ms timer booked under it, because that clock can be dead where
+//     this app actually runs (the booking below owns the story).
 //     Between frames the last boundaries are rendered against the CURRENT display
 //     string, which is what keeps the arriving tail per-frame fresh while only
 //     the block structure lags — the reader cannot see a boundary that is one
@@ -52,6 +54,19 @@ interface Props {
   showCursor: boolean;
 }
 
+/** How long the timer backstop waits — the scramble's own tick, so a dead frame
+ * clock costs the parse nothing the animation wasn't already spending. */
+const PARSE_FALLBACK_MS = 40;
+
+function cancelBooking(booking: { frame: number | null; timer: ReturnType<typeof setTimeout> | null }) {
+  if (booking.frame !== null && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(booking.frame);
+  }
+  if (booking.timer !== null) clearTimeout(booking.timer);
+  booking.frame = null;
+  booking.timer = null;
+}
+
 function sameSplit(a: StreamSplit, b: StreamSplit): boolean {
   return (
     a.tailStart === b.tailStart &&
@@ -77,38 +92,49 @@ function StreamingMarkdownImpl({ content, display, showCursor }: Props) {
     splitForStreaming(content, edge(content, display)),
   );
 
-  // The props the pending frame must read. It fires after this render has
+  // The props the pending recompute must read. It fires after this render has
   // committed, and by then `content` may already have grown again.
   const latest = useRef({ content, display });
-  const frame = useRef<number | null>(null);
+  // The one recompute in flight, booked on BOTH clocks below. `null` when none.
+  const booked = useRef<{ frame: number | null; timer: ReturnType<typeof setTimeout> | null }>({
+    frame: null,
+    timer: null,
+  });
 
   useEffect(() => {
     latest.current = { content, display };
-    if (frame.current !== null) return;
-    // Read from the ref, never from this render's props: by the time the frame
-    // runs, more of the answer may have arrived.
-    const recompute = () => {
+    const booking = booked.current;
+    if (booking.frame !== null || booking.timer !== null) return;
+    // Read from the ref, never from this render's props: by the time the
+    // recompute runs, more of the answer may have arrived.
+    const run = () => {
+      cancelBooking(booking);
       const now = latest.current;
       const next = splitForStreaming(now.content, edge(now.content, now.display));
       setSplit((prev) => (sameSplit(prev, next) ? prev : next));
     };
-    if (typeof requestAnimationFrame !== "function") {
-      // No frame clock (a non-browser host). Nothing to coalesce against, so the
-      // throttle is dropped rather than emulated with a timer.
-      recompute();
-      return;
+    // Booked on TWO clocks, first one to fire wins and cancels the other. The
+    // frame clock is the throttle this component wants — but it is a clock that
+    // CAN SIMPLY NEVER TICK: wry's WKWebView leaves the page believing it is
+    // hidden, so `requestAnimationFrame` accepts the callback and never runs it,
+    // and the first build of this component — throttled on that clock alone —
+    // never settled a single block in the real app while every jsdom test
+    // passed (live failure, 2026-08-21; BUILD-LOG owns the finding). The timer
+    // is the backstop: timers demonstrably fire in that webview — the scramble
+    // itself is a 38ms interval — so the parse is carried at the scramble's own
+    // cadence when the frame clock is dead, and the timer is cancelled unfired
+    // everywhere the frame clock is alive.
+    if (typeof requestAnimationFrame === "function") {
+      booking.frame = requestAnimationFrame(run);
     }
-    frame.current = requestAnimationFrame(() => {
-      frame.current = null;
-      recompute();
-    });
+    booking.timer = setTimeout(run, PARSE_FALLBACK_MS);
   }, [content, display]);
 
   useEffect(() => {
-    return () => {
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
-      frame.current = null;
-    };
+    // The booking OBJECT is stable — only its fields ever change — so taking it
+    // once here reads the live state at unmount, not a stale copy.
+    const booking = booked.current;
+    return () => cancelBooking(booking);
   }, []);
 
   const limit = edge(content, display);
