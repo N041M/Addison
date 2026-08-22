@@ -1145,3 +1145,21 @@ follows. None is scheduled and none blocks anything.
   and that is the Knowledge entry above wearing a smaller hat: once retrieval
   lands, a note is a small attachable document that is already local and already
   trusted. Until then, nothing to build.
+- **Messaging channels: still deferred, but the design now has an owner.** The
+  deferral in [`CLAUDE.md`](../CLAUDE.md) is unchanged and nothing is scheduled;
+  what changed on 2026-08-22 is that the owner asked for phone control of Addison
+  (WhatsApp named), so the design was written down before anything could be built
+  opportunistically. [`messaging-channel-plan.md`](messaging-channel-plan.md)
+  (2026-08-22, proposed, not scheduled) owns it: outbound-only transport with no
+  listener of any kind, Telegram's Bot API first behind a plural adapter protocol,
+  pairing as the authorization boundary (the automation-nonce code, shown on the
+  desktop and sent from the phone) with unknown senders ignored in silence, and a
+  **remote floor** that is a closed set of tool ids asserted to be a subset of
+  `visible_tools(SAFE)` — so a phone is never offered a tool Simple could not be
+  offered. It states the four floors up front, the eleven decisions only the owner
+  can take (transport order and the WhatsApp-bridge stance, whether the
+  card-over-channel phase is ever built, desktop-history access, background mode,
+  what is on the floor's list), and the limits that survive success: the
+  transport's servers see the conversation, a stolen unlocked phone is a paired
+  identity, and the Mac has to be awake — which is where it parts company with
+  design-doc §7.10's managed-proxy assumption, deliberately and at a stated cost.
