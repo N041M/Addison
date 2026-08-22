@@ -276,7 +276,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
         flush_results()
 
         if m.role == "user":
-            api_messages.append({"role": "user", "content": m.content})
+            api_messages.append({"role": "user", "content": _user_content(m)})
         elif m.role == "assistant":
             if m.tool_calls:
                 content: list[dict] = []
@@ -292,6 +292,37 @@ def _translate_history(messages: list[Message]) -> list[dict]:
 
     flush_results()
     return api_messages
+
+
+def _user_content(m: Message) -> str | list[dict]:
+    """A user turn's ``content`` — the plain string it has always been, or the
+    Messages API's block list when the person attached pictures (image-attach §3).
+
+    NO ATTACHMENTS MEANS THE STRING, byte-for-byte: the block list is not "the
+    general case with zero images", because every message in every conversation
+    that predates this feature goes through here and none of them may change shape.
+
+    With attachments: the images FIRST, then at most one text block. Pictures lead
+    because the text almost always refers to them ("what is this?"), and the text
+    block is omitted entirely when there is nothing to say — the API rejects an
+    empty text block, and sending just a photo is an ordinary message.
+    """
+    if not m.images:
+        return m.content
+    blocks: list[dict] = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image.media_type,
+                "data": image.data_b64,
+            },
+        }
+        for image in m.images
+    ]
+    if m.content:
+        blocks.append({"type": "text", "text": m.content})
+    return blocks
 
 
 def _translate_response(data: dict) -> ModelResponse:

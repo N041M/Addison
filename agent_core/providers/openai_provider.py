@@ -312,10 +312,39 @@ def _translate_history(messages: list[Message]) -> list[dict]:
             out.append(
                 {"role": "tool", "tool_call_id": m.tool_call_id, "content": str(m.content)}
             )
+        elif m.role == "user" and m.images:
+            # The ONE message shape that is not a plain string (image-attach §3).
+            # Guarded on the role as well as the field so a picture that somehow
+            # rode in on a tool or assistant message is ignored rather than sent:
+            # OpenAI's tool role takes no image parts at all.
+            out.append({"role": "user", "content": _user_parts(m)})
         else:
             # system / user / plain assistant
             out.append({"role": m.role, "content": m.content or ""})
     return out
+
+
+def _user_parts(m: Message) -> list[dict]:
+    """A user turn's ``content`` parts when pictures are attached.
+
+    Each picture is a ``data:`` URL rather than a link, which is the whole point:
+    nothing about an attachment is fetchable, so no server is asked for anything
+    and the bytes on the wire are the bytes the person previewed.
+
+    Images first, then one text part — and no text part at all when there is
+    nothing to say, so a photo sent on its own is not padded with an empty string
+    for the model to read meaning into.
+    """
+    parts: list[dict] = [
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:{image.media_type};base64,{image.data_b64}"},
+        }
+        for image in m.images
+    ]
+    if m.content:
+        parts.append({"type": "text", "text": m.content})
+    return parts
 
 
 def _translate_response(data: dict) -> ModelResponse:

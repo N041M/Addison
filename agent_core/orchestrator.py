@@ -138,6 +138,20 @@ _KEY_REJECTED_NOTE = (
 _NO_MODEL_REACHABLE = (
     "Addison couldn't reach a model to answer just now. Please try again in a moment."
 )
+# THE PICTURE GATE'S sentence (image-attach plan §3): said when a message that
+# carries attached pictures would be answered by a model that cannot look at them.
+# A warning and a manual switch, NEVER an automatic model change — §4.1.1 item A
+# is explicit that Addison does not pick a different model on somebody's behalf in
+# v1 — so the sentence names the one thing that fixes it and nothing else.
+#
+# Same voice as the tool path's notice (``_gate_image_result``), and deliberately
+# not the same sentence: that one is about a picture a TOOL read off disk, this one
+# about a picture the person attached with their own hands, and telling somebody
+# their own attachment is "this file" would not sound like their message.
+_BLIND_TO_PICTURES = (
+    "The model answering right now can't look at pictures. "
+    "Switch to one that can and send it again."
+)
 
 # The "you did not pass one" sentinel for ``run_turn(stream_to=...)`` (messaging
 # channels phase 2). It cannot be None, because None is a MEANINGFUL value there —
@@ -179,6 +193,24 @@ def _result_as_text(content: Any) -> str:
         except (TypeError, ValueError):
             return json.dumps(str(content), ensure_ascii=False)
     return str(content)
+
+
+def _last_user_message(messages: list[Message]) -> Message | None:
+    """The message this turn is answering, or None if the list holds no user turn.
+
+    THE LAST one, not "the first carrying pictures". A conversation keeps every
+    picture ever attached to it, and the picture gate is a question about the
+    message somebody just sent: an older attachment reaching a model that cannot
+    see it is the adapters' degrade, not a reason to refuse a question typed now.
+
+    At turn entry the last user message IS the new one — the transient system
+    prompt goes in at index 0, and assistant/tool turns only appear after a
+    provider has answered — so no separate marker is needed to find it.
+    """
+    for message in reversed(messages):
+        if message.role == "user":
+            return message
+    return None
 
 
 @dataclass
@@ -459,6 +491,15 @@ class Orchestrator:
             trusted_roots=self._trusted_roots,
         )
         chain = self._routing_chain(requested_role, model_name)
+        # THE PICTURE GATE (image-attach plan §3), before a single provider is
+        # called. A model that cannot look at pictures, handed a message that has
+        # them, does not fail — it answers about the words alone, confidently and
+        # with no sign that half the message was missing. A plain sentence beats
+        # that, so this turn ends here.
+        if self._refuse_if_blind_to_pictures(
+            conversation, chain, requested_role, model_name, sink
+        ):
+            return
         if chain is None:
             # Unwired (CLI/tests): today's single-provider path, byte-for-byte —
             # one resolution, no fallback, no per-call timeout (existing fake
@@ -1350,6 +1391,56 @@ class Orchestrator:
         if role is ModelRole.LOCAL:
             return "ollama", (model_name or "local")
         return "anthropic", (model_name or "default")
+
+    def _refuse_if_blind_to_pictures(
+        self, conversation, chain, requested_role, model_name, sink
+    ) -> bool:
+        """Whether this turn was refused because its NEW message carries pictures
+        the answering model cannot look at (image-attach plan §3). True means the
+        turn is over and nothing was sent.
+
+        THE SEAM. The pictures are read off the last user message rather than taken
+        as a parameter, and that is the smallest honest one: every caller already
+        appends this turn's user ``Message`` to the conversation before calling
+        ``run_turn`` (``rpc/conversation.py``, ``rpc/channels.py``, ``main.py``), so
+        phase 3 — which teaches ``conversation.sendMessage`` to carry attachments —
+        wires this up by building that same Message with ``images`` and changes not
+        one line here. Until then the gate is real code with no production caller,
+        exercised by constructing the Message directly.
+
+        NOTHING IS RESOLVED WHEN THERE ARE NO PICTURES. The common turn does one
+        scan of a list it already holds and is otherwise byte-identical to what it
+        was before this gate existed — no extra ``resolve``, no extra
+        ``capabilities()``, and on the Ollama adapter that second one is an HTTP
+        call the first time.
+
+        WHICH PROVIDER IS ASKED is the one that would answer: the head of the
+        routing chain where there is one, and the single resolution otherwise. A
+        chain can still fall forward PAST that head onto a text-only local, and
+        that case is deliberately not a refusal — the person did nothing to cause
+        it, so it gets the adapters' history degrade instead (plan §9), and the
+        "Answered by" line says who ended up answering.
+        """
+        message = _last_user_message(conversation.messages)
+        if message is None or not message.images:
+            return False
+        if chain:
+            head = chain[0]
+            provider = self.model_router.resolve(head.role, head.model_id)
+        else:
+            provider = self.model_router.resolve(requested_role, model_name)
+        if provider.capabilities().vision:
+            return False
+        # Ended the way every other early stop ends (``_finish_over_budget``): the
+        # sentence is APPENDED to the transcript as well as streamed, so a reopened
+        # conversation does not end on a question with nothing said back, and the
+        # relay is used rather than the sink directly so a turn answering a phone
+        # sends it to the phone.
+        conversation.append_assistant_message(_BLIND_TO_PICTURES)
+        relay = _DeltaRelay(sink)
+        relay.begin_send()
+        relay(_BLIND_TO_PICTURES)
+        return True
 
     def _gate_image_result(self, result: ToolResult, provider) -> ToolResult:
         """(A) Vision gate (§4.1.1 item A): don't feed a picture to a model that

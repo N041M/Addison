@@ -246,7 +246,7 @@ def _translate_history(messages: list[Message]) -> list[dict]:
         flush_results()
 
         if m.role == "user":
-            contents.append({"role": "user", "parts": [{"text": m.content or ""}]})
+            contents.append({"role": "user", "parts": _user_parts(m)})
         elif m.role == "assistant":
             parts: list[dict] = []
             if m.content:
@@ -258,6 +258,33 @@ def _translate_history(messages: list[Message]) -> list[dict]:
 
     flush_results()
     return contents
+
+
+def _user_parts(m: Message) -> list[dict]:
+    """A user turn's ``parts`` — one text part as always, or inline image data
+    ahead of it when the person attached pictures (image-attach plan §3).
+
+    With no attachments this is ``[{"text": content or ""}]``, which is what every
+    user turn has always been: the empty-string fallback stays, because Gemini
+    wants a part and an absent one is not the same as an empty one.
+
+    ``inline_data`` (snake_case, unlike this API's camelCase elsewhere) is the
+    bytes-in-the-request shape; the alternative, ``file_data``, points at an
+    uploaded file on Google's side, which an attachment is deliberately not — the
+    picture goes out with the message and is stored nowhere but this person's own
+    machine.
+    """
+    if not m.images:
+        return [{"text": m.content or ""}]
+    parts: list[dict] = [
+        {"inline_data": {"mime_type": image.media_type, "data": image.data_b64}}
+        for image in m.images
+    ]
+    if m.content:
+        # Omitted when empty, unlike the no-attachment case above: there the empty
+        # part is the only part, and here dropping it still leaves the pictures.
+        parts.append({"text": m.content})
+    return parts
 
 
 def _function_call_part(call: ToolCallRequest) -> dict:
