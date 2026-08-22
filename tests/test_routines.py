@@ -27,10 +27,12 @@ from urllib.parse import urlsplit
 from agent_core.main import build_registry
 from agent_core.memory.store import Store
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
+from agent_core.policy import PolicyMode
 from agent_core.profiles import DEVELOPER
 from agent_core.protocol import Method
 from agent_core.routines.builder import RoutineBuilder
 from agent_core.routines.engine import (
+    _OUTSIDE_TRUST,
     RoutineEngine,
     resolve_template,
     topologically_sorted,
@@ -45,7 +47,13 @@ from agent_core.tools.base import (
     ToolDefinition,
     ToolResult,
 )
-from agent_core.tools.registry import UNKNOWN_TOOL_REFUSAL, ToolRegistry
+from agent_core.tools.registry import (
+    DEV_ONLY_REFUSAL,
+    LIVE_ONLY_REFUSAL,
+    NOT_CALLABLE_REFUSAL,
+    UNKNOWN_TOOL_REFUSAL,
+    ToolRegistry,
+)
 from tests.conftest import IPC_DB_NAME, _shutdown, build_server
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -612,6 +620,196 @@ def test_non_runtime_error_from_tool_becomes_plain_failed_step(tmp_path):
     assert result.status == "failed"
     assert result.detail == "That step didn't work."
     assert "boom internal detail" not in result.detail
+
+
+# --- ONE failure block for every refusal path (KNOWN-GAPS, closed 2026-08-22) --
+#
+# The engine has seven ways a step can end badly: an id nothing is registered
+# under, five pre-gate guards, and a tool that ran and failed. Each guard used to
+# carry its OWN copy of the abort / ask_user / skip handling, agreeing with the
+# canonical block only because each copy was written to match its neighbours —
+# so a fourth on_failure policy would have been added to one and silently missing
+# from the other six. They now share ``RoutineEngine._record_step``, and these
+# tests are what makes a guard that stops sharing it a red build: every path is
+# driven through every policy, not just the default.
+
+class _GuardTool:
+    """A LOW tool with a caller-chosen id, and optionally a path it would touch.
+
+    The cases below need several ids and one path-bounded tool; nothing else about
+    a tool matters to a check that refuses before ``execute`` is ever reached."""
+
+    def __init__(self, tool_id: str, affected: str | None = None):
+        self.definition = ToolDefinition(
+            id=tool_id,
+            label="Do a step",
+            description="Test tool.",
+            risk_tier=RiskTier.LOW,
+            parameters_schema={"type": "object", "properties": {}},
+        )
+        self._affected = affected
+        self.executed: list[dict] = []
+
+    def affected_path(self, args: dict) -> str | None:
+        return self._affected
+
+    def execute(self, args: dict, context: ExecutionContext) -> ToolResult:
+        self.executed.append(args)
+        return ToolResult(success=True, content="ok")
+
+
+_REFUSAL_PATHS = (
+    "unknown_tool",
+    "dev_only",
+    "not_callable",
+    "live_only",
+    "forbidden",
+    "outside_trust",
+    "tool_failed",
+)
+
+_FORBIDDEN_SENTENCE = "That's one of Addison's own folders, so it left it alone."
+
+
+def _guard_engine(tmp_path, path: str, *, on_ask_user=None, db="guards.sqlite3"):
+    """An engine whose FIRST step ends on exactly one of the seven failure paths.
+
+    Returns ``(engine, first_step, refusal, flaky, store)`` — the sentence the run
+    must report, the tool the SECOND step uses (so a caller can ask whether the run
+    carried on), and the run log."""
+    registry = ToolRegistry()
+    flaky = _FlakyTool()
+    registry.register(flaky)
+    gate = PermissionGate()
+    gate.grant("flaky")
+    forbidden_ids: set[str] = set()
+    trusted = True
+
+    def forbidden_check(tool, args):
+        return _FORBIDDEN_SENTENCE if tool.definition.id in forbidden_ids else None
+
+    def trust_check(candidate):
+        return trusted
+
+    if path == "unknown_tool":
+        # Nothing is registered under it — a saved ``mcp:`` step after a restart.
+        step, refusal = RoutineStep("s1", "mcp:Design docs:search", {}), UNKNOWN_TOOL_REFUSAL
+    elif path == "dev_only":
+        registry.register(_GuardTool("dev_step"), open_only=True)
+        step, refusal = RoutineStep("s1", "dev_step", {}), DEV_ONLY_REFUSAL
+    elif path == "not_callable":
+        registry.register(_GuardTool("unwired_step"), not_callable=True)
+        step, refusal = RoutineStep("s1", "unwired_step", {}), NOT_CALLABLE_REFUSAL
+    elif path == "live_only":
+        registry.register(_GuardTool("live_step"), live_only=True)
+        step, refusal = RoutineStep("s1", "live_step", {}), LIVE_ONLY_REFUSAL
+    elif path == "forbidden":
+        registry.register(_GuardTool("guarded_step"))
+        forbidden_ids.add("guarded_step")
+        step, refusal = RoutineStep("s1", "guarded_step", {}), _FORBIDDEN_SENTENCE
+    elif path == "outside_trust":
+        registry.register(_GuardTool("path_step", affected="/elsewhere/notes.txt"))
+        trusted = False
+        step, refusal = RoutineStep("s1", "path_step", {}), _OUTSIDE_TRUST
+    elif path == "tool_failed":
+        # The canonical block's own path: granted, ran, came back unsuccessful.
+        step, refusal = RoutineStep("s1", "flaky", {"fail": True}), "That step didn't work."
+    else:                                                     # pragma: no cover
+        raise AssertionError(f"unknown refusal path '{path}'")
+
+    store = Store(tmp_path / db)
+    store.insert_routine(
+        id="r-1", name="Test", description="", plan_json={},
+        created_from_conversation_id=None, created_at=1,
+    )
+    engine = RoutineEngine(
+        tool_registry=registry,
+        permission_gate=gate,
+        undo_manager=UndoManager(store=store, tool_registry=registry),
+        on_ask_user=on_ask_user,
+        store=store,
+        forbidden_check=forbidden_check,
+        trust_check=trust_check,
+    )
+    return engine, step, refusal, flaky, store
+
+
+def _two_steps(first: RoutineStep, on_failure: str) -> Routine:
+    return _routine([
+        RoutineStep(first.step_id, first.tool_id, dict(first.args_template), on_failure=on_failure),
+        RoutineStep("s2", "flaky", {"value": "second"}, depends_on=["s1"]),
+    ])
+
+
+@pytest.mark.parametrize("path", _REFUSAL_PATHS)
+def test_every_failure_path_honours_on_failure_abort(tmp_path, path):
+    engine, first, refusal, flaky, _ = _guard_engine(tmp_path, path)
+
+    result = engine.run(_two_steps(first, "abort"), {}, mode=PolicyMode.SAFE)
+
+    assert result.status == "failed"
+    assert result.detail == refusal
+    assert {"value": "second"} not in flaky.executed
+
+
+@pytest.mark.parametrize("path", _REFUSAL_PATHS)
+def test_every_failure_path_honours_on_failure_skip(tmp_path, path):
+    engine, first, refusal, flaky, _ = _guard_engine(tmp_path, path)
+
+    result = engine.run(_two_steps(first, "skip"), {}, mode=PolicyMode.SAFE)
+
+    assert result.status == "completed"
+    assert {"value": "second"} in flaky.executed          # the run carried on
+    assert str(result.step_results["s1"].content) == refusal
+
+
+@pytest.mark.parametrize("path", _REFUSAL_PATHS)
+def test_every_failure_path_honours_on_failure_ask_user(tmp_path, path):
+    """Both answers, on every path: the person is asked with the refusal's OWN
+    sentence, "keep going" carries on, and "stop" cancels the run."""
+    asked: list[str] = []
+    keep_going = {"answer": True}
+
+    def ask(step, run_id, message):
+        asked.append(message)
+        return keep_going["answer"]
+
+    engine, first, refusal, flaky, _ = _guard_engine(tmp_path, path, on_ask_user=ask)
+    result = engine.run(_two_steps(first, "ask_user"), {}, mode=PolicyMode.SAFE)
+    assert asked == [refusal]
+    assert result.status == "completed"
+    assert {"value": "second"} in flaky.executed
+
+    keep_going["answer"] = False
+    engine, first, refusal, flaky, _ = _guard_engine(
+        tmp_path, path, on_ask_user=ask, db="again.sqlite3"
+    )
+    result = engine.run(_two_steps(first, "ask_user"), {}, mode=PolicyMode.SAFE)
+    assert result.status == "cancelled"
+    assert result.detail == "Stopped at your request."
+    assert {"value": "second"} not in flaky.executed
+
+
+@pytest.mark.parametrize("path", _REFUSAL_PATHS)
+def test_every_failure_path_records_the_step_and_finishes_the_run(tmp_path, path):
+    """The other half of what the shared block guarantees: whichever way a step
+    ends, the panel is told it FAILED, the run log names it, and the run is
+    finalised rather than left recorded as 'running' forever."""
+    events: list[dict] = []
+    engine, first, refusal, _, store = _guard_engine(tmp_path, path)
+    engine.on_step = events.append
+
+    engine.run(_two_steps(first, "abort"), {}, mode=PolicyMode.SAFE)
+
+    assert [e["status"] for e in events] == ["running", "failed"]
+    assert events[-1]["message"] == refusal
+    assert events[-1]["tool_id"] == first.tool_id
+    row = store._conn.execute(
+        "SELECT status, completed_at, step_log_json FROM routine_runs"
+    ).fetchone()
+    assert row["status"] == "failed" and row["completed_at"] is not None
+    (logged,) = json.loads(row["step_log_json"])
+    assert logged["result_summary"] == refusal
 
 
 # --- builder (§6.3) ----------------------------------------------------------

@@ -362,7 +362,7 @@ twice.
   guarantee, and the last time this thread was allowed to die every later request
   hung with no frame at all. Its test reaches the branch by putting the server back
   into its pre-build state.
-- **`routines/engine.py`: FIVE pre-gate guards each duplicate `on_failure`
+- ~~**`routines/engine.py`: FIVE pre-gate guards each duplicate `on_failure`
   handling.** The unknown-tool refusal, the dev-only guard, the not-callable
   guard, the step-5.5 denylist and the confinement guard each shape their refusal
   as a failed step and re-implement abort / ask_user / skip **inline** instead of
@@ -373,7 +373,18 @@ twice.
   fifth, and each copy was written to match its neighbours rather than introduce a
   new shape. That is the right call for one diff and the wrong equilibrium overall,
   and the rate at which the list grows is now the argument. **Fix by restructuring
-  so all six paths share one block**; it is cheaper to do than to keep deferring.
+  so all six paths share one block**; it is cheaper to do than to keep
+  deferring.~~ **CLOSED 2026-08-22**, exactly as prescribed and with no behaviour
+  change: the guards were collected into `RoutineEngine._pre_gate_refusal` (which
+  returns the first refusal's message, audit outcome and audit detail and decides
+  nothing about what happens next) and every way a step can end — the unknown id,
+  all five guards, and a tool that ran and failed — now shapes one `ToolResult`
+  and goes through `RoutineEngine._record_step`, the single place `on_failure` is
+  read. The entry had been overtaken a third time by the step-8 live-only guard,
+  so it was seven paths rather than six. `test_routines.py` drives every path
+  through every policy (abort / skip / ask_user, both answers) plus the emitted
+  step events and the run log, and the parametrization is mutation-proven: a
+  policy honoured on the tool-failure path alone fails six ways.
 
 **Open design questions, each blocking a specific step** (moved here from the scope
 amendment's §13 when that document was retired, 2026-07-27; the other four §13

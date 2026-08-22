@@ -26,6 +26,7 @@ from agent_core.routines.taint import RunTaint
 from agent_core.snapshots.undo_manager import UndoManager
 from agent_core.tools.base import (
     ExecutionContext,
+    Tool,
     ToolResult,
     call_affected_path,
     call_is_destructive,
@@ -325,34 +326,22 @@ class RoutineEngine:
             # other refusal, and `on_failure` still decides what happens next.
             # `detail` is None and `destructive` False: with no tool there is
             # nothing to ask either question of.
+            #
+            # It stands apart from the guard table below for one reason only: every
+            # per-call fact that table works from needs a tool to ask. The FAILURE
+            # is shaped in the one shared place, like all the others.
             tool = self.tool_registry.find(tool_id)
             if tool is None:
                 self._audit(routine, tool_id, None, mode, False, "not_callable")
-                result = ToolResult(success=False, content=UNKNOWN_TOOL_REFUSAL)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, UNKNOWN_TOOL_REFUSAL,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+                terminal = self._record_step(
+                    ToolResult(success=False, content=UNKNOWN_TOOL_REFUSAL),
+                    step_results=step_results, step_log=step_log, index=index, step=step,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id,
+                    answer=answer,
                 )
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, UNKNOWN_TOOL_REFUSAL, step_log, answer
-                    )
-                if step.on_failure == "ask_user" and not self._on_ask_user(
-                    step, run_id, UNKNOWN_TOOL_REFUSAL
-                ):
-                    return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.",
-                        step_log, answer,
-                    )
+                if terminal is not None:
+                    return terminal
                 continue
-            # SAFE-1 at dispatch, before the gate: a routine step naming a dev-only
-            # tool cannot run outside OPEN, whoever wrote that tool. Refusing here
-            # rather than inside execute also means the person is never asked to
-            # approve something that was never going to run. Shaped as a FAILED
-            # STEP (not a failed run) so on_failure still decides what happens next
-            # — byte-for-byte what run_command's own refusal already produced.
-            dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(tool_id, mode)
             # Per-call destructiveness, resolved ONCE for every branch below — the
             # refusal branches used to hard-code a literal, which described the
             # branch rather than the call (the live loop had the same defect).
@@ -365,147 +354,22 @@ class RoutineEngine:
             # than the one the step acted on. None for a command step, which is what
             # leaves those completely unaffected.
             affected = call_affected_path(tool, resolved_args)
-            if dev_only_refusal is not None:
-                # The live loop audits this branch; this one did not, so a routine
-                # step naming a dev tool in SAFE was the one refusal in the tree
-                # that left no record at all — and a routine is the path that runs
-                # without anyone watching. `detail` is None to match the live
-                # loop's dev_only row exactly: nothing about the call was examined.
-                self._audit(routine, tool_id, None, mode, destructive, "dev_only")
-                result = ToolResult(success=False, content=dev_only_refusal)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, dev_only_refusal,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
+            # THE PRE-GATE GUARDS, asked in ONE call and answered in ONE block
+            # (KNOWN-GAPS, closed 2026-08-22). Each used to shape its own refusal and
+            # re-implement abort / ask_user / skip inline, five copies that agreed only
+            # because each was written to match its neighbours.
+            refusal = self._pre_gate_refusal(tool, tool_id, resolved_args, affected, mode)
+            if refusal is not None:
+                message, outcome, audit_detail = refusal
+                self._audit(routine, tool_id, audit_detail, mode, destructive, outcome)
+                terminal = self._record_step(
+                    ToolResult(success=False, content=message),
+                    step_results=step_results, step_log=step_log, index=index, step=step,
+                    run_id=run_id, routine=routine, total=total, tool_id=tool_id,
+                    answer=answer,
                 )
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, dev_only_refusal, step_log, answer
-                    )
-                if step.on_failure == "ask_user":
-                    if not self._on_ask_user(step, run_id, dev_only_refusal):
-                        return self._finish(
-                            run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log, answer,
-                        )
-                continue
-            # DISCOVERED BUT NOT WIRED. The live loop's twin, here because a
-            # boundary only one dispatch path enforces is not a boundary (SAFE
-            # invariant 3's reasoning) — and a routine is the path that runs with
-            # nobody watching, so a step naming a tool with no dispatch behind it
-            # must refuse here rather than reach a server. Shaped as a FAILED STEP,
-            # so `on_failure` still decides what happens next, exactly like the
-            # branch above. Quiet for MCP since phase 3, and still the mechanism the
-            # phase constant operates through; the audit row is phase 3's too.
-            not_callable_refusal = self.tool_registry.refuse_if_not_callable(tool_id)
-            if not_callable_refusal is not None:
-                self._audit(routine, tool_id, None, mode, destructive, "not_callable")
-                result = ToolResult(success=False, content=not_callable_refusal)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, not_callable_refusal,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
-                )
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, not_callable_refusal, step_log, answer
-                    )
-                if step.on_failure == "ask_user":
-                    if not self._on_ask_user(step, run_id, not_callable_refusal):
-                        return self._finish(
-                            run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log, answer,
-                        )
-                continue
-            # NOT FROM A SAVED SPEC (step 8 phase 3, plan §5.10). Switching an
-            # automation on or off asks a person to read a preview and retype a
-            # short code; a stored, one-click, model-authorable routine that could
-            # raise that card mid-run invites answering it on autopilot, which is
-            # the exact reflex the code exists to break. Refused HERE rather than at
-            # the gate, so the card is never raised at all.
-            #
-            # SAFE-3 note: this NARROWS what a routine may do relative to live chat,
-            # which is the permitted direction — a routine never gains anything, and
-            # a person who wants this asks for it in the conversation.
-            #
-            # `not_callable` is the audit outcome, the vocabulary's value for "the
-            # request named something that could not run, and nothing about it was
-            # examined, approved or reached" (schema.sql) — true of this word for
-            # word. Widening that CHECK to a dedicated value is a migration, and
-            # this refusal does not earn one.
-            live_only_refusal = self.tool_registry.refuse_if_live_only(tool_id)
-            if live_only_refusal is not None:
-                self._audit(routine, tool_id, None, mode, destructive, "not_callable")
-                result = ToolResult(success=False, content=live_only_refusal)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, live_only_refusal,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
-                )
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, live_only_refusal, step_log, answer
-                    )
-                if step.on_failure == "ask_user" and not self._on_ask_user(
-                    step, run_id, live_only_refusal
-                ):
-                    return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.",
-                        step_log, answer,
-                    )
-                continue
-            # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
-            # naming Addison's own restore storage or the user's credential stores
-            # does not run, and is never offered as a card. A routine is persisted,
-            # one-click and model-authorable, so this is the site where a forbidden
-            # command would otherwise be easiest to smuggle past a person.
-            forbidden = self._forbidden_check(tool, resolved_args)
-            if forbidden is not None:
-                self._audit(routine, tool_id,
-                            call_permission_detail(tool, resolved_args, affected),
-                            mode, destructive, "forbidden")
-                result = ToolResult(success=False, content=forbidden)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, forbidden,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
-                )
-                if step.on_failure == "abort":
-                    return self._finish(run_id, "failed", step_results, forbidden, step_log, answer)
-                if step.on_failure == "ask_user" and not self._on_ask_user(
-                    step, run_id, forbidden
-                ):
-                    return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.",
-                        step_log, answer,
-                    )
-                continue
-            # CONFINEMENT (step 5, D3): a path-bounded step may only run inside a
-            # trusted root. Resolve once, refuse before the gate if outside trust,
-            # and hand the resolved path to execute via the context (R6). The file
-            # tools aren't routine-exposed in v1, so this is defence-in-depth;
-            # affected_path is None for a command step, which resets resolved_path.
-            if affected is not None and not self._trust_check(affected):
-                self._audit(routine, tool_id,
-                            call_permission_detail(tool, resolved_args, affected),
-                            mode, destructive, "confined_out")
-                result = ToolResult(success=False, content=_OUTSIDE_TRUST)
-                step_results[step.step_id] = result
-                self._step_done(
-                    step_log, index, step, _OUTSIDE_TRUST,
-                    run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=False,
-                )
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, _OUTSIDE_TRUST, step_log, answer
-                    )
-                if step.on_failure == "ask_user" and not self._on_ask_user(
-                    step, run_id, _OUTSIDE_TRUST
-                ):
-                    return self._finish(
-                        run_id, "cancelled", step_results, "Stopped at your request.",
-                        step_log, answer,
-                    )
+                if terminal is not None:
+                    return terminal
                 continue
             context.resolved_path = affected
             # Mode-aware authorization (policy.py): SAFE prompts for every
@@ -589,13 +453,6 @@ class RoutineEngine:
             if result.snapshot:
                 result.snapshot.tool_call_id = f"{run_id}:{step.step_id}"
                 self.undo_manager.record(result.snapshot)   # Routine runs are undoable too
-            step_results[step.step_id] = result
-            self._step_done(
-                step_log, index, step,
-                "ok" if result.success else str(result.content),
-                run_id=run_id, routine=routine, total=total, tool_id=tool_id,
-                ok=result.success,
-            )
             # THE ANSWER, kept from the last step that actually produced text. A
             # later step that returns nothing (a file write, a snapshot) does not
             # erase it — a person asked for the sum, not for the last thing to
@@ -604,22 +461,152 @@ class RoutineEngine:
                 text = str(result.content or "").strip()
                 if text:
                     answer = text[:MAX_ROUTINE_ANSWER_CHARS]
-
-            if not result.success:
-                if step.on_failure == "abort":
-                    return self._finish(
-                        run_id, "failed", step_results, str(result.content), step_log, answer
-                    )
-                if step.on_failure == "ask_user":
-                    keep_going = self._on_ask_user(step, run_id, str(result.content))
-                    if not keep_going:
-                        return self._finish(
-                            run_id, "cancelled", step_results, "Stopped at your request.",
-                            step_log, answer,
-                        )
-                # "skip" falls through to the next step
+            # The same block every refusal above goes through — a tool that failed
+            # honestly is not a different kind of failed step than one that was
+            # refused before it could run.
+            terminal = self._record_step(
+                result,
+                step_results=step_results, step_log=step_log, index=index, step=step,
+                run_id=run_id, routine=routine, total=total, tool_id=tool_id, answer=answer,
+            )
+            if terminal is not None:
+                return terminal
+            # "skip" (and an ask_user the person answered "keep going" to) falls
+            # through to the next step.
 
         return self._finish(run_id, "completed", step_results, "", step_log, answer)
+
+    # --- the pre-gate guards, in one table (KNOWN-GAPS, closed 2026-08-22) ----
+    def _pre_gate_refusal(
+        self,
+        tool: Tool,
+        tool_id: str,
+        resolved_args: dict,
+        affected: str | None,
+        mode: PolicyMode,
+    ) -> tuple[str, str, str | None] | None:
+        """Every reason a step is refused BEFORE the gate sees it, asked in order.
+
+        Returns ``(message, audit_outcome, audit_detail)`` for the first guard that
+        refuses, or None when the step may go on to the gate. It decides nothing
+        about what happens NEXT: the caller shapes one failed step out of whatever
+        comes back and ``_record_step`` reads ``on_failure`` once, for these and for
+        a tool that failed honestly alike. That was the point of collecting them —
+        each guard used to carry its own copy of the abort / ask_user / skip
+        handling, and five copies agree only until someone adds a fourth policy.
+
+        ORDER IS BEHAVIOUR. The first refusal wins and the rest are never asked, so
+        a step naming a dev-only tool in SAFE reports that rather than whatever the
+        denylist would have said about it. The order below is the order the guards
+        were written in.
+        """
+        # SAFE-1 at dispatch, before the gate: a routine step naming a dev-only
+        # tool cannot run outside OPEN, whoever wrote that tool. Refusing here
+        # rather than inside execute also means the person is never asked to
+        # approve something that was never going to run. Shaped as a FAILED
+        # STEP (not a failed run) so on_failure still decides what happens next
+        # — byte-for-byte what run_command's own refusal already produced.
+        #
+        # The live loop audits this branch; this one did not, so a routine step
+        # naming a dev tool in SAFE was the one refusal in the tree that left no
+        # record at all — and a routine is the path that runs without anyone
+        # watching. The detail is None to match the live loop's dev_only row
+        # exactly: nothing about the call was examined.
+        dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(tool_id, mode)
+        if dev_only_refusal is not None:
+            return dev_only_refusal, "dev_only", None
+        # DISCOVERED BUT NOT WIRED. The live loop's twin, here because a
+        # boundary only one dispatch path enforces is not a boundary (SAFE
+        # invariant 3's reasoning) — and a routine is the path that runs with
+        # nobody watching, so a step naming a tool with no dispatch behind it
+        # must refuse here rather than reach a server. Quiet for MCP since phase 3,
+        # and still the mechanism the phase constant operates through; the audit
+        # row is phase 3's too.
+        not_callable_refusal = self.tool_registry.refuse_if_not_callable(tool_id)
+        if not_callable_refusal is not None:
+            return not_callable_refusal, "not_callable", None
+        # NOT FROM A SAVED SPEC (step 8 phase 3, plan §5.10). Switching an
+        # automation on or off asks a person to read a preview and retype a
+        # short code; a stored, one-click, model-authorable routine that could
+        # raise that card mid-run invites answering it on autopilot, which is
+        # the exact reflex the code exists to break. Refused HERE rather than at
+        # the gate, so the card is never raised at all.
+        #
+        # SAFE-3 note: this NARROWS what a routine may do relative to live chat,
+        # which is the permitted direction — a routine never gains anything, and
+        # a person who wants this asks for it in the conversation.
+        #
+        # `not_callable` is the audit outcome, the vocabulary's value for "the
+        # request named something that could not run, and nothing about it was
+        # examined, approved or reached" (schema.sql) — true of this word for
+        # word. Widening that CHECK to a dedicated value is a migration, and
+        # this refusal does not earn one.
+        live_only_refusal = self.tool_registry.refuse_if_live_only(tool_id)
+        if live_only_refusal is not None:
+            return live_only_refusal, "not_callable", None
+        # THE HARDLINE DENYLIST (step 5.5, item 3), above the gate: a step
+        # naming Addison's own restore storage or the user's credential stores
+        # does not run, and is never offered as a card. A routine is persisted,
+        # one-click and model-authorable, so this is the site where a forbidden
+        # command would otherwise be easiest to smuggle past a person.
+        forbidden = self._forbidden_check(tool, resolved_args)
+        if forbidden is not None:
+            return forbidden, "forbidden", call_permission_detail(tool, resolved_args, affected)
+        # CONFINEMENT (step 5, D3): a path-bounded step may only run inside a
+        # trusted root. Resolved once by the caller, refused before the gate if
+        # outside trust, and handed to execute via the context (R6). The file
+        # tools aren't routine-exposed in v1, so this is defence-in-depth;
+        # affected_path is None for a command step, which resets resolved_path.
+        if affected is not None and not self._trust_check(affected):
+            return (
+                _OUTSIDE_TRUST,
+                "confined_out",
+                call_permission_detail(tool, resolved_args, affected),
+            )
+        return None
+
+    def _record_step(
+        self,
+        result: ToolResult,
+        *,
+        step_results: dict[str, ToolResult],
+        step_log: list[dict],
+        index: int,
+        step: RoutineStep,
+        run_id: str,
+        routine: Routine,
+        total: int,
+        tool_id: str,
+        answer: str,
+    ) -> RoutineRunResult | None:
+        """THE ONE PLACE ``on_failure`` IS READ (KNOWN-GAPS, closed 2026-08-22).
+
+        Every way a step can end arrives here: the id nothing is registered under,
+        each of the five pre-gate guards, and a tool that ran and failed. They used
+        to be six copies of abort / ask_user / skip, matching only because each was
+        written to look like its neighbours — so a fourth policy would have been
+        added to one of them and silently missing from the other five.
+
+        Returns the run's terminal result when the run must STOP, and None to carry
+        on with the next step — which is the answer for a success, for "skip", and
+        for an ask_user the person answered "keep going" to.
+        """
+        step_results[step.step_id] = result
+        self._step_done(
+            step_log, index, step,
+            "ok" if result.success else str(result.content),
+            run_id=run_id, routine=routine, total=total, tool_id=tool_id, ok=result.success,
+        )
+        if result.success:
+            return None
+        message = str(result.content)
+        if step.on_failure == "abort":
+            return self._finish(run_id, "failed", step_results, message, step_log, answer)
+        if step.on_failure == "ask_user" and not self._on_ask_user(step, run_id, message):
+            return self._finish(
+                run_id, "cancelled", step_results, "Stopped at your request.", step_log, answer,
+            )
+        return None
 
     # --- live progress (owner decision 2026-08-12) ---------------------------
     def _step_event(
