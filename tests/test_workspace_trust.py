@@ -1469,3 +1469,117 @@ def test_grant_trust_answers_the_automation_sentence_for_an_automation_dir(tmp_p
     finally:
         reader.close()
         thread.join(timeout=5)
+
+
+# ============================================================================
+# The folder picker: neither loop waits on it, and a timeout says so
+# (KNOWN-GAPS "workspace.pickDirectory blocks the worker thread", CLOSED 2026-08-22)
+# ============================================================================
+class _PickerBridge(ShellBridgeStubs):
+    """A bridge whose ``pick_directory`` behaves like the modal it stands for: it
+    signals that the dialog is on screen, then waits — for a release (somebody
+    choosing a folder at last), or for the raise the test asked for."""
+
+    def __init__(self, *, raises: BaseException | None = None, directory: str = "/tmp/picked"):
+        self.on_screen = threading.Event()
+        self.release = threading.Event()
+        self._raises = raises
+        self._directory = directory
+
+    def pick_directory(self) -> str:
+        self.on_screen.set()
+        if self._raises is not None:
+            raise self._raises
+        self.release.wait(timeout=5)
+        return self._directory
+
+
+def _picker_server(tmp_path, bridge):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    db_path = data_dir / "app.sqlite3"
+    reader = _PipeReader()
+    writer = _FrameWriter()
+    server = JsonRpcServer(
+        reader=reader, writer=writer,
+        tool_registry=build_registry(DEVELOPER),
+        store_factory=lambda: Store(db_path),
+        db_path=db_path,
+        model_router=ModelRouter(configured={ModelRole.PRIMARY: _ScriptedProvider([])}),
+        shell_bridge=bridge,
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    return reader, writer, thread
+
+
+def test_an_open_folder_picker_does_not_hold_up_the_store_queue(tmp_path):
+    """It was a worker job, so a modal dialog somebody had left open stood in the
+    queue every store-backed RPC shares — the trust list the very same panel
+    re-reads, a routine run, a snapshot. This holds the dialog open and asks
+    ``workspace.list``, which IS a worker job and does read SQLite. It must answer.
+
+    Mutation: put ``Method.WORKSPACE_PICK_DIRECTORY`` back into ``_WORKSPACE_JOBS``
+    (with its ``elif`` in the worker loop) and frame 2 waits behind the dialog until
+    this test's ceiling.
+
+    It pins the other half too — that the picker still answers its own request from
+    wherever it now runs — because a call nobody has to wait for is worth nothing if
+    its own answer never arrives."""
+    bridge = _PickerBridge(directory=str(tmp_path))
+    reader, writer, thread = _picker_server(tmp_path, bridge)
+    try:
+        reader.feed({"jsonrpc": "2.0", "id": 1, "method": "workspace.pickDirectory"})
+        assert bridge.on_screen.wait(timeout=5), "the picker never opened"
+
+        listed = _rpc(reader, writer, 2, "workspace.list")
+        assert listed["result"]["folders"] == []
+        # The dialog really is still open — frame 2 did not simply come second.
+        assert not any(f.get("id") == 1 and "result" in f for f in writer.frames)
+
+        bridge.release.set()
+        picked = writer.wait_for(lambda f: f.get("id") == 1 and "result" in f)
+        assert picked["result"] == {"directory": str(tmp_path)}
+    finally:
+        bridge.release.set()
+        reader.close()
+        thread.join(timeout=5)
+
+
+def test_a_picker_the_core_stopped_waiting_for_says_so_and_a_cancel_still_does_not(tmp_path):
+    """The honest-timeout half. A cancelled picker and a picker the bridge gave up on
+    both arrived as ``RuntimeError`` and both answered a bare ``{"directory": null}``,
+    so browsing past the ceiling was indistinguishable from pressing Cancel — the
+    button appeared to have done nothing at all.
+
+    The bridge now raises ``ShellCallTimeout`` for the second case only, and the
+    answer carries one plain sentence. Mutation: collapse the two ``except`` arms in
+    ``_workspace_pick_directory`` and the second half fails; make ``error``
+    unconditional and it fails the other way.
+
+    Also asserts what must NOT be in the sentence: no exception class, no traceback,
+    no number of seconds (CLAUDE.md — plain language, one next step)."""
+    from agent_core.rpc.workspace import _PICKER_TIMED_OUT
+    from agent_core.tools.base import ShellCallTimeout
+
+    timed_out = _PickerBridge(raises=ShellCallTimeout("Addison couldn't finish that just now."))
+    reader, writer, thread = _picker_server(tmp_path / "first", timed_out)
+    try:
+        answer = _rpc(reader, writer, 1, "workspace.pickDirectory")["result"]
+        assert answer == {"directory": None, "error": _PICKER_TIMED_OUT}
+        assert "Traceback" not in answer["error"]
+        assert "ShellCallTimeout" not in answer["error"]
+        assert "60" not in answer["error"]
+    finally:
+        reader.close()
+        thread.join(timeout=5)
+
+    # A cancel keeps the shape it always had: no sentence, because the person who
+    # pressed Cancel does not need to be told that they pressed Cancel.
+    cancelled = _PickerBridge(raises=RuntimeError("cancelled"))
+    reader, writer, thread = _picker_server(tmp_path / "second", cancelled)
+    try:
+        assert _rpc(reader, writer, 1, "workspace.pickDirectory")["result"] == {"directory": None}
+    finally:
+        reader.close()
+        thread.join(timeout=5)

@@ -640,16 +640,17 @@ export const ipc = {
   // {ok:false} carrying the core's plain, already-user-ready sentence, never a
   // reject, so the card can show one calm line. `revokeTrust` likewise resolves to
   // {ok}. `listWorkspaceRoots` returns the currently-trusted roots. `pickDirectory`
-  // opens the OS folder picker through the Rust shell and resolves to the chosen
-  // absolute path, or `null` when the person cancelled (or the picker is
-  // unavailable) — the caller simply does nothing then.
+  // opens the OS folder picker through the Rust shell and resolves to
+  // `{directory, error}`: the chosen absolute path, or `null` when the person
+  // cancelled (or the picker is unavailable) — the caller simply does nothing then
+  // — with `error` set only when the core stopped waiting on a picker still open.
   grantWorkspaceTrust: (directory: string): Promise<WorkspaceMutationResult> =>
     call(Method.WorkspaceGrantTrust, { directory }).then(parseWorkspaceMutation),
   revokeWorkspaceTrust: (directory: string): Promise<WorkspaceMutationResult> =>
     call(Method.WorkspaceRevokeTrust, { directory }).then(parseWorkspaceMutation),
   listWorkspaceRoots: (): Promise<WorkspaceRoot[]> =>
     call(Method.WorkspaceList).then(parseWorkspaceRoots),
-  pickWorkspaceDirectory: (): Promise<string | null> =>
+  pickWorkspaceDirectory: (): Promise<WorkspaceDirectoryPick> =>
     call(Method.WorkspacePickDirectory).then(parseWorkspaceDirectory),
 
   // The review surface (Phase 3). Browsing is a USER-DRIVEN read, which is why it
@@ -2019,11 +2020,26 @@ export function parseArming(value: unknown): PermissionRequest["arming"] {
 
 /** workspace.pickDirectory → the chosen absolute path, or `null` when the person
  * cancelled or no picker is available. Anything that isn't a non-empty string is
- * `null` — a cancelled picker must never look like a chosen folder. */
-export function parseWorkspaceDirectory(result: unknown): string | null {
+ * `null` — a cancelled picker must never look like a chosen folder.
+ *
+ * `error` is the core's own plain sentence for the ONE case it can name: the
+ * picker was still open when the core stopped waiting for it. It used to arrive
+ * as a bare `{directory: null}`, i.e. indistinguishable from Cancel, so browsing
+ * too long silently did nothing. Verbatim, like every other core sentence this
+ * file renders — and `null` for a cancel, which needs no explaining. */
+export interface WorkspaceDirectoryPick {
+  directory: string | null;
+  error: string | null;
+}
+
+export function parseWorkspaceDirectory(result: unknown): WorkspaceDirectoryPick {
   const obj = asRecord(result);
   const dir = obj?.directory;
-  return typeof dir === "string" && dir ? dir : null;
+  const error = obj?.error;
+  return {
+    directory: typeof dir === "string" && dir ? dir : null,
+    error: typeof error === "string" && error ? error : null,
+  };
 }
 
 // ---------------------------------------------------------------------------

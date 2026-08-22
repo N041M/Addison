@@ -30,7 +30,8 @@ export function useWorkspace({ connected }: UseWorkspaceArgs) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   // The last refused grant, in the core's own already-plain words (e.g. the
-  // data-dir refusal). Cleared when the next grant/revoke starts.
+  // data-dir refusal) — or the core's sentence for a folder picker it stopped
+  // waiting on. Cleared when the next pick/grant/revoke starts.
   const [error, setError] = useState<string | null>(null);
   // The last revoke's plain outcome line ("Addison will ask first again in …").
   // Stays put rather than fading — a sentence someone re-reads. Cleared on the
@@ -62,10 +63,20 @@ export function useWorkspace({ connected }: UseWorkspaceArgs) {
 
   /** Open the OS folder picker. Resolves to the chosen absolute path, or `null`
    * when the person cancelled or no picker is available (the card does nothing
-   * then). Never throws — a picker failure is just "no folder chosen". */
+   * then). Never throws — a picker failure is just "no folder chosen".
+   *
+   * One case is NOT silent: when the core stopped waiting on a picker still open,
+   * it sends a plain sentence with the null, and that goes on the panel's own
+   * error line — the same line a refused grant uses. Without it, giving up and
+   * pressing Cancel looked identical, and the person was left clicking a button
+   * that appeared to do nothing. Any previous error is cleared first, so a stale
+   * refusal never survives a fresh pick. */
   const pickDirectory = useCallback(async (): Promise<string | null> => {
+    setError(null);
     try {
-      return await ipc.pickWorkspaceDirectory();
+      const picked = await ipc.pickWorkspaceDirectory();
+      if (picked.error) setError(picked.error);
+      return picked.directory;
     } catch {
       return null;
     }

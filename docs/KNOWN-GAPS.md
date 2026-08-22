@@ -498,11 +498,16 @@ against the tree on 2026-07-26:
   *(The guard immediately found four tests sending `{"content": ...}` where the
   wire field is `text`; they had been running whole turns on an empty user
   message, which is the litter this entry describes.)*
-- **Local-setup pre-flight HTTP runs on the read loop.**
+- ~~**Local-setup pre-flight HTTP runs on the read loop.**
   `_handle_start_local_setup` (`agent_core/main.py`) is an inline dispatch handler
   and calls `is_running()`, which can block frame delivery up to 5s.
   `availableRoles` was moved off the read loop for exactly this reason; same shape
-  as `shell.pickDirectory` blocking the worker on a modal.
+  as `shell.pickDirectory` blocking the worker on a modal.~~ **CLOSED 2026-08-22.**
+  `model.startLocalSetup` is a worker job (`start_local_setup`) now, moved by the
+  same one-line change `availableRoles` took, so the five-second Ollama probe can
+  no longer stop the read loop from delivering the `permission.respond` or
+  `conversation.stop` that would end the turn underneath it. It queues behind an
+  in-flight turn, which is the accepted half of that trade.
 - ~~**Three stale-docstring flags, still UNVERIFIED.**~~ **All three resolved
   2026-08-06: one was real, two were the stale thing.** `openai_provider.py` was
   REAL and is fixed: its module docstring said the custom base URL is "validated
@@ -638,7 +643,13 @@ are here because somebody will meet them, and because anything built on top of
 - **`policy._canonical` case-folds unconditionally**, so `/tmp/PROJECT/x` is judged
   inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
   (case-insensitive), **wrong on a case-sensitive volume**, where it widens
-  confinement. macOS-only assumption, currently undocumented in the function.
+  confinement. **Still open — but DOCUMENTED AT THE FUNCTION since 2026-08-22**, so
+  it is a known platform note rather than a silent assumption: `_canonical`'s
+  docstring now states that the fold is a macOS default-volume assumption, which
+  direction each caller errs in when it is wrong (the protected-dir refusal toward
+  refusing, workspace confinement toward admitting a sibling of a trusted folder),
+  and that a fix would have to decide per-VOLUME rather than per-platform, since
+  both kinds mount on one Mac. **The behaviour is unchanged.**
 - ~~The floor protects Addison's DATA, not Addison's CODE.~~ **CLOSED FOR A
   PACKAGED INSTALL, 2026-08-06.** *(This is the single statement of it; SAFETY.md,
   design-doc §9.x and HANDOFF all point here.)* In a packaged install the model
@@ -820,10 +831,21 @@ are here because somebody will meet them, and because anything built on top of
   `shell/src/types/protocol.ts` (`WorkspaceEdit.revertable: boolean` →
   `boolean | null`), so it is a core + protocol change and was deliberately not made
   from the frontend side.
-- **`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
+- ~~**`workspace.pickDirectory` blocks the worker thread** on a modal dialog with the
   bridge's 60s ceiling; browse for longer and the timeout is swallowed into
   `{"directory": null}` with no explanation, while every other store RPC queues
-  behind the open dialog.
+  behind the open dialog.~~ **CLOSED 2026-08-22**, both halves. It is no longer a
+  worker job at all: the handler starts one short-lived thread and answers from
+  there (`main.py::_handle_workspace_pick_directory`), which it is allowed to do
+  because the RPC is store-free — the `_ensure_built()` it used to call was the
+  only thing tying a folder dialog to the SQLite queue. And a timeout is no longer
+  a cancellation: `IpcShellBridge._call` raises `ShellCallTimeout`
+  (a `RuntimeError` subclass, so every existing catch is unchanged) and the handler
+  answers `{"directory": null, "error": "Addison stopped waiting for the folder
+  picker…"}`, which `useWorkspace` puts on the panel's existing error line.
+  **The 60s ceiling itself is unchanged** — this makes it audible, it does not
+  raise it; if browsing past a minute turns out to be ordinary, the human-paced
+  precedent to copy is `_KEYCHAIN_TIMEOUT`.
 - **The CSP blocks Tauri's own custom-protocol IPC, and whether to admit it is an
   OWNER DECISION** (found 2026-08-08, verified against tauri 2.11.5, the version in
   `Cargo.lock`). `connect-src 'self'` does not admit `ipc:` (macOS/Linux) or

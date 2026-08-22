@@ -87,6 +87,26 @@ class ToolResult:
     content_origin: str = "local"
 
 
+class ShellCallTimeout(RuntimeError):
+    """A Core -> Shell request that never came back inside its waiter's ceiling.
+
+    A ``RuntimeError`` subclass so every existing ``except RuntimeError`` around a
+    bridge call keeps catching it unchanged. It exists so the few callers that can
+    say something TRUER than "that didn't work" are able to tell a timeout apart
+    from the shell's own refusal — ``workspace.pickDirectory`` is the first: a
+    cancelled picker and a picker somebody is still browsing are the same
+    ``RuntimeError`` today, and the second one silently became "no folder chosen".
+
+    It carries the bridge's plain sentence like any other; distinguishing on the
+    TYPE rather than on the message text is the point, because a message string is
+    copy and copy gets rewritten.
+
+    Declared here, beside the Protocol whose calls raise it, so a caller can name
+    it without importing ``agent_core.shell_bridge`` (which several modules are
+    structurally forbidden from touching).
+    """
+
+
 class ShellBridge(Protocol):
     """The typed contract every OS-level effect crosses (engineering-spec §1.3).
 

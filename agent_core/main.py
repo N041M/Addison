@@ -568,6 +568,14 @@ class JsonRpcServer(
     read loop: it may lazily fetch the live cloud-model list, which does a Core ->
     Shell key probe and an outbound HTTPS call — both block on frames the read loop
     must stay free to deliver, so they can never run on the read loop itself.
+    ``model.startLocalSetup`` joined it there on 2026-08-22 for the same reason (its
+    reachability pre-flight is a five-second HTTP call).
+
+    ONE call belongs to NEITHER loop: ``workspace.pickDirectory`` answers on a
+    short-lived thread of its own (``_handle_workspace_pick_directory``). A modal
+    folder dialog is paced by a person, so the read loop must not wait on it and the
+    worker must not either — parking the queue on somebody browsing held up every
+    store RPC behind it. It is store-free, which is what makes a thread legal.
 
     Every outgoing frame — notification, response, or Core -> Shell request —
     goes through ``_write_frame`` under one lock; stdout therefore carries only
@@ -1310,9 +1318,20 @@ class JsonRpcServer(
             Method.PROFILE_GET: enqueue("profile_get"),
             Method.PROFILE_SET: enqueue("profile_set"),
             Method.STATS_GET: enqueue("stats_get"),
-            # Inline on the read loop (store-free; each owns its own response).
+            # On the worker for availableRoles' reason exactly, and it was inline
+            # until 2026-08-22: its pre-flight asks Ollama over HTTP
+            # (``is_running``), which can sit there for five seconds, and five
+            # seconds of undelivered frames means a window that has stopped
+            # answering — including the permission card that would end the turn
+            # underneath it. The pull itself was always on its own thread; it was
+            # the two questions BEFORE the pull that ran here.
+            Method.MODEL_START_LOCAL_SETUP: enqueue("start_local_setup"),
+            # Inline on the read loop (store-free; it owns its own response).
             Method.MODEL_SET_ROLE_FOR_NEXT_MESSAGE: self._handle_set_role,
-            Method.MODEL_START_LOCAL_SETUP: self._handle_start_local_setup,
+            # Inline in the sense that the read loop does not wait on it: the
+            # handler starts a thread and returns. It is NOT a worker job, and
+            # that is the whole point — see its docstring.
+            Method.WORKSPACE_PICK_DIRECTORY: self._handle_workspace_pick_directory,
         }
         for jobs in (
             _ROUTINE_JOBS,
@@ -1339,6 +1358,49 @@ class JsonRpcServer(
         """A §7 method reserved for a later build step: a plain 'not built yet'
         error rather than a silent failure (see _NOT_BUILT_METHODS)."""
         self._respond_error(request_id, _SERVER_ERROR, _NOT_BUILT_MESSAGE)
+
+    # --- the folder picker: neither loop waits on it (2026-08-22) ------------
+    def _handle_workspace_pick_directory(self, params: dict, request_id) -> None:
+        """workspace.pickDirectory — start a thread and return; it answers itself.
+
+        THE THIRD PLACE, and it needs to be. The read loop cannot make this call:
+        the shell's answer arrives as a frame only the read loop parses, so waiting
+        here would wait forever. The WORKER cannot make it either — which is where
+        it used to live: this is a modal folder dialog a person may leave open while
+        they go and find their project, and every store RPC behind it (the trust
+        list the very same panel re-reads, a routine run, a snapshot) sat waiting on
+        somebody browsing. So it gets a thread of its own, exactly as the local-model
+        pull does, and blocks nothing but itself.
+
+        Safe as a thread precisely because ``_workspace_pick_directory`` is
+        store-free — no SQLite crosses a thread boundary here, which is the rule the
+        worker exists to keep. ``_respond`` is already locked, so the answer
+        interleaves with the loops' frames cleanly.
+
+        Nothing serialises two of these: a second click means a second thread and a
+        second ``shell.pickDirectory``, which the shell answers as it sees fit. That
+        is the same shape a double-click had before (two queued jobs, two dialogs in
+        turn) and is left alone deliberately — a guard here would be a lock over a
+        dialog nobody has reported opening twice."""
+        thread = threading.Thread(
+            target=self._run_workspace_pick_directory,
+            args=(request_id,),
+            name="folder-picker",
+            daemon=True,
+        )
+        thread.start()
+
+    def _run_workspace_pick_directory(self, request_id) -> None:
+        """The picker thread's whole body: ask, answer, never raise out.
+
+        A thread that dies with an exception answers no frame at all, and the panel
+        would wait on a promise that never settles — so the catch-all is not
+        decoration. It collapses to the same plain sentence ``_dispatch`` gives any
+        handler that throws, with no stack trace (CLAUDE.md)."""
+        try:
+            self._respond(request_id, self._workspace_pick_directory())
+        except Exception as exc:
+            self._respond_error(request_id, _SERVER_ERROR, _plain(exc))
 
     # --- worker thread (all SQLite-backed work) ---------------------------
     def _worker_loop(self) -> None:
@@ -1396,6 +1458,8 @@ class JsonRpcServer(
                 elif kind == "available_roles":
                     self._maybe_load_catalogs()
                     self._respond(request_id, self._available_roles())
+                elif kind == "start_local_setup":
+                    self._handle_start_local_setup(params, request_id)
                 elif kind == "undo":
                     self._respond(request_id, self._undo_last_action())
                 elif kind == "redo":
@@ -1495,8 +1559,6 @@ class JsonRpcServer(
                     self._respond(request_id, self._workspace_grant(params))
                 elif kind == "workspace_revoke":
                     self._respond(request_id, self._workspace_revoke(params))
-                elif kind == "workspace_pick_directory":
-                    self._respond(request_id, self._workspace_pick_directory())
                 elif kind == "workspace_list_directory":
                     self._respond(request_id, self._workspace_list_directory(params))
                 elif kind == "workspace_read_file":
@@ -2198,7 +2260,23 @@ class JsonRpcServer(
     def _handle_start_local_setup(self, params: dict, request_id) -> None:
         """Steps 1-2 (reachability + hardware) answer via the RPC response; on
         success the pull/verify (steps 3-4) run on a background thread so the
-        server stays responsive, streaming ``model.localSetupProgress``."""
+        server stays responsive, streaming ``model.localSetupProgress``.
+
+        RUNS ON THE WORKER (job kind ``start_local_setup``), not on the read loop.
+        It was an inline dispatch handler until 2026-08-22, and step 1 is
+        ``is_running()`` — an HTTP call to Ollama with a five-second ceiling. On the
+        read loop that is five seconds in which no inbound frame is parsed at all:
+        no ``permission.respond``, no ``conversation.stop``, no shell response for a
+        bridge call the worker is parked on. The same reasoning moved
+        ``availableRoles`` (see the class docstring's threading model), and the same
+        consequence applies — this now queues behind an in-flight turn, which is the
+        correct trade: setting up a local model is not the thing that has to answer
+        while a card is on screen.
+
+        It touches no store, so it takes the worker's build-failure answer along
+        with everything else rather than an exemption: a session whose settings file
+        will not open is one where the person's next action is a restore, not a
+        seven-gigabyte download."""
         model_name = str(params.get("modelName") or "").strip()
         if not model_name:
             self._respond_error(request_id, _SERVER_ERROR, "Choose a model to set up first.")
@@ -2418,7 +2496,12 @@ _WORKSPACE_JOBS = {
     Method.WORKSPACE_GRANT_TRUST: "workspace_grant",
     Method.WORKSPACE_REVOKE_TRUST: "workspace_revoke",
     Method.WORKSPACE_LIST: "workspace_list",
-    Method.WORKSPACE_PICK_DIRECTORY: "workspace_pick_directory",
+    # WORKSPACE_PICK_DIRECTORY IS DELIBERATELY ABSENT (2026-08-22). It is the one
+    # workspace call that touches no store and opens a modal a person may sit in
+    # front of for minutes, so queueing it here made every other store RPC wait on
+    # a dialog. It answers on its own thread from the dispatch table instead —
+    # ``_handle_workspace_pick_directory``. Do not add it back: the queue is a lock
+    # for the calls that write, and this one writes nothing.
     Method.WORKSPACE_LIST_DIRECTORY: "workspace_list_directory",
     Method.WORKSPACE_READ_FILE: "workspace_read_file",
     # The diff and the revert (Build §2/§3) queue here for a THIRD reason on top of

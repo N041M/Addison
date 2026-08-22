@@ -48,7 +48,7 @@ from agent_core.snapshots.file_revert import (
     another_file_stands_there,
     replaced_by_a_link,
 )
-from agent_core.tools.base import call_is_forbidden
+from agent_core.tools.base import ShellCallTimeout, call_is_forbidden
 
 # Frozen plain-language copy (D6, F2). The frontend asserts these bytes.
 _GRANT_DATA_DIR_REFUSAL = (
@@ -67,6 +67,15 @@ _GRANT_AUTOMATION_DIR_REFUSAL = (
 )
 _GRANT_NOT_A_FOLDER = "That folder isn't there, so Addison can't trust it."
 _GRANT_NEEDS_ABSOLUTE = "Addison needs the full path to a folder to trust it."
+# The picker's own "nobody answered" sentence. It says what happened, what it did
+# NOT do, and the one next step — and it names no ceiling, no thread and no
+# timeout in seconds, because none of those is a thing the person can act on. It
+# is only ever sent for ``ShellCallTimeout``: pressing Cancel still says nothing,
+# which is correct, because the person already knows they pressed Cancel.
+_PICKER_TIMED_OUT = (
+    "Addison stopped waiting for the folder picker, so nothing was chosen and "
+    "nothing changed. Open it again and pick a folder."
+)
 
 # --- the review surface's read paths (Phase-3 plan Build §1) ----------------
 # Frozen plain-language copy, same rule as the grant refusals above. Each says what
@@ -274,16 +283,32 @@ class WorkspaceMixin(ServerContext):
         }
 
     def _workspace_pick_directory(self) -> dict:
-        """workspace.pickDirectory -> {directory: str | null}. Relays the shell's
-        native folder picker so the "Trust a folder" flow reaches a real OS dialog;
-        the frontend then calls grantTrust with the chosen path. A cancelled picker
-        (or no shell wired) returns ``{"directory": null}`` — not an error, just no
-        choice."""
-        self._ensure_built()
+        """workspace.pickDirectory -> ``{directory: str | null, error?: str}``.
+
+        Relays the shell's native folder picker so the "Trust a folder" flow reaches
+        a real OS dialog; the frontend then calls grantTrust with the chosen path. A
+        cancelled picker (or no shell wired) returns ``{"directory": null}`` — not an
+        error, just no choice.
+
+        STORE-FREE ON PURPOSE, and that is what lets it answer OFF the worker
+        thread (``main.py::_handle_workspace_pick_directory``). It used to call
+        ``_ensure_built()`` before touching a picker it then never asked the store
+        about, and that one line was the whole reason a modal dialog somebody left
+        open held up every other store RPC behind it. Nothing here reads or writes
+        SQLite; keep it that way, or this goes back on the queue.
+
+        A TIMEOUT IS NOT A CANCELLATION. Both used to arrive as ``RuntimeError`` and
+        both answered ``{"directory": null}``, so browsing past the bridge's ceiling
+        told the person exactly what pressing Cancel told them: nothing. The bridge
+        now raises ``ShellCallTimeout`` for the "no answer came back" case alone, and
+        that one carries a plain sentence the panel already knows how to show. The
+        ceiling itself is unchanged."""
         if self._shell_bridge is None:
             return {"directory": None}
         try:
             directory = self._shell_bridge.pick_directory()
+        except ShellCallTimeout:
+            return {"directory": None, "error": _PICKER_TIMED_OUT}
         except RuntimeError:
             return {"directory": None}
         return {"directory": directory or None}

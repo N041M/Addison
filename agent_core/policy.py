@@ -211,7 +211,20 @@ def _canonical(path: str | os.PathLike[str]) -> str | None:
     """``realpath`` (resolves symlinks, ``..`` and relative paths against cwd) plus
     a case fold, so comparison is symlink- and case-insensitive-filesystem safe
     (``/tmp/link -> ~/.addison`` and ``~/.Addison`` both normalise onto the real
-    data dir). Returns None if the path can't be resolved at all."""
+    data dir). Returns None if the path can't be resolved at all.
+
+    THE FOLD IS UNCONDITIONAL, and that is a macOS assumption stated here rather
+    than left to be rediscovered: APFS and HFS+ are case-INSENSITIVE by default, so
+    two spellings really are one file and folding is the only correct comparison.
+    On a case-SENSITIVE volume (APFS can be formatted that way, and a mounted
+    Linux/NFS share usually is) the fold makes this answer YES for paths that are
+    genuinely different files — ``/tmp/PROJECT/x`` reads as inside a trusted
+    ``/tmp/project``. Note the DIRECTION: it widens what counts as inside a
+    protected or trusted root, so the protected-dir refusal errs toward refusing
+    and workspace confinement errs toward admitting a sibling of a folder somebody
+    trusted. Not fixed here; ``docs/KNOWN-GAPS.md`` carries it as a platform note.
+    Anything that would make the fold conditional has to decide per-VOLUME, never
+    per-platform, because both kinds of volume mount on the same Mac."""
     try:
         return os.path.normcase(os.path.realpath(os.path.expanduser(str(path)))).casefold()
     except (OSError, ValueError):

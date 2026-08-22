@@ -187,7 +187,11 @@ class Method:
     WORKSPACE_GRANT_TRUST = "workspace.grantTrust"   # {directory} -> {ok, directory} | {ok:false, error}
     WORKSPACE_REVOKE_TRUST = "workspace.revokeTrust" # {directory} -> {ok}
     WORKSPACE_LIST = "workspace.list"                # {} -> {folders: [{directory, grantedAt}]}
-    WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"  # {} -> {directory: str | null} (relays the shell folder picker)
+    # {} -> {directory: str | null, error?: str} (relays the shell folder picker).
+    # ``error`` rides ONLY when the picker never came back inside the bridge's
+    # ceiling — a cancelled picker is still a bare {directory: null}, because the
+    # person who pressed Cancel needs no sentence about it.
+    WORKSPACE_PICK_DIRECTORY = "workspace.pickDirectory"
     # The review surface's READ paths (Phase-3 plan Build §1). RPC, NEVER a registry
     # tool: a person clicking a folder is not the model acting, and routing a browse
     # through the registry would hand the model a `list_directory` capability as a side
