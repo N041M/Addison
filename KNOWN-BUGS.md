@@ -8,7 +8,7 @@ is only defects with a known wrong behaviour.
 
 ## P1 — broken features
 
-1. **Arming an automation from chat can never succeed — the id is never in the
+1. ~~**Arming an automation from chat can never succeed — the id is never in the
    conversation, in any flow.** Root cause pinned 2026-08-11: `create_automation`'s
    tool result (`_result_text`, `create_automation.py:501`) hands the model the
    schedule sentence, the plist preview and the not-armed line but **never
@@ -25,32 +25,37 @@ is only defects with a known wrong behaviour.
    deletion; (c) optionally let `arm_automation` resolve a unique name, refusing
    on ambiguity — which is also what the Settings seeded sentence needs.*
    `agent_core/tools/create_automation.py` · `agent_core/tools/arm_automation.py` ·
-   SettingsPage AutomationsSection · artifact §07
+   SettingsPage AutomationsSection · artifact §07~~
+   **FIXED 2026-08-11 (PR #98); artifact §07 check re-run green 2026-08-21 (PR #127).**
 
-2. **Gemini 3.x multi-step tool turns always fail.** The adapter does not replay
+2. ~~**Gemini 3.x multi-step tool turns always fail.** The adapter does not replay
    Gemini's `thought_signature` on the second model call, every multi-step tool
    turn 400s, and the error is surfaced as "That key doesn't work" (it does — it
    was a 400, not an auth failure). Re-reproduced 2026-08-11 08:31:06 running the
    artifact §02 check (the Probe automation prompt): the turn died on the second
    call with `ProviderRequestRejected("That key doesn't work. Check it and try
    again.")` — same misattribution, still open.
-   `agent_core/providers/` google adapter · artifact §02
+   `agent_core/providers/` google adapter · artifact §02~~
+   **FIXED 2026-08-11 (PR #109); artifact §02 check re-run green 2026-08-21 (PR #127).**
 
 ## P2 — trust and lifecycle
 
-3. **A pending approval card can stay invisible behind "Working…".** Observed
+3. ~~**A pending approval card can stay invisible behind "Working…".** Observed
    ~4 minutes unrendered; it appeared only after Stop. Nothing ever times out.
-   Frontend card rendering / turn state · artifact §04
+   Frontend card rendering / turn state · artifact §04~~
+   **FIXED 2026-08-11 (PR #110); artifact §04 check re-run green 2026-08-21 (PR #127).**
 
-4. **An approval card outlives its stopped turn and stays fully actionable.**
+4. ~~**An approval card outlives its stopped turn and stays fully actionable.**
    Decide the intended behaviour (card dies with the turn, or survives
-   explicitly) and enforce it. Gate ↔ turn lifecycle · artifact §04
+   explicitly) and enforce it. Gate ↔ turn lifecycle · artifact §04~~
+   **FIXED 2026-08-11 (PR #99); artifact §04 check re-run green 2026-08-21 (PR #127).**
 
-5. **"Save as routine" is lost on conversation reload.** The work panel and the
+5. ~~**"Save as routine" is lost on conversation reload.** The work panel and the
    save link vanish after quit/relaunch; the steps become silently unsaveable.
-   Frontend work-panel state · artifact §06
+   Frontend work-panel state · artifact §06~~
+   **FIXED 2026-08-11 (PR #100); artifact §06 check re-run green 2026-08-21 (PR #127).**
 
-6. **Simple cannot edit existing files at all** — it refuses and offers only
+6. ~~**Simple cannot edit existing files at all** — it refuses and offers only
    "save a new file" (observed 2026-08-11 running the §03 check; the model's
    refusal was accurate to the tool view). **Owner decision 2026-08-11: this is a
    bug — Simple should show the permission card first and then do the edit,**
@@ -65,43 +70,52 @@ is only defects with a known wrong behaviour.
    ceremony, with copy that says what SAFE actually does — so the capability no
    longer reaches only folders trusted while Developer was active. Remaining
    before this is struck: the artifact §03 red-railed check re-runs green.
-   `agent_core/tools/write_project_file.py` · `agent_core/tools/registry.py` · artifact §03
+   `agent_core/tools/write_project_file.py` · `agent_core/tools/registry.py` · artifact §03~~
+   **FIXED 2026-08-11 (PR #101); artifact §03 check re-run green 2026-08-21 (PR #127).**
 
 ## P3 — quality
 
-7. **Message segments fuse without whitespace** ("for you.The answer is…").
+7. ~~**Message segments fuse without whitespace** ("for you.The answer is…").
    Confirmed 9 Aug (second session): the fused text is also in the *settled*
    transcript ("file.Now I'll add", "the end:Done.") — this is not just the
    streaming renderer; the joined content is what gets persisted/rendered after
-   the turn completes. Frontend message renderer (and possibly segment storage) · artifact §04
+   the turn completes. Frontend message renderer (and possibly segment storage) · artifact §04~~
+   **FIXED 2026-08-11 (PR #102); artifact §04 check re-run green 2026-08-21 (PR #127).**
 
-8. **Appends drop the trailing newline.** Addison writes the appended line
+8. ~~**Appends drop the trailing newline.** Addison writes the appended line
    without `\n`, so the next writer's line fuses onto it
-   (`edited: yesmy own edit`). File-edit tool append path · artifact §09
+   (`edited: yesmy own edit`). File-edit tool append path · artifact §09~~
+   **FIXED 2026-08-11 (PR #108); artifact §09 check re-run green 2026-08-21 (PR #127).**
 
-9. **Changes entries carry no timestamp.** The Code screen's Changes list is
-   supposed to show name and time; only the name renders. Code screen Changes list · artifact §09
+9. ~~**Changes entries carry no timestamp.** The Code screen's Changes list is
+   supposed to show name and time; only the name renders. Code screen Changes list · artifact §09~~
+   **FIXED 2026-08-11 (PR #103); artifact §09 check re-run green 2026-08-21 (PR #127).**
 
-10. **Revert confirm contradicts enforcement on swapped files.** When a file has
+10. ~~**Revert confirm contradicts enforcement on swapped files.** When a file has
    been replaced (symlink/hard link/FIFO), the first put-it-back press still
    shows the generic "you've changed this file" confirm and offers a revert the
    engine then (correctly) refuses. The confirm should detect and say it first.
-   Code screen revert confirm · artifact §10
+   Code screen revert confirm · artifact §10~~
+   **FIXED 2026-08-11 (PR #108); artifact §10 check re-run green 2026-08-21 (PR #127).**
 
-11. **Routine plan capture is conversation-scoped.** "Save as routine" offers
+11. ~~**Routine plan capture is conversation-scoped.** "Save as routine" offers
     every tool call in the conversation, including stale unrelated steps, not
-    the turn that produced the answer. Routine plan capture · artifact §06
+    the turn that produced the answer. Routine plan capture · artifact §06~~
+    **FIXED 2026-08-11 (PR #104); artifact §06 check re-run green 2026-08-21 (PR #127).**
 
-12. **"Technical details" adds nothing.** The fold shows the same sentence
-    wrapped in an exception class — no provider, no status code. Error surface · artifact §02
+12. ~~**"Technical details" adds nothing.** The fold shows the same sentence
+    wrapped in an exception class — no provider, no status code. Error surface · artifact §02~~
+    **FIXED 2026-08-11 (PR #108); artifact §02 check re-run green 2026-08-21 (PR #127).**
 
-13. **Status footer claims before it knows.** Asserts "Simple profile · local"
-    at launch before the engine has answered, then corrects itself. Frontend status bar · artifact §01
+13. ~~**Status footer claims before it knows.** Asserts "Simple profile · local"
+    at launch before the engine has answered, then corrects itself. Frontend status bar · artifact §01~~
+    **FIXED 2026-08-11 (PR #105); artifact §01 check re-run green 2026-08-21 (PR #127).**
 
-14. **One thing, two names.** Sidebar says "Snapshots", Settings says "Restore
-    points". Naming, sidebar + SettingsPage.
+14. ~~**One thing, two names.** Sidebar says "Snapshots", Settings says "Restore
+    points". Naming, sidebar + SettingsPage.~~
+    **FIXED 2026-08-11 (PR #106); re-run green 2026-08-21 (PR #127).**
 
-15. **Mermaid diagrams render unthemed and clipped.** Observed 2026-08-11 (light
+15. ~~**Mermaid diagrams render unthemed and clipped.** Observed 2026-08-11 (light
     theme, §04 check): nodes are solid near-black fills with dark text —
     black-on-black, illegible in the light theme and not Addison's palette in
     either theme; node labels truncate mid-word ("Task reques", "Do it dire",
@@ -109,7 +123,8 @@ is only defects with a known wrong behaviour.
     than lines. The diagram itself is structurally correct — this is theming
     (mermaid theme variables not wired to the app's tokens) plus a node-sizing
     bug (fixed-width nodes clipping their labels).
-    Frontend mermaid renderer / theme wiring · artifact §04
+    Frontend mermaid renderer / theme wiring · artifact §04~~
+    **FIXED 2026-08-11 (PR #107); artifact §04 check re-run green 2026-08-21 (PR #127).**
 
 ## Open questions (need a decision or one more observation, not yet a defect)
 
