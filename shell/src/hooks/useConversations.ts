@@ -4,7 +4,7 @@
 // handlers touch (busy guard, transient reset, the thread itself) are passed in.
 
 import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { ConversationSummary, DisplayMessage } from "../types/ui";
+import type { ConversationSummary, DisplayMessage, ThreadContinuation } from "../types/ui";
 import type { ActivityUpdate } from "../types/protocol";
 import { ipc, isEngineConnected } from "../ipc/client";
 
@@ -53,6 +53,10 @@ export function useConversations({
   // The active conversation's title, shown in the chat header. Null → the
   // "New conversation" fallback (an untitled or not-yet-titled chat).
   const [conversationTitle, setConversationTitle] = useState<string | null>(null);
+  // The open chat's boundary, when it has one: the chat it continues and the
+  // summary it was seeded with, both straight off the stored row. Null for an
+  // ordinary chat, and cleared by a new one.
+  const [continuation, setContinuation] = useState<ThreadContinuation | null>(null);
   // A stable mirror of the current id so the post-turn list refresh (which runs
   // in an async `finally`) reads the up-to-date value, not a stale closure.
   const currentConversationIdRef = useRef<string | null>(null);
@@ -97,6 +101,7 @@ export function useConversations({
         setMessages([]);
         setCurrentConversationId(id);
         setConversationTitle(null);
+        setContinuation(null); // a fresh chat continues nothing
         setScreen("chat");
         // The new (still empty) conversation may not be in the list until its
         // first turn; refresh anyway so an existing row is reconciled.
@@ -134,6 +139,14 @@ export function useConversations({
         // per-turn state, so this is the reopened chat's last turn and nothing
         // older — the same thing the person was looking at when they closed it.
         setActivities(loaded.work);
+        // The durable half of §4.8's "boundary marker in the thread": the note
+        // said when the chat was condensed is long gone (per-turn channel), and
+        // this is the stored row saying the same thing every time it is opened.
+        setContinuation(
+          loaded.continuedFrom
+            ? { fromId: loaded.continuedFrom, summary: loaded.summary }
+            : null,
+        );
         setCurrentConversationId(loaded.conversationId || id);
         setConversationTitle(
           loaded.title ?? conversations.find((c) => c.id === (loaded.conversationId || id))?.title ?? null,
@@ -182,6 +195,7 @@ export function useConversations({
     conversations,
     currentConversationId,
     conversationTitle,
+    continuation,
     refreshConversations,
     handleNewChat,
     handleOpenConversation,

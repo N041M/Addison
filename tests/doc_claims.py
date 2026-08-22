@@ -1199,8 +1199,8 @@ CLAIMS: tuple[Claim, ...] = (
                 "rule and it is false: it is orchestrator machinery, never a "
                 "registry tool, never model-invokable and never behind a permission "
                 "card. docs/context-budget-plan.md owns what shipped, spec §4.8 "
-                "owns the five hard rules, and docs/KNOWN-GAPS.md owns the three "
-                "limits: none of them is a deletion."
+                "owns the five hard rules, and docs/KNOWN-GAPS.md owns the limits "
+                "it still has: none of them is a deletion."
             ),
             # Prose that carries the truth in the same breath, which is how every
             # honest passage about this subsystem already reads.

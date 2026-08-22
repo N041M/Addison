@@ -46,7 +46,7 @@ import {
   type ReactNode,
   type UIEvent,
 } from "react";
-import type { DisplayMessage } from "../types/ui";
+import type { DisplayMessage, ThreadContinuation } from "../types/ui";
 import { Markdown } from "./Markdown";
 import { StreamingMarkdown } from "./StreamingMarkdown";
 import { isMotionEnabled, scrambleElement } from "../lib/scramble";
@@ -80,6 +80,13 @@ interface Props {
   onSuggestion?: (text: string) => void;
   /** Rendered with the empty stack, and above the messages once there are any. */
   header?: ReactNode;
+  /**
+   * Set when this chat continues an earlier one (§4.8) — the boundary marker at
+   * the top of the thread. It is drawn from the STORED conversation row, so it is
+   * still there on the tenth reopening; the one sentence said when the condensing
+   * happened rode the per-turn Activity channel and was gone by the next send.
+   */
+  continuation?: ThreadContinuation | null;
   /** Rendered after the last message, inside the scroll (consent + work inline). */
   footer?: ReactNode;
   /**
@@ -167,6 +174,7 @@ export function ChatThread({
   conversationKey,
   onSuggestion,
   header,
+  continuation = null,
   footer,
   attention = null,
 }: Props) {
@@ -505,6 +513,11 @@ export function ChatThread({
     >
       {header}
 
+      {/* Above everything: the boundary is where this chat begins, and the
+          "Show N earlier messages" control below it is about THIS chat's own
+          messages, which all come after it. */}
+      {continuation && <ContinuationMarker continuation={continuation} />}
+
       {hiddenCount > 0 && (
         // Without this the thread simply starts 30 messages ago, and the fade
         // mask at the top of the column makes that cut read as the beginning of
@@ -612,6 +625,52 @@ function greeting(): string {
   if (h < 12) return "Good morning.";
   if (h < 18) return "Good afternoon.";
   return "Good evening.";
+}
+
+// ---------------------------------------------------------------------------
+// The boundary marker (§4.8, item 4) — the top of a chat that continues another.
+//
+// DURABLE BY CONSTRUCTION, which is the entire reason it exists: it renders the
+// `conversations` row (`continued_from_conversation_id` + `summary`), so it is on
+// screen every time the chat is opened. The one sentence said when the condensing
+// happened goes out on the Activity Panel note channel, which is cleared at the
+// start of every turn and never persisted — the note tells you as it happens, this
+// says the same thing for as long as the chat exists. Both are true; only one of
+// them is still there tomorrow.
+//
+// No new furniture: the 2px rule + 11px label is the annotation idiom the
+// free-model line already uses, and the disclosure is the "Technical details"
+// idiom with plain-language copy. No accent — nothing here is an action or a live
+// state, it is a fact about the chat.
+// ---------------------------------------------------------------------------
+function ContinuationMarker({ continuation }: { continuation: ThreadContinuation }) {
+  return (
+    <div
+      data-testid="continuation-marker"
+      className="shrink-0 animate-[fadeRise_.4s_ease_both] border-l-2 border-rail pl-2.5"
+    >
+      <p className="m-0 text-[11px] font-medium tracking-[.04em] text-faint">
+        Continued from an earlier chat
+      </p>
+      <p className="m-0 mt-1.5 text-[12px] leading-[1.6] text-muted">
+        This chat was getting long, so Addison condensed the earlier part into a summary and
+        carried on here. Nothing was deleted: the earlier chat is still in your history, with
+        every message it had.
+      </p>
+      {/* Only when there is one. A continuation whose summary did not survive still
+          says the boundary is here rather than saying nothing at all. */}
+      {continuation.summary && (
+        <details className="mt-2">
+          <summary className="cursor-pointer font-mono text-[10px] text-disabled transition-colors hover:text-muted">
+            The summary Addison carried over
+          </summary>
+          <p className="m-0 mt-1.5 whitespace-pre-wrap text-[12px] leading-[1.6] text-ink-soft">
+            {continuation.summary}
+          </p>
+        </details>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -22,6 +22,15 @@
 // Real data only: the buckets come from each conversation's own `startedAt`, and
 // a conversation without a usable timestamp is shown under "Earlier" with no
 // time rather than being dated with a guess (IMPLEMENTATION.md, standing rule 1).
+//
+// A CONTINUED CHAT IS ONE THING (§4.8). When a long conversation is condensed,
+// Addison carries on in a NEW conversation that records where it came from — so a
+// chat the person experienced as continuous used to be two rows sharing a title
+// with nothing saying one came from the other. `continuedFrom` is now read here:
+// the newest part keeps the row, the older parts sit under it indented, and the
+// group's count counts the chat once. NOTHING IS HIDDEN — every conversation is
+// still drawn and still opens, which is the promise the whole feature rests on
+// (the older transcript stays reachable, untouched).
 
 import { useEffect, useRef, useState } from "react";
 import type { ConversationSummary, View } from "../types/ui";
@@ -121,10 +130,13 @@ export function Sidebar({
     };
   }, []);
 
-  const buckets = bucketConversations(conversations);
+  // Entries, not rows: one continued chat is one entry, however many
+  // conversations it is made of. That is what the collapse count and the group
+  // hint are counting from here on.
+  const buckets = bucketConversations(lineageEntries(conversations));
   const groups = ([["today", "Today"], ["earlier", "Earlier"]] as const)
-    .map(([key, label]) => ({ key, label, ids: buckets[key] }))
-    .filter((g) => g.ids.length > 0);
+    .map(([key, label]) => ({ key, label, entries: buckets[key] }))
+    .filter((g) => g.entries.length > 0);
 
   function groupBox(key: string): HTMLElement | null {
     return rootRef.current?.querySelector<HTMLElement>(`[data-group="${key}"]`) ?? null;
@@ -302,38 +314,56 @@ export function Sidebar({
 
       {groups.map((group) => {
         const isExpanded = Boolean(expanded[group.key]);
-        const rows = isExpanded ? group.ids : group.ids.slice(0, COLLAPSED_ROWS);
-        const hidden = group.ids.length - rows.length;
+        const rows = isExpanded ? group.entries : group.entries.slice(0, COLLAPSED_ROWS);
+        const hidden = group.entries.length - rows.length;
         return (
           <div key={group.key} className="shrink-0 animate-[fadeRise_.3s_ease_both]">
             <button
               type="button"
-              onClick={() => toggleGroup(group.key, group.ids.length, isExpanded)}
+              onClick={() => toggleGroup(group.key, group.entries.length, isExpanded)}
               className="flex w-full items-baseline justify-between pb-2.5 text-left"
             >
               <span className="text-[11px] font-medium tracking-[.04em] text-faint">
                 {group.label}
               </span>
               <span className="font-mono text-[10px] text-disabled">
-                {groupHint(group.ids.length, isExpanded)}
+                {groupHint(group.entries.length, isExpanded)}
               </span>
             </button>
             <div
               data-group={group.key}
               className="flex flex-col gap-0.5 text-[12px]"
             >
-              {rows.map((c) => (
-                <ConversationRow
-                  key={c.id}
-                  conversation={c}
-                  active={
-                    view === "chat" &&
-                    currentConversationId != null &&
-                    c.id === currentConversationId
-                  }
-                  onOpen={onOpenConversation}
-                  onRename={onRenameConversation}
-                />
+              {rows.map((entry) => (
+                // One entry = one chat. The wrapper is what the expand/collapse
+                // animation counts and animates (it walks `[data-group] > *`), so
+                // a continued chat rises and drops as the single thing it is.
+                <div key={entry.conversation.id} className="flex flex-col gap-0.5">
+                  <ConversationRow
+                    conversation={entry.conversation}
+                    active={
+                      view === "chat" &&
+                      currentConversationId != null &&
+                      entry.conversation.id === currentConversationId
+                    }
+                    onOpen={onOpenConversation}
+                    onRename={onRenameConversation}
+                  />
+                  {entry.earlier.map((older) => (
+                    <ConversationRow
+                      key={older.id}
+                      conversation={older}
+                      earlier
+                      active={
+                        view === "chat" &&
+                        currentConversationId != null &&
+                        older.id === currentConversationId
+                      }
+                      onOpen={onOpenConversation}
+                      onRename={onRenameConversation}
+                    />
+                  ))}
+                </div>
               ))}
               {hidden > 0 && (
                 <button
@@ -417,11 +447,20 @@ function WorkspaceRow({
 function ConversationRow({
   conversation: c,
   active,
+  earlier = false,
   onOpen,
   onRename,
 }: {
   conversation: ConversationSummary;
   active: boolean;
+  /**
+   * This row is an earlier part of the chat above it. Indented one step, and its
+   * mono fact says what it is instead of when it started — "earlier" is the thing
+   * worth knowing about a row whose whole meaning is that it came first. It opens
+   * and renames exactly like any other row: the older transcript is reachable, in
+   * full, which is what the continuation feature promises.
+   */
+  earlier?: boolean;
   onOpen: (id: string) => void;
   onRename: (id: string, title: string) => void;
 }) {
@@ -481,7 +520,10 @@ function ConversationRow({
           }
         }}
         aria-label="Rename chat"
-        className="block w-full border-l-2 border-accent bg-transparent py-1.5 pl-3 text-left text-[12px] text-ink caret-accent outline-none max-md:min-h-[44px]"
+        className={
+          "block w-full border-l-2 border-accent bg-transparent py-1.5 text-left text-[12px] text-ink caret-accent outline-none max-md:min-h-[44px] " +
+          (earlier ? "pl-6" : "pl-3")
+        }
       />
     );
   }
@@ -493,20 +535,26 @@ function ConversationRow({
       onDoubleClick={startEditing}
       title={c.title}
       // The accessible name is the title alone — the time beside it is a machine
-      // fact, not part of what this row is called.
-      aria-label={c.title}
+      // fact, not part of what this row is called. An earlier part says so in its
+      // name, because the indent that says it visually says nothing out loud.
+      aria-label={earlier ? `${c.title} — earlier part of this chat` : c.title}
       className={
-        "flex w-full items-baseline justify-between gap-2 border-l-2 py-1.5 pl-3 text-left transition-colors hover:text-ink max-md:min-h-[44px] " +
+        "flex w-full items-baseline justify-between gap-2 border-l-2 py-1.5 text-left transition-colors hover:text-ink max-md:min-h-[44px] " +
+        (earlier ? "pl-6 " : "pl-3 ") +
         (active ? "border-accent text-ink" : "border-transparent text-muted")
       }
     >
       <span ref={titleRef} data-chat-title="1" className="min-w-0 flex-1 truncate">
         {c.title}
       </span>
-      {formatRowTime(c.startedAt) && (
-        <span className="shrink-0 font-mono text-[10px] text-disabled">
-          {formatRowTime(c.startedAt)}
-        </span>
+      {earlier ? (
+        <span className="shrink-0 font-mono text-[10px] text-disabled">earlier</span>
+      ) : (
+        formatRowTime(c.startedAt) && (
+          <span className="shrink-0 font-mono text-[10px] text-disabled">
+            {formatRowTime(c.startedAt)}
+          </span>
+        )
       )}
     </button>
   );
@@ -521,20 +569,77 @@ function groupHint(count: number, isExpanded: boolean): string {
   return `${count} ${count === 1 ? "chat" : "chats"}`;
 }
 
-// Today vs. everything earlier, from each conversation's own `startedAt` (epoch
-// SECONDS). A zero/absent value means we don't know when it started, so it goes
-// to "Earlier" and shows no time at all — dating it "today" would be inventing a
-// fact about the person's own history.
-function bucketConversations(conversations: ConversationSummary[]): {
-  today: ConversationSummary[];
+/** One chat as the sidebar draws it: its newest part, and the older parts it
+ * carried on from (newest first). `earlier` is empty for an ordinary chat. */
+export interface ConversationEntry {
+  conversation: ConversationSummary;
   earlier: ConversationSummary[];
+}
+
+/**
+ * Fold `continuedFrom` into entries: a conversation that another listed row
+ * continues from stops being a row of its own and becomes an earlier part of it.
+ *
+ * Exported because it is the whole of the grouping rule and it is worth testing
+ * on its own. Three properties it holds deliberately:
+ *
+ *   * **Every conversation appears exactly once.** A row claimed as an earlier
+ *     part is claimed by ONE chain (`taken`), and the last loop puts back anything
+ *     no chain reached — a lineage that somehow points in a circle would otherwise
+ *     make both of its chats vanish from history, which is the one outcome this
+ *     list may never produce.
+ *   * **A lineage pointing outside the list is ignored.** The id has to belong to
+ *     a conversation that is actually here.
+ *   * **Order is the order it was given** (the core sends newest first), and a
+ *     chain is walked oldest-ward, so an entry reads newest → older → older still.
+ */
+export function lineageEntries(conversations: ConversationSummary[]): ConversationEntry[] {
+  const byId = new Map(conversations.map((c) => [c.id, c]));
+  // Ids that some other listed row continues from: never a row of their own.
+  const isEarlierPart = new Set<string>();
+  for (const c of conversations) {
+    if (c.continuedFrom && byId.has(c.continuedFrom)) isEarlierPart.add(c.continuedFrom);
+  }
+  const taken = new Set<string>();
+  const entries: ConversationEntry[] = [];
+  for (const c of conversations) {
+    if (isEarlierPart.has(c.id)) continue;
+    taken.add(c.id);
+    const earlier: ConversationSummary[] = [];
+    let parentId = c.continuedFrom;
+    while (parentId && !taken.has(parentId)) {
+      const parent = byId.get(parentId);
+      if (!parent) break;
+      taken.add(parent.id);
+      earlier.push(parent);
+      parentId = parent.continuedFrom;
+    }
+    entries.push({ conversation: c, earlier });
+  }
+  // Nothing may disappear: anything no chain reached is its own entry, in place.
+  for (const c of conversations) {
+    if (!taken.has(c.id)) entries.push({ conversation: c, earlier: [] });
+  }
+  return entries;
+}
+
+// Today vs. everything earlier, from each chat's own `startedAt` (epoch SECONDS).
+// A zero/absent value means we don't know when it started, so it goes to "Earlier"
+// and shows no time at all — dating it "today" would be inventing a fact about the
+// person's own history. A continued chat is bucketed by its NEWEST part, because
+// that is when the person last used the chat this entry stands for; each older
+// part keeps its own row under it either way.
+function bucketConversations(entries: ConversationEntry[]): {
+  today: ConversationEntry[];
+  earlier: ConversationEntry[];
 } {
   const now = new Date();
-  const today: ConversationSummary[] = [];
-  const earlier: ConversationSummary[] = [];
-  for (const c of conversations) {
-    if (c.startedAt && isSameDay(new Date(c.startedAt * 1000), now)) today.push(c);
-    else earlier.push(c);
+  const today: ConversationEntry[] = [];
+  const earlier: ConversationEntry[] = [];
+  for (const entry of entries) {
+    const startedAt = entry.conversation.startedAt;
+    if (startedAt && isSameDay(new Date(startedAt * 1000), now)) today.push(entry);
+    else earlier.push(entry);
   }
   return { today, earlier };
 }

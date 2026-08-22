@@ -62,11 +62,13 @@ chat is left exactly as it was and you are told nothing. The relay a person uses
 before they have a key of their own is refused outright. A chat that outgrows its
 model anyway now gets a plain sentence saying so, which is a thing the spec had
 claimed for months and no code had ever produced.
-**Its limits are real**: the sentence you see is not saved, so reopening the chat
-shows no boundary; the summary call's tokens are not in the cost views; and a
-continued chat is a second row in the history list.
+Since 2026-08-22 a continued chat also
+says so where you can see it later: a marker at the top of the thread, drawn from
+the stored row rather than from the note, and one entry in the history list with
+the earlier part under it. **One limit is still real**: the summary call's tokens
+are not in the cost views, so a long chat costs a little more than they say.
 [docs/context-budget-plan.md](docs/context-budget-plan.md) owns it, and
-[docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks the three limits.
+[docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks that limit.
 
 **Sharing a routine, built 2026-08-15.** A routine can be saved as a file and sent
 to anyone else using Addison, and a file somebody sends you can be added from the

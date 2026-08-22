@@ -1280,6 +1280,9 @@ export function App() {
                   conversationKey={conversationsState.currentConversationId}
                   onSuggestion={(text) => setComposerSeed(text)}
                   header={firstRunHeader}
+                  // The boundary at the top of a continued chat (§4.8), from the
+                  // stored row rather than from the per-turn note channel.
+                  continuation={conversationsState.continuation}
                   // The one footer change the thread may scroll for: a consent card
                   // arriving inline (rail hidden) lands BELOW the fold otherwise,
                   // in a container whose scrollbar is hidden — KNOWN-BUGS P2 #3.

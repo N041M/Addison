@@ -1,7 +1,9 @@
 # The Context Budget Manager
 
 **Status: BUILT 2026-08-14 (PRs #120 and #122), in the form this document
-describes and with the limits it states.** Engineering-spec §4.8 is the design and
+describes and with the limits it states. Extended 2026-08-22: the boundary a
+person sees is durable now, and the history list reads the lineage — two of the
+three limits below are closed, and the third is unchanged.** Engineering-spec §4.8 is the design and
 still owns the five hard rules; this file owns what actually shipped, what it does
 when things go wrong, and where it falls short of §4.8's own description. Anything
 else in the tree that mentions long-conversation continuation links here.
@@ -71,6 +73,31 @@ screening notes already use, with its own synthetic id `context`. It says what
 happened and that nothing was deleted. It is not a modal, not a confirmation and
 has nothing to decide.
 
+**The marker in the thread, and the chat that is one chat (2026-08-22).** The note
+tells a person as it happens and is gone by the next turn; these two say the same
+thing for as long as the chat exists, and they say it by RENDERING WHAT WAS
+ALREADY ON DISK. Nothing new is stored and nothing new is computed.
+
+- `conversation.load` sends `continuedFrom` and `summary` off the `conversations`
+  row, for a continuation only, and `ChatThread` draws a marker above the first
+  message: one 11px label, one plain sentence in the note's own voice (this chat
+  was getting long, Addison condensed the earlier part and carried on, nothing was
+  deleted and the earlier chat is still in your history), and the summary behind a
+  disclosure. It uses the 2px-rule annotation idiom the free-model line already
+  uses and no accent at all: it is a fact about the chat, not an action and not a
+  live state. A continuation whose summary did not survive still shows the marker,
+  with nothing behind the disclosure — the boundary is the claim, the summary is
+  the extra.
+- `conversation.list` rows carry `continuedFrom`, and `Sidebar.lineageEntries`
+  folds a chain into ONE entry: the newest part keeps its row, each older part sits
+  under it indented with the mono fact `earlier` in place of a start time, and the
+  group hint counts the chat once. Every conversation is still drawn and still
+  opens — the grouping is a way of reading the list, never a filter on it, because
+  the original transcript's reachability is what the summary is an access path to.
+
+Neither surface reads the profile: Simple and Developer see the identical marker
+and the identical list, which is hard rule 5 holding where a person can see it.
+
 **The over-window sentence: `agent_core/providers/base.py`.** §4.8 promised since
 it was written that a conversation outgrowing the window "surfaces a plain-language
 error suggesting a new chat". **No code ever produced that sentence.** PR #122
@@ -122,20 +149,12 @@ the top of the method, before anything is built.
 
 ## 4. Honest limits
 
-These are real, they are not softened anywhere, and each is tracked in
-[KNOWN-GAPS.md](KNOWN-GAPS.md).
+**One is left.** It is real, it is not softened anywhere, and it is tracked in
+[KNOWN-GAPS.md](KNOWN-GAPS.md). The other two were closed on 2026-08-22 and are
+recorded below them, because a limit that was stated plainly should be withdrawn
+just as plainly.
 
-**1. The boundary marker is EPHEMERAL, so §4.8 item 4 is only partly served.** The
-sentence goes out on the Activity Panel note channel, and that channel is cleared
-at the start of every turn and is never persisted: `useTurn` calls
-`setActivities([])` on send and on reset. So the person sees the note once, and
-reopening the conversation later shows no sign that a boundary is there. What §4.8
-asked for is "a visible boundary marker in the thread", and a thread marker is
-durable by nature. The summary and the lineage ARE durable, both written to the
-`conversations` row, so the data a real in-thread marker would render is already on
-disk: this is a clean follow-up, not a redesign.
-
-**2. The summary call's tokens are NOT written to `usage_log`, so they are
+**1. The summary call's tokens are NOT written to `usage_log`, so they are
 invisible in cost views.** The call is made at the RPC layer, where there is no
 resolved provider id or model id to attribute a row to, and `usage_log` rows are
 written by the orchestrator's `on_usage` at its choke point with both identities in
@@ -146,13 +165,34 @@ cost view shows. The call is bounded (60,000 characters of input at most) and
 happens at most once per turn, so this understates cost by a bounded amount rather
 than an unbounded one, but it does understate it.
 
-**3. Continuing switches the live conversation, so a second row appears in the
-history sidebar.** A continuation IS a new conversation: that is what makes the
-lineage column meaningful and what keeps the original transcript untouched. The
-visible consequence is that one chat the person experienced as continuous is two
-rows in the history list, sharing a title, with nothing in the list saying one came
-from the other. The information needed to draw them as one thing is stored
-(`continued_from_conversation_id`), and nothing in the sidebar reads it yet.
+### Closed 2026-08-22
+
+Both were the same shape of gap — a durable fact on the `conversations` row with
+nothing reading it — and both were closed by reading it. Section 1 describes what
+now renders; this is the record of what was wrong and what the fix does not claim.
+
+**~~The boundary marker was EPHEMERAL, so §4.8 item 4 was only partly served.~~**
+The sentence goes out on the Activity Panel note channel, which `useTurn` clears at
+the start of every turn (`setActivities([])`) and nothing persists — so the note
+was seen once and a chat reopened later showed no sign that a boundary was there,
+while §4.8 asked for "a visible boundary marker in the thread" and a thread marker
+is durable by nature. The thread now renders `continuedFrom` + `summary` from the
+stored row. The note still exists and is still ephemeral, deliberately: it is the
+live telling, and the marker is the standing record. What this does NOT do is make
+the marker appear mid-session in the chat that was just continued — the frontend
+still holds the id of the conversation it was in, and the marker is drawn when the
+continuation is OPENED. The note is what covers that moment, which is what it was
+for.
+
+**~~A continued chat was two rows in the history sidebar.~~** Continuing switches
+the live conversation, which is what keeps the original transcript untouched and
+what makes the lineage column mean anything; the visible consequence was two rows
+sharing a title with nothing saying one came from the other. `lineageEntries` in
+`Sidebar.tsx` now folds a chain into one entry. It is a way of READING the list and
+never a filter on it: every conversation is still drawn, still renamable and still
+one click from opening, and a lineage that pointed at a conversation not in the
+list — or in a circle, which the core cannot produce — leaves the rows exactly
+where they were rather than dropping one.
 
 ## 5. What is deliberately NOT built
 

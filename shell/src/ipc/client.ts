@@ -736,6 +736,20 @@ export interface LoadedConversation {
    * reload, taking "Save as routine" with it). Empty when that turn did no work.
    */
   work: ActivityUpdate[];
+  /**
+   * The chat this one carried on from (§4.8), or null for an ordinary chat. Read
+   * off the stored `conversations` row, which is what makes the thread's boundary
+   * marker durable: the live note goes out on the per-turn Activity channel and is
+   * gone by the next send, while this is still true a week later.
+   */
+  continuedFrom: string | null;
+  /**
+   * The summary the continuation was seeded with, or null. Shown behind a
+   * disclosure in the marker — the older messages are still on disk in the chat
+   * `continuedFrom` names, and this is the access path to them, never a
+   * replacement for them.
+   */
+  summary: string | null;
 }
 
 export interface ConversationRenameResult {
@@ -834,11 +848,20 @@ export function parseLoadedConversation(result: unknown): LoadedConversation {
       ...(detail ? { detail } : {}),
     });
   }
+  // The boundary, when there is one. Both keys are absent on an ordinary chat and
+  // the marker is drawn from `continuedFrom` alone — a continuation whose summary
+  // somehow did not come back still says a boundary is here, with nothing behind
+  // the disclosure, rather than saying nothing at all.
+  const continuedFrom =
+    typeof obj.continuedFrom === "string" && obj.continuedFrom ? obj.continuedFrom : null;
+  const summary = typeof obj.summary === "string" && obj.summary.trim() ? obj.summary : null;
   return {
     conversationId,
     title: typeof obj.title === "string" ? obj.title : null,
     messages,
     work,
+    continuedFrom,
+    summary,
   };
 }
 

@@ -599,9 +599,15 @@ class Store:
         backs a NULL-title fallback for legacy rows that were never auto-titled.
         Ordering matches the rest of the file: ``started_at`` then rowid, both
         descending, so the newest conversation comes first with a stable tiebreak
-        when two share a start second."""
+        when two share a start second.
+
+        ``continued_from_conversation_id`` rides along so a history list can draw a
+        continued chat as ONE thing instead of as two rows sharing a title (§4.8;
+        the column has been written since 2026-08-14 and nothing read it). The
+        summary deliberately does not: a list row shows a title, and a paragraph of
+        condensed history is what ``get_conversation`` is for."""
         rows = self._conn.execute(
-            "SELECT c.id, c.title, c.started_at, "
+            "SELECT c.id, c.title, c.started_at, c.continued_from_conversation_id, "
             "       SUM(m.role != 'tool') AS message_count, "
             "       (SELECT content FROM messages "
             "        WHERE conversation_id = c.id AND role = 'user' "
