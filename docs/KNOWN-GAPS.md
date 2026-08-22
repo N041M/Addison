@@ -467,7 +467,21 @@ questions were resolved during steps 1–3 and went with it):
   when this happens; the answering model should be shown on a tab/indicator
   next to the model picker. This is the cost-first-vs-explicit-pick question
   (KNOWN-BUGS.md, open questions) grown an answer for its UI half; the
-  precedence rule itself is still the owner's to settle. Same pass, same
+  precedence rule itself is still the owner's to settle.
+  **THE UI HALF IS BUILT (2026-08-22)** and this entry stays open for the other
+  half. The composer's controls strip now carries one quiet line left of the
+  picker — `Answered by <label>`, mono 10.5px `disabled`, no accent (the accent
+  is for actions, selection and live state, never a disclosure) — drawn by
+  `shell/src/components/Composer.tsx`. It is **derived from the thread**, never
+  stashed: the newest assistant message carrying `answeredWith` (contract D5).
+  That is deliberate — the fact rides on a send REPLY, so it exists only for
+  turns answered in this session, and `useConversations` replaces the messages
+  array wholesale on open/new-chat, so opening another conversation takes the
+  line with it rather than leaving a previous chat's model on screen. Nothing in
+  routing, the router or any precedence logic was touched, and the line says only
+  what answered — it does not editorialise about what SHOULD have. Pinned by nine
+  tests in `shell/src/__tests__/composer.test.tsx`; the transcript's separate
+  free-model chip is unchanged. Same pass, same
   register: the "Tools" page reads as "what Addison can reach" (providers,
   folders, servers) while its name promises the tool registry — recorded as a
   naming observation, not scheduled.

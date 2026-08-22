@@ -24,6 +24,7 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { Composer } from "../components/Composer";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { TurnState } from "../hooks/useTurn";
+import type { DisplayMessage } from "../types/ui";
 
 // globals:false → testing-library's automatic afterEach cleanup isn't registered.
 afterEach(cleanup);
@@ -45,14 +46,17 @@ const MODELS = {
 } as unknown as ModelSelection;
 
 /** A turn bundle carrying only what Composer reads off it, plus direct handles
- *  on the two spies so a test can assert on them after the cast. */
-function stubTurn(isWorking = false) {
+ *  on the two spies so a test can assert on them after the cast. `messages` is
+ *  the real thread (the answering-model disclosure is derived from it), and is
+ *  left OFF the object by default on purpose: the older tests above cast a
+ *  partial bundle, and the derivation has to survive that. */
+function stubTurn(isWorking = false, messages?: DisplayMessage[]) {
   const handleSend = vi.fn();
   const handleStop = vi.fn();
   return {
     handleSend,
     handleStop,
-    turn: { isWorking, handleSend, handleStop } as unknown as TurnState,
+    turn: { isWorking, handleSend, handleStop, messages } as unknown as TurnState,
   };
 }
 
@@ -196,6 +200,153 @@ describe("a seeded draft", () => {
     // It is a real draft, so it is sendable — the seed is a prefill, not a
     // read-only preview.
     expect(sendButton().disabled).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The answering-model disclosure (owner directive 2026-08-21). Every test here
+// was verified RED against its own mutation — see the two recorded at the foot
+// of this block.
+// ---------------------------------------------------------------------------
+
+/** An assistant turn that carries the D5 fact (or, with `label` omitted, one
+ *  that does not — a loaded-history row, or a turn that failed before an answer
+ *  landed: the core clears `answeredWith` before a run and never attaches it on
+ *  the error path). */
+function assistant(id: string, label?: string, over: Partial<DisplayMessage> = {}): DisplayMessage {
+  return {
+    id,
+    role: "assistant",
+    content: "Here you go.",
+    ...(label === undefined
+      ? {}
+      : { answeredWith: { modelId: `id-${label}`, label, free: false, routed: true } }),
+    ...over,
+  } as DisplayMessage;
+}
+
+function user(id: string): DisplayMessage {
+  return { id, role: "user", content: "what did you change?" } as DisplayMessage;
+}
+
+function renderWithThread(messages?: DisplayMessage[]) {
+  const { turn } = stubTurn(false, messages);
+  return render(<Composer connected turn={turn} models={MODELS} />);
+}
+
+const disclosure = () => screen.queryByText(/^Answered by/);
+
+describe("the answering-model disclosure", () => {
+  it("names the model that actually answered, beside the picker", () => {
+    // The owner's directive: a turn can be answered by a model the person did
+    // not pick, and until this line nothing on screen said so — which made the
+    // picker read as broken. `routed: true` is exactly that case.
+    renderWithThread([user("u1"), assistant("a1", "Gemma 4 31B")]);
+
+    expect(disclosure()?.textContent).toBe("Answered by Gemma 4 31B");
+    // Beside the picker, in the same controls strip — not a banner somewhere
+    // else on the screen.
+    const strip = disclosure()?.parentElement as HTMLElement;
+    expect(strip.querySelector("[aria-haspopup='tree']")).not.toBe(null);
+  });
+
+  it("states the fact and nothing else — no accent, no verdict", () => {
+    // The accent is reserved for actions, selection and live state; a
+    // disclosure of fact is none of those. And the line must not editorialise:
+    // whether the explicit pick SHOULD have won is the owner's open question,
+    // not something the composer gets to announce.
+    renderWithThread([assistant("a1", "Claude Haiku 4.5")]);
+    const el = disclosure() as HTMLElement;
+
+    expect(el.className).not.toContain("accent");
+    expect(el.textContent).toBe("Answered by Claude Haiku 4.5");
+    expect(el.getAttribute("aria-hidden")).toBe(null);
+  });
+
+  it("is absent in a fresh chat and in loaded history", () => {
+    // `answeredWith` rides on a send REPLY, so it exists only for turns answered
+    // in this session. A reopened conversation carries none, and the honest
+    // thing to show for a fact one does not have is nothing.
+    renderWithThread([]);
+    expect(disclosure()).toBe(null);
+    cleanup();
+
+    renderWithThread([user("u1"), assistant("a1"), user("u2"), assistant("a2")]);
+    expect(disclosure()).toBe(null);
+  });
+
+  it("does not go stale when the person switches conversation", () => {
+    // THE bug this feature must not have. The thread is replaced wholesale by
+    // `useConversations` on open/new-chat, and the disclosure is derived from
+    // that thread, so it goes with it — a stash would have to be remembered to
+    // be cleared, and a previous chat's model left on screen is a lie about the
+    // chat now open.
+    const { turn: answered } = stubTurn(false, [assistant("a1", "Claude Haiku 4.5")]);
+    const { rerender } = render(<Composer connected turn={answered} models={MODELS} />);
+    expect(disclosure()?.textContent).toBe("Answered by Claude Haiku 4.5");
+
+    // Opened another conversation: loaded rows, no D5 fact on any of them.
+    const { turn: loaded } = stubTurn(false, [user("u9"), assistant("a9")]);
+    rerender(<Composer connected turn={loaded} models={MODELS} />);
+    expect(disclosure()).toBe(null);
+
+    // And a brand-new chat is empty, which is the same answer by a different
+    // route.
+    const { turn: fresh } = stubTurn(false, []);
+    rerender(<Composer connected turn={fresh} models={MODELS} />);
+    expect(disclosure()).toBe(null);
+  });
+
+  it("keeps naming the last real answer through a newer user turn or a failure", () => {
+    // The newest message is often a user line, a pending answer, or a failed
+    // turn — none of which un-say which model gave the last answer. Reading the
+    // last message rather than the last ANSWER would blank the line the moment
+    // the next question is typed, and again on every error.
+    renderWithThread([
+      assistant("a1", "Claude Haiku 4.5"),
+      user("u2"),
+      assistant("a2", undefined, { failed: true, content: "Something went wrong." }),
+    ]);
+    expect(disclosure()?.textContent).toBe("Answered by Claude Haiku 4.5");
+  });
+
+  it("follows the newest answer when consecutive turns are answered differently", () => {
+    // Rapid consecutive turns: the strip must show the LATEST answer, not the
+    // first one it ever saw.
+    renderWithThread([
+      assistant("a1", "Claude Haiku 4.5"),
+      user("u2"),
+      assistant("a2", "Gemma 4 31B"),
+    ]);
+    expect(disclosure()?.textContent).toBe("Answered by Gemma 4 31B");
+  });
+
+  it("shows nothing rather than a dangling 'Answered by' for a blank label", () => {
+    // The parser falls a missing label back to the model id, but a
+    // whitespace-only label would slip through it — and half a sentence is
+    // worse than silence.
+    renderWithThread([assistant("a1", "   ")]);
+    expect(disclosure()).toBe(null);
+  });
+
+  it("survives a turn bundle with no thread at all", () => {
+    // The partial-bundle casts elsewhere in this file (and any caller rendering
+    // the composer before the hook has state) must not crash it.
+    renderWithThread(undefined);
+    expect(disclosure()).toBe(null);
+    expect(textarea()).toBeTruthy();
+  });
+
+  it("leaves the free-model disclaimer where it is — in the transcript", () => {
+    // Two different disclosures with two different jobs: the thread's "Answered
+    // with a free model." is about an answer's COST and stays a per-message
+    // chip (routing.test.tsx pins it). The composer says only WHICH model, once,
+    // for the latest answer.
+    renderWithThread([
+      { ...assistant("a1", "Local Llama"), answeredWith: { modelId: "llama", label: "Local Llama", free: true, routed: false } } as DisplayMessage,
+    ]);
+    expect(disclosure()?.textContent).toBe("Answered by Local Llama");
+    expect(screen.queryByText("Answered with a free model.")).toBe(null);
   });
 });
 
