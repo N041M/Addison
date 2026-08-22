@@ -447,6 +447,19 @@ questions were resolved during steps 1–3 and went with it):
   failure, with per-provider cooldown, a per-**attempt** deadline and the plain
   "X was busy, so Addison used Y" note. The CONFIDENCE half, quality-based
   escalation, remains v2 substrate, untouched.
+- **The answering model must be disclosed beside the picker (owner directive,
+  2026-08-21).** Evidence from the QA re-run pass: with Claude Haiku 4.5
+  explicitly picked and strategy Cost first, an offline turn's Technical
+  details showed the router attempting `provider: google · gemma-4-31b-it` —
+  the explicit pick does not win, and no surface says which model actually
+  answers a given turn. The owner's words: the picker system reads as broken
+  when this happens; the answering model should be shown on a tab/indicator
+  next to the model picker. This is the cost-first-vs-explicit-pick question
+  (KNOWN-BUGS.md, open questions) grown an answer for its UI half; the
+  precedence rule itself is still the owner's to settle. Same pass, same
+  register: the "Tools" page reads as "what Addison can reach" (providers,
+  folders, servers) while its name promises the tool registry — recorded as a
+  naming observation, not scheduled.
 
 **Moved here from `VERIFICATION.md` §4/§6 (2026-07-26)**: that file had become a
 second live-issue register holding items this one did not have. All checked
@@ -702,11 +715,12 @@ are here because somebody will meet them, and because anything built on top of
   over (`write_project_file` ×2, `save_file`, `draft_message`, `arm_automation` ×2,
   `create_automation`); Redo is untouched, and the response shape did not change, so the
   frontend renders the sentence through the `detail` it already read.
-- **The shell follows a shortcut planted at a path it once wrote** (2026-08-08).
-  `restore_workspace_path` checks its session ledger against the NAME and then
-  `fs::write`s that name; `read_workspace_view` opens it. Neither asks whether a
-  symlink now stands there, so a path Addison legitimately wrote is a write-through to
-  wherever that name later points, and it takes no attacker to arrive, only somebody
+- ~~**The shell follows a shortcut planted at a path it once wrote** (2026-08-08).~~
+  **CLOSED 2026-08-22, the shell's own half last.**
+  `restore_workspace_path` checked its session ledger against the NAME and then
+  `fs::write`s that name; `read_workspace_view` opened it. Neither asked whether a
+  symlink now stood there, so a path Addison legitimately wrote was a write-through to
+  wherever that name later points, and it took no attacker to arrive, only somebody
   moving a config file into a dotfiles folder and linking it back. The review surface
   refuses first, core-side: `file_revert.replaced_by_a_link` guards the diff's read and
   the revert's write, and what crosses is the RECORDED path rather than a re-resolution
@@ -714,11 +728,20 @@ are here because somebody will meet them, and because anything built on top of
   `WriteProjectFileTool.undo()` now asks `another_file_stands_there` first, and a shortcut
   standing at a written path reaches a different file by that question too, so nothing is
   written (it used to put its prior bytes into whatever the link pointed at: a private
-  key, in the test that plants one). What is still open is the SHELL's own half: nothing in
-  `filesystem.rs` refuses a symlink on these methods, so any future caller that has not
-  asked core-side is unguarded, and a row written before `wrote_ident` existed cannot ask.
-  The complete fix belongs in `filesystem.rs`, which already makes `symlink_metadata` the
-  rule for listing and would need the same refusal on both these methods. **Cosmetic consequence of the same swap, not a second gap:** a row whose
+  key, in the test that plants one).
+  **What closed the SHELL's half, 2026-08-22:** `filesystem.rs::refuse_shortcut_at_path`
+  asks `symlink_metadata` — never `metadata` — of the recorded name itself, and both
+  methods take it before anything is opened or written (the viewer ahead of its own stat,
+  which follows the link on purpose because it measures what would be loaded; the undo
+  ahead of both its branches, the delete included). Nothing follows the link and nothing
+  acts on its target. So the two cases no core guard reaches are refused anyway: a future
+  caller that has not asked core-side, and a row written before `wrote_ident` existed,
+  which cannot ask. It is only the name ITSELF — a link in a parent directory stays
+  `refuse_addison_data_dir`'s chain walk, a different question with a different owner.
+  **What it costs, stated:** `write_workspace_path` follows a link, so the LINK can be the
+  ledgered name (a config file linked back from a dotfiles folder), and that undo is now
+  refused rather than written through — which is already the answer both core guards give.
+  **Cosmetic consequence of the same swap, not a second gap:** a row whose
   recorded path is now a shortcut lists with `root: null` and its whole path, because
   the display comparator (`policy.path_is_within`) resolves both sides. `root` permits
   nothing; it decides only what the row renders as.
