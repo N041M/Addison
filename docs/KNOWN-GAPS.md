@@ -936,7 +936,11 @@ are here because somebody will meet them, and because anything built on top of
 
 - `draft_message` compose handoff: Rust returns "not available yet"; a real
   discardable-draft mechanism is required by the undo invariant.
-- No file-attach/drop UI → `read_file` unreachable from chat.
+- No file-attach/drop UI → `read_file` unreachable from chat. **The design now has
+  an owner:** [`input-attachments-plan.md`](input-attachments-plan.md) (2026-08-23,
+  proposed, not scheduled) — attachments as user-message parts, extraction split
+  shell/core along the trust gradient, and the send-time vision gate; five owner
+  decisions block its phases. The entry closes when phase 1 ships, not before.
 - Setup Assistant relay is client-complete; the server side is external by design.
 - Packaging/signing/updater = Phase 3.
 - ~~**`primary.txt` widget guidance says Addison can't build custom-app widgets.**~~
