@@ -121,6 +121,16 @@ class Store:
         # that has been running Addison longest. Verified rather than assumed, which
         # is why these lines exist at all. NULL is the only honest default: a chat
         # written before this column is not a continuation of anything.
+        # Owner decision 8's setting (messaging channels, phase 3). Same idiom, same
+        # guard: schema.sql carries it on a fresh database (no-op), a database made
+        # by phase 1 or 2 gets it added. 'decline' is the only safe default and it is
+        # also the behaviour those builds had, so an upgrade changes nothing anybody
+        # would notice.
+        self._add_column_if_missing(
+            "channels",
+            "on_wake",
+            "TEXT NOT NULL DEFAULT 'decline' CHECK(on_wake IN ('decline','answer'))",
+        )
         self._add_column_if_missing("conversations", "summary", "TEXT")
         self._add_column_if_missing(
             "conversations",
@@ -1621,7 +1631,7 @@ class Store:
     def list_channels(self) -> list[dict[str, Any]]:
         """Every saved channel, oldest first (the order they were added)."""
         rows = self._conn.execute(
-            "SELECT id, kind, name, enabled, token_present, created_at FROM channels "
+            "SELECT id, kind, name, enabled, token_present, on_wake, created_at FROM channels "
             "ORDER BY created_at ASC, rowid ASC"
         ).fetchall()
         return [
@@ -1631,6 +1641,7 @@ class Store:
                 "name": row["name"],
                 "enabled": bool(row["enabled"]),
                 "token_present": row["token_present"],
+                "on_wake": row["on_wake"],
                 "created_at": row["created_at"],
             }
             for row in rows
@@ -1685,6 +1696,22 @@ class Store:
         — the step-8 lesson (ask what is really running) in a different costume."""
         self._conn.execute(
             "UPDATE channels SET enabled = ? WHERE id = ?", (1 if enabled else 0, channel_id)
+        )
+        self._conn.commit()
+
+    def set_channel_on_wake(self, channel_id: str, behaviour: str) -> None:
+        """Record what to do with a message that arrived while nobody was listening.
+
+        Owner decision 8's setting: 'decline' (the default, and the safe direction)
+        answers each held message with one plain sentence; 'answer' runs the turn
+        anyway. ORDINARY REVERSIBLE CONFIGURATION — captured and restored with the
+        rest of the row, unlike `token_present`, because this one is a choice the
+        person made rather than an observation about something outside SQLite.
+
+        The CHECK in schema.sql is the authority for the two values; a caller that
+        passes anything else gets an IntegrityError rather than a silent write."""
+        self._conn.execute(
+            "UPDATE channels SET on_wake = ? WHERE id = ?", (behaviour, channel_id)
         )
         self._conn.commit()
 

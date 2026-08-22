@@ -1,5 +1,5 @@
 """channel.* handlers — the messaging channels a person talks to Addison through
-from their phone (PHASES 1 AND 2 of three).
+from their phone (PHASES 1 TO 3, which is all of them that ship).
 [docs/messaging-channel-plan.md](../../docs/messaging-channel-plan.md) owns the
 design, the phase order and the eleven owner decisions of 2026-08-22.
 
@@ -9,13 +9,21 @@ tree. That was the MCP phase-1 shape, chosen so the reversible-config half, the 
 half and the snapshot-capture decision all landed before anything could reach a
 network.
 
-**PHASE 2 IS CONNECT, PAIR, AND ANSWER WITH WORDS ONLY.** A paired phone can hold
-a conversation with Addison, and **Addison can use no tools at all while doing
-it**: `REMOTE_TOOL_IDS` is EMPTY, `remote_tools(mode)` returns `[]`, and a
-`tool_use` naming anything is refused before the gate at both dispatch paths. That
-is not a placeholder — it is the strongest version of the phase, and it proves
-every seam (the thread, the hand-off, the conversation isolation, the screening,
-the splitting, the pairing) with the tool question factored out entirely.
+**PHASE 2 WAS CONNECT AND PAIR, WITH AN EMPTY FLOOR.** A paired phone could hold a
+conversation with Addison and Addison could use no tools at all while doing it —
+not a placeholder but the strongest version of that phase, proving every seam (the
+thread, the hand-off, the conversation isolation, the screening, the splitting, the
+pairing) with the tool question factored out entirely.
+
+**PHASE 3 IS THE REMOTE FLOOR AND THE DESK QUEUE.** `REMOTE_TOOL_IDS` now carries
+three read-only ids — `calculator`, `web_search`, `read_web_page` (owner decision
+5) — asserted to be a SUBSET of `visible_tools(SAFE)`, so a phone is never offered
+a tool Simple could not be offered. Everything else is refused before the gate at
+both dispatch paths, in one plain sentence, and **the request is written down**:
+`channel.pendingRequests` is the desk queue, and the sentence the phone gets says
+so. The queue is a RECORD and never a resumable action — its one affordance writes
+the person's own words into the DESKTOP composer for them to send live, with the
+ordinary card.
 
 **WHAT THIS MODULE MAY NOT DO, still.** It reads and writes rows and it asks the
 SERVICE for everything else. It starts no thread (``channel_service.py`` owns the
@@ -72,7 +80,7 @@ import time
 from uuid import uuid4
 
 from agent_core.channel_pairing import PairingOutcome, offer
-from agent_core.channel_service import STATE_STOPPED
+from agent_core.channel_service import STATE_STOPPED, PendingRequest
 from agent_core.channels.adapter import (
     MAX_LABEL_CHARS,
     TOKEN_REJECTED,
@@ -113,6 +121,16 @@ _CHECK_FIRST = (
     "Addison hasn't checked this connection yet. Press Check now, then switch it on."
 )
 _CHECK_FAILED = "Addison couldn't check that connection just now. Try again in a moment."
+
+# Owner decision 8's two behaviours. ONE SPELLING, matching the CHECK in schema.sql —
+# a second copy of a closed vocabulary is how a value ends up legal in one place and
+# refused in the other.
+_DECLINE = "decline"
+_ANSWER = "answer"
+_UNKNOWN_ON_WAKE = (
+    "Addison can either answer messages that arrived while it was off, or say it "
+    "wasn't there. Pick one of those."
+)
 
 # Owner decision 11 (2026-08-22): v1 runs ONE enabled channel at a time. The schema
 # and the service both permit several — several rows, several threads — so this is a
@@ -156,6 +174,13 @@ _PAIRED = (
 # code: one sentence and one next step, exactly as the desk gets.
 _TURN_FAILED = "Addison couldn't answer that just now. Try again in a moment."
 
+# What a queued request names when the tool it was refused for is not registered any
+# more — a stale transcript replayed after an `mcp.refresh`, a removal, a restore.
+# The ID IS NEVER PRINTED (UNKNOWN_TOOL_REFUSAL's rule, one surface over):
+# `mcp:Design docs:search` is Addison's internal spelling of somebody else's tool and
+# answers no question a person reading their desk has.
+_SOMETHING_AT_YOUR_COMPUTER = "Something Addison does at your computer"
+
 # The dedicated conversation every channel's turns land in. Plain words, and the
 # same title for every channel: a person with two connections has two threads
 # titled the same, which is what the desk's own per-launch conversations already do.
@@ -197,6 +222,7 @@ class ChannelsMixin(ServerContext):
             "name": row["name"],
             "enabled": row["enabled"],
             "tokenPresent": row["token_present"],
+            "onWake": row["on_wake"],
             "pairedDevices": self.store.count_channel_pairings(row["id"]),
             "addedAt": row["created_at"],
         }
@@ -262,6 +288,7 @@ class ChannelsMixin(ServerContext):
                 "name": name,
                 "enabled": False,
                 "tokenPresent": "unknown",
+                "onWake": _DECLINE,
                 "pairedDevices": 0,
                 "addedAt": added_at,
             },
@@ -297,6 +324,11 @@ class ChannelsMixin(ServerContext):
         # pairing lookups now answer nothing. Stopping is idempotent and does not
         # wait, so this costs nothing when the channel was never switched on.
         self._channel_service.stop(channel_id)
+        # And the desk's notes about it go too (phase 3). A pending request names a
+        # connection, and its one affordance writes a sentence about "your phone"
+        # into the composer — a note outliving the connection it came from would
+        # offer that for a phone the person has just forgotten.
+        self._channel_service.forget_requests(channel_id)
         self.store.delete_channel(channel_id)
         return {"ok": True}
 
@@ -397,6 +429,34 @@ class ChannelsMixin(ServerContext):
             }
         self._channel_service.start(row["id"], row["kind"])
         self.store.set_channel_enabled(row["id"], True)
+        return {"ok": True}
+
+    def _channel_set_on_wake(self, params: dict) -> dict:
+        """channel.setOnWake {id, onWake} -> {ok} | {ok:false, error}.
+
+        OWNER DECISION 8's SETTING, and the whole of it: what happens to a message
+        that arrived while this Mac was asleep. 'decline' — the default, because the
+        safe behaviour should be the out-of-box one — answers each held message with
+        one plain sentence. 'answer' runs the turn anyway.
+
+        CHOOSING 'answer' IS A WIDENING, so it is Developer-only like every other
+        widening in this namespace. Choosing 'decline' answers in EVERY profile: it
+        is a tightening, and a tightening must never be what a profile switch traps.
+
+        Hook (G3): none, and that is deliberate rather than an omission. This is one
+        column of a captured table with two legal values and a one-press way back —
+        the `mcp_toggle` class, not the `skill_delete` class — so a restore point per
+        flip would be a restore point per toggle."""
+        self._ensure_built()
+        row = self._channel_row(params.get("id"))
+        if row is None:
+            return {"ok": False, "error": _NO_SUCH_CHANNEL}
+        behaviour = params.get("onWake")
+        if behaviour not in (_DECLINE, _ANSWER):
+            return {"ok": False, "error": _UNKNOWN_ON_WAKE}
+        if behaviour == _ANSWER and self._mode() is not PolicyMode.OPEN:
+            return {"ok": False, "error": _DEV_ONLY}
+        self.store.set_channel_on_wake(row["id"], behaviour)
         return {"ok": True}
 
     def _channel_status(self, params: dict) -> dict:
@@ -503,6 +563,105 @@ class ChannelsMixin(ServerContext):
             self.store.delete_channel_pairing(pairing_id)
         return {"ok": True}
 
+    # =====================================================================
+    # PHASE 3 — the desk queue (plan §3.11)
+    # =====================================================================
+
+    def _channel_pending_requests(self, params: dict) -> dict:
+        """channel.pendingRequests {} -> {requests: [{id, channelId, askedAt,
+        toolLabel, whatWasAsked}]}, oldest first.
+
+        Everything a phone asked for that Addison does at the computer. THE METHOD
+        answers in EVERY profile, like `list`: a note is inert, it is the person's own
+        words back, and a read is never the thing a profile switch traps. The SECTION
+        that renders it is still Developer-only (owner decision 10), so in Simple
+        nobody is looking at these — which is honest rather than contradictory,
+        because in Simple there is no channel to have sent one. What this rules out is
+        the other shape: a method that refused, so that a person who switched profiles
+        with notes waiting could not read them even after switching back.
+
+        THE QUEUE IS THE SERVICE'S, not the store's (owner decision 7): a row would
+        carry a message somebody typed on a phone, and a captured table's text is
+        copied into every later snapshot payload and plaintext sidecar forever."""
+        self._ensure_built()
+        now = int(time.time())
+        return {
+            "requests": [
+                self._request_wire_row(request)
+                for request in self._channel_service.pending_requests(now)
+            ]
+        }
+
+    def _channel_dismiss_request(self, params: dict) -> dict:
+        """channel.dismissRequest {requestId} -> {ok}. Idempotent.
+
+        THE ONLY VERB A REQUEST HAS besides ageing out. There is deliberately no
+        `channel.runRequest`: a queued request is a RECORD, not a resumable action,
+        and the desk's other affordance ("Ask this here") composes the person's own
+        sentence into the DESKTOP conversation for them to send live, with the
+        ordinary card. Replaying a stored request through a button would be a second
+        dispatch path, raising a card written for a moment that has passed."""
+        self._ensure_built()
+        request_id = params.get("requestId")
+        if isinstance(request_id, str) and request_id:
+            self._channel_service.dismiss_request(request_id)
+        return {"ok": True}
+
+    def _request_wire_row(self, request: PendingRequest) -> dict:
+        """One queued request as the frontend parses it.
+
+        NO TOOL ID, NO ARGUMENTS, NO CALL ID — the dataclass has none to give, which
+        is what makes "a record, not a resumable action" a property of the shape
+        rather than a promise about the caller."""
+        return {
+            "id": request.id,
+            "channelId": request.channel_id,
+            "askedAt": request.asked_at,
+            "toolLabel": request.tool_label,
+            "whatWasAsked": request.what_was_asked,
+        }
+
+    def _queue_refused_requests(
+        self, channel_id: str, new_messages: list[Message], asked: str
+    ) -> None:
+        """Write down every call this turn made that the remote floor refused.
+
+        READ BACK OFF THE TURN'S OWN MESSAGES, deliberately, rather than through a
+        new callback out of the orchestrator. The refusal is the registry's and the
+        dispatch loop's (``refuse_if_not_remote``, FIRST among the pre-gate refusals
+        and above every effect); this method asks, on the same thread, what the turn
+        it just ran left behind. A second seam into ``_run_tool_calls`` would be a
+        channel-shaped hook inside the one loop every surface shares, and the queue
+        is a desk surface's record rather than a fact the turn needs.
+
+        THE FLOOR IS ASKED, NOT STRING-MATCHED. ``refuse_if_not_remote`` is the same
+        predicate dispatch used, computed from the same constant, so this cannot
+        drift from what actually happened — and because the floor check is first
+        among the refusals, an id it refuses is an id that was refused FOR THAT
+        REASON. Matching the refusal sentence against the tool result's text would
+        both re-spell frozen copy and queue a request for any tool that happened to
+        return those words.
+
+        It asks the registry OBJECT this mixin already holds and imports nothing from
+        ``tools/`` — the import fence phase 1 put around this module
+        (``tests/test_channels.py``) stays exactly where it was.
+
+        An id that is not registered any more — a stale transcript after a refresh,
+        a removal or a restore — gets one honest sentence rather than
+        `mcp:Design docs:search` printed on somebody's desk."""
+        for message in new_messages:
+            for call in message.tool_calls:
+                if self.tool_registry.refuse_if_not_remote(call.tool_id, TurnSurface.REMOTE) is None:
+                    continue
+                tool = self.tool_registry.find(call.tool_id)
+                label = tool.definition.label if tool is not None else _SOMETHING_AT_YOUR_COMPUTER
+                request = self._channel_service.note_request(
+                    channel_id, label, asked, int(time.time())
+                )
+                self._notify(
+                    Method.CHANNEL_REQUEST_QUEUED, {"request": self._request_wire_row(request)}
+                )
+
     # --- the row helper ----------------------------------------------------
 
     def _channel_row(self, channel_id: object) -> dict | None:
@@ -580,9 +739,14 @@ class ChannelsMixin(ServerContext):
             return
 
         # ---- 2. Was this waiting while nobody was listening? (owner decision 8)
+        # THE SETTING DECIDES, and its default is to decline. 'answer' falls straight
+        # through to the ordinary path — the message runs as a turn however long it
+        # waited — which is the decision's other half and the reason the check reads
+        # the row rather than a constant.
         now = int(time.time())
         sent_at = params.get("sentAt")
-        if isinstance(sent_at, int) and sent_at > 0 and now - sent_at > _STALE_AFTER_SECONDS:
+        stale = isinstance(sent_at, int) and sent_at > 0 and now - sent_at > _STALE_AFTER_SECONDS
+        if stale and row["on_wake"] != _ANSWER:
             if self._channel_service.may_decline(channel_id, chat_id, now):
                 self._channel_service.deliver(channel_id, chat_id, _ARRIVED_WHILE_ASLEEP)
             self._notify_remote_turn(channel_id, "declined", _ARRIVED_WHILE_ASLEEP)
@@ -630,6 +794,11 @@ class ChannelsMixin(ServerContext):
             conversation.messages.insert(0, system_message)
         pre_turn = len(conversation.messages)
         answer = ""
+        # What the turn added, captured INSIDE the try for ``pre_turn``'s reason: the
+        # transient system message is removed in the ``finally`` below, so the list
+        # shifts by one and an index taken afterwards points at the wrong messages.
+        # The desk queue is built from this copy, after the answer has gone.
+        new_messages: list[Message] = []
         try:
             self.orchestrator.run_turn(
                 conversation,
@@ -652,7 +821,8 @@ class ChannelsMixin(ServerContext):
             # to shift anything. `test_the_app_prompt_does_not_swallow_the_answer`
             # exists for exactly that gap.) The desk path is written the same way for
             # the same reason.
-            for message in conversation.messages[pre_turn:]:
+            new_messages = list(conversation.messages[pre_turn:])
+            for message in new_messages:
                 self._persist_channel_message(conversation, message)
                 if message.role == "assistant" and str(message.content or "").strip():
                     answer = str(message.content)
@@ -675,6 +845,14 @@ class ChannelsMixin(ServerContext):
         if answer:
             self._channel_service.deliver(channel_id, chat_id, answer)
         self._notify_remote_turn(channel_id, "answered", None)
+
+        # ---- 7. Write down anything the floor refused, for the desk (phase 3).
+        # AFTER THE ANSWER HAS GONE, deliberately: the queue is a record for a person
+        # who is not here, and a defect in building one must never cost the phone the
+        # answer it was owed. The person's OWN message is what is written down —
+        # `text`, not the marked copy the model was handed: a note on somebody's desk
+        # should read as what they typed, not as Addison's annotation of it.
+        self._queue_refused_requests(channel_id, new_messages, text)
 
     def _offer_pairing(
         self, row: dict, chat_id: str, sender_id: str, label: object, text: str

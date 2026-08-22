@@ -1,6 +1,13 @@
 # Messaging channels: controlling Addison from a phone
 
-**Status: DECIDED AND SCHEDULED 2026-08-22.** Proposed and answered the same day:
+**Status: DECIDED 2026-08-22, and PHASES 1–3 ARE BUILT** — the whole of what this
+plan schedules; phase 4 stays deferred. [`ROADMAP.md`](../ROADMAP.md) owns status
+per phase and [`BUILD-LOG.md`](BUILD-LOG.md) records what each one found. Two things
+the build settled that this document had left open are marked where they belong: the
+keychain account stays keyed by transport kind (§3.9), and owner decision 8's setting
+landed in phase 3 as `channels.on_wake` (§5, decision 8).
+
+**Status when it was written: DECIDED AND SCHEDULED 2026-08-22.** Proposed and answered the same day:
 the owner took all eleven decisions in §5 (each records its answer beside the
 recommendation), messaging channels left [`CLAUDE.md`](../CLAUDE.md)'s
 *"Do NOT build yet"* list, and the build order is **phases 1–3 as written**, with
@@ -625,6 +632,10 @@ CREATE TABLE IF NOT EXISTS channels (                        -- proposed
     enabled       INTEGER NOT NULL DEFAULT 0,
     token_present TEXT NOT NULL DEFAULT 'unknown'
                       CHECK(token_present IN ('present','absent','unknown')),
+    -- Owner decision 8's setting, added in phase 3: what happens to a message that
+    -- arrived while the Mac was asleep. Ordinary captured configuration.
+    on_wake       TEXT NOT NULL DEFAULT 'decline'
+                      CHECK(on_wake IN ('decline','answer')),
     created_at    INTEGER NOT NULL
 );
 
@@ -659,9 +670,11 @@ CREATE TABLE IF NOT EXISTS channel_pairings (                -- proposed
 `tests/test_snapshots.py::test_capture_scope_covers_every_schema_table` forces every
 new table into `_CAPTURED_TABLES` or `_EXCLUDED_TABLES` with a stated reason:
 
-- **`channels` → CAPTURED** (`id, kind, name, enabled` — not `token_present`, not
-  `created_at` if the existing tuples' convention says otherwise at build time). It
-  is reversible configuration, exactly like `mcp_servers` and `automations`.
+- **`channels` → CAPTURED** (`id, kind, name, enabled, on_wake, created_at` as
+  built — `created_at` joined because every other captured tuple carries it, and
+  `on_wake` because decision 8's setting is a choice somebody made rather than an
+  observation; not `token_present`). It is reversible configuration, exactly like
+  `mcp_servers` and `automations`.
 - **`channel_pairings` → EXCLUDED**, and this is a decision rather than an omission.
   A pairing is not configuration; it is an **authorization**. G3 promises that one
   action restores your configuration, and an authorization somebody deliberately
@@ -757,8 +770,9 @@ Webview → Core:
 | `channel.cancelPairing` | `{id} -> {ok}` | Closes it. |
 | `channel.pairings` | `{id} -> {pairings: [row]}` | The paired devices, with labels and dates. |
 | `channel.revokePairing` | `{pairingId} -> {ok}` | Deletes one. Answers in every profile. |
-| `channel.pendingRequests` | `{} -> {requests: [row]}` | The desk queue (§3.11). |
-| `channel.dismissRequest` | `{requestId} -> {ok}` | Removes one from it. |
+| `channel.pendingRequests` | `{} -> {requests: [row]}` | The desk queue (§3.11). Answers in every profile: a note is the person's own words back, and the sentence the phone was sent promised it would be here. |
+| `channel.dismissRequest` | `{requestId} -> {ok}` | Removes one from it. The ONLY other verb a request has — there is deliberately no `channel.runRequest`. |
+| `channel.setOnWake` | `{id, onWake} -> {ok}` | Owner decision 8's setting, as built in phase 3. `'answer'` is a widening and is Developer-only; `'decline'` answers in every profile. |
 
 Core → Webview (notifications):
 
@@ -1079,8 +1093,11 @@ plainly rather than folded in quietly.
    declining each with the plain sentence. **Default: decline** (the recommended
    direction), because the safe behaviour should be the out-of-box one; the
    setting lives with the channel row and is ordinary captured configuration.
-   Phase 2 ships the default; the setting itself may land in phase 2 or 3,
-   whichever diff it fits.
+   Phase 2 shipped the default; **the setting landed in phase 3** as
+   `channels.on_wake` (`'decline' | 'answer'`, CHECKed by the schema, captured with
+   the rest of the row, `channel.setOnWake` on the wire). Choosing to answer late
+   messages is a widening and is Developer-only; choosing to decline answers in
+   every profile, because a tightening must never be what a profile switch traps.
 9. **Duplicate delivery.** *Recommended: accept for phase 3; dedupe mandatory in
    phase 4.*
    **ANSWERED: as recommended.** (Phase 4's deferral makes the second half moot

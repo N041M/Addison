@@ -1112,9 +1112,9 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "`remote_tools(mode)` is an intersection with `visible_tools(mode)`, so the "
             "remote view is a subset of the SAFE view in every mode."
         ),
-        "the phase-2 state of the set, which is narrower still": (
-            "`REMOTE_TOOL_IDS` is empty in phase 2, so a phone is offered no tools at "
-            "all and Addison answers in words only."
+        "the state of the set, which is narrower than the subset claim": (
+            "`REMOTE_TOOL_IDS` carries three read-only ids, so from a phone Addison can "
+            "look something up and do the maths and nothing else."
         ),
         "the desk's own view, described positively beside it": (
             "The desk sees `visible_tools(mode)`, which in OPEN carries `run_command` "

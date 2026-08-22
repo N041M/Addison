@@ -774,11 +774,13 @@ Four things the diagram cannot show:
 
 ## 17. A message arrives from a paired phone
 
-**Messaging channels, phase 2 of three (2026-08-22).** The claim this flow draws, and
-only this: *a paired phone can hold a conversation with Addison, and Addison can use no
-tools at all while doing it.* `REMOTE_TOOL_IDS` is EMPTY in this phase.
-[messaging-channel-plan.md](messaging-channel-plan.md) owns the design; §3.4 owns the
-G2 argument the first two lines below stand on.
+**Messaging channels, phases 2 and 3 of three (2026-08-22).** The claim this flow
+draws: *a phone can ask Addison to look something up, and everything else comes back as
+a plain sentence and a note waiting on the desk.* `REMOTE_TOOL_IDS` carries three
+read-only ids — `calculator`, `web_search`, `read_web_page` — and is asserted to be a
+subset of `visible_tools(SAFE)`, so a phone is never offered a tool Simple could not be
+offered. [messaging-channel-plan.md](messaging-channel-plan.md) owns the design; §3.4
+owns the G2 argument the first two lines below stand on.
 
 **Outbound only, no listener of any kind.** The core has no OS permissions of its own
 and the seatbelt grants nothing inbound, so there is no webhook, no port and no tunnel:
@@ -817,14 +819,15 @@ sequenceDiagram
     WK->>ST: the channel's own conversation ("From your phone")
     WK->>ORC: run_turn(remote_conversation, surface = REMOTE, stream_to = None)
     ORC->>REG: remote_tools(mode)
-    REG-->>ORC: empty in phase 2, and a subset of the SAFE view in every phase
-    Note over ORC: a tool_use naming anything is refused BEFORE the gate<br/>(refuse_if_not_remote) and leaves a tool_audit row
+    REG-->>ORC: the three read-only ids, a subset of the SAFE view in every mode
+    Note over ORC: a tool_use naming anything ELSE is refused BEFORE the gate<br/>(refuse_if_not_remote), leaves a tool_audit row,<br/>and is written down for the desk
     ORC-->>WK: the assistant's final text
     WK->>ST: the turn's messages, in the channel's conversation only
     WK->>CS: deliver(channel, chat, text)
     CS->>TG: sendMessage (split at 4096 on a paragraph break)
     TG-->>PH: the answer, in one or more messages
     WK->>WV: channel.remoteTurn {id, phase}
+    WK->>WV: channel.requestQueued {request} — for anything the floor omits
 ```
 
 Four things the diagram cannot show:
@@ -837,16 +840,30 @@ Four things the diagram cannot show:
   by the frontend as belonging to the thread on screen.
 - **No card can be raised here, and that is a design constraint rather than a
   coincidence.** `_ask_once` waits with **no timeout**, so a card raised for a phone
-  would park the worker thread forever and take every desktop turn with it. The empty
-  remote view plus the pre-gate refusal make it structurally unreachable, and the one
+  would park the worker thread forever and take every desktop turn with it. The floor's
+  three tools are LOW and non-destructive for every argument (none of them defines
+  `is_destructive` at all), and everything else is refused before the gate — so a card
+  is structurally unreachable, and the one
   setting that could still route a LOW call to the asking flow
   (`auto_grant_scope = "none"`) makes the channel refuse the turn instead — a
   narrowing, which is the permitted direction.
 - **Delivery is at-least-once.** Telegram's `offset` is the acknowledgement, and the
   cursor advances only after the messages have been handed on, so a crash in between
-  re-delivers. On a floor with no tools a duplicated turn costs a duplicated answer;
-  the moment anything with an effect joins the floor, deduplication by `update_id`
-  stops being a nicety (owner decision 9).
+  re-delivers. NOTHING ON THE FLOOR HAS AN EFFECT — three read-only tools, no row
+  written, no file touched — so a duplicated turn costs a duplicated answer and a
+  second search, which is owner decision 9's "accept it". The phase that puts a tool
+  with an effect on the floor is the phase that must build deduplication by
+  `update_id`; the judgment is recorded beside the set in `tools/registry.py`.
 - **The Mac has to be awake and Addison has to be running.** There is no proxy and no
   daemon. Messages that arrived while it was not are DECLINED with one plain sentence
-  (owner decision 8's default), once per chat rather than once per message.
+  by default, once per chat rather than once per message — and owner decision 8's
+  SETTING (`channels.on_wake`, phase 3) is what changes that to answering them late.
+  Choosing to answer is a widening and is Developer-only; choosing to decline answers
+  in every profile.
+
+- **A refused call becomes a note on the desk, and a note is a RECORD.** The queue
+  lives in memory on the service, bounded by age and by count with the oldest falling
+  off, and is empty after a restart (owner decision 7). Its one affordance, *"Ask this
+  here"*, writes the person's own sentence into the DESKTOP composer for them to send
+  live with the ordinary card — nothing on either side can dispatch a stored request,
+  which is why `PendingRequest` carries no tool id and no arguments to dispatch.

@@ -108,7 +108,7 @@ widened content-security policy is enforced by a real webview, on all three plat
 See the note further down and
 [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md).
 
-**Scheduled 2026-08-22, beside those tracks: messaging channels — controlling
+**Built 2026-08-22, beside those tracks: messaging channels — controlling
 Addison from a phone.** The owner asked for it, the design was written and its
 eleven decisions answered the same day
 ([docs/messaging-channel-plan.md](docs/messaging-channel-plan.md) owns all of it).
@@ -117,7 +117,8 @@ keychain and nothing connecting; then Telegram connected, a phone paired with a
 code Addison shows on the desktop, and conversation with **no tools at all**; then
 the remote floor — three read-only tools, a closed set proven a subset of Simple's
 own view — with everything else refused in one plain sentence and left waiting on
-the desk. Phase 4 (approving an action from the phone) is **deferred**: the
+the desk. **All three landed on 2026-08-22** (per-phase notes below). Phase 4
+(approving an action from the phone) is **deferred**: the
 owner's horizon for that is a bespoke phone app, which is not designed anywhere
 yet. One channel enabled at a time in v1 (multiple is v2); the approved menu-bar
 popup chat is added scope that gets its own design section before it is built.
@@ -147,8 +148,24 @@ pairing and Revoke in plain words. Owner decision 8 ships as its DEFAULT only �
 messages that arrived while the Mac slept are declined with one sentence; the
 queue-or-decline setting itself is later. One channel listens at a time (decision
 11), and nothing starts listening when the app opens: switching one on is what
-starts it, so `channel.status` is where a surface learns the truth. **Phase 3 —
-the remote floor's three ids and the desk queue — is what remains.**
+starts it, so `channel.status` is where a surface learns the truth.
+
+**Phase 3 landed the same day, and with it the whole of what this plan schedules:
+the remote floor and the desk queue.** `REMOTE_TOOL_IDS` now carries three read-only
+ids — look something up on the web, read the page it found, do the maths — and a test
+asserts the four properties that make that list safe to edit, the load-bearing one
+being that **the set is a subset of Simple's own view**: a phone is never offered a
+tool Simple could not be offered. Everything else is refused before the gate at both
+dispatch paths, in one plain sentence, and **the request is written down** — a desk
+queue in memory on the core, bounded by age and by count, empty after a restart. A
+note is a RECORD and not a resumable action: it carries the person's own words and
+the plain name of the thing Addison would have used, and its one affordance ("Ask
+this here") writes that sentence into the desktop composer for the person to send
+live with the ordinary card. Owner decision 8's SETTING landed here too
+(`channels.on_wake`): decline a message that arrived while the Mac slept, which is
+still the default, or answer it late — choosing the wider one is Developer-only.
+**Phase 4 — approving an action from a phone — stays deferred**, the owner's horizon
+for that being a bespoke phone app.
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 until the following morning; all are finished. Their entries

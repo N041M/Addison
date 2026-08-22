@@ -179,8 +179,9 @@ erDiagram
         TEXT id PK
         TEXT kind "telegram only in v1; CHECK"
         TEXT name "the person's own label"
-        INTEGER enabled "0 in phase 1; nothing turns one on"
+        INTEGER enabled "the person's saved intent; the service is the truth"
         TEXT token_present "present|absent|unknown; NOT captured"
+        TEXT on_wake "decline|answer; what to do with a message sent while asleep"
         INTEGER created_at
     }
     channel_pairings {
@@ -549,11 +550,10 @@ erDiagram
     and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
     2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
     no-undo one out of it in any case.
-- **channels** *(messaging channels, phase 1, **built 2026-08-22**)*: a connection a
+- **channels** *(messaging channels, phases 1–3, **built 2026-08-22**)*: a connection a
   person can talk to Addison through from their phone. A row is a `kind` (the
-  transport), a plain `name` they chose, an off switch and `created_at`. **Phase 1
-  connects to nothing**: there is no adapter, no poll loop, no pairing and no network
-  call in the build, so a saved row reaches nothing and is reached by nothing.
+  transport), a plain `name` they chose, an off switch, what to do with a message that
+  arrived while the Mac was asleep, and `created_at`.
   [`messaging-channel-plan.md`](messaging-channel-plan.md) owns the phase order and the
   eleven owner decisions of 2026-08-22.
   - **`kind` carries a CHECK and there is no command column**, on the `mcp_servers`
@@ -563,15 +563,22 @@ erDiagram
     **OS keychain** through the shell's own `store_channel_key` command, under the
     account `channel-key:<kind>` — a parallel command to the provider pair and never a
     call into it — and the core reads it at the moment of use
-    (`keychain.getChannelKey`, uncalled in phase 1). `token_present` is the non-secret
+    (`keychain.getChannelKey`). `token_present` is the non-secret
     three-state record, `provider_config.secret_presence`'s vocabulary exactly: it
     says whether a token is *believed* to exist so a surface can render a list without
-    a keychain touch, and it holds no part of one. In phase 1 it is `unknown` on every
-    row, because proving otherwise means asking a transport.
-  - **`enabled` defaults to 0 and nothing sets it.** Turning a channel on is what
-    starts a poll loop, which is phase 2. It is captured and restored, so a restore
-    leaves a channel exactly as off as a fresh row — the honest state, since neither
-    the token nor the pairings come back with it.
+    a keychain touch, and it holds no part of one. It becomes anything but `unknown`
+    only when a transport has been ASKED (`channel.connect`).
+  - **`enabled` is the person's saved intent and never live truth.** Nothing starts a
+    poll loop when the app opens, so a restored or remembered 1 means "the person had
+    this on"; `channel.status` asks the service what is actually listening. It is
+    captured and restored, and a restore leaves a channel exactly as off as a fresh
+    row — the honest state, since neither the token nor the pairings come back with it.
+  - **`on_wake` is owner decision 8's setting** (phase 3): `'decline'` — the default,
+    because the safe behaviour should be the out-of-box one — answers a message that
+    arrived while the Mac slept with one plain sentence; `'answer'` runs the turn
+    anyway. Ordinary reversible configuration, so unlike `token_present` it IS
+    captured: it records a choice somebody made rather than an observation about
+    something outside SQLite.
   - **Snapshot-CAPTURED** (`snapshots/scope.py`) on the `mcp_servers` terms — a row is
     reversible config and grants Addison nothing on this machine — **except
     `token_present`, which is in `_EXCLUDED_COLUMNS`** for `secret_presence`'s reason:

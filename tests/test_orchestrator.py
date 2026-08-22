@@ -176,16 +176,16 @@ def test_the_two_new_turn_parameters_change_nothing_when_they_are_not_passed():
     Mutation: make ``sink`` default to None rather than to the orchestrator's own
     stream — the streamed text disappears and this fails on the last comparison."""
 
-    def one_turn(**kwargs):
-        tool = _SpyTool("calculator", content=42)
+    def one_turn(tool_id: str = "calculator", **kwargs):
+        tool = _SpyTool(tool_id, content=42)
         registry = ToolRegistry()
         registry.register(tool)
         provider = _ScriptedProvider([
-            _calls_response(_tool_call("call-1", "calculator", {"expression": "6*7"})),
+            _calls_response(_tool_call("call-1", tool_id, {"expression": "6*7"})),
             _text_response("The answer is 42."),
         ])
         gate = PermissionGate()
-        gate.grant("calculator")
+        gate.grant(tool_id)
         router = ModelRouter(configured={ModelRole.PRIMARY: provider})
         streamed: list[str] = []
         orchestrator = Orchestrator(
@@ -211,12 +211,21 @@ def test_the_two_new_turn_parameters_change_nothing_when_they_are_not_passed():
     explicit = one_turn(surface=TurnSurface.DESK)
     assert explicit == before
     # And the remote surface is the ONE thing that differs, so the comparison above
-    # is measuring something: no tools offered, and nothing streamed anywhere.
+    # is measuring something. Since phase 3 the floor carries three read-only ids, so
+    # the difference to look for is not "no tools" any more: it is that the phone
+    # gets the FLOOR and nothing else, and that nothing is streamed anywhere.
     remote = one_turn(surface=TurnSurface.REMOTE, stream_to=None)
     assert remote != before
-    assert remote["offered"] == [[], []]
+    assert remote["offered"] == [["calculator"], ["calculator"]]
     assert remote["streamed"] == []
-    assert remote["calls"] == [], "a remote turn may not reach a tool at all"
+    assert remote["calls"] == [{"expression": "6*7"}], (
+        "`calculator` is ON the remote floor, so a phone may reach it"
+    )
+    # A tool that is NOT on the floor is offered to nobody and reached by nobody on
+    # this surface, with the same registry and the same granted gate.
+    off_the_floor = one_turn("read_clipboard", surface=TurnSurface.REMOTE, stream_to=None)
+    assert off_the_floor["offered"] == [[], []]
+    assert off_the_floor["calls"] == []
     assert before["streamed"] and before["calls"] == [{"expression": "6*7"}]
 
 

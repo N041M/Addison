@@ -699,6 +699,12 @@ export type ChannelKind = "telegram";
  * never be rendered as "no token saved". */
 export type ChannelTokenPresence = "present" | "absent" | "unknown";
 
+/** What Addison does with a message that arrived while this Mac was asleep — the
+ * core's closed two-value vocabulary (owner decision 8). "decline" is the default
+ * and the safe direction: an unrecognised value must read as "Addison will say it
+ * wasn't there", never as "Addison will answer whatever it finds". */
+export type ChannelOnWake = "decline" | "answer";
+
 export interface Channel {
   /** The core's row id — what `channel.remove` takes. */
   id: string;
@@ -715,6 +721,10 @@ export interface Channel {
   enabled: boolean;
   /** Whether a token is believed saved. Never a token, a length or a prefix. */
   tokenPresent: ChannelTokenPresence;
+  /** What to do with a message that arrived while this Mac was asleep or Addison
+   * was not running: say it wasn't there ("decline", the default and the safe
+   * direction), or answer it on the way back in ("answer"). */
+  onWake: ChannelOnWake;
   /** How many phones are paired to this channel. A COUNT and never the rows: a
    * pairing carries a display name the transport supplied. Always 0 in phase 1,
    * which has no pairing. */
@@ -770,6 +780,29 @@ export interface ChannelPairing {
   label: string;
   /** Unix seconds when this phone paired. */
   pairedAt?: number;
+}
+
+/** One thing a phone asked for that Addison only does at this computer, from
+ * `channel.pendingRequests` (phase 3).
+ *
+ * A RECORD, NEVER A RESUMABLE ACTION, and the shape is the guarantee: there is no
+ * tool id here, no arguments and no call id, so there is nothing on this side to
+ * replay even for a caller that wanted to. The panel offers "Ask this here", which
+ * writes `whatWasAsked` into the composer for the person to send themselves — the
+ * ordinary turn, with the ordinary permission card. */
+export interface ChannelPendingRequest {
+  /** What `channel.dismissRequest` takes. */
+  id: string;
+  /** Which connection it came in on. */
+  channelId: string;
+  /** Unix seconds when the phone asked. */
+  askedAt?: number;
+  /** The plain-language name of the thing Addison would have used ("Change a
+   * file"), never a tool id. */
+  toolLabel: string;
+  /** What the person typed on their phone, capped by the core. Untrusted text:
+   * shown as plain text, never through the markdown renderer. */
+  whatWasAsked: string;
 }
 
 /** An open pairing window, from `channel.beginPairing`. The code is shown on THIS

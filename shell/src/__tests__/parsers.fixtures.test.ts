@@ -350,10 +350,12 @@ describe("parseChannels over the real channel.list payload", () => {
     // table rather than reading off the row. Pinning them against the generated
     // fixture is what makes a rename on either side a red build.
     //
-    // Every row is off, unpaired and "unknown", and that is the payload phase 1 can
-    // actually produce: nothing turns a channel on and nothing can ask a transport
-    // whether a token works. A fixture claiming otherwise would pin this parser
-    // against a shape the handler never emits.
+    // Every row is off, unpaired, "unknown" and set to decline late messages, and
+    // that is the payload a freshly added connection actually produces: nothing turns
+    // a channel on, nothing can ask a transport whether a token works until somebody
+    // presses Check now, and owner decision 8's setting starts at its safe default. A
+    // fixture claiming otherwise would pin this parser against a shape the handler
+    // never emits.
     expect(parseChannels(channelListFixture)).toEqual([
       {
         id: "channel-fixture-0",
@@ -361,6 +363,7 @@ describe("parseChannels over the real channel.list payload", () => {
         name: "My phone",
         enabled: false,
         tokenPresent: "unknown",
+        onWake: "decline",
         pairedDevices: 0,
         addedAt: 4102444800,
       },
@@ -370,6 +373,7 @@ describe("parseChannels over the real channel.list payload", () => {
         name: "The kitchen tablet",
         enabled: false,
         tokenPresent: "unknown",
+        onWake: "decline",
         pairedDevices: 0,
         addedAt: 4102444801,
       },
@@ -389,6 +393,7 @@ describe("parseChannels over the real channel.list payload", () => {
         "id",
         "kind",
         "name",
+        "onWake",
         "pairedDevices",
         "tokenPresent",
       ]);

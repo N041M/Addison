@@ -116,42 +116,70 @@ LIVE_ONLY_REFUSAL = (
 UNKNOWN_TOOL_REFUSAL = "That tool isn't available any more, so Addison didn't run it."
 
 # Said when a turn that arrived FROM A PHONE names a tool the remote floor omits
-# (messaging channels phase 2; docs/messaging-channel-plan.md §3.6). It says what
-# to do instead, because a refusal with no next move comes back as a blocked task
-# — LIVE_ONLY_REFUSAL's own rule.
+# (messaging channels; docs/messaging-channel-plan.md §3.6). It says what to do
+# instead, because a refusal with no next move comes back as a blocked task —
+# LIVE_ONLY_REFUSAL's own rule.
 #
-# IT IS NOT §3.6's QUOTED SENTENCE YET, and the difference is deliberate. The plan
-# writes *"It's saved as a request — it will be waiting on your screen when you're
-# back"*, which is true only once the desk queue exists — and the queue is PHASE 3
-# (§3.11, listed under phase 2's "deliberately does not ship"). Promising somebody
-# a note waiting on their screen while nothing is written down would be this app
-# telling a lie of exactly the kind its copy rules exist to prevent. So phase 2
-# says the true half, and the commit that builds the queue is the commit that earns
-# the second sentence.
+# §3.6's QUOTED SENTENCE, WHOLE, AND THE SECOND HALF IS EARNED HERE. Phase 2 shipped
+# the first half alone and said why: the plan's *"It's saved as a request — it will
+# be waiting on your screen when you're back"* is true only once the desk queue
+# exists, and promising somebody a note waiting on their screen while nothing was
+# written down would be this app telling a lie of exactly the kind its copy rules
+# exist to prevent. Phase 3 builds the queue (`channel_service.PendingRequest`,
+# §3.11) IN THIS COMMIT, so the promise is now kept: every refusal below records the
+# request, and `channel.pendingRequests` is what the desk reads it from. If the
+# queue is ever taken out, this sentence goes back to its true half in the same
+# commit.
 REMOTE_REFUSAL = (
-    "That's something Addison does at your computer. Ask again when you're back at "
-    "your screen and it can go ahead."
+    "That's something Addison does at your computer. It's saved as a request — it "
+    "will be waiting on your screen when you're back."
 )
 
 # THE REMOTE FLOOR: what a turn that arrived over a messaging channel may use.
 #
-# EMPTY, ON PURPOSE (phase 2). An empty set is not a placeholder — it is the
-# strongest possible version of the phase, and it proves every seam (the thread,
-# the hand-off, the conversation isolation, the screening, the splitting, the
-# pairing) with the tool question factored out entirely. Phase 3 fills it with the
-# three ids §3.6 argues for; nothing else about this file changes when it does.
+# THREE READ-ONLY IDS (phase 3, owner decision 5 — "the three as proposed"). It was
+# EMPTY through phase 2 on purpose, which proved every other seam (the thread, the
+# hand-off, the conversation isolation, the screening, the splitting, the pairing)
+# with the tool question factored out; filling it is a one-line edit with a
+# deliberate speed bump of a test, and nothing else about this file changed when it
+# happened.
 #
 # A CLOSED SET OF IDS, HARD-CODED, and not a predicate over risk tiers. The obvious
-# floor — LOW and not open_only — admits `read_clipboard` (an exfiltration path off
-# an unattended Mac), `open_link` (something happens on a screen nobody is at) and
-# the two file readers (local file contents leaving through a chat server on the
-# strength of one message). All four are properly in the SAFE view for a person at
-# the keyboard; a phone is a different consent. That is invariant 4's own lesson —
+# floor — LOW and not open_only — would also admit `read_clipboard` (an exfiltration
+# path off an unattended Mac), `open_link` (something happens on a screen nobody is
+# at) and the two file readers (local file contents leaving through a chat server on
+# the strength of one message). All four are properly in the SAFE view for a person
+# at the keyboard; a phone is a different consent. That is invariant 4's own lesson —
 # widget kinds are a closed set the CODE owns, because a spec never declares its own
 # capabilities — applied one layer down, and it is also step 7's answer to a
 # stranger's server declaring its own risk: a `remote_ok` flag on a tool would be
 # that trust hole moved indoors.
-REMOTE_TOOL_IDS: frozenset[str] = frozenset()
+#
+# WHAT THE SET IS ALLOWED TO CONTAIN is asserted rather than described:
+# ``tests/test_channel_remote_floor.py`` holds §3.6's four properties over it — every
+# id registered and LOW, none of them `open_only`, none destructive for any
+# arguments, and the whole set a SUBSET of ``visible_tools(SAFE)``. The last one is
+# the sentence the floor is really made of: *a remote turn is never offered a tool
+# Simple could not be offered.*
+#
+# AND WHY NO DEDUPLICATION BY `update_id` COMES WITH IT, recorded here because here
+# is where the judgment is made rather than in a changelog. Delivery over the
+# transport is at-least-once (`channels/telegram.py`: the cursor IS the
+# acknowledgement, so a crash between hand-off and advance re-delivers), and the
+# plan's §3.3 says dedup becomes a REQUIREMENT "the moment anything with an effect
+# joins the floor". Nothing on this list has an effect: three read-only tools, no
+# `undo()` needed, no row written, no file touched. A duplicated delivery therefore
+# costs a duplicated ANSWER and a second search — annoying, never harmful — which is
+# owner decision 9's "accept it" at full strength. **The phase that puts a tool with
+# an effect on this list is the phase that must build the dedup**, and this paragraph
+# is the note it will find when it edits the line above.
+REMOTE_TOOL_IDS: frozenset[str] = frozenset(
+    {
+        "calculator",
+        "web_search",
+        "read_web_page",
+    }
+)
 
 
 class ToolRegistry:
@@ -368,9 +396,10 @@ class ToolRegistry:
 
         Called by BOTH dispatch paths — the orchestrator's tool round and the
         routine engine's step — because a boundary only one path enforces is not a
-        boundary. Nothing can start a routine from a phone in phase 2 (the floor is
-        empty, so no tool can be named at all), and the check goes in anyway: the
-        phase that admits a tool must not also have to remember the second site."""
+        boundary. It was wired at both while the floor was still empty, so that the
+        phase which admitted the first three ids did not also have to remember the
+        second site; nothing starts a routine from a phone even now, and the check
+        is there for the day something tries."""
         if surface is TurnSurface.REMOTE and tool_id not in REMOTE_TOOL_IDS:
             return REMOTE_REFUSAL
         return None

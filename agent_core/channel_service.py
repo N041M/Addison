@@ -67,6 +67,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from uuid import uuid4
 
 from agent_core.channel_pairing import PendingPairing, begin
 from agent_core.channels.adapter import (
@@ -110,6 +111,22 @@ CONTINUATION_MARKER = "\n\n(continued…)"
 #: liveable).
 _DECLINE_SUPPRESSION_SECONDS = 300
 
+#: How much of a person's own message a queued request keeps. Enough to recognise
+#: what was asked on the desk; short enough that a note is a note. The text is
+#: cleaned and capped through the same door a transport-supplied label goes through
+#: (``clean_untrusted_text``), because it is the same kind of text: somebody typed
+#: it on a phone, and nothing here may assume it is well-behaved.
+MAX_REQUEST_CHARS = 280
+
+#: THE QUEUE'S TWO BOUNDS (plan §3.11). Nothing about a desk queue may grow without
+#: limit from the far end of a network, so it is bounded by COUNT and by AGE, and
+#: the oldest falls off. A day is the age because the queue's whole purpose is
+#: "you were away and this is what your phone asked for" — a note from last week
+#: answers no question anybody still has, and the queue is gone on restart anyway
+#: (owner decision 7).
+MAX_PENDING_REQUESTS = 20
+PENDING_REQUEST_MAX_AGE_SECONDS = 24 * 60 * 60
+
 
 @dataclass(frozen=True)
 class ChannelStatus:
@@ -127,6 +144,40 @@ class ChannelStatus:
     backoff_seconds: int = 0
     unknown_senders: int = 0
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class PendingRequest:
+    """One thing a phone asked for that Addison does at the computer (plan §3.11).
+
+    **A RECORD, NEVER A RESUMABLE ACTION**, and the shape of this dataclass is the
+    guarantee rather than a promise about how it is used: it carries no tool id, no
+    arguments and no call id, so there is nothing here to replay even for a caller
+    that wanted to. The desk offers *"Ask this here"*, which writes the person's own
+    sentence into the desktop composer for them to send live, with the ordinary card.
+    A button that re-dispatched a stored request would be a second dispatch path,
+    raising a card written for a moment that has passed, for arguments a model chose
+    in a context nobody is looking at any more — and this design's whole rule is one
+    registry, one gate, one dispatch.
+
+    IN MEMORY ON THE SERVICE, NEVER IN A TABLE (owner decision 7). Two reasons, both
+    borrowed: a captured table carrying somebody's phone message would copy that text
+    into every later snapshot payload and plaintext sidecar forever (the MCP
+    catalog's reason), and a queue is a set of moments rather than configuration — it
+    exists to be read once. After a restart it is empty, which is coherent, because
+    v1 only answers a phone while the app is running at all."""
+
+    id: str
+    channel_id: str
+    asked_at: int
+    #: The tool's plain-language LABEL, never its id. A person reading the desk sees
+    #: "Change a file", not `write_project_file` — the same rule every card and every
+    #: activity line keeps.
+    tool_label: str
+    #: The person's own message, cleaned and capped. Their words, not the model's
+    #: summary of them: this is what "Ask this here" hands back to the composer, and
+    #: a paraphrase would put words in somebody's mouth on their own screen.
+    what_was_asked: str
 
 
 def split_message(text: str, limit: int, marker: str = CONTINUATION_MARKER) -> list[str]:
@@ -167,7 +218,12 @@ def split_message(text: str, limit: int, marker: str = CONTINUATION_MARKER) -> l
 
 
 class ChannelService:
-    """One thread per enabled channel, and no state that matters."""
+    """One thread per enabled channel, and no state that outlives the process.
+
+    The desk queue (phase 3) is the only thing here a person will notice the loss
+    of, and losing it on a restart is the DESIGN rather than a shortcut (owner
+    decision 7): a queue row would carry a message somebody typed on a phone, and a
+    captured table's text is copied into every later snapshot payload forever."""
 
     def __init__(
         self,
@@ -198,6 +254,13 @@ class ChannelService:
         self._status: dict[str, ChannelStatus] = {}
         self._pending: dict[str, PendingPairing] = {}
         self._declined_at: dict[tuple[str, str], int] = {}
+        #: THE DESK QUEUE (plan §3.11) — oldest first, bounded by count and by age.
+        #: Written by the worker thread when a remote turn names something the floor
+        #: omits; read by the worker thread when the desk asks. It lives here rather
+        #: than on the server for the reason everything else about a channel does:
+        #: this object is what a restart empties, and a queue of moments should be
+        #: emptied by a restart.
+        self._requests: list[PendingRequest] = []
 
     # --- lifecycle ---------------------------------------------------------
 
@@ -378,6 +441,73 @@ class ChannelService:
                 return False
             self._declined_at[key] = now
             return True
+
+    # --- the desk queue (plan §3.11) ---------------------------------------
+
+    def note_request(
+        self, channel_id: str, tool_label: str, what_was_asked: str, asked_at: int
+    ) -> PendingRequest:
+        """Write down one thing a phone asked for that Addison does at the computer.
+
+        Called from the WORKER thread, after a remote turn whose ``tool_use`` the
+        floor refused. The refusal itself is the registry's
+        (``refuse_if_not_remote``, above the gate and above every effect); this is
+        the half that means the sentence the phone was sent — *"it will be waiting on
+        your screen when you're back"* — is true.
+
+        BOUNDED IN BOTH DIRECTIONS, and the oldest falls off: nothing reachable from
+        the far end of a network may grow without limit. The text is cleaned and
+        capped on the way in, because it is a message somebody typed on a phone."""
+        request = PendingRequest(
+            id=str(uuid4()),
+            channel_id=channel_id,
+            asked_at=asked_at,
+            tool_label=clean_untrusted_text(tool_label, MAX_LABEL_CHARS),
+            what_was_asked=clean_untrusted_text(what_was_asked, MAX_REQUEST_CHARS),
+        )
+        with self._lock:
+            self._prune_requests(asked_at)
+            self._requests.append(request)
+            # The count bound, applied after the append so the newest is never the
+            # one dropped: a queue that discarded the message somebody just sent
+            # would be the one failure a person would actually notice.
+            if len(self._requests) > MAX_PENDING_REQUESTS:
+                del self._requests[: len(self._requests) - MAX_PENDING_REQUESTS]
+        return request
+
+    def pending_requests(self, now: int) -> list[PendingRequest]:
+        """Everything waiting on the desk, oldest first.
+
+        The age bound is applied HERE as well as on the way in, because a queue that
+        only aged out when something new arrived would show a day-old note forever on
+        a channel nobody has messaged since."""
+        with self._lock:
+            self._prune_requests(now)
+            return list(self._requests)
+
+    def dismiss_request(self, request_id: str) -> bool:
+        """Take one note off the desk. Returns whether there was one to take.
+
+        The ONLY thing that happens to a request other than ageing out. There is no
+        "run it now": see :class:`PendingRequest`."""
+        with self._lock:
+            before = len(self._requests)
+            self._requests = [r for r in self._requests if r.id != request_id]
+            return len(self._requests) != before
+
+    def forget_requests(self, channel_id: str) -> None:
+        """Drop every note belonging to one channel — called when the channel itself
+        is removed. A note naming a connection that no longer exists is a note whose
+        "Ask this here" would put a sentence about a phone the person just forgot
+        into their composer."""
+        with self._lock:
+            self._requests = [r for r in self._requests if r.channel_id != channel_id]
+
+    def _prune_requests(self, now: int) -> None:
+        """Age-out, under the caller's lock."""
+        self._requests = [
+            r for r in self._requests if now - r.asked_at <= PENDING_REQUEST_MAX_AGE_SECONDS
+        ]
 
     # --- the send side ------------------------------------------------------
 

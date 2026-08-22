@@ -12,6 +12,81 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (eighth): three read-only tools for a phone, and a note on the desk for everything else
+
+Phase 3 of the messaging channels, and the last one that ships
+([`messaging-channel-plan.md`](messaging-channel-plan.md) owns the design; phase 4 —
+approving an action from a phone — stays deferred). The claim: **a phone can ask
+Addison to look something up, and everything else comes back as a plain sentence and
+a note waiting on the desk.**
+
+- **THE FLOOR FILLED, AND THE ONE LINE HAS A SPEED BUMP.** `REMOTE_TOOL_IDS` now
+  carries `calculator`, `web_search`, `read_web_page` (owner decision 5, the three as
+  proposed), and the test that used to assert the set was empty became §3.6's FOUR
+  properties, asked of the registry the app actually builds rather than of a fixture:
+  every id registered and `RiskTier.LOW`; none of them `open_only`; `call_is_destructive`
+  False and **none of them defines `is_destructive` at all**, so no argument can make
+  one destructive and no card can be raised for a phone; and **the set is a subset of
+  `visible_tools(SAFE)`** — *a remote turn is never offered a tool Simple could not be
+  offered.* That last one is the sentence the floor is made of, so it is asserted a
+  second time in `test_tool_registry.py` beside the registry's own tests and held to
+  the documents by a `doc_claims` row. Beside them is the TABLE test: every LOW tool
+  NOT on the list — `read_clipboard`, `read_file`, `read_project_file`, `open_link` —
+  is refused at dispatch on a remote turn, so a tool registered tomorrow is refused by
+  default and admission stays a deliberate edit.
+- **THE REFUSAL EARNED ITS SECOND SENTENCE, in the commit that made it true.** Phase 2
+  shipped half of §3.6's quoted copy and said why: the other half promises a note
+  waiting on your screen, and there was no queue. `REMOTE_REFUSAL` is now the whole
+  sentence, and the end-to-end test reads the note back off `channel.pendingRequests`
+  after the phone has been told it exists. The comment that explained the withheld
+  half now records that it is earned — and says what to do if the queue is ever
+  removed.
+- **A QUEUED REQUEST IS A RECORD, AND THE DATACLASS IS THE GUARANTEE.**
+  `PendingRequest` carries an id, a channel, a time, the tool's plain-language LABEL
+  and the person's own message — **no tool id, no arguments, no call id**, so there is
+  nothing to replay even for a caller that wanted to. The desk's affordance is *"Ask
+  this here"*, which seeds the DESKTOP composer (App's `seedAsk`, the same seam the
+  Automations section's Arm uses) and leaves the person to press Send, so the turn
+  runs live through the ordinary gate with the ordinary card. There is no
+  `channel.runRequest` on either side, and a test asserts the channel namespace's
+  request methods are exactly `pendingRequests` / `dismissRequest` / the notification.
+- **The queue is populated by reading the turn back, not by a new hook in the shared
+  loop.** `_queue_refused_requests` walks the messages the turn just left behind and
+  ASKS THE FLOOR — `refuse_if_not_remote`, the same predicate dispatch used — rather
+  than string-matching the refusal sentence, which would both re-spell frozen copy and
+  queue a request for any tool that happened to return those words. It also keeps
+  phase 1's import fence on `rpc/channels.py` intact: it uses the registry object the
+  mixin already holds and imports nothing from `tools/`.
+- **`update_id` DEDUPLICATION WAS JUDGED, NOT FORGOTTEN.** Delivery is at-least-once,
+  and the plan says dedup becomes a requirement "the moment anything with an effect
+  joins the floor". Nothing on this floor has an effect, so a duplicate costs a
+  duplicated answer and a second search — accepted (owner decision 9). The judgment is
+  written **at `REMOTE_TOOL_IDS`**, the line an editor has to touch to make it wrong,
+  rather than in a changelog nobody will be reading when they add a fourth id.
+- **Owner decision 8's SETTING landed here too.** `channels.on_wake`
+  (`'decline' | 'answer'`, CHECKed by the schema, migrated with
+  `_add_column_if_missing`, CAPTURED with the rest of the row because it is a choice
+  somebody made rather than an observation about a keychain). Choosing to answer late
+  messages is a widening and is Developer-only; choosing to decline answers in every
+  profile, because a tightening must never be what a profile switch traps. The default
+  is unchanged, so nobody who never opens the control sees a difference.
+- **What the adversarial pass over this diff found.** (a) The first draft imported
+  `REMOTE_REFUSAL` into `rpc/channels.py`, which phase 1's structural test forbids —
+  the fence around that module is deliberate, and the fix was to ask the registry
+  rather than to widen the fence. (b) `tests/test_orchestrator.py`'s
+  byte-identical-when-DESK pin used a spy tool named `calculator`, which the new floor
+  ADMITS: the test went green while asserting "a remote turn may not reach a tool at
+  all", a sentence that had silently stopped being true. It now asserts what the phase
+  actually claims — the phone gets the floor and nothing else — and a second spy named
+  `read_clipboard` proves the other direction on the same registry. A test that keeps
+  passing while its own sentence goes false is the failure this log exists for.
+- **What is still open, and is now written down** ([`KNOWN-GAPS.md`](KNOWN-GAPS.md)):
+  a remote conversation is never condensed (the context-budget machinery hangs off the
+  desktop path), and the desk can open the phone's thread from the sidebar — it is an
+  ordinary conversation and `conversation.load` rebuilds the rewind anchor for it — but
+  a message arriving while it is open appends rows that loaded copy does not know
+  about.
+
 ## What shipped 08-22 (seventh): a phone that can hold a conversation, and no tools at all
 
 Phase 2 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)

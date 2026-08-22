@@ -484,8 +484,11 @@ relaxes exactly these four, and only as spelled out above.
    to a second SURFACE rather than a second caller: `remote_tools(mode)` is what a
    turn that came from a paired phone is offered, an INTERSECTION with
    `visible_tools(mode)` and therefore a subset of the desk's view in every mode — *a
-   remote turn is never offered a tool Simple could not be offered.* It is empty in
-   phase 2 by design. Like the routine view it is a filter over the one registry, and
+   remote turn is never offered a tool Simple could not be offered.* It was empty by
+   design in phase 2 and carries three read-only ids since phase 3 (`calculator`,
+   `web_search`, `read_web_page`) — a closed list, with that subset property asserted
+   over it by a test rather than described. Like the routine view it is a filter over
+   the one registry, and
    like the routine view its marker is not its enforcement: `refuse_if_not_remote` at
    both dispatch paths is.
    [messaging-channel-plan.md](messaging-channel-plan.md) §3.6 owns the closed set

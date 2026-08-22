@@ -288,9 +288,11 @@ is recorded), Routine step-editing UI, and a Rust rewrite of the
 Agent Core. **Messaging channels left this list on 2026-08-22**: the owner asked for
 phone control, [`docs/messaging-channel-plan.md`](docs/messaging-channel-plan.md)
 was written and its eleven owner decisions answered the same day, and phases 1–3
-are **scheduled** (Telegram default, plural adapters, the closed remote floor;
-phase 4 — approving actions from a phone — stays deferred, the owner's horizon
-being a bespoke phone app). That plan owns the design; ROADMAP owns status. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
+are **built** (Telegram default, plural adapters, and the closed remote floor —
+three read-only ids asserted to be a subset of the SAFE view, with everything else
+refused in one plain sentence and left as a note on the desk; phase 4 — approving
+actions from a phone — stays deferred, the owner's horizon being a bespoke phone
+app). That plan owns the design; ROADMAP owns status. **Neither v2 item from the 2026-07 ecosystem survey is deferred any
 more.** **Untrusted-content screening** was pulled forward on 2026-08-13, its
 triggers having fired, and is **built**;
 [`docs/untrusted-screening-plan.md`](docs/untrusted-screening-plan.md) owns it,

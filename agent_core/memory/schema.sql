@@ -152,6 +152,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
 -- loop. It is captured and restored, so a restore leaves a channel exactly as off as
 -- a fresh row — which is the honest state, since the token and the pairings do not
 -- come back with it.
+-- `on_wake` is owner decision 8's SETTING (phase 3): what happens to a message that
+-- arrived while this Mac was asleep or Addison was not running. 'decline' — the
+-- DEFAULT, because the safe behaviour should be the out-of-box one — answers each
+-- one with a plain sentence saying Addison was not there. 'answer' runs the turn
+-- anyway, which is the decision's "queue them": the TRANSPORT does the queueing, and
+-- this column only decides whether Addison takes the held message seriously when it
+-- comes back. It is ordinary reversible configuration and is CAPTURED
+-- (snapshots/scope.py) with the rest of the row.
 CREATE TABLE IF NOT EXISTS channels (
     id            TEXT PRIMARY KEY,      -- uuid4
     kind          TEXT NOT NULL CHECK(kind IN ('telegram')),
@@ -159,6 +167,8 @@ CREATE TABLE IF NOT EXISTS channels (
     enabled       INTEGER NOT NULL DEFAULT 0,
     token_present TEXT NOT NULL DEFAULT 'unknown'
                       CHECK(token_present IN ('present','absent','unknown')),
+    on_wake       TEXT NOT NULL DEFAULT 'decline'
+                      CHECK(on_wake IN ('decline','answer')),
     created_at    INTEGER NOT NULL
 );
 

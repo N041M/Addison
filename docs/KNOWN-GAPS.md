@@ -1145,7 +1145,7 @@ follows. None is scheduled and none blocks anything.
   and that is the Knowledge entry above wearing a smaller hat: once retrieval
   lands, a note is a small attachable document that is already local and already
   trusted. Until then, nothing to build.
-- **Messaging channels: SCHEDULED 2026-08-22, the same day the design was
+- **Messaging channels: BUILT 2026-08-22 (phases 1–3), the same day the design was
   written.** The owner asked for phone control of Addison (WhatsApp named), the
   plan was written, and all eleven of its owner decisions were answered that
   evening — Telegram default with plural adapters, phases 1–3 scheduled, phase 4
@@ -1184,3 +1184,52 @@ follows. None is scheduled and none blocks anything.
     one bot per transport is the common case, and it keeps the account name readable
     in Keychain Access. The plan's §3.9 records the decision in one sentence, so the
     v2 diff that lifts decision 11 finds it there rather than here.
+  - **CLOSED 2026-08-22 (phase 3): the refusal copy now earns its second sentence.**
+    Phase 2 shipped `REMOTE_REFUSAL` as the true HALF of §3.6's quoted sentence,
+    because the other half — *"It's saved as a request — it will be waiting on your
+    screen when you're back"* — promises a desk queue that phase 2 deliberately did
+    not ship, and promising somebody a note waiting on their screen while nothing was
+    written down is the kind of lie this project's copy rules exist to prevent. Phase
+    3 built the queue in the same commit that pasted the sentence in whole, and the
+    end-to-end test reads the note back off `channel.pendingRequests` after the phone
+    has been told it exists. If the queue is ever removed, the sentence goes back to
+    its true half in that commit.
+  - **CLOSED 2026-08-22 (phase 3), decided: NO `update_id` DEDUPLICATION, and the
+    judgment is recorded beside the floor.** Delivery is at-least-once (§3.3: the
+    cursor IS the acknowledgement, so a crash between hand-off and advance
+    re-delivers), and the plan says dedup becomes a requirement "the moment anything
+    with an effect joins the floor". Nothing on the floor has an effect — `calculator`,
+    `web_search` and `read_web_page` are LOW, read-only, undo-free by construction and
+    write no row — so a duplicated delivery costs a duplicated ANSWER and a second
+    search. That is owner decision 9's "accept it" at full strength, and the note
+    lives at `REMOTE_TOOL_IDS` in `agent_core/tools/registry.py`, which is the line an
+    editor has to touch to make it wrong: **the phase that puts a tool with an effect
+    on the floor is the phase that must build the dedup.**
+  - **NOTED 2026-08-22 (phase 3), and accepted: "Ask this here" puts somebody else's
+    sentence in your composer.** A queued request carries the phone's own words, and
+    the desk's one affordance writes them into the desktop composer. On a paired phone
+    that is the person's own text; on a STOLEN paired phone (§6's second limit) it is
+    an attacker's, sitting in the box on the owner's screen. What holds is that
+    NOTHING SENDS IT: the person reads it and presses Send themselves, and anything it
+    then asks for goes through the ordinary gate with the ordinary card — the same
+    two-step every Settings surface that seeds the composer relies on (the Automations
+    section's Arm is the precedent). The note is rendered as plain text, never through
+    the markdown renderer. The alternative — not offering the words back at all —
+    would make the queue a list of things you cannot act on.
+  - **STILL OPEN: a remote conversation is never condensed.** The channel's own thread
+    ("From your phone") grows for the life of the process and no continuation boundary
+    is ever minted in it — the context-budget machinery hangs off the desktop path.
+    A long-lived phone conversation will eventually reach a model's context limit and
+    fail a turn, which the phone sees as one plain "couldn't answer that just now".
+  - **STILL OPEN: the desk and a live channel can hold the same thread twice.** A
+    remote turn's messages go into the ordinary `messages` table under a conversation
+    titled "From your phone", and that conversation DOES appear in the sidebar and
+    loads like any other (verified 2026-08-22 — `conversation.load` rebuilds
+    `_message_ids` from the rows, so rewind works on it). What is not handled is the
+    overlap: `_run_channel_turn` always runs against the Conversation OBJECT the
+    channel job owns, so while the desk has that thread open, a message arriving from
+    the phone appends rows the desk's loaded copy does not know about. The desk shows
+    a stale thread until it is re-opened, and a rewind performed in the meantime works
+    off the ids it loaded and leaves the newer remote rows behind. Nothing is lost or
+    corrupted, and the honest fix is either a re-read on `channel.remoteTurn` or
+    refusing to load a live channel's conversation — neither is built.
