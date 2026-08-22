@@ -571,6 +571,16 @@ class Method:
     SHELL_OPEN_EXTERNAL = "shell.openExternal"         # {url} -> {}
     SHELL_PICK_FILE = "shell.pickFile"                 # {} -> {fileHandle} (opaque, not a path)
     SHELL_READ_SCOPED_FILE = "shell.readScopedFile"    # {fileHandle} -> {content, kind}
+    # Attaching a picture (image-attach plan §4). Their OWN methods rather than a mode
+    # on the two above: the pick answers with a name and a size so a composer chip can
+    # be drawn before the read finishes, and the read DECODES — decoding is the
+    # validation — then downscales to a 1600px long edge and re-encodes under 2 MiB,
+    # so what crosses is never the original file. `mediaType` is one of the four
+    # `providers/base.py::ALLOWED_IMAGE_MEDIA_TYPES` holds; `width`/`height`/`byteSize`
+    # describe the bytes being sent, never the file on disk.
+    SHELL_PICK_IMAGE = "shell.pickImage"               # {} -> {fileHandle, name, byteSize}
+    # {fileHandle} -> {content, mediaType, name, byteSize, width, height}
+    SHELL_READ_PICKED_IMAGE = "shell.readPickedImage"
     # Workspace-trust file surface (step 5, OPEN harness). Path-based (NOT picker-
     # scoped like the four above) — the core confines which paths reach here (D3),
     # and the shell independently refuses Addison's own data dir + ledgers what it

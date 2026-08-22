@@ -129,9 +129,20 @@ Two new commands in `filesystem.rs`, both Core→Shell like their siblings:
   file that doesn't parse as an image is refused with a plain sentence, which
   retires extension-guessing for this path — then downscales anything over
   1600px on its long edge and re-encodes: JPEG (quality 80) for opaque images,
-  PNG where alpha exists, GIF/WebP under the pixel bound pass through. The
-  encoded result must land under **2 MiB** or the shell steps the quality/size
-  down until it does. What crosses the pump is base64 of *that*.
+  PNG where alpha exists. The encoded result must land under **2 MiB** or the
+  shell steps the quality down (60, 40) and then the long edge (1200, 800)
+  until it does, refusing plainly if the smallest step still won't fit. What
+  crosses the pump is base64 of *that*.
+
+  **Pass-through is the exception**, and it needs all three conditions at once
+  (phase 2 built it wider than this file first said — it named only GIF/WebP,
+  which would have re-encoded every small screenshot for nothing): a picture
+  already one of the four media types **by decoded format, never by extension**,
+  already under 2 MiB, and already within the long edge crosses byte-for-byte.
+  Re-encoding a small photo is pure loss, and a PNG screenshot of text — the
+  most common thing anybody attaches — is exactly what a JPEG round-trip ruins.
+  A GIF that fails any of the three loses its animation: what is re-encoded is
+  the first frame, which is what a model looks at anyway.
 
 The `PICKED_FILE_SIZE_BOUND` docblock is rewritten in the same PR: the 1 MiB
 bound remains the *text* pick's bound and its base64-as-text justification now

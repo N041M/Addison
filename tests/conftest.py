@@ -123,6 +123,15 @@ class ShellBridgeStubs:
     def pick_file(self) -> str:
         raise NotImplementedError
 
+    # Image attach (plan §4). On ``ServerShellBridge`` and never on ``ShellBridge``:
+    # no tool may open this picker, because an attachment is the person's own content
+    # and the model cannot ask for one.
+    def pick_image(self) -> dict:
+        raise NotImplementedError
+
+    def read_picked_image(self, file_handle: str) -> dict:
+        raise NotImplementedError
+
     def write_workspace_file(self, path: str, content: str) -> dict:
         raise NotImplementedError
 
