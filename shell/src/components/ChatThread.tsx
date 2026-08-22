@@ -19,19 +19,20 @@
 //
 // TWO THINGS THAT ARE DELIBERATE, not stylistic:
 //
-//   * An arriving answer FORMATS ITSELF AS IT LANDS (owner request 2026-08-21),
-//     block by block, and the rule that makes that safe is two-sided: a block
-//     becomes markdown only once it is COMPLETE and lies entirely behind the
-//     scramble's resolved edge. The streaming scramble puts random glyphs in the
-//     tail, and feeding those to a markdown parser 26 times a second would make
-//     a stray `#` a heading for one frame and reflow the answer under the
-//     reader's eyes — so the scrambled window only ever lives in plain pre-wrap
-//     text, or inside the literal content of a fence it cannot close (the glyph
-//     pools hold no backtick and no newline). A glyph can never become
+//   * An arriving answer FORMATS ITSELF AS IT LANDS (owner request 2026-08-21,
+//     reworked 2026-08-22), and the rule that makes that safe is one cut: the
+//     last newline behind the scramble's resolved edge — the prefix the frame
+//     and the true text still agree on. Everything before it is parsed fresh
+//     every frame; the line still being written stays plain pre-wrap text. The
+//     streaming scramble puts random glyphs in that tail, and feeding those to a
+//     markdown parser 26 times a second would make a stray `#` a heading for one
+//     frame and reflow the answer under the reader's eyes — so the parser only
+//     ever sees true text ending at a line break, and a glyph can never become
 //     structure. `StreamingMarkdown` renders it; `lib/streamMarkdown.ts` owns
-//     where the cut is made. The reveal of a settled answer runs through the
-//     same component, so it formats behind the resolved edge too, rather than
-//     arriving whole on the frame the reveal lands.
+//     where the cut is made and why every frame agrees with the final document.
+//     The reveal of a settled answer runs through the same component, so it
+//     formats behind the resolved edge too, rather than arriving whole on the
+//     frame the reveal lands.
 //   * Switching conversations staggers the rows in and re-scrambles them, but a
 //     body is only scrambled when it is a single text node. A rendered markdown
 //     body has element children, and the engine's leaf guard would skip it

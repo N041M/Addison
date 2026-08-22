@@ -12,6 +12,106 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (second): boundaries that agree with the final parse
+
+Owner follow-up on the progressive renderer (#128/#129): it "breaks from time to
+time and doesn't render tables from the get go." Both halves of that report came
+out of ONE decision, and the fix was to delete the decision rather than patch
+around it.
+
+- **THE OLD RULE FROZE A BOUNDARY, AND MARKDOWN IS CONTEXT-SENSITIVE.** A block
+  settled once and kept its boundary for the rest of the answer. But the meaning
+  of settled text can still change: `Results` is a paragraph until a line of
+  dashes underneath it makes the pair a setext heading. The frozen paragraph
+  stayed a paragraph, the dashes rendered as a horizontal rule, and the reader
+  looked at a document the answer did not contain until the turn landed and
+  re-laid the whole thing out. That is the intermittent "breaks" — it needed the
+  model to write a shape whose meaning arrives late, which is exactly "from time
+  to time".
+- **AND THE LAST NODE WAS NEVER RENDERED, WHICH IS WHERE TABLES LIVE.** The rule
+  "only a COMPLETE block, so never the last node" was meant to stop a
+  half-written block reflowing. A streaming table is always the last node, so it
+  stayed raw pipes until some other block existed after it — and an answer that
+  ENDS with a table showed pipes to the very end. Not intermittent at all; it was
+  the design working as specified.
+- **THE FIX IS TO STOP REMEMBERING ANYTHING.** Every frame re-derives every
+  boundary from a fresh parse of the true prefix, and the last node is rendered
+  like any other. The cut is now one offset: the last newline at or before the
+  scramble's resolved edge. The splitter is stateless, so what is on screen at
+  any frame IS a parse of that prefix — the stream cannot disagree with the final
+  document, and a block the document reinterprets corrects itself one frame later
+  instead of at the end.
+- **THE WITHHOLD IS ONE LINE, NOT ONE BLOCK.** Only the trailing line with no
+  newline yet is held back into the plain tail. That is the whole of what the
+  old "never the last node" rule was really protecting: the line whose meaning is
+  not yet decided (half a table row is a paragraph, and a paragraph inside a
+  table ends the table). Tables now render from header + separator and grow row
+  by row; a paragraph grows line by line.
+- **THE SAFETY INVARIANT GOT STRONGER BY BEING DELETED.** "No scrambled glyph
+  reaches the parser" used to be enforced by gates; it now holds by construction,
+  because the parse input is true text ending at a newline. So the whole fence
+  special case went: `fenceEndOffset`, `tailIsFence`, the two gates that made the
+  claim safe and the component's fence branch, comments and all. Micromark
+  auto-closes an unclosed fence, so an open fence still shows as a code block
+  that grows, for free. **Less machinery was part of the fix, not a tidy-up
+  after it.** The splitter is now one arithmetic step and one loop.
+- **IDENTITY MOVED FROM POSITION TO BYTES — and the honest note is that no test
+  can currently tell the difference.** Blocks are keyed by a content hash, so
+  identity follows the bytes: a byte-identical block keeps its DOM node (and the
+  reader's selection, and any diagram in it) however the boundaries were derived
+  this frame. Mutating the key back to the array index left the whole suite
+  GREEN, and that is not a gap in the tests — with append-only text the block
+  list only ever grows at the end, so an index does name the same block, and a
+  block whose text changed re-renders correctly either way. The hash is the
+  model that stays right if the parser ever merges or reorders nodes; today it
+  buys defence, not a fixed bug. **What it does cost is real and IS pinned: two
+  byte-identical blocks in one answer** collide on a bare hash, and duplicate
+  React keys corrupt reconciliation rather than merely warning — so the key
+  carries which occurrence of that hash it is. (Note for whoever writes that
+  test next: a slice carries the blank line BEFORE it, so the first block of an
+  answer is never identical to a later one — the collision needs two middle
+  blocks. The first fixture missed that and the mutation survived it.)
+- **A COROLLARY THAT ONLY SHOWS UP ONCE KEYS ARE BYTES: a slice must not depend
+  on where the cut fell.** The obvious shape — run the last block's slice on to
+  the cut so the tail starts exactly there — gives a block different bytes every
+  time a newline lands, so every settled block remounts once for a blank line
+  that changes nothing about it. Slices therefore end at their own node's end and
+  the trailing blank lines open the tail (trimmed for display, as they always
+  were). Reconstruction stays exact; the DOM-identity test is what caught it.
+- **WHAT IT COSTS, honestly.** Each block is still parsed alone, so a link
+  reference defined in one block is invisible to a block that uses it and renders
+  literally until the turn settles (verified, unchanged). And the block currently
+  growing takes a new hash each time a line completes, so it remounts per
+  COMPLETED LINE — bounded by lines, not by frames, and invisible for a paragraph
+  that arrives as one line.
+- **THE NEW CENTRAL TEST IS A PROPERTY, NOT A CASE.** Feed a document three
+  characters at a time and, at every increment, the rendered markup must equal a
+  FRESH render of the same text — nothing carried over, nothing held back. A
+  design that remembers a boundary diverges the moment the document reinterprets
+  it, and no case-by-case test sees that. Mutations: withhold the last node again
+  → 18 red; parse to the edge rather than to the last newline behind it → 7 red;
+  drop the occurrence counter from the key → 1 red; run the last slice on to the
+  cut → 5 red, the DOM-identity test among them.
+- **THE GLYPH TESTS HAD A BLIND SPOT WORTH KNOWING ABOUT.** Both frames they use
+  diverge from the truth BEFORE the first newline, so "no line has ended" refuses
+  everything and they cannot tell the cut from the edge — the parse-to-the-edge
+  mutation walked past both. A third frame, diverging after a line has ended,
+  is what closes it: the still-scrambling line must not be formatted from the
+  true text behind the reader's back. The same pass turned up one leak with no
+  possible witness — `lastIndexOf` clamps a negative `fromIndex` to 0, so at a
+  resolved edge of ZERO the cut landed one character past the edge. That
+  character is always the newline itself and parses to nothing, so no output
+  differs and no test can kill the mutation. Guarded anyway, and the code says
+  plainly that it is unwitnessed: an invariant with an arithmetic exception
+  inside it stops being checkable by reading, which is the only way this one
+  gets checked.
+- **THE LESSON.** A streaming view of a context-sensitive grammar may not cache
+  its own interpretation. Re-parsing from the top every frame sounds like the
+  expensive option and is the only correct one; the cheap-looking cache was
+  paid for in wrongness the reader could see.
+
+---
+
 ## What shipped 08-22: the frame clock that can stop, and the fossil that wore the app's face
 
 Two findings from chasing one report. The owner streamed the styling test and the

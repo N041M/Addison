@@ -1,28 +1,58 @@
 // Where an arriving answer may be cut into "already formatted" and "still
-// arriving" (owner request 2026-08-21). Pure: no React, no DOM, no timers — the
-// component decides WHEN to ask, this file only answers WHERE.
+// arriving" (owner request 2026-08-21; reworked 2026-08-22). Pure: no React, no
+// DOM, no timers — the component decides WHEN to ask, this file only answers
+// WHERE.
 //
-// THE CUT IS MADE AGAINST TWO EDGES, AND BOTH ARE NECESSARY:
+// THE CUT IS ONE OFFSET, AND TWO FACTS PLACE IT:
 //
-//   1. A BLOCK EDGE. Only a complete top-level block may be formatted, so the
-//      last node in the parse is always left alone — it is the one the model is
-//      still writing, and a half-written table, link or list would otherwise
-//      reflow on every delta as the parser changed its mind about it.
-//   2. THE SCRAMBLE'S RESOLVED EDGE (`limit`). The display the reader sees is
-//      the true text with a ~14-character window of random glyphs trailing it
-//      (lib/scramble.ts), and a glyph that reached the markdown parser would be
+//   1. THE SCRAMBLE'S RESOLVED EDGE (`limit`). What the reader sees is the true
+//      text with a ~14-character window of random glyphs trailing it
+//      (lib/scramble.ts). A glyph that reached the markdown parser would be
 //      structure for one frame — a stray `#` as a heading, a stray `-` as a list
-//      item. `limit` is the length of the prefix the display and the truth still
-//      agree on, so a block that ends at or before it contains no glyph by
-//      construction.
+//      item — and the answer would reflow under the reader's eyes. Nothing at or
+//      past `limit` is parsed, ever.
+//   2. THE LAST NEWLINE BEHIND THAT EDGE. Only whole lines are parsed. The line
+//      still being written is the one the parser would keep changing its mind
+//      about — and half a table row is not a row at all, it is a paragraph that
+//      breaks the table it belongs to — so it is withheld and the component
+//      prints it as plain text under the formatted blocks.
 //
-// NOTHING IS DROPPED. A settled slice runs from the PREVIOUS boundary to its own
-// node's end rather than from its own start, so the blank line between two blocks
-// rides at the front of the second slice instead of falling in the gap between
-// them; leading newlines are inert to the parser and invisible in the output. The
-// tail slice starts at the last settled boundary for the same reason. Settled
-// slices joined with the tail slice reconstruct the input byte for byte, and
-// `__tests__/streamMarkdown.test.tsx` pins that.
+// So the parse input is always TRUE text ending at a newline. That is the
+// invariant this file exists for, and it now holds BY CONSTRUCTION: there is no
+// input shape for which a glyph reaches the parser, so there is no shape needing
+// an exception. The design this replaced had two — both for a fenced code block,
+// the one thing that read better through the parser than beside it. It still
+// does, and it costs nothing now: micromark closes an unclosed fence at end of
+// input, so an open fence's completed lines simply parse as a code block that
+// grows a line at a time, with the half-written line waiting below it in plain
+// text. The gates went with the special case (`fenceEndOffset`, `tailIsFence`).
+//
+// EVERY BOUNDARY IS RE-DERIVED FROM A FRESH PARSE, EVERY TIME, and no node is
+// held back for being last. Markdown is context-sensitive: "Results" is a
+// paragraph until a line of dashes turns it into a setext heading, and a
+// boundary frozen before those dashes arrived belongs to a document that no
+// longer exists — the reader ends up looking at structure the answer does not
+// have, until the turn settles and it all re-lays itself out. Because this
+// function is stateless, what is on screen at any frame IS a parse of the prefix
+// behind the cut; when the document reinterprets a block, the next frame
+// reinterprets it too. A table therefore renders as soon as its header and
+// separator lines are behind the cut, and grows row by row.
+//
+// NOTHING IS DROPPED. A block's slice runs from the PREVIOUS boundary to its own
+// node's end rather than from its own start, so the blank line between two
+// blocks rides at the front of the second slice instead of falling in the gap
+// between them; leading newlines are inert to the parser and invisible in the
+// output. The blank lines between the LAST block and the cut ride at the front
+// of the tail on the same reasoning, and the component trims them for display
+// exactly as it always has. Blocks joined with the tail reconstruct the input
+// byte for byte, and `__tests__/streamMarkdown.test.tsx` pins that.
+//
+// A SLICE THEREFORE NEVER DEPENDS ON WHERE THE CUT FELL — only on its own node's
+// position. That is not tidiness: `StreamingMarkdown` identifies a block by its
+// BYTES (a content hash is its React key), so a slice that grew a newline every
+// time the model finished a line would remount a settled block for a blank line
+// that changes nothing about it. The only block whose bytes move is the one
+// actually growing.
 
 import { unified } from "unified";
 import remarkParse from "remark-parse";
@@ -34,12 +64,10 @@ import remarkGfm from "remark-gfm";
 const parser = unified().use(remarkParse).use(remarkGfm);
 
 export interface StreamSplit {
-  /** Complete blocks, in order, safe to hand to the markdown renderer. */
-  settled: string[];
+  /** Top-level blocks, in order, safe to hand to the markdown renderer. */
+  blocks: string[];
   /** Offset the still-arriving remainder begins at. */
   tailStart: number;
-  /** The remainder is a fenced code block (see `splitForStreaming`). */
-  tailIsFence: boolean;
 }
 
 /** How many leading characters two strings share. */
@@ -51,107 +79,51 @@ export function commonPrefixLength(a: string, b: string): number {
 }
 
 /**
- * Cut `content` into settled blocks plus the remainder still being written.
+ * Cut `content` into renderable blocks plus the remainder still being written.
  *
  * `limit` is the scramble's resolved edge — the length of the prefix that is
- * known-true text. A block settles only if it is NOT the last node and it ends
- * at or before `limit`.
+ * known-true text. The parse runs over `content` up to the last newline at or
+ * before `limit`, and the boundaries come from that parse alone: every node it
+ * produced becomes a block, the last one included, and `tailStart` is where the
+ * last of them ended (the blank lines after it, if any, open the tail).
  *
- * `tailIsFence` says the remainder is a fenced code block, which is the one kind
- * of half-written block that renders better through the parser than beside it:
- * micromark closes an unclosed fence at end of input, so a fence the model has
- * opened and not yet closed shows as a code block that grows, instead of as three
- * backticks and some source. Nothing else is special-cased — a half-written link
- * or a table mid-row is simply "the last node" and stays plain text until the
- * block after it exists.
+ * The ONE withhold is the trailing line with no newline yet. It is not a
+ * completeness rule about blocks — a paragraph gaining a second line, a fence
+ * gaining a line, a table gaining a row are all rendered while they grow — it is
+ * a rule about the one line whose meaning is not yet decided.
  *
- * The fence claim carries TWO EXTRA GATES, because it is the one claim that puts
- * display text — glyphs included — through the parser:
- *
- *   * THE OPENER LINE MUST BE FULLY BEHIND THE EDGE. A fence whose opener is
- *     still inside the scrambled window is not a fence in the display at all
- *     (the pools hold no backtick), so the parser would read its interior as
- *     ordinary lines. This is the gate that does the work, and it also refuses
- *     the neighbouring failure: an earlier block that has not cleared the edge
- *     means the edge is still inside that block, which puts it short of the
- *     opener by arithmetic — so a tail that still holds scrambled non-fence
- *     text can never be called "a fence" through this gate alone.
- *   * EVERYTHING BEFORE THE FENCE MUST HAVE SETTLED — the same refusal stated
- *     directly, rather than inherited from that arithmetic. It acts alone in
- *     exactly one place: a node the parser gave no position stops the settling
- *     loop early, and the opener gate reasons from positions, so this is the
- *     condition that still says no there.
+ * A node the parser gave no position for is not a node this can reason about,
+ * and neither is anything after it: the loop stops there and the remainder goes
+ * to the tail rather than guessing a boundary.
  */
 export function splitForStreaming(content: string, limit: number): StreamSplit {
-  const settled: string[] = [];
+  const blocks: string[] = [];
+  if (!content) return { blocks, tailStart: 0 };
+
+  // Clamp defensively: the edge is a common-prefix length, so it cannot exceed
+  // the content — but a cut past the end would parse text nobody has sent.
+  const edge = Math.max(0, Math.min(limit, content.length));
+  // `lastIndexOf` clamps a negative `fromIndex` to 0 rather than searching
+  // nothing, so at edge 0 a leading newline would answer 0 and cut one character
+  // PAST the edge. NO TEST WITNESSES THIS, and honestly none can: the character
+  // in question is that newline, `"\n"` parses to no nodes, so the output is
+  // identical either way. It is guarded because the rule is that the parser is
+  // never handed text the frame has not resolved, and a rule with an arithmetic
+  // exception in it stops being checkable by reading.
+  const lastNewline = edge > 0 ? content.lastIndexOf("\n", edge - 1) : -1;
+  // Nothing has finished a line behind the edge: the whole answer is still the
+  // line being written.
+  if (lastNewline === -1) return { blocks, tailStart: 0 };
+  const cut = lastNewline + 1;
+
+  const children = parser.parse(content.slice(0, cut)).children;
   let tailStart = 0;
-  if (!content) return { settled, tailStart, tailIsFence: false };
-
-  const children = parser.parse(content).children;
-  if (children.length === 0) return { settled, tailStart, tailIsFence: false };
-
-  for (let i = 0; i < children.length - 1; i++) {
-    const end = children[i].position?.end.offset;
-    // A node with no position is not a node this can reason about, and neither
-    // is anything after it: stop rather than guess a boundary.
-    if (end == null || end > limit) break;
-    settled.push(content.slice(tailStart, end));
+  for (const node of children) {
+    const end = node.position?.end.offset;
+    if (end == null) break;
+    blocks.push(content.slice(tailStart, end));
     tailStart = end;
   }
 
-  const last = children[children.length - 1];
-  const start = last.position?.start.offset ?? 0;
-  const opener = content.slice(start, start + 3);
-  const openerLineEnd = content.indexOf("\n", start);
-  const tailIsFence =
-    last.type === "code" &&
-    (opener === "```" || opener === "~~~") &&
-    // The two gates from the header: the fence must be the ONLY node in the
-    // tail (nothing still-scrambled rides ahead of it into the parser), and its
-    // opener line must be known-true text, newline and all — an opener the
-    // display has not finished resolving is not an opener in the display.
-    settled.length === children.length - 1 &&
-    openerLineEnd !== -1 &&
-    openerLineEnd <= limit;
-
-  return { settled, tailStart, tailIsFence };
-}
-
-/**
- * Where a fence-shaped tail stops being a fence: the offset just past its
- * closing line, or the tail's whole length while the fence is still open.
- *
- * This exists for a one-frame gap: the split is recomputed once per animation
- * frame, so when the model closes a fence and starts the next block within a
- * single delta, the render between the two still holds a split that says "the
- * tail is a fence" — and handing the WHOLE tail to the parser on that frame
- * would put the new block's scrambled text through it. Cutting at the closing
- * line keeps the code block stable and leaves the overflow as plain text until
- * the next parse catches up. A closing fence can be trusted when it is seen:
- * the glyph pools hold no backtick and no tilde, so a frame can neither mint a
- * close that is not in the true text nor un-mint one that is — a real close
- * still inside the window merely shows as glyphs, and the overflow stays
- * literal fence content for those frames, styled as code and nothing more.
- */
-export function fenceEndOffset(tail: string): number {
-  let offset = 0;
-  let marker: string | null = null;
-  for (const line of tail.split("\n")) {
-    if (marker === null) {
-      // Lines before the opener are the blank separator the tail carries.
-      const found = /^ {0,3}(`{3,}|~{3,})/.exec(line);
-      if (found) marker = found[1];
-    } else {
-      // A close matches the opener's character and is at least as long
-      // (CommonMark's rule), with nothing else on the line.
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      if (close && close[1][0] === marker[0] && close[1].length >= marker.length) {
-        // Past the closing line and its newline, clamped for a close that ends
-        // the string.
-        return Math.min(tail.length, offset + line.length + 1);
-      }
-    }
-    offset += line.length + 1;
-  }
-  return tail.length;
+  return { blocks, tailStart };
 }

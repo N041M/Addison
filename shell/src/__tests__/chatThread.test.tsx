@@ -1,9 +1,9 @@
 // The one rendering rule an answer that formats itself as it arrives depends on
-// (owner request 2026-08-21, replacing the 2026-07-26 shape of the same rule):
-// NO SCRAMBLED GLYPH EVER REACHES THE MARKDOWN PARSER. A block becomes markdown
-// only once it is complete AND lies entirely behind the resolved edge — the
-// prefix the frame and the true text still agree on — so what is left over, the
-// part the glyphs are in, stays plain pre-wrap text.
+// (owner request 2026-08-21, reworked 2026-08-22, replacing the 2026-07-26
+// shape of the same rule): NO SCRAMBLED GLYPH EVER REACHES THE MARKDOWN PARSER.
+// The parse stops at the last newline behind the resolved edge — the prefix the
+// frame and the true text still agree on — so what is left over, the part the
+// glyphs are in, stays plain pre-wrap text.
 //
 // This is not a style preference. The scramble writes random glyphs into the
 // text 26 times a second, and markdown is structural: a stray `#` at the start
