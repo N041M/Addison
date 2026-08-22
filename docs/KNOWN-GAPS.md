@@ -619,7 +619,13 @@ are here because somebody will meet them, and because anything built on top of
 - **`policy._canonical` case-folds unconditionally**, so `/tmp/PROJECT/x` is judged
   inside the trusted root `/tmp/project`. Correct on APFS/HFS+ default
   (case-insensitive), **wrong on a case-sensitive volume**, where it widens
-  confinement. macOS-only assumption, currently undocumented in the function.
+  confinement. **Still open — but DOCUMENTED AT THE FUNCTION since 2026-08-22**, so
+  it is a known platform note rather than a silent assumption: `_canonical`'s
+  docstring now states that the fold is a macOS default-volume assumption, which
+  direction each caller errs in when it is wrong (the protected-dir refusal toward
+  refusing, workspace confinement toward admitting a sibling of a trusted folder),
+  and that a fix would have to decide per-VOLUME rather than per-platform, since
+  both kinds mount on one Mac. **The behaviour is unchanged.**
 - ~~The floor protects Addison's DATA, not Addison's CODE.~~ **CLOSED FOR A
   PACKAGED INSTALL, 2026-08-06.** *(This is the single statement of it; SAFETY.md,
   design-doc §9.x and HANDOFF all point here.)* In a packaged install the model
