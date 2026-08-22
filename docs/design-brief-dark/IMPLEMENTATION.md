@@ -184,6 +184,12 @@ glyphs hover to `ink`.
   control** (border circle, ■ glyph, title "Stop"), a real function, not in
   the prototype. Below: mono 10px `ghost` microcopy "enter to send ·
   everything can be undone". Placeholder flips to "Addison is working…".
+  **Left of the model label, one non-interactive line of the same mono 10.5px
+  `disabled` machine fact: "Answered by &lt;model&gt;"** (owner directive
+  2026-08-21) — which model actually answered the newest turn, truncated with
+  the full sentence on `title`, no accent, not in the prototype. Present only
+  when a turn answered in this session says so, so it is absent in a fresh chat
+  and in reopened history.
 - **Composer model menu:** opens above the label, bottom-right anchored,
   min-width 196px, `panel` bg, `rail` border, radius 6px, "Answer with"
   header (10px), rows = mono name + mono note with ✓ + accent note on

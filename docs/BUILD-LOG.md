@@ -12,6 +12,48 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (third): the composer says which model answered
+
+One line, and the reason it is one line. The QA re-run pass caught a turn
+answered by `google · gemma-4-31b-it` with Claude Haiku 4.5 explicitly picked and
+Cost first active; the owner's report was not "routing is wrong" but "the picker
+system reads as broken" — the app had picked one model, used another, and said
+nothing anywhere. The core has reported the answering candidate since Phase-2
+step 3 (`orchestrator.on_answered` → `answeredWith`, contract D5); the only
+consumer was the transcript's free-model chip, which fires on `free` alone and so
+stays silent for the case that caused the complaint.
+
+- **WHAT SHIPPED.** `Composer.tsx` draws `Answered by <label>` in the controls
+  strip, left of the model label — mono 10.5px in `disabled`, the strip's own
+  machine-fact idiom, truncated with the full sentence on `title`. Not `ghost`
+  (the microcopy shade below it): a disclosure nobody can read is not a
+  disclosure, and the readers are 54 and 68. Not accent either — the accent
+  belongs to actions, selection and live state.
+- **WHY IT IS DERIVED, NOT STASHED.** The indicator reads the newest assistant
+  message carrying `answeredWith` and holds no state of its own. `answeredWith`
+  rides on a send REPLY, so it exists only for turns answered in this session,
+  and `useConversations` replaces the whole messages array on open/new-chat —
+  which means opening another conversation removes the line for free. A stashed
+  label would have to be REMEMBERED to be cleared on every path that changes the
+  thread, and the one bug this feature must not have is a previous chat's model
+  still on screen. Deriving it makes that bug unrepresentable rather than
+  untriggered.
+- **WHY IT WALKS BACK RATHER THAN READING THE LAST MESSAGE.** The newest message
+  is usually a user line, sometimes a pending answer, sometimes a failed one
+  (`main.py` clears `_answered_with` before a run and never reads it on the error
+  path, so a failure carries no fact). None of those un-say which model gave the
+  last real answer; reading the last message would blank the line the moment the
+  next question is typed. Mutated to read the last message → red; mutated to keep
+  the label sticky across a thread swap → red on the conversation-switch test.
+- **WHAT WAS DELIBERATELY NOT TOUCHED: the precedence rule.** Whether an explicit
+  pick should beat Cost first is the OWNER's question, still open in
+  [KNOWN-GAPS.md](KNOWN-GAPS.md). Nothing in routing, the router or the gate
+  changed here, and the wording obeys the same line: it states which model
+  answered and never that something went wrong. Honest disclosure of a behaviour
+  is not a fix for it, and this entry is not claiming one.
+
+---
+
 ## What shipped 08-22 (second): boundaries that agree with the final parse
 
 Owner follow-up on the progressive renderer (#128/#129): it "breaks from time to

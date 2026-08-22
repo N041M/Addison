@@ -25,6 +25,23 @@
 // (16px below md), and doubling it was the misalignment phase 1 flagged — the
 // composer row and the thread above it must share one left edge.
 //
+// THE ANSWERING MODEL IS DISCLOSED IN THAT STRIP, left of the picker (owner
+// directive 2026-08-21). The complaint it answers: a turn can be answered by a
+// model the person did not pick — routing degrades, a strategy chooses — and
+// until now nothing on screen said so, which made the picker read as broken.
+// The line states the fact and nothing else ("Answered by <label>"); it does not
+// editorialise, does not claim a fault, and is NOT accent-coloured, because the
+// accent belongs to actions, selection and live state, never to a disclosure.
+//
+// It is DERIVED FROM THE THREAD, never stashed: the newest assistant message
+// that carries `answeredWith` (contract D5, `ipc/client.parseAnsweredWith`).
+// That is the whole staleness fix — `answeredWith` rides on a send REPLY, so it
+// exists only for turns answered in this session, and the messages array is
+// replaced wholesale when a conversation is opened or a new chat starts. Loaded
+// history carries no such fact, so the line simply is not there. A separate
+// piece of state would have to be remembered to be cleared, and the one bug this
+// feature must not have is a previous chat's model still on screen.
+//
 // The Stop control is not in the prototype and is not decoration: it is what lets
 // a person end a turn that is taking too long (useTurn.handleStop). The v1 IPC
 // contract still has no way to interrupt the core MID-STEP — the tool call it
@@ -35,6 +52,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { TurnState } from "../hooks/useTurn";
+import type { DisplayMessage } from "../types/ui";
 import { ModelSelector } from "./ModelSelector";
 
 interface Props {
@@ -57,6 +75,28 @@ interface Props {
  * report, 2026-07-26). */
 const MAX_TEXTAREA_PX = 168.5;
 
+/**
+ * The label of the model that answered most recently in THIS conversation, or
+ * null when nothing on screen carries the fact (a fresh chat, loaded history, or
+ * a session in which every turn failed before an answer landed — the core clears
+ * `answeredWith` before a run and never attaches it on the error path).
+ *
+ * Walks back over the thread rather than reading the last message: the newest
+ * turn may be a user message, a still-pending answer or a failed one, and none of
+ * those un-say which model gave the last real answer. A blank label is treated as
+ * no fact at all — "Answered by " is worse than silence.
+ */
+function lastAnsweredLabel(messages: DisplayMessage[] | undefined): string | null {
+  if (!messages) return null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role !== "assistant") continue;
+    const label = message.answeredWith?.label?.trim();
+    if (label) return label;
+  }
+  return null;
+}
+
 export function Composer({
   connected,
   turn,
@@ -66,6 +106,7 @@ export function Composer({
   focusSignal,
 }: Props) {
   const { isWorking, handleSend, handleStop } = turn;
+  const answeredLabel = lastAnsweredLabel(turn.messages);
   const [draft, setDraft] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -168,6 +209,26 @@ export function Composer({
         {/* pt-3, not a token nudge: the visual space above the send button is
             the point of the stacked layout (owner request 2026-07-26). */}
         <div className="flex items-center justify-end gap-3 pb-[5px] pt-3">
+          {/* The answering-model disclosure. Deliberately the SAME mono
+              machine-fact idiom as the picker beside it (10.5px, `disabled`)
+              rather than the fainter `ghost` used for the microcopy below: this
+              is the sentence the owner asked for because nothing was saying it,
+              and a line nobody can read would not be saying it either — the
+              readers are 54 and 68. It stays a plain span, so the only thing
+              separating it from the label is that one of them is a button.
+              Truncated with the full sentence on `title` so a long model name
+              can't push the picker off a narrow window. Never aria-hidden: a
+              screen reader reads it in the strip, before the picker it is
+              about. */}
+          {answeredLabel && (
+            <span
+              data-answered-by=""
+              title={`Answered by ${answeredLabel}`}
+              className="min-w-0 max-w-[120px] truncate font-mono text-[10.5px] text-disabled md:max-w-[220px]"
+            >
+              Answered by {answeredLabel}
+            </span>
+          )}
           <ModelSelector
             roles={models.roles}
             cloudModels={models.cloudModels}
