@@ -83,6 +83,9 @@ class AnthropicProvider:
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # Claude models can analyze images
+            # The Messages API's own word for "I ran out of output room", passed
+            # through verbatim by both response paths below (``stop_reason``).
+            truncation_finish_reasons=("max_tokens",),
         )
 
     def send(

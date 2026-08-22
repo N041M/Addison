@@ -1273,6 +1273,7 @@ export function App() {
                   messages={turn.messages}
                   onRetry={turn.handleRetry}
                   retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
+                  onContinue={turn.handleContinue}
                   onRewindTo={handleRewindTo}
                   showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}
                   streamDisplay={turn.streamDisplay}

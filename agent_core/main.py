@@ -2233,16 +2233,22 @@ class JsonRpcServer(
             return
         self._turn_context_usage = (used_tokens, max_context_tokens)
 
-    def _record_answered(self, model_id, label, free, routed) -> None:
+    def _record_answered(self, model_id, label, free, routed, truncated) -> None:
         """Orchestrator ``on_answered`` sink (D5): stash the answering candidate so
         _run_send_message can attach ``answeredWith`` to the reply. Overwritten each
         turn and read once; a turn that raised leaves the prior value, which
-        _run_send_message clears before the run and never reads on the error path."""
+        _run_send_message clears before the run and never reads on the error path.
+
+        ``truncated`` says this answer stopped because it hit the answering model's
+        output cap — the orchestrator decided it from that provider's own declared
+        spellings, and nothing here re-derives it. It is what lets the thread offer
+        to carry the answer on."""
         self._answered_with = {
             "modelId": model_id,
             "label": label,
             "free": free,
             "routed": routed,
+            "truncated": bool(truncated),
         }
 
     # (``_usage_identity`` was REMOVED in step 3: it re-derived the usage row's

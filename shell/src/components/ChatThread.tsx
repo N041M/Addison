@@ -57,8 +57,20 @@ import { SelectionAsk } from "./SelectionAsk";
 interface Props {
   messages: DisplayMessage[];
   onRetry: () => void;
-  /** Whether the last answer can be regenerated (a real turn has happened). */
+  /**
+   * Whether the last answer can be regenerated (a real turn has happened).
+   *
+   * Also gates "Continue this answer", which needs the same two things and no
+   * others: the thread is settled (nothing is arriving) and a real turn produced
+   * the answer being acted on. What makes Continue APPEAR is a separate fact
+   * entirely — the core saying that answer hit the model's output cap.
+   */
   retryAvailable: boolean;
+  /**
+   * Send the fixed "carry on" message. Only ever reachable from an answer the
+   * core reported as cut off at its output cap.
+   */
+  onContinue: () => void;
   onRewindTo: (messageId: string) => void;
   /**
    * Developer profile only: when a turn fails and the core supplied raw error
@@ -172,6 +184,7 @@ export function ChatThread({
   messages,
   onRetry,
   retryAvailable,
+  onContinue,
   onRewindTo,
   showTechnicalDetails = false,
   streamDisplay,
@@ -360,6 +373,15 @@ export function ChatThread({
     onRetry();
   }
 
+  // Continue APPENDS a user message and then an answer, so the send force in the
+  // follow effect does see it — but a reader who pressed the button is asking to
+  // watch what comes next, exactly as with Retry, and saying so here costs one
+  // line and removes the question.
+  function handleContinue() {
+    followingRef.current = true;
+    onContinue();
+  }
+
   // Keep the newest content in view — but only for a reader who is already
   // there. Skipped while the thread is empty: the greeting stack is the content
   // then, and it must stay put.
@@ -546,8 +568,17 @@ export function ChatThread({
             display={m.id === streamMessageId && streamDisplay != null ? streamDisplay : m.content}
             canRewind={m.role === "user" && Boolean(m.storeId)}
             canRetry={m.id === lastAssistantId && retryAvailable}
+            // Beside Retry, and gated on the same settled-last-answer condition
+            // PLUS the core's own report that this answer ran into the model's
+            // output cap. A newer turn moves `lastAssistantId`, so the offer
+            // disappears from the older answer the moment there is a newer one —
+            // it is about the end of the conversation, not about a row in it.
+            canContinue={
+              m.id === lastAssistantId && retryAvailable && m.answeredWith?.truncated === true
+            }
             onRewindTo={onRewindTo}
             onRetry={handleRetry}
+            onContinue={handleContinue}
             showTechnicalDetails={showTechnicalDetails}
           />
         ))}
@@ -705,8 +736,11 @@ interface RowProps {
   revealing: boolean;
   canRewind: boolean;
   canRetry: boolean;
+  /** This is the last answer AND the core said it stopped at the model's output cap. */
+  canContinue: boolean;
   onRewindTo: (messageId: string) => void;
   onRetry: () => void;
+  onContinue: () => void;
   showTechnicalDetails: boolean;
 }
 
@@ -716,8 +750,10 @@ function MessageRow({
   revealing,
   canRewind,
   canRetry,
+  canContinue,
   onRewindTo,
   onRetry,
+  onContinue,
   showTechnicalDetails,
 }: RowProps) {
   const label = SENDER_LABEL[message.role] ?? message.role;
@@ -834,14 +870,40 @@ function MessageRow({
         </details>
       )}
 
-      {canRetry && (
-        <button
-          type="button"
-          onClick={onRetry}
-          className="mt-2.5 text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
-        >
-          Retry this answer
-        </button>
+      {(canRetry || canContinue) && (
+        // Two plain accent actions on one line, the thread's existing idiom (no
+        // new furniture, no icons). Continue sits AFTER Retry: Retry is the one
+        // that is always there, and a row whose members move about depending on
+        // what happened is harder to learn than one that grows at the end.
+        <div className="mt-2.5 flex flex-wrap items-center gap-4">
+          {canRetry && (
+            <button
+              type="button"
+              onClick={onRetry}
+              className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+            >
+              Retry this answer
+            </button>
+          )}
+          {canContinue && (
+            // NO SEPARATE DISCLOSURE LINE, decided 2026-08-22. The 2px-rail + 11px
+            // label annotation (the free-model chip) exists to say something the
+            // reader cannot see; an answer that stopped at its cap ends mid
+            // sentence, which they can. The button's own words are the disclosure
+            // — design-doc §7.9.1 asks a command to be "a labeled button with a
+            // one-line plain-language description", and this label is one — and a
+            // second annotation would compete with the free-model chip on exactly
+            // the messages most likely to carry both (a free model has the
+            // smallest output cap).
+            <button
+              type="button"
+              onClick={onContinue}
+              className="text-[12px] text-accent transition-colors hover:text-ink max-md:min-h-[44px]"
+            >
+              Continue this answer
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

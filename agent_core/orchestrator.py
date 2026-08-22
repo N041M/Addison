@@ -287,7 +287,7 @@ class Orchestrator:
         shell_bridge=None,
         guards_provider=lambda: None,
         routing_chain=lambda requested_role, model_name: None,
-        on_answered=lambda model_id, label, free, routed: None,
+        on_answered=lambda model_id, label, free, routed, truncated: None,
         model_label=lambda model_id: model_id,
         on_auth_rejected=lambda provider_id: False,
         provider_label=lambda provider_id: provider_id,
@@ -339,6 +339,12 @@ class Orchestrator:
         # chip renders on ``free`` alone (known-free by construction, owner decision
         # 2026-08-12). ``model_label`` maps a model_id to its human label for that chip
         # and the fallback note.
+        #
+        # ``truncated`` (2026-08-22) rides the same seam because it is a fact about
+        # the SAME thing — the answer this turn produced. It is true only when the
+        # answering provider's own ``truncation_finish_reasons`` contains the reason
+        # that response carried, so the orchestrator never learns a provider's
+        # spelling and never asks which provider it is holding.
         self.on_answered = on_answered
         self._model_label = model_label
         # Plan §5.2. Called with a provider id when THAT PROVIDER answered a send with
@@ -492,7 +498,12 @@ class Orchestrator:
             # (2026-08-12; it used to report False unconditionally, which is a claim
             # about cost, not an absence of one).
             self.on_answered(
-                model_id, self._model_label(model_id), provider_id == "ollama", False
+                model_id,
+                self._model_label(model_id),
+                provider_id == "ollama",
+                False,
+                # This response is the answer on screen, so it is the one asked.
+                self._hit_output_cap(response, provider),
             )
             break
         else:
@@ -529,6 +540,11 @@ class Orchestrator:
         preferred_rejected = False
         last_unavailable: RuntimeError | None = None
         answered: RoutingCandidate | None = None
+        # Read off the response that ACTUALLY answered, at the moment it answers,
+        # rather than from whatever the loop variables happen to hold afterwards:
+        # this turn may have walked several candidates, and the claim is about one
+        # of them.
+        answered_truncated = False
         calls_made = 0
         budget_spent = False
         relay = _DeltaRelay(self.stream_to_frontend)
@@ -694,6 +710,7 @@ class Orchestrator:
                 # relay drops empty text, so nothing is shown and no break is minted.)
                 relay(response.text or "")
             answered = candidate
+            answered_truncated = self._hit_output_cap(response, provider)
             break
         else:
             budget_spent = True
@@ -710,7 +727,11 @@ class Orchestrator:
             # whether the person got the model they asked for.
             routed = answered.model_id != model_name
             self.on_answered(
-                answered.model_id, self._model_label(answered.model_id), answered.free, routed
+                answered.model_id,
+                self._model_label(answered.model_id),
+                answered.free,
+                routed,
+                answered_truncated,
             )
 
     def _audit(
@@ -1202,6 +1223,42 @@ class Orchestrator:
         except (TypeError, ValueError):
             return
         self.on_context_usage(used, limit)
+
+    def _hit_output_cap(self, response, provider) -> bool:
+        """Did THIS answer stop because it ran out of output room?
+
+        Asks the answering provider what its own word for that is
+        (``ProviderCapabilities.truncation_finish_reasons``) and tests membership.
+        No literal spelling appears here and no provider is identified: an
+        ``isinstance`` branch, or a hardcoded ``"max_tokens"``, would be the same
+        mistake the capability dataclass exists to prevent (CLAUDE.md — the
+        orchestrator is provider-agnostic).
+
+        FAILS TOWARD SILENCE at every step. A provider that declares nothing, a
+        ``capabilities()`` that raises (Ollama's queries its metadata over HTTP),
+        or a reason that is not in the list all answer False — the person is then
+        simply not offered a way to carry on, which is the harmless outcome. The
+        harmful one is offering to continue an answer that was already finished.
+
+        WHICH RESPONSE THIS IS ASKED ABOUT — the rule, decided 2026-08-22: only the
+        FINAL one, the response whose text became the assistant message on screen.
+        Both callers are the ``on_answered`` sites, which are reached only after a
+        response with no tool calls has been appended to the conversation. A
+        mid-loop round that hit its cap is a different situation and deliberately
+        makes no claim here: the person is reading the last round's prose, so an
+        offer to "carry on" would resume from text they never saw, and the loop's
+        own next round already continues the work. (In practice every adapter also
+        reports a tool round as ``"tool_use"``, so a mid-loop cap cannot even reach
+        a truncation spelling — the structural rule above is what holds it, not
+        that coincidence.) A turn that ran out of tool rounds never gets here at
+        all: ``_finish_over_budget`` says its own plain sentence and reports no
+        answering candidate.
+        """
+        try:
+            reasons = provider.capabilities().truncation_finish_reasons
+            return bool(reasons) and response.finish_reason in reasons
+        except Exception:
+            return False
 
     def _single_identity(self, requested_role, model_name) -> tuple[str, str]:
         """Best-effort (provider_id, model_id) for the unwired single path — used only

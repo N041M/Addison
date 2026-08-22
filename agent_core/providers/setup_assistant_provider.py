@@ -73,6 +73,12 @@ class SetupAssistantProvider:
             max_context_tokens=8_192,
             supports_streaming=True,
             runs_off_device=False,
+            # No truncation spellings ON PURPOSE (the empty default, said out loud
+            # because this file has a ``finish_reason`` that looks like one). The
+            # relay's ``"at_cap"`` is the ONBOARDING allowance running out — the
+            # whole assistant is finished, and there is nothing to carry on with —
+            # not an answer cut off at its output cap. It reports no cap of that
+            # kind, so it claims none.
         )
 
     def send(

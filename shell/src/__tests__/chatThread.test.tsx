@@ -63,6 +63,7 @@ function renderThread(extra: Partial<React.ComponentProps<typeof ChatThread>>) {
     <ChatThread
       messages={[MESSAGE]}
       onRetry={() => {}}
+      onContinue={() => {}}
       retryAvailable={false}
       onRewindTo={() => {}}
       {...extra}
@@ -109,6 +110,7 @@ describe("a message whose text is still resolving", () => {
       <ChatThread
         messages={[other, MESSAGE]}
         onRetry={() => {}}
+        onContinue={() => {}}
         retryAvailable={false}
         onRewindTo={() => {}}
         streamMessageId="a1"
@@ -211,6 +213,7 @@ describe("keeping the newest content in view", () => {
     const props = {
       messages: ROWS,
       onRetry() {},
+      onContinue() {},
       retryAvailable: false,
       onRewindTo() {},
     };
@@ -225,6 +228,7 @@ describe("keeping the newest content in view", () => {
     const props = {
       messages: ROWS,
       onRetry() {},
+      onContinue() {},
       retryAvailable: false,
       onRewindTo() {},
     };
@@ -241,6 +245,7 @@ describe("keeping the newest content in view", () => {
     const props = {
       messages: ROWS,
       onRetry() {},
+      onContinue() {},
       retryAvailable: false,
       onRewindTo() {},
       streamMessageId: "a1",
@@ -275,6 +280,7 @@ describe("keeping the newest content in view", () => {
   const consentProps = {
     messages: ROWS,
     onRetry() {},
+    onContinue() {},
     retryAvailable: false,
     onRewindTo() {},
   };
@@ -380,7 +386,14 @@ describe("the conversation-switch stagger", () => {
   }
 
   function open(messages: DisplayMessage[], conversationKey: string | null) {
-    const props = { messages, onRetry() {}, retryAvailable: false, onRewindTo() {}, conversationKey };
+    const props = {
+      messages,
+      onRetry() {},
+      retryAvailable: false,
+      onContinue() {},
+      onRewindTo() {},
+      conversationKey,
+    };
     const view = render(<ChatThread {...props} />);
     return {
       ...view,

@@ -15,6 +15,20 @@ import {
   type StreamScramble,
 } from "../lib/scramble";
 
+/**
+ * What "Continue this answer" actually says, word for word. A fixed sentence, in
+ * plain language, sent as an ordinary message from the person — so it is visible
+ * in the thread and no hidden prompt exists to explain later.
+ *
+ * The wording earns each word: "carry on from where" asks the model to RESUME the
+ * answer it cut off, which is the whole point of the action; "your last answer"
+ * names what to resume without needing to quote it back; and nothing invites a
+ * longer or more elaborate answer, because this is not a "make it longer" button
+ * (design-doc §7.9.1 — the command set stays short, and a generic Continue invites
+ * padding rather than finishing a cut-off answer).
+ */
+export const CONTINUE_MESSAGE = "Please carry on from where your last answer stopped.";
+
 interface UseTurnArgs {
   connected: boolean;
   setStatusBanner: (text: string | null) => void;
@@ -397,6 +411,21 @@ export function useTurn({
     void runTurn(lastUserText, { isRetry: true });
   }
 
+  function handleContinue() {
+    if (!connected || isWorking) return;
+    // An ORDINARY message, sent the ordinary way. It is not a retry (the answer
+    // that was cut off stays exactly where it is — there is nothing wrong with
+    // it), there is no second send path, and nothing is hidden: the sentence
+    // below appears in the thread above the reply, in the person's own column,
+    // because Addison never puts words in someone's mouth without showing them.
+    //
+    // The result is TWO messages, not one repaired one. Splicing a resumed
+    // answer onto the end of the first would mean guessing where one stopped and
+    // the other began, and getting that wrong silently rewrites what the person
+    // was told.
+    void runTurn(CONTINUE_MESSAGE);
+  }
+
   function handleStop() {
     // Stop halts the webview turn: it stops accepting streamed text and re-enables
     // the input. Abandon the turn so its still-in-flight result can't land later
@@ -459,6 +488,7 @@ export function useTurn({
     appendStreamedText,
     handleSend,
     handleRetry,
+    handleContinue,
     handleStop,
     resetTurn,
   };

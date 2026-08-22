@@ -180,6 +180,7 @@ function renderThread(extra: Partial<React.ComponentProps<typeof ChatThread>>) {
     <ChatThread
       messages={MESSAGES}
       onRetry={() => {}}
+      onContinue={() => {}}
       retryAvailable={false}
       onRewindTo={() => {}}
       {...extra}

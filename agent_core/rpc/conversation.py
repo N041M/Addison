@@ -374,9 +374,11 @@ class ConversationMixin(ServerContext):
             "userMessageId": user_message_id,
             "assistantMessageId": assistant_message_id,
         }
-        # answeredWith (D5): {modelId, label, free, routed}. The transcript chip
-        # renders on ``free`` alone — known-free by construction (owner decision
-        # 2026-08-12).
+        # answeredWith (D5): {modelId, label, free, routed, truncated}. The
+        # transcript chip renders on ``free`` alone — known-free by construction
+        # (owner decision 2026-08-12). ``truncated`` says the answer stopped at the
+        # model's output cap, which is what puts "Continue this answer" beside
+        # Retry (2026-08-22).
         # Absent when the turn produced no final answer (e.g. an over-budget stop).
         if self._answered_with is not None:
             result["answeredWith"] = self._answered_with

@@ -460,3 +460,61 @@ def test_response_carries_usage_when_reported():
 def test_response_usage_none_when_absent():
     provider, _, _ = _make({"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
     assert provider.send([Message(role="user", content="hi")], []).usage is None
+
+
+# --- the output cap ("Continue this answer", 2026-08-22) --------------------
+
+
+def test_an_answer_cut_off_at_the_cap_keeps_geminis_own_word():
+    # The wire says ``finishReason: "MAX_TOKENS"``. This adapter dropped the field
+    # entirely until 2026-08-22 and reported "stop" for everything, so an answer
+    # Gemini had cut off looked finished.
+    provider, _, _ = _make(
+        {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": "The first three reasons are"}]},
+                    "finishReason": "MAX_TOKENS",
+                }
+            ]
+        }
+    )
+    res = provider.send([Message(role="user", content="list ten reasons")], [])
+    assert res.finish_reason == "MAX_TOKENS"
+    assert res.finish_reason in provider.capabilities().truncation_finish_reasons
+
+
+def test_an_ordinary_stop_still_reads_as_a_plain_stop():
+    # STOP is the one value that IS translated — every other provider's ordinary
+    # ending is "stop", and a plain answer should read the same everywhere.
+    provider, _, _ = _make(
+        {"candidates": [{"content": {"parts": [{"text": "Four."}]}}, ], }
+    )
+    assert provider.send([Message(role="user", content="2+2?")], []).finish_reason == "stop"
+
+    provider, _, _ = _make(
+        {"candidates": [{"content": {"parts": [{"text": "Four."}]}, "finishReason": "STOP"}]}
+    )
+    res = provider.send([Message(role="user", content="2+2?")], [])
+    assert res.finish_reason == "stop"
+    assert res.finish_reason not in provider.capabilities().truncation_finish_reasons
+
+
+def test_a_function_call_turn_is_still_reported_as_a_tool_round():
+    # Unchanged by the finishReason work: a turn that asked for a tool is
+    # "tool_use", and the answer the person reads has not been written yet.
+    provider, _, _ = _make(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [{"functionCall": {"name": "calculator", "args": {}}}]
+                    },
+                    "finishReason": "MAX_TOKENS",
+                }
+            ]
+        }
+    )
+    res = provider.send([Message(role="user", content="2+2?")], [])
+    assert res.finish_reason == "tool_use"
+    assert res.tool_calls[0].tool_id == "calculator"

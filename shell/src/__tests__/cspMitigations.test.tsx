@@ -243,6 +243,7 @@ describe("the consent card's container", () => {
       <ChatThread
         messages={messages}
         onRetry={() => {}}
+        onContinue={() => {}}
         retryAvailable={false}
         onRewindTo={() => {}}
         footer={<PermissionCard request={REQUEST} onRespond={() => {}} />}

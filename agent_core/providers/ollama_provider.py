@@ -86,6 +86,12 @@ class OllamaProvider:
             # routing relies on (base.py); "off device" == runs on this machine.
             runs_off_device=True,
             vision="vision" in declared,
+            # /api/chat reports ``done_reason: "length"`` when the answer ran into
+            # the model's output room, and ``"stop"`` when it finished on its own.
+            # Kept verbatim by the translations below; declared here in the same
+            # spelling. Not queried from the model metadata like the flags above —
+            # it is a fact about Ollama's API, identical for every model it serves.
+            truncation_finish_reasons=("length",),
         )
 
     def _metadata(self) -> dict:
@@ -153,9 +159,12 @@ class OllamaProvider:
         # (prompt_eval_count / eval_count), not inside ``message`` — populate when
         # present, else None (a modest local model may omit them).
         usage = _translate_usage(payload)
+        # ``done_reason`` sits at the top level beside the counts, not inside
+        # ``message`` — same reason the usage read takes the whole payload.
+        done_reason = _done_reason(payload)
         if native:
-            return _translate_native_response(message, usage)
-        return _translate_fallback_response(message, usage)
+            return _translate_native_response(message, usage, done_reason)
+        return _translate_fallback_response(message, usage, done_reason)
 
     def _send_streaming(
         self, body: dict, timeout, on_delta, native: bool
@@ -274,7 +283,24 @@ def _with_tool_instructions(history: list[dict], tools: list) -> list[dict]:
     return [{"role": "system", "content": block}, *updated]
 
 
-def _translate_native_response(message: dict, usage: Usage | None = None) -> ModelResponse:
+def _done_reason(payload: dict) -> str | None:
+    """Ollama's top-level ``done_reason`` for a finished /api/chat response, or
+    None when it says nothing.
+
+    Kept in Ollama's own spelling — ``"length"`` is how it says the answer ran out
+    of output room, and that is the word ``capabilities()`` declares. Until
+    2026-08-22 every Ollama answer was reported as ``"stop"`` whatever the wire
+    said, so a cut-off local answer looked like a finished one.
+    """
+    reason = payload.get("done_reason")
+    if not (isinstance(reason, str) and reason):
+        return None
+    return reason
+
+
+def _translate_native_response(
+    message: dict, usage: Usage | None = None, done_reason: str | None = None
+) -> ModelResponse:
     tool_calls: list[ToolCallRequest] = []
     for raw in message.get("tool_calls") or []:
         fn = raw.get("function") or {}
@@ -290,17 +316,23 @@ def _translate_native_response(message: dict, usage: Usage | None = None) -> Mod
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+    return ModelResponse(
+        text=text, tool_calls=[], finish_reason=done_reason or "stop", usage=usage
+    )
 
 
-def _translate_fallback_response(message: dict, usage: Usage | None = None) -> ModelResponse:
+def _translate_fallback_response(
+    message: dict, usage: Usage | None = None, done_reason: str | None = None
+) -> ModelResponse:
     text = message.get("content") or ""
     tool_call = parse_tool_call(text, id_prefix="ollama")
     if tool_call is not None:
         return ModelResponse(
             text=None, tool_calls=[tool_call], finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text or None, tool_calls=[], finish_reason="stop", usage=usage)
+    return ModelResponse(
+        text=text or None, tool_calls=[], finish_reason=done_reason or "stop", usage=usage
+    )
 
 
 def _translate_stream(lines, on_delta, native: bool) -> ModelResponse:
@@ -323,6 +355,11 @@ def _translate_stream(lines, on_delta, native: bool) -> ModelResponse:
     text_parts: list[str] = []
     tool_calls: list[ToolCallRequest] = []
     usage: Usage | None = None
+    # Carried by the final ``done: true`` line, beside the counts. Last line that
+    # says anything wins — a stream reports its ending once, at the end. A stream
+    # whose last line never arrived reports nothing, which is the honest reading:
+    # no claim that the answer was cut off, and none that it was complete.
+    done_reason: str | None = None
 
     for line in lines:
         line = line.strip()
@@ -337,6 +374,9 @@ def _translate_stream(lines, on_delta, native: bool) -> ModelResponse:
         frame_usage = _translate_usage(frame)
         if frame_usage is not None:
             usage = frame_usage
+        frame_reason = _done_reason(frame)
+        if frame_reason is not None:
+            done_reason = frame_reason
         message = frame.get("message") or {}
         piece = message.get("content")
         if isinstance(piece, str) and piece:
@@ -360,7 +400,9 @@ def _translate_stream(lines, on_delta, native: bool) -> ModelResponse:
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+    return ModelResponse(
+        text=text, tool_calls=[], finish_reason=done_reason or "stop", usage=usage
+    )
 
 
 def _translate_usage(payload: dict) -> Usage | None:

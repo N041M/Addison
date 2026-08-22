@@ -136,6 +136,12 @@ class OpenAIProvider:
             supports_streaming=True,
             runs_off_device=False,
             vision=True,        # modern GPT-class models can analyze images
+            # chat.completions says "length" when the answer hit ``max_tokens``,
+            # and both response paths below keep that word as it arrived. The same
+            # adapter serves the custom OpenAI-compatible server (a different base
+            # URL and label, one class), so a compatible server that reports the
+            # standard word is read correctly too.
+            truncation_finish_reasons=("length",),
         )
 
     def send(
@@ -314,7 +320,8 @@ def _translate_history(messages: list[Message]) -> list[dict]:
 
 def _translate_response(data: dict) -> ModelResponse:
     choices = data.get("choices") or []
-    message = (choices[0].get("message") if choices else None) or {}
+    choice = (choices[0] if choices else None) or {}
+    message = choice.get("message") or {}
     text = message.get("content") or None
     tool_calls: list[ToolCallRequest] = []
     for raw in message.get("tool_calls") or []:
@@ -334,7 +341,14 @@ def _translate_response(data: dict) -> ModelResponse:
         return ModelResponse(
             text=text, tool_calls=tool_calls, finish_reason="tool_use", usage=usage
         )
-    return ModelResponse(text=text, tool_calls=[], finish_reason="stop", usage=usage)
+    # The choice's own ``finish_reason``, kept as it arrived — "length" is how this
+    # API says the answer ran out of output room, and collapsing it to "stop" (which
+    # this path did until 2026-08-22) threw that away before anyone could read it.
+    # The streamed path already kept it; the two now agree.
+    reason = choice.get("finish_reason")
+    if not (isinstance(reason, str) and reason):
+        reason = "stop"
+    return ModelResponse(text=text, tool_calls=[], finish_reason=reason, usage=usage)
 
 
 def _translate_stream(frames, on_delta) -> ModelResponse:
