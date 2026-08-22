@@ -55,6 +55,9 @@ import {
   type McpServer,
   type McpServerStatus,
   type McpDiscoveredTool,
+  type Channel,
+  type ChannelKind,
+  type ChannelTokenPresence,
 } from "../types/ui";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -686,6 +689,20 @@ export const ipc = {
     call(Method.McpRemove, { id }).then(parseMcpMutation),
   refreshMcpServer: (id: string): Promise<McpRefreshResult> =>
     call(Method.McpRefresh, { id }).then(parseMcpRefresh),
+
+  // Messaging channels — the phone connections a person can save (phase 1 of
+  // three). NOT ONE OF THESE REACHES A NETWORK: `addChannel` writes a row that is
+  // switched off and connected to nothing, `listChannels` reads those rows, and
+  // `removeChannel` takes one away. There is no adapter, no poll loop and no
+  // pairing in this build. NO TOKEN RIDES THESE PAYLOADS in either direction — the
+  // token goes to the OS keychain through `storeChannelKey` below, exactly as an
+  // API key does. A refusal (a name already used, the Developer-only sentence) is a
+  // resolved {ok:false} carrying the core's own plain words, never a reject.
+  listChannels: (): Promise<Channel[]> => call(Method.ChannelList).then(parseChannels),
+  addChannel: (kind: ChannelKind, name: string): Promise<ChannelMutationResult> =>
+    call(Method.ChannelAdd, { kind, name }).then(parseChannelMutation),
+  removeChannel: (id: string): Promise<ChannelMutationResult> =>
+    call(Method.ChannelRemove, { id }).then(parseChannelMutation),
 
   // Automations — what Addison has written down for the OS to run (Phase-2 step 8).
   // NOT ONE OF THESE CAN START ANYTHING. `listAutomations` reads saved rows,
@@ -1836,6 +1853,86 @@ export function parseMcpRefresh(result: unknown): McpRefreshResult {
 }
 
 // ---------------------------------------------------------------------------
+// Messaging channels (phase 1) — the phone connections a person has saved.
+// Configuration only: nothing in this build connects, polls or pairs, and no
+// payload here has ever carried a token.
+// ---------------------------------------------------------------------------
+
+/** `channel.add` / `channel.remove` → {ok, error?}. A refusal — the wrong profile,
+ * a name already in use, a restore point that could not be saved — is a resolved
+ * {ok:false} carrying the core's plain sentence, which the panel prints verbatim. */
+export interface ChannelMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+function parseChannelMutation(result: unknown): ChannelMutationResult {
+  const obj = asRecord(result);
+  return {
+    ok: obj?.ok === true,
+    error: typeof obj?.error === "string" ? obj.error : undefined,
+  };
+}
+
+/** The transports this side knows how to describe — the core's closed set. */
+const CHANNEL_KINDS = new Set<string>(["telegram"]);
+
+/** The three presence answers, whole. Anything else becomes "unknown", which is
+ * the only safe direction: "unknown" reads as "Addison doesn't know", while
+ * "absent" would read as "no token saved" about a token that may well be there. */
+const CHANNEL_PRESENCES = new Set<string>(["present", "absent", "unknown"]);
+
+/** One `channel.list` row, or `null` when it isn't usable.
+ *
+ * Fails CLOSED on `parseMcpServerRow`'s reasoning: a row without a usable id and
+ * name is dropped, because a row the panel cannot name is one it would render a
+ * "Remove" button for and then fail to act on. A `kind` outside the closed set is
+ * dropped too — the panel's copy names the transport, and a connection to a
+ * transport with no adapter behind it is a claim the app would be making up.
+ *
+ * `enabled` defaults to FALSE on anything unrecognised (the opposite default to
+ * `McpServer.enabled`, deliberately: an MCP row arrives enabled and a channel row
+ * arrives off, and each side's default is the state its core actually writes).
+ * `tokenPresent` and `pairedDevices` both fail towards "Addison doesn't know" and
+ * zero. */
+function parseChannelRow(value: unknown): Channel | null {
+  const row = asRecord(value);
+  if (!row || typeof row.id !== "string" || !row.id) return null;
+  if (typeof row.name !== "string" || !row.name) return null;
+  if (typeof row.kind !== "string" || !CHANNEL_KINDS.has(row.kind)) return null;
+  const presence =
+    typeof row.tokenPresent === "string" && CHANNEL_PRESENCES.has(row.tokenPresent)
+      ? (row.tokenPresent as ChannelTokenPresence)
+      : "unknown";
+  return {
+    id: row.id,
+    kind: row.kind as ChannelKind,
+    name: row.name,
+    enabled: row.enabled === true,
+    tokenPresent: presence,
+    pairedDevices:
+      typeof row.pairedDevices === "number" && Number.isFinite(row.pairedDevices)
+        ? row.pairedDevices
+        : 0,
+    addedAt:
+      typeof row.addedAt === "number" && Number.isFinite(row.addedAt) ? row.addedAt : undefined,
+  };
+}
+
+/** Parse `channel.list` → the saved connections. Unusable rows are dropped; junk
+ * never throws. */
+export function parseChannels(result: unknown): Channel[] {
+  const obj = asRecord(result);
+  const list = obj && Array.isArray(obj.channels) ? (obj.channels as unknown[]) : [];
+  const out: Channel[] = [];
+  for (const item of list) {
+    const row = parseChannelRow(item);
+    if (row) out.push(row);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Automations (Phase-2 step 8) — the work Addison has written down for THIS
 // COMPUTER to run on a schedule. A row is a draft: nothing in the app arms one
 // yet, and when arming lands it is the Rust shell that writes the job file.
@@ -2069,6 +2166,42 @@ export async function storeProviderKey(provider: string, key: string): Promise<v
     // this the one sentence that says how to fix the paste is thrown away and
     // replaced by the generic "check the key and try again", which is the
     // mystifying failure §5.3 exists to remove.
+    throw new Error(toPlainMessage(err));
+  }
+}
+
+// The messaging-channel bot token (phase 1). The SAME path as a provider key and a
+// PARALLEL command, never the provider one: the account namespace is
+// `channel-key:<kind>` and the shell's own comment gives the three reasons the
+// provider path is not reused. Write-only from here — the engine reads a token at
+// the moment of use and this window can never read one back (G1).
+export async function storeChannelKey(kind: string, key: string): Promise<void> {
+  if (!isEngineConnected()) {
+    throw new Error(NOT_CONNECTED_MESSAGE);
+  }
+  try {
+    await invoke("store_channel_key", { kind, key });
+  } catch (err) {
+    // The Rust store boundary refuses a token whose SHAPE is wrong with a plain,
+    // fixable sentence ("That key has a line break in it — paste it again as one
+    // line."). A Tauri command returning `Err(String)` rejects with the BARE
+    // STRING, so without this the one sentence that says how to fix the paste is
+    // thrown away — the same repair `storeProviderKey` above needed.
+    throw new Error(toPlainMessage(err));
+  }
+}
+
+// Removing a channel deletes its token first, from HERE. The core's side of the
+// keychain is a read and nothing more, so the window that wrote the token is what
+// removes it — the same shape as the provider "Remove" action, and the reason the
+// core was never handed a delete-anything verb.
+export async function deleteChannelKey(kind: string): Promise<void> {
+  if (!isEngineConnected()) {
+    throw new Error(NOT_CONNECTED_MESSAGE);
+  }
+  try {
+    await invoke("delete_channel_key", { kind });
+  } catch (err) {
     throw new Error(toPlainMessage(err));
   }
 }

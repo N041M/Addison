@@ -16,7 +16,7 @@
 // API keys · Run a model on this computer · Routines · Skills · Profile · How
 // careful Addison is (Custom only) · Folders Addison may work in
 // (EVERY profile since 2026-08-12 — the copy differs by mode) · Tool servers
-// (Developer/Custom only) · Automations
+// (Developer/Custom only) · Your phone (Developer/Custom only) · Automations
 // (EVERY profile — Simple lists them disabled, saying why) · Restore points ·
 // Diagnostics.
 //
@@ -39,6 +39,7 @@ import type { GuardsCardState } from "../hooks/useGuards";
 import type { RoutingCardState } from "../hooks/useRouting";
 import type { WorkspaceCardState } from "../hooks/useWorkspace";
 import type { McpServersCardState } from "../hooks/useMcpServers";
+import type { ChannelsCardState } from "../hooks/useChannels";
 import type { AutomationsCardState } from "../hooks/useAutomations";
 import type { ThemeChoice } from "../lib/theme";
 import type { PopupAnchor } from "./ModelPopup";
@@ -57,6 +58,7 @@ import { RestorePointsSection } from "./SnapshotsCard";
 import { CustomGuardPanel } from "./CustomGuardPanel";
 import { WorkspaceTrustPanel } from "./WorkspaceTrustPanel";
 import { McpServersPanel } from "./McpServersPanel";
+import { ChannelsPanel } from "./ChannelsPanel";
 import { RoutingCard, type RoutingCardModel } from "./RoutingCard";
 import { LocalModelSetup } from "./LocalModelSetup";
 
@@ -95,6 +97,15 @@ interface Props {
    * active profile, never the mode); Simple never sees it, and the core refuses
    * `mcp.add` outside Developer independently of this gate. */
   mcp?: McpServersCardState;
+  /** The messaging-channel bundle (useChannels; messaging channels phase 1 of
+   * three). Optional so a partial caller (older tests) still renders — the section
+   * is simply omitted then. It shows ONLY on the Developer/Custom surfaces (keyed
+   * off the active profile, never the mode), the same treatment "Tool servers"
+   * gets and for the same reason: a Settings surface for a capability a profile
+   * lacks is profile surface, not a disabled artifact — nobody's saved work is
+   * being hidden. The core refuses `channel.add` outside Developer independently
+   * of this gate. */
+  channels?: ChannelsCardState;
   /**
    * The automations bundle (useAutomations; Phase-2 step 8 phase 4). Optional so a
    * partial caller (older tests) still renders — the section is simply omitted
@@ -243,6 +254,7 @@ export function SettingsPage({
   routing,
   workspace,
   mcp,
+  channels,
   automations,
   profile,
   onSetProfile,
@@ -280,6 +292,9 @@ export function SettingsPage({
   // from the policy mode and `null` means "not answered yet", never "Simple".
   const showWorkspace = Boolean(workspace) && Boolean(profile);
   const showMcp = Boolean(mcp) && developerSurface;
+  // Messaging channels (phase 1): the same Developer/Custom gate, for the same
+  // reason. Channels are dev-only for v1 (owner decision 10 of 2026-08-22).
+  const showChannels = Boolean(channels) && developerSurface;
 
   return (
     <Surface title="Settings" description={SETTINGS_DESCRIPTION} pinned={pinned}>
@@ -377,6 +392,18 @@ export function SettingsPage({
       {showMcp && mcp && (
         <SurfaceSection label="Tool servers">
           <McpServersPanel connected={connected} mcp={mcp} />
+        </SurfaceSection>
+      )}
+
+      {/* Your phone — the messaging channels (phase 1 of three). Same
+          Developer/Custom gate as Tool servers, and it sits beside it because both
+          answer "what may reach Addison". NOTHING HERE CONNECTS: there is no
+          adapter, no background thread and no pairing in this build, and the panel
+          says so in its own second line — under the privacy sentence, which comes
+          first and every time (docs/messaging-channel-plan.md §3.12). */}
+      {showChannels && channels && (
+        <SurfaceSection label="Your phone">
+          <ChannelsPanel connected={connected} channels={channels} />
         </SurfaceSection>
       )}
 

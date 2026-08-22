@@ -12,6 +12,70 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (sixth): a phone connection that connects to nothing
+
+Phase 1 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)
+owns the design and its eleven answered decisions). The whole of it is
+configuration: two tables, three RPC methods, two Rust commands and a Settings
+section. **There is no adapter, no poll loop, no pairing and no network call
+anywhere in the build** — a saved channel reaches nothing and is reached by nothing.
+That is the MCP phase-1 shape on purpose: the questions that are expensive to unwind
+get answered while the feature is still inert.
+
+- **The capture decision is the phase.** `channels` is snapshot-CAPTURED on the
+  `mcp_servers` terms (`id, kind, name, enabled, created_at` — `created_at` joins
+  because every other captured tuple carries it), and two things are deliberately
+  left out. `token_present` is in `_EXCLUDED_COLUMNS` for `secret_presence`'s reason:
+  it is an observation about a keychain no snapshot touches, so a restore resets it to
+  `unknown` rather than asserting a token that may be gone. And `channel_pairings` is
+  EXCLUDED wholesale, which is the decision worth having made now: **a pairing is an
+  authorization, not configuration.** Step 8 could ask the OS what was armed because
+  the OS held the truth; here nothing outside SQLite holds it — the row *is* the
+  authorization — so a one-action restore that put one back would re-instate an
+  authorization somebody deliberately revoked. One test proves both halves on a single
+  restore.
+- **A parallel keychain pair, not a borrowed one.** `store_channel_key` /
+  `delete_channel_key` write under `channel-key:<kind>` on the same SERVICE, and
+  reuse exactly what is general — `Entry`, `write_credential` (delete-then-add,
+  retried, verified by read-back), `os_guard`, the `spawn_blocking` shape,
+  `normalised_key`. What they deliberately do not touch is the provider path's mint
+  ledger, replace-detection, session cache and legacy-account migration: that
+  machinery was built around one very particular failure and should not grow a second
+  tenant, and `store_provider_key`'s `provider: String` has no closed-set check, so
+  handing it a second caller would turn a typed surface into a general keychain
+  writer. Two source-level tests hold the separation, because the alternative is an OS
+  keychain in a unit test.
+- **The token's only path is webview → Rust → keychain.** The core has a READ
+  (`keychain.getChannelKey`) and no verb that removes one, so a removal deletes the
+  keychain item **from the frontend** and then asks the core to drop the row — the
+  same shape the provider "Remove" action has always had. The order is deliberate: the
+  failure mode is a listed row whose token is gone, which is visible and removable
+  again, rather than a token left on the machine belonging to a connection nothing can
+  name. That is the one place the build departs from the plan's §3.10 wording ("`remove`
+  … deletes the token"), and it is what §3.9's own list of shell surfaces implies.
+- **`IpcShellBridge.get_channel_key` is uncalled, and says so in its docstring.** It
+  exists so the phase that adds the adapter needs no change to the bridge, the shell's
+  dispatch or the keychain module. The `keychain.*` prefix already routes off the
+  shell's main loop, which was verified rather than assumed.
+- **THE FINDING, from the adversarial pass over this diff: one transport, one
+  token.** The account is `channel-key:<kind>`, namespaced by transport, while
+  `channels` permits several rows of a kind — owner decision 11 restricts what may be
+  *enabled*, not what may be *saved*. So a second Telegram row's token overwrites the
+  first's, and a naive removal would delete the remaining row's token in the one
+  direction nothing can put back: no snapshot has ever carried a secret. Both
+  directions are now handled where they happen rather than papered over — the panel
+  says the token is shared once a second row of that kind exists, and a removal
+  deletes the keychain item only when the last row of its kind goes. Whether the
+  account should be keyed by CHANNEL ID instead is a change to the plan's §3.9 and is
+  recorded as an open row in [`KNOWN-GAPS.md`](KNOWN-GAPS.md); it wants deciding
+  before anything reads a token, which is phase 2.
+- **What the panel deliberately does not draw**, asserted by a test that allow-lists
+  every button on it: no enable switch, no connect or check, no pairing code, no
+  paired-device list. Each would be a control with nothing behind it. The privacy
+  sentence is FIRST and every render, above the field a token gets pasted into —
+  position is the requirement, and the test asserts the position rather than the
+  presence.
+
 ## What shipped 08-22 (fifth): Continue, and the two adapters that were throwing the fact away
 
 The judged feature (KNOWN-GAPS, 2026-08-09) was a button beside Retry that appears

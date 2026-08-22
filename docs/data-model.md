@@ -120,7 +120,9 @@ erDiagram
 
 ## Config and identity tables
 
-These tables have no foreign-key relationships; they are keyed independently.
+These tables are keyed independently, with one exception: `channel_pairings`
+references `channels` and is cascaded from it, so a pairing can never outlive the
+connection it authorizes.
 
 ```mermaid
 erDiagram
@@ -171,6 +173,22 @@ erDiagram
         TEXT transport "http only in v1"
         INTEGER enabled
         INTEGER created_at
+    }
+    channels ||--o{ channel_pairings : authorizes
+    channels {
+        TEXT id PK
+        TEXT kind "telegram only in v1; CHECK"
+        TEXT name "the person's own label"
+        INTEGER enabled "0 in phase 1; nothing turns one on"
+        TEXT token_present "present|absent|unknown; NOT captured"
+        INTEGER created_at
+    }
+    channel_pairings {
+        TEXT id PK
+        TEXT channel_id FK "ON DELETE CASCADE"
+        TEXT sender_id "the transport's id for the human"
+        TEXT label "display name; untrusted text, capped"
+        INTEGER paired_at
     }
     automations {
         TEXT id PK
@@ -531,6 +549,56 @@ erDiagram
     and for v1 the answer is that **it is not**: MCP is Developer-only (owner decision
     2026-08-06), so no MCP tool enters the SAFE view, and invariant 2 keeps a mutating,
     no-undo one out of it in any case.
+- **channels** *(messaging channels, phase 1, **built 2026-08-22**)*: a connection a
+  person can talk to Addison through from their phone. A row is a `kind` (the
+  transport), a plain `name` they chose, an off switch and `created_at`. **Phase 1
+  connects to nothing**: there is no adapter, no poll loop, no pairing and no network
+  call in the build, so a saved row reaches nothing and is reached by nothing.
+  [`messaging-channel-plan.md`](messaging-channel-plan.md) owns the phase order and the
+  eleven owner decisions of 2026-08-22.
+  - **`kind` carries a CHECK and there is no command column**, on the `mcp_servers`
+    terms: the schema is where "this row can never name a program" is enforced. A
+    second transport widens the CHECK in the commit that adds its adapter.
+  - **No token column, per G1.** The bot token goes from the webview straight to the
+    **OS keychain** through the shell's own `store_channel_key` command, under the
+    account `channel-key:<kind>` — a parallel command to the provider pair and never a
+    call into it — and the core reads it at the moment of use
+    (`keychain.getChannelKey`, uncalled in phase 1). `token_present` is the non-secret
+    three-state record, `provider_config.secret_presence`'s vocabulary exactly: it
+    says whether a token is *believed* to exist so a surface can render a list without
+    a keychain touch, and it holds no part of one. In phase 1 it is `unknown` on every
+    row, because proving otherwise means asking a transport.
+  - **`enabled` defaults to 0 and nothing sets it.** Turning a channel on is what
+    starts a poll loop, which is phase 2. It is captured and restored, so a restore
+    leaves a channel exactly as off as a fresh row — the honest state, since neither
+    the token nor the pairings come back with it.
+  - **Snapshot-CAPTURED** (`snapshots/scope.py`) on the `mcp_servers` terms — a row is
+    reversible config and grants Addison nothing on this machine — **except
+    `token_present`, which is in `_EXCLUDED_COLUMNS`** for `secret_presence`'s reason:
+    it is an observation about a keychain no snapshot touches, and a restored row must
+    not claim a token that may have been removed since. A restore resets it to
+    `unknown`, which is both the honest answer and the safe one.
+  - **Read and removable in every profile**; `channel.add` is the Developer-only
+    method, the `mcp.add` pattern exactly. Hiding somebody's saved configuration on a
+    profile switch is the failure the 2026-08-06 artifact decision reversed, and a
+    removal — which also deletes the token — is a tightening, which must never be the
+    thing a switch traps.
+- **channel_pairings** *(messaging channels, phase 1, **built 2026-08-22**)*: which
+  phone is allowed to talk to Addison. Written by pairing, which is phase 2; the table
+  exists now because its exclusion from capture is a phase-1 decision. `label` is a
+  display name the **transport** supplied — somebody else's text — so it is capped and
+  cleaned before storage and never rendered as markdown.
+  - **Deliberately NOT snapshot-captured**, and this is a decision rather than an
+    omission. A pairing is not configuration; it is an **authorization**. G3 promises
+    that one action restores your configuration, and an authorization somebody
+    deliberately revoked must not come back inside that one action. Step 8 solved the
+    same problem by asking the OS what was armed, because the OS held the truth; here
+    nothing outside SQLite holds it — **the row *is* the authorization** — so the only
+    honest answer is to keep it out. After a restore no phone is paired, and pairing
+    again costs one code and one message.
+  - **Cascaded from `channels`** (`ON DELETE CASCADE`, with `PRAGMA foreign_keys = ON`),
+    so removing a connection takes its pairings with it as a property of the database
+    rather than the diligence of a handler.
 - **automations** *(Phase-2 step 8, phases 1–2, **built 2026-08-07**)*: the automation
   Addison **authors for the OS to run**. Addison never triggers itself (G2): the row
   describes a `command` and a schedule, and only the operating system ever runs one.

@@ -70,6 +70,12 @@ REASONS: dict[str, str] = {
     "mcp_connect": "Before adding a tool server",       # step 7 phase 1 (rpc/mcp.py)
     "mcp_disconnect": "Before removing a tool server",  # step 7 phase 1 (rpc/mcp.py)
     "automation_remove": "Before removing an automation",  # step 8 phase 1 (rpc/automations.py)
+    # Messaging channels phase 1 (rpc/channels.py), on the mcp pair's terms exactly:
+    # `channels` is a captured table, so adding or removing one is a change to the
+    # configuration a restore puts back, and it deserves a label that says which
+    # change rather than "Before a change".
+    "channel_add": "Before adding a phone connection",
+    "channel_remove": "Before removing a phone connection",
     # Reserved and STILL UNCALLED after phase 2 landed: create_automation carries a
     # real undo(), and a draft nothing in the tree can run is not a risky change.
     # Kept so the vocabulary does not churn if arming ever wants a capture here.

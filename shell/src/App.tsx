@@ -22,7 +22,7 @@
 // progress) into React state, and Frontend → Core actions back out through the
 // typed `ipc`. The big state clusters live in dedicated hooks: useModelSelection,
 // useWidgets, useTurn, useConversations, useSnapshots, useGuards, useRouting,
-// useWorkspace, useMcpServers, useAutomations, useOffers.
+// useWorkspace, useMcpServers, useChannels, useAutomations, useOffers.
 //
 // Theme is class-driven and persisted in localStorage ("addison.theme") as one of
 // "light" | "dark" | "system"; the default is now "system" (Match this computer).
@@ -86,6 +86,7 @@ import { useRouting } from "./hooks/useRouting";
 import { useWorkspace } from "./hooks/useWorkspace";
 import { useCodeReview } from "./hooks/useCodeReview";
 import { useMcpServers } from "./hooks/useMcpServers";
+import { useChannels } from "./hooks/useChannels";
 import { usePendingConsentResync } from "./hooks/usePendingConsentResync";
 import { useAutomations } from "./hooks/useAutomations";
 import { useOffers } from "./hooks/useOffers";
@@ -270,8 +271,8 @@ export function App() {
   // does not go stale quietly: the surface goes on offering controls for a thing
   // the core has already put back, and "Addison has forgotten X" comes back for
   // a server it no longer had.
-  // HAZARD: `refreshProfile`, `guardsState`, `routingState`, `mcpState` and
-  // `automationsState` are forward references; this closure only ever runs at
+  // HAZARD: `refreshProfile`, `guardsState`, `routingState`, `mcpState`,
+  // `channelsState` and `automationsState` are forward references; this closure only ever runs at
   // event time, after a restore has landed.
   const snapshotsState = useSnapshots({
     connected,
@@ -285,6 +286,12 @@ export function App() {
       guardsState.refreshGuards();
       routingState.refreshRouting();
       mcpState.refreshServers();
+      // The saved phone connections. `channels` is a captured table too, so a
+      // restore can add or remove one underneath an open Settings page — and what
+      // does NOT come back with a row is the token (no snapshot has ever carried a
+      // secret) or a pairing (deliberately excluded from capture: an authorization
+      // somebody revoked must never return inside a one-action restore).
+      channelsState.refreshChannels();
       // The saved automations. The ROWS only: a restore can put a row back and
       // can never put a JOB back — there is no armed column to restore and a
       // one-action restore cannot perform the keyword ceremony (plan §5.6) — so
@@ -332,6 +339,12 @@ export function App() {
   // other captured table is re-read above. Reading the list on mount is a local
   // read; what the OPERATING SYSTEM is running is asked by the section when it
   // loads, never here — nothing checks at startup (plan §5.6).
+  // The messaging channels — the phone connections a person has saved (phase 1 of
+  // three). Same Developer/Custom gate as the tool servers, applied in SettingsPage.
+  // Owned here rather than by the Settings section because `channels` is a
+  // SNAPSHOT-CAPTURED table and the restore closure above has to re-read it. Adding
+  // one saves a name and a kind and connects to nothing — there is no adapter yet.
+  const channelsState = useChannels({ connected });
   const automationsState = useAutomations({ connected });
   // The two step-4 conversational offers — "add my own model server" and "make it
   // cheaper" (useOffers). Same propose -> card -> explicit confirm mechanism as the
@@ -1351,6 +1364,7 @@ export function App() {
                 routing={routingState}
                 workspace={workspaceState}
                 mcp={mcpState}
+                channels={channelsState}
                 automations={automationsState}
                 profile={profile}
                 onSetProfile={handleSetProfile}

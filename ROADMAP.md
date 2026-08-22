@@ -122,6 +122,14 @@ owner's horizon for that is a bespoke phone app, which is not designed anywhere
 yet. One channel enabled at a time in v1 (multiple is v2); the approved menu-bar
 popup chat is added scope that gets its own design section before it is built.
 
+**Phase 1 landed 2026-08-22: configuration, and nothing connects.** The two tables
+(`channels` captured, `channel_pairings` deliberately excluded — an authorization
+must not be restorable), `channel.list`/`add`/`remove`, the parallel keychain pair
+`store_channel_key` / `delete_channel_key` under `channel-key:<kind>`, and a
+Developer-only "Your phone" Settings section whose first line is the privacy
+sentence. There is still no adapter, no poll loop, no pairing and no network call
+anywhere in the build — that is phase 2.
+
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 until the following morning; all are finished. Their entries
 stay below, in place, because they are recent enough that people still ask what

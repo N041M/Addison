@@ -771,7 +771,7 @@ def test_read_config_state_captures_exactly_the_declared_tables(store: Store):
     state = store.read_config_state()
     assert set(state) == {
         "app_settings", "provider_config", "skills", "widgets", "routines", "mcp_servers",
-        "automations",
+        "automations", "channels",
     }
     assert state["skills"][0]["name"] == "Be brief"
     assert set(state["skills"][0]) == {

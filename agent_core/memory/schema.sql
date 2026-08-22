@@ -125,6 +125,69 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_name
     ON mcp_servers(name COLLATE NOCASE);
 
+-- A messaging channel a person can talk to Addison through from their phone
+-- (messaging channels, PHASE 1; docs/messaging-channel-plan.md owns the design).
+-- Phase 1 is configuration and NOTHING ELSE: there is no adapter, no thread and no
+-- network call in the tree, so a row here reaches nothing and is not reached. The
+-- shape is `mcp_servers`', for the same reason — reversible config, snapshotted,
+-- revocable — and the same two absences carry the same weight.
+--
+-- `kind` carries a CHECK and there is NO command column, on the step-7 precedent:
+-- the schema is where "this row can never name a program" is enforced, not a
+-- comment. A second transport widens the CHECK in the commit that adds its adapter.
+--
+-- THERE IS NO TOKEN COLUMN, and there never will be (G1). The bot token goes from
+-- the webview straight to the OS keychain through the shell's own `store_channel_key`
+-- command, under `channel-key:<kind>`, and the core reads it at the moment of use.
+-- `token_present` is the non-secret three-state record of whether one is believed to
+-- exist — `provider_config.secret_presence`'s vocabulary and purpose exactly — so a
+-- surface can say "no token saved" without anybody reading the keychain to render a
+-- list. Like `secret_presence` it is EXCLUDED FROM CAPTURE (snapshots/scope.py):
+-- a restored row must not claim a token that the keychain, which no snapshot touches,
+-- may no longer hold. The general rule is the automations one — a restore may put a
+-- ROW back and never the thing outside SQLite that the row describes.
+--
+-- `enabled` defaults to 0 and nothing SETS it in phase 1: turning a channel on is
+-- `channel.setEnabled` (phase 2), which is also the only thing that starts a poll
+-- loop. It is captured and restored, so a restore leaves a channel exactly as off as
+-- a fresh row — which is the honest state, since the token and the pairings do not
+-- come back with it.
+CREATE TABLE IF NOT EXISTS channels (
+    id            TEXT PRIMARY KEY,      -- uuid4
+    kind          TEXT NOT NULL CHECK(kind IN ('telegram')),
+    name          TEXT NOT NULL,         -- the person's own label for this channel
+    enabled       INTEGER NOT NULL DEFAULT 0,
+    token_present TEXT NOT NULL DEFAULT 'unknown'
+                      CHECK(token_present IN ('present','absent','unknown')),
+    created_at    INTEGER NOT NULL
+);
+
+-- WHICH PHONE IS ALLOWED TO TALK TO ADDISON. Written by pairing (phase 2) and by
+-- nothing in phase 1; the table exists now because its EXCLUSION from snapshot
+-- capture is part of the phase-1 capture decision and belongs with the other table.
+--
+-- DELIBERATELY NOT SNAPSHOT-CAPTURED (snapshots/scope.py), and that is a decision
+-- rather than an omission. A pairing is not configuration; it is an AUTHORIZATION.
+-- G3 promises that ONE action restores your configuration, and an authorization
+-- somebody deliberately revoked must not come back inside that one action. Step 8
+-- solved the same problem by asking the OS what was armed, because the OS held the
+-- truth; here nothing outside SQLite holds it — the ROW IS THE AUTHORIZATION — so
+-- the only honest answer is to keep it out of the capture. The cost is small and
+-- symmetrical: after a restore no phone is paired, and pairing again costs one code
+-- and one message.
+--
+-- `label` is a display name the TRANSPORT supplied, i.e. attacker-controlled text.
+-- It is capped and cleaned before it is stored and is never put through a markdown
+-- renderer. `sender_id` is the transport's id for the human, which is the only thing
+-- a pairing binds.
+CREATE TABLE IF NOT EXISTS channel_pairings (
+    id         TEXT PRIMARY KEY,       -- uuid4
+    channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    sender_id  TEXT NOT NULL,          -- the transport's id for the human
+    label      TEXT NOT NULL,          -- display name. Untrusted text, capped.
+    paired_at  INTEGER NOT NULL
+);
+
 -- Automation Addison AUTHORS for the OS to run (step 8, phases 1-2). Addison never
 -- triggers itself — G2 is a floor, and nothing in this step gives the app a timer,
 -- a watcher or a callback of its own. A row here is a DRAFT and nothing else: phase

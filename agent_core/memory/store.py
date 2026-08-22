@@ -1590,6 +1590,88 @@ class Store:
         self._conn.commit()
         return cur.rowcount > 0
 
+    # --- messaging channels (phase 1; configuration, and nothing connects) -----
+    # Non-secret configuration only, and inert: nothing in the tree polls, connects
+    # or pairs yet. CAPTURED by snapshots (snapshots/scope.py) on the `mcp_servers`
+    # terms, EXCEPT `token_present`, which is excluded for `secret_presence`'s reason.
+    # `channel_pairings` is excluded from capture wholesale — a pairing is an
+    # authorization, not configuration.
+    #
+    # THERE IS NO TOKEN HERE and no method below can write one: the bot token goes
+    # from the webview straight to the OS keychain (G1), and this table records only
+    # whether one is BELIEVED to exist. Whatever lands here is copied into every later
+    # snapshot payload and plaintext sidecar, which is the other reason the columns
+    # are a name, a kind and two flags.
+
+    def insert_channel(self, *, id: str, kind: str, name: str, created_at: int) -> None:
+        """Save a channel row, switched off and with no token believed saved.
+
+        ``enabled`` and ``token_present`` are left to their schema defaults (0 and
+        'unknown'): phase 1 has nothing that turns a channel on and nothing that can
+        ask a transport whether the token works, so claiming either would be the app
+        inventing a fact. Raises ``sqlite3.IntegrityError`` on a kind outside the
+        CHECK — the database is the authority for the closed transport vocabulary,
+        and the caller turns that into a plain sentence."""
+        self._conn.execute(
+            "INSERT INTO channels (id, kind, name, created_at) VALUES (?, ?, ?, ?)",
+            (id, kind, name, created_at),
+        )
+        self._conn.commit()
+
+    def list_channels(self) -> list[dict[str, Any]]:
+        """Every saved channel, oldest first (the order they were added)."""
+        rows = self._conn.execute(
+            "SELECT id, kind, name, enabled, token_present, created_at FROM channels "
+            "ORDER BY created_at ASC, rowid ASC"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "kind": row["kind"],
+                "name": row["name"],
+                "enabled": bool(row["enabled"]),
+                "token_present": row["token_present"],
+                "created_at": row["created_at"],
+            }
+            for row in rows
+        ]
+
+    def get_channel(self, channel_id: str) -> dict[str, Any] | None:
+        """One channel row, or None."""
+        for row in self.list_channels():
+            if row["id"] == channel_id:
+                return row
+        return None
+
+    def channel_name_taken(self, name: str) -> bool:
+        """Is this name already in use? Case-insensitive, because "My phone" and
+        "my phone" are the same channel to a person — and a channel is named so it
+        can be recognised in a list of them."""
+        row = self._conn.execute(
+            "SELECT 1 FROM channels WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)
+        ).fetchone()
+        return row is not None
+
+    def delete_channel(self, channel_id: str) -> bool:
+        """Forget a channel. Returns True if a row was removed.
+
+        The pairings go with it, by ``ON DELETE CASCADE`` and ``PRAGMA foreign_keys =
+        ON`` (set in ``__init__``) — not by a second DELETE here. The database is what
+        keeps "no pairing outlives its channel" true, so it stays true for a caller
+        this module has not met yet."""
+        cur = self._conn.execute("DELETE FROM channels WHERE id = ?", (channel_id,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def count_channel_pairings(self, channel_id: str) -> int:
+        """How many devices are paired to this channel. A COUNT and never the rows:
+        a pairing carries a transport-supplied display name, and the only surface
+        phase 1 has needs the number."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM channel_pairings WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+        return int(row["n"]) if row is not None else 0
+
     # --- automations (step 8 phase 1; what the OS will run, once armed) --------
     # A row is a DRAFT: nothing in the tree authors one (phase 2) and nothing arms one
     # (phase 3), so the table stays empty except by hand. CAPTURED by snapshots

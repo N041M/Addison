@@ -246,6 +246,26 @@ export const Method = {
   // vocabulary exactly. A check in flight is NOT one of them: the core answers
   // `list` and `refresh` on the same worker thread, so a list could never observe
   // one — the frontend tracks the row it is waiting on itself (useMcpServers).
+  // Messaging channels — talking to Addison from your phone (PHASE 1 of three).
+  // Phase 1 saves a connection and NOTHING CONNECTS: there is no adapter, no
+  // background thread, no pairing and no network call anywhere in this build. A
+  // saved channel is a name and a kind, switched off, reaching nothing.
+  //
+  // NO TOKEN EVER RIDES THESE PAYLOADS. The bot token you paste goes straight from
+  // this window to your computer's keychain through the Rust `store_channel_key`
+  // command, the same way an API key does; the engine reads it at the moment of use
+  // and never stores it. A row carries `tokenPresent` — "present" | "absent" |
+  // "unknown" — which says whether a token is believed to be saved and never any
+  // part of one. In this phase it is always "unknown": deciding otherwise means
+  // asking Telegram, which is the next phase.
+  //
+  // `add` is refused outside the Developer profile. `list` and `remove` answer in
+  // every profile, so a saved connection never disappears on a profile switch and
+  // can always be removed. Mirrored in protocol.py.
+  ChannelList: "channel.list",
+  ChannelAdd: "channel.add",
+  ChannelRemove: "channel.remove",
+
   McpList: "mcp.list",
   McpAdd: "mcp.add",
   McpRemove: "mcp.remove",
@@ -354,6 +374,11 @@ export const Method = {
   ShellAppBuildRef: "shell.appBuildRef",
   KeychainGetDeviceKey: "keychain.getDeviceKey",
   KeychainGetProviderKey: "keychain.getProviderKey",
+  // The messaging-channel bot token, read by the engine at the moment of use.
+  // Core -> shell only: this window WRITES a token (through the Rust
+  // `store_channel_key` command) and can never read one back. Nothing calls it in
+  // phase 1, which connects to nothing.
+  KeychainGetChannelKey: "keychain.getChannelKey",
   KeychainSignRelayRequest: "keychain.signRelayRequest",
 } as const;
 

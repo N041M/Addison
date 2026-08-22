@@ -1538,6 +1538,171 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
     Ok(identity)
 }
 
+// ===========================================================================
+// MESSAGING-CHANNEL TOKENS — a PARALLEL pair, never a call into the provider path
+// ===========================================================================
+// Messaging channels phase 1 (docs/messaging-channel-plan.md §3.9). A channel's bot
+// token is a credential the person types into Settings, so it goes where every other
+// credential goes: from the webview straight into the OS keychain, on the same
+// SERVICE, under its own account namespace `channel-key:<kind>` — and never through
+// the webview again, never into SQLite, never onto a JSON-RPC payload (G1).
+//
+// The obvious shortcut — `store_provider_key("telegram", token)` — was rejected after
+// reading that function, for three specific reasons:
+//
+//   1. `store_provider_key_blocking` runs the value through PROVIDER machinery: the
+//      mint ledger, `save_verdict`'s replace-detection and rollback record,
+//      `cache_evict`, `failure_forget`, `repair_lost_forget` — all keyed by provider
+//      id. A channel token in that ledger is a channel token participating in the
+//      provider key-repair story, which was built around one very particular failure
+//      and should not grow a second tenant.
+//   2. The read path branches on `LEGACY_ANTHROPIC_ACCOUNT` and its copy-then-delete
+//      migration. Nothing about a channel should be able to reach that code.
+//   3. The Rust command takes `provider: String` with NO closed-set check, so handing
+//      that generality a second caller turns a typed surface into a general keychain
+//      writer — the step-8 rule in one sentence: a shell surface that accepted raw XML
+//      for LaunchAgents would be `run_command` with extra steps.
+//
+// What IS reused, because it is genuinely general: `SERVICE`, `Entry`,
+// `write_credential` (delete-then-add, retried, verified by read-back — the ACL
+// argument in the WRITES block above applies to any item this app owns), `os_guard`,
+// the `spawn_blocking` shape (a keychain call can park on a password dialog and must
+// never hold the main thread), and `normalised_key`, whose rules — non-empty, no line
+// breaks, no invisible characters — fit a bot token without change.
+//
+// What is deliberately NOT reused, beyond the three above: the session cache and the
+// remembered-failure map. A channel token is read at most once per poll by a caller
+// that does not exist yet, so there is nothing yet to protect from a repeated dialog;
+// caching a credential is the kind of thing to add when something measures the need
+// for it, not on the strength of a symmetry.
+
+/// Keychain account for a messaging-channel token, namespaced by TRANSPORT KIND
+/// (`telegram` today). Distinct from `provider-key:*` by prefix, so a channel token
+/// and a model-provider key can never collide or be mistaken for one another — and so
+/// a read of one can never fall into the other's migration.
+fn account_for_channel(kind: &str) -> String {
+    format!("channel-key:{kind}")
+}
+
+/// Webview -> Shell. Write-only path for the bot token a person typed into Settings.
+/// The token goes straight into the OS keychain, keyed by transport kind, and is never
+/// echoed back anywhere (G1).
+///
+/// `async` + `spawn_blocking` for `store_provider_key`'s reason: the body waits on
+/// `OS_KEYCHAIN`, which a password dialog can hold for as long as it sits unanswered,
+/// and a sync command would park the whole window behind it.
+#[tauri::command]
+pub async fn store_channel_key(kind: String, key: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || store_channel_key_blocking(&kind, &key))
+        .await
+        .unwrap_or_else(|_| Err("The keychain didn't answer just now.".to_string()))
+}
+
+fn store_channel_key_blocking(kind: &str, key: &str) -> Result<(), String> {
+    // The shape check FIRST, and for the first of `store_provider_key_blocking`'s two
+    // reasons: a token refused for its shape must not queue behind a password dialog
+    // somebody else's read is parked on — the refusal needs nothing from the OS. (The
+    // second reason, keeping the compare and the write on identical bytes, belongs to
+    // the provider path's replace-detection, which this one deliberately does not have.)
+    let key = match normalised_key(key) {
+        Ok(normalised) => normalised,
+        Err(problem) => {
+            trace!("save", &format!("channel={kind}"), "refused-shape");
+            return Err(problem.to_string());
+        }
+    };
+    let _os = os_guard();
+    let account = account_for_channel(kind);
+    let ledger = MintLedger::live();
+    let entry = Entry::new(SERVICE, &account)
+        .map_err(|_| "Couldn't reach the system keychain to save your token.".to_string())?;
+    // NOT `set_password`. See the WRITES block: `set_password` falls back to
+    // `SecItemUpdate` on a duplicate, which preserves the old foreign ACL — so the
+    // convenient call is exactly the one that makes "save it again" useless.
+    match write_credential(&entry, &ledger, &account, key) {
+        Ok(()) => {
+            trace!("save", &format!("channel={kind}"), "stored");
+            Ok(())
+        }
+        // Nothing happened; the old item, if any, is untouched.
+        Err(WriteFailure::Untouched) => {
+            trace!("save", &format!("channel={kind}"), "untouched");
+            Err("Couldn't save your token to the system keychain.".to_string())
+        }
+        // The delete landed and nothing would stick. Said plainly, and it names the
+        // only action that fixes it: there is no repair-lost latch here, because there
+        // is no read path holding a cached value that a later turn would quietly use.
+        Err(WriteFailure::Lost) => {
+            trace!("save", &format!("channel={kind}"), "lost-in-write");
+            Err(CHANNEL_TOKEN_LOST_MESSAGE.to_string())
+        }
+    }
+}
+
+/// Said when a write destroyed the old item and could not put a new one there. Plain,
+/// and it names the one action that fixes it — `KEY_LOST_MESSAGE`'s shape, in the
+/// vocabulary this surface uses ("token", not "key").
+const CHANNEL_TOKEN_LOST_MESSAGE: &str =
+    "Addison couldn't save your token to your computer's keychain, so nothing is \
+     stored any more. Paste it again in Settings.";
+
+/// Webview -> Shell. Delete a channel's stored token (the "Remove" action). A missing
+/// entry is treated as success — removing an absent token is idempotent.
+///
+/// THIS IS ALSO THE ONLY DELETE THERE IS. The core's side of the keychain is a READ
+/// (`keychain.getChannelKey`) and nothing more, so removing a channel deletes its
+/// token from here — the frontend — before it asks the core to drop the row. Giving
+/// the Agent Core a verb that removes a keychain item to save one round-trip is not a
+/// trade this project makes.
+#[tauri::command]
+pub async fn delete_channel_key(kind: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || delete_channel_key_blocking(&kind))
+        .await
+        .unwrap_or_else(|_| Err("The keychain didn't answer just now.".to_string()))
+}
+
+fn delete_channel_key_blocking(kind: &str) -> Result<(), String> {
+    let _os = os_guard();
+    let account = account_for_channel(kind);
+    let entry = Entry::new(SERVICE, &account)
+        .map_err(|_| "Couldn't reach the system keychain to remove your token.".to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => {}
+        Err(_) => return Err("Couldn't remove your token from the system keychain.".to_string()),
+    }
+    // The item is gone, so the mint record is a claim about nothing. Forgotten only
+    // AFTER the delete lands: on a failed delete the item is still there, still ours,
+    // and still owed its veto.
+    MintLedger::live().forget(&account);
+    trace!("remove", &format!("channel={kind}"), "deleted");
+    Ok(())
+}
+
+/// Agent-Core-internal read of a channel token. Never exposed as a Tauri command, so
+/// the webview has no route to it — the token is write-only from the window.
+///
+/// Deliberately plain: one OS read, mapped onto the same three answers the provider
+/// seam uses. No session cache, no remembered failure, no self-heal — see the block
+/// above for why none of that machinery is borrowed. `LostInRepair` cannot arise here
+/// because nothing repairs.
+///
+/// NOTHING CALLS THIS YET. Phase 1 connects to nothing; the read exists so the phase
+/// that adds the adapter needs no new shell surface (plan §3.9).
+fn get_channel_key(kind: &str) -> KeyRead {
+    trace!("ask", &format!("channel={kind}"), "…");
+    let _os = os_guard();
+    let account = account_for_channel(kind);
+    trace!("OS-TOUCH", &account, "reading…");
+    let Ok(entry) = Entry::new(SERVICE, &account) else {
+        return KeyRead::Unreadable;
+    };
+    match entry.get_password() {
+        Ok(key) => KeyRead::Found(key),
+        Err(keyring::Error::NoEntry) => KeyRead::NothingSaved,
+        Err(_) => KeyRead::Unreadable,
+    }
+}
+
 /// Build the `keychain.getProviderKey` response. Split out of `handle()` (the
 /// app_build.rs call-the-real-builder pattern) so a test can pin the exact wire seam
 /// the core is written against without touching the OS keychain.
@@ -1605,6 +1770,16 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
             let provider = required_str(params, "provider", "A provider is required.")?;
             let fresh = params.get("fresh").and_then(Value::as_bool).unwrap_or(false);
             provider_key_response(get_provider_key(provider, fresh))
+        }
+        // {kind} -> {key}. The messaging-channel bot token, read at the moment of use.
+        // The SAME wire seam as the provider read — a token is `{"key": "<value>"}`,
+        // nothing saved is `{"key": ""}` as a normal RESULT, a failed read is an app
+        // error — because the core is written against one shape, and a second spelling
+        // of "nothing saved" is how "couldn't read" ends up meaning "no token".
+        // Nothing calls this yet (messaging channels phase 1 connects to nothing).
+        "keychain.getChannelKey" => {
+            let kind = required_str(params, "kind", "A channel kind is required.")?;
+            provider_key_response(get_channel_key(kind))
         }
         // {} -> {deviceId, publicKey}. Generates the keypair on first use, loads it
         // thereafter (§5). Returns the PUBLIC half only — the private key never
@@ -1675,6 +1850,77 @@ mod tests {
         // Read and removal must agree on which provider owns the legacy copy —
         // otherwise a removed key resurrects from the account nobody deleted.
         assert_eq!(LEGACY_PROVIDER, "anthropic");
+    }
+
+    #[test]
+    fn account_is_namespaced_by_channel_kind() {
+        // The account naming IS the parallel-namespace decision (messaging channels
+        // phase 1, plan §3.9), so it is pinned rather than left to the format string.
+        assert_eq!(account_for_channel("telegram"), "channel-key:telegram");
+        assert_ne!(account_for_channel("telegram"), account_for_channel("signal"));
+    }
+
+    #[test]
+    fn a_channel_token_can_never_land_in_a_provider_account() {
+        // The whole reason there are two commands instead of one. If these namespaces
+        // ever overlapped, a channel token would be readable by `get_provider_key` —
+        // and worse, it would join the provider mint ledger, the replace-detection
+        // rollback and the legacy-account migration, none of which were designed for
+        // a second tenant.
+        assert!(account_for_channel("telegram").starts_with("channel-key:"));
+        assert!(!account_for_channel("telegram").starts_with("provider-key:"));
+        assert_ne!(account_for_channel("anthropic"), account_for_provider("anthropic"));
+        // And the legacy Anthropic item, which the provider read path migrates out of,
+        // is not something a channel account can ever collide with.
+        assert_ne!(account_for_channel("primary"), LEGACY_ANTHROPIC_ACCOUNT);
+    }
+
+    #[test]
+    fn a_channel_token_is_refused_for_the_same_shapes_a_key_is() {
+        // The one piece of the provider store boundary that IS reused, so the reuse is
+        // asserted rather than assumed: a token with a line break in the middle is the
+        // classic paste bug, and a token Addison quietly repaired would fail
+        // mysteriously days later against a transport nobody can debug from here.
+        assert_eq!(normalised_key("  123:AAH-token  "), Ok("123:AAH-token"));
+        assert_eq!(normalised_key("   "), Err(KEY_IS_BLANK));
+        assert_eq!(normalised_key("123:AA\nH"), Err(KEY_HAS_A_LINE_BREAK));
+        assert_eq!(normalised_key("123:AA\u{200B}H"), Err(KEY_HAS_HIDDEN_CHARACTERS));
+    }
+
+    #[test]
+    fn the_channel_save_path_never_calls_set_password_directly() {
+        // The source-level backstop the provider save path has, for the same reason:
+        // the next version of this bug is not a rewritten ladder, it is one convenient
+        // `entry.set_password(token)` put back into the save path, which silently
+        // becomes SecItemUpdate on a duplicate and preserves the old foreign ACL.
+        assert!(
+            !item_source("fn store_channel_key_blocking").contains(".set_password("),
+            "the channel save path writes with set_password again — that is \
+             SecItemUpdate on a duplicate, which preserves the old foreign ACL"
+        );
+    }
+
+    #[test]
+    fn the_channel_read_stays_out_of_the_provider_repair_machinery() {
+        // Reason 1 and 2 of the three in the block above, held at source level because
+        // the alternative is an OS keychain in a unit test. A channel read that grew a
+        // ledger lookup, a self-heal or a cache would be the provider path's failure
+        // story acquiring a tenant it was never designed for — and it would do so
+        // silently, since both paths return the same three answers.
+        let body = item_source("fn get_channel_key");
+        for borrowed in [
+            "MintLedger",
+            "should_self_heal",
+            "cache_put",
+            "cache_get",
+            "failure_remember",
+            "LEGACY_ANTHROPIC_ACCOUNT",
+        ] {
+            assert!(
+                !body.contains(borrowed),
+                "the channel read reaches into the provider key machinery ({borrowed})"
+            );
+        }
     }
 
     #[test]
