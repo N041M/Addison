@@ -11,6 +11,7 @@ providers can replay a valid transcript (§4.4).
 import pytest
 
 from agent_core.orchestrator import Conversation, Orchestrator
+from agent_core.policy import TurnSurface
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
 from agent_core.providers.base import (
     Message,
@@ -43,6 +44,11 @@ class _ScriptedProvider:
     def __init__(self, responses: list[ModelResponse]):
         self._responses = list(responses)
         self.histories: list[list[Message]] = []
+        # What the provider was OFFERED, per send. Recorded since the turn gained a
+        # SURFACE (messaging channels phase 2): "which tools did the model actually
+        # see" is the only honest way to assert a tool view, and asking the registry
+        # instead would be asking the thing under test.
+        self.offered: list[list] = []
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -54,6 +60,7 @@ class _ScriptedProvider:
 
     def send(self, messages, tools, effort=None, timeout=None, on_delta=None) -> ModelResponse:
         self.histories.append(list(messages))
+        self.offered.append(list(tools))
         return self._responses.pop(0)
 
 
@@ -149,6 +156,68 @@ def _conversation_with(user_text: str) -> Conversation:
 
 
 # --- tests -----------------------------------------------------------------
+
+
+def test_the_two_new_turn_parameters_change_nothing_when_they_are_not_passed():
+    """THE FREEZE (messaging channels phase 2; the idiom
+    docs/model-assignments-plan.md §2.2 uses and the routing chain's head got).
+
+    ``run_turn`` gained ``surface`` and ``stream_to``. With ``surface=DESK`` and
+    ``stream_to`` unset the path must be byte-identical to what it was before those
+    parameters existed — because every caller in the app except one is that call,
+    and a channel feature that changes the desktop's behaviour by a single delta is
+    a channel feature that has already failed.
+
+    "Byte-identical" is pinned on the four things a turn is made of: the tool list
+    the provider was OFFERED, the history it was REPLAYED, the messages the
+    conversation ended with, and the stream the frontend SAW. Passing the new
+    parameters explicitly at their defaults must produce all four unchanged.
+
+    Mutation: make ``sink`` default to None rather than to the orchestrator's own
+    stream — the streamed text disappears and this fails on the last comparison."""
+
+    def one_turn(**kwargs):
+        tool = _SpyTool("calculator", content=42)
+        registry = ToolRegistry()
+        registry.register(tool)
+        provider = _ScriptedProvider([
+            _calls_response(_tool_call("call-1", "calculator", {"expression": "6*7"})),
+            _text_response("The answer is 42."),
+        ])
+        gate = PermissionGate()
+        gate.grant("calculator")
+        router = ModelRouter(configured={ModelRole.PRIMARY: provider})
+        streamed: list[str] = []
+        orchestrator = Orchestrator(
+            model_router=router,
+            tool_registry=registry,
+            permission_gate=gate,
+            undo_manager=UndoManager(store=_FakeStore(), tool_registry=registry),
+            stream_to_frontend=streamed.append,
+        )
+        conv = _conversation_with("6*7")
+        orchestrator.run_turn(conv, **kwargs)
+        return {
+            "offered": [[d.id for d in tools] for tools in provider.offered],
+            "history": [
+                [(m.role, str(m.content)) for m in replayed] for replayed in provider.histories
+            ],
+            "messages": [(m.role, str(m.content)) for m in conv.messages],
+            "streamed": streamed,
+            "calls": tool.calls,
+        }
+
+    before = one_turn()
+    explicit = one_turn(surface=TurnSurface.DESK)
+    assert explicit == before
+    # And the remote surface is the ONE thing that differs, so the comparison above
+    # is measuring something: no tools offered, and nothing streamed anywhere.
+    remote = one_turn(surface=TurnSurface.REMOTE, stream_to=None)
+    assert remote != before
+    assert remote["offered"] == [[], []]
+    assert remote["streamed"] == []
+    assert remote["calls"] == [], "a remote turn may not reach a tool at all"
+    assert before["streamed"] and before["calls"] == [{"expression": "6*7"}]
 
 
 def test_assistant_tool_call_turn_recorded_before_results():

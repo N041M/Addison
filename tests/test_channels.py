@@ -495,13 +495,24 @@ def test_no_channel_method_may_be_answered_inline_on_the_read_loop():
     from agent_core import main as main_module
     from agent_core.protocol import Method
 
+    # The two OUTBOUND notifications are not requests and have no handler: nothing
+    # dispatches them, main.py never names them, and they are emitted by the service
+    # (`channel.stateChanged`) and by the remote turn (`channel.remoteTurn`). They are
+    # named here so that adding a third notification is a deliberate edit rather than
+    # something this test quietly swallows.
+    notifications = {Method.CHANNEL_STATE_CHANGED, Method.CHANNEL_REMOTE_TURN}
     named = {
         name
         for name, value in vars(Method).items()
-        if isinstance(value, str) and value.startswith("channel.")
+        if isinstance(value, str)
+        and value.startswith("channel.")
+        and value not in notifications
     }
     assert named, "no channel.* methods found in protocol.py — did they move?"
     assert {getattr(Method, name) for name in named} == set(main_module._CHANNEL_JOBS)
+    assert not (notifications & set(main_module._CHANNEL_JOBS)), (
+        "a notification is not a request and must not be dispatchable"
+    )
 
     tree = ast.parse(_MAIN_SRC.read_text(encoding="utf-8"))
     jobs_table = next(

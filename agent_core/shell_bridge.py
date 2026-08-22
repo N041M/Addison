@@ -53,6 +53,13 @@ class ServerShellBridge(ShellBridge, Protocol):
 
     def resolve_response(self, req_id, result, error) -> bool: ...
 
+    # Messaging channels (phase 1 shipped it, phase 2 is the first caller). Declared
+    # HERE and not on ``ShellBridge`` for the reason that Protocol's own docstring
+    # gives: this is the SERVER's contract, and no tool has any business reading a
+    # channel token. The one core-side reach for it that will ever exist, called by
+    # the channel service at the moment of use and never retained (G1).
+    def get_channel_key(self, kind: str) -> str: ...
+
     # Routine import (sharing, PR 2). Declared HERE and not on ``ShellBridge`` for
     # the reason that Protocol's own docstring gives: a tool must never be able to
     # put a file dialog on screen by itself. A person clicking Import is what opens
@@ -524,12 +531,11 @@ class IpcShellBridge:
         """Per-call messaging-channel token fetch from the OS keychain via the shell,
         keyed by TRANSPORT KIND (``telegram``), account ``channel-key:<kind>``.
 
-        **NOTHING CALLS THIS YET, and that is deliberate.** Phase 1 of the messaging
-        channels ships configuration and connects to nothing, so there is no poller
-        and no adapter to read a token for. It exists now so the phase that adds one
-        needs no change to this bridge, to the shell's dispatch or to the keychain
-        module — the read seam lands with the write command it is the other half of
-        (docs/messaging-channel-plan.md §3.9).
+        **ONE CALLER, and it is the channel service** (phase 2, 2026-08-22): the poll
+        loop before each poll, and the send side before each answer. Phase 1 shipped
+        this uncalled on purpose, so that the phase which added the adapter needed no
+        change to this bridge, to the shell's dispatch or to the keychain module — and
+        it needed none (docs/messaging-channel-plan.md §3.9).
 
         Modelled on ``get_provider_key`` and deliberately NOT routed through it: the
         provider path carries a mint ledger, replace-detection and the legacy-account

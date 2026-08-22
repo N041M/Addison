@@ -179,6 +179,15 @@ than working around it silently):
   user-typed, observed/injected content can never supply it, so the nonce is also
   a prompt-injection defense. (Scope amendment 2026-07-20; supersedes the earlier
   "no scheduling in v1" wording.)
+  **A SECOND INBOUND EDGE, 2026-08-22, and it is not the keyboard.** The messaging
+  channel (phase 2) runs a poll loop that waits on a network read for a message a
+  paired person sent from their phone. That is a second edge on a process that
+  already had one, not a second author: it hands no callback to a clock, a poll that
+  finds nothing produces nothing, every unit of work still traces to a human having
+  typed something, and **Addison still never speaks first** — no proactive message,
+  no notification, no digest, ever. The loop's target is named in
+  `tests/test_g2_no_self_trigger.py`'s reviewed set with that argument;
+  [messaging-channel-plan.md](messaging-channel-plan.md) §3.4 owns it at length.
 - **G3: Guaranteed rollback (the operative meaning of "safety").** Neither the
   user nor the model can drive Addison into an unrecoverable state. App-state
   **snapshots** (automatic before any risky change, plus **on-command**) always
@@ -471,6 +480,16 @@ relaxes exactly these four, and only as spelled out above.
    SAFE/OPEN distinction is a *filtered view* over the one shared registry
    (`visible_tools(mode)`), never a second registry, so this no-escalation
    property survives OPEN mode intact.
+   **A second filtered view arrived on 2026-08-22** and it is the same shape applied
+   to a second SURFACE rather than a second caller: `remote_tools(mode)` is what a
+   turn that came from a paired phone is offered, an INTERSECTION with
+   `visible_tools(mode)` and therefore a subset of the desk's view in every mode — *a
+   remote turn is never offered a tool Simple could not be offered.* It is empty in
+   phase 2 by design. Like the routine view it is a filter over the one registry, and
+   like the routine view its marker is not its enforcement: `refuse_if_not_remote` at
+   both dispatch paths is.
+   [messaging-channel-plan.md](messaging-channel-plan.md) §3.6 owns the closed set
+   and why it is a list of ids rather than a tier test.
 4. **Widgets are capability-gated, not code, and buildable in every mode (scope
    amendment 2026-07-20).** Widgets can be *built* in all modes; the mode gates
    the *capability*, not the ability to build. SAFE-tier widgets come from a

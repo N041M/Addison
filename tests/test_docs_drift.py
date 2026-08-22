@@ -1107,6 +1107,25 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "The `channels` row is captured, so a restore puts the saved connections back."
         ),
     },
+    "remote-view-is-a-subset-of-the-safe-view": {
+        "the fact stated at today's polarity, which is the point of the row": (
+            "`remote_tools(mode)` is an intersection with `visible_tools(mode)`, so the "
+            "remote view is a subset of the SAFE view in every mode."
+        ),
+        "the phase-2 state of the set, which is narrower still": (
+            "`REMOTE_TOOL_IDS` is empty in phase 2, so a phone is offered no tools at "
+            "all and Addison answers in words only."
+        ),
+        "the desk's own view, described positively beside it": (
+            "The desk sees `visible_tools(mode)`, which in OPEN carries `run_command` "
+            "and every tool a server offered."
+        ),
+        "the reason the floor is a closed list rather than a tier test": (
+            "`read_clipboard` is LOW and read-only, and it is still off the floor: a "
+            "message to a bot must not return whatever is on an unattended Mac's "
+            "clipboard."
+        ),
+    },
     "file-tools-are-in-the-safe-view": {
         "the history, in the past tense, which is the reasoning and must survive": (
             "They were `open_only` until 2026-08-11: absent from the SAFE view and "
@@ -1448,6 +1467,30 @@ _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
             ),
             "the post-restore promise, still made": (
                 "After a restore, no phone is paired."
+            ),
+        },
+    },
+    "remote-view-is-a-subset-of-the-safe-view": {
+        "while_true": {
+            "the union, which is the implementation mistake the row exists for": (
+                "`remote_tools` is a union over REMOTE_TOOL_IDS, so an id on the list is "
+                "offered to a phone whatever the mode says."
+            ),
+            "the subset property denied in a summary": (
+                "The phone view is not a subset of the desk's — it is resolved "
+                "separately."
+            ),
+            "the claim that a phone gets something Simple does not": (
+                "From a phone Addison is offered tools Simple cannot be offered, because "
+                "the remote floor is resolved on its own terms."
+            ),
+        },
+        "while_false": {
+            "the subset promise, still made after the view widened": (
+                "The remote view is a subset of the SAFE view in every mode."
+            ),
+            "the sentence the floor was made of, still standing": (
+                "A remote turn is never offered a tool Simple could not be offered."
             ),
         },
     },

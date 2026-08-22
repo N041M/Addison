@@ -262,9 +262,38 @@ export const Method = {
   // `add` is refused outside the Developer profile. `list` and `remove` answer in
   // every profile, so a saved connection never disappears on a profile switch and
   // can always be removed. Mirrored in protocol.py.
+  //
+  // PHASE 2 — connect, pair, and answer with words only. Your phone can hold a
+  // conversation with Addison, and Addison uses NO TOOLS AT ALL while doing it:
+  // nothing that changes a file, runs a command, or touches your computer can
+  // happen from a message. Answers only, in words.
+  //
+  // `setEnabled` is the one control that makes a connection live, and it only ever
+  // listens for THIS session — nothing starts listening when the app opens. So a
+  // connection you switched on yesterday shows as off today until you switch it on
+  // again, and `status` is where the truth about listening comes from; the saved
+  // row only says what you last chose.
   ChannelList: "channel.list",
   ChannelAdd: "channel.add",
   ChannelRemove: "channel.remove",
+  ChannelConnect: "channel.connect",
+  ChannelSetEnabled: "channel.setEnabled",
+  ChannelStatus: "channel.status",
+  // Pairing: Addison shows a code on THIS screen and you send it from your phone.
+  // The code is made up at the moment you ask for it, so nothing Addison has merely
+  // read could have written it down in advance. A message from a phone that is not
+  // paired is ignored in silence — a reply would tell a stranger somebody is home —
+  // and all you see of it is a count.
+  ChannelBeginPairing: "channel.beginPairing",
+  ChannelCancelPairing: "channel.cancelPairing",
+  ChannelPairings: "channel.pairings",
+  ChannelRevokePairing: "channel.revokePairing",
+  // Core -> this window. `stateChanged` re-renders the panel without polling;
+  // `remoteTurn` says a phone turn started or finished. Deliberately NOT the
+  // streaming or activity channels: a phone turn's words must never appear inside
+  // the conversation on this screen.
+  ChannelStateChanged: "channel.stateChanged",
+  ChannelRemoteTurn: "channel.remoteTurn",
 
   McpList: "mcp.list",
   McpAdd: "mcp.add",
@@ -376,8 +405,9 @@ export const Method = {
   KeychainGetProviderKey: "keychain.getProviderKey",
   // The messaging-channel bot token, read by the engine at the moment of use.
   // Core -> shell only: this window WRITES a token (through the Rust
-  // `store_channel_key` command) and can never read one back. Nothing calls it in
-  // phase 1, which connects to nothing.
+  // `store_channel_key` command) and can never read one back. Since phase 2 the
+  // engine reads it before each poll and before each answer it sends — at the moment
+  // of use, and never kept.
   KeychainGetChannelKey: "keychain.getChannelKey",
   KeychainSignRelayRequest: "keychain.signRelayRequest",
 } as const;

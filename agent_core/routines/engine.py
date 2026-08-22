@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
-from agent_core.policy import PolicyMode
+from agent_core.policy import PolicyMode, TurnSurface
 from agent_core.routines.model import Routine, RoutineStep
 from agent_core.routines.taint import RunTaint
 from agent_core.snapshots.undo_manager import UndoManager
@@ -251,7 +251,14 @@ class RoutineEngine:
         routine: Routine,
         variable_values: dict[str, str],
         mode: PolicyMode = PolicyMode.SAFE,
+        surface: TurnSurface = TurnSurface.DESK,
     ) -> RoutineRunResult:
+        # ``surface`` (policy.py) is WHERE the run was started from. DESK is every
+        # caller today and leaves this path byte-identical; it is threaded through
+        # to ``_pre_gate_refusal`` so the remote floor is enforced at BOTH dispatch
+        # sites rather than at one — a boundary only one path enforces is not a
+        # boundary, and the phase that admits a remote tool must not also have to
+        # remember to come back here (messaging channels, plan §3.6).
         # ``mode`` (policy.py) is the live policy mode: SAFE (default) is the
         # historical behaviour; OPEN thins the gate to prompt only for destructive
         # steps and lets command steps run. main.py refuses to run a dev-created
@@ -358,7 +365,9 @@ class RoutineEngine:
             # (KNOWN-GAPS, closed 2026-08-22). Each used to shape its own refusal and
             # re-implement abort / ask_user / skip inline, five copies that agreed only
             # because each was written to match its neighbours.
-            refusal = self._pre_gate_refusal(tool, tool_id, resolved_args, affected, mode)
+            refusal = self._pre_gate_refusal(
+                tool, tool_id, resolved_args, affected, mode, surface
+            )
             if refusal is not None:
                 message, outcome, audit_detail = refusal
                 self._audit(routine, tool_id, audit_detail, mode, destructive, outcome)
@@ -484,6 +493,7 @@ class RoutineEngine:
         resolved_args: dict,
         affected: str | None,
         mode: PolicyMode,
+        surface: TurnSurface = TurnSurface.DESK,
     ) -> tuple[str, str, str | None] | None:
         """Every reason a step is refused BEFORE the gate sees it, asked in order.
 
@@ -512,6 +522,21 @@ class RoutineEngine:
         # record at all — and a routine is the path that runs without anyone
         # watching. The detail is None to match the live loop's dev_only row
         # exactly: nothing about the call was examined.
+        # NOT FROM A PHONE (messaging channels phase 2, plan §3.6). FIRST, for the
+        # live loop's reason exactly: "not from there" is the true reason, and a
+        # step naming a dev-only tool on a remote run would otherwise report the
+        # wrong one. Nothing can start a routine from a phone in phase 2 — the
+        # remote floor is EMPTY, so no tool can be named at all — and the check is
+        # here anyway, because the two dispatch paths have to agree before there is
+        # something for them to disagree about.
+        #
+        # `not_callable` is the audit outcome, the vocabulary's value for "the
+        # request named something that could not run, and nothing about it was
+        # examined, approved or reached" — the same call the live_only refusal
+        # below makes, for the same reason.
+        remote_refusal = self.tool_registry.refuse_if_not_remote(tool_id, surface)
+        if remote_refusal is not None:
+            return remote_refusal, "not_callable", None
         dev_only_refusal = self.tool_registry.refuse_if_dev_only_outside_open(tool_id, mode)
         if dev_only_refusal is not None:
             return dev_only_refusal, "dev_only", None

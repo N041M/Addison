@@ -1686,8 +1686,9 @@ fn delete_channel_key_blocking(kind: &str) -> Result<(), String> {
 /// above for why none of that machinery is borrowed. `LostInRepair` cannot arise here
 /// because nothing repairs.
 ///
-/// NOTHING CALLS THIS YET. Phase 1 connects to nothing; the read exists so the phase
-/// that adds the adapter needs no new shell surface (plan §3.9).
+/// ONE CALLER, from phase 2 (2026-08-22): the Agent Core's channel service, before
+/// each poll and before each answer it sends. Phase 1 shipped this uncalled so the
+/// phase that added the adapter needed no new shell surface, and it needed none.
 fn get_channel_key(kind: &str) -> KeyRead {
     trace!("ask", &format!("channel={kind}"), "…");
     let _os = os_guard();
@@ -1776,7 +1777,8 @@ pub fn handle(method: &str, params: &Value) -> Result<Value, RpcError> {
         // nothing saved is `{"key": ""}` as a normal RESULT, a failed read is an app
         // error — because the core is written against one shape, and a second spelling
         // of "nothing saved" is how "couldn't read" ends up meaning "no token".
-        // Nothing calls this yet (messaging channels phase 1 connects to nothing).
+        // Called by the Agent Core's channel service since phase 2, at the moment of
+        // use and never retained on that side.
         "keychain.getChannelKey" => {
             let kind = required_str(params, "kind", "A channel kind is required.")?;
             provider_key_response(get_channel_key(kind))

@@ -12,6 +12,100 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-22 (seventh): a phone that can hold a conversation, and no tools at all
+
+Phase 2 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)
+owns the design). The claim, and only this: **a paired phone can hold a conversation
+with Addison, and Addison can use no tools at all while doing it.**
+`REMOTE_TOOL_IDS = frozenset()` — empty, on purpose. An empty floor is not a
+placeholder; it is the strongest version of the phase, because it proves every seam
+(the thread, the hand-off, the conversation isolation, the screening, the splitting,
+the pairing) with the tool question factored out entirely. Phase 3 fills the set and
+changes nothing else about the shape.
+
+- **THE G2 ARGUMENT, MADE HERE because the commit is where it has to be made.** The
+  poll loop repeats, and G2 says Addison never triggers itself, so this is the one
+  place in the design where the floor's letter is argued rather than merely satisfied.
+  `self._poll_loop` is now in `_REVIEWED_THREAD_TARGETS` with the sentence that says
+  what hands it its work — a person, with their thumb, on their own phone. It hands no
+  callback to a clock (the AST scan that bans `Timer`, `scheduler`, `call_later` and
+  the rest still covers the new module and is still green); it blocks on a network
+  read that only an inbound message ends, and on `threading.Event.wait`, which parks
+  until somebody else acts. A poll that finds nothing does nothing: no turn, no tool,
+  no model call, no row. What the loop IS, precisely, is **a second inbound edge on a
+  process that already has one** — and Addison still never speaks first. Every
+  outbound message this build can send is an answer to an inbound one. The honest half
+  is that a thread which repeats must be switchable off, so `stop`/`stop_all` are part
+  of the contract: core shutdown stops them, and so does leaving Developer.
+- **The hand-off is the whole design.** The service calls no orchestrator. It puts
+  `("channel_turn", {...}, None)` on the same queue every RPC method uses, and
+  everything follows from that one choice: SQLite stays on one thread, remote turns
+  serialize behind desk turns and vice versa, `conversation.stop` reaches a remote
+  turn the way it reaches a desk turn, and the audit rows, the undo stack and the
+  snapshot hooks all work because nothing about them was special-cased. `request_id`
+  is None because nothing is waiting for a reply — the answer goes to a phone.
+- **`self.conversation` is never touched, and the test asserts it by IDENTITY.**
+  `run_turn` takes a `Conversation` OBJECT rather than an id, so the channel job owns
+  one of its own ("From your phone"); the desktop's thread, its 1:1 `_message_ids`
+  alignment and its rewind anchors are untouched by construction. `_message_ids` is
+  deliberately NOT written for a remote turn: that list is the desktop's rewind
+  anchor, and appending to it would corrupt the alignment in a thread nobody is even
+  looking at.
+- **Two new `run_turn` parameters, frozen at their defaults.** `surface`
+  (`TurnSurface`, in `policy.py` beside `PolicyMode`) and `stream_to`, whose sentinel
+  is a private object rather than None — because None is a MEANINGFUL value there,
+  "stream nowhere", which is what a phone turn passes. With `surface=DESK` and
+  `stream_to` unset the path is byte-identical, pinned on the four things a turn is
+  made of: the tools offered, the history replayed, the messages left behind, and the
+  stream the frontend saw. `_DeltaRelay` treats a None sink as *nothing was shown*,
+  which also keeps a remote turn's freedom to fall forward — there is no reader whose
+  screen already has half an answer on it.
+- **Two layers under the floor, and the second is the enforcement.**
+  `remote_tools(mode)` is an INTERSECTION with `visible_tools(mode)` — a subset of the
+  desk's view in every mode, so *a remote turn is never offered a tool Simple could
+  not be offered*, which is now a `doc_claims` row. `refuse_if_not_remote` is wired at
+  BOTH dispatch paths before the gate, and it is FIRST among the refusals: "not from
+  there" is the true reason, and a phone naming `run_command` in Developer would
+  otherwise be refused for a reason that is not the reason. It writes a `not_callable`
+  audit row (the vocabulary's value for "named something that could not run, and
+  nothing about it was examined") rather than earning a schema migration.
+- **THE COPY DEPARTS FROM THE PLAN, DELIBERATELY.** §3.6 quotes the refusal as *"It's
+  saved as a request — it will be waiting on your screen when you're back."* That is
+  true only once the desk queue exists, and the queue is **phase 3**. Promising
+  somebody a note waiting on their screen while nothing is written down is exactly the
+  kind of lie this project's copy rules exist to prevent, so phase 2 ships the true
+  half and the commit that builds the queue is the commit that earns the second
+  sentence. A test asserts the promise is absent.
+- **Silence is a wire-level property, so it is tested on the wire.** An unpaired
+  sender produces **no outbound request at all** — not an error, not a read receipt,
+  not a "who are you" — because a reply is an oracle that tells a stranger the bot is
+  real and somebody is behind it. The same holds inside an open pairing window, which
+  is where saying something would be most tempting: a wrong code spends an attempt and
+  says nothing. All an unpaired message produces is a counter on the desk.
+- **Owner decision 8 needed a fact Addison's own clock cannot supply.** Messages that
+  arrived while the Mac slept are declined (the default; the setting itself is later),
+  and staleness turned out to be unanswerable from `received_at`: a message that
+  arrived during a fifty-second long poll and one queued overnight both come back the
+  instant the poll returns. So `InboundMessage` gained `sent_at`, the transport's own
+  timestamp — **the one place a transport's clock is read**, used for this question
+  only, where a wrong value costs one declined message and nothing else. A night of
+  queued messages is not a night of apologies: the decline is suppressed per chat.
+- **Running truth is not saved truth**, which is step 8's lesson one subsystem over.
+  Nothing starts a poll loop at launch — `channel.setEnabled` is the one control that
+  makes a channel live — so a row that says `enabled` after a restart has no thread
+  behind it. `channels.enabled` is therefore the person's saved intent, the SERVICE is
+  the truth, and every control on the panel reads the live state. A switch showing
+  "on" over a connection that is not listening would be the panel telling somebody
+  their phone is connected. For the same reason the one-at-a-time rule (decision 11)
+  asks what is RUNNING rather than what the column says.
+- **The finding from the adversarial pass over this diff: the token was in the
+  exception.** Telegram puts the bot token in the URL path, and an `httpx` exception's
+  `str()` carries the URL — so the first draft's `raise ChannelUnavailable(str(exc))`
+  would have put a live credential into whatever the caller did with the message, on
+  the one path (an outage) that happens routinely. Every raise in `telegram.py` now
+  names a frozen constant and no `from exc` chain is kept, and a test asserts the token
+  appears in no request body, no row, no payload and nowhere in the database file.
+
 ## What shipped 08-22 (sixth): a phone connection that connects to nothing
 
 Phase 1 of the messaging channels ([`messaging-channel-plan.md`](messaging-channel-plan.md)

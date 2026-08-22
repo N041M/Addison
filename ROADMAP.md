@@ -127,8 +127,28 @@ popup chat is added scope that gets its own design section before it is built.
 must not be restorable), `channel.list`/`add`/`remove`, the parallel keychain pair
 `store_channel_key` / `delete_channel_key` under `channel-key:<kind>`, and a
 Developer-only "Your phone" Settings section whose first line is the privacy
-sentence. There is still no adapter, no poll loop, no pairing and no network call
-anywhere in the build — that is phase 2.
+sentence. There was no adapter, no poll loop, no pairing and no network call
+anywhere in that build.
+
+**Phase 2 landed the same day: connect, pair, and answer with words only.** A
+paired phone can now hold a conversation with Addison, and **Addison can use no
+tools at all while doing it** — `REMOTE_TOOL_IDS` is EMPTY on purpose, which is the
+strongest version of the phase rather than a placeholder: it proves the thread, the
+hand-off, the conversation isolation, the screening, the splitting and the pairing
+with the tool question factored out. What shipped: the transport contract and the
+Telegram adapter (outbound long-poll only, no listener of any kind), the channel
+service and its one thread per enabled channel, pairing over the existing
+`automation_nonce` (the desktop shows a code, the phone sends it, and **every**
+non-match is met with silence), the remote turn in a conversation of its own
+("From your phone", never `self.conversation`), `surface` and `stream_to` on
+`run_turn` with the byte-identical-when-DESK pin, `remote_tools(mode)` and
+`refuse_if_not_remote` at both dispatch paths, and the panel that shows status,
+pairing and Revoke in plain words. Owner decision 8 ships as its DEFAULT only —
+messages that arrived while the Mac slept are declined with one sentence; the
+queue-or-decline setting itself is later. One channel listens at a time (decision
+11), and nothing starts listening when the app opens: switching one on is what
+starts it, so `channel.status` is where a surface learns the truth. **Phase 3 —
+the remote floor's three ids and the desk queue — is what remains.**
 
 Step 5.5 headed this list until 2026-07-31, step 6 until 2026-08-06, step 7 until
 2026-08-07 and step 8 until the following morning; all are finished. Their entries
@@ -327,7 +347,9 @@ Not because they are hard. They were looked at and put down on purpose.
 
 - Automatic task classification for routing. The four named strategies ship, but
   choosing one per task by itself is a later problem.
-- Messaging channels, and a UI for editing the steps of a routine.
+- A UI for editing the steps of a routine. (Messaging channels left this list on
+  2026-08-22, when the owner asked for phone control; phases 1-2 are built and
+  phase 3 is scheduled — see above.)
 - Rewriting the agent core in Rust.
 - **Running a command in a virtual machine first to see what it would do.** The
   appeal is obvious and the reasoning against it is not, so it is written down

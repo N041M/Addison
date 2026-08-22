@@ -1,15 +1,17 @@
-// Your phone — the messaging channels' surfaces (phase 1 of three;
+// Your phone — the messaging channels' surfaces (phases 1-2 of three;
 // docs/messaging-channel-plan.md). Four parts:
 //
-//   (a) The fail-closed parser: a row without a usable id, name or known transport
-//       is DROPPED, junk never throws, and `tokenPresent` fails towards "unknown"
-//       — never towards "no token saved", which is the one direction that would be
-//       a lie about what is on somebody's computer.
+//   (a) The fail-closed parsers: a row without a usable id, name or known transport
+//       is DROPPED, junk never throws, `tokenPresent` fails towards "unknown" —
+//       never towards "no token saved" — and an unrecognised STATE fails towards
+//       "stopped", never towards "listening".
 //   (b) The panel, rendered for real: the PRIVACY SENTENCE byte-for-byte and FIRST,
-//       the honest standing line under it, and the per-row token line.
-//   (c) What phase 1 deliberately does NOT draw: no enable switch, no connect or
-//       check, no pairing code, no paired-device list. A control that does nothing
-//       is the panel telling somebody their phone is on.
+//       the standing list of what Addison will and will not do from a phone, the
+//       live status in plain words, the pairing code, and the paired-device list
+//       with its Revoke.
+//   (c) What phase 2 STILL deliberately does NOT draw: no approve/deny, no card, no
+//       queue of waiting requests, and nothing that suggests a phone can make
+//       something happen on this computer.
 //   (d) The page-level gate: the section renders ONLY on the Developer/Custom
 //       surfaces (keyed off the active profile, never the mode); Simple never sees
 //       it — and the core refuses `channel.add` outside Developer independently.
@@ -27,15 +29,15 @@ import {
   renderHook,
   act,
 } from "@testing-library/react";
-import { parseChannels } from "../ipc/client";
-import { ChannelsPanel, PRIVACY_LINE } from "../components/ChannelsPanel";
+import { parseChannels, parseChannelStatus, parseChannelPairings } from "../ipc/client";
+import { ChannelsPanel, PRIVACY_LINE, WHAT_IT_WILL_DO } from "../components/ChannelsPanel";
 import { SettingsPage } from "../components/SettingsPage";
 import { useChannels, type ChannelsCardState } from "../hooks/useChannels";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { SkillsState } from "../hooks/useSkills";
 import type { SnapshotsState } from "../hooks/useSnapshots";
 import type { GuardsCardState } from "../hooks/useGuards";
-import type { Channel, ProfileState } from "../types/ui";
+import type { Channel, ChannelStatus, ProfileState } from "../types/ui";
 
 afterEach(cleanup);
 
@@ -46,9 +48,13 @@ afterEach(cleanup);
 const PRIVACY_SENTENCE =
   "Messages you send from your phone travel through Telegram's servers, the way any " +
   "other Telegram message does. Everything else stays on this computer.";
-const STANDING_LINE =
-  "Addison can't talk to your phone yet. Saving a connection here stores its name and " +
-  "its token on this computer, ready for when it can.";
+/** The standing list — the remote floor in the person's own vocabulary. In this
+ * phase the floor is EMPTY, so the honest version says words only. Frozen here in
+ * full for the reason the privacy sentence is: the point of the test is that these
+ * exact words are on screen. */
+const STANDING_LIST =
+  "From your phone, Addison answers in words. It can't change a file, run anything, " +
+  "or touch your computer from a message — that all waits until you're back.";
 const SECTION_TITLE = "Your phone";
 const ADD_ACTION = "add a connection";
 const DEV_ONLY =
@@ -67,17 +73,31 @@ function channel(over: Partial<Channel> = {}): Channel {
   };
 }
 
+function status(over: Partial<ChannelStatus> = {}): ChannelStatus {
+  return { state: "stopped", backoffSeconds: 0, unknownSenders: 0, ...over };
+}
+
 function stateWith(over: Partial<ChannelsCardState> = {}): ChannelsCardState {
   return {
     channels: [],
     channelsLoaded: true,
     busy: false,
+    checking: null,
     error: null,
     notice: null,
+    statuses: {},
+    pairings: {},
+    pairing: null,
+    lastRemoteTurn: null,
     refreshChannels: vi.fn(),
     handleAdd: vi.fn(async () => true),
     handleRemove: vi.fn(async () => {}),
     handleSaveToken: vi.fn(async () => true),
+    handleConnect: vi.fn(async () => {}),
+    handleSetEnabled: vi.fn(async () => {}),
+    handleBeginPairing: vi.fn(async () => {}),
+    handleCancelPairing: vi.fn(async () => {}),
+    handleRevokePairing: vi.fn(async () => {}),
     ...over,
   } as ChannelsCardState;
 }
@@ -163,7 +183,7 @@ describe("ChannelsPanel", () => {
     render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
     const text = document.body.textContent ?? "";
     expect(text.indexOf(PRIVACY_SENTENCE)).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf(PRIVACY_SENTENCE)).toBeLessThan(text.indexOf(STANDING_LINE));
+    expect(text.indexOf(PRIVACY_SENTENCE)).toBeLessThan(text.indexOf(STANDING_LIST));
     expect(text.indexOf(PRIVACY_SENTENCE)).toBeLessThan(text.indexOf("token"));
   });
 
@@ -174,15 +194,28 @@ describe("ChannelsPanel", () => {
     expect(screen.getByText(PRIVACY_SENTENCE)).toBeTruthy();
   });
 
-  it("admits that nothing is connected yet", () => {
+  it("says what Addison will and will not do from a phone, and says it honestly", () => {
+    // THE STANDING LIST (§3.12 item 4), and in this phase the honest version of it:
+    // the remote floor is EMPTY, so a phone gets words and nothing else. Phase 3 is
+    // the commit that widens both this copy and the floor, together.
     render(<ChannelsPanel connected channels={stateWith()} />);
-    expect(screen.getByText(STANDING_LINE)).toBeTruthy();
+    expect(screen.getByText(STANDING_LIST)).toBeTruthy();
+    expect(WHAT_IT_WILL_DO).toBe(STANDING_LIST);
   });
 
   it("says Addison has not checked whether a token is saved, rather than that none is", () => {
     render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
     expect(screen.getByText("Addison hasn't checked whether a token is saved.")).toBeTruthy();
     expect(document.body.textContent ?? "").not.toContain("No token saved yet.");
+    cleanup();
+    // And once it HAS asked, it says what it learned rather than what it assumed.
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel({ tokenPresent: "present" })] })}
+      />,
+    );
+    expect(screen.getByText("A token is saved and Addison has checked it.")).toBeTruthy();
   });
 
   it("takes a name for a new connection and saves it as a telegram channel", async () => {
@@ -252,42 +285,326 @@ describe("ChannelsPanel", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (c) what phase 1 deliberately does NOT ship
+// (b2) the phase-2 surfaces: status, the switch, pairing, revoking
 // ---------------------------------------------------------------------------
-describe("the phase-1 boundary", () => {
-  it("draws no enable switch, no connect, and no pairing", () => {
-    // The plan's "deliberately does not ship" list, as a test. Every one of these
-    // would be a control with nothing behind it: there is no adapter, no poll loop
-    // and no pairing anywhere in this build, so a switch would be the panel telling
-    // somebody their phone is on.
-    render(
-      <ChannelsPanel
-        connected
-        channels={stateWith({ channels: [channel({ tokenPresent: "present" })] })}
-      />,
-    );
-    // EVERY control on the panel, by name. An allow-list rather than a search for
-    // forbidden words: the copy legitimately contains "connection", so a substring
-    // hunt would either go red on the honest sentence or be loosened until it caught
-    // nothing. What must be true is that the only things a person can PRESS here are
-    // saving a connection, saving a token, and removing.
-    const pressable = Array.from(document.querySelectorAll("button")).map((button) =>
-      (button.textContent ?? "").trim(),
-    );
-    expect(pressable.sort()).toEqual(["Remove", "add a connection", "token"].sort());
-    // And no switch, in either of the two shapes one takes.
-    expect(screen.queryByRole("switch")).toBeNull();
-    expect(screen.queryByRole("checkbox")).toBeNull();
-    // Nor any of the words a later phase's controls would arrive with.
-    const text = (document.body.textContent ?? "").toLowerCase();
-    for (const absent of ["turn on", "switch on", "check now", "pairing", "paired"]) {
-      expect(text, `phase 1 must not offer "${absent}"`).not.toContain(absent);
+describe("the live picture", () => {
+  it("says which kind of quiet this is", () => {
+    // A phone that goes silent looks exactly like a phone nobody has messaged, and
+    // the desk is the only place that can tell somebody which it is. Every state in
+    // the core's closed vocabulary gets its own sentence, and none of them is a
+    // status code.
+    const lines: Array<[ChannelStatus["state"], string]> = [
+      ["listening", "Listening for messages from your phone."],
+      ["backing_off", "Telegram isn't answering. Addison is still trying."],
+      ["token_rejected", "Telegram refused the saved token, so Addison stopped listening."],
+      ["no_token", "No token saved, so there is nothing to listen with."],
+      ["stopped", "Not listening."],
+    ];
+    for (const [state, sentence] of lines) {
+      render(
+        <ChannelsPanel
+          connected
+          channels={stateWith({
+            channels: [channel()],
+            statuses: { a: status({ state }) },
+          })}
+        />,
+      );
+      expect(screen.getByText(sentence)).toBeTruthy();
+      cleanup();
     }
   });
 
-  it("never claims a phone is paired", () => {
+  it("shows the bot it is connected as, once it has asked", () => {
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          statuses: { a: status({ state: "listening", connectedAs: "addison_bot" }) },
+        })}
+      />,
+    );
+    expect(document.body.textContent ?? "").toContain("connected as addison_bot");
+  });
+
+  it("counts the strangers knocking without ever quoting one", () => {
+    // An unpaired phone is ignored in silence, because a reply would tell whoever
+    // sent it that the bot is real and somebody is behind it. A COUNT is the only
+    // trace it leaves, and the panel must not invent more than that.
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          statuses: { a: status({ unknownSenders: 3 }) },
+        })}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "3 messages came from phones that aren't paired. Addison didn't reply.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("drives the switch from what is LISTENING, never from the saved row", () => {
+    // The two questions this panel would otherwise conflate. `enabled` is what the
+    // person last chose and is saved; the status is whether Addison is listening
+    // right now. Nothing starts listening when the app opens, so a switched-on row
+    // with a stopped service must offer "Start listening" — a switch pointing the
+    // other way would be the panel telling somebody their phone is connected.
+    const handleSetEnabled = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel({ enabled: true })],
+          statuses: { a: status({ state: "stopped" }) },
+          handleSetEnabled,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Listen to My phone"));
+    expect(handleSetEnabled).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), true);
+  });
+
+  it("offers to stop when it IS listening", () => {
+    const handleSetEnabled = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel({ enabled: false })],
+          statuses: { a: status({ state: "listening" }) },
+          handleSetEnabled,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Stop listening to My phone"));
+    expect(handleSetEnabled).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), false);
+  });
+
+  it("prints the one-at-a-time refusal in the core's own words", () => {
+    // Owner decision 11: v1 listens to one connection at a time, and the refusal
+    // NAMES the other one, because "no" with nothing to act on is not an answer.
+    const refusal =
+      "Addison listens to one phone connection at a time. Switch My phone off first.";
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel({ id: "b", name: "Tablet" })], error: refusal })}
+      />,
+    );
+    expect(screen.getByText(refusal)).toBeTruthy();
+  });
+
+  it("asks the core to check a token, and says so while it is asking", () => {
+    const handleConnect = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], handleConnect })}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Check My phone"));
+    expect(handleConnect).toHaveBeenCalled();
+    cleanup();
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], checking: "a" })}
+      />,
+    );
+    expect(screen.getByText("Checking…")).toBeTruthy();
+  });
+
+  it("renders a phone turn as a notice and never as a message", () => {
+    // `channel.remoteTurn` is deliberately not the streaming or activity channel: a
+    // phone turn's words must never appear inside the conversation on this screen.
+    // So the panel says THAT one happened, and nothing about what was said.
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          lastRemoteTurn: { channelId: "a", phase: "answered", at: 1 },
+        })}
+      />,
+    );
+    expect(screen.getByText("Addison answered a message from your phone.")).toBeTruthy();
+  });
+});
+
+describe("pairing, on screen", () => {
+  it("shows the code beside one sentence about what pairing means", () => {
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          pairing: { channelId: "a", code: "ABC-DEF", expiresAt: 999 },
+        })}
+      />,
+    );
+    expect(screen.getByText("ABC-DEF")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Send this code to your bot from the phone you want to use. Only that phone will " +
+          "be able to message Addison, and you can undo it here at any time.",
+      ),
+    ).toBeTruthy();
+    // No jargon anywhere near it — personas 54 and 68 read this.
+    const text = (document.body.textContent ?? "").toLowerCase();
+    for (const word of ["nonce", "pairing token", "sender id", "authorization"]) {
+      expect(text).not.toContain(word);
+    }
+  });
+
+  it("asks for a code, and can close the window again", () => {
+    const handleBeginPairing = vi.fn(async () => {});
+    const handleCancelPairing = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({ channels: [channel()], handleBeginPairing, handleCancelPairing })}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Pair a phone with My phone"));
+    expect(handleBeginPairing).toHaveBeenCalled();
+    cleanup();
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          pairing: { channelId: "a", code: "ABC-DEF", expiresAt: 999 },
+          handleCancelPairing,
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByText("Cancel pairing"));
+    expect(handleCancelPairing).toHaveBeenCalled();
+  });
+
+  it("lists paired phones and asks twice before revoking one", () => {
+    // Revocation is the whole control surface a pairing has, so it is a two-press
+    // confirm like every other thing that takes something away.
+    const handleRevokePairing = vi.fn(async () => {});
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel()],
+          pairings: { a: [{ id: "p1", label: "petr", pairedAt: 1_700_000_000 }] },
+          handleRevokePairing,
+        })}
+      />,
+    );
+    expect(document.body.textContent ?? "").toContain("petr");
+    fireEvent.click(screen.getByLabelText("Revoke petr"));
+    expect(handleRevokePairing).not.toHaveBeenCalled();
+    expect(screen.getByText("Really revoke?")).toBeTruthy();
+    fireEvent.click(screen.getByLabelText("Revoke petr"));
+    expect(handleRevokePairing).toHaveBeenCalledWith("a", "p1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (a2) the phase-2 parsers, failing closed
+// ---------------------------------------------------------------------------
+describe("parseChannelStatus / parseChannelPairings", () => {
+  it("never reads an unknown state as listening", () => {
+    // The one wrong direction: an unknown state rendered as "listening" would tell
+    // somebody their phone is connected when this window has no idea.
+    for (const junk of [null, 42, {}, { state: "probably-fine" }, { state: "" }]) {
+      expect(parseChannelStatus(junk).state).toBe("stopped");
+    }
+    expect(parseChannelStatus({ state: "listening" }).state).toBe("listening");
+  });
+
+  it("degrades counts and sentences without throwing", () => {
+    const parsed = parseChannelStatus({
+      state: "backing_off",
+      backoffSeconds: "soon",
+      unknownSenders: null,
+      connectedAs: 7,
+      error: { message: "no" },
+    });
+    expect(parsed).toEqual({
+      state: "backing_off",
+      backoffSeconds: 0,
+      unknownSenders: 0,
+      connectedAs: undefined,
+      lastPollAt: undefined,
+      error: undefined,
+    });
+  });
+
+  it("drops a pairing it could not revoke and keeps one it could", () => {
+    expect(
+      parseChannelPairings({
+        pairings: [
+          { id: "p1", label: "petr", pairedAt: 5 },
+          { label: "no id" },
+          { id: "p2" },
+          "nonsense",
+        ],
+      }),
+    ).toEqual([
+      { id: "p1", label: "petr", pairedAt: 5 },
+      { id: "p2", label: "This phone", pairedAt: undefined },
+    ]);
+    for (const junk of [null, 42, {}, { pairings: "no" }]) {
+      expect(parseChannelPairings(junk)).toEqual([]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (c) what phase 2 STILL deliberately does not ship
+// ---------------------------------------------------------------------------
+describe("the phase-2 boundary", () => {
+  it("offers no approval, no card and no queue of waiting requests", () => {
+    // The plan's phase-2 "deliberately does not ship" list, as a test. A phone can
+    // hold a conversation and nothing more: there is no tool it may use, so there is
+    // nothing to approve, nothing to card, and nothing to queue. Every control on
+    // this panel by name — an allow-list rather than a hunt for forbidden words,
+    // because the honest copy legitimately contains "connection" and "message".
+    render(
+      <ChannelsPanel
+        connected
+        channels={stateWith({
+          channels: [channel({ tokenPresent: "present" })],
+          statuses: { a: status({ state: "listening" }) },
+          pairings: { a: [{ id: "p1", label: "petr" }] },
+        })}
+      />,
+    );
+    const pressable = Array.from(document.querySelectorAll("button")).map((button) =>
+      (button.textContent ?? "").trim(),
+    );
+    expect(pressable.sort()).toEqual(
+      [
+        "Check now",
+        "Stop listening",
+        "token",
+        "Remove",
+        "Pair a phone",
+        "Revoke",
+        "add a connection",
+      ].sort(),
+    );
+    const text = (document.body.textContent ?? "").toLowerCase();
+    for (const absent of ["approve", "allow this", "deny", "waiting on your screen", "ask this here"]) {
+      expect(text, `phase 2 must not offer "${absent}"`).not.toContain(absent);
+    }
+  });
+
+  it("never suggests a phone can make something happen on this computer", () => {
     render(<ChannelsPanel connected channels={stateWith({ channels: [channel()] })} />);
-    expect((document.body.textContent ?? "").toLowerCase()).not.toContain("device");
+    const text = document.body.textContent ?? "";
+    expect(text).toContain("It can't change a file, run anything, or touch your computer");
   });
 });
 
@@ -309,14 +626,37 @@ vi.mock("../ipc/client", async (importOriginal) => {
     ...actual,
     isEngineConnected: () => true,
     subscribeCoreState: () => () => {},
+    // The notification channel, stubbed. The real one reaches for Tauri's event
+    // bridge, which is not in a jsdom window — and the hook subscribes on mount, so
+    // without this every hook test below would leave an unhandled rejection behind
+    // it and the suite would be reporting green over a thrown error.
+    subscribe: (_method: string, handler: (params: Record<string, unknown>) => void) => {
+      notificationHandlers.push(handler);
+      return () => {};
+    },
     ipc: {
       ...actual.ipc,
       listChannels: vi.fn(async () => []),
       addChannel: vi.fn(async () => ({ ok: true })),
       removeChannel: vi.fn(async () => ({ ok: true })),
+      channelStatus: vi.fn(async () => ({
+        state: "stopped",
+        backoffSeconds: 0,
+        unknownSenders: 0,
+      })),
+      listChannelPairings: vi.fn(async () => []),
+      connectChannel: vi.fn(async () => ({ ok: true, connectedAs: "addison_bot" })),
+      setChannelEnabled: vi.fn(async () => ({ ok: true })),
+      beginChannelPairing: vi.fn(async () => ({ ok: true, code: "ABC-DEF", expiresAt: 9 })),
+      cancelChannelPairing: vi.fn(async () => ({ ok: true })),
+      revokeChannelPairing: vi.fn(async () => ({ ok: true })),
     },
   };
 });
+
+/** Every handler the hook has subscribed with, so a test can push a notification
+ * frame at it the way the core would. */
+const notificationHandlers: Array<(params: Record<string, unknown>) => void> = [];
 
 describe("useChannels (real hook, mocked ipc)", () => {
   beforeEach(() => {
@@ -418,13 +758,95 @@ describe("useChannels (real hook, mocked ipc)", () => {
     expect(result.current.error).toBe(DEV_ONLY);
   });
 
-  it("reaches nothing on its own beyond reading the list", async () => {
+  it("reaches nothing on its own beyond reading what is already there", async () => {
     const { ipc } = await import("../ipc/client");
+    (ipc.listChannels as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: "a", kind: "telegram", name: "My phone", enabled: false,
+        tokenPresent: "unknown", pairedDevices: 0 },
+    ]);
     renderHook(() => useChannels({ connected: true }));
-    await waitFor(() => expect(ipc.listChannels).toHaveBeenCalled());
-    // Mounting the panel must not touch the keychain or anything else: listing is
-    // not asking, and in this phase there is nothing to ask anyway.
+    await waitFor(() => expect(ipc.channelStatus).toHaveBeenCalledWith("a"));
+    // MOUNTING ASKS THE CORE AND NOBODY ELSE. Reading the list, the live state and
+    // the paired devices are all reads of what this computer already knows; not one
+    // of them touches the keychain, and none of them reaches Telegram — checking a
+    // token is a button somebody presses.
     expect(invoked).toEqual([]);
+    expect(ipc.connectChannel).not.toHaveBeenCalled();
+    expect(ipc.setChannelEnabled).not.toHaveBeenCalled();
+  });
+
+  it("re-reads a connection's state when the core says it moved", async () => {
+    const { ipc } = await import("../ipc/client");
+    (ipc.listChannels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "a", kind: "telegram", name: "My phone", enabled: true,
+        tokenPresent: "present", pairedDevices: 1 },
+    ]);
+    renderHook(() => useChannels({ connected: true }));
+    await waitFor(() => expect(ipc.channelStatus).toHaveBeenCalledWith("a"));
+    (ipc.channelStatus as ReturnType<typeof vi.fn>).mockClear();
+    // The core says the state moved. NOTHING IN THE FRAME IS AUTHORITATIVE: the
+    // panel asks for the truth rather than believing the notice, so a dropped or
+    // reordered frame costs a stale line and never a wrong one.
+    act(() => {
+      for (const handler of notificationHandlers) handler({ id: "a", state: "listening" });
+    });
+    await waitFor(() => expect(ipc.channelStatus).toHaveBeenCalledWith("a"));
+  });
+
+  it("surfaces the core's refusal when a second connection is switched on", async () => {
+    const { ipc } = await import("../ipc/client");
+    const refusal =
+      "Addison listens to one phone connection at a time. Switch My phone off first.";
+    (ipc.setChannelEnabled as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ok: false,
+      error: refusal,
+    });
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleSetEnabled(
+        { id: "b", kind: "telegram", name: "Tablet", enabled: false,
+          tokenPresent: "present", pairedDevices: 0 },
+        true,
+      );
+    });
+    // The core's own words, verbatim — this window never writes a second sentence
+    // for a refusal the core already explained.
+    expect(result.current.error).toBe(refusal);
+  });
+
+  it("says which bot a checked token belongs to", async () => {
+    const { ipc } = await import("../ipc/client");
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleConnect({
+        id: "a", kind: "telegram", name: "My phone", enabled: false,
+        tokenPresent: "unknown", pairedDevices: 0,
+      });
+    });
+    expect(ipc.connectChannel).toHaveBeenCalledWith("a");
+    expect(result.current.notice).toBe("Connected as addison_bot.");
+  });
+
+  it("holds a pairing code in memory only, and lets it go again", async () => {
+    const { ipc } = await import("../ipc/client");
+    const row = {
+      id: "a", kind: "telegram" as const, name: "My phone", enabled: false,
+      tokenPresent: "unknown" as const, pairedDevices: 0,
+    };
+    const { result } = renderHook(() => useChannels({ connected: true }));
+    await act(async () => {
+      await result.current.handleBeginPairing(row);
+    });
+    expect(result.current.pairing).toEqual({
+      channelId: "a",
+      code: "ABC-DEF",
+      expiresAt: 9,
+    });
+    await act(async () => {
+      await result.current.handleCancelPairing(row);
+    });
+    expect(result.current.pairing).toBeNull();
+    expect(ipc.cancelChannelPairing).toHaveBeenCalledWith("a");
   });
 });
 

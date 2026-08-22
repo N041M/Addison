@@ -1,13 +1,21 @@
-// Messaging channels — the phone connections a person has saved (phase 1 of three;
-// docs/messaging-channel-plan.md). This hook owns the list, the add/remove handlers,
-// the token save, and the two transient lines the panel shows — a plain error (the
-// core's own refusal sentence, or the shell's) and a plain notice. It mirrors
-// useMcpServers, which is the surface this one is modelled on throughout.
+// Messaging channels — the phone connections a person has saved (phases 1-2 of
+// three; docs/messaging-channel-plan.md). This hook owns the list, the add/remove
+// handlers, the token save, the live status of each connection, the pairing window,
+// the paired-device list, and the two transient lines the panel shows — a plain
+// error (the core's own refusal sentence, or the shell's) and a plain notice. It
+// mirrors useMcpServers, which is the surface this one is modelled on throughout.
 //
-// NOTHING HERE CONNECTS TO ANYTHING, because there is nothing in the app to connect
-// with: no adapter, no poll loop, no pairing, and no network call on any path this
-// hook can reach. Saving a connection stores a name and a kind; saving a token puts
-// it in the OS keychain. That is the whole of phase 1, and the panel says so.
+// PHASE 2: A CONNECTION CAN NOW BE LIVE. `handleConnect` asks Telegram who the
+// saved token belongs to; `handleSetEnabled` starts or stops the listening. What
+// Addison can do from a phone is still WORDS ONLY — no tool, in any profile, by any
+// path — and the panel says so as a standing line rather than as a promise.
+//
+// TWO DIFFERENT QUESTIONS, KEPT APART. `Channel.enabled` is what the person last
+// chose and is saved; `ChannelStatus.state` is whether Addison is listening RIGHT
+// NOW. Nothing starts listening when the app opens, so after a restart those two
+// legitimately disagree — and every control here is driven by the LIVE one, because
+// a switch that shows "on" over a connection that is not listening is the panel
+// telling somebody their phone is connected when it is not.
 //
 // G1 — THE TOKEN NEVER TOUCHES THIS HOOK'S STATE. `handleSaveToken` takes the string
 // straight from the field, hands it to the Rust command, and lets it go. It is never
@@ -18,20 +26,43 @@
 //
 // The panel renders only on the Developer/Custom surfaces (keyed off the active
 // profile, never the mode) — that gate lives in SettingsPage, not here, and the core
-// independently refuses `channel.add` outside Developer.
+// independently refuses `channel.add`, `channel.connect` and switching one ON
+// outside Developer. Switching one OFF, removing one and revoking a pairing answer
+// in EVERY profile: those are tightenings, and a tightening must never be the thing
+// a profile switch traps.
 
-import { useCallback, useEffect, useState } from "react";
-import type { Channel, ChannelKind } from "../types/ui";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type {
+  Channel,
+  ChannelKind,
+  ChannelPairing,
+  ChannelPairingWindow,
+  ChannelStatus,
+} from "../types/ui";
 import {
   deleteChannelKey,
   ipc,
   isEngineConnected,
   storeChannelKey,
+  subscribe,
   subscribeCoreState,
 } from "../ipc/client";
+import { Method } from "../types/protocol";
 
 interface UseChannelsArgs {
   connected: boolean;
+}
+
+/** What the last phone turn did, for the one line the panel shows about it.
+ *
+ * DELIBERATELY NOT THE MESSAGE AND NOT THE ANSWER. A phone turn's words live in
+ * their own conversation; this is a notice that one happened, so the desk can see
+ * the connection working without the thread on screen being disturbed. */
+export interface RemoteTurnNote {
+  channelId: string;
+  phase: string;
+  summary?: string;
+  at: number;
 }
 
 export function useChannels({ connected }: UseChannelsArgs) {
@@ -45,6 +76,40 @@ export function useChannels({ connected }: UseChannelsArgs) {
   const [error, setError] = useState<string | null>(null);
   // The last outcome line — a removal, or a token saved. Stays put rather than fading.
   const [notice, setNotice] = useState<string | null>(null);
+  // Live state per connection id, and the paired phones per connection id. Both
+  // are read from the core rather than remembered: this window is a renderer.
+  const [statuses, setStatuses] = useState<Record<string, ChannelStatus>>({});
+  const [pairings, setPairings] = useState<Record<string, ChannelPairing[]>>({});
+  // The open pairing window, if there is one. AT MOST ONE at a time, which matches
+  // the core (a second `beginPairing` replaces the first) and matches the fact that
+  // v1 listens to one connection at a time.
+  const [pairing, setPairing] = useState<ChannelPairingWindow | null>(null);
+  const [lastRemoteTurn, setLastRemoteTurn] = useState<RemoteTurnNote | null>(null);
+  // Which row a check is in flight for, so its own action can say "Checking…"
+  // without disabling the rest of the panel.
+  const [checking, setChecking] = useState<string | null>(null);
+
+  // The ids currently on screen, for the notification handlers — which are
+  // subscribed once and must not re-subscribe on every list change.
+  const idsRef = useRef<string[]>([]);
+  idsRef.current = channels.map((row) => row.id);
+
+  const refreshStatuses = useCallback((ids: string[]) => {
+    if (!isEngineConnected()) return;
+    for (const id of ids) {
+      ipc
+        .channelStatus(id)
+        .then((status) => setStatuses((prev) => ({ ...prev, [id]: status })))
+        .catch(() => {
+          // Keep the last-known line rather than blanking it: a dropped answer is
+          // not evidence that a connection stopped.
+        });
+      ipc
+        .listChannelPairings(id)
+        .then((rows) => setPairings((prev) => ({ ...prev, [id]: rows })))
+        .catch(() => {});
+    }
+  }, []);
 
   const refreshChannels = useCallback(() => {
     if (!isEngineConnected()) return;
@@ -53,21 +118,52 @@ export function useChannels({ connected }: UseChannelsArgs) {
       .then((rows) => {
         setChannels(rows);
         setLoaded(true);
+        refreshStatuses(rows.map((row) => row.id));
       })
       .catch(() => {
         // Keep the last-known list rather than blanking the panel; still stop the
         // looking-for line.
         setLoaded(true);
       });
-  }, []);
+  }, [refreshStatuses]);
 
   useEffect(() => {
     refreshChannels();
-    // Every "ready" is a fresh engine — re-read, like the other data hooks.
-    return subscribeCoreState((state) => {
+    // Every "ready" is a fresh engine — re-read, like the other data hooks. A fresh
+    // engine is also listening to nothing, which the status re-read is what shows.
+    const stopCoreState = subscribeCoreState((state) => {
       if (state === "ready") refreshChannels();
     });
-  }, [connected, refreshChannels]);
+    // The core says when a connection's state moves, so the panel re-renders
+    // without polling. Nothing here is authoritative: the frame carries the new
+    // state, and the status re-read is what fills in the rest.
+    const stopState = subscribe(Method.ChannelStateChanged, (params) => {
+      const id = typeof params.id === "string" ? params.id : null;
+      if (!id) return;
+      refreshStatuses([id]);
+    });
+    // A phone turn started or finished. NOT the streaming or activity channels, on
+    // purpose: a phone turn's words must never appear inside the conversation on
+    // this screen.
+    const stopTurn = subscribe(Method.ChannelRemoteTurn, (params) => {
+      const id = typeof params.id === "string" ? params.id : null;
+      if (!id) return;
+      setLastRemoteTurn({
+        channelId: id,
+        phase: typeof params.phase === "string" ? params.phase : "",
+        summary: typeof params.summary === "string" ? params.summary : undefined,
+        at: Date.now(),
+      });
+      // A turn that paired a phone changes the device list, and a turn of any kind
+      // may have changed the unknown-sender count.
+      refreshStatuses([id]);
+    });
+    return () => {
+      stopCoreState();
+      stopState();
+      stopTurn();
+    };
+  }, [connected, refreshChannels, refreshStatuses]);
 
   /** Save a connection. A refusal is a resolved {ok:false} carrying the core's plain
    * sentence, which we surface as one calm line — never a stack trace. Returns
@@ -154,9 +250,9 @@ export function useChannels({ connected }: UseChannelsArgs) {
    *
    * The token goes to the Rust command and NOWHERE else: not into this hook's state,
    * not into a core payload, not into the list this hook holds (G1). The list is
-   * re-read afterwards anyway, because the row is the only thing that can report on
-   * a token — and in phase 1 it honestly reports "unknown", since proving a token
-   * works means asking Telegram, which is the next phase.
+   * re-read afterwards, because the row is the only thing that can report on a
+   * token — and it will still say "unknown" until somebody presses Check now, which
+   * is the only thing that can turn a saved token into a known one.
    *
    * Returns whether it landed, so the panel can clear its field only on success. */
   const handleSaveToken = useCallback(
@@ -187,16 +283,144 @@ export function useChannels({ connected }: UseChannelsArgs) {
     [refreshChannels],
   );
 
+  /** Check the saved token — ONE request that both validates it and comes back with
+   * the bot it belongs to. It starts no listening: checking is a question, and
+   * switching on is a decision. */
+  const handleConnect = useCallback(
+    async (channel: Channel): Promise<void> => {
+      setBusy(true);
+      setChecking(channel.id);
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await ipc.connectChannel(channel.id);
+        if (res.ok) {
+          setNotice(
+            res.connectedAs
+              ? `Connected as ${res.connectedAs}.`
+              : "That token works.",
+          );
+        } else {
+          setError(res.error ?? "Addison couldn't check that connection just now.");
+        }
+      } catch {
+        setError("Addison couldn't check that connection just now.");
+      } finally {
+        setChecking(null);
+        setBusy(false);
+        refreshChannels();
+      }
+    },
+    [refreshChannels],
+  );
+
+  /** Start or stop listening. The core refuses a second live connection with its own
+   * plain sentence naming the other one (owner decision 11), and refuses switching
+   * one on before its token has been checked. */
+  const handleSetEnabled = useCallback(
+    async (channel: Channel, enabled: boolean): Promise<void> => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await ipc.setChannelEnabled(channel.id, enabled);
+        if (!res.ok) {
+          setError(res.error ?? "Addison couldn't change that just now.");
+        }
+      } catch {
+        setError("Addison couldn't change that just now.");
+      } finally {
+        setBusy(false);
+        refreshChannels();
+      }
+    },
+    [refreshChannels],
+  );
+
+  /** Ask for a pairing code. It is shown on THIS screen and typed on the phone —
+   * the secret stays on the trusted surface and only the proof goes over the wire. */
+  const handleBeginPairing = useCallback(
+    async (channel: Channel): Promise<void> => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await ipc.beginChannelPairing(channel.id);
+        if (res.ok && res.code) {
+          setPairing({
+            channelId: channel.id,
+            code: res.code,
+            expiresAt: res.expiresAt ?? 0,
+          });
+        } else {
+          setError(res.error ?? "Addison couldn't start pairing just now.");
+        }
+      } catch {
+        setError("Addison couldn't start pairing just now.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const handleCancelPairing = useCallback(
+    async (channel: Channel): Promise<void> => {
+      setPairing(null);
+      try {
+        await ipc.cancelChannelPairing(channel.id);
+      } catch {
+        // Closing a window that is already closed is not a failure worth a line.
+      }
+      refreshStatuses([channel.id]);
+    },
+    [refreshStatuses],
+  );
+
+  /** Revoke one paired phone. Answers in every profile — the whole control surface a
+   * pairing has, and a tightening is never trapped. */
+  const handleRevokePairing = useCallback(
+    async (channelId: string, pairingId: string): Promise<void> => {
+      setBusy(true);
+      setError(null);
+      setNotice(null);
+      try {
+        const res = await ipc.revokeChannelPairing(pairingId);
+        if (res.ok) {
+          setNotice("That phone can't message Addison any more.");
+        } else {
+          setError(res.error ?? "Addison couldn't remove that phone just now.");
+        }
+      } catch {
+        setError("Addison couldn't remove that phone just now.");
+      } finally {
+        setBusy(false);
+        refreshStatuses([channelId]);
+      }
+    },
+    [refreshStatuses],
+  );
+
   return {
     channels,
     channelsLoaded: loaded,
     busy,
+    checking,
     error,
     notice,
+    statuses,
+    pairings,
+    pairing,
+    lastRemoteTurn,
     refreshChannels,
     handleAdd,
     handleRemove,
     handleSaveToken,
+    handleConnect,
+    handleSetEnabled,
+    handleBeginPairing,
+    handleCancelPairing,
+    handleRevokePairing,
   };
 }
 

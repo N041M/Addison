@@ -104,6 +104,29 @@ _REVIEWED_THREAD_TARGETS = {
     # dialog. It relays one shell call and responds; it never starts a turn, runs
     # a tool, or schedules anything.
     "self._run_workspace_pick_directory",
+    # channel_service.py — the messaging-channel poll loop (phase 2 of three;
+    # docs/messaging-channel-plan.md §3.4 owns the argument, and this entry is the
+    # deliberate, reviewable step that plan names).
+    #
+    # WHAT HANDS IT ITS WORK: a person, with their thumb, on their own phone. The
+    # loop blocks inside `adapter.poll` on a long-poll socket read that only an
+    # inbound message ends, and a poll that finds nothing does nothing — no turn,
+    # no tool, no model call, no row. It hands each message it does find to the
+    # SAME worker queue every inbound JSON-RPC frame goes on, which makes it a
+    # second inbound edge on a process that already has one, not a second author.
+    #
+    # It is started by `channel.setEnabled` (a person's switch) and stopped by it,
+    # by core shutdown, and by the profile leaving Developer. Its two waits are a
+    # network read and `threading.Event.wait` — both park until somebody else acts,
+    # which is the distinction the whole file turns on. It hands no callback to a
+    # clock: none of the banned names above appears in `channel_service.py`, and
+    # the scans in this file cover it like every other module.
+    #
+    # ADDISON STILL NEVER SPEAKS FIRST. Every outbound message the service can send
+    # is an answer to an inbound one. There is no digest, no reminder, no nudge —
+    # and a later version that wanted one would be a new owner decision against
+    # this floor rather than an extension of this feature.
+    "self._poll_loop",
 }
 
 _ADD_TARGET_HINT = (

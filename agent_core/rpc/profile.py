@@ -3,7 +3,7 @@ derives) and switch it live (engineering-spec §7, §4.7; policy.py)."""
 
 from __future__ import annotations
 
-from agent_core.policy import mode_for_profile
+from agent_core.policy import PolicyMode, mode_for_profile
 from agent_core.profiles import CUSTOM, DEVELOPER, SIMPLE, Profile, ProfileId, get_profile
 from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import _SERVER_ERROR, _UNKNOWN_PROFILE_MESSAGE
@@ -84,6 +84,23 @@ class ProfileMixin(ServerContext):
             self.permission_gate.clear_denials()
         except Exception:
             pass
+        # EVERY PHONE CONNECTION OFF WHEN DEVELOPER IS LEFT (messaging channels
+        # phase 2, plan §3.4). Channels are dev-only for v1, and a capability that
+        # belongs to a profile must not keep running after somebody switches away
+        # from it — least of all one whose thread is waiting on a network for
+        # somebody else's words. The saved `enabled` column is untouched, so this
+        # hides nothing and traps nothing: switching back to Developer and pressing
+        # the switch is all it costs.
+        #
+        # `_run_channel_turn` re-asks the mode per turn anyway, for the message that
+        # was already in flight when the switch happened. This is the loud half of
+        # that pair, and the quiet half is what makes it safe for this one to be
+        # best-effort.
+        if mode_for_profile(profile) is not PolicyMode.OPEN:
+            try:
+                self._channel_service.stop_all()
+            except Exception:
+                pass
         # Mode is derived live from _active_profile (policy.py) — the switch takes
         # effect immediately and needs no per-mode cache to refresh: the orchestrator
         # reads visible_tools(mode) per turn and the gate takes mode per call. Return

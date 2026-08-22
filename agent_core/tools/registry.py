@@ -72,7 +72,7 @@ than about who wrote the tool:
 
 from __future__ import annotations
 
-from agent_core.policy import PolicyMode
+from agent_core.policy import PolicyMode, TurnSurface
 from agent_core.tools.base import RiskTier, Tool, ToolDefinition
 
 # Said when a dev-only tool is reached outside OPEN mode. Plain language, and the
@@ -114,6 +114,44 @@ LIVE_ONLY_REFUSAL = (
 # Addison's internal spelling of somebody else's tool, and it answers no question
 # a person reading a routine's step log has.
 UNKNOWN_TOOL_REFUSAL = "That tool isn't available any more, so Addison didn't run it."
+
+# Said when a turn that arrived FROM A PHONE names a tool the remote floor omits
+# (messaging channels phase 2; docs/messaging-channel-plan.md §3.6). It says what
+# to do instead, because a refusal with no next move comes back as a blocked task
+# — LIVE_ONLY_REFUSAL's own rule.
+#
+# IT IS NOT §3.6's QUOTED SENTENCE YET, and the difference is deliberate. The plan
+# writes *"It's saved as a request — it will be waiting on your screen when you're
+# back"*, which is true only once the desk queue exists — and the queue is PHASE 3
+# (§3.11, listed under phase 2's "deliberately does not ship"). Promising somebody
+# a note waiting on their screen while nothing is written down would be this app
+# telling a lie of exactly the kind its copy rules exist to prevent. So phase 2
+# says the true half, and the commit that builds the queue is the commit that earns
+# the second sentence.
+REMOTE_REFUSAL = (
+    "That's something Addison does at your computer. Ask again when you're back at "
+    "your screen and it can go ahead."
+)
+
+# THE REMOTE FLOOR: what a turn that arrived over a messaging channel may use.
+#
+# EMPTY, ON PURPOSE (phase 2). An empty set is not a placeholder — it is the
+# strongest possible version of the phase, and it proves every seam (the thread,
+# the hand-off, the conversation isolation, the screening, the splitting, the
+# pairing) with the tool question factored out entirely. Phase 3 fills it with the
+# three ids §3.6 argues for; nothing else about this file changes when it does.
+#
+# A CLOSED SET OF IDS, HARD-CODED, and not a predicate over risk tiers. The obvious
+# floor — LOW and not open_only — admits `read_clipboard` (an exfiltration path off
+# an unattended Mac), `open_link` (something happens on a screen nobody is at) and
+# the two file readers (local file contents leaving through a chat server on the
+# strength of one message). All four are properly in the SAFE view for a person at
+# the keyboard; a phone is a different consent. That is invariant 4's own lesson —
+# widget kinds are a closed set the CODE owns, because a spec never declares its own
+# capabilities — applied one layer down, and it is also step 7's answer to a
+# stranger's server declaring its own risk: a `remote_ok` flag on a tool would be
+# that trust hole moved indoors.
+REMOTE_TOOL_IDS: frozenset[str] = frozenset()
 
 
 class ToolRegistry:
@@ -311,6 +349,48 @@ class ToolRegistry:
         if tool_id in self._live_only:
             return LIVE_ONLY_REFUSAL
         return None
+
+    def refuse_if_not_remote(self, tool_id: str, surface: TurnSurface) -> str | None:
+        """A plain refusal sentence when a REMOTE turn names a tool the remote floor
+        omits, else None (messaging channels, plan §3.6).
+
+        SURFACE-SCOPED, unlike its siblings: this is not "wrong profile" and not
+        "no dispatch exists", it is "not from there". A DESK turn is unaffected —
+        this answers None for every id — which is what makes the whole channel
+        feature invisible to the path everything else in the app uses.
+
+        WHERE IT IS ENFORCED: AT DISPATCH, NOT AT DISPLAY. ``remote_tools(mode)``
+        decides what the model is OFFERED; this is the independent second check
+        that refuses a ``tool_use`` naming anything else, before the gate and before
+        any effect. The artifact-disabling lesson is explicit that a marker is never
+        the enforcement and dispatch wins if the two disagree, so the offer and the
+        refusal are computed from the same constant but asked separately.
+
+        Called by BOTH dispatch paths — the orchestrator's tool round and the
+        routine engine's step — because a boundary only one path enforces is not a
+        boundary. Nothing can start a routine from a phone in phase 2 (the floor is
+        empty, so no tool can be named at all), and the check goes in anyway: the
+        phase that admits a tool must not also have to remember the second site."""
+        if surface is TurnSurface.REMOTE and tool_id not in REMOTE_TOOL_IDS:
+            return REMOTE_REFUSAL
+        return None
+
+    def remote_tools(self, mode: PolicyMode) -> list[ToolDefinition]:
+        """The view a turn that arrived over a messaging channel is offered.
+
+        AN INTERSECTION WITH ``visible_tools(mode)``, NEVER A UNION: a tool the mode
+        already hides can never appear here, so this view is a SUBSET OF THE DESK'S
+        VIEW IN EVERY MODE, and adding an id to :data:`REMOTE_TOOL_IDS` can only ever
+        take something out of the desk's view and put it in a smaller one.
+
+        That subset property is the sentence the floor is really made of — *a remote
+        turn is never offered a tool Simple could not be offered* — and it is
+        asserted by a test rather than by this docstring
+        (``tests/test_channel_remote_floor.py``).
+
+        SAFE INVARIANT 3'S SHAPE, applied to a second SURFACE instead of a second
+        caller: a filtered view over the ONE registry, never a second registry."""
+        return [d for d in self.visible_tools(mode) if d.id in REMOTE_TOOL_IDS]
 
     def visible_tools(self, mode: PolicyMode) -> list[ToolDefinition]:
         """The tool definitions the model may call under ``mode``.

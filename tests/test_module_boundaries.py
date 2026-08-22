@@ -152,6 +152,33 @@ def test_boundary_packages_do_not_import_each_other():
     assert not violations, "Module-boundary rule violated:\n" + "\n".join(violations)
 
 
+def test_the_channels_package_imports_none_of_the_three():
+    """``agent_core/channels/`` is a FOURTH SIBLING under the boundary rule
+    (docs/messaging-channel-plan.md §3.1): it holds the transport contract and the
+    adapters, and it imports none of ``tools/``, ``providers/`` or ``routines/``.
+
+    That is the same placement ``mcp_client.py`` took and for the same stated
+    reason — a thing that is eventually consumed by all three may not live inside
+    one of them. It matters most for ``providers/``: a channel is NOT a model
+    provider, and the moment an adapter reached for ``request_with_retry`` or the
+    orchestrator's cooldown map, a Telegram outage could cool down an Anthropic key.
+
+    Mutation: import ``agent_core.providers.base`` in ``channels/telegram.py`` —
+    this fails, naming the file and the line."""
+    package = _AGENT_CORE / "channels"
+    violations: list[str] = []
+    for path in sorted(package.rglob("*.py")):
+        module = _module_name(path)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for target, lineno in _imported_targets(tree, module):
+            if _package_of(target) is not None:
+                violations.append(f"{path}:{lineno} — {module} imports {target}")
+    assert not violations, (
+        "agent_core/channels/ must import none of tools/, providers/ or routines/:\n"
+        + "\n".join(violations)
+    )
+
+
 def test_policy_does_not_import_tools():
     """policy.py's one-way dependency (its own docstring): tools/base.py imports
     PolicyMode, so agent_core.policy must never import agent_core.tools back —
