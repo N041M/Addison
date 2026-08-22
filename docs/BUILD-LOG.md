@@ -283,6 +283,20 @@ correction is itself the more valuable half of this entry.
   this exact trap (whole-app-test-pass memory, 2026-08-21) and it still cost
   this session an hour. The remedy is unchanged: delete `target/debug/bundle`,
   `tauri build --debug --bundles app`, drive the fresh bundle.
+  **THE TRAP HAS A SECOND DOOR (found 2026-08-22, live pass over the merged
+  wave): the webview's OWN CACHE serves last week's frontend out of a fresh
+  bundle.** WKWebView caches what `tauri://localhost` served in earlier runs
+  (`~/Library/WebKit/app.addison.desktop`, `~/Library/Caches/app.addison.desktop`),
+  and a freshly built, freshly launched `.app` — bundle deleted first, process
+  path verified — still loaded a stale `index-…js` that exists NOWHERE on disk
+  outside that cache. Every "missing feature" observed live was that stale
+  script; the embedded assets were current the whole time. Deleting and
+  rebuilding the bundle does not touch this. The remedy grows one step and one
+  proof: clear both cache directories before the run, and — before believing ANY
+  observation — ask the PAGE what it is running
+  (`Array.from(document.scripts).map(s => s.src)` in the inspector) and match
+  the hash against `shell/dist/index.html`. A build proven on disk is not yet a
+  build proven on screen.
 - **THE REAL WEAKNESS THE WRONG THEORY UNCOVERED: the re-parse trusted a clock
   that is allowed to stop.** It was throttled into one `requestAnimationFrame`
   and nothing else; a webview whose page believes it is not visible — an
