@@ -21,6 +21,7 @@ import {
   parseWidgetList,
   parseWorkspaceRoots,
   parseMcpServers,
+  parseChannels,
 } from "../ipc/client";
 import { normalizeProfile } from "../lib/parse";
 import { normalizeCloudModels, normalizeRoles } from "../hooks/useModelSelection";
@@ -32,6 +33,7 @@ import rolesFixture from "./fixtures/model.availableRoles.json";
 import snapshotListFixture from "./fixtures/snapshot.list.json";
 import workspaceListFixture from "./fixtures/workspace.list.json";
 import mcpListFixture from "./fixtures/mcp.list.json";
+import channelListFixture from "./fixtures/channel.list.json";
 import automationListFixture from "./fixtures/automation.list.json";
 // The same method answered while SIMPLE is active — the only fixture whose name is
 // not a method name, because the payload has two shapes and no one call can show
@@ -336,6 +338,63 @@ describe("parseMcpServers over the real mcp.list payload", () => {
       for (const tool of (row as { tools?: unknown[] }).tools ?? []) {
         expect(Object.keys(tool as object).sort()).toEqual(["description", "name"]);
       }
+    }
+  });
+});
+
+describe("parseChannels over the real channel.list payload", () => {
+  it("reads the connections the core actually sends, camelCase names included", () => {
+    // Two renames and one derived field, all of them the class of thing the
+    // roots/folders mismatch hid in: `created_at` -> `addedAt`, `token_present` ->
+    // `tokenPresent`, and `pairedDevices`, which the core COMPUTES from a second
+    // table rather than reading off the row. Pinning them against the generated
+    // fixture is what makes a rename on either side a red build.
+    //
+    // Every row is off, unpaired and "unknown", and that is the payload phase 1 can
+    // actually produce: nothing turns a channel on and nothing can ask a transport
+    // whether a token works. A fixture claiming otherwise would pin this parser
+    // against a shape the handler never emits.
+    expect(parseChannels(channelListFixture)).toEqual([
+      {
+        id: "channel-fixture-0",
+        kind: "telegram",
+        name: "My phone",
+        enabled: false,
+        tokenPresent: "unknown",
+        pairedDevices: 0,
+        addedAt: 4102444800,
+      },
+      {
+        id: "channel-fixture-1",
+        kind: "telegram",
+        name: "The kitchen tablet",
+        enabled: false,
+        tokenPresent: "unknown",
+        pairedDevices: 0,
+        addedAt: 4102444801,
+      },
+    ]);
+  });
+
+  it("carries nothing that could be part of a token", () => {
+    // G1 at the artifact. The row's whole account of the credential is one word
+    // from a three-value vocabulary; a key, a length, a prefix or a masked form
+    // would all be a token reaching the webview. This reads the FIXTURE rather than
+    // the parser, because a parser that dropped an extra field would keep this
+    // green while the core was already sending it over the wire.
+    for (const row of channelListFixture.channels) {
+      expect(Object.keys(row as object).sort()).toEqual([
+        "addedAt",
+        "enabled",
+        "id",
+        "kind",
+        "name",
+        "pairedDevices",
+        "tokenPresent",
+      ]);
+      expect(["present", "absent", "unknown"]).toContain(
+        (row as { tokenPresent: string }).tokenPresent,
+      );
     }
   });
 });

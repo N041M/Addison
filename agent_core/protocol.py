@@ -381,6 +381,36 @@ class Method:
     # `run_command` with extra steps; a sentence about a schedule is a fact, a plist is
     # an instrument. tests/test_automations.py pins that rpc/automations.py cannot even
     # reach the preview builder.
+    # Messaging channels — talking to Addison from a phone (PHASE 1 of three;
+    # docs/messaging-channel-plan.md owns the design and its eleven answered
+    # decisions). Phase 1 is CONFIGURATION AND NOTHING ELSE: there is no adapter, no
+    # poll loop, no pairing and no network call anywhere in the tree, so a saved
+    # channel reaches nothing and is reached by nothing. That is the MCP phase-1
+    # shape on purpose — the reversible-config half, the G1 half and the capture
+    # decision all land before anything can touch a network.
+    #
+    # NO TOKEN RIDES THESE PAYLOADS, in either direction, ever. The bot token goes
+    # from the webview straight to the OS keychain through the shell's own
+    # `store_channel_key` command, and the core reads it at the moment of use
+    # (`keychain.getChannelKey`, below). A row carries `tokenPresent` — 'present' |
+    # 'absent' | 'unknown', the `provider_config.secret_presence` vocabulary — which
+    # says whether a token is BELIEVED to exist and never any part of one. In phase 1
+    # it is 'unknown' on every row and stays there: validating a token means asking
+    # Telegram, which is phase 2.
+    #
+    # `add` is Developer-only (the `mcp.add` pattern, and channels are dev-only for
+    # v1 by owner decision). `list` and `remove` answer in EVERY profile: saved
+    # configuration is not a capability, and a REMOVAL — which deletes the token from
+    # the keychain and drops every pairing by cascade — is a tightening, which must
+    # never be the thing a profile switch traps (docs/SAFETY.md owns that rule).
+    CHANNEL_LIST = "channel.list"      # {} -> {channels: [<row>]}, oldest first
+    CHANNEL_ADD = "channel.add"        # {kind, name} -> {ok, channel} | {ok:false, error}
+    CHANNEL_REMOVE = "channel.remove"  # {id} -> {ok} | {ok:false, error}
+    # <row> = {id, kind, name, enabled, tokenPresent, pairedDevices, addedAt}
+    # `pairedDevices` is a COUNT and never the rows: a pairing carries a display name
+    # the TRANSPORT supplied, i.e. text somebody else wrote. Nothing here says a
+    # channel is running, because nothing can run one yet; `channel.status` arrives
+    # with the service in phase 2.
     MODEL_AVAILABLE_ROLES = "model.availableRoles"
     MODEL_SET_ROLE_FOR_NEXT_MESSAGE = "model.setRoleForNextMessage"
     MODEL_START_LOCAL_SETUP = "model.startLocalSetup"
@@ -557,6 +587,13 @@ class Method:
     KEYCHAIN_GET_DEVICE_KEY = "keychain.getDeviceKey"
     # {provider} -> {key}; read per-call at the moment of use, never cached (G1)
     KEYCHAIN_GET_PROVIDER_KEY = "keychain.getProviderKey"
+    # {kind} -> {key}; the messaging-channel bot token, read per-call at the moment of
+    # use (G1). A PARALLEL command to the provider one and never a call into it: the
+    # account namespace is `channel-key:<kind>` on the same keychain service, and the
+    # provider path's mint ledger, replace-detection and legacy-account migration are
+    # deliberately out of reach (plan §3.9). NOTHING CALLS THIS IN PHASE 1 — the read
+    # side exists so the phase that adds the adapter needs no new shell surface.
+    KEYCHAIN_GET_CHANNEL_KEY = "keychain.getChannelKey"
     # {payload} -> {signature, deviceId}. The shell signs relay requests with the
     # device private key, which never leaves the OS keychain (§5) — the core sends
     # bytes to sign, never sees key material.

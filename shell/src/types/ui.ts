@@ -682,6 +682,47 @@ export interface McpServer {
   error?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Messaging channels (phase 1) — the phone connections a person can save.
+// Configuration only: nothing in this build connects, polls or pairs.
+// ---------------------------------------------------------------------------
+
+/** The transports Addison has an adapter for. A CLOSED set, matching the core's
+ * own — a row naming anything else is one the panel could not describe, so the
+ * parser drops it rather than rendering a connection to a transport that does not
+ * exist. Widened in the commit that adds an adapter, never before it. */
+export type ChannelKind = "telegram";
+
+/** Whether a token is BELIEVED to be saved for a channel — the core's
+ * `provider_config.secret_presence` vocabulary, and never any part of a token.
+ * "unknown" is the honest answer whenever nothing has proved otherwise, and must
+ * never be rendered as "no token saved". */
+export type ChannelTokenPresence = "present" | "absent" | "unknown";
+
+export interface Channel {
+  /** The core's row id — what `channel.remove` takes. */
+  id: string;
+  /** Which transport this connection speaks. */
+  kind: ChannelKind;
+  /** The plain name the person gave this connection. */
+  name: string;
+  /**
+   * Whether the channel is switched on. Written by nothing in phase 1 — turning
+   * one on is what starts a poll loop, and there is no loop yet — so every row
+   * arrives false. Carried now so the switch, when it exists, controls something
+   * that is already stored, captured and restored.
+   */
+  enabled: boolean;
+  /** Whether a token is believed saved. Never a token, a length or a prefix. */
+  tokenPresent: ChannelTokenPresence;
+  /** How many phones are paired to this channel. A COUNT and never the rows: a
+   * pairing carries a display name the transport supplied. Always 0 in phase 1,
+   * which has no pairing. */
+  pairedDevices: number;
+  /** Unix seconds when it was added, when the core reports it. */
+  addedAt?: number;
+}
+
 /** The full profile picture from `profile.get`. */
 export interface ProfileState {
   activeProfile: string;

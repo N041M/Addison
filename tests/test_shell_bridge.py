@@ -210,6 +210,13 @@ _BRIDGE_CALLS = (
     ("pick_file", ()),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
+    # The messaging-channel token (phase 1). Person-paced like every other
+    # ``keychain.*`` call, and for the identical reason — the read can sit behind an
+    # OS password dialog. Listed here even though NOTHING CALLS IT YET: the table is
+    # what makes a bridge method's budget a decision rather than a default, and a
+    # method that lands uncalled is exactly the one that would otherwise acquire its
+    # budget by accident when the phase that calls it arrives.
+    ("get_channel_key", ("telegram",)),
     ("get_device_key", ()),
     ("sign_relay_request", ({"messages": []},)),
     ("run_command", ("ls", 30_000, [])),

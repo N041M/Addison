@@ -1089,6 +1089,24 @@ _LEGITIMATE_PROSE: dict[str, dict[str, str]] = {
             "stdio is not rejected, it is scheduled — phase 5, behind containment."
         ),
     },
+    "channel-pairings-are-never-restored": {
+        "the decision stated plainly, with the two tables told apart": (
+            "`channels` is snapshot-captured on the `mcp_servers` terms, while "
+            "`channel_pairings` is deliberately excluded: a pairing is an authorization, "
+            "not configuration."
+        ),
+        "what a restore actually does, in the tree's own voice": (
+            "After a restore the channel rows come back, the token does not, and no "
+            "device is paired — the channel is off until the person turns it on."
+        ),
+        "the cost of the decision, recounted": (
+            "The cost is small and symmetrical: pairing again costs one code and one "
+            "message."
+        ),
+        "the neighbouring table's capture, which IS a positive claim": (
+            "The `channels` row is captured, so a restore puts the saved connections back."
+        ),
+    },
     "file-tools-are-in-the-safe-view": {
         "the history, in the past tense, which is the reasoning and must survive": (
             "They were `open_only` until 2026-08-11: absent from the SAFE view and "
@@ -1408,6 +1426,31 @@ def test_the_claims_registry_is_silent_on_legitimate_prose():
 # Write the sample in the tree's own voice. A sentence transcribed from the regex
 # proves the regex matches itself and nothing about the documents.
 _MUST_FLAG: dict[str, dict[str, dict[str, str]]] = {
+    "channel-pairings-are-never-restored": {
+        "while_true": {
+            "the table listed as captured, the shape a scope tidy-up produces": (
+                "`channel_pairings` is snapshot-captured with the rest of the channel "
+                "configuration."
+            ),
+            "a restore described as putting the paired phones back": (
+                "Restoring a snapshot puts the channel rows and their pairings back, so "
+                "the phone that was paired before is paired again."
+            ),
+            "the passive form, in a summary of what survives a rollback": (
+                "The token is not carried by any snapshot, but the pairings are restored "
+                "with everything else."
+            ),
+        },
+        "while_false": {
+            "the exclusion still asserted after pairings became captured": (
+                "`channel_pairings` is excluded from capture, because an authorization "
+                "must not be restorable."
+            ),
+            "the post-restore promise, still made": (
+                "After a restore, no phone is paired."
+            ),
+        },
+    },
     "g3-open-mode-polarity": {
         "while_true": {
             "the floor asserted as still limited, in the present tense": (

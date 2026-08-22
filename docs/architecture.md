@@ -101,13 +101,19 @@ wired up, and auto-update is a **Phase-3** item (see G4 below, where this matter
 What each process may and may not do:
 
 - **React webview (lowest trust).** It renders state and turns clicks into typed IPC
-  calls. It reaches the shell through exactly four Tauri commands: `send_to_core`
+  calls. It reaches the shell through exactly six Tauri commands: `send_to_core`
   for everything conversational, the write/delete-only pair
   `store_provider_key` / `delete_provider_key` for saving or removing a key the
-  user typed, and `restore_replaced_provider_key`, which undoes the last such save
+  user typed, `restore_replaced_provider_key`, which undoes the last such save
   (for a connect that then failed) by putting back what it replaced (a provider id
-  out, one boolean back). It has no network access, cannot talk to the core directly,
-  and can never read a key back: not one of the four returns key material. The shell rejects any relayed frame whose method is in
+  out, one boolean back), and the PARALLEL pair `store_channel_key` /
+  `delete_channel_key`, which do the same job for a messaging channel's bot token
+  under the separate account namespace `channel-key:<kind>` — deliberately not the
+  provider commands, whose mint ledger, replace-detection and legacy-account
+  migration were built around one very particular failure and should not grow a
+  second tenant. It has no network access, cannot talk to the core directly,
+  and can never read a key or a token back: not one of the six returns credential
+  material. The shell rejects any relayed frame whose method is in
   the `shell.*` or `keychain.*` namespace, so the lowest-trust process can never
   drive the OS-level side.
 - **Tauri shell (highest trust).** It is a relay and a supervisor, not a
@@ -202,9 +208,10 @@ exact same registry and gate as the live loop.
 mixins in `agent_core/rpc/`, one module per method namespace (`conversation`,
 `undo`, `routines`, `profile`, `models`, `providers`, `widgets`, `skills`,
 `snapshots`, `guards`, `routing`, `cost_plan`, `workspace`, `mcp` (the external
-tool servers of step 7) and `automations`, the rows step 8 authors for the OS to
-run), each of which is also the sole camelCase mapper at the wire boundary for its
-own namespace.
+tool servers of step 7), `automations` (the rows step 8 authors for the OS to run)
+and `channels`, the phone connections of the messaging-channel plan's phase 1 —
+configuration that connects to nothing yet), each of which is also the sole
+camelCase mapper at the wire boundary for its own namespace.
 
 ```mermaid
 flowchart LR

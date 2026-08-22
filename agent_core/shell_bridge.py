@@ -520,6 +520,32 @@ class IpcShellBridge:
         result = self._call(Method.KEYCHAIN_GET_PROVIDER_KEY, params, timeout=_KEYCHAIN_TIMEOUT)
         return result.get("key", "")
 
+    def get_channel_key(self, kind: str) -> str:
+        """Per-call messaging-channel token fetch from the OS keychain via the shell,
+        keyed by TRANSPORT KIND (``telegram``), account ``channel-key:<kind>``.
+
+        **NOTHING CALLS THIS YET, and that is deliberate.** Phase 1 of the messaging
+        channels ships configuration and connects to nothing, so there is no poller
+        and no adapter to read a token for. It exists now so the phase that adds one
+        needs no change to this bridge, to the shell's dispatch or to the keychain
+        module — the read seam lands with the write command it is the other half of
+        (docs/messaging-channel-plan.md §3.9).
+
+        Modelled on ``get_provider_key`` and deliberately NOT routed through it: the
+        provider path carries a mint ledger, replace-detection and the legacy-account
+        migration, none of which a channel token has any business in. The two outcomes
+        are kept apart on the same terms — ``""`` means nothing is saved for this
+        kind, a read that FAILED comes back as a JSON-RPC error and raises here,
+        because a token may well exist and Addison simply could not see it.
+
+        The token is returned for immediate one-request use and is never retained on
+        this bridge, never logged, and never written to SQLite (G1)."""
+        _trace(f"want channel {kind}")
+        result = self._call(
+            Method.KEYCHAIN_GET_CHANNEL_KEY, {"kind": kind}, timeout=_KEYCHAIN_TIMEOUT
+        )
+        return result.get("key", "")
+
     # --- app build reference (G4) -----------------------------------------
     def get_app_build_ref(self) -> dict:
         """The running build, as ``{"version", "identifier"}``.

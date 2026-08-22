@@ -1,0 +1,22 @@
+{
+  "channels": [
+    {
+      "id": "channel-fixture-0",
+      "kind": "telegram",
+      "name": "My phone",
+      "enabled": false,
+      "tokenPresent": "unknown",
+      "pairedDevices": 0,
+      "addedAt": 4102444800
+    },
+    {
+      "id": "channel-fixture-1",
+      "kind": "telegram",
+      "name": "The kitchen tablet",
+      "enabled": false,
+      "tokenPresent": "unknown",
+      "pairedDevices": 0,
+      "addedAt": 4102444801
+    }
+  ]
+}

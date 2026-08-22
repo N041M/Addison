@@ -51,6 +51,14 @@ _CAPTURED_TABLES: dict[str, tuple[str, ...]] = {
     # cannot un-arm either — what launchd holds is launchd's, and the surface asks it.
     "automations":     ("id", "name", "label", "command", "schedule_kind",
                         "schedule_json", "created_in_mode", "created_at", "updated_at"),
+    # Messaging channels, phase 1. CAPTURED, on the `mcp_servers` terms: a channel
+    # row is reversible config — a name, a transport kind and an off switch — and it
+    # grants Addison nothing on this machine, so a restore that brings one back
+    # re-instates a setting rather than a permission or a running loop. `created_at`
+    # joins because every other captured table's tuple carries it; `token_present` is
+    # the one column left out, in _EXCLUDED_COLUMNS below, for `secret_presence`'s
+    # reason. `channel_pairings` is EXCLUDED — see below; that half is the decision.
+    "channels":        ("id", "kind", "name", "enabled", "created_at"),
 }
 
 # Deliberately NOT captured, each for a stated reason. A restore leaves all of
@@ -95,6 +103,14 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # Store.apply_config_state (the routine_runs shape), because the FK would
     # otherwise abort the restore at COMMIT.
     "widget_state":     "what the person did with a widget, not configuration",
+    # Messaging channels, phase 1, on the tool_grants / workspace_trust precedent and
+    # for the same reason at full strength: a pairing is an AUTHORIZATION, not
+    # configuration. Nothing outside SQLite holds that truth — unlike an armed
+    # automation, which the OS holds and is asked for — so the row IS the
+    # authorization, and a one-action restore that put one back would re-instate an
+    # authorization somebody deliberately revoked. After a restore no phone is paired;
+    # pairing again costs one code and one message.
+    "channel_pairings": "an authorization, not config; a restore must never re-pair a revoked phone",
 }
 
 # Columns of a CAPTURED table that are deliberately not captured.
@@ -121,8 +137,16 @@ _EXCLUDED_TABLES: dict[str, str] = {
 # notice for a key that IS revoked, because the restored row already says "told".
 # Left out, a restore resets it to NULL, which is the honest post-restore answer —
 # Addison no longer knows — and the next definitive rejection says so once.
+#
+# channels.token_present (messaging channels, phase 1) joins them, on
+# `secret_presence`'s reasoning verbatim: it is an OBSERVATION about the OS keychain,
+# which no snapshot touches, and a restored row asserting 'present' would claim a
+# token that may have been removed since. Left out, a restore resets it to the schema
+# default 'unknown' — the honest post-restore answer, and the safe one, because
+# 'unknown' can never read as "a token is saved".
 _EXCLUDED_COLUMNS: dict[str, tuple[str, ...]] = {
     "provider_config": ("secret_presence", "key_rejected_at"),
+    "channels": ("token_present",),
 }
 
 # app_settings keys that survive a replace-all restore. One-way latches, not

@@ -89,6 +89,7 @@ from agent_core.rpc.constants import (
     _UNKNOWN_PROFILE_MESSAGE as _UNKNOWN_PROFILE_MESSAGE,
 )
 from agent_core.rpc.automations import AutomationsMixin
+from agent_core.rpc.channels import ChannelsMixin
 from agent_core.rpc.conversation import ConversationMixin
 from agent_core.rpc.cost_plan import CostPlanMixin
 from agent_core.rpc.guards import GuardsMixin
@@ -547,6 +548,7 @@ class JsonRpcServer(
     WorkspaceMixin,
     McpMixin,
     AutomationsMixin,
+    ChannelsMixin,
 ):
     """The §7 JSON-RPC 2.0 stdio server, decoupled from the real stdin/stdout.
 
@@ -1346,6 +1348,7 @@ class JsonRpcServer(
             _WORKSPACE_JOBS,
             _MCP_JOBS,
             _AUTOMATION_JOBS,
+            _CHANNEL_JOBS,
         ):
             for method_name, kind in jobs.items():
                 table[method_name] = enqueue(kind)
@@ -1585,6 +1588,12 @@ class JsonRpcServer(
                     self._respond(request_id, self._automation_status())
                 elif kind == "automation_disarm_orphan":
                     self._respond(request_id, self._automation_disarm_orphan(params))
+                elif kind == "channel_list":
+                    self._respond(request_id, self._channel_list())
+                elif kind == "channel_add":
+                    self._respond(request_id, self._channel_add(params))
+                elif kind == "channel_remove":
+                    self._respond(request_id, self._channel_remove(params))
             except live_db_guard.LiveDatabaseBlocked as exc:
                 # A job can reach _ensure_built() too (conversation.list, and every
                 # mixin handler that calls it), so the same rule as the startup build
@@ -2558,6 +2567,23 @@ _AUTOMATION_JOBS = {
     Method.AUTOMATION_REMOVE: "automation_remove",
     Method.AUTOMATION_STATUS: "automation_status",
     Method.AUTOMATION_DISARM_ORPHAN: "automation_disarm_orphan",
+}
+
+# channel.* read and write the `channels` table and mint an auto-snapshot through
+# the SnapshotManager, so they run on the worker like every other store op (the
+# sqlite3 connection is bound to that thread). Method -> worker job kind, and this
+# table is the ONLY place main.py may name a channel.* method: answering one inline
+# on the read loop would put a store read on the wrong thread and a snapshot capture
+# beside an in-flight turn.
+#
+# NONE OF THEM REACHES A NETWORK, in this phase, at all. `channel.connect` — the one
+# that will — arrives with the adapter in phase 2 and belongs here for the second
+# half of `mcp.refresh`'s reason as well: a stranger's server must never hold the
+# IPC pump. Messaging channels phase 1; docs/messaging-channel-plan.md.
+_CHANNEL_JOBS = {
+    Method.CHANNEL_LIST: "channel_list",
+    Method.CHANNEL_ADD: "channel_add",
+    Method.CHANNEL_REMOVE: "channel_remove",
 }
 
 

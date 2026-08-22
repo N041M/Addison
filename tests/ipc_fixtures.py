@@ -340,6 +340,7 @@ def generate_fixtures(tmp_dir: Path) -> dict[str, dict]:
         "workspace.readEditDiff": _workspace_read_edit_diff_fixture(server),
         "workspace.revertFile": _workspace_revert_file_fixture(server),
         "mcp.list": _mcp_list_fixture(server),
+        "channel.list": _channel_list_fixture(server),
         "automation.list": _automation_list_fixture(server),
         # The same method in the OTHER profile. Not a method name — the only fixture
         # key that is not one — because the payload genuinely has two shapes and the
@@ -748,6 +749,42 @@ def _mcp_list_fixture(server: JsonRpcServer) -> dict:
         for server_id, _name, _url in rows:
             server._mcp_catalog.forget(server.tool_registry, server_id)
             server.store.delete_mcp_server(server_id)
+
+
+def _channel_list_fixture(server: JsonRpcServer) -> dict:
+    """A ``channel.list`` payload with rows in it (messaging channels, phase 1).
+
+    Written through the store and read back through the REAL handler, so the two
+    things this payload does at the boundary are pinned rather than assumed: the
+    camelCase renames (``created_at`` -> ``addedAt``, ``token_present`` ->
+    ``tokenPresent``) and the derived ``pairedDevices`` count, which is a second
+    table's answer folded into this row. A hand-written fixture would let either
+    drift, and the `roots`/`folders` mismatch is what that costs.
+
+    TWO ROWS, because one would parse the same whichever key the frontend read.
+    Both are switched off with ``tokenPresent: "unknown"``, which is not a poverty of
+    the fixture — it is the ONLY shape phase 1 can produce: nothing in the tree turns
+    a channel on and nothing can ask a transport whether a token works. The day a
+    later phase can write 'present' or `enabled: true`, this fixture grows the row
+    that proves it, and until then a fixture claiming either would pin the parser
+    against a payload the real handler never emits.
+
+    ``pairedDevices`` is 0 on both for the same reason — phase 1 has no pairing — and
+    the count is exercised anyway, because it is COMPUTED here rather than stored.
+
+    Everything is torn down afterwards so the rest of the fixtures (the snapshot
+    payloads capture this table) stay byte-stable."""
+    rows = [
+        ("channel-fixture-0", "telegram", "My phone"),
+        ("channel-fixture-1", "telegram", "The kitchen tablet"),
+    ]
+    for index, (channel_id, kind, name) in enumerate(rows):
+        server.store.insert_channel(id=channel_id, kind=kind, name=name, created_at=_T0 + index)
+    try:
+        return server._channel_list()
+    finally:
+        for channel_id, _kind, _name in rows:
+            server.store.delete_channel(channel_id)
 
 
 def _automation_list_fixture(server: JsonRpcServer) -> dict:

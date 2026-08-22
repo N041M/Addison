@@ -48,6 +48,13 @@ fn main() {
             keychain::store_provider_key,
             keychain::delete_provider_key,
             keychain::restore_replaced_provider_key,
+            // Messaging channels phase 1: a PARALLEL pair to the two above, under the
+            // `channel-key:<kind>` account namespace, never a call into the provider
+            // path (keychain.rs explains the three reasons). The read half is
+            // core-side only (`keychain.getChannelKey`), so the window can write a
+            // token and never read one back.
+            keychain::store_channel_key,
+            keychain::delete_channel_key,
         ])
         // TODO(Phase 3): tauri_plugin_updater — signed manifest endpoint + pubkey
         // (design-doc §7.7). Left unwired here on purpose (updater.rs).

@@ -315,6 +315,22 @@ MCP_TOOLS_ARE_NOT_CALLABLE = False
 # Flip this only if the tools genuinely go back to being Developer-only.
 FILE_TOOLS_ARE_IN_THE_SAFE_VIEW = True
 
+# Messaging channels, phase 1 (2026-08-22). `channel_pairings` is deliberately kept
+# OUT of the G3 capture scope: a pairing is an AUTHORIZATION, not configuration, and
+# a one-action restore must never re-instate one somebody deliberately revoked.
+# `channels` itself IS captured — the row is reversible config — so the distinction
+# between the two tables is the whole fact, and it is exactly the kind that reads as
+# an oversight to somebody tidying a scope file three directories away.
+#
+# Registered because the failure is silent in the dangerous direction: adding the
+# table to `_CAPTURED_TABLES` breaks no build, produces no card, and shows up only as
+# a revoked phone quietly working again after somebody rolls back. The plan
+# (messaging-channel-plan.md §8) asked for this row by name, in the commit that made
+# it true.
+#
+# Flip this only if an owner decision makes a pairing restorable.
+CHANNEL_PAIRINGS_ARE_NEVER_RESTORED = True
+
 
 # ---------------------------------------------------------------------------
 # Row types
@@ -804,6 +820,55 @@ CLAIMS: tuple[Claim, ...] = (
             fix=(
                 "stdio has shipped — this line still says the transport is HTTP only. Amend "
                 "it, or link to docs/step-7-mcp-plan.md §5, which owns the transport decision."
+            ),
+        ),
+        exempt=FROZEN,
+    ),
+    Claim(
+        id="channel-pairings-are-never-restored",
+        owner="docs/messaging-channel-plan.md",
+        holds=CHANNEL_PAIRINGS_ARE_NEVER_RESTORED,
+        true_state=(
+            "`channel_pairings` is EXCLUDED from snapshot capture (snapshots/scope.py): a "
+            "pairing is an authorization, not configuration, so a restore brings the "
+            "channel rows back and leaves no phone paired. `channels` itself IS captured, "
+            "minus `token_present`."
+        ),
+        false_state=(
+            "Pairings are captured and restored with the channel rows, so a rollback can "
+            "put a paired device back."
+        ),
+        # Anchored on the TABLE NAME beside a positive capture claim, and on the
+        # restore putting pairings back — the two shapes a scope-file tidy-up or a
+        # summary of "what a restore does" would produce. Deliberately narrow: the
+        # tree constantly says the neighbouring true things ("the channel rows come
+        # back", "no device is paired"), and a pattern wide enough to catch a
+        # paraphrase of the falsehood catches those too.
+        while_true=Wrong(
+            pattern=(
+                r"channel_pairings\b[^.\n]{0,80}\b(?:is|are)\s+(?:snapshot-)?captured"
+                r"|restor\w+[^.\n]{0,80}\bpairings?\b[^.\n]{0,40}\bback\b"
+                r"|\bpairings?\b[^.\n]{0,40}\b(?:is|are)\s+restored\b"
+            ),
+            fix=(
+                "A pairing is an authorization, not configuration: `channel_pairings` is in "
+                "`_EXCLUDED_TABLES` and a restore leaves no phone paired. Amend the "
+                "sentence, or link to docs/messaging-channel-plan.md §3.8, which owns the "
+                "decision. If an owner decision genuinely made pairings restorable, flip "
+                "CHANNEL_PAIRINGS_ARE_NEVER_RESTORED in tests/doc_claims.py in the SAME "
+                "commit."
+            ),
+        ),
+        while_false=Wrong(
+            pattern=(
+                r"channel_pairings\b[^.\n]{0,80}\b(?:excluded|not captured)"
+                r"|\bpairings?\b[^.\n]{0,40}\b(?:are|is)\s+never restored\b"
+                r"|after a restore,? no (?:phone|device) is paired"
+            ),
+            fix=(
+                "Pairings are captured now — this line still says a restore leaves no phone "
+                "paired. Amend it, or link to docs/messaging-channel-plan.md §3.8, which "
+                "owns the capture decision."
             ),
         ),
         exempt=FROZEN,
