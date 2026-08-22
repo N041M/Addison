@@ -208,6 +208,16 @@ _BRIDGE_CALLS = (
     # same reason the note below records: a person is in front of both dialogs, and
     # whether that deserves the human-paced budget is a separate call from this one.
     ("pick_file", ()),
+    # The picture picker and the read behind it (image-attach plan §4). DEFAULT
+    # budget for both, and the second is the one worth stating: it does REAL WORK —
+    # decode, Lanczos3 downscale, re-encode — where every other ``shell.*`` call is
+    # syscalls. It is still bounded by construction (24 MiB in, one image out), it
+    # runs on a blocking task rather than the pump, and a minute of silence from it
+    # still means the shell is wedged rather than busy. The picker joins its two
+    # siblings above on the same note: a person is in front of the dialog, and
+    # whether that earns the human-paced budget is the same separate call.
+    ("pick_image", ()),
+    ("read_picked_image", ("handle-1",)),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
     # The messaging-channel token (phase 1). Person-paced like every other
@@ -282,7 +292,9 @@ class _RecordingBridge(IpcShellBridge):
         self.calls.append((method, timeout))
         # One dict that satisfies every caller's unwrapping.
         return {"path": "/tmp/x", "draftRef": "d", "text": "t", "content": "c", "key": "",
-                "existed": False, "prior": None, "fileHandle": "h"}
+                "existed": False, "prior": None, "fileHandle": "h",
+                "name": "photo.png", "byteSize": 1, "mediaType": "image/png",
+                "width": 1, "height": 1}
 
 
 def test_only_the_keychain_calls_wait_at_a_persons_pace():

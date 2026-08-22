@@ -90,13 +90,25 @@ const READ_SIZE_BOUND: u64 = 256 * 1024;
 /// serialized onto ONE line of a line-delimited stdio channel by a handler awaited
 /// INLINE on the core's stdout pump (`agent_process.rs`), so a 2 GB file picked by
 /// accident stalls every frame in the app while it loads — the wedge is mechanical
-/// and does not care who chose the file. And v1 has NO image-block path: the shell's
-/// `{content, kind}` is JSON-serialized into a `tool_result` STRING
-/// (`orchestrator._result_as_text`, `anthropic_provider._translate_history`), so a
-/// picked image is charged to the turn as base64 TEXT. 1 MiB is already ~1.4 MB of
-/// characters and several hundred thousand tokens: the outer edge of the largest
-/// context Addison can route to, and far past a local or free-tier one. A ceiling
-/// above this would only buy a slower way to be told the turn is too big.
+/// and does not care who chose the file. And THIS path still charges a picture to
+/// the turn as base64 TEXT: the shell's `{content, kind}` is JSON-serialized into a
+/// `tool_result` STRING (`orchestrator._result_as_text`,
+/// `anthropic_provider._translate_history`). 1 MiB is already ~1.4 MB of characters
+/// and several hundred thousand tokens: the outer edge of the largest context
+/// Addison can route to, and far past a local or free-tier one. A ceiling above
+/// this would only buy a slower way to be told the turn is too big.
+///
+/// THERE IS AN IMAGE-BLOCK PATH NOW, AND IT IS NOT THIS ONE. `Message.images`
+/// and the four adapters' block shapes landed with phase 1 of
+/// [`docs/image-attach-plan.md`](../../../docs/image-attach-plan.md), and phase 2
+/// gave them their own front door — `shell.pickImage` + `shell.readPickedImage`,
+/// which decode, downscale and re-encode before anything crosses, and carry their
+/// own two bounds (`PICKED_IMAGE_SIZE_BOUND` on the file, `ENCODED_IMAGE_SIZE_BOUND`
+/// on what is sent). So this constant is the TEXT pick's bound. `read_file` — the
+/// tool a MODEL calls — was deliberately left on the old shape by that plan (§7):
+/// upgrading a tool RESULT to image blocks is real work per provider and waits for
+/// a reason, so what it hands back is still base64 text, and the arithmetic above
+/// is still the arithmetic that decides this number.
 ///
 /// ONE bound for text and pictures alike, judged BEFORE the extension is consulted.
 /// `is_image_path` is a guess about content made from a filename, and a guess must
@@ -107,6 +119,51 @@ const READ_SIZE_BOUND: u64 = 256 * 1024;
 ///
 /// Kept a whole number of MB: the sentence names it in MB and derives it from here.
 const PICKED_FILE_SIZE_BOUND: u64 = 1024 * 1024;
+
+/// A picture the person picked to ATTACH, larger than this on disk, refuses the read
+/// (`shell.readPickedImage`) before a byte of it is decoded.
+///
+/// A BOUND AGAINST ABSURDITY, NOT A BUDGET, and that is the whole difference between
+/// this number and `PICKED_FILE_SIZE_BOUND` above. That one is a budget: what it lets
+/// through is charged to a model turn as base64 text, so the ceiling is doing
+/// arithmetic about context windows. Nothing of the sort applies here — what crosses
+/// this path is the DOWNSCALED re-encode (`ENCODED_IMAGE_SIZE_BOUND`), never the
+/// original, so the file's own size buys the turn nothing and costs it nothing. All
+/// this number has to do is stop the two absurd cases: a 400 MB scan that would be
+/// read into memory in one `Vec` before anything looked at it, and a decode that
+/// allocates width × height × 4 bytes for an image nobody meant to pick.
+///
+/// TWENTY-FOUR MEBIBYTES because that is comfortably past every camera a person
+/// actually owns — a 48-megapixel phone HEIC is ~5 MB, a full-frame RAW-adjacent JPEG
+/// ~15 MB — and comfortably short of the sizes that are only ever a mistake. A photo
+/// simply works, which is decision 3 of the plan and the entire point of the path.
+///
+/// STILL A REFUSAL AND STILL EARLY. This handler moves its work to
+/// `spawn_blocking` (the pump-stall `PICKED_FILE_SIZE_BOUND` describes is why), so
+/// an oversize read here does not wedge the app the way it would above — but a
+/// 400 MB allocation in the highest-trust process is worth refusing on its own, and
+/// refusing it BEFORE the read is what keeps the refusal from having already done
+/// the damage.
+///
+/// Kept a whole number of MB: the sentence names it in MB and derives it from here.
+const PICKED_IMAGE_SIZE_BOUND: u64 = 24 * 1024 * 1024;
+
+/// What the ENCODED picture must fit under before it may cross the bridge.
+///
+/// THE ONE THAT IS ACTUALLY A BUDGET, where the constant above deliberately is not.
+/// These bytes are base64'd onto one line of the stdio channel, held in the core's
+/// attachment cache, written into `message_attachments` as text (plan §5) and sent to
+/// a vision API on every turn the message is replayed in. Two mebibytes is where
+/// every one of those stays boring: ~2.8 MB of characters on the wire, four of them
+/// per message at most, and inside what all four providers accept for one image.
+///
+/// NOT A REFUSAL FIRST, unlike every other ceiling in this file. The encode STEPS
+/// DOWN to meet it — quality 80 → 60 → 40, then the long edge 1600 → 1200 → 800 —
+/// because the person has already chosen this picture and there is a version of it
+/// that fits. Refusing a photo for being a photo would fail the one requirement the
+/// path exists to meet. Only when the smallest step still will not fit is it refused,
+/// and then plainly.
+const ENCODED_IMAGE_SIZE_BOUND: usize = 2 * 1024 * 1024;
 
 /// How much of one file the read-only VIEWER may show (`shell.readWorkspaceFileForView`,
 /// the review surface's file pane — phase-3 plan Build §1).
@@ -306,6 +363,15 @@ pub async fn handle(app: &AppHandle, method: &str, params: &Value) -> Result<Val
         "shell.restoreFile" => restore_file(app, params),
         "shell.pickFile" => pick_file(app).await,
         "shell.readScopedFile" => read_scoped_file(app, params),
+        // Attaching a picture to a chat message (image-attach plan §4). TWO METHODS
+        // of their own rather than a mode on the two above, because the answers are
+        // different in kind: `pickFile` hands back a handle and nothing else, while a
+        // composer chip needs a name and a size the moment the dialog closes, and
+        // `readScopedFile` reads bytes through where this DECODES them, downscales
+        // them and re-encodes them. A parameter would have made both contracts
+        // conditional on a flag, which is the shape a later edit gets wrong.
+        "shell.pickImage" => pick_image(app).await,
+        "shell.readPickedImage" => read_picked_image(app, params).await,
         // OPEN-mode coding harness (step 5). Path-based, NOT picker-scoped: the core
         // confines which paths reach here (trusted-root check, D3); the shell
         // independently refuses Addison's own data directory (defence in depth) and
@@ -479,11 +545,7 @@ fn read_scoped_file(app: &AppHandle, params: &Value) -> Result<Value, RpcError> 
 // The handle-scope core of readScopedFile, factored out of the Tauri wrapper so the
 // guard is testable without a live app. Behaviour is unchanged from the inline version.
 fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError> {
-    // Resolve ONLY a handle we minted; a raw/unknown handle reads nothing.
-    let path = lock(&state.handles)
-        .get(handle)
-        .cloned()
-        .ok_or_else(|| RpcError::app("Addison can't read that file — please pick it again."))?;
+    let path = resolve_picked_handle(state, handle)?;
 
     // Judged from the file's SIZE, before a byte is read, exactly as the workspace
     // paths do it: a refusal that first allocates the 2 GB it is refusing has
@@ -513,6 +575,405 @@ fn read_scoped_handle(state: &FileState, handle: &str) -> Result<Value, RpcError
     } else {
         Err(RpcError::app("Addison can't read that kind of file yet."))
     }
+}
+
+/// The path behind a handle THIS SESSION's picker minted, or the one refusal both
+/// picked reads give.
+///
+/// RESOLVED IN ONE PLACE, because there are two readers now — `read_scoped_handle`
+/// (the `read_file` tool) and `read_picked_image` (the attach path) — and the
+/// property they share is the entire security argument for handles: only a handle the
+/// shell itself minted resolves to anything at all, so nothing the core learned from
+/// one file can point it at a second, and a raw path is not a handle.
+///
+/// ONE SENTENCE FOR EVERY WAY IT CAN FAIL. An unknown handle, a guessed one and one
+/// left over from a previous run are indistinguishable here on purpose — they are the
+/// same thing to the person, and picking again is the only answer to any of them.
+fn resolve_picked_handle(state: &FileState, handle: &str) -> Result<PathBuf, RpcError> {
+    lock(&state.handles)
+        .get(handle)
+        .cloned()
+        .ok_or_else(|| RpcError::app("Addison can't read that file — please pick it again."))
+}
+
+/// What a person may be offered in the ATTACH picker (`shell.pickImage`).
+///
+/// WIDE ON PURPOSE, and wider than what the crate can actually decode. A filter's job
+/// is to stop somebody hunting through a folder of spreadsheets for their photo, not
+/// to decide what is real — that is the decoder's job, one step later, on the bytes
+/// (`encode_picked_image`, where a file that does not parse is refused in plain
+/// language). A filter used as a validator is the extension-guessing this path exists
+/// to retire, and it fails in the direction that hurts: a `.png` that is really a
+/// screenshot saved as something else is admitted by name and refused by content,
+/// while a correct picture with an odd name would have been hidden from the person
+/// who knew perfectly well where it was.
+///
+/// `heic` IS LISTED AND WILL NOT DECODE. It is what an iPhone hands you, so hiding it
+/// would leave people unable to find the file they went looking for and unable to
+/// learn why; listing it means they pick it and read one honest sentence saying
+/// Addison does not know that kind. That is a better failure than an empty folder.
+const PICKABLE_IMAGE_EXTENSIONS: &[&str] =
+    &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif", "heic"];
+
+/// The media types an encoded picture may cross the bridge as.
+///
+/// **HAND-SYNCED, ENTRY FOR ENTRY, WITH `ALLOWED_IMAGE_MEDIA_TYPES` IN
+/// `agent_core/providers/base.py`** — the `OS_AUTOMATION_DIRS` precedent (exec.rs).
+/// There is no codegen and no runtime handshake; the two lists are kept in lockstep
+/// by hand, and the whole claim of a CLOSED set is that both sides mean the same four.
+/// Change one, change the other in the same commit.
+///
+/// THIS SIDE IS THE ENFORCEMENT (image-attach plan §3), which is why the list has to
+/// be here at all rather than only there. The provider adapters deliberately do NOT
+/// re-check it: an assertion in an adapter could only turn a shell bug into a stack
+/// trace in the middle of somebody's sentence, which the house rule forbids. So a
+/// picture carries one of these because it was minted here, on this list, and there
+/// is no other door.
+///
+/// FOUR, because four is what every vision API on the router's list accepts. A fifth
+/// would work for whichever provider happened to answer that turn and be refused by
+/// the other three — a message that fails for some people and not others, with
+/// nothing on screen to say why.
+const ALLOWED_IMAGE_MEDIA_TYPES: &[&str] =
+    &["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+/// The long edge a picture is fitted to, and the two steps below it.
+///
+/// SIXTEEN HUNDRED is the plan's number (§4) and it is a vision-model number, not a
+/// screen one: every provider on the list tiles an image internally at roughly this
+/// scale, so pixels past it are paid for on every turn the message is replayed in and
+/// read by nobody. The two steps below exist only for `ENCODED_IMAGE_SIZE_BOUND` — a
+/// picture that will not fit at 1600 gets smaller rather than refused.
+const IMAGE_LONG_EDGES: [u32; 3] = [1600, 1200, 800];
+
+/// JPEG quality, and the two steps below it.
+///
+/// EIGHTY first, because that is where a photograph stops looking re-encoded. The
+/// steps below are tried before any pixels are thrown away, in that order and not the
+/// other one: a 1600px picture at quality 40 still shows a model everything an
+/// 800px picture at quality 80 does, and more. Quality is the cheaper thing to spend.
+const JPEG_QUALITY_STEPS: [u8; 3] = [80, 60, 40];
+
+/// Said when the bytes do not parse as a picture — the ONE refusal that stands for
+/// every way that can be true.
+///
+/// DECODING IS THE VALIDATION on this path (plan §4), and this sentence is what that
+/// decision costs: a damaged file, a file renamed to `.png` that never was one, and a
+/// HEIC the crate has no decoder for all arrive here and all read the same. That is
+/// honest rather than vague — Addison genuinely cannot tell them apart, and the two
+/// things a person can do about any of them (try another file, convert it) are the
+/// same. Naming a format it "does not know" is the half that keeps it from reading as
+/// an accusation about their file.
+const NOT_A_PICTURE: &str =
+    "Addison couldn't read that as a picture — it may be damaged or a kind Addison doesn't know.";
+
+/// The final refusal, when even the smallest step will not fit under the encoded
+/// bound. Unreachable for anything a camera produces — 800px at quality 40 is tens of
+/// kilobytes — and kept anyway, because "we stepped down and it still did not fit" has
+/// to end in a sentence rather than in whatever the last attempt happened to weigh.
+const COULD_NOT_SHRINK_PICTURE: &str =
+    "Addison couldn't make that picture small enough to send — please try a smaller one.";
+
+/// Said when the encoder itself fails. Not a decode failure (that is `NOT_A_PICTURE`,
+/// and it is about the person's file); this is Addison's own machinery giving up, and
+/// it says so without a stack trace or a format name nobody asked about.
+const COULD_NOT_PREPARE_PICTURE: &str = "Addison couldn't prepare that picture to send.";
+
+/// One encoded picture, exactly as it will cross the bridge.
+struct EncodedImage {
+    bytes: Vec<u8>,
+    /// Always a member of `ALLOWED_IMAGE_MEDIA_TYPES` — by construction, not by check:
+    /// pass-through is filtered THROUGH that list, and the re-encode can only produce
+    /// JPEG or PNG.
+    media_type: &'static str,
+    /// The FINAL dimensions, after any downscale — never the original's. The composer
+    /// draws a thumbnail from these and the budget counts an image by them, so the
+    /// number that describes the bytes is the only honest one to send.
+    width: u32,
+    height: u32,
+}
+
+/// Written by hand rather than derived, because a derived one would print up to two
+/// mebibytes of pixel data into a test failure — burying the assertion that failed
+/// under the picture it was about. What a reader needs is the shape: what it is, how
+/// big it is, and how much it weighs.
+impl std::fmt::Debug for EncodedImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "EncodedImage {{ {} {}x{}, {} bytes }}",
+            self.media_type,
+            self.width,
+            self.height,
+            self.bytes.len()
+        )
+    }
+}
+
+// shell.pickImage {} -> {fileHandle, name, byteSize}
+//
+// `pick_file`'s sibling, and deliberately not `pick_file` with a flag: this one hands
+// back a NAME and a SIZE as well as the handle, because the composer draws a chip the
+// moment the dialog closes and the read that follows may take a second on a large
+// photo. Two commands with two honest contracts beat one whose result shape depends
+// on an argument.
+//
+// The handle is minted into the SAME session map, so everything the handle argument
+// buys `pick_file` (see `resolve_picked_handle`) it buys here unchanged: the core
+// learns a name to show a person, never a path it could walk from.
+async fn pick_image(app: &AppHandle) -> Result<Value, RpcError> {
+    let picked: Option<PathBuf> = on_main(app, move || {
+        rfd::FileDialog::new()
+            // "Pictures", not "Images": the personas are 54 and 68 and this is a file
+            // dialog, not a developer tool (CLAUDE.md — plain language everywhere a
+            // person reads).
+            .add_filter("Pictures", PICKABLE_IMAGE_EXTENSIONS)
+            .pick_file()
+    })
+    .await?;
+    let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
+
+    // The size is what the file claims RIGHT NOW, and it is display-only: the chip
+    // says "2.4 MB" beside a name while the read is still going. Nothing decides
+    // anything from it — `read_and_encode_picked_image` takes its own stat and its own
+    // refusal — so a stat the OS will not answer is a 0 here rather than a failed
+    // pick, and the read speaks if there is something to say.
+    let byte_size = stat_on_disk(&path).map(|meta| meta.len()).unwrap_or(0);
+    let name = display_name(&path);
+
+    let handle = uuid::Uuid::new_v4().to_string();
+    lock(&app.state::<FileState>().handles).insert(handle.clone(), path);
+    Ok(json!({ "fileHandle": handle, "name": name, "byteSize": byte_size }))
+}
+
+// shell.readPickedImage {fileHandle} -> {content, mediaType, name, byteSize, width, height}
+//
+// ASYNC, and every byte of the work is on `spawn_blocking`. `handle()` is awaited
+// INLINE on the core's stdout pump (`agent_process.rs`, and `PICKED_FILE_SIZE_BOUND`
+// above explains what that costs), and this is the one method in this file whose work
+// is measured in seconds rather than syscalls: decoding a 24 MB photo, resampling it
+// with Lanczos3 and re-encoding it is real CPU, and doing it on the pump would freeze
+// every frame in the app — the typing indicator, the streaming answer, all of it —
+// for as long as it took. `run_command` gets `dispatch_off_loop` for the same reason
+// at a larger scale; this needs only that its own body not sit on the loop.
+//
+// The handle is resolved BEFORE the hop, on the loop, because that is a map lookup and
+// because `FileState` lives in Tauri's managed state and does not travel. What crosses
+// into the blocking task is one `PathBuf` and nothing else.
+async fn read_picked_image(app: &AppHandle, params: &Value) -> Result<Value, RpcError> {
+    let handle = required_str(params, "fileHandle", "A file handle is required.")?;
+    let path = resolve_picked_handle(app.state::<FileState>().inner(), handle)?;
+
+    let read = tauri::async_runtime::spawn_blocking(move || read_and_encode_picked_image(&path))
+        .await
+        // The task itself panicking or being cancelled is not a thing a person can act
+        // on, and it must not surface as a hang: one plain sentence, same as any other
+        // failure of Addison's own machinery.
+        .map_err(|_| RpcError::app(COULD_NOT_PREPARE_PICTURE))??;
+
+    let (name, encoded) = read;
+    Ok(json!({
+        "content": base64::engine::general_purpose::STANDARD.encode(&encoded.bytes),
+        "mediaType": encoded.media_type,
+        "name": name,
+        // The FINAL byte count, of the bytes actually being sent — never the file's
+        // size on disk. The two differ by an order of magnitude for a phone photo, and
+        // the number a person is shown beside a picture that is about to cost them a
+        // turn should be the one that costs them the turn.
+        "byteSize": encoded.bytes.len(),
+        "width": encoded.width,
+        "height": encoded.height,
+    }))
+}
+
+/// Read the picked file and turn it into what crosses the bridge: `(name, encoded)`.
+///
+/// EVERYTHING BLOCKING LIVES HERE, on the blocking task — the stat, the read and the
+/// decode/resize/encode — so the caller above is one lookup and an await.
+fn read_and_encode_picked_image(path: &Path) -> Result<(String, EncodedImage), RpcError> {
+    // The same two questions of one stat every read path in this file asks, in the
+    // same order: WHAT IT IS first (a person can type a FIFO's name into an OS dialog,
+    // and `fs::read` on one never returns — `refuse_non_regular_file`), then how big.
+    // A size the OS will not give us is not a refusal; the read below has its own
+    // sentence.
+    if let Some(meta) = stat_on_disk(path) {
+        refuse_non_regular_file(&meta)?;
+        refuse_oversize_picture(meta.len())?;
+    }
+    let bytes = std::fs::read(path).map_err(|_| RpcError::app("Addison couldn't read that file."))?;
+    // The file that GREW between the stat and the read, or one metadata could not
+    // answer for at all. It has already cost this process the memory; it does not also
+    // get to be decoded, which is where the cost multiplies. The same race backstop
+    // the two reads above carry, and like them unreachable from a test.
+    refuse_oversize_picture(bytes.len() as u64)?;
+
+    Ok((display_name(path), encode_picked_image(bytes)?))
+}
+
+/// The picked-picture ceiling, refused in plain language. The size is named in the
+/// sentence and derived from the constant, so the two cannot drift apart.
+///
+/// A SIBLING of `refuse_oversize_pick`, not a reuse of it, for that function's own
+/// stated reason: same shape, different bound, different sentence — and this one says
+/// "picture" because that is what the person is standing in front of.
+fn refuse_oversize_picture(len: u64) -> Result<(), RpcError> {
+    if len > PICKED_IMAGE_SIZE_BOUND {
+        return Err(RpcError::app(format!(
+            "That picture is too big for Addison to open — please pick one that's {} MB or smaller.",
+            PICKED_IMAGE_SIZE_BOUND / (1024 * 1024)
+        )));
+    }
+    Ok(())
+}
+
+/// The media type an ORIGINAL of this format may cross the bridge as, or `None` when
+/// re-encoding is the only way to reach the closed set.
+///
+/// FILTERED THROUGH `ALLOWED_IMAGE_MEDIA_TYPES` rather than matched against a second
+/// list of formats. The crate names a mime type for everything it can decode — BMP is
+/// `image/bmp`, TIFF is `image/tiff` — and those are exactly the ones no vision API on
+/// the list takes, so letting the closed set do the deciding means a format added to
+/// the picker's filter cannot accidentally pass through as itself. One list, one
+/// answer.
+fn passthrough_media_type(format: image::ImageFormat) -> Option<&'static str> {
+    let named = format.to_mime_type();
+    ALLOWED_IMAGE_MEDIA_TYPES.iter().copied().find(|allowed| *allowed == named)
+}
+
+/// Decode, downscale and re-encode picked bytes — the whole of what
+/// `shell.readPickedImage` does to them, as a function of the bytes alone.
+///
+/// A PURE FUNCTION, factored out for `read_scoped_handle`'s reason: none of this needs
+/// a live Tauri app, a dialog or a file, so all of it is reachable from an ordinary
+/// unit test, which is where the refusals and the closed media-type set are actually
+/// pinned.
+///
+/// **DECODING IS THE VALIDATION** (plan §4). There is no magic-byte table and no
+/// extension check on this path: bytes that parse as an image are an image, and bytes
+/// that do not are refused with `NOT_A_PICTURE`. That is stronger than either guess —
+/// it is the same decoder the re-encode will use — and it is what lets the picker's
+/// filter be generous.
+///
+/// PASS-THROUGH IS AN EXCEPTION, and a narrow one: a picture that is ALREADY one of
+/// the four, ALREADY under the encoded bound and ALREADY within the long edge crosses
+/// byte-for-byte. Re-encoding a small photo is pure loss — a JPEG round-tripped
+/// through quality 80 is visibly worse and no smaller — and a PNG screenshot of text,
+/// the single most common thing anybody attaches, is exactly the image JPEG treats
+/// worst. All three conditions have to hold: the point is that nothing changed, so
+/// there is nothing to gain by touching it.
+///
+/// GIF LOSES ITS ANIMATION when it cannot pass through, and that is accepted rather
+/// than solved. `load_from_memory` hands back the first frame, so a GIF too large or
+/// too big-edged to pass through is re-encoded as that one frame. A model looks at
+/// still pictures; the alternative is refusing the file outright, which serves nobody,
+/// and re-encoding every frame is a video pipeline this path has no reason to grow.
+fn encode_picked_image(original: Vec<u8>) -> Result<EncodedImage, RpcError> {
+    // The format is read from the BYTES, never from a name — this function has never
+    // seen a name. `Err` here simply means "no pass-through", because the decode below
+    // is the answer that matters.
+    let format = image::guess_format(&original).ok();
+    let decoded = image::load_from_memory(&original).map_err(|_| RpcError::app(NOT_A_PICTURE))?;
+
+    let (width, height) = (decoded.width(), decoded.height());
+    if let Some(media_type) = format.and_then(passthrough_media_type) {
+        if original.len() <= ENCODED_IMAGE_SIZE_BOUND && width.max(height) <= IMAGE_LONG_EDGES[0] {
+            return Ok(EncodedImage { bytes: original, media_type, width, height });
+        }
+    }
+
+    // ALPHA DECIDES THE FORMAT, and it is asked of the DECODED image rather than of the
+    // original's format: a GIF's first frame comes back RGBA whatever the file looked
+    // like, and a PNG that has an alpha channel it never uses is still a PNG. Erring
+    // towards PNG costs bytes; erring the other way turns transparent pixels black,
+    // which is a picture that lies about itself.
+    let keeps_alpha = decoded.color().has_alpha();
+
+    for edge in IMAGE_LONG_EDGES {
+        let needs_resize = width.max(height) > edge;
+        if !needs_resize && edge != IMAGE_LONG_EDGES[0] {
+            // Already smaller than this step, so this iteration would encode exactly
+            // the bytes the previous one did and fail exactly the same way.
+            continue;
+        }
+        let scaled;
+        let candidate = if needs_resize {
+            // LANCZOS3, not Triangle. This is CPU on a blocking task, not on the pump,
+            // so the cost is a second nobody is watching — and the thing most often
+            // attached is a screenshot with text in it, where a soft filter smears the
+            // strokes into something a model reads wrong with total confidence.
+            // Lanczos3 keeps the edges. `resize` fits INSIDE the box and preserves the
+            // aspect ratio, which is why both arguments are the same number.
+            scaled = decoded.resize(edge, edge, image::imageops::FilterType::Lanczos3);
+            &scaled
+        } else {
+            &decoded
+        };
+
+        // QUALITY BEFORE PIXELS: every step of the JPEG ladder is spent at this edge
+        // before the loop moves to a smaller one. PNG has no such knob — it is lossless
+        // — so the alpha branch has exactly one attempt per step, and shrinking is the
+        // only thing left to try.
+        if keeps_alpha {
+            let bytes = encode_png(candidate)?;
+            if bytes.len() <= ENCODED_IMAGE_SIZE_BOUND {
+                return Ok(EncodedImage {
+                    bytes,
+                    media_type: "image/png",
+                    width: candidate.width(),
+                    height: candidate.height(),
+                });
+            }
+        } else {
+            for quality in JPEG_QUALITY_STEPS {
+                let bytes = encode_jpeg(candidate, quality)?;
+                if bytes.len() <= ENCODED_IMAGE_SIZE_BOUND {
+                    return Ok(EncodedImage {
+                        bytes,
+                        media_type: "image/jpeg",
+                        width: candidate.width(),
+                        height: candidate.height(),
+                    });
+                }
+            }
+        }
+    }
+
+    Err(RpcError::app(COULD_NOT_SHRINK_PICTURE))
+}
+
+/// PNG bytes for a picture that has transparency to keep.
+fn encode_png(image: &image::DynamicImage) -> Result<Vec<u8>, RpcError> {
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image
+        .write_to(&mut buffer, image::ImageFormat::Png)
+        .map_err(|_| RpcError::app(COULD_NOT_PREPARE_PICTURE))?;
+    Ok(buffer.into_inner())
+}
+
+/// JPEG bytes at one quality step.
+///
+/// `to_rgb8` first, deliberately: the encoder is handed three channels because JPEG
+/// has no fourth, and this is only ever called for an image that has no alpha to lose.
+fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, RpcError> {
+    let mut bytes: Vec<u8> = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
+        .encode_image(&image.to_rgb8())
+        .map_err(|_| RpcError::app(COULD_NOT_PREPARE_PICTURE))?;
+    Ok(bytes)
+}
+
+/// The last component of a path, for showing beside a thumbnail and nothing else.
+///
+/// DISPLAY ONLY, and that is what makes it safe to send where a path never is: it says
+/// what the person called their file, it cannot be walked from, and the core stores it
+/// on the attachment RECORD rather than on the wire to any model (plan §3 — a model
+/// told the file was "receipt.png" will answer about a receipt it never saw).
+fn display_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        // A path with no final component is not something a native picker returns, and
+        // a nameless chip is worse than a generic one.
+        .unwrap_or_else(|| "picture".to_string())
 }
 
 // shell.writeWorkspaceFile {path, content} -> {existed, prior, newlineRestored}  (step 5)
@@ -3261,6 +3722,192 @@ mod tests {
             assert_eq!(err.code, -32000);
             assert_eq!(err.message, "Addison can only look at 200 files at once.");
         }
+    }
+
+    // --- The attach path's decode/downscale/encode (image-attach plan §4). All of it
+    // runs against `encode_picked_image`, which takes bytes and returns bytes — no
+    // Tauri app, no dialog, no file — which is the reason it was factored out.
+
+    /// PNG bytes for a `width` × `height` picture, opaque unless `alpha`.
+    ///
+    /// GENERATED RATHER THAN CHECKED IN. A fixture photo in the repo would be a
+    /// binary blob nobody can review in a diff, and the properties these tests
+    /// assert are about SIZE and CHANNELS — both of which are arguments here and
+    /// neither of which a reader could tell by looking at a checked-in file.
+    ///
+    /// The pattern is deliberately not flat: a solid colour compresses to almost
+    /// nothing in every format, which would make "did it fit under the bound?"
+    /// vacuously true for any input at any size.
+    ///
+    /// The callers pick sizes JUST past the long edge rather than phone-photo sizes,
+    /// and that is a deliberate trade. None of the properties here depend on the
+    /// number of pixels — 1700 wide crosses the same branch 4000 wide does — while a
+    /// debug build resamples and deflates at a few megapixels per SECOND, so a
+    /// realistic fixture bought nothing and cost twenty seconds. A suite people start
+    /// skipping is the failure mode that matters.
+    fn generated_png(width: u32, height: u32, alpha: bool) -> Vec<u8> {
+        let picture = image::RgbaImage::from_fn(width, height, |x, y| {
+            let noise = ((x * 7 + y * 13) % 251) as u8;
+            image::Rgba([noise, (x % 256) as u8, (y % 256) as u8, if alpha { 128 } else { 255 }])
+        });
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let source = if alpha {
+            image::DynamicImage::ImageRgba8(picture)
+        } else {
+            image::DynamicImage::ImageRgb8(image::DynamicImage::ImageRgba8(picture).to_rgb8())
+        };
+        source.write_to(&mut buffer, image::ImageFormat::Png).expect("encode the fixture");
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn a_picture_past_the_long_edge_comes_back_within_it() {
+        // THE WHOLE REASON THE SHELL DECODES AT ALL (owner decision 3): a phone photo
+        // simply works, because it is downscaled here and never crosses the pump at
+        // full size. Delete the resize and this comes back 2400 wide.
+        let encoded = encode_picked_image(generated_png(1700, 340, false)).unwrap();
+        assert!(
+            encoded.width.max(encoded.height) <= IMAGE_LONG_EDGES[0],
+            "a picture past the long edge must be downscaled, not sent as it is: {}x{}",
+            encoded.width,
+            encoded.height
+        );
+        // The ASPECT RATIO survives, or the thumbnail lies about the picture and the
+        // model sees something the person did not.
+        assert_eq!(encoded.width, 1600);
+        assert_eq!(encoded.height, 320);
+        // And the reported dimensions describe THESE bytes, not the original's.
+        let sent = image::load_from_memory(&encoded.bytes).expect("what we send must decode");
+        assert_eq!((sent.width(), sent.height()), (encoded.width, encoded.height));
+    }
+
+    #[test]
+    fn a_small_picture_crosses_byte_for_byte() {
+        // PASS-THROUGH, and it is asserted as BYTE IDENTITY rather than as "still a
+        // PNG": re-encoding a small picture is pure loss, and the most common thing
+        // anybody attaches is a screenshot of text, which is exactly what a JPEG
+        // round-trip ruins. Under the bound, within the long edge, already one of the
+        // four — nothing to gain by touching it.
+        let original = generated_png(64, 48, false);
+        let encoded = encode_picked_image(original.clone()).unwrap();
+        assert_eq!(encoded.bytes, original, "a small picture must cross untouched");
+        assert_eq!(encoded.media_type, "image/png");
+        assert_eq!((encoded.width, encoded.height), (64, 48));
+    }
+
+    #[test]
+    fn bytes_that_are_not_a_picture_are_refused_in_plain_language() {
+        // DECODING IS THE VALIDATION (plan §4). No magic-byte table, no extension
+        // check: what does not parse is refused, and the sentence covers a damaged
+        // file, a renamed one and a HEIC the crate cannot read, because Addison
+        // genuinely cannot tell them apart and the answer to all three is the same.
+        for junk in [
+            b"this is not a picture, it is a sentence".to_vec(),
+            // A PNG header with nothing behind it — the shape that defeats every
+            // check made from the first few bytes rather than from a decode.
+            vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0],
+            Vec::new(),
+        ] {
+            let err = encode_picked_image(junk).unwrap_err();
+            assert_eq!(err.code, -32000);
+            assert_eq!(err.message, NOT_A_PICTURE);
+        }
+    }
+
+    #[test]
+    fn a_picture_with_transparency_comes_back_as_png() {
+        // JPEG has no fourth channel, so an alpha picture re-encoded as one comes back
+        // with its transparent pixels turned black — a picture that lies about itself.
+        // Big enough to force the re-encode, so this measures the ladder's choice and
+        // not the pass-through.
+        let encoded = encode_picked_image(generated_png(1700, 340, true)).unwrap();
+        assert_eq!(encoded.media_type, "image/png", "transparency must survive the re-encode");
+        let sent = image::load_from_memory(&encoded.bytes).expect("what we send must decode");
+        assert!(sent.color().has_alpha(), "the alpha channel must still be there");
+
+        // ...and the other half, or "always PNG" would pass this while costing every
+        // photograph its size: an opaque picture of the same shape becomes a JPEG.
+        let opaque = encode_picked_image(generated_png(1700, 340, false)).unwrap();
+        assert_eq!(opaque.media_type, "image/jpeg");
+    }
+
+    #[test]
+    fn every_encoded_picture_lands_on_the_closed_media_type_set() {
+        // THE CLOSED SET IS ENFORCED HERE AND NOWHERE ELSE (plan §3): the provider
+        // adapters deliberately do not re-check it, because an assertion there could
+        // only turn a shell bug into a stack trace mid-sentence. So this side has to
+        // be true by construction, and every route out of the encoder is walked:
+        // pass-through, the JPEG ladder and the PNG branch.
+        //
+        // HAND-SYNCED with `ALLOWED_IMAGE_MEDIA_TYPES` in agent_core/providers/base.py.
+        assert_eq!(
+            ALLOWED_IMAGE_MEDIA_TYPES,
+            ["image/png", "image/jpeg", "image/gif", "image/webp"],
+            "the closed set must stay entry-for-entry with ALLOWED_IMAGE_MEDIA_TYPES \
+             in agent_core/providers/base.py — a fifth type is accepted by whichever \
+             provider happened to answer and refused by the other three"
+        );
+
+        for bytes in [
+            generated_png(32, 32, false),   // pass-through
+            generated_png(1700, 340, false), // downscale + JPEG
+            generated_png(1700, 340, true),  // downscale + PNG
+        ] {
+            let encoded = encode_picked_image(bytes).unwrap();
+            assert!(
+                ALLOWED_IMAGE_MEDIA_TYPES.contains(&encoded.media_type),
+                "{} is not one of the four every vision API accepts",
+                encoded.media_type
+            );
+            assert!(
+                encoded.bytes.len() <= ENCODED_IMAGE_SIZE_BOUND,
+                "what crosses the bridge must fit the encoded bound"
+            );
+        }
+
+        // A format the crate CAN decode but no vision API takes must never pass
+        // through as itself — the reason `passthrough_media_type` filters through the
+        // closed set rather than matching a second list of formats.
+        assert_eq!(passthrough_media_type(image::ImageFormat::Bmp), None);
+        assert_eq!(passthrough_media_type(image::ImageFormat::Tiff), None);
+        assert_eq!(passthrough_media_type(image::ImageFormat::Png), Some("image/png"));
+        assert_eq!(passthrough_media_type(image::ImageFormat::Gif), Some("image/gif"));
+    }
+
+    #[test]
+    fn an_oversize_picture_is_refused_before_it_is_read() {
+        // The bound against absurdity, and the sentence names the number in MB derived
+        // from the constant so the two cannot drift. The refusal is taken from the
+        // file's SIZE — the read that follows it never happens.
+        let err = refuse_oversize_picture(PICKED_IMAGE_SIZE_BOUND + 1).unwrap_err();
+        assert_eq!(err.code, -32000);
+        assert_eq!(
+            err.message,
+            "That picture is too big for Addison to open — please pick one that's 24 MB or smaller."
+        );
+        assert!(refuse_oversize_picture(PICKED_IMAGE_SIZE_BOUND).is_ok(), "AT the bound passes");
+    }
+
+    #[test]
+    fn a_picked_image_read_resolves_only_a_handle_the_shell_minted() {
+        // The handle argument, unchanged from `read_scoped_file` and asserted for the
+        // second reader: a raw path is not a handle, and a handle nobody minted reads
+        // nothing. Same sentence for both, so the person cannot tell which read
+        // refused — or an unknown handle from an expired one.
+        let state = FileState::default();
+        let err = resolve_picked_handle(&state, "/etc/passwd").unwrap_err();
+        assert_eq!(err.message, "Addison can't read that file — please pick it again.");
+        assert!(resolve_picked_handle(&state, &uuid::Uuid::new_v4().to_string()).is_err());
+
+        let path = temp_path();
+        std::fs::write(&path, generated_png(8, 8, false)).expect("seed a picture");
+        lock(&state.handles).insert("minted".to_string(), path.clone());
+        let (name, encoded) =
+            read_and_encode_picked_image(&resolve_picked_handle(&state, "minted").unwrap()).unwrap();
+        assert_eq!(name, path.file_name().unwrap().to_string_lossy());
+        assert_eq!(encoded.media_type, "image/png");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

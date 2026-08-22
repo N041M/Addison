@@ -385,6 +385,13 @@ export const Method = {
   ShellOpenExternal: "shell.openExternal",
   ShellPickFile: "shell.pickFile",
   ShellReadScopedFile: "shell.readScopedFile",
+  // Attaching a picture (image-attach plan §4) — the native picker and the decode/
+  // downscale/re-encode read behind it. Mirrored from protocol.py like every method
+  // in this block and NEVER callable from this webview: the picker is opened by the
+  // core answering a person's click on ＋, and the bytes that come back reach the
+  // frontend as `conversation.pickAttachment`'s result (phase 3), never from here.
+  ShellPickImage: "shell.pickImage",
+  ShellReadPickedImage: "shell.readPickedImage",
   // Workspace-trust file surface (step 5, OPEN harness) — path-based, Rust-enforced.
   ShellWriteWorkspaceFile: "shell.writeWorkspaceFile",
   ShellReadWorkspaceFile: "shell.readWorkspaceFile",

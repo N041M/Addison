@@ -66,6 +66,16 @@ class ServerShellBridge(ShellBridge, Protocol):
     # this picker, and the handler that answers that click calls it.
     def pick_file(self) -> str: ...
 
+    # Image attach (plan §4, phase 3 is the first caller). Declared HERE and not on
+    # ``ShellBridge`` for the reason that Protocol's own docstring gives, and this
+    # pair is the sharpest case of it: an attachment is the person's own content,
+    # picked with their own hands, and it grants nothing. A TOOL that could open this
+    # picker would be a model asking for a picture — exactly what the plan's one
+    # sentence says can never happen.
+    def pick_image(self) -> dict: ...
+
+    def read_picked_image(self, file_handle: str) -> dict: ...
+
     # The review surface's read paths (Phase-3 plan Build §1). They are declared HERE
     # and not on ``ShellBridge`` for the reason that Protocol's own docstring gives —
     # it is "exactly the surface the v1 tools need", and no tool may ever have these.
@@ -302,6 +312,55 @@ class IpcShellBridge:
         second file by anything it read in the first. ``read_scoped_file`` resolves
         it. Raises (RuntimeError) if the person cancels, like ``pick_directory``."""
         return self._call(Method.SHELL_PICK_FILE, {})["fileHandle"]
+
+    # --- image attach (plan §4) --------------------------------------------
+    def pick_image(self) -> dict:
+        """Native picker filtered to pictures: ``{"fileHandle", "name", "byteSize"}``.
+
+        ITS OWN METHOD rather than a flag on ``pick_file``, so neither contract grows
+        a mode. The handle is the same opaque, session-scoped thing ``pick_file``
+        mints and carries the same argument — the core learns what the person called
+        their file and never where it lives. ``name`` and ``byteSize`` are DISPLAY
+        ONLY, so a composer chip can be drawn the moment the dialog closes while the
+        decode is still running; nothing decides anything from either.
+
+        Raises (RuntimeError) if the person cancels, like ``pick_file``."""
+        result = self._call(Method.SHELL_PICK_IMAGE, {})
+        # The shape is validated the way ``save_new_file`` validates its own: read the
+        # key the caller needs and let a missing one raise here, at the boundary,
+        # rather than three layers later as a None nobody can trace back.
+        return {
+            "fileHandle": result["fileHandle"],
+            "name": result["name"],
+            "byteSize": result["byteSize"],
+        }
+
+    def read_picked_image(self, file_handle: str) -> dict:
+        """The picked picture, ready to send:
+        ``{"content", "mediaType", "name", "byteSize", "width", "height"}``.
+
+        THE SHELL DOES THE WORK, and that is the point of the method rather than an
+        accident of where the bytes are. It decodes (which IS the validation — a file
+        that does not parse as a picture is refused there, in one plain sentence),
+        downscales anything past a 1600px long edge, and re-encodes under 2 MiB. So
+        what crosses this bridge is never the original file: a phone photo simply
+        works, and the pump never carries twenty megabytes.
+
+        ``content`` is base64 of the ENCODED bytes and ``mediaType`` is one of
+        ``providers/base.py::ALLOWED_IMAGE_MEDIA_TYPES`` — the shell is where that
+        closed set is enforced, so this is the shape the adapters may trust.
+        ``width``, ``height`` and ``byteSize`` describe those bytes, never the file on
+        disk. Only a handle the shell itself minted resolves; anything else is refused
+        with "please pick it again"."""
+        result = self._call(Method.SHELL_READ_PICKED_IMAGE, {"fileHandle": file_handle})
+        return {
+            "content": result["content"],
+            "mediaType": result["mediaType"],
+            "name": result["name"],
+            "byteSize": result["byteSize"],
+            "width": result["width"],
+            "height": result["height"],
+        }
 
     # --- workspace-trust file surface (step 5, OPEN harness) ---------------
     def write_workspace_file(self, path: str, content: str) -> dict:

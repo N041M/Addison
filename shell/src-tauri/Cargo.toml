@@ -3,7 +3,12 @@ name = "addison"
 version = "0.1.0"
 description = "Addison — local-first consumer agent harness"
 edition = "2021"
-rust-version = "1.77"
+# RAISED FROM 1.77 by the `image` dependency below, which declares 1.88 — so 1.77
+# stopped being true the moment that line landed, and a floor nothing can build at
+# is a claim, not a floor. Stated here rather than worked around: pinning an older
+# `image` to hold a number no CI runner or developer machine in this project is
+# anywhere near would be paying in decoder bugs for a compatibility nobody wants.
+rust-version = "1.88"
 
 # Engineering-spec §1.2: Tauri 2.x. The Rust shell owns the OS-permission-sensitive
 # code (keychain, filesystem picker, updater) and supervises the Python Agent Core.
@@ -22,6 +27,24 @@ arboard = "3"                       # clipboard text (shell.readClipboard)
 open = "5"                          # open http(s) links in the default browser (shell.openExternal)
 base64 = "0.22"                     # encode picked images for shell.readScopedFile
 uuid = { version = "1", features = ["v4"] }   # opaque file handles + device_id (§5)
+
+# Decode, downscale and re-encode a picked picture (shell.readPickedImage,
+# image-attach plan §4). DECODING IS THE VALIDATION on that path: a file that does
+# not parse as an image is refused, which is what retires guessing content from a
+# filename there — so this crate is not a convenience, it is the check.
+#
+# DEFAULT FEATURES OFF, and the trim is the point. The default set is
+# `rayon` + every format the crate knows, which drags in the AVIF encoder (`ravif`,
+# its own threading stack) plus exr, dds, hdr, pnm, qoi, tga — none of which a
+# person picks out of a photo library, all of which would be new code inside the
+# HIGHEST-TRUST process in this app. What is enabled is exactly what the picker's
+# filter offers to decode (png/jpeg/gif/webp/bmp/tiff) and what the re-encode may
+# land on (jpeg/png — the `png` and `jpeg` features carry both directions). HEIC is
+# deliberately absent because the crate has no decoder for it at all; the picker
+# still offers it and the refusal sentence covers it honestly.
+image = { version = "0.25", default-features = false, features = [
+    "png", "jpeg", "gif", "webp", "bmp", "tiff",
+] }
 
 # SHA-256 of a file that is already on disk (shell.digestWorkspaceFiles, phase-3
 # review surface). The core records the digest of what it WROTE; the shell answers
