@@ -96,21 +96,37 @@ shape; a `tool`/`assistant` message never carries them in v1:
 - **Google**: `parts` — `inline_data {mime_type, data}`, then `text`.
 - **Ollama**: the message's `images: [b64, …]` key (raw base64, no `data:` prefix).
 
-**ANTHROPIC IS PROVEN AGAINST THE REAL API — the others are not yet.** On
-2026-08-23 the owner ran `scripts/check_image_wire.py`, which drives these
-adapters (never a hand-written request) and sends a flat purple square with the
-question *"What is the single dominant colour of this image?"* — a word the prompt
-never contains, so an answer from the text alone cannot pass. Anthropic answered
-**purple**. That is the first evidence in this feature that is not a test agreeing
-with its author: the block shape is accepted, the base64 is right, the
-image-before-text order works, and the pixels genuinely arrived at a model.
+**ANTHROPIC AND GOOGLE ARE PROVEN AGAINST THE REAL API.** On 2026-08-23 the owner
+ran `scripts/check_image_wire.py`, which drives these adapters (never a
+hand-written request) and sends a flat purple square with the question *"What is
+the single dominant colour of this image?"* — a word the prompt never contains, so
+an answer from the text alone cannot pass. Both answered **purple**. That is the
+first evidence in this feature that is not a test agreeing with its author: the
+block shapes are accepted, the base64 is right, the image-before-text order works,
+and the pixels genuinely arrived at a model.
 
-**What it does not cover, stated so the green does not spread:** OpenAI, Google
-and Ollama are still documentation-checked only, and Google is the one most worth
-running (snake_case in an otherwise camelCase API). The harness feeds a synthetic
-PNG straight to the adapters, so it says nothing about phase 2's decode and
-downscale, the picker, the composer, persistence, or the thread — those need the
-app.
+**Google was the one worth running**, and it is now settled rather than argued:
+`inline_data` / `mime_type` in snake_case, inside an API whose every other field
+here is camelCase (`functionCall`, `systemInstruction`), is **accepted**. The
+adapter's module docstring says it "speaks v1beta camelCase throughout"; the image
+part is the one deliberate exception, and it works because Google's JSON-proto
+mapping takes both spellings.
+
+**What it does not cover, stated so the green does not spread:** OpenAI and Ollama
+are still documentation-checked only. The harness feeds a synthetic PNG straight to
+the adapters, so it says nothing about phase 2's decode and downscale, the picker,
+the composer, persistence, or the thread — those need the app.
+
+**It also found something that is not this feature's** (2026-08-23): Google's
+`GET /v1beta/models` LISTS models it will not serve. `gemini-2.5-flash` is
+returned by the list and answers 404 to a newer key — *"no longer available to new
+users … use models/gemini-3.6-flash"* — so the live-list design that replaced the
+hardcoded ids in August can still put a dead model in the picker, and every message
+to it fails. Addison's own sentence for that 404 is *"Please try again"*, which is
+false advice, while `exception_for_http_status` holds Google's explanation (and the
+replacement it names) in `server_detail` and consults it only for the over-window
+case. [`KNOWN-GAPS.md`](KNOWN-GAPS.md) tracks it; it is a provider-layer defect
+that predates image attach and wants its own change.
 
 **All four shapes were checked against the vendors' own documentation** the same
 day, because until then every one of them was asserted only against tests written

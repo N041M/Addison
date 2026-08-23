@@ -964,6 +964,30 @@ carries the reasoning:
   reduced by nothing. The two candidate fixes — an Anthropic `cache_control`
   breakpoint, or degrading old pictures to the `[picture]` marker — both change
   what the model receives, so both are owner calls.
+**Google lists models it will not serve, and Addison's 404 sentence gives false
+advice (found 2026-08-23 by a real request; NOT an image-attach defect — it
+predates the feature and wants its own change).** `GET /v1beta/models` returns
+`gemini-2.5-flash`, and calling it with a newer key answers 404: *"This model is no
+longer available to new users. Please update your code to use
+models/gemini-3.6-flash."* The picker is built from that live list — the design
+that replaced the hardcoded ids in August, precisely so Addison would never offer a
+model that does not exist — so a person can pick from Addison's own menu and have
+every message fail. **The live list cannot be trusted as a servable set, and
+nothing can know which entries are dead without calling one.**
+Two things follow, both worth fixing and neither done:
+- **The sentence is wrong, not merely unhelpful.** A 404 answers *"The request to
+  Google failed (status 404). Please try again."* Retrying a retired model never
+  works. `exception_for_http_status` already ATTACHES the provider's own words as
+  `server_detail` and already reads them for one case (`_reads_as_over_window`), so
+  the precedent for choosing a truer sentence from them exists in the same
+  function. It should say the model is no longer available and to pick another —
+  ours, not the vendor's text verbatim, since that text is external content.
+- **`list_models`' filter does not filter.** Its docstring says "chat-capable model
+  ids", and a real run returned TTS, image-generation, robotics, `lyria-*` and
+  `deep-research-*` entries — nothing is filtered on
+  `supportedGenerationMethods`. That would not have caught the retired 2.5 models
+  (they do support `generateContent`), so it is a second, smaller thread: the
+  picker is fuller of unusable entries than the retirement issue alone explains.
 - **Rewinding to a picture-only message loses its pictures, and says so rather
   than handing them back.** A rewind deletes the anchor's attachment rows with the
   message (one transaction, by design — the bytes belonged to a message that no
