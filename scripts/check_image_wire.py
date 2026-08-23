@@ -140,7 +140,7 @@ def providers():
             (
                 "google",
                 GoogleProvider(
-                    model=os.environ.get("GOOGLE_MODEL", "gemini-2.0-flash"),
+                    model=os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash"),
                     api_key_getter=lambda k=key: k,
                 ),
             )
