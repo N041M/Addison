@@ -488,11 +488,19 @@ def test_a_throwing_attempt_sink_never_breaks_the_turn():
 def test_the_log_keeps_what_the_SERVER_said_not_only_what_addison_said():
     """Two different sentences, and only one of them ends an investigation.
 
-    Addison shows "The request to Google failed (status 404). Please try again."
-    — plain language, the house rule, and the right thing on screen. The server
-    said WHICH model and WHICH API version. Recording only ours meant the log
-    faithfully preserved Addison's own guess about a failure nobody understood,
-    which is how a real 404 survived four rounds of theorising."""
+    Addison shows a plain-language sentence — the house rule, and the right thing
+    on screen. The server said WHICH model and WHICH API version. Recording only
+    ours meant the log faithfully preserved Addison's own guess about a failure
+    nobody understood, which is how a real 404 survived four rounds of theorising.
+
+    THE SENTENCE ADDISON SHOWS CHANGED ON 2026-08-23, and this test is why the
+    change was safe to make: it was "The request to Google failed (status 404).
+    Please try again", which is false for the failure this very fixture describes —
+    a retired model does not come back, so the only action it named could not work.
+    The provider's own words now DECIDE which of Addison's sentences is shown
+    (``base._reads_as_model_retired``), and the two-channel property this test
+    exists for is untouched: ``detail`` is still ours and ``server_detail`` is
+    still theirs, which is the thing that ends an investigation."""
     rows: list[dict] = []
     exc = exception_for_http_status(
         404,
@@ -504,7 +512,10 @@ def test_the_log_keeps_what_the_SERVER_said_not_only_what_addison_said():
                         on_provider_attempt=rows.append)
     orch.run_turn(conv, mode=orch_mod.PolicyMode.SAFE)
 
-    assert rows[0]["detail"].startswith("The request to Google failed")
+    # OURS — and now a true one: the fixture's own body says the model is retired,
+    # so the 404 branch picks the sentence that names the one thing that helps.
+    assert rows[0]["detail"] == "That model isn't available any more. Choose a different one in Settings."
+    # THEIRS, verbatim and separate. This is the assertion the test is named for.
     assert "no longer available to new users" in rows[0]["server_detail"]
 
 

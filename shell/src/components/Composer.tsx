@@ -49,10 +49,23 @@
 // CONSENT: `conversation.stop` refuses every pending permission card and forbids
 // another (KNOWN-BUGS #4). It keeps its aria-label.
 
+// PICTURES (image-attach plan §6). A ＋ control opens the picker — through the
+// CORE, never `shell.*` (spec §1.3) — and what comes back rides the strip above
+// the textarea as a chip until it is sent or taken off again. Nothing here grants
+// anything: an attachment is the person's own content, picked with their own
+// hands, and the only thing that changed for the model is that a message it was
+// already going to receive can now carry pixels.
+//
+// The bytes this file holds are FOR DISPLAY only. A send names ids, so nothing in
+// the webview — the lowest-trust process — can become what the model saw. Every
+// thumbnail is a `data:` URI, which the pinned CSP already allows; `blob:` and
+// object URLs are refused by name (tests/test_csp_is_pinned.py).
+
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { TurnState } from "../hooks/useTurn";
-import type { DisplayMessage } from "../types/ui";
+import type { DisplayMessage, PendingAttachment } from "../types/ui";
+import { ipc } from "../ipc/client";
 import { ModelSelector } from "./ModelSelector";
 
 interface Props {
@@ -67,7 +80,35 @@ interface Props {
   onDraftSeedUsed?: () => void;
   /** Bump to focus the textarea without prefilling (first-run "say hello" nudge). */
   focusSignal?: number;
+  /**
+   * Bump to drop every pending picture — App's `resetTransientState`, the same
+   * line that clears `composerSeed`, so a new chat or a switched-to conversation
+   * starts with an empty composer in both halves of it. A signal rather than
+   * lifted state, on the `focusSignal` precedent: the picks belong to the message
+   * being composed, and the only thing App knows about them is when they stop
+   * being one.
+   */
+  clearAttachmentsSignal?: number;
+  /**
+   * App's status banner (the surface every other RPC failure in the app already
+   * uses). A picker that was closed, a file that will not decode, a fifth picture
+   * — each comes back as one plain sentence from the core, and this is where it is
+   * shown. Optional so a partial-bundle render still works.
+   */
+  setStatusBanner?: (text: string | null) => void;
 }
+
+/** The core holds four pending pictures at most and refuses a fifth pick in a
+ *  sentence (rpc/conversation.py, MAX_ATTACHMENTS_PER_MESSAGE). This is the same
+ *  number so the ＋ simply stops offering rather than sending somebody to a file
+ *  dialog whose answer is already refused — the CORE is the enforcement, this is
+ *  only the manners. */
+const MAX_ATTACHMENTS = 4;
+
+/** What the composer says when the reply to a pick is a shape it cannot read.
+ *  Every real refusal arrives as the core's own sentence and is shown verbatim;
+ *  this covers only the case where the two sides disagree about the payload. */
+const UNREADABLE_PICK = "Addison couldn't read that picture. Please try another one.";
 
 /** The textarea grows to this and then scrolls. Not the prototype's 180: the
  * cap sits ON the line grid (9px + 2px pads + 7 × 22.5px lines), so a
@@ -97,6 +138,36 @@ function lastAnsweredLabel(messages: DisplayMessage[] | undefined): string | nul
   return null;
 }
 
+/**
+ * A picture's size, in the strip's machine-fact voice. Whole kilobytes below a
+ * megabyte, one decimal above it: what this answers is "is that the big one or the
+ * small one", and a byte count answers it worse than "1.4 MB" does.
+ */
+function formatByteSize(bytes: number): string {
+  if (!bytes || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${Math.round(kb)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * Whether the model the person EXPLICITLY picked is known not to look at pictures.
+ *
+ * Three ways to answer "no" here, and only one of them is a yes-it-cannot:
+ * `vision === false` on the picked cloud row. A local model carries no flag at all
+ * (its answer is per model and the list path does not fetch it — plan §5), and a
+ * turn with no explicit pick will be decided by routing, which this side cannot
+ * predict. Absent means UNKNOWN, and a warning that is sometimes wrong teaches
+ * people to ignore the one that is right.
+ */
+function pickedModelCannotSee(models: ModelSelection): boolean {
+  if (models.selectedRole === "local") return false;
+  const picked = models.selectedCloudModel;
+  if (!picked) return false;
+  return (models.cloudModels ?? []).find((m) => m.id === picked)?.vision === false;
+}
+
 export function Composer({
   connected,
   turn,
@@ -104,10 +175,18 @@ export function Composer({
   draftSeed,
   onDraftSeedUsed,
   focusSignal,
+  clearAttachmentsSignal,
+  setStatusBanner,
 }: Props) {
   const { isWorking, handleSend, handleStop } = turn;
   const answeredLabel = lastAnsweredLabel(turn.messages);
   const [draft, setDraft] = useState("");
+  // Pictures the person has picked and not yet sent. The core is holding the bytes
+  // under these ids; what is kept here is the preview it handed back.
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  // A picker is open (or its decode is still running). The ＋ waits for it —
+  // nothing else does.
+  const [picking, setPicking] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Auto-grow from one line to the cap, then scroll. Runs on every draft change
@@ -153,11 +232,138 @@ export function Composer({
     }
   }, [focusSignal, isWorking]);
 
+  // A new chat, or another conversation opened: the message being composed is
+  // gone, so its pictures go with it. Guarded on > 0 like `focusSignal`, so the
+  // initial mount is not a clear.
+  //
+  // JUST THE SCREEN. It used to discard every id here as well, because
+  // `conversation.new` cleared the core's pending set and `conversation.load` did
+  // not — so the frontend covered the gap. `conversation.load` now clears it too
+  // (rpc/conversation.py), which is a strictly better place for it: this effect can
+  // only run if the webview is alive to run it, and a reload, a crash or a window
+  // closed mid-compose left the slots held with nobody left to free them. The core
+  // owning the clear makes that unreachable, and it takes a list-mirroring ref out
+  // of this component along with it.
+  useEffect(() => {
+    if (!clearAttachmentsSignal || clearAttachmentsSignal <= 0) return;
+    setAttachments([]);
+  }, [clearAttachmentsSignal]);
+
+  /** Free one pending picture's slot in the core. Fire-and-forget: the chip is
+   *  already gone from the screen, an id the core is not holding is a no-op there,
+   *  and there is nothing a person could do about a failure to forget something. */
+  function discardInCore(attachmentId: string) {
+    void Promise.resolve(ipc.discardAttachment(attachmentId)).catch(() => {
+      /* nothing to say about a picture nobody is sending */
+    });
+  }
+
+  async function attach() {
+    if (picking || isWorking || attachments.length >= MAX_ATTACHMENTS) return;
+    setPicking(true);
+    try {
+      const picked = await ipc.pickAttachment();
+      if (!picked) {
+        setStatusBanner?.(UNREADABLE_PICK);
+        return;
+      }
+      // Capped here too, not just on the button: the pick took real time (a modal
+      // dialog, then a decode) and the fourth slot may have been taken by then.
+      //
+      // A DROPPED PICK IS GIVEN BACK. The core minted an id and is holding the bytes
+      // under it, so dropping the object on the floor here holds a slot that nothing
+      // on screen can see, use or free — the exact defect the clear-signal effect
+      // above stopped having to work around. It cannot happen through the ＋ (which
+      // is disabled at four), so this is the raced or replayed case, and it is
+      // precisely the case where nobody would notice the leak. Discarding from
+      // inside the updater is safe because the call is idempotent both ways: it is
+      // fire-and-forget, and an id the core is not holding is a silent no-op there,
+      // so a double-invoked updater (StrictMode) sends one redundant frame and
+      // nothing else.
+      setAttachments((prev) => {
+        if (prev.length >= MAX_ATTACHMENTS) {
+          discardInCore(picked.attachmentId);
+          return prev;
+        }
+        return [...prev, picked];
+      });
+    } catch (err) {
+      // The core's own sentence — a closed picker, a file that will not decode, a
+      // fifth picture. Shown as it arrived: it is already plain language with a
+      // next step in it, and re-wrapping it here would only make it vaguer.
+      setStatusBanner?.(err instanceof Error ? err.message : UNREADABLE_PICK);
+    } finally {
+      setPicking(false);
+    }
+  }
+
+  function removeAttachment(attachmentId: string) {
+    discardInCore(attachmentId);
+    setAttachments((prev) => prev.filter((a) => a.attachmentId !== attachmentId));
+  }
+
   function submit() {
     const text = draft.trim();
-    if (!text || isWorking) return;
+    const picked = attachments;
+    // A picture with no words is an ordinary message (the core relaxes its
+    // empty-text guard by exactly this case), so either half is enough to send.
+    if ((!text && picked.length === 0) || isWorking) return;
     setDraft("");
-    handleSend(text);
+    setAttachments([]);
+    // THE CHIPS COME BACK IF THE SEND WAS REFUSED, and only then. Phase 3 spends an
+    // id at the point of no return and at no refusal above it, so a send the core
+    // turned away still has its pictures in hand — and a person who has to find four
+    // photos again because a model was wrong for them would be paying for our
+    // tidiness.
+    //
+    // "failed" restores NOTHING, which is the half that used to be wrong. A turn
+    // that broke AFTER the message was persisted has spent its ids, so putting the
+    // chips back offered pictures the next send would be refused for naming: a
+    // second chance that is not one. The pictures are not lost — they are in the
+    // persisted message, and the model sees them again through history on the retry.
+    // `useTurn.runTurn` owns which outcome is which; this side only reads it.
+    //
+    // Called with ONE argument when there are no pictures — the wire rule applied
+    // to the call itself: a message with nothing attached takes the exact path it
+    // took before this feature existed, second argument and all.
+    const sent = picked.length > 0 ? handleSend(text, picked) : handleSend(text);
+    void Promise.resolve(sent).then((outcome) => {
+      if (picked.length === 0) return;
+      if (outcome === "failed") {
+        // GIVE THE IDS BACK, because we cannot tell from here whether they were
+        // spent. "failed" means the turn broke somewhere the pre-persist code does
+        // not reach — a locked database, a worker that never started — and those
+        // paths raise BEFORE the message is persisted, so the core may still be
+        // holding all four pictures under ids no chip on screen can name. Four
+        // invisible slots is the ＋ answering "take one off first" with nothing to
+        // take off, recoverable only by starting a new chat.
+        //
+        // Safe on the other branch by construction: discarding an id the core is
+        // no longer holding is a silent no-op (that is `discardAttachment`'s
+        // contract), so a genuinely spent id costs one frame and nothing else.
+        picked.forEach((a) => discardInCore(a.attachmentId));
+        return;
+      }
+      if (outcome !== "refused") return;
+      // THE WORDS COME BACK WITH THE PICTURES. `useTurn` removes the optimistic
+      // rows for a refused picture send (they show thumbnails of a message that
+      // was never sent), so without this the person's typed message would exist
+      // nowhere at all — not in the thread, not in the box they typed it in. Only
+      // if they have not started typing something else in the meantime: a refusal
+      // arriving late must never overwrite a sentence somebody is in the middle of.
+      setDraft((cur) => (cur.trim() ? cur : text));
+      setAttachments((cur) => {
+        const back = picked.filter((p) => !cur.some((c) => c.attachmentId === p.attachmentId));
+        const restored = [...back, ...cur];
+        // NO SILENT EVICTION. Somebody who picked new pictures while the refusal was
+        // in flight can put the total over four, and the old code simply sliced the
+        // overflow off the end — leaving the core holding ids for pictures nothing
+        // on screen showed any more. Whichever ones fall outside the cap are given
+        // back to the core, so what is held and what is shown stay the same set.
+        restored.slice(MAX_ATTACHMENTS).forEach((a) => discardInCore(a.attachmentId));
+        return restored.slice(0, MAX_ATTACHMENTS);
+      });
+    });
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -167,7 +373,8 @@ export function Composer({
     }
   }
 
-  const canSend = Boolean(draft.trim()) && !isWorking;
+  const canSend = (Boolean(draft.trim()) || attachments.length > 0) && !isWorking;
+  const cannotSee = attachments.length > 0 && pickedModelCannotSee(models);
   const placeholder = !connected
     ? "Addison's engine isn't connected yet."
     : isWorking
@@ -189,6 +396,58 @@ export function Composer({
           border (pt-1.5 = 6px → 5px), so lighting the rule up never shifts the
           text under it. See the focus note in the file header. */}
       <div className="mx-auto w-full max-w-[840px] border-t border-track px-0.5 pt-1.5 transition-colors duration-200 focus-within:border-t-2 focus-within:border-accent focus-within:pt-[5px]">
+        {attachments.length > 0 && (
+          // ABOVE the text, under the box's own top rule: the pictures are part of
+          // the message being written, and a person reads what they are sending
+          // before the words they are sending with it. `fadeRise` is the house
+          // entrance and is a no-op under prefers-reduced-motion (styles.css kills
+          // every animation there).
+          <div
+            data-attachment-chips=""
+            className="flex flex-wrap items-center gap-2 pb-0.5 pt-1.5 animate-[fadeRise_.25s_ease_both]"
+          >
+            {attachments.map((a) => (
+              <span
+                key={a.attachmentId}
+                className="flex min-w-0 max-w-[240px] items-center gap-2 border border-line py-1 pl-1 pr-1.5"
+              >
+                {/* The person's own picture, not chrome: a hairline border and
+                    square corners, so it never reads as a floating card. `alt` is
+                    empty because the file's name is right beside it — announcing
+                    it twice is noise.
+
+                    `dataUri` is READ, never built (types/ui.ts owns why): this
+                    component re-renders on every keystroke of the draft, and the
+                    string it needs is up to 2 MiB of base64 per picture. */}
+                <img
+                  src={a.dataUri}
+                  alt=""
+                  className="h-7 w-7 shrink-0 border border-line object-cover"
+                />
+                <span
+                  title={a.name}
+                  className="min-w-0 truncate font-mono text-[10.5px] text-disabled"
+                >
+                  {a.name}
+                </span>
+                {formatByteSize(a.byteSize) && (
+                  <span className="shrink-0 font-mono text-[10.5px] text-disabled">
+                    {formatByteSize(a.byteSize)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeAttachment(a.attachmentId)}
+                  aria-label={`Remove ${a.name || "this picture"}`}
+                  title="Remove"
+                  className="shrink-0 font-mono text-[11px] text-disabled transition-colors hover:text-ink max-md:min-h-[44px] max-md:min-w-[44px]"
+                >
+                  <span aria-hidden="true">✕</span>
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
           ref={textareaRef}
           data-composer=""
@@ -208,65 +467,100 @@ export function Composer({
         />
         {/* pt-3, not a token nudge: the visual space above the send button is
             the point of the stacked layout (owner request 2026-07-26). */}
-        <div className="flex items-center justify-end gap-3 pb-[5px] pt-3">
-          {/* The answering-model disclosure. Deliberately the SAME mono
-              machine-fact idiom as the picker beside it (10.5px, `disabled`)
-              rather than the fainter `ghost` used for the microcopy below: this
-              is the sentence the owner asked for because nothing was saying it,
-              and a line nobody can read would not be saying it either — the
-              readers are 54 and 68. It stays a plain span, so the only thing
-              separating it from the label is that one of them is a button.
-              Truncated with the full sentence on `title` so a long model name
-              can't push the picker off a narrow window. Never aria-hidden: a
-              screen reader reads it in the strip, before the picker it is
-              about. */}
-          {answeredLabel && (
-            <span
-              data-answered-by=""
-              title={`Answered by ${answeredLabel}`}
-              className="min-w-0 max-w-[120px] truncate font-mono text-[10.5px] text-disabled md:max-w-[220px]"
-            >
-              Answered by {answeredLabel}
-            </span>
-          )}
-          <ModelSelector
-            roles={models.roles}
-            cloudModels={models.cloudModels}
-            selectedRole={models.selectedRole}
-            selectedCloudModel={models.selectedCloudModel}
-            selectedLocalModel={models.selectedLocalModel}
-            selectedEffort={models.selectedEffort}
-            onSelectModel={models.handleSelectModel}
-            onSelectEffort={models.handleSelectEffort}
-            disabled={isWorking}
-          />
-          {isWorking ? (
+        <div className="flex items-center justify-between gap-3 pb-[5px] pt-3">
+          {/* The LEFT cluster: attaching a picture, and the one quiet thing the
+              composer knows about the picture it is holding. The strip was
+              right-aligned until the ＋ arrived; the right cluster below keeps its
+              order exactly (disclosure · picker · send). */}
+          <div className="flex min-w-0 items-center gap-3">
             <button
               type="button"
-              onClick={handleStop}
-              title="Stop"
-              aria-label="Stop"
-              className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border border-track bg-transparent text-[11px] text-disabled transition-colors hover:text-ink max-md:h-11 max-md:w-11"
+              onClick={() => void attach()}
+              disabled={picking || isWorking || attachments.length >= MAX_ATTACHMENTS}
+              aria-label="Attach a picture"
+              title="Attach a picture"
+              // The strip's own mono voice, one step up in size: a lone glyph has
+              // no word shape to read it by, and the readers are 54 and 68. NOT
+              // accent — the accent on this strip belongs to Send, and a second
+              // violet thing beside it would compete with the action the person
+              // came here for.
+              className="shrink-0 font-mono text-[13px] leading-none text-disabled transition-colors hover:text-muted disabled:cursor-not-allowed disabled:text-disabled disabled:hover:text-disabled max-md:min-h-[44px] max-md:min-w-[44px]"
             >
-              <span aria-hidden="true">■</span>
+              <span aria-hidden="true">＋</span>
             </button>
-          ) : (
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!canSend}
-              title="Send"
-              aria-label="Send"
-              className={
-                "flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border text-[15px] transition-colors duration-200 max-md:h-11 max-md:w-11 " +
-                (canSend
-                  ? "border-accent bg-accent text-on-accent"
-                  : "cursor-not-allowed border-track bg-transparent text-disabled")
-              }
-            >
-              <span aria-hidden="true">↑</span>
-            </button>
-          )}
+            {cannotSee && (
+              // A warning and never a gate (plan §6, spec §4.1.1 item A): nothing
+              // is disabled, Send still works, and the CORE's refusal at send is
+              // the enforcement. Stated flat, in the strip's machine-fact voice —
+              // no accent, because this is neither an action nor live state.
+              <span
+                data-vision-warning=""
+                className="min-w-0 truncate font-mono text-[10.5px] text-disabled"
+              >
+                {"This model can't look at pictures."}
+              </span>
+            )}
+          </div>
+          <div className="flex min-w-0 items-center gap-3">
+            {/* The answering-model disclosure. Deliberately the SAME mono
+                machine-fact idiom as the picker beside it (10.5px, `disabled`)
+                rather than the fainter `ghost` used for the microcopy below: this
+                is the sentence the owner asked for because nothing was saying it,
+                and a line nobody can read would not be saying it either — the
+                readers are 54 and 68. It stays a plain span, so the only thing
+                separating it from the label is that one of them is a button.
+                Truncated with the full sentence on `title` so a long model name
+                can't push the picker off a narrow window. Never aria-hidden: a
+                screen reader reads it in the strip, before the picker it is
+                about. */}
+            {answeredLabel && (
+              <span
+                data-answered-by=""
+                title={`Answered by ${answeredLabel}`}
+                className="min-w-0 max-w-[120px] truncate font-mono text-[10.5px] text-disabled md:max-w-[220px]"
+              >
+                Answered by {answeredLabel}
+              </span>
+            )}
+            <ModelSelector
+              roles={models.roles}
+              cloudModels={models.cloudModels}
+              selectedRole={models.selectedRole}
+              selectedCloudModel={models.selectedCloudModel}
+              selectedLocalModel={models.selectedLocalModel}
+              selectedEffort={models.selectedEffort}
+              onSelectModel={models.handleSelectModel}
+              onSelectEffort={models.handleSelectEffort}
+              disabled={isWorking}
+            />
+            {isWorking ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                title="Stop"
+                aria-label="Stop"
+                className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border border-track bg-transparent text-[11px] text-disabled transition-colors hover:text-ink max-md:h-11 max-md:w-11"
+              >
+                <span aria-hidden="true">■</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={submit}
+                disabled={!canSend}
+                title="Send"
+                aria-label="Send"
+                className={
+                  "flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full border text-[15px] transition-colors duration-200 max-md:h-11 max-md:w-11 " +
+                  (canSend
+                    ? "border-accent bg-accent text-on-accent"
+                    : "cursor-not-allowed border-track bg-transparent text-disabled")
+                }
+              >
+                <span aria-hidden="true">↑</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <p

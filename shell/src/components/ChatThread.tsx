@@ -786,6 +786,16 @@ function MessageRow({
   // sentence anybody wants to ask about. Read from the row's state, never from
   // the characters on screen.
   const askSelectable = !message.pending && !revealing;
+  // Pictures the person attached to this message (image-attach plan §6). They ride
+  // `ChatMessage` itself, so the optimistic row useTurn pushes the instant Send is
+  // pressed and the row `conversation.load` rebuilds are the same shape and draw
+  // through this one block. Only a USER message ever carries any.
+  const pictures = message.attachments ?? [];
+  // A picture with no words is an ordinary message — the core's empty-text guard is
+  // relaxed by exactly that case (plan §5) — and an empty paragraph under it would
+  // be a blank line the reader has to account for. Nothing else can reach this: an
+  // assistant row carries no pictures, so "Addison is writing…" is untouched.
+  const textless = pictures.length > 0 && !message.content;
 
   return (
     <div className="group shrink-0 animate-[fadeRise_.4s_ease_both]">
@@ -813,7 +823,38 @@ function MessageRow({
         )}
       </div>
 
-      {asMarkdown ? (
+      {pictures.length > 0 && (
+        // AHEAD of the text, because that is the order the message was written in.
+        // Each picture is height-capped and hairline-bordered with its name in the
+        // mono machine-fact voice beneath — the person's own content, shown plainly,
+        // with no card around it and nothing to click: there is no lightbox in v1,
+        // so nothing here promises one. `data:` only; the pinned CSP refuses `blob:`
+        // and object URLs by name.
+        <div data-message-pictures="" className="mt-2 flex flex-col gap-2.5">
+          {pictures.map((picture) => (
+            <figure key={picture.id} className="m-0">
+              <img
+                // Built once where the row was made (types/ui.ts owns why), never
+                // here: this row re-renders on every streamed delta of the answer
+                // beside it, and rebuilding a multi-megabyte template literal per
+                // frame is what that costs. `data:` only — the pinned CSP refuses
+                // `blob:` and object URLs by name.
+                src={picture.dataUri}
+                alt={picture.name || "Attached picture"}
+                loading="lazy"
+                className="block max-h-[240px] max-w-full border border-line object-contain"
+              />
+              {picture.name && (
+                <figcaption className="mt-1 font-mono text-[10.5px] text-disabled">
+                  {picture.name}
+                </figcaption>
+              )}
+            </figure>
+          ))}
+        </div>
+      )}
+
+      {textless ? null : asMarkdown ? (
         <div
           data-ask-selectable={askSelectable ? "" : undefined}
           className="mt-2 text-[15.5px] leading-[1.65] text-ink"

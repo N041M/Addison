@@ -100,8 +100,35 @@ def test_capabilities_degrade_gracefully_when_metadata_unavailable():
     client, _ = _client({"/api/show": (500, {"error": "boom"})})
     caps = OllamaProvider("whatever", client=client).capabilities()
     assert caps.native_tool_calling is False
-    assert caps.vision is False
     assert caps.runs_off_device is True
+
+
+def test_vision_fails_OPEN_when_ollama_never_answered():
+    """"The model says it cannot see" and "nobody answered" are different facts, and
+    only one of them may mint a sentence about switching models.
+
+    An unreachable daemon used to read as a blind model, because both arrived as an
+    empty metadata dict. The picture gate then refused the turn with "the model
+    answering right now can't look at pictures" — about a model that may well be able
+    to, and while the actual problem was that Ollama was not running. Failing OPEN
+    costs nothing: nothing can answer, so the send fails on its own honest sentence
+    or the routed path falls forward.
+
+    Mutation: go back to ``"vision" in declared`` for the no-answer case and this
+    fails on the first assertion — which is the refusal coming back.
+
+    ``native_tool_calling`` is asserted in the same breath because it deliberately
+    did NOT change: guessing yes there would put a tools array on a request the
+    server may reject, where vision only decides what Addison SAYS."""
+    client, _ = _client({"/api/show": (500, {"error": "boom"})})
+    unreachable = OllamaProvider("whatever", client=client).capabilities()
+    assert unreachable.vision is True
+    assert unreachable.native_tool_calling is False
+
+    # ...and a model that ANSWERED and declared no vision is still False. Without
+    # this half the fix above would read as "vision is always True".
+    answered, _ = _client({"/api/show": (200, {"capabilities": ["completion"]})})
+    assert OllamaProvider("deepseek:8b", client=answered).capabilities().vision is False
 
 
 def test_metadata_cached_after_first_fetch():

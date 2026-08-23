@@ -113,6 +113,20 @@ _DEFAULT_TIMEOUT = 60.0
 # fails anyway AND the shell's answer is thrown away. Human-paced, therefore.
 _KEYCHAIN_TIMEOUT = 600.0
 
+# ...and neither is a MODAL FILE DIALOG. ``shell.pickFile`` and ``shell.pickImage``
+# do not return until the person has chosen or closed, and a person choosing a
+# picture may go and find it first: open another folder, look through a phone's
+# photo sync, get up and come back. Sixty seconds is not a wedged shell there, it is
+# somebody deciding — and abandoning the request achieves exactly what abandoning a
+# keychain dialog achieves, which is nothing: the dialog stays up, and the file they
+# eventually choose answers a request nobody is waiting on any more.
+#
+# 900s matches the webview's own ``TURN_TIMEOUT_MS`` (shell/src/ipc/client.ts) and
+# for the same reason, because this leg sits INSIDE that one: ``pickAttachment`` is
+# a frontend call that opens this dialog, so a budget shorter here would fail the
+# turn while the webview was still patiently waiting for it.
+_PICKER_TIMEOUT = 900.0
+
 # ...and a ``shell.runCommand`` waits on the COMMAND's budget, not the shell's own
 # responsiveness. The shell kills the child at the timeout it was given and answers,
 # so this waiter only needs enough headroom on top to cover spawning sandbox-exec
@@ -310,8 +324,14 @@ class IpcShellBridge:
         The handle is the whole point: the core asks to read what the person chose
         and never learns where it lives, so nothing in the core can be pointed at a
         second file by anything it read in the first. ``read_scoped_file`` resolves
-        it. Raises (RuntimeError) if the person cancels, like ``pick_directory``."""
-        return self._call(Method.SHELL_PICK_FILE, {})["fileHandle"]
+        it. Raises (RuntimeError) if the person cancels, like ``pick_directory``.
+
+        PERSON-PACED (``_PICKER_TIMEOUT``), like its picture sibling below. This one
+        was not the bug that was found — the picture picker was — but it is the same
+        bug: what is being waited on is a modal dialog and a human decision, not the
+        shell's own responsiveness. Fixing one and leaving the other would leave the
+        defect standing under a different method name."""
+        return self._call(Method.SHELL_PICK_FILE, {}, timeout=_PICKER_TIMEOUT)["fileHandle"]
 
     # --- image attach (plan §4) --------------------------------------------
     def pick_image(self) -> dict:
@@ -324,8 +344,14 @@ class IpcShellBridge:
         ONLY, so a composer chip can be drawn the moment the dialog closes while the
         decode is still running; nothing decides anything from either.
 
+        PERSON-PACED (``_PICKER_TIMEOUT``): this call does not come back until the
+        dialog is closed, and somebody looking for a photograph is not a slow shell.
+        On the default budget a person who took a minute to find their picture had
+        the pick fail underneath them with "Addison couldn't finish that just now",
+        while the dialog they were still using went on standing there.
+
         Raises (RuntimeError) if the person cancels, like ``pick_file``."""
-        result = self._call(Method.SHELL_PICK_IMAGE, {})
+        result = self._call(Method.SHELL_PICK_IMAGE, {}, timeout=_PICKER_TIMEOUT)
         # The shape is validated the way ``save_new_file`` validates its own: read the
         # key the caller needs and let a missing one raise here, at the boundary,
         # rather than three layers later as a None nobody can trace back.
@@ -342,24 +368,32 @@ class IpcShellBridge:
         THE SHELL DOES THE WORK, and that is the point of the method rather than an
         accident of where the bytes are. It decodes (which IS the validation — a file
         that does not parse as a picture is refused there, in one plain sentence),
-        downscales anything past a 1600px long edge, and re-encodes under 2 MiB. So
-        what crosses this bridge is never the original file: a phone photo simply
-        works, and the pump never carries twenty megabytes.
+        downscales anything past the vendors' own 1568px long edge, and re-encodes
+        under 2 MiB. So what crosses this bridge is never the original file: a phone
+        photo simply works, and the pump never carries twenty megabytes.
 
         ``content`` is base64 of the ENCODED bytes and ``mediaType`` is one of
         ``providers/base.py::ALLOWED_IMAGE_MEDIA_TYPES`` — the shell is where that
         closed set is enforced, so this is the shape the adapters may trust.
         ``width``, ``height`` and ``byteSize`` describe those bytes, never the file on
         disk. Only a handle the shell itself minted resolves; anything else is refused
-        with "please pick it again"."""
+        with "please pick it again".
+
+        THE THREE THINGS A MESSAGE ACTUALLY NEEDS are required; the dimensions are
+        not. Nothing downstream reads ``width`` or ``height`` — the thumbnail is
+        sized by CSS and the model is sent bytes — so demanding them meant a shell
+        that stopped sending a number nobody uses would fail the whole pick with a
+        ``KeyError``, losing a picture over a field that changes nothing. They are
+        carried when present because a diagnostic that has them is better than one
+        that does not."""
         result = self._call(Method.SHELL_READ_PICKED_IMAGE, {"fileHandle": file_handle})
         return {
             "content": result["content"],
             "mediaType": result["mediaType"],
             "name": result["name"],
             "byteSize": result["byteSize"],
-            "width": result["width"],
-            "height": result["height"],
+            "width": result.get("width"),
+            "height": result.get("height"),
         }
 
     # --- workspace-trust file surface (step 5, OPEN harness) ---------------

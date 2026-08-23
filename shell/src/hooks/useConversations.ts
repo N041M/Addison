@@ -132,6 +132,13 @@ export function useConversations({
           storeId: row.id,
           role: normalizeRole(row.role),
           content: row.content,
+          // The pictures come back with the words. A message row and the optimistic
+          // one `useTurn` pushes are the same shape, so the thread draws both
+          // through one block — but only if this mapper carries the key, which it
+          // did not until 2026-08-23: a reopened chat showed the words of a message
+          // and lost the picture they were about, while the model could still see
+          // it. Absent when there are none, so an ordinary row is unchanged.
+          ...(row.attachments ? { attachments: row.attachments } : {}),
         }));
         resetTransientState();
         setMessages(rows);

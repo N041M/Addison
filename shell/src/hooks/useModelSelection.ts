@@ -417,6 +417,15 @@ export function normalizeCloudModels(result: unknown): CloudModel[] {
       providerLabel: typeof obj.providerLabel === "string" ? obj.providerLabel : undefined,
       // Fails closed: only an explicit `true` from the core makes a model free.
       free: obj.free === true,
+      // THREE STATES, not two, so this is copied and never coerced. The core sends
+      // `vision` only for a provider it can honestly answer for; absent means
+      // UNKNOWN, and the composer says something only when it knows the answer is
+      // no (`pickedModelCannotSee` tests `=== false`). Writing `obj.vision === true`
+      // here would flatten unknown into "cannot see" and put the warning under every
+      // local model and every custom server. Without this line at all — which is how
+      // it shipped — the flag was parsed off the wire and then dropped, so the
+      // warning never appeared for anyone.
+      ...(typeof obj.vision === "boolean" ? { vision: obj.vision } : {}),
       // Present only when the CORE has seen this provider refuse this model
       // (a `model_gone` row). Never inferred here — the frontend has no way to
       // know, and guessing would dim a model that works.

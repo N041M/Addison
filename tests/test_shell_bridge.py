@@ -22,7 +22,12 @@ from __future__ import annotations
 import pytest
 
 from agent_core.protocol import Method
-from agent_core.shell_bridge import _EXEC_SLACK_MS, _KEYCHAIN_TIMEOUT, IpcShellBridge
+from agent_core.shell_bridge import (
+    _EXEC_SLACK_MS,
+    _KEYCHAIN_TIMEOUT,
+    _PICKER_TIMEOUT,
+    IpcShellBridge,
+)
 
 # A stand-in secret. Long and distinctive so a "did this leak?" scan cannot pass
 # by accident on a substring of something else.
@@ -204,19 +209,20 @@ _BRIDGE_CALLS = (
     ("read_workspace_file", ("/tmp/project/a.py",)),
     ("restore_workspace_file", ("/tmp/project/a.py", "print()")),
     ("pick_directory", ()),
-    # The file picker joins its folder sibling on the DEFAULT budget, and for the
-    # same reason the note below records: a person is in front of both dialogs, and
-    # whether that deserves the human-paced budget is a separate call from this one.
+    # THE TWO FILE PICKERS ARE PERSON-PACED (``_PICKER_TIMEOUT``), decided
+    # 2026-08-23 when the image-attach review asked what a minute of silence from a
+    # modal dialog actually means. It means somebody is looking for their file. The
+    # separate call this table's earlier note deferred is therefore made: neither
+    # call is the shell answering out of its own process, so neither belongs on the
+    # budget that exists to catch a wedged shell.
     ("pick_file", ()),
-    # The picture picker and the read behind it (image-attach plan §4). DEFAULT
-    # budget for both, and the second is the one worth stating: it does REAL WORK —
-    # decode, Lanczos3 downscale, re-encode — where every other ``shell.*`` call is
-    # syscalls. It is still bounded by construction (24 MiB in, one image out), it
-    # runs on a blocking task rather than the pump, and a minute of silence from it
-    # still means the shell is wedged rather than busy. The picker joins its two
-    # siblings above on the same note: a person is in front of the dialog, and
-    # whether that earns the human-paced budget is the same separate call.
     ("pick_image", ()),
+    # ...and the read BEHIND the picture picker is not, which is the distinction
+    # worth keeping. It does REAL WORK — decode, Lanczos3 downscale, re-encode —
+    # where every other ``shell.*`` call is syscalls, but it is compute and not a
+    # person: bounded by construction (24 MiB in, one image out), run on a blocking
+    # task rather than the pump, and a minute of silence from it still means the
+    # shell is wedged rather than busy.
     ("read_picked_image", ("handle-1",)),
     ("get_app_build_ref", ()),
     ("get_provider_key", ("anthropic",)),
@@ -271,6 +277,17 @@ _BRIDGE_CALLS = (
 # kept running with nobody to receive its output.
 _COMMAND_BUDGET_SECONDS = (30_000 + _EXEC_SLACK_MS) / 1000.0
 
+# The two calls that wait on a MODAL DIALOG, and therefore on a person (2026-08-23).
+# Named as methods rather than as bridge functions because that is what the recorder
+# sees, and because it is the wire method that blocks: whichever core function opens
+# ``shell.pickFile`` is waiting on somebody choosing a file.
+#
+# ``shell.pickDirectory`` is NOT here, and that is a live inconsistency rather than a
+# decision: it is the same modal-dialog shape and it is still on the default budget,
+# because the change that fixed these two was scoped to the picture path. It is
+# recorded in KNOWN-GAPS.
+_PICKER_METHODS = {Method.SHELL_PICK_FILE, Method.SHELL_PICK_IMAGE}
+
 # Not requests: one binds the sender, the other is the read loop handing an answer
 # back. Neither has a timeout to choose.
 _NOT_REQUESTS = {"bind_sender", "resolve_response"}
@@ -297,7 +314,7 @@ class _RecordingBridge(IpcShellBridge):
                 "width": 1, "height": 1}
 
 
-def test_only_the_keychain_calls_wait_at_a_persons_pace():
+def test_only_the_calls_a_person_answers_wait_at_a_persons_pace():
     """The long budget belongs to the calls a PERSON answers, and to no others.
 
     A ``shell.*`` request is the shell answering out of its own process, so a
@@ -310,9 +327,12 @@ def test_only_the_keychain_calls_wait_at_a_persons_pace():
     the short budget is the bug this fixes; a file or clipboard call quietly given
     the long one turns a wedged shell into a ten-minute hang with no explanation.
 
-    (The folder and file pickers also wait on a person. They were deliberately
-    left on the default budget by this change — a separate call to make, and the
-    table makes it visible rather than implied.)
+    The FILE PICKERS joined the long budget on 2026-08-23, which is the separate
+    call this docstring used to defer. ``shell.pickFile`` and ``shell.pickImage`` do
+    not return until a modal dialog is answered, so a minute of silence from either
+    is somebody looking for their file — and giving up on them achieves what giving
+    up on a password dialog achieves, which is nothing. ``shell.pickDirectory`` is
+    the same shape and is still on the default budget; the table says so.
     """
     named = {name for name, _ in _BRIDGE_CALLS}
     public = {
@@ -328,6 +348,8 @@ def test_only_the_keychain_calls_wait_at_a_persons_pace():
     for method, timeout in bridge.calls:
         if method.startswith("keychain."):
             assert timeout == _KEYCHAIN_TIMEOUT, method
+        elif method in _PICKER_METHODS:
+            assert timeout == _PICKER_TIMEOUT, method
         elif method == Method.SHELL_RUN_COMMAND:
             assert timeout == _COMMAND_BUDGET_SECONDS, method
         else:

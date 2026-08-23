@@ -936,7 +936,113 @@ are here because somebody will meet them, and because anything built on top of
 
 - `draft_message` compose handoff: Rust returns "not available yet"; a real
   discardable-draft mechanism is required by the undo invariant.
-- No file-attach/drop UI → `read_file` unreachable from chat.
+- ~~No file-attach/drop UI → `read_file` unreachable from chat.~~ **Closed
+  2026-08-23 for pictures, and only for pictures** — the four phases of
+  [`image-attach-plan.md`](image-attach-plan.md), which owns the subject. The
+  composer's ＋ picks an image through `conversation.pickAttachment`, the shell
+  decodes and downscales it, and it reaches the model as a real image block. What
+  this entry originally asked for is NOT what shipped: `read_file` is untouched and
+  still hands a picked image to the model as base64 *text* nothing can see (plan
+  §7), and attaching a non-image document is not built at all. Drag-drop and paste
+  are each their own deferred decision (owner decision 1, same day), and a photo
+  arriving from a paired phone stays dropped on provenance grounds (owner decision
+  4) — the bytes come through Telegram's servers, which is not a file somebody
+  picked with their own hands. The MCP client's image parts stay refused for the
+  same reason the tool path does: upgrading a tool RESULT to image blocks is real
+  work per provider (OpenAI's tool role takes no images) and waits for a reason.
+
+**Opened by image attach (built 2026-08-23;
+[`image-attach-plan.md`](image-attach-plan.md) §9 owns the subject and states each
+of these at its real cost).** Four limits the feature ships with, none of them a
+wrong behaviour and each one a decision somebody may want to revisit. They are
+listed here because this file is the live-issue register, not restated — the plan
+carries the reasoning:
+
+- **A picture is re-sent to the provider on every later turn of its conversation.**
+  History replays whole, so one attached photo is ingested again for every turn
+  that follows it. Honestly counted (§4.8 reads the provider's own usage report),
+  reduced by nothing. The two candidate fixes — an Anthropic `cache_control`
+  breakpoint, or degrading old pictures to the `[picture]` marker — both change
+  what the model receives, so both are owner calls.
+**Google lists models it will not serve, and Addison's 404 sentence gives false
+advice (found 2026-08-23 by a real request; NOT an image-attach defect — it
+predates the feature and wants its own change).** `GET /v1beta/models` returns
+`gemini-2.5-flash`, and calling it with a newer key answers 404: *"This model is no
+longer available to new users. Please update your code to use
+models/gemini-3.6-flash."* The picker is built from that live list — the design
+that replaced the hardcoded ids in August, precisely so Addison would never offer a
+model that does not exist — so a person can pick from Addison's own menu and have
+every message fail. **The live list cannot be trusted as a servable set, and
+nothing can know which entries are dead without calling one.**
+- ~~**The sentence is wrong, not merely unhelpful.**~~ **CLOSED 2026-08-23.** A 404
+  answered *"The request to Google failed (status 404). Please try again."*, and
+  retrying a retired model never works — false advice in front of the one 404 a
+  person can actually fix. `exception_for_http_status` already ATTACHED the
+  provider's own words as `server_detail` and already read them for one case
+  (`_reads_as_over_window`), so the fix is that precedent applied one branch up:
+  `_reads_as_model_retired` now decides between the generic sentence and *"That
+  model isn't available any more. Choose a different one in Settings."* Ours, never
+  the vendor's text verbatim — their words DECIDE which of our sentences is shown
+  and are never themselves shown, which is the same rule that keeps every other
+  user-facing string ours. Cross-provider, because it sits at the choke point every
+  adapter funnels through.
+- **The list still cannot be trusted, and that half is NOT closed.** A retired model
+  is still offered by the picker; all that changed is what a person is told when
+  they pick it. Nothing can know which listed entries are dead without calling one,
+  so closing it properly means either remembering which ids answered 404 or asking
+  the provider a question its list API does not answer.
+  *(A claim written here on the day and corrected the same day: this entry first
+  said `list_models`' "chat-capable" filter "does not filter". It does — it drops
+  anything whose `supportedGenerationMethods` omits `generateContent`. The TTS,
+  image-generation and robotics entries in a real listing are there because those
+  models genuinely advertise `generateContent`; the filter is working and the
+  listing is simply broader than the word "chat" suggests.)*
+- **Rewinding to a picture-only message loses its pictures, and says so rather
+  than handing them back.** A rewind deletes the anchor's attachment rows with the
+  message (one transaction, by design — the bytes belonged to a message that no
+  longer exists), and the ids were spent at send time, so edit-and-resend has
+  nothing to re-chip: a message that was ONLY pictures rewinds into an empty
+  composer. What ships is one plain sentence naming what went with it. Handing them
+  back would mean a new core RPC that re-admits deleted bytes into the pending set
+  — a real design with its own trust story, since it is the one path that would put
+  bytes back into a place a send can name — and it was not improvised for this.
+- **A conversation of nothing but pictures is titled "Untitled" forever.** Titles
+  come from the first user message's text, a wordless one yields none, and the
+  fallback is the generic word rather than anything picture-aware. Cosmetic, and
+  the sidebar always gets a string; noted because the fix (a "Picture" fallback, or
+  a title from the filename) is small and nobody has decided which.
+- **A picture-only turn reaches the continuation summariser as a blank line.**
+  `_as_text` renders it `"user: "`, so a chat condensed by §4.8 loses the fact that
+  a picture was ever in it — no marker equivalent to the adapters' `[picture]`. The
+  summary is poorer; nothing breaks.
+- **"Can it see" is answered per PROVIDER, and it is a property of the MODEL.**
+  Both halves work this way — the turn gate asks the adapter's constitutional
+  answer, and the picker's `vision` flag reads `PROVIDER_VISION` — so a text-only
+  model from a vision-capable provider is claimed as sighted, passes the gate, and
+  receives image parts it cannot use. It is the same shape as the custom-server
+  entry below, one layer in, and the custom fix (2026-08-23) closed only the
+  custom case; this was **reported as fully fixed and was not**, which is why it
+  is written here rather than left implied. Unfired today because the curated
+  catalogue's cloud entries are all multimodal. **Not closed with a per-model
+  table on purpose**: the live model list comes from the provider, ids arrive that
+  no table has heard of, and a hand-kept capability table is precisely the shape
+  that made a connected Google key answer `404` to every message in 2026-08 (the
+  hardcoded-ids bug `test_live_model_registration.py` now holds the line on).
+  What would actually close it is a per-model capability the provider itself
+  reports, or a probe — the same answer the custom-server entry reaches.
+- **A text-only CUSTOM server refuses a picture, and every later turn with it.**
+  Addison no longer claims a custom endpoint can see (the row ships no `vision`
+  field, so the composer stays quiet rather than lying in either direction), but
+  it cannot know either, and the failure repeats through history replay. Closing
+  it means probing the configured server's capabilities, which is a network call
+  with its own failure modes.
+- **`conversation.load` carries every attachment's full base64 on every open**, up
+  to ~2.7 MB a picture, to draw a 240px thumbnail. The fix is a small thumbnail
+  column plus an on-demand fetch for full bytes; not built, because it is a schema
+  change against a wire settled the same day.
+- **A §4.8 continuation re-persists the pictures it carries** under new ids and
+  loses their filenames. A row-to-row SQL copy would fix both halves at once; the
+  duplication is bounded by the same four-per-message ceiling as everything else.
 - Setup Assistant relay is client-complete; the server side is external by design.
 - Packaging/signing/updater = Phase 3.
 - ~~**`primary.txt` widget guidance says Addison can't build custom-app widgets.**~~

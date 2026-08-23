@@ -1671,10 +1671,6 @@ class JsonRpcServer(
                     # from inside this try, so every except arm below still catches
                     # what it always caught.
                     self._run_channel_job(kind, params, request_id)
-                elif kind == "conversation_pick_attachment":
-                    self._handle_pick_attachment(request_id)
-                elif kind == "conversation_discard_attachment":
-                    self._handle_discard_attachment(params, request_id)
             except live_db_guard.LiveDatabaseBlocked as exc:
                 # A job can reach _ensure_built() too (conversation.list, and every
                 # mixin handler that calls it), so the same rule as the startup build

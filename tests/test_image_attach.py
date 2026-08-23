@@ -553,3 +553,119 @@ def test_only_the_new_message_is_gated_not_an_older_picture_in_history():
     # The old picture DID go out with the history — dropping it is the adapter's
     # call (Ollama's degrade), never the orchestrator's.
     assert provider.sends[0][0].images == (PNG,)
+
+
+# ---------------------------------------------------------------------------
+# The two ways an EMPTY user message could reach a provider, both found by an
+# audit on 2026-08-23 rather than by the suite, and both of them fatal to a whole
+# conversation rather than to one turn. The relaxation that made a wordless photo
+# a legal message (plan §5) is what created the shape: before it, no user row
+# could hold "", so nothing downstream had ever had to survive one.
+# ---------------------------------------------------------------------------
+
+
+def test_the_relay_never_replays_a_picture_turn_as_an_empty_message():
+    """The Setup Assistant relay cannot see and has no images branch, so it used to
+    translate a picture-carrying turn into ``{"role": "user", "content": ""}`` —
+    which the API it is shaped after refuses outright.
+
+    WHY THAT KILLED A CONVERSATION rather than a turn: a picture-only message is
+    persisted BEFORE the turn gate refuses it (plan §9), so the empty row stays in
+    the transcript, and every later turn replayed it. The chat answered "couldn't
+    reach a model" forever, and the only way back was a rewind.
+
+    Mutation: put ``m.content`` back in ``setup_assistant_provider._translate_history``
+    — the first assertion fails, because a wordless picture becomes "".
+    """
+    from agent_core.providers.setup_assistant_provider import _translate_history
+
+    # A wordless photo: the case with nothing at all to fall back on.
+    wordless = _translate_history([Message(role="user", content="", images=(PNG,))])
+    assert wordless[0]["content"] == "[picture]", "an empty string is what broke it"
+
+    # And with words, the marker leads them — the picture came first.
+    worded = _translate_history([Message(role="user", content="what is this?", images=(PNG,))])
+    assert worded[0]["content"] == "[picture]\n\nwhat is this?"
+
+    # No pixels reach a relay that cannot look at them.
+    assert "AAAApngbytes" not in json.dumps(wordless)
+
+
+def test_a_message_and_its_pictures_are_written_in_one_transaction(tmp_path):
+    """Either both land or neither does. Two commits left a window in which the
+    message row existed and its pictures did not — an empty user row with no
+    images, which replays to a cloud model as an empty message and is refused on
+    every later turn. Nothing in the schema forbids the row (``content`` is only
+    NOT NULL, and '' satisfies it), so the write is the only place to stop it.
+
+    Mutation: commit inside ``_insert_attachment_rows`` and drop the parameter from
+    ``insert_message`` — the second assertion fails, because the message survives a
+    failed attachment write.
+    """
+    from agent_core.memory.store import Store
+
+    store = Store(db_path=str(tmp_path / "addison.sqlite3"))
+    store.create_conversation(id="c1", title=None, provider_id="anthropic", started_at=1)
+
+    # A picture row that CANNOT be written: `id` is the primary key, and this one
+    # is already taken by the first attachment of the same call, so the second row
+    # of the executemany raises after the message insert has already run.
+    doomed = [
+        {"id": "same", "name": "a.png", "media_type": "image/png", "byte_size": 1, "data_b64": "x"},
+        {"id": "same", "name": "b.png", "media_type": "image/png", "byte_size": 1, "data_b64": "y"},
+    ]
+    with pytest.raises(Exception):
+        store.insert_message(
+            id="m1",
+            conversation_id="c1",
+            role="user",
+            content="",
+            created_at=2,
+            attachments=doomed,
+        )
+
+    # THE POINT: no half-written turn. Not a message with no pictures, and not a
+    # picture with no message.
+    assert store.messages_for_conversation("c1") == [], "the message must not survive alone"
+    assert store.attachments_for_conversation("c1") == []
+
+
+def test_a_retired_model_is_not_answered_with_try_again():
+    """Whose words decide, and whose words are shown (2026-08-23).
+
+    Found by pointing a real request at a real key: Google LISTS gemini-2.5-flash in
+    the catalogue the picker is built from, and then refuses to serve it — *"no
+    longer available to new users"*. Addison answered that with "Please try again",
+    which is not merely unhelpful but FALSE: a retired model never comes back, so
+    the only action the sentence named could not work, in front of the one 404 a
+    person can actually do something about.
+
+    The provider's words DECIDE (the `_reads_as_over_window` precedent, one branch
+    up) and are never SHOWN — the sentence stays Addison's, because a vendor's text
+    put in front of somebody as though Addison wrote it is the rule this repo keeps
+    for every other user-facing string.
+
+    Mutation: drop the `_reads_as_model_retired` branch — the first assertion gets
+    "try again" back.
+    """
+    from agent_core.providers.base import exception_for_http_status
+
+    generic = "The request to Google failed (status 404). Please try again."
+    retired = exception_for_http_status(
+        404, generic, "This model models/gemini-2.5-flash is no longer available to new users."
+    )
+    assert "try again" not in str(retired).lower()
+    assert "Settings" in str(retired)
+    # THEIR words are kept for the log and kept OUT of the sentence.
+    assert "gemini-2.5-flash" not in str(retired)
+    # ``getattr``: the detail is ATTACHED to the exception at the choke point
+    # (``exc.server_detail = ...``), so it is not on RuntimeError's declared surface
+    # and a direct read fails the typecheck gate rather than the test.
+    assert "no longer available" in getattr(retired, "server_detail", "")
+
+    # A 404 that is NOT a retirement keeps the generic sentence: "choose another in
+    # Settings" is no help to somebody whose model name has a character wrong in it.
+    mistyped = exception_for_http_status(404, generic, "models/gemni-3-flash is not found")
+    assert str(mistyped) == generic
+    # And a 404 with no body at all cannot be guessed at.
+    assert str(exception_for_http_status(404, generic, None)) == generic

@@ -48,10 +48,10 @@ model is that a message it was already going to receive can now carry pixels.
 2. **Display: inline thumbnail.** A restrained, height-capped thumbnail in the
    user message row, name and size in mono beneath. The brief's "Assets: None"
    governs chrome, not a person's own content. *(Recommended: thumbnail.)*
-3. **Size: shell-side downscale.** The shell resizes/re-encodes large images
-   (≤1600px long edge, JPEG) before anything crosses the stdio pump, so a phone
-   photo simply works. The 1 MiB text-pick bound is untouched; the image path
-   gets its own bounds (§4). *(Recommended: downscale.)*
+3. **Size: shell-side downscale.** The shell resizes/re-encodes large images (to
+   the vendors' own 1568px long edge, JPEG) before anything crosses the stdio
+   pump, so a phone photo simply works. The 1 MiB text-pick bound is untouched;
+   the image path gets its own bounds (§4). *(Recommended: downscale.)*
 4. **Phone photos: deferred.** A Telegram photo from a paired phone is a
    different provenance than a person-picked file (the bytes come via
    Telegram's servers, from a program nobody audited). The adapter goes on
@@ -94,7 +94,61 @@ shape; a `tool`/`assistant` message never carries them in v1:
 - **OpenAI / custom**: `content` parts — `image_url` with a
   `data:{media_type};base64,{data}` URL, then `text`.
 - **Google**: `parts` — `inline_data {mime_type, data}`, then `text`.
-- **Ollama**: the message's `images: [b64, …]` key.
+- **Ollama**: the message's `images: [b64, …]` key (raw base64, no `data:` prefix).
+
+**ANTHROPIC AND GOOGLE ARE PROVEN AGAINST THE REAL API.** On 2026-08-23 the owner
+ran `scripts/check_image_wire.py`, which drives these adapters (never a
+hand-written request) and sends a flat purple square with the question *"What is
+the single dominant colour of this image?"* — a word the prompt never contains, so
+an answer from the text alone cannot pass. Both answered **purple**. That is the
+first evidence in this feature that is not a test agreeing with its author: the
+block shapes are accepted, the base64 is right, the image-before-text order works,
+and the pixels genuinely arrived at a model.
+
+**Google was the one worth running**, and it is now settled rather than argued:
+`inline_data` / `mime_type` in snake_case, inside an API whose every other field
+here is camelCase (`functionCall`, `systemInstruction`), is **accepted**. The
+adapter's module docstring says it "speaks v1beta camelCase throughout"; the image
+part is the one deliberate exception, and it works because Google's JSON-proto
+mapping takes both spellings.
+
+**What it does not cover, stated so the green does not spread:** OpenAI and Ollama
+are still documentation-checked only. The harness feeds a synthetic PNG straight to
+the adapters, so it says nothing about phase 2's decode and downscale, the picker,
+the composer, persistence, or the thread — those need the app.
+
+**It also found something that is not this feature's** (2026-08-23): Google's
+`GET /v1beta/models` LISTS models it will not serve. `gemini-2.5-flash` is
+returned by the list and answers 404 to a newer key — *"no longer available to new
+users … use models/gemini-3.6-flash"* — so the live-list design that replaced the
+hardcoded ids in August can still put a dead model in the picker, and every message
+to it fails. Addison's own sentence for that 404 is *"Please try again"*, which is
+false advice, while `exception_for_http_status` holds Google's explanation (and the
+replacement it names) in `server_detail` and consults it only for the over-window
+case. [`KNOWN-GAPS.md`](KNOWN-GAPS.md) tracks it; it is a provider-layer defect
+that predates image attach and wants its own change.
+
+**All four shapes were checked against the vendors' own documentation** the same
+day, because until then every one of them was asserted only against tests written
+from the same belief that produced the code — a suite that cannot disagree with
+its author. What the check settled, recorded here so the next reader does not
+repeat it:
+
+- Anthropic's block is exactly the shape above, and **images before text is the
+  vendor's own recommendation**, not a guess we made — the ordering the adapters
+  already used.
+- Google really is **snake_case** (`inline_data` / `mime_type`) on the REST
+  endpoint, despite that API being camelCase almost everywhere else. The oddity
+  had a comment in the adapter reading as though somebody had noticed a
+  discrepancy and talked themselves out of it; it turns out they were right.
+- The supported set is **PNG, JPEG, GIF, WebP** at Anthropic and at OpenAI alike,
+  which is `ALLOWED_IMAGE_MEDIA_TYPES` entry for entry — the closed four were
+  guessed correctly.
+- **Only a GIF's first frame is ever used** ("animations are unsupported"), by
+  both vendors. §4's decision to re-encode one frame and accept the animation
+  loss is not a compromise: it is what the API does anyway.
+- Size ceilings are far above ours (10 MB base64 at Anthropic direct; 5 MB on
+  Bedrock/Vertex), so the 2 MiB encoded bound is never the binding one.
 
 **The turn gate.** Before dispatching a turn whose *new user message* carries
 images, the orchestrator asks the resolved provider's capabilities; on
@@ -128,7 +182,7 @@ Two new commands in `filesystem.rs`, both Core→Shell like their siblings:
   budget), decodes with the `image` crate — **decoding is the validation**; a
   file that doesn't parse as an image is refused with a plain sentence, which
   retires extension-guessing for this path — then downscales anything over
-  1600px on its long edge and re-encodes: JPEG (quality 80) for opaque images,
+  1568px on its long edge and re-encodes: JPEG (quality 80) for opaque images,
   PNG where alpha exists. The encoded result must land under **2 MiB** or the
   shell steps the quality down (60, 40) and then the long edge (1200, 800)
   until it does, refusing plainly if the smallest step still won't fit. What
@@ -268,9 +322,42 @@ edge.
   conversation, pictures included. Those copies are written as new rows and lose
   the person's filename (`Message.images` carries none — §3), so a continued chat
   shows the picture and not its name. The bytes are duplicated, exactly as the
-  carried text is.
+  carried text is. **The fix, if it is ever wanted, is a row-to-row SQL copy**
+  keyed off the old message id, which would carry the filename across for free;
+  it was not built because the duplication is bounded by the same four-per-message
+  ceiling as everything else here.
+- **`conversation.load` ships every attachment's full base64, every time a chat is
+  opened** — up to ~2.7 MB per picture, for thumbnails drawn at 240px. Switching
+  between two picture-heavy chats pays it each way. The honest fix is a second,
+  small thumbnail column written at pick time (the shell already decodes and
+  resizes there) with the full bytes fetched on demand; the model's own history
+  half would go on reading the full rows. Recorded rather than built: it is a
+  schema change, and the wire it would change is the one phase 3 just settled.
+- **Every later turn of a picture-bearing conversation re-sends those pictures to
+  the provider.** History is replayed whole, so a photo attached once is ingested
+  again on every turn that follows it — real money and real latency, honestly
+  counted by §4.8's budget (which reads the provider's own usage report) but not
+  reduced by anything. Two candidate fixes, both owner calls because both change
+  what the model receives: an Anthropic `cache_control` breakpoint on the last
+  history block (cache-reads instead of re-ingestion, no behaviour change), or
+  degrading pictures older than N turns to the `[picture]` marker the Ollama path
+  already has.
+- **A text-only CUSTOM server still fails, and the gate cannot know.** `custom` is
+  somebody's own OpenAI-compatible endpoint, so Addison no longer claims it can
+  see (§5: the row ships no `vision` field at all, and the composer stays quiet).
+  But quiet is not the same as safe: attaching a picture to a text-only llama.cpp
+  or vLLM server sends `image_url` parts it will refuse, and because history
+  replays whole, **every later turn of that conversation refuses too**. The fix
+  that would close it is a capability probe against the configured server, which
+  is a network call with its own failure modes and its own owner decision; what
+  ships instead is the absence of a false claim.
 - Attachments live in SQLite as base64; a person who attaches many large
-  photos grows their database by up to ~8 MiB a message, bounded but real.
+  photos grows their database by up to **~10.7 MiB a message**, bounded but real.
+  (Four pictures × the 2 MiB *encoded* ceiling is 8 MiB of image bytes, and the
+  column stores base64, which is four thirds of that. The figure read 8 MiB until
+  2026-08-23, when checking the arithmetic found it had been written from the byte
+  bound and not from what is actually stored — a third light, in a file whose whole
+  discipline is that a number is a claim.)
 - The composer's warning appears only for explicit picks; strategy-routed
   turns learn from the refusal sentence instead.
 - `read_file`'s image path remains the old text shape (§7).

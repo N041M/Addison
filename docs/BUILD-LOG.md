@@ -12,6 +12,55 @@ place here is a finding a future session would otherwise rediscover the hard way
 
 ---
 
+## What shipped 08-23: attaching a picture, all four phases
+
+[`image-attach-plan.md`](image-attach-plan.md) owns the design and carries the
+amendments each phase made to it. The claim: **a message can carry pictures, end to
+end, and the model sees pixels rather than a paragraph of base64.**
+
+- **Phase 1** put an `images` tuple beside `Message.content` and taught all four
+  adapters their own block shape, behind a turn gate that refuses a picture to a
+  `vision=False` provider in one sentence.
+- **Phase 2** gave the shell `pickImage`/`readPickedImage`: **decoding IS the
+  validation** (a file that will not parse as an image is refused plainly, which
+  retires extension-guessing for this path), then a downscale/re-encode under 2 MiB
+  — with a three-condition pass-through, because a JPEG round trip is exactly what
+  ruins the PNG screenshot of text that is the commonest thing anybody attaches.
+- **Phase 3** minted attachment ids in the core, spent them at the send's point of
+  no return, and stored the BYTES beside the message so a reopened chat carries its
+  pictures to the thread *and* to the model.
+- **Phase 4** is the composer's ＋, the chip row, and the thumbnails in the thread.
+
+Findings from phase 4 worth keeping:
+
+- **`git checkout --` on a file mid-mutation-check ate an hour of edits.** The
+  mutation pass edits a source file, runs the tests, and restores it; `git checkout`
+  restores it to HEAD, which for a file with uncommitted work means deleting the
+  work. Copy the file aside and copy it back. (This is the second time — the
+  streaming-markdown rework of 2026-08-22 lost work the same way.)
+- **An extra `undefined` argument is a visible change.** `handleSend(text)` became
+  `handleSend(text, attachments)` and `toHaveBeenCalledWith("…")` in
+  `composer.test.tsx` went red on the argument nobody passed. The fix is the rule
+  the wire already follows: a message with no pictures takes the exact call it took
+  before, second argument and all — which is worth more than the tidier signature,
+  because it is what makes "an ordinary send is unchanged" checkable rather than
+  merely claimed.
+- **The chips come back on a refused send, and that is a deliberate asymmetry.**
+  Phase 3 spends an id at the point of no return and at no refusal above it, so a
+  refused send's pictures are still held. The one case the frontend cannot tell
+  apart is a turn that failed AFTER the message was persisted: the ids are spent,
+  the chips return, and re-sending them is refused in a sentence. Noisy, and chosen
+  over the reverse mistake — silently eating the pictures of a send that never
+  happened, leaving somebody to find four photographs again.
+- **`conversation.load` does not clear the core's pending set** (only
+  `conversation.new` does), so the composer discards each id when its chips are
+  cleared. Without that, switching conversations with four picked pictures leaves
+  four slots held that nothing on screen can explain or free.
+- **The thread shows a name and never a size**, because phase 3 deliberately kept
+  `byteSize` off the stored wire row. The composer chip has it (a pick carries it);
+  a reopened chat does not, and showing it in one place and not the other would be
+  the inconsistency a reader notices.
+
 ## What shipped 08-22 (eighth): three read-only tools for a phone, and a note on the desk for everything else
 
 Phase 3 of the messaging channels, and the last one that ships

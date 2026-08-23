@@ -877,16 +877,29 @@ class Orchestrator:
         on every CLI and test turn."""
         return self._on_tool_audit is not None
 
+    def _finish_with_sentence(
+        self, conversation, relay: "_DeltaRelay", sentence: str
+    ) -> None:
+        """End a turn early on one plain sentence of Addison's own.
+
+        THREE STEPS THAT BELONG TOGETHER, which is why they are one function rather
+        than a shape two callers each remember. The sentence is APPENDED to the
+        transcript as well as streamed, so a reopened conversation does not end on a
+        question with nothing said back; it goes out through the RELAY rather than
+        the sink, so a turn answering a phone answers the phone; and ``begin_send``
+        marks it as a fresh utterance, because a turn that stops here has usually
+        already said something before it and this sentence must not fuse onto the
+        tail of that one.
+
+        Both early stops use it: the step/round ceiling and the picture gate."""
+        conversation.append_assistant_message(sentence)
+        relay.begin_send()
+        relay(sentence)
+
     def _finish_over_budget(self, conversation, relay: "_DeltaRelay") -> None:
         # Same sentence for both ceilings: the person does not care which counter ran
         # out, only that Addison stopped and is saying so.
-        conversation.append_assistant_message(_TOO_MANY_STEPS)
-        # Also a segment, and a new one: a turn that stops here has usually already
-        # said something before its first tool call, and the sentence must not fuse
-        # onto it. ``begin_send`` is how the relay is told a fresh utterance starts —
-        # this sentence is Addison's own, not the tail of the send that preceded it.
-        relay.begin_send()
-        relay(_TOO_MANY_STEPS)
+        self._finish_with_sentence(conversation, relay, _TOO_MANY_STEPS)
 
     def _run_tool_calls(
         self, conversation, response, context, guards, mode, provider, calls_made, surface
@@ -1414,33 +1427,58 @@ class Orchestrator:
         ``capabilities()``, and on the Ollama adapter that second one is an HTTP
         call the first time.
 
-        WHICH PROVIDER IS ASKED is the one that would answer: the head of the
-        routing chain where there is one, and the single resolution otherwise. A
-        chain can still fall forward PAST that head onto a text-only local, and
-        that case is deliberately not a refusal — the person did nothing to cause
-        it, so it gets the adapters' history degrade instead (plan §9), and the
-        "Answered by" line says who ended up answering.
+        WHICH PROVIDERS ARE ASKED is EVERY candidate that could answer, not just
+        the first. The question this gate exists to ask is "is there anybody to show
+        this to", and the head of a chain is not that question's answer: it may be
+        cooled, unreachable, or out of quota, in which case the turn falls forward to
+        a candidate behind it and the head never sees anything. Refusing on the head
+        alone meant a person with a vision model second in their chain was told to
+        switch models while the model that could see it sat waiting. So the refusal
+        needs every candidate to lack vision, and one that can see is enough to let
+        the turn run.
+
+        THE MIRROR CASE IS STILL NOT A REFUSAL: a chain whose head CAN see, falling
+        forward onto a text-only local, gets the adapters' history degrade (plan §9)
+        and the "Answered by" line saying who answered. The person did nothing to
+        cause that, and a dead turn would be a worse answer than a degraded one.
+
+        AN EMPTY-BUT-WIRED CHAIN refuses nothing either. There is no candidate to
+        ask, and the routed path has its own plain sentence for having nowhere to
+        go — inventing a picture-shaped refusal for it would name the wrong problem.
+
+        The resolutions stay LAZY: the common turn carries no pictures and resolves
+        nothing at all, and a chain whose first candidate can see never resolves the
+        second (on the Ollama adapter a ``capabilities()`` call is an HTTP request
+        the first time).
         """
         message = _last_user_message(conversation.messages)
         if message is None or not message.images:
             return False
-        if chain:
-            head = chain[0]
-            provider = self.model_router.resolve(head.role, head.model_id)
-        else:
-            provider = self.model_router.resolve(requested_role, model_name)
-        if provider.capabilities().vision:
+        if chain is None:
+            candidates = [(requested_role, model_name)]
+        elif not chain:
             return False
-        # Ended the way every other early stop ends (``_finish_over_budget``): the
-        # sentence is APPENDED to the transcript as well as streamed, so a reopened
-        # conversation does not end on a question with nothing said back, and the
-        # relay is used rather than the sink directly so a turn answering a phone
-        # sends it to the phone.
-        conversation.append_assistant_message(_BLIND_TO_PICTURES)
-        relay = _DeltaRelay(sink)
-        relay.begin_send()
-        relay(_BLIND_TO_PICTURES)
+        else:
+            candidates = [(c.role, c.model_id) for c in chain]
+        if any(self._might_see_pictures(role, model_id) for role, model_id in candidates):
+            return False
+        self._finish_with_sentence(conversation, _DeltaRelay(sink), _BLIND_TO_PICTURES)
         return True
+
+    def _might_see_pictures(self, role, model_id) -> bool:
+        """Could THIS candidate look at a picture? Anything but a definite no is a
+        yes.
+
+        A candidate that will not even resolve counts as a maybe, deliberately. The
+        gate's job is to stop a model answering about words alone; a provider this
+        turn cannot build is a provider that will answer nothing at all, and the
+        failure it produces further down says what actually went wrong. Refusing
+        here on an unresolvable candidate would replace that honest failure with a
+        sentence about pictures."""
+        try:
+            return bool(self.model_router.resolve(role, model_id).capabilities().vision)
+        except Exception:
+            return True
 
     def _gate_image_result(self, result: ToolResult, provider) -> ToolResult:
         """(A) Vision gate (§4.1.1 item A): don't feed a picture to a model that

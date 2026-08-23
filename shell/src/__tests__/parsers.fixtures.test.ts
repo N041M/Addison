@@ -179,6 +179,12 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         // parser therefore lands on false for all three, which is what makes the
         // composer menu's note read "quality" rather than a guess.
         free: false,
+        // Whether this model can look at a picture (image-attach plan §5). Carried
+        // through from the payload rather than defaulted, because ABSENT is its own
+        // answer — "nobody has told us" — and the composer stays quiet on it, where
+        // a false would say out loud that the model is blind. A custom server's row
+        // is the one that arrives without it.
+        vision: true,
       },
       {
         id: "claude-haiku-4-5-20251001",
@@ -188,6 +194,7 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         provider: "anthropic",
         providerLabel: "Anthropic",
         free: false,
+        vision: true,
       },
       {
         id: "gpt-fixture",
@@ -197,6 +204,7 @@ describe("normalizeRoles / normalizeCloudModels over the real availableRoles pay
         provider: "openai",
         providerLabel: "OpenAI",
         free: false,
+        vision: true,
       },
     ]);
   });

@@ -16,6 +16,29 @@ from agent_core.policy import PolicyMode
 _METHOD_NOT_FOUND = -32601
 _SERVER_ERROR = -32000
 
+# A ``conversation.sendMessage`` that was turned away BEFORE anything was written:
+# no conversation row, no message row, and — the reason this code exists — no
+# attachment id consumed. Every refusal above ``_ensure_conversation()`` carries
+# it; everything from that line on keeps ``_SERVER_ERROR``.
+#
+# NOT a promise that nothing at all was spent. The per-message role/model/effort
+# pick is cleared further up, before four of these six refusals, so a person who
+# said "answer this one with X" and then met the locked-keychain sentence has lost
+# that pick and will send to the default model next time. That is pre-existing
+# behaviour and is not this code's to fix; it is written down because a constant
+# that says "nothing happened" beside code where something did is how a false
+# claim gets believed twice.
+#
+# THE MACHINE-READABLE HALF OF A SENTENCE THE PERSON ALREADY GETS. The message is
+# unchanged and is still the whole answer for a reader; what the code adds is a fact
+# the composer cannot otherwise learn — whether the pictures it just cleared are
+# still held by the core. Offering them back after a refusal saves somebody finding
+# four photographs again; offering them back after a failure that happened LATER
+# would hand them ids that were spent at the point of no return, and a chip that
+# names a spent id is an affordance that lies. One boolean, two opposite mistakes,
+# and only the core knows which side of the line the failure fell on.
+_REFUSED_BEFORE_SEND = -32011
+
 _NOT_BUILT_MESSAGE = "This isn't built yet."
 # The card died with its turn (KNOWN-BUGS #4, owner decision 2026-08-09). Said to a
 # `permission.respond` that arrives for a request nobody is waiting on any more —

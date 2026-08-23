@@ -145,6 +145,10 @@ export function App() {
   const [canRedo, setCanRedo] = useState(false);
   // One-shot composer prefill for rewind's edit-and-resend.
   const [composerSeed, setComposerSeed] = useState<string | null>(null);
+  // Bumped to tell the composer to drop the pictures it is holding (image-attach
+  // plan §6). A signal, not the pictures themselves: the pending set belongs to the
+  // message being written, and all App knows is when there stops being one.
+  const [attachmentsClearSignal, setAttachmentsClearSignal] = useState(0);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   // Which in-window view is showing: the live chat, or one of the four surfaces.
@@ -410,6 +414,13 @@ export function App() {
     turn.resetTurn();
     setRoutineProposal(null);
     setComposerSeed(null);
+    // Pending pictures are part of the message being composed, and this is where
+    // that message stops existing — the `composerSeed` line above, one attachment
+    // later (image-attach plan §6). This drops the CHIPS only: the core frees its
+    // own held bytes on the same frame (`conversation.new` and `conversation.load`
+    // both clear the pending set), which is what keeps a webview that reloads at
+    // the wrong moment from stranding slots nothing can name.
+    setAttachmentsClearSignal((n) => n + 1);
   }
 
   // --- The view machine -----------------------------------------------------
@@ -763,11 +774,13 @@ export function App() {
     // (a thread that looks rewound while the core remembers is the worst outcome).
     let before: DisplayMessage[] = [];
     let anchorText = "";
+    let anchorPictures = 0;
     turn.setMessages((prev) => {
       before = prev;
       const idx = prev.findIndex((m) => m.storeId === storeId);
       if (idx === -1) return prev;
       anchorText = prev[idx].content;
+      anchorPictures = prev[idx].attachments?.length ?? 0;
       return prev.slice(0, idx);
     });
     turn.setPermission(null);
@@ -775,6 +788,25 @@ export function App() {
       .rewindConversation(storeId)
       .then(() => {
         if (anchorText) setComposerSeed(anchorText);
+        if (anchorPictures > 0) {
+          // SAY IT, because the pictures are not coming back on their own. A rewind
+          // deletes the anchor's attachment rows with the message (one transaction,
+          // by design — the bytes belonged to a message that no longer exists), and
+          // the ids were spent at send time, so there is nothing left for the
+          // composer to re-chip. On a message that was ONLY pictures this used to
+          // leave an empty box with a disabled Send and no account of where four
+          // photographs had gone.
+          //
+          // A sentence rather than machinery: handing them back would mean a new
+          // core RPC that re-admits deleted bytes into the pending set, which is a
+          // real design with a real trust story and is recorded in KNOWN-GAPS
+          // instead of improvised here.
+          setStatusBanner(
+            anchorPictures === 1
+              ? "The picture on that message was removed with it. Attach it again to send it once more."
+              : "The pictures on that message were removed with it. Attach them again to send it once more.",
+          );
+        }
       })
       .catch((err) => {
         turn.setMessages(before);
@@ -1285,6 +1317,14 @@ export function App() {
                 <ChatThread
                   messages={turn.messages}
                   onRetry={turn.handleRetry}
+                  // `!== null`, not truthiness: "" is a real last message. A
+                  // picture-only send is exactly that (the core relaxed its
+                  // empty-text guard for it), and reading its empty text as
+                  // "nothing to retry" hid Retry on the one turn most worth
+                  // retrying. `useTurn.handleRetry` guards the same way.
+                  // Truthiness, matching `useTurn.handleRetry`'s own guard: a
+                  // wordless picture turn has nothing to resend, and offering the
+                  // control anyway removed the answer it was pointed at.
                   retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
                   onContinue={turn.handleContinue}
                   onRewindTo={handleRewindTo}
@@ -1448,6 +1488,8 @@ export function App() {
               draftSeed={composerSeed}
               onDraftSeedUsed={() => setComposerSeed(null)}
               focusSignal={composerFocusSignal}
+              clearAttachmentsSignal={attachmentsClearSignal}
+              setStatusBanner={setStatusBanner}
             />
           )}
         </div>

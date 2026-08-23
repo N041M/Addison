@@ -12,6 +12,7 @@ import { useTurn } from "../hooks/useTurn";
 import { ChatThread } from "../components/ChatThread";
 import { ipc } from "../ipc/client";
 import { setMotionEnabled } from "../lib/scramble";
+import { REFUSED_BEFORE_SEND } from "../types/protocol";
 
 // Irrelevant here, and it drags a heavy async renderer into jsdom. Nothing else
 // is stubbed: the real Markdown component is the thing under test at the seam.
@@ -550,6 +551,41 @@ describe("revealing an answer that arrived whole", () => {
     expect(result.current.messages.at(-1)).toMatchObject({
       failed: true,
       content: "I couldn't reach the model.",
+    });
+  });
+
+  it("keeps a refused text message on screen, sentence and all", async () => {
+    // MUTATION: remove the rows for every refusal rather than only for one that
+    // carried pictures. That is the shape a first draft of the image-attach fix
+    // round had, and it reaches far past pictures: the pre-persist refusal code
+    // rides SIX refusals, three of which are the everyday ones — no key yet, a
+    // locked keychain, a model pick that is no longer available. On any of them
+    // the person's own typed message was filtered out of the thread while the
+    // composer had already cleared the box, so a paragraph they had just written
+    // existed nowhere, and the only explanation was a banner that dismisses itself
+    // after eight seconds.
+    const { result } = renderHook(() => useTurn(makeArgs()));
+    act(() => {
+      result.current.handleSend("four paragraphs of something hard to retype");
+    });
+    await act(async () => {
+      const refusal = new Error("Addison can't read your saved key right now.");
+      (refusal as Error & { code?: number }).code = REFUSED_BEFORE_SEND;
+      deferreds[0].reject(refusal);
+      await flushMicrotasks();
+    });
+
+    // Their words are still there...
+    expect(
+      result.current.messages.some(
+        (m) => m.role === "user" && m.content === "four paragraphs of something hard to retype",
+      ),
+    ).toBe(true);
+    // ...and the refusal explains itself in the row under them, where every other
+    // refusal in this app has always put it.
+    expect(result.current.messages.at(-1)).toMatchObject({
+      failed: true,
+      content: "Addison can't read your saved key right now.",
     });
   });
 

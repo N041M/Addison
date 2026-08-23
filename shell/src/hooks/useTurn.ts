@@ -4,8 +4,9 @@
 // drop late results from stopped/superseded turns — is unchanged.
 
 import { useEffect, useRef, useState } from "react";
-import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/protocol";
-import type { DisplayMessage } from "../types/ui";
+import type { ActivityUpdate, ModelRole, PermissionRequest } from "../types/protocol";
+import { REFUSED_BEFORE_SEND } from "../types/protocol";
+import type { DisplayAttachment, DisplayMessage, PendingAttachment } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
 import {
@@ -248,17 +249,62 @@ export function useTurn({
   const currentTurnRef = useRef<string | null>(null);
 
   // --- Turn lifecycle -------------------------------------------------------
-  async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
+  /**
+   * Run one turn. Answers WHICH OF THREE THINGS happened, because a boolean could
+   * only answer two and the third was the one that mattered:
+   *
+   *   * **"sent"** — the message reached the core and is in the transcript. Whatever
+   *     happened afterwards is in the thread; the ids it named are spent.
+   *   * **"refused"** — the core turned the send away BEFORE persisting anything
+   *     (`REFUSED_BEFORE_SEND`). Nothing was written and no id was spent, so the
+   *     optimistic rows are REMOVED and the composer may honestly offer the pictures
+   *     back.
+   *   * **"failed"** — everything else: a turn that broke after the message was
+   *     written down, a timeout, a transport failure, an abandoned turn. The rows
+   *     stay and the failing one says so, and the chips do NOT come back.
+   *
+   * The two failure cases used to share `false`, and the cost was one lie each way.
+   * A refused send left a user row on screen showing thumbnails of a message the
+   * model never received — the person's own transcript claiming they had sent
+   * something they had not. A failed-after-persist send put the chips back holding
+   * ids the core had already spent, so the next send was refused for naming them:
+   * an affordance that looks like a second chance and is not.
+   */
+  async function runTurn(
+    text: string,
+    opts: { isRetry?: boolean; attachments?: PendingAttachment[] } = {},
+  ): Promise<TurnOutcome> {
     const assistantId = uid();
     const userId = uid();
+    // The previews the person is looking at, in the shape the thread renders
+    // (image-attach plan §6): the thumbnail appears the instant Send is pressed
+    // rather than one round trip later. `attachments` rides ChatMessage itself, so
+    // the optimistic row and the row `conversation.load` rebuilds are the same
+    // shape and draw through the same code.
+    const pictures = (opts.attachments ?? []).map(asDisplayAttachment);
     currentTurnRef.current = assistantId;
     setMessages((prev) => {
       const base = opts.isRetry
         ? dropTrailingAssistant(prev)
-        : [...prev, { id: userId, role: "user", content: text } as DisplayMessage];
+        : [
+            ...prev,
+            {
+              id: userId,
+              role: "user",
+              content: text,
+              // Absent, not empty, when there are none — an ordinary message's
+              // row is exactly the object it always was.
+              ...(pictures.length > 0 ? { attachments: pictures } : {}),
+            } as DisplayMessage,
+          ];
       return [...base, { id: assistantId, role: "assistant", content: "", pending: true }];
     });
 
+    // What Retry would re-send BEFORE this turn claimed the slot. A refused send is
+    // put back to it below: nothing about that send happened, so it must not become
+    // the thing Retry offers to do again — least of all for a picture-only send,
+    // whose text is "" and whose retry would be refused for being empty.
+    const previousUserText = lastUserText;
     setLastUserText(text);
     setActivities([]);
     setCurrentActivity(null);
@@ -276,10 +322,21 @@ export function useTurn({
         ? effectiveLocalModel("local", selectedLocalModel)
         : effectiveCloudModel();
       const effort = isLocal ? undefined : selectedEffort;
-      const res = await ipc.sendMessage(text, selectedRole, modelId, effort);
+      // Ids only. The bytes this side is holding are for display and never go back
+      // to the core (plan §5), so nothing the webview holds can become what the
+      // model saw.
+      const res = await ipc.sendMessage(
+        text,
+        selectedRole,
+        modelId,
+        effort,
+        opts.attachments?.map((a) => a.attachmentId),
+      );
       // Stopped or superseded by a newer turn while we were waiting — drop this
-      // result so it can't overwrite "(Stopped.)" or a later turn's answer.
-      if (currentTurnRef.current !== assistantId) return;
+      // result so it can't overwrite "(Stopped.)" or a later turn's answer. "sent"
+      // all the same: the send landed, so the ids it named are spent, and the
+      // composer must not offer them back.
+      if (currentTurnRef.current !== assistantId) return "sent";
       const finalText = extractFinalText(res);
       // The core's persisted ids: what "Rewind to here" must anchor on.
       const ids = asRecord(res);
@@ -333,15 +390,64 @@ export function useTurn({
       } catch {
         /* no card — never a failed turn */
       }
+      return "sent";
     } catch (err) {
+      const refused = (err as RawError | undefined)?.code === REFUSED_BEFORE_SEND;
       // Same guard on the failure path: an abandoned turn's error must not
       // replace the stopped message or a newer turn's content.
-      if (currentTurnRef.current !== assistantId) return;
+      //
+      // "failed", NEVER "refused", even when the code says the core turned it away.
+      // The outcome is read by a composer that has moved on — a new chat, another
+      // conversation, a later turn — and restoring four chips into a message
+      // somebody is no longer writing is worse than losing four slots that the
+      // core's own clear-on-load has already freed.
+      if (currentTurnRef.current !== assistantId) return "failed";
       const message = err instanceof Error ? err.message : "Something went wrong.";
       // Developer-only: the client attaches the real exception text as `.raw`.
       // We keep it on the message; ChatThread renders it only when the
       // raw-diagnostics flag is on, so the plain message is all Simple ever sees.
       const raw = (err as RawError | undefined)?.raw;
+      if (refused && pictures.length > 0) {
+        // ONLY WHEN THE TURN CARRIED PICTURES, and the narrowness is the whole
+        // point. What is being removed is a specific lie: a user row showing
+        // thumbnails of a message the model never received, which the composer
+        // then offers the pictures back for — two places claiming the same
+        // photographs, one of them wrong. Nothing is lost, because the words go
+        // back into the textarea with the chips.
+        //
+        // A REFUSED TEXT SEND IS LEFT EXACTLY AS IT WAS BEFORE THIS FEATURE
+        // EXISTED: its user row stays and the refusal sentence fills the assistant
+        // row below it. That path is shared with every no-key, locked-keychain and
+        // local-only refusal in the app — none of which is about pictures — and a
+        // first draft of this branch removed their rows too, which threw away
+        // somebody's typed message on a locked keychain and left them an
+        // eight-second banner where their paragraphs had been. A fix for one
+        // feature does not get to delete another feature's transcript.
+        //
+        // It also keeps Retry honest. `handleRetry` re-runs the last text and
+        // pops the trailing assistant row to do it; if a refused retry removed
+        // rows, a perfectly good answer already on screen would vanish because
+        // the retry of it was turned away.
+        setMessages((prev) => prev.filter((m) => m.id !== assistantId && m.id !== userId));
+        setLastUserText(previousUserText);
+        setStatusBanner(message);
+        return "refused";
+      }
+      if (refused) {
+        // Refused, but nothing to un-say: the rows stay and the sentence lands in
+        // the assistant row below the person's own message, where every other
+        // refusal in this app has always put it. Still "refused" to the composer,
+        // which is what keeps a picture-free send from being told its ids were
+        // spent — it named none.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, pending: false, failed: true, content: m.content || message }
+              : m,
+          ),
+        );
+        return "refused";
+      }
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantId
@@ -357,6 +463,7 @@ export function useTurn({
             : m,
         ),
       );
+      return "failed";
     } finally {
       // Only the still-current turn clears the working/activity state; an
       // abandoned turn's cleanup would otherwise re-enable the composer and hide
@@ -398,16 +505,55 @@ export function useTurn({
     }
   }
 
-  function handleSend(text: string) {
+  /**
+   * Send one message, optionally carrying pictures the person has already picked.
+   *
+   * Resolves "refused" ONLY when the core turned the send away before persisting
+   * anything, which is the composer's cue to put the chips back: phase 3 spends an
+   * id at the point of no return and at no refusal above it, so a refused send's
+   * pictures are still held and still nameable. "failed" covers everything else and
+   * restores nothing — see `runTurn`.
+   *
+   * No engine at all is "refused" too, and correctly so: the frame never left this
+   * window, so no id can have been spent by it.
+   */
+  function handleSend(text: string, attachments?: PendingAttachment[]): Promise<TurnOutcome> {
     if (!connected) {
       setStatusBanner("Addison's engine isn't connected yet, so I can't reply.");
-      return;
+      return Promise.resolve("refused");
     }
-    void runTurn(text);
+    return runTurn(text, { attachments });
   }
 
   function handleRetry() {
+    // TRUTHINESS, so "" is excluded — and the reasoning that briefly made this
+    // `!== null` was wrong in a way worth writing down, because it sounded right.
+    // It said: a picture-only send is the turn most worth retrying (four
+    // photographs in it), so do not read "" as "nothing to retry". But retry
+    // resends TEXT, and a wordless turn has none: the call became
+    // `runTurn("", {isRetry: true})`, which names no ids (they were spent) and no
+    // words, and the core refuses exactly that with "There's nothing to send yet".
+    // Meanwhile `runTurn` had already popped the answer the person was reading in
+    // order to make room for the reply. Pressing Retry under a wordless photo
+    // deleted a good answer and replaced it with a sentence telling them they had
+    // written nothing.
+    //
+    // So Retry is offered only where there is something to resend. The answer to
+    // "how do I ask again about that photo?" is the composer, which is a real
+    // answer; a button that destroys what it was meant to replace is not.
     if (!connected || isWorking || !lastUserText) return;
+    // TEXT ONLY, deliberately, and it is not an oversight: an id is spent the
+    // moment its send reaches the point of no return, so a turn that failed after
+    // the message was written down has ids that no longer exist, and naming them
+    // again would refuse the retry whole. The pictures are not lost by this — they
+    // are in the persisted message, so history replay carries them to the model
+    // exactly as the first attempt did.
+    //
+    // That is now the ONLY case that can reach here, which is what makes text-only
+    // right rather than merely defensible. A REFUSED send persisted nothing, so its
+    // rows are removed and its `lastUserText` is put back — there is no failed
+    // answer for Retry to sit under and nothing of that send left to retry. What
+    // remains is exactly the failure whose pictures are already on disk.
     void runTurn(lastUserText, { isRetry: true });
   }
 
@@ -496,6 +642,13 @@ export function useTurn({
 
 export type TurnState = ReturnType<typeof useTurn>;
 
+/**
+ * What one send did. Three values because there are three outcomes and only one
+ * caller-visible difference between the last two matters: whether the pictures the
+ * composer just cleared are still the core's to give back.
+ */
+export type TurnOutcome = "sent" | "refused" | "failed";
+
 // ---------------------------------------------------------------------------
 // Small pure helpers (moved with the turn logic from App.tsx).
 // ---------------------------------------------------------------------------
@@ -504,6 +657,24 @@ function uid(): string {
     return crypto.randomUUID();
   }
   return `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** A pending pick as the thread renders it. The id loses its `attachmentId` name
+ *  and nothing else: a stored row and an optimistic one are the same shape, so a
+ *  reopened conversation draws exactly what the person saw when they pressed Send.
+ *  `byteSize` is dropped because the thread shows a name and never a size — the
+ *  stored rows carry none either (plan §5). */
+function asDisplayAttachment(picked: PendingAttachment): DisplayAttachment {
+  return {
+    id: picked.attachmentId,
+    name: picked.name,
+    mediaType: picked.mediaType,
+    dataB64: picked.dataB64,
+    // Carried, not rebuilt: the pick's parser already spelled it (types/ui.ts owns
+    // why it is spelled once), and this row is about to sit in a thread that
+    // re-renders on every streamed delta of the answer to it.
+    dataUri: picked.dataUri,
+  };
 }
 
 function dropTrailingAssistant(list: DisplayMessage[]): DisplayMessage[] {

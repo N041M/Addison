@@ -42,6 +42,7 @@ from agent_core.providers.base import (
     exception_for_http_status,
     open_stream,
     request_with_retry,
+    text_for_a_blind_model,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
 
@@ -76,7 +77,8 @@ class OllamaProvider:
 
     # --- capabilities (queried, not assumed) ------------------------------
     def capabilities(self) -> ProviderCapabilities:
-        meta = self._metadata()
+        fetched = self._metadata_or_none()
+        meta = fetched if fetched is not None else {}
         declared = meta.get("capabilities") or []
         return ProviderCapabilities(
             native_tool_calling="tools" in declared,
@@ -85,7 +87,27 @@ class OllamaProvider:
             # True for every local model — this is the flag privacy-sensitive
             # routing relies on (base.py); "off device" == runs on this machine.
             runs_off_device=True,
-            vision="vision" in declared,
+            # VISION FAILS OPEN WHEN THERE IS NO ANSWER, and only then. Three states
+            # hide behind one boolean here: the model says it can see, the model says
+            # it cannot, and Ollama never answered at all — and the third used to be
+            # folded into the second, which made an unreachable daemon read as a
+            # model that is blind.
+            #
+            # That mattered because of what the flag is FOR. The picture gate exists
+            # to stop a model answering confidently about the words of a message
+            # whose pictures it never saw; a daemon that is not running cannot answer
+            # anything, so failing open costs nothing — the send fails with the
+            # honest "Ollama isn't running" sentence, or the routed path falls
+            # forward to a model that is. Failing closed, by contrast, MINTS a
+            # sentence: the transcript gains "switch to a model that can look at
+            # pictures" about a model that may well be able to, and the person goes
+            # looking for a model problem instead of a daemon that is down.
+            #
+            # ``native_tool_calling`` deliberately keeps the old treatment: a
+            # no-answer is False there, exactly as before. Tools are a thing this
+            # adapter must DO, and guessing yes would put a tools array on a request
+            # the server may reject; vision is a thing the gate must not SAY.
+            vision=("vision" in declared) if fetched is not None else True,
             # /api/chat reports ``done_reason: "length"`` when the answer ran into
             # the model's output room, and ``"stop"`` when it finished on its own.
             # Kept verbatim by the translations below; declared here in the same
@@ -94,24 +116,38 @@ class OllamaProvider:
             truncation_finish_reasons=("length",),
         )
 
-    def _metadata(self) -> dict:
-        """Model metadata from ``POST /api/show``, cached after first success.
+    def _metadata_or_none(self) -> dict | None:
+        """Model metadata from ``POST /api/show``, cached after first success —
+        or **None when there was no answer at all**.
 
-        Degrades gracefully: if Ollama is unreachable or errors, return {} (which
-        yields conservative caps — no native tools, no vision) rather than raising,
-        so ``capabilities()`` never crashes a turn. The failure is NOT cached, so a
-        later call can still populate once Ollama is up."""
+        Degrades gracefully either way: an unreachable or erroring Ollama never
+        raises out of here, so ``capabilities()`` cannot crash a turn, and the
+        failure is NOT cached, so a later call can still populate once Ollama is up.
+
+        THE None IS THE POINT, and it is why this returns an option rather than the
+        empty dict it used to. "The model declares no vision" and "nobody answered"
+        are different facts, and a caller that cannot tell them apart has to pick one
+        to be wrong about (see ``capabilities``). ``_metadata`` keeps the old
+        empty-dict shape for every caller that genuinely does not care."""
         if self._metadata_cache is not None:
             return self._metadata_cache
         try:
             response = self._post("/api/show", {"model": self._model})
         except RuntimeError:
-            return {}
+            return None
         if response.status_code >= 400:
-            return {}
-        data = response.json()
+            return None
+        try:
+            data = response.json()
+        except ValueError:
+            # A 200 carrying something that is not JSON. It was outside the try
+            # until 2026-08-23 and would have raised straight out of
+            # ``capabilities()`` — which this docstring promises cannot happen, and
+            # which the picture gate and the router both call without a net.
+            return None
         self._metadata_cache = data
         return data
+
 
     # --- send -------------------------------------------------------------
     def send(
@@ -287,9 +323,6 @@ def _translate_history(messages: list[Message], vision: bool = True) -> list[dic
 #: ``[picture: {name}]`` before the shape was settled), and inventing one would be
 #: worse than saying nothing — a model told a file was called "receipt.png" will
 #: answer about a receipt it never saw.
-_PICTURE_MARKER = "[picture]"
-
-
 def _picture_entry(m: Message, vision: bool) -> dict:
     """A user turn carrying pictures, for a local model that may or may not see.
 
@@ -312,11 +345,10 @@ def _picture_entry(m: Message, vision: bool) -> dict:
     it, and reads as a description of a missing thing with the marker there.
     """
     if not vision:
-        markers = " ".join(_PICTURE_MARKER for _ in m.images)
-        return {
-            "role": "user",
-            "content": f"{markers}\n\n{m.content}" if m.content else markers,
-        }
+        # `base.text_for_a_blind_model` owns the wording and the ordering now — this
+        # adapter was where the degrade was written, and the Setup Assistant relay
+        # then proved it was not one adapter's problem (2026-08-23).
+        return {"role": "user", "content": text_for_a_blind_model(m)}
     # Ollama's own shape: base64 strings on the message, no media type — it sniffs
     # the format itself, which is why the closed media-type set (base.py) is a
     # cross-provider rule rather than something this adapter needs to send.
