@@ -407,23 +407,45 @@ export function useTurn({
       // We keep it on the message; ChatThread renders it only when the
       // raw-diagnostics flag is on, so the plain message is all Simple ever sees.
       const raw = (err as RawError | undefined)?.raw;
-      if (refused) {
-        // NOTHING WAS SENT, so nothing may be left on screen saying it was. Both
-        // optimistic rows go: the user row (which on a picture send is showing
-        // thumbnails of a message the model never received — a person's own
-        // transcript claiming they sent something they did not) and the empty
-        // assistant row waiting to answer it. The refusal itself is a status
-        // banner, not a transcript entry: the message was never in the
-        // conversation, so an answer to it does not belong in one either.
+      if (refused && pictures.length > 0) {
+        // ONLY WHEN THE TURN CARRIED PICTURES, and the narrowness is the whole
+        // point. What is being removed is a specific lie: a user row showing
+        // thumbnails of a message the model never received, which the composer
+        // then offers the pictures back for — two places claiming the same
+        // photographs, one of them wrong. Nothing is lost, because the words go
+        // back into the textarea with the chips.
         //
-        // The draft is NOT restored to the textarea, and that is the composer's
-        // half of this: it clears the box on submit as it always has. What comes
-        // back are the pictures, because those are the expensive thing to find
-        // again — the words are still in the banner and, more to the point, still
-        // in the person's head.
+        // A REFUSED TEXT SEND IS LEFT EXACTLY AS IT WAS BEFORE THIS FEATURE
+        // EXISTED: its user row stays and the refusal sentence fills the assistant
+        // row below it. That path is shared with every no-key, locked-keychain and
+        // local-only refusal in the app — none of which is about pictures — and a
+        // first draft of this branch removed their rows too, which threw away
+        // somebody's typed message on a locked keychain and left them an
+        // eight-second banner where their paragraphs had been. A fix for one
+        // feature does not get to delete another feature's transcript.
+        //
+        // It also keeps Retry honest. `handleRetry` re-runs the last text and
+        // pops the trailing assistant row to do it; if a refused retry removed
+        // rows, a perfectly good answer already on screen would vanish because
+        // the retry of it was turned away.
         setMessages((prev) => prev.filter((m) => m.id !== assistantId && m.id !== userId));
         setLastUserText(previousUserText);
         setStatusBanner(message);
+        return "refused";
+      }
+      if (refused) {
+        // Refused, but nothing to un-say: the rows stay and the sentence lands in
+        // the assistant row below the person's own message, where every other
+        // refusal in this app has always put it. Still "refused" to the composer,
+        // which is what keeps a picture-free send from being told its ids were
+        // spent — it named none.
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, pending: false, failed: true, content: m.content || message }
+              : m,
+          ),
+        );
         return "refused";
       }
       setMessages((prev) =>

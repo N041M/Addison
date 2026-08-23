@@ -265,6 +265,42 @@ describe("sending a picture", () => {
     fireEvent.click(sendButton());
     expect(handleSend).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.queryByText(PICK.name)).toBe(null));
+    // AND THE IDS GO BACK. A "failed" turn may have broken somewhere the
+    // pre-persist code never reaches — a locked database, a worker that never
+    // started — and those paths raise before the message is written, so the core
+    // can still be holding all four pictures under ids no chip can name. Giving
+    // them back is free when they were genuinely spent (an id nobody holds is a
+    // silent no-op) and is the difference between four invisible slots and none.
+    await waitFor(() => expect(discardAttachment).toHaveBeenCalledWith(PICK.attachmentId));
+  });
+
+  it("puts the words back with the pictures when a picture send is refused", async () => {
+    // MUTATION: drop the `setDraft` restore in submit(). `useTurn` removes the
+    // optimistic rows for a refused PICTURE send, so without this the person's
+    // typed message exists nowhere at all — not in the thread it was taken out of,
+    // and not in the box they typed it in, which was cleared on submit. They watch
+    // a paragraph disappear and get an eight-second banner in its place.
+    renderComposer({}, "refused");
+    await attachOne();
+    fireEvent.change(textarea(), { target: { value: "what does this say?" } });
+
+    fireEvent.click(sendButton());
+    await waitFor(() => expect(textarea().value).toBe("what does this say?"));
+    expect(screen.getByText(PICK.name)).toBeTruthy();
+  });
+
+  it("does not overwrite a sentence the person has already started", async () => {
+    // MUTATION: restore unconditionally (`setDraft(text)`). A refusal that arrives
+    // late would then type over whatever is in the box now — the one thing a
+    // recovery affordance must never do.
+    renderComposer({}, "refused");
+    await attachOne();
+    fireEvent.change(textarea(), { target: { value: "first message" } });
+    fireEvent.click(sendButton());
+    fireEvent.change(textarea(), { target: { value: "something else entirely" } });
+
+    await waitFor(() => expect(screen.getByText(PICK.name)).toBeTruthy());
+    expect(textarea().value).toBe("something else entirely");
   });
 
   it("carries no `attachments` key at all on an ordinary send", async () => {

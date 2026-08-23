@@ -136,14 +136,17 @@ class OllamaProvider:
             return None
         if response.status_code >= 400:
             return None
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            # A 200 carrying something that is not JSON. It was outside the try
+            # until 2026-08-23 and would have raised straight out of
+            # ``capabilities()`` — which this docstring promises cannot happen, and
+            # which the picture gate and the router both call without a net.
+            return None
         self._metadata_cache = data
         return data
 
-    def _metadata(self) -> dict:
-        """The same metadata, with a no-answer flattened to ``{}`` (conservative
-        caps). For callers to whom "absent" and "unanswered" mean the same thing."""
-        return self._metadata_or_none() or {}
 
     # --- send -------------------------------------------------------------
     def send(

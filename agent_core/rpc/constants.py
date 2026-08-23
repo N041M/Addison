@@ -16,11 +16,18 @@ from agent_core.policy import PolicyMode
 _METHOD_NOT_FOUND = -32601
 _SERVER_ERROR = -32000
 
-# A ``conversation.sendMessage`` that was turned away BEFORE anything happened:
-# no conversation row, no message row, no spent role pick, and — the reason this
-# code exists — no attachment id consumed. Every refusal above
-# ``_ensure_conversation()`` carries it; everything from that line on keeps
-# ``_SERVER_ERROR``.
+# A ``conversation.sendMessage`` that was turned away BEFORE anything was written:
+# no conversation row, no message row, and — the reason this code exists — no
+# attachment id consumed. Every refusal above ``_ensure_conversation()`` carries
+# it; everything from that line on keeps ``_SERVER_ERROR``.
+#
+# NOT a promise that nothing at all was spent. The per-message role/model/effort
+# pick is cleared further up, before four of these six refusals, so a person who
+# said "answer this one with X" and then met the locked-keychain sentence has lost
+# that pick and will send to the default model next time. That is pre-existing
+# behaviour and is not this code's to fix; it is written down because a constant
+# that says "nothing happened" beside code where something did is how a false
+# claim gets believed twice.
 #
 # THE MACHINE-READABLE HALF OF A SENTENCE THE PERSON ALREADY GETS. The message is
 # unchanged and is still the whole answer for a reader; what the code adds is a fact

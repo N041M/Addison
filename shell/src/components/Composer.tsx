@@ -328,7 +328,30 @@ export function Composer({
     // took before this feature existed, second argument and all.
     const sent = picked.length > 0 ? handleSend(text, picked) : handleSend(text);
     void Promise.resolve(sent).then((outcome) => {
-      if (outcome !== "refused" || picked.length === 0) return;
+      if (picked.length === 0) return;
+      if (outcome === "failed") {
+        // GIVE THE IDS BACK, because we cannot tell from here whether they were
+        // spent. "failed" means the turn broke somewhere the pre-persist code does
+        // not reach — a locked database, a worker that never started — and those
+        // paths raise BEFORE the message is persisted, so the core may still be
+        // holding all four pictures under ids no chip on screen can name. Four
+        // invisible slots is the ＋ answering "take one off first" with nothing to
+        // take off, recoverable only by starting a new chat.
+        //
+        // Safe on the other branch by construction: discarding an id the core is
+        // no longer holding is a silent no-op (that is `discardAttachment`'s
+        // contract), so a genuinely spent id costs one frame and nothing else.
+        picked.forEach((a) => discardInCore(a.attachmentId));
+        return;
+      }
+      if (outcome !== "refused") return;
+      // THE WORDS COME BACK WITH THE PICTURES. `useTurn` removes the optimistic
+      // rows for a refused picture send (they show thumbnails of a message that
+      // was never sent), so without this the person's typed message would exist
+      // nowhere at all — not in the thread, not in the box they typed it in. Only
+      // if they have not started typing something else in the meantime: a refusal
+      // arriving late must never overwrite a sentence somebody is in the middle of.
+      setDraft((cur) => (cur.trim() ? cur : text));
       setAttachments((cur) => {
         const back = picked.filter((p) => !cur.some((c) => c.attachmentId === p.attachmentId));
         const restored = [...back, ...cur];

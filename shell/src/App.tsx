@@ -416,8 +416,10 @@ export function App() {
     setComposerSeed(null);
     // Pending pictures are part of the message being composed, and this is where
     // that message stops existing — the `composerSeed` line above, one attachment
-    // later (image-attach plan §6). The composer frees the core's held bytes when
-    // the signal lands; App never sees them.
+    // later (image-attach plan §6). This drops the CHIPS only: the core frees its
+    // own held bytes on the same frame (`conversation.new` and `conversation.load`
+    // both clear the pending set), which is what keeps a webview that reloads at
+    // the wrong moment from stranding slots nothing can name.
     setAttachmentsClearSignal((n) => n + 1);
   }
 
