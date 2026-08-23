@@ -2,8 +2,44 @@
 // These describe how the frontend holds and renders state; they never cross the
 // process boundary.
 
-import type { ChatMessage, ModelRole } from "./protocol";
+import type { ChatMessage, MessageAttachment, ModelRole, PickedAttachment } from "./protocol";
 import { asRecord } from "../lib/parse";
+
+/**
+ * One attached picture, ready to put in an `<img src>`.
+ *
+ * THE `data:` URI IS BUILT ONCE, HERE, and this type is what makes that a rule
+ * rather than a habit. The wire shapes (`MessageAttachment`, `PickedAttachment` in
+ * protocol.ts) carry `dataB64` because that is what the core sends; the string a
+ * browser needs is `data:{mediaType};base64,{dataB64}`, and building it in the JSX
+ * — which is where both surfaces built it first — rebuilds a multi-megabyte
+ * template literal on EVERY render of the component holding it. In the composer
+ * that is every keystroke of the draft; in the thread it is every streamed delta of
+ * the answer, for every picture in the conversation. The pictures are up to 2 MiB
+ * of base64 each and there may be four of them on a message.
+ *
+ * So the parse boundary builds it (`ipc/client.parsePickedAttachment`,
+ * `parseLoadedConversation`) or the mapper that mints the display row does
+ * (`useTurn.asDisplayAttachment`, `useConversations`), and every renderer just
+ * reads `dataUri`. `data:` and nothing else: the pinned CSP refuses `blob:` and
+ * object URLs by name (tests/test_csp_is_pinned.py).
+ */
+export interface DisplayAttachment extends MessageAttachment {
+  dataUri: string;
+}
+
+/** The same, for a picture that is picked and not yet sent — the composer's chip.
+ *  Separate because a pending pick carries `byteSize` (the chip says how big it is)
+ *  and a stored row does not, exactly as the two wire shapes are separate. */
+export interface PendingAttachment extends PickedAttachment {
+  dataUri: string;
+}
+
+/** The one place the URI is spelled. Both display shapes above are built with it,
+ *  and nothing renders a picture without going through one of them. */
+export function toDataUri(mediaType: string, dataB64: string): string {
+  return `data:${mediaType};base64,${dataB64}`;
+}
 
 /**
  * Which in-window view is showing (docs/design-brief-dark, "Screens"). "chat" is
@@ -51,6 +87,12 @@ export interface DisplayMessage extends ChatMessage {
    * a rewind.
    */
   storeId?: string;
+  /**
+   * Narrowed from `ChatMessage.attachments`: a row on screen carries pictures that
+   * already know their `data:` URI. The wire shape is still what crosses the
+   * boundary — this is what the boundary hands on.
+   */
+  attachments?: DisplayAttachment[];
 }
 
 /**

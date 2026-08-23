@@ -113,6 +113,20 @@ _DEFAULT_TIMEOUT = 60.0
 # fails anyway AND the shell's answer is thrown away. Human-paced, therefore.
 _KEYCHAIN_TIMEOUT = 600.0
 
+# ...and neither is a MODAL FILE DIALOG. ``shell.pickFile`` and ``shell.pickImage``
+# do not return until the person has chosen or closed, and a person choosing a
+# picture may go and find it first: open another folder, look through a phone's
+# photo sync, get up and come back. Sixty seconds is not a wedged shell there, it is
+# somebody deciding — and abandoning the request achieves exactly what abandoning a
+# keychain dialog achieves, which is nothing: the dialog stays up, and the file they
+# eventually choose answers a request nobody is waiting on any more.
+#
+# 900s matches the webview's own ``TURN_TIMEOUT_MS`` (shell/src/ipc/client.ts) and
+# for the same reason, because this leg sits INSIDE that one: ``pickAttachment`` is
+# a frontend call that opens this dialog, so a budget shorter here would fail the
+# turn while the webview was still patiently waiting for it.
+_PICKER_TIMEOUT = 900.0
+
 # ...and a ``shell.runCommand`` waits on the COMMAND's budget, not the shell's own
 # responsiveness. The shell kills the child at the timeout it was given and answers,
 # so this waiter only needs enough headroom on top to cover spawning sandbox-exec
@@ -310,8 +324,14 @@ class IpcShellBridge:
         The handle is the whole point: the core asks to read what the person chose
         and never learns where it lives, so nothing in the core can be pointed at a
         second file by anything it read in the first. ``read_scoped_file`` resolves
-        it. Raises (RuntimeError) if the person cancels, like ``pick_directory``."""
-        return self._call(Method.SHELL_PICK_FILE, {})["fileHandle"]
+        it. Raises (RuntimeError) if the person cancels, like ``pick_directory``.
+
+        PERSON-PACED (``_PICKER_TIMEOUT``), like its picture sibling below. This one
+        was not the bug that was found — the picture picker was — but it is the same
+        bug: what is being waited on is a modal dialog and a human decision, not the
+        shell's own responsiveness. Fixing one and leaving the other would leave the
+        defect standing under a different method name."""
+        return self._call(Method.SHELL_PICK_FILE, {}, timeout=_PICKER_TIMEOUT)["fileHandle"]
 
     # --- image attach (plan §4) --------------------------------------------
     def pick_image(self) -> dict:
@@ -324,8 +344,14 @@ class IpcShellBridge:
         ONLY, so a composer chip can be drawn the moment the dialog closes while the
         decode is still running; nothing decides anything from either.
 
+        PERSON-PACED (``_PICKER_TIMEOUT``): this call does not come back until the
+        dialog is closed, and somebody looking for a photograph is not a slow shell.
+        On the default budget a person who took a minute to find their picture had
+        the pick fail underneath them with "Addison couldn't finish that just now",
+        while the dialog they were still using went on standing there.
+
         Raises (RuntimeError) if the person cancels, like ``pick_file``."""
-        result = self._call(Method.SHELL_PICK_IMAGE, {})
+        result = self._call(Method.SHELL_PICK_IMAGE, {}, timeout=_PICKER_TIMEOUT)
         # The shape is validated the way ``save_new_file`` validates its own: read the
         # key the caller needs and let a missing one raise here, at the boundary,
         # rather than three layers later as a None nobody can trace back.

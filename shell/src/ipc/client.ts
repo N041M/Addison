@@ -19,7 +19,6 @@ import {
   type AutomationStatus,
   type ModelRole,
   type PermissionRequest,
-  type PickedAttachment,
   type WorkspaceEdit,
   type WorkspaceEditDiff,
   type WorkspaceEditList,
@@ -31,6 +30,9 @@ import {
 import { asRecord, normalizeUnavailable } from "../lib/parse";
 import {
   parseConversationSummaries,
+  toDataUri,
+  type DisplayAttachment,
+  type PendingAttachment,
   type ConversationSummary,
   type Skill,
   type Snapshot,
@@ -130,8 +132,19 @@ interface CoreFrame {
 
 // An Error surfaced from a Core response may carry the developer-only raw detail
 // alongside its plain, always-shown `message`. Callers can read `err.raw`.
+//
+// ...and, since 2026-08-23, the core's own JSON-RPC error CODE. Still a plain
+// `Error` with the plain sentence as its `message`, so every existing
+// `err instanceof Error ? err.message : …` reads exactly what it always read — the
+// code is an extra property nobody has to know about. One caller does:
+// `useTurn.runTurn` has to tell a send the core REFUSED before anything was
+// persisted from one that failed after, and the sentence cannot say which (both are
+// plain language, and matching on copy is how a refusal starts depending on a
+// wording change). Optional because a timeout, a transport failure and a
+// `NOT_CONNECTED` all raise here with no frame behind them at all.
 export interface RawError extends Error {
   raw?: string;
+  code?: number;
 }
 
 // One captured raw diagnostic — the developer-only raw text, the plain message
@@ -237,6 +250,11 @@ function handleCoreMessage(frame: CoreFrame): void {
   if (frame.error) {
     const message = frame.error.message || "Something went wrong.";
     const err: RawError = new Error(message);
+    // The code rides along, unread by almost everybody (see `RawError`). Copied
+    // rather than interpreted here: this function knows nothing about what any
+    // particular method's codes mean, and the one caller that does keeps that
+    // knowledge next to the decision it makes with it.
+    if (typeof frame.error.code === "number") err.code = frame.error.code;
     // Developer profile only: the core adds the real exception text under
     // `error.data.raw`. The plain message above is unchanged for both profiles.
     const rawValue = frame.error.data?.raw;
@@ -451,7 +469,7 @@ export const ipc = {
   // not a slow engine. A cancelled picker, a file that will not decode, a fifth
   // pick — each comes back as a plain sentence on the error frame, which the caller
   // shows as-is.
-  pickAttachment: (): Promise<PickedAttachment | null> =>
+  pickAttachment: (): Promise<PendingAttachment | null> =>
     call(Method.ConversationPickAttachment, {}, TURN_TIMEOUT_MS).then(parsePickedAttachment),
   // The ✕ on a composer chip. An id the core is not holding is a silent no-op there,
   // so this never needs a result to act on.
@@ -817,6 +835,18 @@ export interface LoadedConversationRow {
   id: string;
   role: string;
   content: string;
+  /**
+   * The pictures this message was sent with (image-attach plan §5). Present only on
+   * a user row that has any, exactly as the core sends it.
+   *
+   * IT WAS MISSING HERE, AND THAT IS WHAT LOST THEM. The core has always rebuilt
+   * the `attachments` key on load — both halves of it, the wire one for the thread
+   * and `Message.images` for the model — but this parser dropped the key on the
+   * floor, so a reopened chat showed the words of a message and not the picture the
+   * words were about, while the model went on being able to see it. The thumbnail
+   * came back only if you never closed the chat.
+   */
+  attachments?: DisplayAttachment[];
 }
 
 export interface LoadedConversation {
@@ -921,10 +951,14 @@ export function parseLoadedConversation(result: unknown): LoadedConversation {
   for (const item of rawMessages) {
     const row = asRecord(item);
     if (!row || typeof row.role !== "string") continue;
+    const pictures = parseMessageAttachments(row.attachments);
     messages.push({
       id: typeof row.id === "string" ? row.id : "",
       role: row.role,
       content: typeof row.content === "string" ? row.content : "",
+      // Absent, not empty, when the message carried none — the row a caller maps is
+      // then the object it was before this feature existed.
+      ...(pictures.length > 0 ? { attachments: pictures } : {}),
     });
   }
   // Fails closed, like every parser here: a garbled step is dropped rather than
@@ -1492,20 +1526,70 @@ export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
  * costs the chip its "42 KB", and nothing else — it is not worth losing the picture
  * over. The id, the bytes and the media type are what must be there.
  */
-export function parsePickedAttachment(result: unknown): PickedAttachment | null {
+export function parsePickedAttachment(result: unknown): PendingAttachment | null {
   const obj = asRecord(result);
   if (!obj) return null;
   const attachmentId = typeof obj.attachmentId === "string" ? obj.attachmentId : "";
   const dataB64 = typeof obj.dataB64 === "string" ? obj.dataB64 : "";
   const mediaType = typeof obj.mediaType === "string" ? obj.mediaType : "";
-  if (!attachmentId || !dataB64 || !mediaType) return null;
+  if (!attachmentId || !dataB64 || !mediaType) {
+    // A HALF-READABLE REPLY MUST NOT STRAND A SLOT. If the id came through and the
+    // rest did not, the core is holding bytes under that id — one of four — and
+    // nothing on screen will ever be able to name it, because no chip was made. So
+    // give it back before answering null. Fire-and-forget for `discardInCore`'s
+    // reason: an id nobody is holding is a silent no-op there, and there is nothing
+    // a person could do about a failure to forget something.
+    if (attachmentId) {
+      void Promise.resolve(ipc.discardAttachment(attachmentId)).catch(() => {
+        /* nothing to say about a picture nobody is sending */
+      });
+    }
+    return null;
+  }
   return {
     attachmentId,
     name: typeof obj.name === "string" ? obj.name : "",
     mediaType,
     byteSize: typeof obj.byteSize === "number" && obj.byteSize > 0 ? obj.byteSize : 0,
     dataB64,
+    // Built here, once (types/ui.ts owns why): the alternative is a multi-megabyte
+    // template literal rebuilt on every keystroke of the draft beside it.
+    dataUri: toDataUri(mediaType, dataB64),
   };
+}
+
+/**
+ * The `attachments` array on one `conversation.load` message row.
+ *
+ * Defensive per FIELD, not just per array, like every other parser here: a row is
+ * kept only when it has all three of the things a thumbnail needs (an id to key it
+ * by, a media type and the bytes), and a malformed entry is SKIPPED rather than
+ * taking the message — or the conversation — down with it. A missing key, an older
+ * core, or a message that simply had no pictures all come back as no pictures.
+ *
+ * `name` is coerced instead of required: it is a caption, and a message that shows
+ * a picture with no name under it is a far smaller loss than one that shows no
+ * picture.
+ */
+function parseMessageAttachments(raw: unknown): DisplayAttachment[] {
+  if (!Array.isArray(raw)) return [];
+  const out: DisplayAttachment[] = [];
+  for (const item of raw) {
+    const obj = asRecord(item);
+    if (!obj) continue;
+    const id = typeof obj.id === "string" ? obj.id : "";
+    const mediaType = typeof obj.mediaType === "string" ? obj.mediaType : "";
+    const dataB64 = typeof obj.dataB64 === "string" ? obj.dataB64 : "";
+    if (!id || !mediaType || !dataB64) continue;
+    out.push({
+      id,
+      name: typeof obj.name === "string" ? obj.name : "",
+      mediaType,
+      dataB64,
+      dataUri: toDataUri(mediaType, dataB64),
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

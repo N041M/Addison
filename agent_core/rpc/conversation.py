@@ -27,6 +27,7 @@ from agent_core.rpc.base import ServerContext
 from agent_core.rpc.constants import (
     _BYOK_ONBOARDING_MESSAGE,
     _KEY_UNREADABLE_MESSAGE,
+    _REFUSED_BEFORE_SEND,
     _SERVER_ERROR,
 )
 from agent_core.secret_presence import SecretPresence, may_reach_setup_relay
@@ -346,6 +347,17 @@ class ConversationMixin(ServerContext):
         return records, None
 
     def _run_send_message(self, params: dict, request_id) -> None:
+        # EVERY REFUSAL FROM HERE DOWN TO ``_ensure_conversation()`` ANSWERS WITH
+        # ``_REFUSED_BEFORE_SEND``, and every failure after it keeps the generic
+        # code. The line between them is not a matter of taste: above it nothing has
+        # been read, cleared or written and no attachment id has been spent, so the
+        # pictures the composer just took off its own screen are still held here and
+        # can honestly be offered back. Below it the ids are spent, the message is in
+        # somebody's transcript, and a composer that put the chips back would be
+        # offering ids the next send is refused for naming.
+        #
+        # The person sees no difference — each of these is the same plain sentence it
+        # always was. The code is for the one caller that has a decision to make.
         text = params.get("text", "")
         # The pictures FIRST, because the guard below needs to know whether there are
         # any — and, like that guard, before anything is read, cleared or written. An
@@ -353,7 +365,7 @@ class ConversationMixin(ServerContext):
         # row, no message row and no spent role pick behind it.
         pictures, picture_refusal = self._pending_pictures(params.get("attachments"))
         if picture_refusal is not None:
-            self._respond_error(request_id, _SERVER_ERROR, picture_refusal)
+            self._respond_error(request_id, _REFUSED_BEFORE_SEND, picture_refusal)
             return
         # SECOND, behind the picture check above and ahead of everything else: those
         # two are the whole of what runs before anything is read, cleared or written.
@@ -377,7 +389,7 @@ class ConversationMixin(ServerContext):
         # is a turn with NOTHING in it leaving a blank row no rollback removes, and a
         # message carrying four pictures is not that turn.
         if not isinstance(text, str) or (not text.strip() and not pictures):
-            self._respond_error(request_id, _SERVER_ERROR, _NOTHING_TO_SEND)
+            self._respond_error(request_id, _REFUSED_BEFORE_SEND, _NOTHING_TO_SEND)
             return
         if not text.strip():
             # Whitespace-only text with pictures is stored as "", not as the spaces:
@@ -397,7 +409,7 @@ class ConversationMixin(ServerContext):
 
         error = self._selection_error(requested_role, model_name, effort)
         if error is not None:
-            self._respond_error(request_id, _SERVER_ERROR, error)
+            self._respond_error(request_id, _REFUSED_BEFORE_SEND, error)
             return
 
         # Routing strategy governs role selection BEFORE the relay branch (D6 [MF-C]):
@@ -414,11 +426,11 @@ class ConversationMixin(ServerContext):
             if explicit_cloud:
                 picked = self._model_label(model_name) if model_name else "cloud models"
                 self._respond_error(
-                    request_id, _SERVER_ERROR, _LOCAL_ONLY_REFUSES_CLOUD.format(x=picked)
+                    request_id, _REFUSED_BEFORE_SEND, _LOCAL_ONLY_REFUSES_CLOUD.format(x=picked)
                 )
                 return
             if not local_ids:
-                self._respond_error(request_id, _SERVER_ERROR, _LOCAL_ONLY_EMPTY_POOL)
+                self._respond_error(request_id, _REFUSED_BEFORE_SEND, _LOCAL_ONLY_EMPTY_POOL)
                 return
             requested_role = ModelRole.LOCAL
 
@@ -440,7 +452,7 @@ class ConversationMixin(ServerContext):
         # Both profiles get the same sentence: neither onboarding path applies when
         # the question "is there a key?" has no answer yet.
         if presence is SecretPresence.UNKNOWN:
-            self._respond_error(request_id, _SERVER_ERROR, _KEY_UNREADABLE_MESSAGE)
+            self._respond_error(request_id, _REFUSED_BEFORE_SEND, _KEY_UNREADABLE_MESSAGE)
             return
 
         # §4.6's "no key yet" means no PRIMARY-capable provider AT ALL — not "no
@@ -471,7 +483,7 @@ class ConversationMixin(ServerContext):
             and profile is not None
             and profile.onboarding == "byok_first"
         ):
-            self._respond_error(request_id, _SERVER_ERROR, _BYOK_ONBOARDING_MESSAGE)
+            self._respond_error(request_id, _REFUSED_BEFORE_SEND, _BYOK_ONBOARDING_MESSAGE)
             return
 
         self._ensure_conversation()
@@ -935,6 +947,16 @@ class ConversationMixin(ServerContext):
         self._conversation_created = True
         self._conversation_titled = header["title"] is not None
         self._draft_routine = None
+        # Exactly what ``conversation.new`` does, and for exactly its reason: the
+        # pending set belongs to the message being COMPOSED, and opening another
+        # conversation is that message ceasing to exist. This used to be the
+        # frontend's job — the composer discarded each id as it cleared its chips —
+        # which worked right up until the webview did not get to run: a reload, a
+        # crash, a window closed mid-compose left the core holding four slots that
+        # nothing on screen could see, use or free, and the next pick was refused for
+        # a reason nobody could find. THE CORE OWNING THE CLEAR is what makes that
+        # unreachable, because the clear now rides the same frame as the switch.
+        self._pending_attachments.clear()
         result = {
             "conversationId": conversation_id,
             "title": header["title"],

@@ -245,6 +245,40 @@ def test_a_new_chat_drops_every_pending_picture(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
+def test_opening_another_chat_drops_every_pending_picture_too(tmp_path):
+    """``conversation.load`` clears the pending set exactly as ``conversation.new``
+    does, and the CORE is what does it.
+
+    The frontend used to cover this gap by discarding each id as it cleared its
+    chips, which works only while the webview is alive to do it — a reload, a crash
+    or a window closed mid-compose left the slots held with nothing on screen able to
+    see, use or free them, and the next pick refused for a reason nobody could find.
+
+    Mutation: remove the ``_pending_attachments.clear()`` from
+    ``_handle_conversation_load`` and the fourth pick below is refused instead of
+    answered, because two slots are still held by a conversation nobody is in."""
+    h, _ = _server(tmp_path)
+    try:
+        # A real conversation to go back to, made the ordinary way.
+        _call(h, Method.CONVERSATION_SEND_MESSAGE, {"text": "first"}, request_id=1)
+        conversation_id = h.server.conversation.id
+        _call(h, Method.CONVERSATION_NEW, request_id=2)
+
+        _pick(h, request_id=3)
+        _pick(h, request_id=4)
+        assert len(h.server._pending_attachments) == 2
+
+        _call(h, Method.CONVERSATION_LOAD, {"conversationId": conversation_id}, request_id=5)
+        assert h.server._pending_attachments == {}
+
+        # ...and the slots are genuinely free: all four are pickable again.
+        for n in range(MAX_ATTACHMENTS_PER_MESSAGE):
+            _pick(h, request_id=10 + n)
+        assert len(h.server._pending_attachments) == MAX_ATTACHMENTS_PER_MESSAGE
+    finally:
+        _shutdown(h.reader, h.thread)
+
+
 def test_closing_the_picker_passes_the_shell_sentence_through(tmp_path):
     h, _ = _server(tmp_path, cancel=True)
     try:
@@ -499,18 +533,41 @@ def test_a_provider_this_build_has_never_heard_of_claims_nothing():
 
 
 def test_provider_vision_matches_the_adapters():
-    """PROVIDER_VISION is a COPY of four ``capabilities()`` lines, so this asks the
+    """PROVIDER_VISION is a COPY of three ``capabilities()`` lines, so this asks the
     adapters themselves. Flip any one of them and the picker would start lying about
-    what the model on the other end can see."""
+    what the model on the other end can see.
+
+    THREE, not four: ``custom`` is deliberately absent from the table, so it is
+    deliberately absent from this comparison. The adapter behind it still answers
+    True (it is the OpenAI adapter and it must speak some shape), and the table still
+    says nothing, because what the table feeds is a sentence shown to a person about
+    a server Addison knows nothing about. The divergence is the decision; the test
+    below is what stops it becoming a drift."""
     live = {
         "anthropic": AnthropicProvider().capabilities().vision,
         "openai": OpenAIProvider(model="gpt-x").capabilities().vision,
         "google": GoogleProvider(model="gemini-x").capabilities().vision,
-        # The custom OpenAI-compatible server IS the OpenAI adapter, pointed
-        # somewhere else and allowed to run without a key.
-        "custom": OpenAIProvider(
-            model="whatever", base_url="http://localhost:1234", require_key=False,
-            service_label="Your own server",
-        ).capabilities().vision,
     }
     assert PROVIDER_VISION == live
+
+
+def test_the_custom_server_is_asked_nothing_and_claims_nothing():
+    """An arbitrary OpenAI-compatible server's eyes are not Addison's to assert.
+
+    Mutation: put ``"custom": True`` back in the table — a model on somebody's own
+    llama.cpp build starts carrying an affirmative ``vision`` flag on the wire, and
+    the composer stops treating it as the unknown it is.
+
+    The adapter is asserted to still say True in the same breath, because the point
+    is not that the adapter changed (it did not): it is that the TABLE is a separate
+    answer to a separate question, and this is the one entry where the two differ."""
+    assert "custom" not in PROVIDER_VISION
+    wire = CloudModel(id="m", label="M", description="", provider="custom").to_wire()
+    assert "vision" not in wire
+    assert (
+        OpenAIProvider(
+            model="whatever", base_url="http://localhost:1234", require_key=False,
+            service_label="Your own server",
+        ).capabilities().vision
+        is True
+    )

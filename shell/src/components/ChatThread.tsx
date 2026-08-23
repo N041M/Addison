@@ -834,7 +834,12 @@ function MessageRow({
           {pictures.map((picture) => (
             <figure key={picture.id} className="m-0">
               <img
-                src={`data:${picture.mediaType};base64,${picture.dataB64}`}
+                // Built once where the row was made (types/ui.ts owns why), never
+                // here: this row re-renders on every streamed delta of the answer
+                // beside it, and rebuilding a multi-megabyte template literal per
+                // frame is what that costs. `data:` only — the pinned CSP refuses
+                // `blob:` and object URLs by name.
+                src={picture.dataUri}
                 alt={picture.name || "Attached picture"}
                 loading="lazy"
                 className="block max-h-[240px] max-w-full border border-line object-contain"

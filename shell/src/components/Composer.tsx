@@ -64,8 +64,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ModelSelection } from "../hooks/useModelSelection";
 import type { TurnState } from "../hooks/useTurn";
-import type { PickedAttachment } from "../types/protocol";
-import type { DisplayMessage } from "../types/ui";
+import type { DisplayMessage, PendingAttachment } from "../types/ui";
 import { ipc } from "../ipc/client";
 import { ModelSelector } from "./ModelSelector";
 
@@ -184,7 +183,7 @@ export function Composer({
   const [draft, setDraft] = useState("");
   // Pictures the person has picked and not yet sent. The core is holding the bytes
   // under these ids; what is kept here is the preview it handed back.
-  const [attachments, setAttachments] = useState<PickedAttachment[]>([]);
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   // A picker is open (or its decode is still running). The ＋ waits for it —
   // nothing else does.
   const [picking, setPicking] = useState(false);
@@ -233,26 +232,20 @@ export function Composer({
     }
   }, [focusSignal, isWorking]);
 
-  // What the clear signal has to free, read at the moment it fires rather than
-  // captured when the effect was declared — the effect runs on the SIGNAL alone, so
-  // a list captured in its closure would be the list as it was one pick ago.
-  const attachmentsRef = useRef<PickedAttachment[]>([]);
-  useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
-
   // A new chat, or another conversation opened: the message being composed is
   // gone, so its pictures go with it. Guarded on > 0 like `focusSignal`, so the
   // initial mount is not a clear.
   //
-  // The ids are DISCARDED, not just dropped from the screen: `conversation.new`
-  // clears the core's pending set, but opening a stored conversation does not, and
-  // four slots nobody can see, use or free is a composer that refuses the next
-  // picture for no visible reason. Discarding an id the core is not holding is a
-  // silent no-op, so doing it in both cases is safe.
+  // JUST THE SCREEN. It used to discard every id here as well, because
+  // `conversation.new` cleared the core's pending set and `conversation.load` did
+  // not — so the frontend covered the gap. `conversation.load` now clears it too
+  // (rpc/conversation.py), which is a strictly better place for it: this effect can
+  // only run if the webview is alive to run it, and a reload, a crash or a window
+  // closed mid-compose left the slots held with nobody left to free them. The core
+  // owning the clear makes that unreachable, and it takes a list-mirroring ref out
+  // of this component along with it.
   useEffect(() => {
     if (!clearAttachmentsSignal || clearAttachmentsSignal <= 0) return;
-    attachmentsRef.current.forEach((a) => discardInCore(a.attachmentId));
     setAttachments([]);
   }, [clearAttachmentsSignal]);
 
@@ -276,7 +269,24 @@ export function Composer({
       }
       // Capped here too, not just on the button: the pick took real time (a modal
       // dialog, then a decode) and the fourth slot may have been taken by then.
-      setAttachments((prev) => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, picked]));
+      //
+      // A DROPPED PICK IS GIVEN BACK. The core minted an id and is holding the bytes
+      // under it, so dropping the object on the floor here holds a slot that nothing
+      // on screen can see, use or free — the exact defect the clear-signal effect
+      // above stopped having to work around. It cannot happen through the ＋ (which
+      // is disabled at four), so this is the raced or replayed case, and it is
+      // precisely the case where nobody would notice the leak. Discarding from
+      // inside the updater is safe because the call is idempotent both ways: it is
+      // fire-and-forget, and an id the core is not holding is a silent no-op there,
+      // so a double-invoked updater (StrictMode) sends one redundant frame and
+      // nothing else.
+      setAttachments((prev) => {
+        if (prev.length >= MAX_ATTACHMENTS) {
+          discardInCore(picked.attachmentId);
+          return prev;
+        }
+        return [...prev, picked];
+      });
     } catch (err) {
       // The core's own sentence — a closed picker, a file that will not decode, a
       // fifth picture. Shown as it arrived: it is already plain language with a
@@ -300,27 +310,35 @@ export function Composer({
     if ((!text && picked.length === 0) || isWorking) return;
     setDraft("");
     setAttachments([]);
-    // THE CHIPS COME BACK IF THE SEND WAS REFUSED. Phase 3 spends an id at the
-    // point of no return and at no refusal above it, so a send the core turned
-    // away still has its pictures in hand — and a person who has to find four
+    // THE CHIPS COME BACK IF THE SEND WAS REFUSED, and only then. Phase 3 spends an
+    // id at the point of no return and at no refusal above it, so a send the core
+    // turned away still has its pictures in hand — and a person who has to find four
     // photos again because a model was wrong for them would be paying for our
-    // tidiness. On success they are spent, and the pictures are in the thread on
-    // the message itself.
+    // tidiness.
     //
-    // The one case this cannot tell apart: a turn that failed AFTER the message
-    // was persisted (the model refused, the network went). The ids were spent, the
-    // chips return, and sending them again is refused in a plain sentence — noisy,
-    // but recoverable, and the reverse mistake (silently eating the pictures of a
-    // send that never happened) is not.
+    // "failed" restores NOTHING, which is the half that used to be wrong. A turn
+    // that broke AFTER the message was persisted has spent its ids, so putting the
+    // chips back offered pictures the next send would be refused for naming: a
+    // second chance that is not one. The pictures are not lost — they are in the
+    // persisted message, and the model sees them again through history on the retry.
+    // `useTurn.runTurn` owns which outcome is which; this side only reads it.
+    //
     // Called with ONE argument when there are no pictures — the wire rule applied
     // to the call itself: a message with nothing attached takes the exact path it
     // took before this feature existed, second argument and all.
     const sent = picked.length > 0 ? handleSend(text, picked) : handleSend(text);
-    void Promise.resolve(sent).then((ok) => {
-      if (ok !== false || picked.length === 0) return;
+    void Promise.resolve(sent).then((outcome) => {
+      if (outcome !== "refused" || picked.length === 0) return;
       setAttachments((cur) => {
         const back = picked.filter((p) => !cur.some((c) => c.attachmentId === p.attachmentId));
-        return [...back, ...cur].slice(0, MAX_ATTACHMENTS);
+        const restored = [...back, ...cur];
+        // NO SILENT EVICTION. Somebody who picked new pictures while the refusal was
+        // in flight can put the total over four, and the old code simply sliced the
+        // overflow off the end — leaving the core holding ids for pictures nothing
+        // on screen showed any more. Whichever ones fall outside the cap are given
+        // back to the core, so what is held and what is shown stay the same set.
+        restored.slice(MAX_ATTACHMENTS).forEach((a) => discardInCore(a.attachmentId));
+        return restored.slice(0, MAX_ATTACHMENTS);
       });
     });
   }
@@ -373,9 +391,13 @@ export function Composer({
                 {/* The person's own picture, not chrome: a hairline border and
                     square corners, so it never reads as a floating card. `alt` is
                     empty because the file's name is right beside it — announcing
-                    it twice is noise. */}
+                    it twice is noise.
+
+                    `dataUri` is READ, never built (types/ui.ts owns why): this
+                    component re-renders on every keystroke of the draft, and the
+                    string it needs is up to 2 MiB of base64 per picture. */}
                 <img
-                  src={`data:${a.mediaType};base64,${a.dataB64}`}
+                  src={a.dataUri}
                   alt=""
                   className="h-7 w-7 shrink-0 border border-line object-cover"
                 />

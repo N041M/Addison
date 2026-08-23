@@ -517,9 +517,22 @@ async fn pick_file(app: &AppHandle) -> Result<Value, RpcError> {
         on_main(app, move || rfd::FileDialog::new().pick_file()).await?;
     let path = picked.ok_or_else(|| RpcError::app("You closed the picker without choosing."))?;
 
+    Ok(json!({ "fileHandle": mint_picked_handle(app, path) }))
+}
+
+/// Take a path the person just chose and give back the OPAQUE handle the core will
+/// name it by, remembering the pairing for `resolve_picked_handle`.
+///
+/// One function for both pickers because it is one rule, and the rule is the whole
+/// provenance argument (spec §9): the core learns a handle, never a path, so nothing
+/// it reads can point it at a second file. Two copies of a three-line mint is how a
+/// third picker one day gets a handle that is minted into a different map, or not
+/// remembered at all — and both failures look like "please pick it again" to the
+/// person, with nothing to say why.
+fn mint_picked_handle(app: &AppHandle, path: PathBuf) -> String {
     let handle = uuid::Uuid::new_v4().to_string();
     lock(&app.state::<FileState>().handles).insert(handle.clone(), path);
-    Ok(json!({ "fileHandle": handle }))
+    handle
 }
 
 // shell.pickDirectory {} -> {path}   (native folder picker, step 5)
@@ -741,8 +754,7 @@ async fn pick_image(app: &AppHandle) -> Result<Value, RpcError> {
     let byte_size = stat_on_disk(&path).map(|meta| meta.len()).unwrap_or(0);
     let name = display_name(&path);
 
-    let handle = uuid::Uuid::new_v4().to_string();
-    lock(&app.state::<FileState>().handles).insert(handle.clone(), path);
+    let handle = mint_picked_handle(app, path);
     Ok(json!({ "fileHandle": handle, "name": name, "byteSize": byte_size }))
 }
 
@@ -764,26 +776,58 @@ async fn read_picked_image(app: &AppHandle, params: &Value) -> Result<Value, Rpc
     let handle = required_str(params, "fileHandle", "A file handle is required.")?;
     let path = resolve_picked_handle(app.state::<FileState>().inner(), handle)?;
 
-    let read = tauri::async_runtime::spawn_blocking(move || read_and_encode_picked_image(&path))
-        .await
-        // The task itself panicking or being cancelled is not a thing a person can act
-        // on, and it must not surface as a hang: one plain sentence, same as any other
-        // failure of Addison's own machinery.
-        .map_err(|_| RpcError::app(COULD_NOT_PREPARE_PICTURE))??;
+    // THE BASE64 IS PART OF THE WORK, so it happens in here with the rest of it. It
+    // used to be computed on the line that builds the JSON below — back on the pump,
+    // after the hop had carefully taken the decode off it — and encoding 2 MiB is not
+    // free: it allocates a ~2.7 MiB String and walks every byte. The comment above
+    // promises this method's body does not sit on the loop, and this is what makes the
+    // promise true rather than nearly true.
+    let picture = tauri::async_runtime::spawn_blocking(move || {
+        let (name, encoded) = read_and_encode_picked_image(&path)?;
+        Ok::<_, RpcError>(PreparedPicture {
+            name,
+            content: base64::engine::general_purpose::STANDARD.encode(&encoded.bytes),
+            media_type: encoded.media_type,
+            byte_size: encoded.bytes.len(),
+            width: encoded.width,
+            height: encoded.height,
+        })
+    })
+    .await
+    // The task itself panicking or being cancelled is not a thing a person can act
+    // on, and it must not surface as a hang: one plain sentence, same as any other
+    // failure of Addison's own machinery.
+    .map_err(|_| RpcError::app(COULD_NOT_PREPARE_PICTURE))??;
 
-    let (name, encoded) = read;
     Ok(json!({
-        "content": base64::engine::general_purpose::STANDARD.encode(&encoded.bytes),
-        "mediaType": encoded.media_type,
-        "name": name,
+        "content": picture.content,
+        "mediaType": picture.media_type,
+        "name": picture.name,
         // The FINAL byte count, of the bytes actually being sent — never the file's
         // size on disk. The two differ by an order of magnitude for a phone photo, and
         // the number a person is shown beside a picture that is about to cost them a
         // turn should be the one that costs them the turn.
-        "byteSize": encoded.bytes.len(),
-        "width": encoded.width,
-        "height": encoded.height,
+        "byteSize": picture.byte_size,
+        "width": picture.width,
+        "height": picture.height,
     }))
+}
+
+/// What the blocking task hands back: the picture already in the shape the wire
+/// wants. Held as a struct rather than a six-tuple because the two `u32`s and the
+/// `usize` beside them are exactly the arguments a tuple lets you swap by accident.
+struct PreparedPicture {
+    name: String,
+    /// Base64 of the encoded bytes — computed on the blocking task, never on the pump.
+    content: String,
+    media_type: &'static str,
+    /// The FINAL byte count, of the bytes actually being sent — never the file's size
+    /// on disk. The two differ by an order of magnitude for a phone photo, and the
+    /// number a person is shown beside a picture that is about to cost them a turn
+    /// should be the one that costs them the turn.
+    byte_size: usize,
+    width: u32,
+    height: u32,
 }
 
 /// Read the picked file and turn it into what crosses the bridge: `(name, encoded)`.

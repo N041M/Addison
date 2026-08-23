@@ -456,6 +456,21 @@ export const Method = {
 
 export type MethodName = (typeof Method)[keyof typeof Method];
 
+/**
+ * `conversation.sendMessage` was turned away BEFORE anything happened: no
+ * conversation row, no message row, no spent role pick, and no attachment id
+ * consumed. Mirrors `agent_core/rpc/constants.py::_REFUSED_BEFORE_SEND`, which owns
+ * the rule about which refusals carry it.
+ *
+ * It is not a second copy of the sentence — the plain message is unchanged and is
+ * still the whole answer for a reader. It is the one fact the composer cannot read
+ * off that sentence: whether the pictures it just cleared are still held by the core
+ * and can honestly be offered back. Anything else — including a turn that failed
+ * after the message was persisted — comes back on the generic server code, and its
+ * ids are spent.
+ */
+export const REFUSED_BEFORE_SEND = -32011;
+
 export type ModelRole = "primary" | "local" | "setup_assistant";
 export type RiskTier = "low" | "medium" | "high";
 export type PermissionStatus = "granted" | "denied" | "not_yet_asked";

@@ -1294,7 +1294,12 @@ export function App() {
                 <ChatThread
                   messages={turn.messages}
                   onRetry={turn.handleRetry}
-                  retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
+                  // `!== null`, not truthiness: "" is a real last message. A
+                  // picture-only send is exactly that (the core relaxed its
+                  // empty-text guard for it), and reading its empty text as
+                  // "nothing to retry" hid Retry on the one turn most worth
+                  // retrying. `useTurn.handleRetry` guards the same way.
+                  retryAvailable={!turn.isWorking && turn.lastUserText !== null}
                   onContinue={turn.handleContinue}
                   onRewindTo={handleRewindTo}
                   showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}

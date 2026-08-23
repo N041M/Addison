@@ -189,14 +189,26 @@ def provider_label(provider_id: str) -> str:
 #: Can a model from this provider look at pictures? (image-attach plan §5, read by
 #: ``CloudModel.to_wire``.)
 #:
-#: THE ANSWER IS THE ADAPTER'S, NOT THIS TABLE'S. Each entry is the ``vision=`` line
-#: in that provider's own ``capabilities()`` — anthropic/openai/google say True, and
-#: ``custom`` is the OpenAI adapter pointed at somebody's own server, so it answers
-#: with it. This module cannot ASK them: a capability is an instance method, the
-#: instance is per-model, and the picker's list path must not grow a round-trip per
-#: row. So the table is a copy, and
+#: THE ANSWER IS THE ADAPTER'S, NOT THIS TABLE'S — for the three providers whose
+#: adapter is answering about a service it actually knows. Each entry is the
+#: ``vision=`` line in that provider's own ``capabilities()``. This module cannot ASK
+#: them: a capability is an instance method, the instance is per-model, and the
+#: picker's list path must not grow a round-trip per row. So the table is a copy, and
 #: ``tests/test_image_attach_wire.py::test_provider_vision_matches_the_adapters``
-#: asks the four adapters themselves and fails the moment one of them disagrees.
+#: asks the three adapters themselves and fails the moment one of them disagrees.
+#:
+#: ``custom`` IS ABSENT, AND THE TABLE DIVERGES FROM ITS ADAPTER HERE DELIBERATELY.
+#: The custom provider is the OpenAI adapter pointed at an arbitrary
+#: OpenAI-compatible server — llama.cpp, vLLM, LM Studio, somebody's proxy — and
+#: whether the thing on the other end can look at a picture is not Addison's to
+#: assert. The adapter still says True because it must send SOMETHING and the
+#: OpenAI shape is what it speaks; this table is read by ``to_wire``, which is the
+#: composer's source of truth for a sentence shown to a person, and an affirmative
+#: claim there would be a promise made on a stranger's behalf. Absent means UNKNOWN,
+#: which is exactly what it is, and the composer then says nothing — the same
+#: silence a local model gets. The cost is recorded in KNOWN-GAPS: a text-only
+#: custom server still fails the send with the server's own error rather than with
+#: Addison's plain sentence.
 #:
 #: LOCAL MODELS ARE ABSENT ON PURPOSE and are not CloudModels at all: Ollama's answer
 #: is per model (``"vision" in declared``, from ``POST /api/show``) and the list path
@@ -206,7 +218,6 @@ PROVIDER_VISION: dict[str, bool] = {
     "anthropic": True,
     "openai": True,
     "google": True,
-    "custom": True,
 }
 
 
