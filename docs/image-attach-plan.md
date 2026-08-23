@@ -96,11 +96,27 @@ shape; a `tool`/`assistant` message never carries them in v1:
 - **Google**: `parts` — `inline_data {mime_type, data}`, then `text`.
 - **Ollama**: the message's `images: [b64, …]` key (raw base64, no `data:` prefix).
 
-**All four shapes were checked against the vendors' own documentation on
-2026-08-23**, because until then every one of them was asserted only against
-tests written from the same belief that produced the code — a suite that cannot
-disagree with its author. What the check settled, recorded here so the next
-reader does not repeat it:
+**ANTHROPIC IS PROVEN AGAINST THE REAL API — the others are not yet.** On
+2026-08-23 the owner ran `scripts/check_image_wire.py`, which drives these
+adapters (never a hand-written request) and sends a flat purple square with the
+question *"What is the single dominant colour of this image?"* — a word the prompt
+never contains, so an answer from the text alone cannot pass. Anthropic answered
+**purple**. That is the first evidence in this feature that is not a test agreeing
+with its author: the block shape is accepted, the base64 is right, the
+image-before-text order works, and the pixels genuinely arrived at a model.
+
+**What it does not cover, stated so the green does not spread:** OpenAI, Google
+and Ollama are still documentation-checked only, and Google is the one most worth
+running (snake_case in an otherwise camelCase API). The harness feeds a synthetic
+PNG straight to the adapters, so it says nothing about phase 2's decode and
+downscale, the picker, the composer, persistence, or the thread — those need the
+app.
+
+**All four shapes were checked against the vendors' own documentation** the same
+day, because until then every one of them was asserted only against tests written
+from the same belief that produced the code — a suite that cannot disagree with
+its author. What the check settled, recorded here so the next reader does not
+repeat it:
 
 - Anthropic's block is exactly the shape above, and **images before text is the
   vendor's own recommendation**, not a guess we made — the ordering the adapters
