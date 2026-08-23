@@ -504,6 +504,24 @@ export interface MessageAttachment {
   dataB64: string;
 }
 
+/**
+ * The reply to `conversation.pickAttachment` — one picture the person has just
+ * chosen, held by the core and not yet sent.
+ *
+ * The id is `attachmentId` here and `id` on a stored `MessageAttachment` above:
+ * the two are the same string and the shapes are deliberately NOT merged, because
+ * a pending pick carries `byteSize` (the composer chip says how big the picture
+ * is) and a stored row does not (the thread shows a name and never a size). What
+ * the send names is this `attachmentId`, alone — never the bytes beside it.
+ */
+export interface PickedAttachment {
+  attachmentId: string;
+  name: string;
+  mediaType: string;
+  byteSize: number;
+  dataB64: string;
+}
+
 export interface PermissionRequest {
   toolId: string;
   label: string;

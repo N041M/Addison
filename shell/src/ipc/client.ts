@@ -19,6 +19,7 @@ import {
   type AutomationStatus,
   type ModelRole,
   type PermissionRequest,
+  type PickedAttachment,
   type WorkspaceEdit,
   type WorkspaceEditDiff,
   type WorkspaceEditList,
@@ -417,10 +418,45 @@ function toPlainMessage(err: unknown): string {
 // Method names; params are the free-form JSON-RPC payloads each method expects.
 // ---------------------------------------------------------------------------
 export const ipc = {
-  sendMessage: (text: string, role?: ModelRole, modelId?: string, effort?: string) =>
+  // `attachments` names ids minted by `pickAttachment` and nothing else — never
+  // bytes, never a path (image-attach plan §5). The key is OMITTED when there are
+  // none, the `respondToPermission` shape below: an ordinary send's params are then
+  // byte-for-byte what they have always been, and the core's `params.get`
+  // ("attachments" absent → None) takes the no-pictures path it always took.
+  sendMessage: (
+    text: string,
+    role?: ModelRole,
+    modelId?: string,
+    effort?: string,
+    attachments?: string[],
+  ) =>
     // TURN_TIMEOUT_MS, not the default: a turn may sit behind an OS keychain
     // dialog for up to the core's 600s before it even starts.
-    call(Method.ConversationSendMessage, { text, role, modelId, effort }, TURN_TIMEOUT_MS),
+    call(
+      Method.ConversationSendMessage,
+      attachments && attachments.length > 0
+        ? { text, role, modelId, effort, attachments }
+        : { text, role, modelId, effort },
+      TURN_TIMEOUT_MS,
+    ),
+
+  // Attaching a picture (image-attach plan §5). Both are ordinary Frontend→Core
+  // calls: the webview may never touch `shell.*` (spec §1.3), so the CORE opens the
+  // picker, reads the file once and holds the encoded bytes under an id of its own
+  // minting. What comes back is base64 FOR DISPLAY — rendered as a `data:` URI,
+  // which the pinned CSP already allows — and it never goes back: a send names ids.
+  //
+  // The LONG timeout, for `previewRoutineImport`'s reason exactly: this puts an OS
+  // dialog up inside the core's own turn, and a person deciding in a file dialog is
+  // not a slow engine. A cancelled picker, a file that will not decode, a fifth
+  // pick — each comes back as a plain sentence on the error frame, which the caller
+  // shows as-is.
+  pickAttachment: (): Promise<PickedAttachment | null> =>
+    call(Method.ConversationPickAttachment, {}, TURN_TIMEOUT_MS).then(parsePickedAttachment),
+  // The ✕ on a composer chip. An id the core is not holding is a silent no-op there,
+  // so this never needs a result to act on.
+  discardAttachment: (attachmentId: string) =>
+    call(Method.ConversationDiscardAttachment, { attachmentId }),
 
   // `typed` is the ARMING card's code box (step 8 phase 3) and rides only that
   // card's answer — every other card sends the exact payload it always did. It goes
@@ -1438,6 +1474,37 @@ export function parseAnsweredWith(result: unknown): AnsweredWith | undefined {
     free: raw.free === true,
     routed: raw.routed === true,
     truncated: raw.truncated === true,
+  };
+}
+
+/**
+ * Parse the reply to `conversation.pickAttachment` (image-attach plan §5).
+ *
+ * FAILS CLOSED to `null`, the workspace picker's rule: a reply this side cannot
+ * read must not become a chip, because a chip is a promise that an id exists for
+ * the send to name — and a send naming an id the core is not holding is refused
+ * whole. Every real refusal (a closed picker, a file that will not decode, a fifth
+ * pick) arrives as an error frame carrying the core's own sentence and never comes
+ * through here at all, so `null` means only "the shapes disagree", which the caller
+ * says in one plain line.
+ *
+ * `byteSize` is coerced rather than required: a size the core sent as something odd
+ * costs the chip its "42 KB", and nothing else — it is not worth losing the picture
+ * over. The id, the bytes and the media type are what must be there.
+ */
+export function parsePickedAttachment(result: unknown): PickedAttachment | null {
+  const obj = asRecord(result);
+  if (!obj) return null;
+  const attachmentId = typeof obj.attachmentId === "string" ? obj.attachmentId : "";
+  const dataB64 = typeof obj.dataB64 === "string" ? obj.dataB64 : "";
+  const mediaType = typeof obj.mediaType === "string" ? obj.mediaType : "";
+  if (!attachmentId || !dataB64 || !mediaType) return null;
+  return {
+    attachmentId,
+    name: typeof obj.name === "string" ? obj.name : "",
+    mediaType,
+    byteSize: typeof obj.byteSize === "number" && obj.byteSize > 0 ? obj.byteSize : 0,
+    dataB64,
   };
 }
 

@@ -936,7 +936,20 @@ are here because somebody will meet them, and because anything built on top of
 
 - `draft_message` compose handoff: Rust returns "not available yet"; a real
   discardable-draft mechanism is required by the undo invariant.
-- No file-attach/drop UI → `read_file` unreachable from chat.
+- ~~No file-attach/drop UI → `read_file` unreachable from chat.~~ **Closed
+  2026-08-23 for pictures, and only for pictures** — the four phases of
+  [`image-attach-plan.md`](image-attach-plan.md), which owns the subject. The
+  composer's ＋ picks an image through `conversation.pickAttachment`, the shell
+  decodes and downscales it, and it reaches the model as a real image block. What
+  this entry originally asked for is NOT what shipped: `read_file` is untouched and
+  still hands a picked image to the model as base64 *text* nothing can see (plan
+  §7), and attaching a non-image document is not built at all. Drag-drop and paste
+  are each their own deferred decision (owner decision 1, same day), and a photo
+  arriving from a paired phone stays dropped on provenance grounds (owner decision
+  4) — the bytes come through Telegram's servers, which is not a file somebody
+  picked with their own hands. The MCP client's image parts stay refused for the
+  same reason the tool path does: upgrading a tool RESULT to image blocks is real
+  work per provider (OpenAI's tool role takes no images) and waits for a reason.
 - Setup Assistant relay is client-complete; the server side is external by design.
 - Packaging/signing/updater = Phase 3.
 - ~~**`primary.txt` widget guidance says Addison can't build custom-app widgets.**~~

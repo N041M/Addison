@@ -145,6 +145,10 @@ export function App() {
   const [canRedo, setCanRedo] = useState(false);
   // One-shot composer prefill for rewind's edit-and-resend.
   const [composerSeed, setComposerSeed] = useState<string | null>(null);
+  // Bumped to tell the composer to drop the pictures it is holding (image-attach
+  // plan §6). A signal, not the pictures themselves: the pending set belongs to the
+  // message being written, and all App knows is when there stops being one.
+  const [attachmentsClearSignal, setAttachmentsClearSignal] = useState(0);
 
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   // Which in-window view is showing: the live chat, or one of the four surfaces.
@@ -410,6 +414,11 @@ export function App() {
     turn.resetTurn();
     setRoutineProposal(null);
     setComposerSeed(null);
+    // Pending pictures are part of the message being composed, and this is where
+    // that message stops existing — the `composerSeed` line above, one attachment
+    // later (image-attach plan §6). The composer frees the core's held bytes when
+    // the signal lands; App never sees them.
+    setAttachmentsClearSignal((n) => n + 1);
   }
 
   // --- The view machine -----------------------------------------------------
@@ -1448,6 +1457,8 @@ export function App() {
               draftSeed={composerSeed}
               onDraftSeedUsed={() => setComposerSeed(null)}
               focusSignal={composerFocusSignal}
+              clearAttachmentsSignal={attachmentsClearSignal}
+              setStatusBanner={setStatusBanner}
             />
           )}
         </div>

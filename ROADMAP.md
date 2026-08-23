@@ -90,6 +90,25 @@ moment you add it. The run card, which shows those values, is the control.
 [docs/routine-sharing-plan.md](docs/routine-sharing-plan.md) owns it, and
 [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) tracks what remains uncaught.
 
+**Attaching a picture, built 2026-08-23** (four phases, all four merged the same
+week they were decided). A message can carry up to four pictures: press ＋ in the
+composer, choose a file, and it rides above what you type as a small chip until you
+send it — then it is in the thread, with its name under it, and it stays there when
+you reopen the chat. The picture reaches the model as a real image, which it never
+did before: a picked file used to be flattened into base64 *text* that no model
+could see. Large photographs are shrunk before they go anywhere, so a picture from a
+phone simply works. **Every profile gets it**, because a file you picked with your
+own hands grants nothing: no new tool exists, and Addison can never ask you for a
+picture or reach one on its own.
+**The limits are real**: a model that cannot look at pictures refuses the message in
+one plain sentence rather than quietly switching to one that can — the composer
+warns you first when you picked that model yourself, and says nothing when it cannot
+know; a picture sent before you have a key of your own is refused the same way,
+after the message is already in your transcript; and pictures already in a long chat
+reach a text-only model as the word `[picture]`. There is no drag-and-drop, no
+paste, and no photo from a paired phone: each is its own decision, and none was
+taken. [docs/image-attach-plan.md](docs/image-attach-plan.md) owns it.
+
 ## Next
 
 **Nothing from this sequence is left. Step 8 finished on 2026-08-08, and with it

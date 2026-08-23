@@ -4,7 +4,13 @@
 // drop late results from stopped/superseded turns — is unchanged.
 
 import { useEffect, useRef, useState } from "react";
-import type { ModelRole, PermissionRequest, ActivityUpdate } from "../types/protocol";
+import type {
+  ActivityUpdate,
+  MessageAttachment,
+  ModelRole,
+  PermissionRequest,
+  PickedAttachment,
+} from "../types/protocol";
 import type { DisplayMessage } from "../types/ui";
 import { ipc, parseAnsweredWith, type RawError } from "../ipc/client";
 import { asRecord } from "../lib/parse";
@@ -248,14 +254,39 @@ export function useTurn({
   const currentTurnRef = useRef<string | null>(null);
 
   // --- Turn lifecycle -------------------------------------------------------
-  async function runTurn(text: string, opts: { isRetry?: boolean } = {}) {
+  /**
+   * Run one turn. Resolves TRUE when the send itself got through (the pictures it
+   * named are spent, and whatever happened afterwards is in the thread) and FALSE
+   * when it was refused before that — which is what lets the composer put a refused
+   * send's chips back. See `handleSend`.
+   */
+  async function runTurn(
+    text: string,
+    opts: { isRetry?: boolean; attachments?: PickedAttachment[] } = {},
+  ): Promise<boolean> {
     const assistantId = uid();
     const userId = uid();
+    // The previews the person is looking at, in the shape the thread renders
+    // (image-attach plan §6): the thumbnail appears the instant Send is pressed
+    // rather than one round trip later. `attachments` rides ChatMessage itself, so
+    // the optimistic row and the row `conversation.load` rebuilds are the same
+    // shape and draw through the same code.
+    const pictures = (opts.attachments ?? []).map(asDisplayAttachment);
     currentTurnRef.current = assistantId;
     setMessages((prev) => {
       const base = opts.isRetry
         ? dropTrailingAssistant(prev)
-        : [...prev, { id: userId, role: "user", content: text } as DisplayMessage];
+        : [
+            ...prev,
+            {
+              id: userId,
+              role: "user",
+              content: text,
+              // Absent, not empty, when there are none — an ordinary message's
+              // row is exactly the object it always was.
+              ...(pictures.length > 0 ? { attachments: pictures } : {}),
+            } as DisplayMessage,
+          ];
       return [...base, { id: assistantId, role: "assistant", content: "", pending: true }];
     });
 
@@ -276,10 +307,21 @@ export function useTurn({
         ? effectiveLocalModel("local", selectedLocalModel)
         : effectiveCloudModel();
       const effort = isLocal ? undefined : selectedEffort;
-      const res = await ipc.sendMessage(text, selectedRole, modelId, effort);
+      // Ids only. The bytes this side is holding are for display and never go back
+      // to the core (plan §5), so nothing the webview holds can become what the
+      // model saw.
+      const res = await ipc.sendMessage(
+        text,
+        selectedRole,
+        modelId,
+        effort,
+        opts.attachments?.map((a) => a.attachmentId),
+      );
       // Stopped or superseded by a newer turn while we were waiting — drop this
-      // result so it can't overwrite "(Stopped.)" or a later turn's answer.
-      if (currentTurnRef.current !== assistantId) return;
+      // result so it can't overwrite "(Stopped.)" or a later turn's answer. TRUE
+      // all the same: the send landed, so the ids it named are spent, and the
+      // composer must not offer them back.
+      if (currentTurnRef.current !== assistantId) return true;
       const finalText = extractFinalText(res);
       // The core's persisted ids: what "Rewind to here" must anchor on.
       const ids = asRecord(res);
@@ -333,10 +375,11 @@ export function useTurn({
       } catch {
         /* no card — never a failed turn */
       }
+      return true;
     } catch (err) {
       // Same guard on the failure path: an abandoned turn's error must not
       // replace the stopped message or a newer turn's content.
-      if (currentTurnRef.current !== assistantId) return;
+      if (currentTurnRef.current !== assistantId) return false;
       const message = err instanceof Error ? err.message : "Something went wrong.";
       // Developer-only: the client attaches the real exception text as `.raw`.
       // We keep it on the message; ChatThread renders it only when the
@@ -357,6 +400,7 @@ export function useTurn({
             : m,
         ),
       );
+      return false;
     } finally {
       // Only the still-current turn clears the working/activity state; an
       // abandoned turn's cleanup would otherwise re-enable the composer and hide
@@ -398,16 +442,31 @@ export function useTurn({
     }
   }
 
-  function handleSend(text: string) {
+  /**
+   * Send one message, optionally carrying pictures the person has already picked.
+   *
+   * Resolves FALSE when nothing was sent — no engine, or a send the core refused —
+   * and the composer reads that to put the chips back: phase 3 spends an id at the
+   * point of no return and at no refusal above it, so a refused send's pictures are
+   * still held and still nameable. See the composer's own comment for the one case
+   * this cannot tell apart (a turn that failed AFTER the message was persisted).
+   */
+  function handleSend(text: string, attachments?: PickedAttachment[]): Promise<boolean> {
     if (!connected) {
       setStatusBanner("Addison's engine isn't connected yet, so I can't reply.");
-      return;
+      return Promise.resolve(false);
     }
-    void runTurn(text);
+    return runTurn(text, { attachments });
   }
 
   function handleRetry() {
     if (!connected || isWorking || !lastUserText) return;
+    // TEXT ONLY, deliberately, and it is not an oversight: an id is spent the
+    // moment its send reaches the point of no return, so a turn that failed after
+    // the message was written down has ids that no longer exist, and naming them
+    // again would refuse the retry whole. The pictures are not lost by this — they
+    // are in the persisted message, so history replay carries them to the model
+    // exactly as the first attempt did.
     void runTurn(lastUserText, { isRetry: true });
   }
 
@@ -504,6 +563,20 @@ function uid(): string {
     return crypto.randomUUID();
   }
   return `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** A pending pick as the thread renders it. The id loses its `attachmentId` name
+ *  and nothing else: a stored row and an optimistic one are the same shape, so a
+ *  reopened conversation draws exactly what the person saw when they pressed Send.
+ *  `byteSize` is dropped because the thread shows a name and never a size — the
+ *  stored rows carry none either (plan §5). */
+function asDisplayAttachment(picked: PickedAttachment): MessageAttachment {
+  return {
+    id: picked.attachmentId,
+    name: picked.name,
+    mediaType: picked.mediaType,
+    dataB64: picked.dataB64,
+  };
 }
 
 function dropTrailingAssistant(list: DisplayMessage[]): DisplayMessage[] {
