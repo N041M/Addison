@@ -950,6 +950,33 @@ are here because somebody will meet them, and because anything built on top of
   picked with their own hands. The MCP client's image parts stay refused for the
   same reason the tool path does: upgrading a tool RESULT to image blocks is real
   work per provider (OpenAI's tool role takes no images) and waits for a reason.
+
+**Opened by image attach (built 2026-08-23;
+[`image-attach-plan.md`](image-attach-plan.md) §9 owns the subject and states each
+of these at its real cost).** Four limits the feature ships with, none of them a
+wrong behaviour and each one a decision somebody may want to revisit. They are
+listed here because this file is the live-issue register, not restated — the plan
+carries the reasoning:
+
+- **A picture is re-sent to the provider on every later turn of its conversation.**
+  History replays whole, so one attached photo is ingested again for every turn
+  that follows it. Honestly counted (§4.8 reads the provider's own usage report),
+  reduced by nothing. The two candidate fixes — an Anthropic `cache_control`
+  breakpoint, or degrading old pictures to the `[picture]` marker — both change
+  what the model receives, so both are owner calls.
+- **A text-only CUSTOM server refuses a picture, and every later turn with it.**
+  Addison no longer claims a custom endpoint can see (the row ships no `vision`
+  field, so the composer stays quiet rather than lying in either direction), but
+  it cannot know either, and the failure repeats through history replay. Closing
+  it means probing the configured server's capabilities, which is a network call
+  with its own failure modes.
+- **`conversation.load` carries every attachment's full base64 on every open**, up
+  to ~2.7 MB a picture, to draw a 240px thumbnail. The fix is a small thumbnail
+  column plus an on-demand fetch for full bytes; not built, because it is a schema
+  change against a wire settled the same day.
+- **A §4.8 continuation re-persists the pictures it carries** under new ids and
+  loses their filenames. A row-to-row SQL copy would fix both halves at once; the
+  duplication is bounded by the same four-per-message ceiling as everything else.
 - Setup Assistant relay is client-complete; the server side is external by design.
 - Packaging/signing/updater = Phase 3.
 - ~~**`primary.txt` widget guidance says Addison can't build custom-app widgets.**~~

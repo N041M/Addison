@@ -30,7 +30,7 @@ import { Composer } from "../components/Composer";
 import { ChatThread, resetThreadStaggerForTests } from "../components/ChatThread";
 import { ipc } from "../ipc/client";
 import type { ModelSelection } from "../hooks/useModelSelection";
-import type { TurnState } from "../hooks/useTurn";
+import type { TurnOutcome, TurnState } from "../hooks/useTurn";
 import type { DisplayMessage } from "../types/ui";
 
 vi.mock("../components/MermaidDiagram", () => ({ MermaidDiagram: () => null }));
@@ -60,12 +60,18 @@ const invoked = invoke as unknown as ReturnType<typeof vi.fn>;
 
 /** One picture as `conversation.pickAttachment` hands it back: an id to name at
  *  send time, and the bytes for the thumbnail. 43,008 bytes is exactly 42 KB. */
+/// `dataUri` rides along because `ipc.pickAttachment` is what BUILDS it — the URI
+/// is spelled once, at the parse boundary (`types/ui.ts::toDataUri`), so that a
+/// multi-megabyte template literal is not rebuilt on every keystroke of the draft
+/// beside it. A mock standing in for the parser has to return what the parser
+/// returns, or it proves the component against a shape nothing produces.
 const PICK = {
   attachmentId: "att-1",
   name: "receipt.png",
   mediaType: "image/png",
   byteSize: 43008,
   dataB64: "iVBORw0KGgo=",
+  dataUri: "data:image/png;base64,iVBORw0KGgo=",
 };
 
 beforeAll(() => {
@@ -106,7 +112,12 @@ function modelsWith(over: Partial<ModelSelection> = {}): ModelSelection {
 
 function renderComposer(
   over: Partial<React.ComponentProps<typeof Composer>> = {},
-  sendResult: boolean = true,
+  // THREE-WAY, not a boolean. "refused" means the core turned the send away before
+  // it persisted anything, so the pictures are still held and the chips are the
+  // truth; "failed" means the turn broke after the message was persisted, so the
+  // ids are spent and putting the chips back would offer a second chance that is
+  // not one. The old boolean said only "not sent" and the composer guessed.
+  sendResult: TurnOutcome = "sent",
 ) {
   const handleSend = vi.fn(async () => sendResult);
   const handleStop = vi.fn();
@@ -188,9 +199,14 @@ describe("picking a picture", () => {
     );
 
     await waitFor(() => expect(screen.queryByText(PICK.name)).toBe(null));
-    // Freed, not merely hidden: `conversation.load` does not clear the core's
-    // pending set, so the frontend has to say so.
-    expect(discardAttachment).toHaveBeenCalledWith(PICK.attachmentId);
+    // AND THE CORE IS NOT ASKED TO FORGET THEM, because it already has.
+    // `conversation.load` clears the pending set core-side now, exactly as
+    // `conversation.new` always did, so the webview's job here ends at the chips.
+    // The discard loop that used to live here made the lowest-trust process
+    // responsible for freeing the core's memory: a webview that reloaded between
+    // the signal and the RPC stranded all four slots, and every later pick was
+    // refused with "take one off" while no chip was on screen to take off.
+    expect(discardAttachment).not.toHaveBeenCalled();
   });
 });
 
@@ -224,16 +240,31 @@ describe("sending a picture", () => {
   });
 
   it("keeps the chips when the send was refused", async () => {
-    // MUTATION: clear the chips unconditionally (drop the `ok !== false` restore).
-    // Phase 3 spends an id at the point of no return and at no refusal above it, so
-    // a refused send's pictures are still held by the core — throwing the chips
-    // away makes the person find every one of them again to fix a model choice.
-    const { handleSend } = renderComposer({}, false);
+    // MUTATION: clear the chips unconditionally (drop the `outcome === "refused"`
+    // restore). Phase 3 spends an id at the point of no return and at no refusal
+    // above it, so a refused send's pictures are still held by the core — throwing
+    // the chips away makes the person find every one of them again to fix a model
+    // choice.
+    const { handleSend } = renderComposer({}, "refused");
     await attachOne();
 
     fireEvent.click(sendButton());
     expect(handleSend).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(screen.getByText(PICK.name)).toBeTruthy());
+  });
+
+  it("lets the chips go when the turn broke after the message was sent", async () => {
+    // MUTATION: restore on "failed" as well (the boolean's old behaviour). Those
+    // ids were spent at the point of no return, so the chips would name pictures
+    // the core is no longer holding and the next send would be refused WHOLE for
+    // naming them — while the pictures themselves are safe in the persisted
+    // message, which is where the retry reads them from.
+    const { handleSend } = renderComposer({}, "failed");
+    await attachOne();
+
+    fireEvent.click(sendButton());
+    expect(handleSend).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText(PICK.name)).toBe(null));
   });
 
   it("carries no `attachments` key at all on an ordinary send", async () => {
@@ -331,7 +362,17 @@ const WITH_PICTURE: DisplayMessage = {
   role: "user",
   content: "what does this say?",
   attachments: [
-    { id: "att-1", name: "receipt.png", mediaType: "image/png", dataB64: "iVBORw0KGgo=" },
+    {
+      id: "att-1",
+      name: "receipt.png",
+      mediaType: "image/png",
+      dataB64: "iVBORw0KGgo=",
+      // Built where the row is (the `conversation.load` parser, or `useTurn` for the
+      // optimistic one) and never in the renderer: `MessageRow` is unmemoized, so a
+      // URI spelled in its JSX is rebuilt for every message on every streaming
+      // delta — megabytes of string per frame for pixels that never change.
+      dataUri: "data:image/png;base64,iVBORw0KGgo=",
+    },
   ],
 } as DisplayMessage;
 

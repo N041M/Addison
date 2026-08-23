@@ -268,7 +268,35 @@ edge.
   conversation, pictures included. Those copies are written as new rows and lose
   the person's filename (`Message.images` carries none — §3), so a continued chat
   shows the picture and not its name. The bytes are duplicated, exactly as the
-  carried text is.
+  carried text is. **The fix, if it is ever wanted, is a row-to-row SQL copy**
+  keyed off the old message id, which would carry the filename across for free;
+  it was not built because the duplication is bounded by the same four-per-message
+  ceiling as everything else here.
+- **`conversation.load` ships every attachment's full base64, every time a chat is
+  opened** — up to ~2.7 MB per picture, for thumbnails drawn at 240px. Switching
+  between two picture-heavy chats pays it each way. The honest fix is a second,
+  small thumbnail column written at pick time (the shell already decodes and
+  resizes there) with the full bytes fetched on demand; the model's own history
+  half would go on reading the full rows. Recorded rather than built: it is a
+  schema change, and the wire it would change is the one phase 3 just settled.
+- **Every later turn of a picture-bearing conversation re-sends those pictures to
+  the provider.** History is replayed whole, so a photo attached once is ingested
+  again on every turn that follows it — real money and real latency, honestly
+  counted by §4.8's budget (which reads the provider's own usage report) but not
+  reduced by anything. Two candidate fixes, both owner calls because both change
+  what the model receives: an Anthropic `cache_control` breakpoint on the last
+  history block (cache-reads instead of re-ingestion, no behaviour change), or
+  degrading pictures older than N turns to the `[picture]` marker the Ollama path
+  already has.
+- **A text-only CUSTOM server still fails, and the gate cannot know.** `custom` is
+  somebody's own OpenAI-compatible endpoint, so Addison no longer claims it can
+  see (§5: the row ships no `vision` field at all, and the composer stays quiet).
+  But quiet is not the same as safe: attaching a picture to a text-only llama.cpp
+  or vLLM server sends `image_url` parts it will refuse, and because history
+  replays whole, **every later turn of that conversation refuses too**. The fix
+  that would close it is a capability probe against the configured server, which
+  is a network call with its own failure modes and its own owner decision; what
+  ships instead is the absence of a false claim.
 - Attachments live in SQLite as base64; a person who attaches many large
   photos grows their database by up to ~8 MiB a message, bounded but real.
 - The composer's warning appears only for explicit picks; strategy-routed
