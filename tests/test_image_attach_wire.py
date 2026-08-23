@@ -412,10 +412,24 @@ def test_attachment_rows_land_beside_the_message_row(tmp_path):
         _shutdown(h.reader, h.thread)
 
 
-def test_a_picture_only_first_message_does_not_title_the_chat(tmp_path):
-    """``_auto_title`` answers None for a message with no words, and the flag must
-    stay DOWN when it does — otherwise the first turn with words in it would find
-    the chat already 'titled' and it would stay Untitled forever."""
+def test_a_picture_only_first_message_titles_the_chat_from_its_filename(tmp_path):
+    """A wordless photo names the chat after the file, because the alternative was
+    "Untitled" for ever.
+
+    ``_auto_title`` answers None for a message with no words, and the sidebar's
+    fallback is the generic word — which is right for a message that genuinely said
+    nothing and wrong for one that said a great deal and used no words. The filename
+    is the only thing the person themselves chose, so it is the honest title, and a
+    real name beats a generic one for the reason any name does: a sidebar of three
+    "Picture" rows names nothing.
+
+    THE WORDS STILL WIN WHERE THERE ARE ANY. This only fires when the message has no
+    text at all; a photo sent WITH a question is titled by the question, which is
+    the better title and the commoner case.
+
+    Mutation: drop the ``or _auto_title(pictures[0]["name"] ...)`` — the row comes
+    back "Untitled" and stays that way, because the store's title write is
+    first-write-wins and the later worded turn never gets to name it either."""
     h, _ = _server(tmp_path)
     try:
         attachment_id = _pick(h)
@@ -423,11 +437,11 @@ def test_a_picture_only_first_message_does_not_title_the_chat(tmp_path):
             h, Method.CONVERSATION_SEND_MESSAGE, {"text": "", "attachments": [attachment_id]},
             request_id=2,
         )
-        assert h.server._conversation_titled is False
-        _call(h, Method.CONVERSATION_SEND_MESSAGE, {"text": "what is in that photo?"}, request_id=3)
         assert h.server._conversation_titled is True
-        rows = _call(h, Method.CONVERSATION_LIST, request_id=4)["conversations"]
-        assert rows[0]["title"] == "what is in that photo?"
+        rows = _call(h, Method.CONVERSATION_LIST, request_id=3)["conversations"]
+        # The name the READ reported, which is the one the record keeps —
+        # ``pick_image``'s own ``name`` is discarded (see the bridge).
+        assert rows[0]["title"] == "handle-1.png"
     finally:
         _shutdown(h.reader, h.thread)
 

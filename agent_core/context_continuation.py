@@ -100,6 +100,21 @@ _SEED_CLOSING = (
 def _as_text(message: object) -> str:
     role = str(getattr(message, "role", "") or "")
     content = getattr(message, "content", "")
+    # A PICTURE IS PART OF WHAT WAS SAID, so the summary has to know one was there.
+    # A message that carried only a photograph rendered as the bare line "user: ",
+    # and a chat condensed by §4.8 then lost every trace that pictures had ever been
+    # in it — the summary is what the continuation carries forward, so the loss is
+    # permanent for that thread. The marker is the same one a blind adapter
+    # substitutes (``providers/base.text_for_a_blind_model``); this is the same
+    # question asked by a different reader, and one spelling of the answer is enough.
+    #
+    # Duck-typed like everything else here: this module takes ``object`` on purpose
+    # (it is pure, and the orchestrator's Message is not importable from it without
+    # a cycle), so a message with no ``images`` attribute is simply text.
+    images = getattr(message, "images", ()) or ()
+    if images:
+        markers = " ".join("[picture]" for _ in images)
+        content = f"{markers}\n\n{content}" if content else markers
     return f"{role}: {content}"
 
 

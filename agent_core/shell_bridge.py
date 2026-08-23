@@ -368,24 +368,32 @@ class IpcShellBridge:
         THE SHELL DOES THE WORK, and that is the point of the method rather than an
         accident of where the bytes are. It decodes (which IS the validation — a file
         that does not parse as a picture is refused there, in one plain sentence),
-        downscales anything past a 1600px long edge, and re-encodes under 2 MiB. So
-        what crosses this bridge is never the original file: a phone photo simply
-        works, and the pump never carries twenty megabytes.
+        downscales anything past the vendors' own 1568px long edge, and re-encodes
+        under 2 MiB. So what crosses this bridge is never the original file: a phone
+        photo simply works, and the pump never carries twenty megabytes.
 
         ``content`` is base64 of the ENCODED bytes and ``mediaType`` is one of
         ``providers/base.py::ALLOWED_IMAGE_MEDIA_TYPES`` — the shell is where that
         closed set is enforced, so this is the shape the adapters may trust.
         ``width``, ``height`` and ``byteSize`` describe those bytes, never the file on
         disk. Only a handle the shell itself minted resolves; anything else is refused
-        with "please pick it again"."""
+        with "please pick it again".
+
+        THE THREE THINGS A MESSAGE ACTUALLY NEEDS are required; the dimensions are
+        not. Nothing downstream reads ``width`` or ``height`` — the thumbnail is
+        sized by CSS and the model is sent bytes — so demanding them meant a shell
+        that stopped sending a number nobody uses would fail the whole pick with a
+        ``KeyError``, losing a picture over a field that changes nothing. They are
+        carried when present because a diagnostic that has them is better than one
+        that does not."""
         result = self._call(Method.SHELL_READ_PICKED_IMAGE, {"fileHandle": file_handle})
         return {
             "content": result["content"],
             "mediaType": result["mediaType"],
             "name": result["name"],
             "byteSize": result["byteSize"],
-            "width": result["width"],
-            "height": result["height"],
+            "width": result.get("width"),
+            "height": result.get("height"),
         }
 
     # --- workspace-trust file surface (step 5, OPEN harness) ---------------

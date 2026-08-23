@@ -974,20 +974,29 @@ that replaced the hardcoded ids in August, precisely so Addison would never offe
 model that does not exist — so a person can pick from Addison's own menu and have
 every message fail. **The live list cannot be trusted as a servable set, and
 nothing can know which entries are dead without calling one.**
-Two things follow, both worth fixing and neither done:
-- **The sentence is wrong, not merely unhelpful.** A 404 answers *"The request to
-  Google failed (status 404). Please try again."* Retrying a retired model never
-  works. `exception_for_http_status` already ATTACHES the provider's own words as
-  `server_detail` and already reads them for one case (`_reads_as_over_window`), so
-  the precedent for choosing a truer sentence from them exists in the same
-  function. It should say the model is no longer available and to pick another —
-  ours, not the vendor's text verbatim, since that text is external content.
-- **`list_models`' filter does not filter.** Its docstring says "chat-capable model
-  ids", and a real run returned TTS, image-generation, robotics, `lyria-*` and
-  `deep-research-*` entries — nothing is filtered on
-  `supportedGenerationMethods`. That would not have caught the retired 2.5 models
-  (they do support `generateContent`), so it is a second, smaller thread: the
-  picker is fuller of unusable entries than the retirement issue alone explains.
+- ~~**The sentence is wrong, not merely unhelpful.**~~ **CLOSED 2026-08-23.** A 404
+  answered *"The request to Google failed (status 404). Please try again."*, and
+  retrying a retired model never works — false advice in front of the one 404 a
+  person can actually fix. `exception_for_http_status` already ATTACHED the
+  provider's own words as `server_detail` and already read them for one case
+  (`_reads_as_over_window`), so the fix is that precedent applied one branch up:
+  `_reads_as_model_retired` now decides between the generic sentence and *"That
+  model isn't available any more. Choose a different one in Settings."* Ours, never
+  the vendor's text verbatim — their words DECIDE which of our sentences is shown
+  and are never themselves shown, which is the same rule that keeps every other
+  user-facing string ours. Cross-provider, because it sits at the choke point every
+  adapter funnels through.
+- **The list still cannot be trusted, and that half is NOT closed.** A retired model
+  is still offered by the picker; all that changed is what a person is told when
+  they pick it. Nothing can know which listed entries are dead without calling one,
+  so closing it properly means either remembering which ids answered 404 or asking
+  the provider a question its list API does not answer.
+  *(A claim written here on the day and corrected the same day: this entry first
+  said `list_models`' "chat-capable" filter "does not filter". It does — it drops
+  anything whose `supportedGenerationMethods` omits `generateContent`. The TTS,
+  image-generation and robotics entries in a real listing are there because those
+  models genuinely advertise `generateContent`; the filter is working and the
+  listing is simply broader than the word "chat" suggests.)*
 - **Rewinding to a picture-only message loses its pictures, and says so rather
   than handing them back.** A rewind deletes the anchor's attachment rows with the
   message (one transaction, by design — the bytes belonged to a message that no

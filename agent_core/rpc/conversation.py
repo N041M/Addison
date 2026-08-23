@@ -520,7 +520,15 @@ class ConversationMixin(ServerContext):
         # message simply does not title the chat, and the next turn with words in it
         # does. ``_conversation_rows`` calls the same function on legacy rows.
         if not self._conversation_titled:
-            title = _auto_title(text)
+            # A WORDLESS PICTURE STILL NAMES THE CHAT. `_auto_title` answers None
+            # for empty text, which used to leave a conversation of nothing but
+            # photographs sitting in the sidebar as "Untitled" for ever — the
+            # fallback for a message that genuinely said nothing, applied to one
+            # that said a great deal and simply used no words. The filename is the
+            # only thing the person themselves chose, so it is the honest title,
+            # and it beats a generic "Picture" for the same reason any real name
+            # beats a category: a sidebar of three "Picture" rows names nothing.
+            title = _auto_title(text) or _auto_title(pictures[0]["name"] if pictures else "")
             if title is not None:
                 self.store.set_conversation_title(self.conversation.id, title)
                 self._conversation_titled = True

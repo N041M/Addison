@@ -179,6 +179,52 @@ _OVER_WINDOW_HINTS = (
 )
 
 
+#: What a person is told when the model they picked is gone for good.
+#:
+#: "Please try again" was the sentence until 2026-08-23, and it was not merely
+#: unhelpful — it was FALSE. A retired model does not come back, so the one action
+#: the sentence named could never work, and the person repeats it. Retirement is
+#: also the only 404 a person can actually fix, and the fix is in Settings.
+#:
+#: It does not name the replacement even when the provider does. Google's own text
+#: named one, and echoing a vendor's sentence verbatim would put text Addison did
+#: not write in front of somebody as though it had — the same rule that keeps every
+#: other user-facing string ours (CLAUDE.md). What their words are allowed to do is
+#: DECIDE which of our sentences is shown.
+_MODEL_RETIRED_MESSAGE = (
+    "That model isn't available any more. Choose a different one in Settings."
+)
+
+#: Phrases a provider uses when a model id is retired rather than merely mistyped.
+#: Matched case-insensitively against its own explanation, and kept narrow on the
+#: same reasoning as the window hints: a 404 that is really a typo must keep the
+#: generic sentence, because "choose another in Settings" is no help to somebody
+#: whose model name has a character wrong in it.
+#:
+#: Measured against the real thing (2026-08-23): Google answers *"This model
+#: models/gemini-2.5-flash is no longer available to new users. Please update your
+#: code to use models/gemini-3.6-flash"*. The first two hints are that sentence;
+#: the rest are the spellings the other three APIs use for the same event.
+_MODEL_RETIRED_HINTS = (
+    "no longer available",
+    "no longer supported",
+    "has been deprecated",
+    "is deprecated",
+    "has been retired",
+    "model_not_found",
+    "been discontinued",
+)
+
+
+def _reads_as_model_retired(server_detail: str | None) -> bool:
+    """Whether a provider's own explanation says this model is gone for good,
+    rather than misspelled or momentarily unreachable."""
+    if not isinstance(server_detail, str):
+        return False
+    lowered = server_detail.lower()
+    return any(hint in lowered for hint in _MODEL_RETIRED_HINTS)
+
+
 def _reads_as_over_window(server_detail: str | None) -> bool:
     """Whether a provider's own explanation says the request was too big to read."""
     if not isinstance(server_detail, str):
@@ -211,7 +257,18 @@ def exception_for_http_status(
         # Checked BEFORE the 429/5xx band and after auth, on the same reasoning as
         # the rest of this ladder: 404 is about the MODEL, not the request and not
         # the provider's health.
-        exc = ProviderModelGone(message)
+        #
+        # THE PROVIDER'S OWN WORDS DECIDE which sentence, exactly as they do for the
+        # over-window case below and for the same reason: the status alone cannot
+        # tell a retired model from a mistyped one, and the two want opposite advice.
+        # A retirement is the only 404 the person can act on, and until 2026-08-23
+        # it was answered with "Please try again" — an instruction that cannot ever
+        # work, in front of the one failure that has a fix. Found by pointing a real
+        # request at a real key: Google LISTS gemini-2.5-flash in the catalogue the
+        # picker is built from, and then refuses to serve it.
+        exc = ProviderModelGone(
+            _MODEL_RETIRED_MESSAGE if _reads_as_model_retired(server_detail) else message
+        )
     elif status_code == 429 or status_code >= 500:
         exc = ProviderUnavailable(message)
     else:
