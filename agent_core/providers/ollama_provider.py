@@ -42,6 +42,7 @@ from agent_core.providers.base import (
     exception_for_http_status,
     open_stream,
     request_with_retry,
+    text_for_a_blind_model,
 )
 from agent_core.providers.tool_call_parser import build_tool_instructions, parse_tool_call
 
@@ -322,9 +323,6 @@ def _translate_history(messages: list[Message], vision: bool = True) -> list[dic
 #: ``[picture: {name}]`` before the shape was settled), and inventing one would be
 #: worse than saying nothing — a model told a file was called "receipt.png" will
 #: answer about a receipt it never saw.
-_PICTURE_MARKER = "[picture]"
-
-
 def _picture_entry(m: Message, vision: bool) -> dict:
     """A user turn carrying pictures, for a local model that may or may not see.
 
@@ -347,11 +345,10 @@ def _picture_entry(m: Message, vision: bool) -> dict:
     it, and reads as a description of a missing thing with the marker there.
     """
     if not vision:
-        markers = " ".join(_PICTURE_MARKER for _ in m.images)
-        return {
-            "role": "user",
-            "content": f"{markers}\n\n{m.content}" if m.content else markers,
-        }
+        # `base.text_for_a_blind_model` owns the wording and the ordering now — this
+        # adapter was where the degrade was written, and the Setup Assistant relay
+        # then proved it was not one adapter's problem (2026-08-23).
+        return {"role": "user", "content": text_for_a_blind_model(m)}
     # Ollama's own shape: base64 strings on the message, no media type — it sniffs
     # the format itself, which is why the closed media-type set (base.py) is a
     # cross-provider rule rather than something this adapter needs to send.

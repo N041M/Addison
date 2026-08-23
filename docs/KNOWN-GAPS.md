@@ -964,6 +964,24 @@ carries the reasoning:
   reduced by nothing. The two candidate fixes — an Anthropic `cache_control`
   breakpoint, or degrading old pictures to the `[picture]` marker — both change
   what the model receives, so both are owner calls.
+- **Rewinding to a picture-only message loses its pictures, and says so rather
+  than handing them back.** A rewind deletes the anchor's attachment rows with the
+  message (one transaction, by design — the bytes belonged to a message that no
+  longer exists), and the ids were spent at send time, so edit-and-resend has
+  nothing to re-chip: a message that was ONLY pictures rewinds into an empty
+  composer. What ships is one plain sentence naming what went with it. Handing them
+  back would mean a new core RPC that re-admits deleted bytes into the pending set
+  — a real design with its own trust story, since it is the one path that would put
+  bytes back into a place a send can name — and it was not improvised for this.
+- **A conversation of nothing but pictures is titled "Untitled" forever.** Titles
+  come from the first user message's text, a wordless one yields none, and the
+  fallback is the generic word rather than anything picture-aware. Cosmetic, and
+  the sidebar always gets a string; noted because the fix (a "Picture" fallback, or
+  a title from the filename) is small and nobody has decided which.
+- **A picture-only turn reaches the continuation summariser as a blank line.**
+  `_as_text` renders it `"user: "`, so a chat condensed by §4.8 loses the fact that
+  a picture was ever in it — no marker equivalent to the adapters' `[picture]`. The
+  summary is poorer; nothing breaks.
 - **"Can it see" is answered per PROVIDER, and it is a property of the MODEL.**
   Both halves work this way — the turn gate asks the adapter's constitutional
   answer, and the picker's `vision` flag reads `PROVIDER_VISION` — so a text-only

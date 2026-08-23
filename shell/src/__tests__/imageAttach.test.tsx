@@ -412,6 +412,19 @@ const WITH_PICTURE: DisplayMessage = {
   ],
 } as DisplayMessage;
 
+it("offers no Retry under a turn that was only pictures", async () => {
+    // MUTATION: put `lastUserText !== null` back in either guard. Retry resends
+    // TEXT, and a wordless turn has none — so the retry names no words and no ids
+    // (those were spent), the core refuses it with "There's nothing to send yet",
+    // and `runTurn` has already popped the answer the person was reading to make
+    // room for the reply. The button deleted what it was meant to replace.
+    renderThread([
+      { id: "u1", role: "user", content: "", attachments: [] } as DisplayMessage,
+      { id: "a1", role: "assistant", content: "That receipt totals £42." } as DisplayMessage,
+    ]);
+    expect(screen.queryByRole("button", { name: /retry/i })).toBe(null);
+  });
+
 describe("a message that carries pictures", () => {
   it("draws the picture as a data: URI above the words, named beneath", () => {
     // MUTATION: render the block after the text, or drop the `data:` prefix. The

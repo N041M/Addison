@@ -794,13 +794,11 @@ class ConversationMixin(ServerContext):
             tool_call_id=message.tool_call_id,
             # NULL for every row but an assistant turn that asked for tools.
             tool_calls_json=_encode_tool_calls(message, self.conversation.shown_steps),
-        )
-        rows = attachments if attachments is not None else _rows_from_images(message)
-        self.store.insert_message_attachments(
-            conversation_id=self.conversation.id,
-            message_id=message_id,
-            attachments=rows,
-            created_at=now,
+            # ONE CALL, so the message and its pictures share one transaction: a
+            # half-written pair leaves an empty user row the cloud APIs refuse, and
+            # a conversation that cannot be sent again (store.insert_message owns
+            # the argument).
+            attachments=attachments if attachments is not None else _rows_from_images(message),
         )
         self._message_ids.append(message_id)
         return message_id

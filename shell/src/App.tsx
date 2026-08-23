@@ -774,11 +774,13 @@ export function App() {
     // (a thread that looks rewound while the core remembers is the worst outcome).
     let before: DisplayMessage[] = [];
     let anchorText = "";
+    let anchorPictures = 0;
     turn.setMessages((prev) => {
       before = prev;
       const idx = prev.findIndex((m) => m.storeId === storeId);
       if (idx === -1) return prev;
       anchorText = prev[idx].content;
+      anchorPictures = prev[idx].attachments?.length ?? 0;
       return prev.slice(0, idx);
     });
     turn.setPermission(null);
@@ -786,6 +788,25 @@ export function App() {
       .rewindConversation(storeId)
       .then(() => {
         if (anchorText) setComposerSeed(anchorText);
+        if (anchorPictures > 0) {
+          // SAY IT, because the pictures are not coming back on their own. A rewind
+          // deletes the anchor's attachment rows with the message (one transaction,
+          // by design — the bytes belonged to a message that no longer exists), and
+          // the ids were spent at send time, so there is nothing left for the
+          // composer to re-chip. On a message that was ONLY pictures this used to
+          // leave an empty box with a disabled Send and no account of where four
+          // photographs had gone.
+          //
+          // A sentence rather than machinery: handing them back would mean a new
+          // core RPC that re-admits deleted bytes into the pending set, which is a
+          // real design with a real trust story and is recorded in KNOWN-GAPS
+          // instead of improvised here.
+          setStatusBanner(
+            anchorPictures === 1
+              ? "The picture on that message was removed with it. Attach it again to send it once more."
+              : "The pictures on that message were removed with it. Attach them again to send it once more.",
+          );
+        }
       })
       .catch((err) => {
         turn.setMessages(before);
@@ -1301,7 +1322,10 @@ export function App() {
                   // empty-text guard for it), and reading its empty text as
                   // "nothing to retry" hid Retry on the one turn most worth
                   // retrying. `useTurn.handleRetry` guards the same way.
-                  retryAvailable={!turn.isWorking && turn.lastUserText !== null}
+                  // Truthiness, matching `useTurn.handleRetry`'s own guard: a
+                  // wordless picture turn has nothing to resend, and offering the
+                  // control anyway removed the answer it was pointed at.
+                  retryAvailable={!turn.isWorking && Boolean(turn.lastUserText)}
                   onContinue={turn.handleContinue}
                   onRewindTo={handleRewindTo}
                   showTechnicalDetails={Boolean(profile?.flags.rawDiagnostics)}

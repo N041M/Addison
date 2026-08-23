@@ -41,6 +41,7 @@ from agent_core.providers.base import (
     effective_timeout,
     exception_for_http_status,
     request_with_retry,
+    text_for_a_blind_model,
 )
 from agent_core.providers.tool_call_parser import parse_tool_call
 
@@ -213,7 +214,20 @@ def _translate_history(messages: list[Message]) -> list[dict]:
         flush_results()
 
         if m.role == "user":
-            api_messages.append({"role": "user", "content": m.content})
+            # THE RELAY CANNOT SEE (its ``capabilities()`` declares no vision), so a
+            # picture-carrying turn is degraded to markers here exactly as the local
+            # adapter degrades one — ``base.text_for_a_blind_model`` owns both.
+            #
+            # It was doing neither until 2026-08-23, and the consequence was not a
+            # missing picture but a BROKEN CONVERSATION. A picture-only message is
+            # persisted before the turn gate refuses it (plan §9), so a row with
+            # empty content stays in the transcript; every later turn replayed that
+            # row here as ``{"role": "user", "content": ""}``, which the API this
+            # file is shaped after rejects outright. The chat was then dead, with a
+            # generic "couldn't reach a model" sentence and no way back but a
+            # rewind. The helper never answers "" for a message that had pictures,
+            # which is the property that closes it.
+            api_messages.append({"role": "user", "content": text_for_a_blind_model(m)})
         elif m.role == "assistant":
             if m.tool_calls:
                 content: list[dict] = []

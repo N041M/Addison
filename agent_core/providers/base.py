@@ -516,6 +516,50 @@ ALLOWED_IMAGE_MEDIA_TYPES = frozenset(
 )
 
 
+#: What stands in for a picture a model cannot look at.
+#:
+#: Deliberately plain and deliberately NAMELESS: ``ImageAttachment`` carries no
+#: filename (a name is display-only and rides the attachment record, not the wire),
+#: and inventing one would be worse than saying nothing — a model told a file was
+#: called "receipt.png" will answer about a receipt it never saw.
+PICTURE_MARKER = "[picture]"
+
+
+def text_for_a_blind_model(message: "Message") -> str:
+    """This message's words with a marker per picture in front of them — what a
+    user turn becomes for an adapter that cannot pass pixels on.
+
+    THE HISTORY DEGRADE (image-attach plan §3, §9), and it lives HERE rather than in
+    one adapter because it turned out not to be one adapter's problem. It was
+    written for Ollama, the obvious case (its answer to "can you see" varies per
+    model), on the reasoning that the other adapters see by construction. The
+    Setup Assistant relay is the counter-example that was sitting in the tree the
+    whole time: it declares no vision, has no images branch, and so replayed a
+    picture-carrying turn as an EMPTY user message — which the API it is shaped
+    after rejects outright, breaking every later turn of that conversation. One
+    home means the next adapter that cannot see has somewhere to reach for.
+
+    WHY DEGRADE RATHER THAN REFUSE. The turn gate (``orchestrator``) already
+    refuses a NEW message whose pictures the answering model cannot look at, and
+    that refusal is about something the person just did and can immediately undo.
+    What reaches here is an OLDER message arriving at a blind model mid
+    conversation — routing degraded, the person switched, the relay took the turn —
+    and nobody chose that. So the pixels are dropped, a marker says a picture was
+    there, and the "Answered by" line names who answered.
+
+    The markers go IN FRONT of the text because that is where the picture was: "what
+    does this say?" reads as a non-sequitur with nothing before it, and reads as a
+    description of a missing thing with the marker there.
+
+    NEVER RETURNS AN EMPTY STRING for a message that had pictures, which is the
+    property the relay bug turned on: a wordless photo becomes the marker alone.
+    """
+    markers = " ".join(PICTURE_MARKER for _ in message.images)
+    if not markers:
+        return message.content
+    return f"{markers}\n\n{message.content}" if message.content else markers
+
+
 @dataclass(frozen=True)
 class ImageAttachment:
     """One picture the person attached to their own message (image-attach plan §3).

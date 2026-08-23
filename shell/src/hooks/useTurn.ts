@@ -526,11 +526,22 @@ export function useTurn({
   }
 
   function handleRetry() {
-    // `!== null`, not truthiness: "" is a real last message. A picture-only send
-    // (the case the core relaxed its empty-text guard for) has empty text, and
-    // reading it as "nothing to retry" left the one turn most worth retrying — the
-    // expensive one, with four photographs in it — with no Retry at all.
-    if (!connected || isWorking || lastUserText === null) return;
+    // TRUTHINESS, so "" is excluded — and the reasoning that briefly made this
+    // `!== null` was wrong in a way worth writing down, because it sounded right.
+    // It said: a picture-only send is the turn most worth retrying (four
+    // photographs in it), so do not read "" as "nothing to retry". But retry
+    // resends TEXT, and a wordless turn has none: the call became
+    // `runTurn("", {isRetry: true})`, which names no ids (they were spent) and no
+    // words, and the core refuses exactly that with "There's nothing to send yet".
+    // Meanwhile `runTurn` had already popped the answer the person was reading in
+    // order to make room for the reply. Pressing Retry under a wordless photo
+    // deleted a good answer and replaced it with a sentence telling them they had
+    // written nothing.
+    //
+    // So Retry is offered only where there is something to resend. The answer to
+    // "how do I ask again about that photo?" is the composer, which is a real
+    // answer; a button that destroys what it was meant to replace is not.
+    if (!connected || isWorking || !lastUserText) return;
     // TEXT ONLY, deliberately, and it is not an oversight: an id is spent the
     // moment its send reaches the point of no return, so a turn that failed after
     // the message was written down has ids that no longer exist, and naming them

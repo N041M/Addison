@@ -534,23 +534,48 @@ class Store:
         created_at: int,
         tool_call_id: str | None = None,
         tool_calls_json: str | None = None,
+        attachments: Sequence[dict[str, Any]] | None = None,
     ) -> None:
-        """Append one message to the transcript. Columns map 1:1 to the schema;
-        no summarization or token counting happens here — that is the v2 Context
-        Budget Manager's job (spec §4.8/§10), not this read/write layer's.
+        """Append one message to the transcript, with the pictures it was sent with.
+        Columns map 1:1 to the schema; no summarization or token counting happens
+        here — that is the v2 Context Budget Manager's job (spec §4.8/§10), not this
+        read/write layer's.
 
         ``tool_calls_json`` is what an assistant turn asked for, encoded by the one
         caller that has the live objects (``rpc/conversation.py``). schema.sql owns
-        why it is written down; this layer only stores the string."""
-        self._conn.execute(
-            "INSERT INTO messages "
-            "(id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json),
-        )
+        why it is written down; this layer only stores the string.
+
+        ONE TRANSACTION FOR THE MESSAGE AND ITS PICTURES, and that is the whole
+        reason ``attachments`` is a parameter here rather than a second call after
+        this one. It was two commits until 2026-08-23, and the window between them
+        had a failure state with no way out: the message row lands, the attachment
+        write fails (a locked database, a full disk), and the transcript keeps a user
+        row with empty content and no pictures. Nothing in the schema forbids that
+        row — ``content`` is only NOT NULL, and '' satisfies it — and on the next
+        reopen it replays to the model as an empty user turn, which the cloud APIs
+        reject outright. One bad moment would have broken that conversation for good.
+        Now either both land or neither does."""
+        try:
+            self._conn.execute(
+                "INSERT INTO messages "
+                "(id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (id, conversation_id, role, content, tool_call_id, created_at, tool_calls_json),
+            )
+            self._insert_attachment_rows(conversation_id, id, attachments or (), created_at)
+        except Exception:
+            # THE ROLLBACK IS NOT DECORATION, and the test that pins this found it:
+            # sharing one transaction is only half the property. sqlite3 opens the
+            # transaction on the first INSERT and does NOT undo it when a later
+            # statement raises, so without this the message row simply sits there
+            # pending — and the very next ``commit()`` on this connection, from the
+            # next message somebody sends, would write it. The half-written turn
+            # would arrive later, attached to an innocent write.
+            self._conn.rollback()
+            raise
         self._conn.commit()
 
-    def insert_message_attachments(
+    def _insert_attachment_rows(
         self,
         conversation_id: str,
         message_id: str,
@@ -559,10 +584,10 @@ class Store:
     ) -> None:
         """Write one message's attached pictures (image-attach plan §5).
 
-        Called straight after ``insert_message`` for the same row, by the one caller
-        that has them (``rpc/conversation.py``). One statement and one commit for
-        the whole set: a message either has the pictures it was sent with or the
-        write failed and nothing is half-remembered.
+        NO COMMIT OF ITS OWN, deliberately: it runs inside ``insert_message``'s
+        transaction so a message and its pictures land together or not at all (the
+        argument is at that method). It was a public method with its own commit
+        until 2026-08-23, which is exactly what let the two halves come apart.
 
         Each dict carries ``id``, ``name``, ``media_type``, ``byte_size`` and
         ``data_b64`` — the record the core minted at pick time, stored as it stands.
@@ -590,7 +615,6 @@ class Store:
                 for a in attachments
             ],
         )
-        self._conn.commit()
 
     def attachments_for_conversation(self, conversation_id: str) -> list[dict[str, Any]]:
         """Every attached picture in one conversation, oldest first.
