@@ -158,7 +158,7 @@ const PICKED_IMAGE_SIZE_BOUND: u64 = 24 * 1024 * 1024;
 /// per message at most, and inside what all four providers accept for one image.
 ///
 /// NOT A REFUSAL FIRST, unlike every other ceiling in this file. The encode STEPS
-/// DOWN to meet it — quality 80 → 60 → 40, then the long edge 1600 → 1200 → 800 —
+/// DOWN to meet it — quality 80 → 60 → 40, then the long edge 1568 → 1200 → 800 —
 /// because the person has already chosen this picture and there is a version of it
 /// that fits. Refusing a photo for being a photo would fail the one requirement the
 /// path exists to meet. Only when the smallest step still will not fit is it refused,
@@ -652,18 +652,37 @@ const ALLOWED_IMAGE_MEDIA_TYPES: &[&str] =
 
 /// The long edge a picture is fitted to, and the two steps below it.
 ///
-/// SIXTEEN HUNDRED is the plan's number (§4) and it is a vision-model number, not a
-/// screen one: every provider on the list tiles an image internally at roughly this
-/// scale, so pixels past it are paid for on every turn the message is replayed in and
-/// read by nobody. The two steps below exist only for `ENCODED_IMAGE_SIZE_BOUND` — a
-/// picture that will not fit at 1600 gets smaller rather than refused.
-const IMAGE_LONG_EDGES: [u32; 3] = [1600, 1200, 800];
+/// FIFTEEN SIXTY-EIGHT is a vision-model number, not a screen one, and it is the
+/// vendors' own — the plan (§4) proposed 1600 as an estimate and this is what
+/// checking replaced it with on 2026-08-23.
+///
+/// It is the standard tier's maximum long edge: an image above it is **downscaled
+/// by the API before the model sees it**. Sending 1600 therefore bought nothing and
+/// cost something real — the picture would be resampled TWICE, once here and once
+/// on the way in, and the second pass lands on exactly the small text this whole
+/// path exists to keep readable (the vendor's own image-quality guidance says a
+/// resize "might make text less legible" and to pre-resize instead). Landing on
+/// their number means ours is the only resample there is. The high-resolution tier
+/// allows more (2576), so 1568 is never the binding constraint there either; what
+/// it costs on those models is two percent of a long edge.
+///
+/// IT ALSO KEEPS US UNDER A CLIFF NOBODY WOULD FIND BY TESTING ONE MESSAGE. Past
+/// twenty image blocks in a single request, a stricter per-image limit applies —
+/// neither dimension over 2000 — and **history replay counts**: four pictures on
+/// each of six remembered turns is twenty-four blocks in one request, all of them
+/// resent. At 1568 that request is fine; at any bound above 2000 it would start
+/// failing only for people whose conversations had got long, which is the worst
+/// possible way to find out.
+///
+/// The two steps below exist only for `ENCODED_IMAGE_SIZE_BOUND` — a picture that
+/// will not fit at the top step gets smaller rather than refused.
+const IMAGE_LONG_EDGES: [u32; 3] = [1568, 1200, 800];
 
 /// JPEG quality, and the two steps below it.
 ///
 /// EIGHTY first, because that is where a photograph stops looking re-encoded. The
 /// steps below are tried before any pixels are thrown away, in that order and not the
-/// other one: a 1600px picture at quality 40 still shows a model everything an
+/// other one: a 1568px picture at quality 40 still shows a model everything an
 /// 800px picture at quality 80 does, and more. Quality is the cheaper thing to spend.
 const JPEG_QUALITY_STEPS: [u8; 3] = [80, 60, 40];
 
@@ -3809,7 +3828,11 @@ mod tests {
         // THE WHOLE REASON THE SHELL DECODES AT ALL (owner decision 3): a phone photo
         // simply works, because it is downscaled here and never crosses the pump at
         // full size. Delete the resize and this comes back 2400 wide.
-        let encoded = encode_picked_image(generated_png(1700, 340, false)).unwrap();
+        // 1960x400 is chosen so the arithmetic is exact rather than rounded: the
+        // long edge scales by exactly 0.8 to reach 1568, and 400 × 0.8 is a whole
+        // 320. A fixture that lands mid-pixel would make this test about the
+        // resampler's rounding instead of about the bound.
+        let encoded = encode_picked_image(generated_png(1960, 400, false)).unwrap();
         assert!(
             encoded.width.max(encoded.height) <= IMAGE_LONG_EDGES[0],
             "a picture past the long edge must be downscaled, not sent as it is: {}x{}",
@@ -3818,7 +3841,7 @@ mod tests {
         );
         // The ASPECT RATIO survives, or the thumbnail lies about the picture and the
         // model sees something the person did not.
-        assert_eq!(encoded.width, 1600);
+        assert_eq!(encoded.width, 1568);
         assert_eq!(encoded.height, 320);
         // And the reported dimensions describe THESE bytes, not the original's.
         let sent = image::load_from_memory(&encoded.bytes).expect("what we send must decode");

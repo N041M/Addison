@@ -964,6 +964,21 @@ carries the reasoning:
   reduced by nothing. The two candidate fixes — an Anthropic `cache_control`
   breakpoint, or degrading old pictures to the `[picture]` marker — both change
   what the model receives, so both are owner calls.
+- **"Can it see" is answered per PROVIDER, and it is a property of the MODEL.**
+  Both halves work this way — the turn gate asks the adapter's constitutional
+  answer, and the picker's `vision` flag reads `PROVIDER_VISION` — so a text-only
+  model from a vision-capable provider is claimed as sighted, passes the gate, and
+  receives image parts it cannot use. It is the same shape as the custom-server
+  entry below, one layer in, and the custom fix (2026-08-23) closed only the
+  custom case; this was **reported as fully fixed and was not**, which is why it
+  is written here rather than left implied. Unfired today because the curated
+  catalogue's cloud entries are all multimodal. **Not closed with a per-model
+  table on purpose**: the live model list comes from the provider, ids arrive that
+  no table has heard of, and a hand-kept capability table is precisely the shape
+  that made a connected Google key answer `404` to every message in 2026-08 (the
+  hardcoded-ids bug `test_live_model_registration.py` now holds the line on).
+  What would actually close it is a per-model capability the provider itself
+  reports, or a probe — the same answer the custom-server entry reaches.
 - **A text-only CUSTOM server refuses a picture, and every later turn with it.**
   Addison no longer claims a custom endpoint can see (the row ships no `vision`
   field, so the composer stays quiet rather than lying in either direction), but

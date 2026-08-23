@@ -48,10 +48,10 @@ model is that a message it was already going to receive can now carry pixels.
 2. **Display: inline thumbnail.** A restrained, height-capped thumbnail in the
    user message row, name and size in mono beneath. The brief's "Assets: None"
    governs chrome, not a person's own content. *(Recommended: thumbnail.)*
-3. **Size: shell-side downscale.** The shell resizes/re-encodes large images
-   (≤1600px long edge, JPEG) before anything crosses the stdio pump, so a phone
-   photo simply works. The 1 MiB text-pick bound is untouched; the image path
-   gets its own bounds (§4). *(Recommended: downscale.)*
+3. **Size: shell-side downscale.** The shell resizes/re-encodes large images (to
+   the vendors' own 1568px long edge, JPEG) before anything crosses the stdio
+   pump, so a phone photo simply works. The 1 MiB text-pick bound is untouched;
+   the image path gets its own bounds (§4). *(Recommended: downscale.)*
 4. **Phone photos: deferred.** A Telegram photo from a paired phone is a
    different provenance than a person-picked file (the bytes come via
    Telegram's servers, from a program nobody audited). The adapter goes on
@@ -94,7 +94,29 @@ shape; a `tool`/`assistant` message never carries them in v1:
 - **OpenAI / custom**: `content` parts — `image_url` with a
   `data:{media_type};base64,{data}` URL, then `text`.
 - **Google**: `parts` — `inline_data {mime_type, data}`, then `text`.
-- **Ollama**: the message's `images: [b64, …]` key.
+- **Ollama**: the message's `images: [b64, …]` key (raw base64, no `data:` prefix).
+
+**All four shapes were checked against the vendors' own documentation on
+2026-08-23**, because until then every one of them was asserted only against
+tests written from the same belief that produced the code — a suite that cannot
+disagree with its author. What the check settled, recorded here so the next
+reader does not repeat it:
+
+- Anthropic's block is exactly the shape above, and **images before text is the
+  vendor's own recommendation**, not a guess we made — the ordering the adapters
+  already used.
+- Google really is **snake_case** (`inline_data` / `mime_type`) on the REST
+  endpoint, despite that API being camelCase almost everywhere else. The oddity
+  had a comment in the adapter reading as though somebody had noticed a
+  discrepancy and talked themselves out of it; it turns out they were right.
+- The supported set is **PNG, JPEG, GIF, WebP** at Anthropic and at OpenAI alike,
+  which is `ALLOWED_IMAGE_MEDIA_TYPES` entry for entry — the closed four were
+  guessed correctly.
+- **Only a GIF's first frame is ever used** ("animations are unsupported"), by
+  both vendors. §4's decision to re-encode one frame and accept the animation
+  loss is not a compromise: it is what the API does anyway.
+- Size ceilings are far above ours (10 MB base64 at Anthropic direct; 5 MB on
+  Bedrock/Vertex), so the 2 MiB encoded bound is never the binding one.
 
 **The turn gate.** Before dispatching a turn whose *new user message* carries
 images, the orchestrator asks the resolved provider's capabilities; on
@@ -128,7 +150,7 @@ Two new commands in `filesystem.rs`, both Core→Shell like their siblings:
   budget), decodes with the `image` crate — **decoding is the validation**; a
   file that doesn't parse as an image is refused with a plain sentence, which
   retires extension-guessing for this path — then downscales anything over
-  1600px on its long edge and re-encodes: JPEG (quality 80) for opaque images,
+  1568px on its long edge and re-encodes: JPEG (quality 80) for opaque images,
   PNG where alpha exists. The encoded result must land under **2 MiB** or the
   shell steps the quality down (60, 40) and then the long edge (1200, 800)
   until it does, refusing plainly if the smallest step still won't fit. What
@@ -298,7 +320,12 @@ edge.
   is a network call with its own failure modes and its own owner decision; what
   ships instead is the absence of a false claim.
 - Attachments live in SQLite as base64; a person who attaches many large
-  photos grows their database by up to ~8 MiB a message, bounded but real.
+  photos grows their database by up to **~10.7 MiB a message**, bounded but real.
+  (Four pictures × the 2 MiB *encoded* ceiling is 8 MiB of image bytes, and the
+  column stores base64, which is four thirds of that. The figure read 8 MiB until
+  2026-08-23, when checking the arithmetic found it had been written from the byte
+  bound and not from what is actually stored — a third light, in a file whose whole
+  discipline is that a number is a claim.)
 - The composer's warning appears only for explicit picks; strategy-routed
   turns learn from the refusal sentence instead.
 - `read_file`'s image path remains the old text shape (§7).
