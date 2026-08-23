@@ -28,6 +28,10 @@ because the words never name a colour.
     Keys (set only the ones you want to test):
         ANTHROPIC_API_KEY   OPENAI_API_KEY   GOOGLE_API_KEY
         CUSTOM_API_KEY + CUSTOM_BASE_URL + CUSTOM_MODEL   (an OpenAI-compatible server)
+        GOOGLE_MODEL et al. override the per-provider default model. Worth knowing
+        for Google: ``GET /v1beta/models`` LISTS models it will not serve — a newer
+        key asking for gemini-2.5-flash gets a 404 saying it "is no longer available
+        to new users" — so a default here ages out faster than it looks.
         OLLAMA_MODEL        (a local vision model, e.g. "llama3.2-vision")
 
     A provider with no key is skipped, not failed.
@@ -140,7 +144,7 @@ def providers():
             (
                 "google",
                 GoogleProvider(
-                    model=os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash"),
+                    model=os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash"),
                     api_key_getter=lambda k=key: k,
                 ),
             )
