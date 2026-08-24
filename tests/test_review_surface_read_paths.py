@@ -256,7 +256,9 @@ def test_the_registry_holds_exactly_these_tools_and_no_browse_tool():
     expected_classes = {
         "WebSearchTool", "ReadWebPageTool", "ReadFileTool", "ReadClipboardTool",
         "CalculatorTool", "SaveFileTool", "DraftMessageTool", "OpenLinkTool",
-        "SnapshotNowTool", "RunCommandTool", "ReadProjectFileTool",
+        "SnapshotNowTool",
+        # Knowledge phase 2: read-only search over attached documents.
+        "SearchKnowledgeTool", "RunCommandTool", "ReadProjectFileTool",
         "WriteProjectFileTool", "CreateAutomationTool", "ArmAutomationTool",
         "DisarmAutomationTool",
     }
@@ -282,6 +284,9 @@ def test_the_registry_holds_exactly_these_tools_and_no_browse_tool():
     expected_ids = {
         "web_search", "read_web_page", "read_file", "read_clipboard", "calculator",
         "save_file", "draft_message", "open_link", "snapshot_now", "run_command",
+        # Knowledge phase 2. Read-only, and NOT a browse tool: it can only reach
+        # documents somebody added through the picker, never the filesystem.
+        "search_knowledge",
         "read_project_file", "write_project_file", "create_automation",
         "arm_automation", "disarm_automation",
     }

@@ -63,6 +63,12 @@ _V1_TOOL_IDS = [
     "draft_message",
     "open_link",
     "snapshot_now",
+    # Knowledge phase 2 (owner decision 2, 2026-08-24). In BOTH profiles: searching
+    # your own documents is exactly the companion's job, every document in the index
+    # is there because somebody picked it through the file-picker consent, and the
+    # tool is LOW and READ-ONLY — so it needs no undo() and invariant 2 is satisfied
+    # without one. It writes nothing and reaches no network of its own.
+    "search_knowledge",
 ]
 
 

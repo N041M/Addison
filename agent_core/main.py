@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from agent_core import automation_nonce, live_db_guard
@@ -135,6 +135,7 @@ from agent_core.tools.read_web_page import ReadWebPageTool
 from agent_core.tools.registry import ToolRegistry
 from agent_core.tools.run_command import RunCommandTool
 from agent_core.tools.save_file import SaveFileTool
+from agent_core.tools.search_knowledge import SearchKnowledgeTool
 from agent_core.tools.snapshot_now import SnapshotNowTool
 from agent_core.tools.web_search import WebSearchTool
 from agent_core.tools.write_project_file import WriteProjectFileTool
@@ -255,6 +256,7 @@ def build_registry(
     snapshot_manager_ref: Callable[[], SnapshotManager | None] | None = None,
     on_snapshot_captured: Callable[[], None] | None = None,
     store_ref: Callable[[], Store | None] | None = None,
+    embedder_ref: Callable[[], Any] | None = None,
 ) -> ToolRegistry:
     """Register the tools the active Profile exposes (engineering-spec §4.2, §4.7).
 
@@ -285,6 +287,15 @@ def build_registry(
     after a successful capture so a save via the tool clears the server's sticky
     capture-failure warning, exactly as the Settings control does.
 
+    ``embedder_ref`` is the same late-bound shape again, and it is what makes
+    ``search_knowledge`` possible at all: searching means embedding the QUERY, which
+    is a provider call, and ``agent_core/tools/`` may not import
+    ``agent_core/providers/`` (spec §2). So the tool holds a zero-arg callable that
+    yields something with ``.model`` and ``.embed(text)`` — duck-typed deliberately,
+    because naming the indexer's class in the tool would reintroduce the very import
+    the two-module split exists to prevent. Left None, the tool registers normally
+    and answers "can't search your documents just yet".
+
     ``store_ref`` is the same late-bound shape for the same reason (step 8 phase 2):
     ``create_automation`` writes a row, and the ``Store`` is built later on the
     worker thread. Left None, the tool registers normally and answers "can't save an
@@ -296,6 +307,7 @@ def build_registry(
     manager_ref = snapshot_manager_ref if snapshot_manager_ref is not None else (lambda: None)
     # Same shape, same honesty, for the tool that writes an automation row.
     live_store_ref = store_ref if store_ref is not None else (lambda: None)
+    live_embedder_ref = embedder_ref if embedder_ref is not None else (lambda: None)
     all_tools = {
         "web_search": WebSearchTool(),
         "read_web_page": ReadWebPageTool(),
@@ -307,6 +319,9 @@ def build_registry(
         "open_link": OpenLinkTool(),
         "snapshot_now": SnapshotNowTool(
             manager_ref=manager_ref, on_captured=on_snapshot_captured
+        ),
+        "search_knowledge": SearchKnowledgeTool(
+            store_ref=live_store_ref, embedder_ref=live_embedder_ref
         ),
     }
     registry = ToolRegistry()
@@ -2799,12 +2814,28 @@ def main() -> None:
         if srv is not None:
             srv._snapshot_warning = None
 
+    # The embedder `search_knowledge` reaches through. Built ONCE and lazily, on
+    # first use: constructing it costs nothing and talks to nothing (the request only
+    # happens inside `embed`), but building it at import time would put a provider
+    # import on a path the CLI does not need. Imported HERE rather than in the tool
+    # for the reason `build_registry`'s docstring gives — a tool may not import a
+    # provider, and the indexer does.
+    _embedder_holder: dict[str, Any] = {}
+
+    def _live_embedder() -> Any:
+        if "embedder" not in _embedder_holder:
+            from agent_core.knowledge.indexer import KnowledgeIndexer
+
+            _embedder_holder["embedder"] = KnowledgeIndexer()
+        return _embedder_holder["embedder"]
+
     registry = build_registry(
         profile,
         shell_bridge=shell_bridge,
         snapshot_manager_ref=_live_snapshot_manager,
         on_snapshot_captured=_clear_snapshot_warning,
         store_ref=_live_store,
+        embedder_ref=_live_embedder,
     )
 
     # The real SQLite Store + UndoManager are built by the server on its worker
