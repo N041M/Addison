@@ -114,6 +114,17 @@ _EXCLUDED_TABLES: dict[str, str] = {
     # authorization somebody deliberately revoked. After a restore no phone is paired;
     # pairing again costs one code and one message.
     "channel_pairings": "an authorization, not config; a restore must never re-pair a revoked phone",
+    # Knowledge, phase 1 (owner decision 4, 2026-08-24), on the `tool_grants`
+    # precedent and for the same reason: removing a document is an act somebody
+    # performed, and a one-action restore that put it back would undo that act
+    # without a card — and would re-open the standing channel the plan's §4 is
+    # about. The cost is stated and small: after a restore the knowledge base is
+    # whatever it is now, and a document that went missing is re-added by picking
+    # it again. The chunks and vectors follow the document by FK, so all three
+    # tables are excluded together or the exclusion means nothing.
+    "knowledge_documents":  "an attached document; a restore must never un-remove one",
+    "knowledge_chunks":     "derived from a document; excluded with it",
+    "knowledge_embeddings": "derived from a chunk; excluded with it",
 }
 
 # Columns of a CAPTURED table that are deliberately not captured.

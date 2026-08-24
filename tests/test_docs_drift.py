@@ -67,6 +67,7 @@ BUNDLED_DOCS = REPO / "docs" / "plans"
 #: that HAS the folder — which is the only machine that could notice it drifting.
 BUNDLED_PLANS = (
     "context-budget-plan.md",
+    "knowledge-retrieval-plan.md",
     "messaging-channel-plan.md",
     "model-assignments-plan.md",
     "phase-3-review-surface-plan.md",

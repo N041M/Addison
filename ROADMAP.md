@@ -167,6 +167,18 @@ still the default, or answer it late — choosing the wider one is Developer-onl
 **Phase 4 — approving an action from a phone — stays deferred**, the owner's horizon
 for that being a bespoke phone app.
 
+**Built 2026-08-24: phase 1 of Knowledge — the index, and nothing retrieves.**
+Addison can be given a document, chop it into passages, screen each one for writing
+shaped like an instruction, and remember it as a searchable index — all locally, with
+an embedding model running on your own machine. **Nothing can search it yet**: no
+tool is registered in this phase, so no model can reach any of it. Four owner
+decisions of the same day set the shape: screening happens once when the document is
+added rather than on every query, both profiles will get the search when it lands,
+Addison refuses rather than sending a private document to a cloud provider when no
+local model is available, and a restore never puts back a document you removed.
+[docs/plans/knowledge-retrieval-plan.md](docs/plans/knowledge-retrieval-plan.md) owns
+it. Nothing in it has spoken to a real embedding endpoint yet.
+
 **Built 2026-08-23, beside those tracks: phase 1 of the Windows port.** The tree
 compiles for `x86_64-pc-windows-msvc` and passes `clippy -D warnings` there; the
 Rust shell grew one platform seam in `exec.rs` (`cmd.exe /C`, a Job Object where

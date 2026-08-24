@@ -1892,6 +1892,110 @@ class Store:
         self._conn.commit()
         return cur.rowcount > 0
 
+    # --- knowledge (retrieval over attached documents; phase 1) ---------------
+    #
+    # THE WRITE IS ONE TRANSACTION, and that is the property this section exists to
+    # hold. A document whose row landed but whose chunks did not would answer
+    # questions from nothing and report itself as indexed; a document whose chunks
+    # landed without their vectors would rank as noise against real passages. Both
+    # are worse than the document not being there, so `index_document` either
+    # replaces everything or leaves the previous state untouched.
+
+    def add_knowledge_document(
+        self, *, doc_id: str, path: str, display_name: str, sha256: str, byte_size: int,
+        added_at: int,
+    ) -> None:
+        """Register a document a person picked. It is 'pending' until indexed."""
+        self._conn.execute(
+            "INSERT INTO knowledge_documents "
+            "(id, path, display_name, sha256, byte_size, status, added_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (doc_id, path, display_name, sha256, byte_size, added_at),
+        )
+        self._conn.commit()
+
+    def index_document(
+        self, *, doc_id: str, sha256: str, rows: list[dict[str, Any]], model: str, dim: int,
+        indexed_at: int,
+    ) -> None:
+        """Replace this document's chunks and vectors, and mark it indexed.
+
+        DELETE-THEN-INSERT rather than an upsert: re-indexing a changed file must not
+        leave chunks from the old one behind, and the old ordinals are not the new
+        ordinals. The FK cascade takes the embeddings with the chunks, so the vectors
+        cannot outlive the text they were made from.
+        """
+        with self._conn:  # one transaction; any raise rolls the whole thing back
+            self._conn.execute("DELETE FROM knowledge_chunks WHERE document_id = ?", (doc_id,))
+            for row in rows:
+                self._conn.execute(
+                    "INSERT INTO knowledge_chunks "
+                    "(id, document_id, ordinal, text, char_start, char_end, flagged, "
+                    " screened_kinds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (row["id"], doc_id, row["ordinal"], row["text"], row["char_start"],
+                     row["char_end"], row["flagged"], row["screened_kinds"]),
+                )
+                self._conn.execute(
+                    "INSERT INTO knowledge_embeddings "
+                    "(chunk_id, model, dim, vector, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (row["id"], model, dim, row["vector"], indexed_at),
+                )
+            self._conn.execute(
+                "UPDATE knowledge_documents SET status = 'indexed', sha256 = ?, "
+                "chunk_count = ?, flagged_chunks = ?, indexed_at = ?, detail = NULL "
+                "WHERE id = ?",
+                (sha256, len(rows), sum(r["flagged"] for r in rows), indexed_at, doc_id),
+            )
+
+    def fail_knowledge_document(self, *, doc_id: str, detail: str) -> None:
+        """Record that indexing did not finish, with the sentence a person is shown."""
+        self._conn.execute(
+            "UPDATE knowledge_documents SET status = 'failed', detail = ? WHERE id = ?",
+            (redact(detail).text, doc_id),
+        )
+        self._conn.commit()
+
+    def list_knowledge_documents(self) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM knowledge_documents ORDER BY added_at DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def remove_knowledge_document(self, doc_id: str) -> bool:
+        """Delete a document, its chunks and their vectors. True if one went."""
+        with self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM knowledge_documents WHERE id = ?", (doc_id,)
+            )
+        return cursor.rowcount > 0
+
+    def knowledge_vectors(self, model: str) -> list[tuple[str, str, bytes]]:
+        """Every ``(chunk_id, document_id, vector)`` embedded with ``model``.
+
+        FILTERED BY MODEL at the query, never by comparing dimensions afterwards:
+        two embedding models produce vectors that are meaningless to compare, and
+        the honest way to exclude them is to not ask for them.
+        """
+        rows = self._conn.execute(
+            "SELECT c.id, c.document_id, e.vector FROM knowledge_embeddings e "
+            "JOIN knowledge_chunks c ON c.id = e.chunk_id WHERE e.model = ?",
+            (model,),
+        ).fetchall()
+        return [(row["id"], row["document_id"], row["vector"]) for row in rows]
+
+    def knowledge_chunks_by_id(self, chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """The named chunks, with their document's display name, keyed by chunk id."""
+        if not chunk_ids:
+            return {}
+        marks = ",".join("?" for _ in chunk_ids)
+        rows = self._conn.execute(
+            f"SELECT c.*, d.display_name FROM knowledge_chunks c "
+            f"JOIN knowledge_documents d ON d.id = c.document_id "
+            f"WHERE c.id IN ({marks})",
+            tuple(chunk_ids),
+        ).fetchall()
+        return {row["id"]: dict(row) for row in rows}
+
     # --- config snapshots (GLOBAL FLOOR G3 — see agent_core/snapshots/) -------
     # App-state rollback, NOT the per-tool-call undo above. These rows hold a JSON
     # row-image of Addison's mutable config tables; the SnapshotManager owns the
