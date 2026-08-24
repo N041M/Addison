@@ -1289,6 +1289,12 @@ pub fn addison_app_bundle() -> Option<PathBuf> {
 /// The bundle containing `exe`, or None. Split out so both answers are testable:
 /// a unit test cannot relocate `current_exe`, and the packaged case is the one
 /// that will never be exercised on a developer's machine.
+///
+/// WINDOWS HAS NO BUNDLE, so it answers the same question a different way —
+/// `install_root_of` below. The name is kept for both because the QUESTION is the
+/// same one ("is Addison's own code sitting somewhere this floor must protect?")
+/// and because `addison_data_dirs`'s source-pin greps for the call.
+#[cfg(not(target_os = "windows"))]
 fn bundle_root_of(exe: &Path) -> Option<PathBuf> {
     // …/Addison.app/Contents/MacOS/addison -> …/Addison.app
     let macos = exe.parent()?;
@@ -1298,6 +1304,89 @@ fn bundle_root_of(exe: &Path) -> Option<PathBuf> {
         && contents.file_name()? == "Contents"
         && bundle.extension()? == "app";
     shaped.then(|| bundle.to_path_buf())
+}
+
+#[cfg(target_os = "windows")]
+fn bundle_root_of(exe: &Path) -> Option<PathBuf> {
+    install_root_of(exe, &install_parents())
+}
+
+/// Where a Windows installer puts an application, read from the environment rather
+/// than spelled `C:\Program Files`: the drive is not always `C:`, and on a
+/// localised install `Program Files` is not always that string.
+///
+/// `%LOCALAPPDATA%\Programs` is on the list because a per-user NSIS install lands
+/// there and needs protecting exactly as much as a machine-wide one — more, since
+/// it is the install a person can perform without an administrator.
+#[cfg(target_os = "windows")]
+fn install_parents() -> Vec<PathBuf> {
+    let mut parents: Vec<PathBuf> = Vec::new();
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Ok(value) = std::env::var(var) {
+            if !value.is_empty() {
+                parents.push(PathBuf::from(value));
+            }
+        }
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        if !local.is_empty() {
+            parents.push(PathBuf::from(local).join("Programs"));
+        }
+    }
+    parents
+}
+
+/// The install directory holding `exe`, or None when `exe` is not inside one.
+///
+/// THE SAME TWO HALVES `bundle_root_of` HAS, and for the same reasons. A packaged
+/// install must contribute its own directory to the protected set, because
+/// rewriting `policy.py` inside a shipped install is a more complete bypass than
+/// deleting the snapshots ever was. A DEVELOPER BUILD MUST NOT: the dev binary sits
+/// under the repo's `target\debug`, and that repo is exactly what the coding
+/// harness is for when the person using it is the developer working on Addison.
+///
+/// The test is STRUCTURAL — is this exe under a directory Windows installers write
+/// to — never the binary's name, which a dev build shares. And `dir` must be a
+/// PROPER descendant: an exe sitting directly in `Program Files` would otherwise
+/// protect the whole of `Program Files`, which is far past this floor's business.
+///
+/// COMPILED INTO EVERY PLATFORM'S TEST BUILD, deliberately, so the Linux and macOS
+/// gates check this logic too — its test uses `/` separators for exactly that
+/// reason. `cfg(any(windows, test))` rather than a bare `allow(dead_code)`: off
+/// Windows and outside a test there is genuinely no caller, and "this does not exist
+/// there" is the true statement, which is the same rule `SANDBOX_EXEC` follows.
+///
+/// CASE, STATED RATHER THAN SOLVED. `Path::starts_with` compares components
+/// case-sensitively even on Windows, where the filesystem does not. Both sides here
+/// come from the OS itself — `current_exe()` and `%ProgramFiles%` — so they agree in
+/// practice, and the downstream comparison in `refuse_addison_data_dir` canonicalises
+/// both paths anyway. A normaliser invented here would be a second, quieter answer to
+/// a question that file already owns.
+#[cfg(any(target_os = "windows", test))]
+fn install_root_of(exe: &Path, install_parents: &[PathBuf]) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    install_parents
+        .iter()
+        .any(|parent| dir != parent && dir.starts_with(parent))
+        .then(|| dir.to_path_buf())
+}
+
+/// The user's home directory, as THIS operating system spells it in the environment.
+///
+/// A FLOOR FIX, not tidiness (2026-08-23). `data_dirs_with_bundle` read `HOME`
+/// unconditionally, and Windows does not set it: the whole `~/.addison` entry would
+/// have vanished from the protected set there, and `refuse_addison_data_dir` — the
+/// shell's own INDEPENDENT refusal, the one that does not trust the core's
+/// `writeRoots` — would have gone quietly silent on the platform. A floor that
+/// disappears with the platform is the shape this repository keeps being bitten by,
+/// so the lookup is named and used everywhere the home directory is meant — which
+/// includes `keychain.rs`'s mint ledger, whose directory is the same `~/.addison`.
+pub(crate) fn home_from_env() -> Option<String> {
+    #[cfg(windows)]
+    let raw = std::env::var("USERPROFILE");
+    #[cfg(not(windows))]
+    let raw = std::env::var("HOME");
+    raw.ok().filter(|home| !home.is_empty())
 }
 
 pub fn addison_data_dirs() -> Vec<PathBuf> {
@@ -1324,10 +1413,8 @@ fn data_dirs_with_bundle(bundle: Option<PathBuf>) -> Vec<PathBuf> {
             }
         }
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            dirs.push(PathBuf::from(home).join(".addison"));
-        }
+    if let Some(home) = home_from_env() {
+        dirs.push(PathBuf::from(home).join(".addison"));
     }
     dirs
 }
@@ -1563,6 +1650,7 @@ fn is_image_path(path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn a_packaged_install_protects_addisons_own_code_and_a_dev_build_does_not() {
         // THE FLOOR PROTECTED ADDISON'S DATA, NOT ADDISON'S CODE — the sharper of
@@ -1598,6 +1686,59 @@ mod tests {
     }
 
     #[test]
+    fn a_windows_install_is_protected_and_a_windows_dev_build_is_not() {
+        // The other platform's half of the test above, and it runs on ALL of them:
+        // `install_root_of` takes the roots as an argument precisely so the answer
+        // does not depend on which machine the suite is on.
+        // FORWARD SLASHES ON PURPOSE. `std::path` only treats `\` as a separator when
+        // it is compiled FOR Windows, so backslash fixtures would make this whole
+        // test one componentless string on the machines that actually run it — and
+        // it would pass by asserting nothing. Windows accepts `/` everywhere, so the
+        // same fixtures exercise the real code path there.
+        let parents = vec![
+            PathBuf::from("C:/Program Files"),
+            PathBuf::from("C:/Users/x/AppData/Local/Programs"),
+        ];
+        assert_eq!(
+            install_root_of(Path::new("C:/Program Files/Addison/Addison.exe"), &parents),
+            Some(PathBuf::from("C:/Program Files/Addison")),
+            "a machine-wide install must contribute its own directory"
+        );
+        assert_eq!(
+            install_root_of(
+                Path::new("C:/Users/x/AppData/Local/Programs/Addison/Addison.exe"),
+                &parents
+            ),
+            Some(PathBuf::from("C:/Users/x/AppData/Local/Programs/Addison")),
+            "and so must the per-user install, which needs no administrator at all"
+        );
+
+        // The dev build must NOT be protected — same reasoning as the .app half.
+        for dev in [
+            "C:/Users/x/Addison/shell/src-tauri/target/debug/addison.exe",
+            "C:/Users/x/Addison/target/release/addison.exe",
+            "C:/Temp/addison.exe",
+        ] {
+            assert_eq!(install_root_of(Path::new(dev), &parents), None, "{dev}");
+        }
+
+        // An exe sitting DIRECTLY in an install root protects nothing, rather than
+        // protecting the whole of Program Files.
+        assert_eq!(
+            install_root_of(Path::new("C:/Program Files/Addison.exe"), &parents),
+            None,
+            "the floor must not swallow the whole install root"
+        );
+
+        // And with no roots to compare against — an environment that reports none —
+        // the answer is None rather than everything.
+        assert_eq!(
+            install_root_of(Path::new("C:/Program Files/Addison/Addison.exe"), &[]),
+            None,
+        );
+    }
+
+    #[test]
     fn the_protected_set_carries_the_bundle_it_is_given() {
         // `addison_data_dirs` is what the seatbelt profile is built from, so a
         // bundle the profile never hears about is a bundle nothing denies.
@@ -1625,7 +1766,11 @@ mod tests {
         // so the last link is pinned at the source, the same way the IPC pump's
         // is. Coarse on purpose: it asserts the call exists, which is the property
         // no runtime assertion here can reach.
-        let source = include_str!("filesystem.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("filesystem.rs").replace("\r\n", "\n");
         let start = source
             .find("pub fn addison_data_dirs")
             .expect("addison_data_dirs must exist");
@@ -1669,6 +1814,9 @@ mod tests {
     /// Two seconds is generous for work that should take one `stat`. A thread left
     /// blocked outlives the test; that is the correct trade for a suite that reports
     /// the failure instead of hanging with it.
+    // Every caller is a `#[cfg(unix)]` test — see the fixture note on the first of
+    // them. Gated with them so `-D warnings` stays honest on Windows.
+    #[cfg(unix)]
     fn within_two_seconds<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -1685,10 +1833,15 @@ mod tests {
     ///
     /// SPAWNED RATHER THAN LINKED. `nix`/`libc` are not dependencies of this crate and
     /// adding one to the trusted process to make a test fixture would be a poor trade;
-    /// `mkfifo(1)` is POSIX and present on both platforms this repo builds on. No
-    /// `#[cfg]` guard, because this test module is ALREADY unix-only — it plants
-    /// symlinks with `std::os::unix::fs::symlink` in five places without one, and
-    /// guarding this one alone would imply the others are portable.
+    /// `mkfifo(1)` is POSIX and present on both Unix platforms this repo builds on.
+    ///
+    /// GUARDED SINCE THE WINDOWS PORT (2026-08-23). It used to say that no `#[cfg]`
+    /// was needed because the module was "ALREADY unix-only" — true only in the sense
+    /// that nothing had ever compiled it elsewhere. Windows now does, so the claim
+    /// had to become an attribute: every test whose FIXTURE cannot be built off Unix
+    /// carries `#[cfg(unix)]` and says why, and the rest of the module — which is
+    /// most of it — runs on all three.
+    #[cfg(unix)]
     fn make_fifo() -> Option<PathBuf> {
         let path = temp_path().with_extension("fifo");
         let made = std::process::Command::new("mkfifo")
@@ -2166,7 +2319,11 @@ mod tests {
         // `File::open` on a FIFO never return at all and the size ceiling cannot see it
         // (`len()` on a pipe is 0). No runtime assertion can tell an early check from a
         // late one — a late one HANGS rather than failing — so the order is pinned here.
-        let source = include_str!("filesystem.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("filesystem.rs").replace("\r\n", "\n");
         for (name, sized_with, opens_with) in [
             ("fn read_workspace_path", "stat_on_disk", "std::fs::read("),
             ("fn capture_prior_text", "stat_on_disk", "std::fs::read("),
@@ -2279,6 +2436,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // UNIX-ONLY, AND THE REASON IS THE FIXTURE, NEVER THE FLOOR. `link_chain`,
+    // `refuse_shortcut_at_path` and the data-dir refusal they feed are portable and
+    // run on Windows exactly as they do here — `symlink_metadata` and `read_link`
+    // both resolve a Windows symlink and a junction. What does not port is PLANTING
+    // one: `std::os::unix::fs::symlink` does not exist there, and the Windows call
+    // that replaces it needs either Developer Mode or an elevated token, so a test
+    // that used it would fail on an ordinary machine for a reason that has nothing
+    // to do with the guard. Same for `make_fifo`, which shells out to `mkfifo(1)`.
+    //
+    // SO THE COVERAGE IS GENUINELY THINNER ON WINDOWS, and that is written down
+    // rather than left implicit: docs/KNOWN-GAPS.md carries it, because a gate that
+    // silently stops running is the exact shape this repository keeps being bitten
+    // by. It is a gap in the TESTS, not a hole in the floor.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_is_listed_as_a_symlink_and_never_as_what_it_points_at() {
         // THE NEW EXPOSURE, and the whole reason `symlink_metadata` is named in the
@@ -2429,6 +2600,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn the_viewer_refuses_a_shortcut_and_never_shows_what_it_points_at() {
         // THE SHELL'S OWN HALF of the shortcut gap (KNOWN-GAPS). The listing has said
@@ -2488,6 +2661,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn restore_workspace_refuses_a_ledgered_path_that_became_a_shortcut() {
         // THE SHELL'S OWN HALF of the shortcut gap (KNOWN-GAPS). The ledger is checked
@@ -2519,6 +2694,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn restore_workspace_refuses_to_delete_a_ledgered_path_that_became_a_shortcut() {
         // THE OTHER BRANCH. `remove_file` does not follow the link, so nothing is
@@ -2546,6 +2723,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn write_workspace_refuses_a_dangling_symlink_into_the_data_dir() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2587,6 +2766,9 @@ mod tests {
     /// fixture every symlink test below plants its links in. Returns both paths and a
     /// restore for the environment variable, so each test says what it PLANTS rather
     /// than repeating fifteen lines of setup around it.
+    // Every caller is a `#[cfg(unix)]` test — see the fixture note on the first of
+    // them. Gated with them so `-D warnings` stays honest on Windows.
+    #[cfg(unix)]
     fn data_dir_and_project(tag: &str) -> (PathBuf, PathBuf, Option<String>) {
         let data_dir = std::env::temp_dir().join(format!("addison-{tag}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(data_dir.join("snapshots")).expect("seed data dir");
@@ -2597,6 +2779,9 @@ mod tests {
         (data_dir, project, prev)
     }
 
+    // Every caller is a `#[cfg(unix)]` test — see the fixture note on the first of
+    // them. Gated with them so `-D warnings` stays honest on Windows.
+    #[cfg(unix)]
     fn restore_db_path(prev: Option<String>) {
         match prev {
             Some(v) => std::env::set_var("ADDISON_DB_PATH", v),
@@ -2604,6 +2789,8 @@ mod tests {
         }
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn write_workspace_refuses_a_two_hop_dangling_symlink_into_the_data_dir() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2634,6 +2821,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn write_workspace_refuses_a_long_dangling_symlink_chain_into_the_data_dir() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2664,6 +2853,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn a_symlink_loop_is_refused_rather_than_walked_forever() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2696,6 +2887,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn an_ordinary_file_behind_a_short_chain_is_still_written() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -2722,6 +2915,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&project);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn restore_workspace_refuses_a_ledgered_path_that_became_a_link_into_the_data_dir() {
         let _env = DATA_DIR_ENV.lock().unwrap_or_else(|e| e.into_inner());
@@ -3002,6 +3197,8 @@ mod tests {
 
     // --- Nothing in this file may open a path that is not an ordinary FILE ---------
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn every_read_path_refuses_a_named_pipe_instead_of_blocking_on_it() {
         // THE WEDGE, on every door that opens a file. A FIFO's `metadata().len()` is 0,
@@ -3060,6 +3257,8 @@ mod tests {
         let _ = std::fs::remove_file(&fifo);
     }
 
+    // Unix-only for its FIXTURE, not its floor — see the first such gate above.
+    #[cfg(unix)]
     #[test]
     fn the_undo_write_back_refuses_a_named_pipe_instead_of_blocking_on_it() {
         // THE SIXTH DOOR, and the one that opens for WRITING. The check above went in
@@ -3105,6 +3304,10 @@ mod tests {
         let _ = std::fs::remove_file(&fifo);
     }
 
+    // Unix-only for its FIXTURE: `/dev/null` is the device node, and Windows has
+    // no path that names one. The guard itself (`refuse_non_regular_file`) is
+    // portable and runs there. Same rule as the symlink gates above.
+    #[cfg(unix)]
     #[test]
     fn the_undo_write_back_refuses_a_device_node_and_a_directory_but_still_creates_and_deletes() {
         // The other three thirds of the same guard, and the two halves that must NOT be

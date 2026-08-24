@@ -1,4 +1,4 @@
-# Handoff: Addison UI Redesign ("Fern"): HISTORY, NOT CURRENT GUIDANCE
+# Handoff: Addison UI redesign ("Fern"): HISTORY, NOT CURRENT GUIDANCE
 
 > # ⛔ SUPERSEDED (2026-07-26). Do not implement from this file.
 >
@@ -25,7 +25,7 @@
 ## Overview
 Complete redesign of the Addison desktop app (repo: `N041M/Addison`, Tauri + React + Tailwind in `shell/`). Replaces the current cool-slate single-window chat with a warm, calm three-column layout: conversation sidebar, correspondence-style chat, and a user-owned widget rail. Adds an in-window settings page, multi-provider API keys, dark mode, a first-run setup banner, and a service-bell logo.
 
-## About the Design Files
+## About the design files
 The `.dc.html` files in this bundle are **design references created in HTML**, interactive prototypes showing intended look and behavior, NOT production code to copy. Open them in a browser (keep `support.js` beside them; they fetch Google Fonts, so go online). The task is to **recreate these designs inside the existing codebase** (`shell/src`, React + Tailwind + Tauri), using its established patterns: the typed `ipc` client, the existing notification subscriptions, the permission/undo wiring. Do not change the safety model (permission gate, undo-at-registration, key isolation, no-arbitrary-shell).
 
 - `Addison App.dc.html`: **the primary reference.** Interactive: sidebar Settings ↔ chat routing, widget-rail hide/show, widget tray expand, light/dark toggle (Settings → Appearance).

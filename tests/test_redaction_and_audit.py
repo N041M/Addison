@@ -1,6 +1,6 @@
 """Step 5.5 item 4 — output redaction + the tool-call audit trail.
 
-Plan: docs/step-5.5-containment-plan.md. Two mechanisms, one purpose: a command's
+Plan: docs/plans/step-5.5-containment-plan.md. Two mechanisms, one purpose: a command's
 output travels to a cloud provider, and until now nothing stood between a secret
 in that output and someone else's server, nor left any record that a tool ran.
 

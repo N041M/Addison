@@ -1,6 +1,6 @@
 """A minimal MCP client — Streamable HTTP: connect, list, call, and shape the
 answer (step 7, PHASES 2–4 of five;
-[docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) owns the phase order).
+[docs/plans/step-7-mcp-plan.md](../docs/plans/step-7-mcp-plan.md) owns the phase order).
 
 **This module speaks the protocol. It never registers, gates or audits
 anything** — ``agent_core/mcp_catalog.py`` owns admission to the registry and the

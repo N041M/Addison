@@ -456,7 +456,7 @@ class Store:
         """Retention for the action-rewind window (spec §4.5).
 
         **Reverted rows only** — owner decision 2026-08-08, adopting the
-        recommendation in ``docs/phase-3-review-surface-plan.md`` prerequisite 3.
+        recommendation in ``docs/plans/phase-3-review-surface-plan.md`` prerequisite 3.
         An UNREVERTED row is not history: it describes a change that is still on
         disk, and its ``undo_payload`` is the only way back from it. Deleting one
         makes a live change both unlistable and unrevertable, which is precisely
@@ -1118,7 +1118,7 @@ class Store:
 
     def list_tool_audit(self, limit: int = 100) -> list[dict[str, Any]]:
         """The newest audit rows, newest first — for a future Developer review
-        surface (docs/phase-3-review-surface-plan.md) and for support questions
+        surface (docs/plans/phase-3-review-surface-plan.md) and for support questions
         of the form "what did it actually do?"."""
         rows = self._conn.execute(
             "SELECT id, conversation_id, tool_id, detail, mode, destructive, "
@@ -1804,7 +1804,7 @@ class Store:
     # whatever lands here is copied into every later snapshot payload in plain text.
     #
     # There is no armed/enabled column to read or write, and no method here invents
-    # one: armed truth lives in the OS (docs/step-8-automation-plan.md §5.6). See the
+    # one: armed truth lives in the OS (docs/plans/step-8-automation-plan.md §5.6). See the
     # schema comment for why a stored flag is the one thing a G3 restore must not have.
 
     def insert_automation(

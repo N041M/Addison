@@ -160,7 +160,7 @@ def _conversation_with(user_text: str) -> Conversation:
 
 def test_the_two_new_turn_parameters_change_nothing_when_they_are_not_passed():
     """THE FREEZE (messaging channels phase 2; the idiom
-    docs/model-assignments-plan.md §2.2 uses and the routing chain's head got).
+    docs/plans/model-assignments-plan.md §2.2 uses and the routing chain's head got).
 
     ``run_turn`` gained ``surface`` and ``stream_to``. With ``surface=DESK`` and
     ``stream_to`` unset the path must be byte-identical to what it was before those

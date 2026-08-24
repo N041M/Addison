@@ -753,7 +753,7 @@ def _seed_config(store: Store) -> None:
     # like the rest. Seeded here so the round-trip tests below carry one.
     store.insert_mcp_server(id="m1", name="Design docs", url="https://mcp.example/sse", created_at=10)
     # Step 8 phase 1: an automation row is reversible config too, and carries no armed
-    # state for a restore to resurrect (docs/step-8-automation-plan.md §5.6).
+    # state for a restore to resurrect (docs/plans/step-8-automation-plan.md §5.6).
     store.insert_automation(
         id="a1",
         name="Tidy up downloads",

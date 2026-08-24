@@ -7,7 +7,7 @@ arming is the ``arm_automation`` TOOL (phase 3, behind the ordinary card plus a
 typed per-automation code). Both go through the registry, the gate and the audit
 like every other tool. This namespace only lists, reports and removes what they
 made — no payload here installs, starts or schedules anything.
-[docs/step-8-automation-plan.md](../../docs/step-8-automation-plan.md) owns the
+[docs/plans/step-8-automation-plan.md](../../docs/plans/step-8-automation-plan.md) owns the
 phase order, and ``agent_core/automations.py`` owns the row and the closed schedule
 vocabulary.
 

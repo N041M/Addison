@@ -1163,7 +1163,7 @@ def test_a_turn_scoped_not_now_is_honoured_even_inside_a_trusted_folder(tmp_path
 # ============================================================================
 # THE NAME A PERSON READS IS THE FILE THAT WAS TOUCHED (2026-08-08)
 # ============================================================================
-# Review-surface prerequisite 1 (docs/phase-3-review-surface-plan.md,
+# Review-surface prerequisite 1 (docs/plans/phase-3-review-surface-plan.md,
 # "Prerequisites"). ``permission_detail`` read the RAW argument while
 # ``affected_path`` resolved, so the two named different files whenever a symlink
 # sat between them. Confinement cannot catch it — the link and its target are both

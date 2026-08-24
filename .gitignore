@@ -25,6 +25,15 @@ shell/src-tauri/gen/
 .DS_Store
 Thumbs.db
 
+# The plan bundle (owner decision 2026-08-24). Design documents for features that
+# are finished, kept on disk and out of the repository. `docs/README.md` says what
+# is in it and what its absence costs; `_broken_links` in tests/test_docs_drift.py
+# is the one gate that knows about it, and only when the folder is not there.
+#
+# NOT a secret, and this rule does not make it one: every one of these files is in
+# the history, so this hides them from a fresh clone and from nobody else.
+docs/plans/
+
 # Local editor / tool settings
 .claude/settings.local.json
 

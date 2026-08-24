@@ -65,7 +65,7 @@ than about who wrote the tool:
     engine and the widget rail, above the gate. It exists because the arming card
     carries a preview and a typed code, and a stored one-click spec that could raise
     one invites answering it on autopilot — the reflex the code exists to break
-    (docs/step-8-automation-plan.md §5.10). Note this is a NARROWING of what a
+    (docs/plans/step-8-automation-plan.md §5.10). Note this is a NARROWING of what a
     routine may do relative to live chat, which is SAFE invariant 3's permitted
     direction.
 """
@@ -116,7 +116,7 @@ LIVE_ONLY_REFUSAL = (
 UNKNOWN_TOOL_REFUSAL = "That tool isn't available any more, so Addison didn't run it."
 
 # Said when a turn that arrived FROM A PHONE names a tool the remote floor omits
-# (messaging channels; docs/messaging-channel-plan.md §3.6). It says what to do
+# (messaging channels; docs/plans/messaging-channel-plan.md §3.6). It says what to do
 # instead, because a refusal with no next move comes back as a blocked task —
 # LIVE_ONLY_REFUSAL's own rule.
 #

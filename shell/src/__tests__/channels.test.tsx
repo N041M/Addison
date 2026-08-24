@@ -1,5 +1,5 @@
 // Your phone — the messaging channels' surfaces (phases 1–3, all that ship;
-// docs/messaging-channel-plan.md). Five parts:
+// docs/plans/messaging-channel-plan.md). Five parts:
 //
 //   (a) The fail-closed parsers: a row without a usable id, name or known transport
 //       is DROPPED, junk never throws, `tokenPresent` fails towards "unknown" —
@@ -1183,7 +1183,7 @@ describe("the sleep setting", () => {
     // The line is the CURRENT behaviour and the button is what pressing it would
     // change to — the idiom the rest of the panel uses ("Stop listening" over a
     // connection that is listening). Neither says "queue": what a person has is a
-    // message sent while their Mac was shut.
+    // message sent while their computer was shut.
     const onWake = vi.fn(async () => {});
     render(
       <ChannelsPanel
@@ -1192,7 +1192,7 @@ describe("the sleep setting", () => {
       />,
     );
     expect(document.body.textContent).toContain(
-      "If a message arrives while this Mac is asleep, Addison says it wasn't there",
+      "If a message arrives while this computer is asleep, Addison says it wasn't there",
     );
     fireEvent.click(screen.getByRole("button", { name: /answer late messages/ }));
     expect(onWake).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), "answer");
@@ -1210,7 +1210,7 @@ describe("the sleep setting", () => {
       />,
     );
     expect(document.body.textContent).toContain(
-      "Addison answers messages that arrived while this Mac was asleep.",
+      "Addison answers messages that arrived while this computer was asleep.",
     );
     fireEvent.click(screen.getByRole("button", { name: /say you weren't there/ }));
     expect(onWake).toHaveBeenCalledWith(expect.objectContaining({ id: "a" }), "decline");

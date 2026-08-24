@@ -81,6 +81,43 @@ a missed one. Do not restate it; link.
   a filename or an error string, not by reading a file top to bottom. Put the literal
   name it will search for in the sentence that answers the question.
 
+## Documentation style: the Google developer documentation style guide
+
+Adopted 2026-08-24 at the owner's request. <https://developers.google.com/style> is
+the reference; its
+[highlights page](https://developers.google.com/style/highlights) is the working
+checklist. What the adopting pass actually changed, so the next writer knows which
+habits to drop:
+
+- **Spell out "for example" and "that is"** rather than `e.g.` and `i.e.` — in prose.
+  Code samples were left alone, because their comments are code.
+- **Second person or the subject's own name, never "we".** Quoted material is exempt
+  and stayed verbatim: product copy, a user's words, a rule being cited.
+- **Sentence case for titles and headings.** Proper nouns keep their capitals
+  (Addison, Setup Assistant, Agent Core, MCP), and so do UI affordance names quoted
+  in a heading.
+- **"and", not "&"**, in headings and prose.
+- **Allowlist and denylist**, never whitelist and blacklist. Applied to the code
+  comments in the same pass, because a doc and the code it describes using two words
+  for one idea is the drift this repository exists to prevent.
+- **No "simply" or "easily".** Almost every use here meant "merely" and the sentence
+  reads better with the word gone.
+
+Two deliberate exemptions, so nobody re-opens them as oversights:
+
+- **`LICENSE.md`** keeps its Title Case section headings. It is a legal instrument,
+  not developer documentation.
+- **Quoted product strings stay verbatim, including "Please restart the app."**
+  (`shell/src-tauri/src/agent_process.rs`). The guide would rewrite the string; the
+  documentation's job is to say what the app actually says. Change the string first
+  if you want the doc to change.
+
+**Still open, and not decided by this pass: the ALL-CAPS emphasis.** The house voice
+leans on it heavily (*"THE COST, WRITTEN DOWN"*), the full guide's text-formatting
+rules prefer bold, and the two cannot both be right. It was left alone because it is
+a voice decision for the owner rather than a mechanical fix, and because the claim
+patterns in `tests/doc_claims.py` are matched against prose that contains it.
+
 ## Working conventions (established with the user)
 
 - **Every change goes PR → `master` directly.** The stacked-PR era is over: no
@@ -139,6 +176,15 @@ a missed one. Do not restate it; link.
 - The user starts every assistant message check with "Ad Astra." (memory).
 
 ## Environment facts
+
+- **`docs/plans/` is on your disk and not in the repository** (owner decision
+  2026-08-24). Twelve design documents for features that have shipped, bundled and
+  gitignored. Two consequences worth carrying: a clone — CI included — cannot open
+  them, so a link into `plans/` is unchecked there and ten claim rows name an owner
+  that machine does not have ([`README.md`](README.md)'s Plans section states the
+  full cost); and if you add, rename or remove one, amend `BUNDLED_PLANS` in
+  `tests/test_docs_drift.py` in the same change, which is what a clone reads to know
+  what it is missing.
 
 - **Keychain prompts were fixed by signing, not by code, and "Always Allow" now
   STICKS across rebuilds (verified 2026-08-06).** An unsigned `cargo build` is ad-hoc

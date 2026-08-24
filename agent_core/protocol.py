@@ -130,7 +130,7 @@ class Method:
 
     # --- Routine sharing (export / import) --------------------------------
     # A routine leaves and enters this machine as the PORTABLE format
-    # (agent_core/routines/portable.py), which is a whitelist and never
+    # (agent_core/routines/portable.py), which is an allowlist and never
     # `routine_to_json`. Three methods, and the split is the safety property: a
     # preview reads a stranger's file and SAVES NOTHING, and the confirm is the
     # only thing that writes.
@@ -273,7 +273,7 @@ class Method:
     # one plain sentence back (2026-08-07). `add` and `refresh` are Developer-only
     # (refused in SAFE); `list` and `remove` answer in every mode, because saved
     # configuration is not a capability and a tightening must not be trapped by a
-    # profile switch. See docs/step-7-mcp-plan.md.
+    # profile switch. See docs/plans/step-7-mcp-plan.md.
     #
     # A row's `status` is one of "never" | "ok" | "failed", and the frontend's own
     # type is that vocabulary exactly. A check IN FLIGHT is deliberately not one of
@@ -318,7 +318,7 @@ class Method:
     # registration and their dispatch), never by hiding rows. Hiding somebody's saved
     # configuration on a profile switch is the failure the 2026-08-06 artifact
     # decision reversed, and a REMOVAL must never be the thing a switch traps
-    # (docs/SAFETY.md owns the rule; docs/step-8-automation-plan.md §4.1 the choice).
+    # (docs/SAFETY.md owns the rule; docs/plans/step-8-automation-plan.md §4.1 the choice).
     #
     # No ROW here carries whether an automation is armed, in either direction — the
     # column does not exist. `automation.status` answers that question separately and
@@ -382,7 +382,7 @@ class Method:
     # an instrument. tests/test_automations.py pins that rpc/automations.py cannot even
     # reach the preview builder.
     # Messaging channels — talking to Addison from a phone (PHASE 1 of three;
-    # docs/messaging-channel-plan.md owns the design and its eleven answered
+    # docs/plans/messaging-channel-plan.md owns the design and its eleven answered
     # decisions). Phase 1 is CONFIGURATION AND NOTHING ELSE: there is no adapter, no
     # poll loop, no pairing and no network call anywhere in the tree, so a saved
     # channel reaches nothing and is reached by nothing. That is the MCP phase-1
@@ -454,7 +454,7 @@ class Method:
     # tool's plain-language label and never its id.
     CHANNEL_DISMISS_REQUEST = "channel.dismissRequest"    # {requestId} -> {ok}
     # Owner decision 8's SETTING: what happens to a message that arrived while this
-    # Mac was asleep. 'decline' (the DEFAULT, and the safe direction) answers each one
+    # computer was asleep. 'decline' (the DEFAULT, and the safe direction) answers each one
     # with a plain sentence; 'answer' runs the turn anyway. Choosing 'answer' is a
     # widening and is Developer-only; choosing 'decline' answers in every profile,
     # because a tightening must never be what a profile switch traps.
@@ -506,7 +506,7 @@ class Method:
     COSTPLAN_APPLY = "costPlan.apply"          # {accept} -> {ok, snapshotId?, error?}
 
     # Widgets — DECLARATIVE specs only (agent_core/widgets.py): a saved-routine Run
-    # pill, a whitelisted stat display, or one of the three interactive SAFE kinds
+    # pill, an allowlisted stat display, or one of the three interactive SAFE kinds
     # (checklist / note / timer). NEVER code. Widgets are proposed like routines
     # (draft-held-in-memory + explicit confirm) and saved LOW-risk.
     # {} -> {widgets: [{id, spec, pinned, position, createdInMode, state?,

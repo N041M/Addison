@@ -1,6 +1,6 @@
 """What a tool server offered, how it enters the one tool registry, and what
 happens when one of its tools is actually run (step 7, PHASES 2–4;
-[docs/step-7-mcp-plan.md](../docs/step-7-mcp-plan.md) §3 owns the admission rules
+[docs/plans/step-7-mcp-plan.md](../docs/plans/step-7-mcp-plan.md) §3 owns the admission rules
 this implements, §4.3 the dispatch and §4.4 the shape of what comes back).
 
 ``mcp_client.py`` speaks the protocol; this module decides what happens to what it

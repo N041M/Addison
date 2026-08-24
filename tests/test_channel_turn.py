@@ -1,6 +1,6 @@
 """What a message from a phone becomes (messaging channels, PHASES 2 AND 3).
 
-[docs/messaging-channel-plan.md](../docs/messaging-channel-plan.md) §3.4–§3.5 own
+[docs/plans/messaging-channel-plan.md](../docs/plans/messaging-channel-plan.md) §3.4–§3.5 own
 the design. These tests drive the REAL server — the real worker queue, the real
 orchestrator, the real registry and gate — against a Telegram adapter wired to an
 ``httpx.MockTransport``, so every claim below is about what actually goes on the

@@ -1,6 +1,6 @@
 """The remote floor — what a turn that arrived from a phone may use (PHASE 3).
 
-[docs/messaging-channel-plan.md](../docs/messaging-channel-plan.md) §3.6 owns the
+[docs/plans/messaging-channel-plan.md](../docs/plans/messaging-channel-plan.md) §3.6 owns the
 design. The floor now carries **three read-only ids** (owner decision 5), and that
 is the claim:
 

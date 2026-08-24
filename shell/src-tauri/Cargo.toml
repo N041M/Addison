@@ -31,10 +31,6 @@ uuid = { version = "1", features = ["v4"] }   # opaque file handles + device_id 
 # the build — only the right to call it.
 sha2 = "0.10"
 
-# SIGKILL for a command that overruns its budget (exec.rs, step 5.5). std::process
-# offers no timed wait and no signal, and a catchable signal is one a runaway shell
-# can ignore — so the one libc call is `kill(pid, SIGKILL)` and nothing more.
-libc = "0.2"
 
 # Device identity keypair (§5): ed25519 signing key generated in the shell on first
 # launch, private half stored ONLY in the OS keychain. `rand_core`'s OsRng is the
@@ -45,11 +41,35 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 # OS keychain (BYOK keys, device key) — §5. Feature-select the platform-native
 # store per target so a macOS `cargo check` never tries to build the Linux
 # secret-service backend (and vice-versa). Cross-platform packaging is Phase 3.
+# SIGKILL for a command that overruns its budget, and launchd's uid for a service
+# target (exec.rs + automation.rs). std::process offers no timed wait and no
+# signal, and a catchable signal is one a runaway shell can ignore. UNIX-ONLY
+# rather than unconditional, because every call site is: naming the platform in the
+# manifest is what makes "this does not exist off Unix" a fact the build checks
+# rather than a comment someone has to believe.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows's answers to the two things `std::process` cannot do portably
+# (exec.rs, `mod plat`): a Job Object, so a timeout reaches everything the command
+# started rather than only the shell that forked it, and `PeekNamedPipe`, so a
+# drain can tell an empty pipe from a closed one without blocking on it. Already in
+# the lockfile as a transitive dependency of the Tauri stack, so declaring it adds
+# no new code to the build — only the right to call it, and only in `mod plat`.
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
+[target.'cfg(target_os = "windows")'.dependencies.keyring]
+version = "3"
+features = ["windows-native"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }

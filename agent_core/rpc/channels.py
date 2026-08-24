@@ -1,6 +1,6 @@
 """channel.* handlers — the messaging channels a person talks to Addison through
 from their phone (PHASES 1 TO 3, which is all of them that ship).
-[docs/messaging-channel-plan.md](../../docs/messaging-channel-plan.md) owns the
+[docs/plans/messaging-channel-plan.md](../../docs/plans/messaging-channel-plan.md) owns the
 design, the phase order and the eleven owner decisions of 2026-08-22.
 
 **PHASE 1 WAS CONFIGURATION, AND NOTHING CONNECTED** — the rows, the keychain
@@ -156,7 +156,7 @@ _GUARDS_REFUSE_REMOTE = (
     "You've asked Addison to check with you before every action, so it can't answer "
     "from your phone."
 )
-# Owner decision 8's DEFAULT: messages that arrived while the Mac was asleep are
+# Owner decision 8's DEFAULT: messages that arrived while the computer was asleep are
 # declined, each with one sentence. (The queue-or-decline SETTING itself is a later
 # diff; this build ships the default only, which is the safe direction.)
 _ARRIVED_WHILE_ASLEEP = (
@@ -188,7 +188,7 @@ _REMOTE_CONVERSATION_TITLE = "From your phone"
 
 # How stale a message may be before it counts as having arrived while nobody was
 # listening. Longer than any long poll (50s) plus network slop, short enough that
-# "the Mac was asleep" is the only ordinary cause. Measured against the TRANSPORT'S
+# "the computer was asleep" is the only ordinary cause. Measured against the TRANSPORT'S
 # own timestamp, which is the only clock that can answer the question at all — see
 # InboundMessage.sent_at, which explains why Addison's own cannot.
 _STALE_AFTER_SECONDS = 120
@@ -435,7 +435,7 @@ class ChannelsMixin(ServerContext):
         """channel.setOnWake {id, onWake} -> {ok} | {ok:false, error}.
 
         OWNER DECISION 8's SETTING, and the whole of it: what happens to a message
-        that arrived while this Mac was asleep. 'decline' — the default, because the
+        that arrived while this computer was asleep. 'decline' — the default, because the
         safe behaviour should be the out-of-box one — answers each held message with
         one plain sentence. 'answer' runs the turn anyway.
 

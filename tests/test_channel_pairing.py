@@ -1,6 +1,6 @@
 """Pairing — which phone may talk to Addison (messaging channels, PHASE 2).
 
-[docs/messaging-channel-plan.md](../docs/messaging-channel-plan.md) §3.7 owns the
+[docs/plans/messaging-channel-plan.md](../docs/plans/messaging-channel-plan.md) §3.7 owns the
 design. What these tests hold:
 
   (1) the code is MINTED, not fixed — a fresh one per window, from the shared

@@ -1,4 +1,4 @@
-"""MCP dispatch — step 7, PHASE 3 (docs/step-7-mcp-plan.md §4.3).
+"""MCP dispatch — step 7, PHASE 3 (docs/plans/step-7-mcp-plan.md §4.3).
 
 Phase 2 proved Addison could SEE what a stranger's server offers and run none of
 it. Phase 3's claim is the one every earlier phase was arranging for, and it is the

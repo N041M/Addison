@@ -1,6 +1,6 @@
 """Presence left the keychain — the rule, the column, and the paths that read it.
 
-Plan §4.1 (`docs/secrets-and-keychain-plan.md`). "Is a key saved for this provider?"
+Plan §4.1 (`docs/plans/secrets-and-keychain-plan.md`). "Is a key saved for this provider?"
 is not a secret and does not belong in the OS keychain: asking the store generated a
 60-second password-dialog poll, a negative read cache, and three probe variants. The
 authority is now ``provider_config.secret_presence``.

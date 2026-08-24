@@ -127,7 +127,7 @@ class UndoManager:
         startup caller passes nothing and there is one place to change them.
 
         Deletes REVERTED rows only — owner decision 2026-08-08 (the recommended
-        resolution in ``docs/phase-3-review-surface-plan.md`` prerequisite 3).
+        resolution in ``docs/plans/phase-3-review-surface-plan.md`` prerequisite 3).
         A row still unreverted describes a change that is live on disk, and its
         payload is the only way back from it; ``Store.prune_action_snapshots``
         owns the full semantics and states what that costs.

@@ -1,5 +1,5 @@
 """MCP connect + discovery — step 7, PHASE 2, and what PHASE 3 changed about it
-(docs/step-7-mcp-plan.md §4.2 and §4.3). **Dispatch itself is
+(docs/plans/step-7-mcp-plan.md §4.2 and §4.3). **Dispatch itself is
 ``test_mcp_dispatch.py``**; this file owns everything up to the moment of a call.
 
 Phase 1 proved a saved server was inert. Phase 2's claim was that Addison could

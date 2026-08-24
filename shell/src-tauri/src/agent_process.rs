@@ -330,7 +330,7 @@ async fn write_to_channel(channel: &mut CoreChannel, frame: &Value) {
 ///   1. `ADDISON_CORE_CMD` env override (dev/testing) — whitespace-split argv.
 ///   2. a bundled `addison-core` binary next to the app executable (production;
 ///      PyInstaller packaging is Phase 3 — we only resolve the path here).
-///   3. dev fallback: `python3 -m agent_core.main`, preferring the repo venv's
+///   3. dev fallback: `<python> -m agent_core.main`, preferring the repo venv's
 ///      interpreter when present, run from the repo root.
 fn resolve_core_command() -> Command {
     // 1. Explicit override.
@@ -354,11 +354,25 @@ fn resolve_core_command() -> Command {
         }
     }
 
-    // 3. Dev fallback: python3 -m agent_core.main from the repo root.
+    // 3. Dev fallback: the interpreter, `-m agent_core.main`, from the repo root.
+    //
+    // BOTH HALVES ARE SPELLED PER-PLATFORM. A venv puts its interpreter in
+    // `bin/python3` on Unix and `Scripts\python.exe` on Windows, and the bare name
+    // on PATH is `python3` on Unix while a Windows install of Python 3 registers
+    // `python`. Getting either wrong does not fail loudly — it silently skips the
+    // venv and runs whatever interpreter the machine happens to answer with, which
+    // is the "gate green for a reason that is not in the repository" failure in
+    // another costume.
     let root = repo_root();
-    let venv_python = root.join("agent_core/.venv/bin/python3");
+    let venv_python = if cfg!(windows) {
+        root.join("agent_core/.venv/Scripts/python.exe")
+    } else {
+        root.join("agent_core/.venv/bin/python3")
+    };
     let program = if venv_python.exists() {
         venv_python
+    } else if cfg!(windows) {
+        PathBuf::from("python")
     } else {
         PathBuf::from("python3")
     };
@@ -384,6 +398,8 @@ fn emit_status(app: &AppHandle, state: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the unix-gated pump test reads frames back off a pipe.
+    #[cfg(unix)]
     use tokio::io::BufReader as AsyncBufReader;
 
     #[test]
@@ -401,7 +417,11 @@ mod tests {
         // time in the same repo, so it gets a source-level pin rather than a
         // comment. Coarse on purpose: it asserts ORDER, which is the property, and
         // not the surrounding shape, which is free to change.
-        let source = include_str!("agent_process.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("agent_process.rs").replace("\r\n", "\n");
         let start = source
             .find("async fn handle_line")
             .expect("handle_line must exist for this test to mean anything");
@@ -427,6 +447,13 @@ mod tests {
         );
     }
 
+    // UNIX-ONLY FOR ITS STAND-IN, not for what it proves. The test needs a process
+    // that echoes its stdin back on stdout — `/bin/cat` — and a command that takes a
+    // known two seconds — `sleep 2`. Neither spelling exists on Windows, and the
+    // property (a slow `shell.runCommand` must not hold the core's read loop) is
+    // platform-independent, so the Windows equivalent belongs with the manual pass
+    // in docs/plans/windows-port-plan.md rather than in a hurried `cmd /c timeout`.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_long_command_does_not_block_the_next_request() {
         // THE ASSERTION THAT MATTERS IS THE CLOCK, and the frames are read back off a

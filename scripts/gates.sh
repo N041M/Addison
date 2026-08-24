@@ -17,7 +17,11 @@
 # ci.yml calls it, which is what makes drift impossible rather than merely
 # discouraged: there is no second copy left to disagree with.
 #
-# Usage:  scripts/gates.sh [python|frontend|rust|all]     (default: all)
+# Usage:  scripts/gates.sh [python|frontend|rust|python-floors|all]   (default: all)
+#
+# `python-floors` is the ONE job that is not part of `all`, and it exists for the
+# Windows port. See its function for what it runs and, more importantly, what it
+# deliberately does not.
 #
 # Run from anywhere; paths resolve against the repo root, not the caller's cwd.
 
@@ -27,6 +31,22 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 JOB=${1:-all}
 
 say() { printf '\n=== %s ===\n' "$1"; }
+
+# `$ROOT` in a form the PYTHON on this machine understands.
+#
+# On Windows CI this script runs under Git Bash, where `$ROOT` is `/d/a/...` — a
+# path bash resolves and a native Windows Python does not, so `PYTHONPATH="$ROOT"`
+# would silently add a directory that does not exist and every `import tests.*`
+# would fail with a message about the import rather than about the path. `cygpath`
+# ships with that bash and exists nowhere else, which makes its absence the exact
+# test for "this is not that situation".
+py_root() {
+    if command -v cygpath >/dev/null 2>&1; then
+        cygpath -w "$ROOT"
+    else
+        printf '%s' "$ROOT"
+    fi
+}
 
 # A missing TOOL is not a failing gate, and must not read like one. Run cold, this
 # script used to stop at a bare `ruff: command not found` — which tells a reader
@@ -63,9 +83,40 @@ gates_python() {
     cd "$ROOT"
     # PYTHONPATH mirrors CI: the editable install covers agent_core.*, the repo
     # root covers tests.*.
-    PYTHONPATH="$ROOT" ruff check agent_core/ tests/
-    PYTHONPATH="$ROOT" pyright
-    PYTHONPATH="$ROOT" pytest tests/ -q
+    PYTHONPATH="$(py_root)" ruff check agent_core/ tests/
+    PYTHONPATH="$(py_root)" pyright
+    PYTHONPATH="$(py_root)" pytest tests/ -q
+}
+
+# The Windows job, and the honest statement of its scope.
+#
+# WHY IT IS NOT `gates.sh python`. The full suite does not pass on Windows and has
+# never been asked to: nineteen test files plant symlinks, spawn `/bin/sh`, call
+# `mkfifo` or hard-code `/tmp`, and porting those fixtures is its own phase
+# (docs/plans/windows-port-plan.md §6). Running the whole suite there today would put a
+# permanently red job in front of every pull request, and a gate nobody can make
+# green is a gate somebody eventually deletes.
+#
+# WHY IT EXISTS AT ALL. The Windows half of the G2 fence has assertions that are
+# a SKIP everywhere else — `test_the_windows_fence_is_whole_on_windows` is the one
+# that says an entry which will not expand is a hole rather than a platform
+# difference. A test that only ever skips is a test that has never run, which is
+# this repository's most expensive recurring bug. So the floors run on Windows,
+# and the list is a program here rather than a sentence in a workflow file, for
+# the same reason everything else in this script is.
+#
+# WIDEN IT AS FIXTURES PORT. Every file that joins this list is one more file that
+# cannot regress on Windows; the goal is for this function to disappear into
+# `gates_python`.
+gates_python_floors() {
+    need pytest
+    say "python floors (Windows scope)"
+    cd "$ROOT"
+    PYTHONPATH="$(py_root)" pytest \
+        tests/test_step_5_5_containment.py \
+        tests/test_g2_no_self_trigger.py \
+        tests/test_policy_modes.py \
+        -q
 }
 
 gates_frontend() {
@@ -89,12 +140,15 @@ gates_rust() {
     mkdir -p "$ROOT/shell/dist"
     cd "$ROOT/shell/src-tauri"
     cargo test
-    # PLATFORM-GATED CODE IS THE ONE THING THIS CANNOT CHECK. Everything behind
-    # `#[cfg(target_os = "macos")]` compiles here and vanishes on CI's Linux
-    # runner, taking its imports and constants with it — so `-D warnings` finds
-    # dead code there that does not exist here. Cross-checking locally is not
-    # practical (a Linux build of the Tauri deps needs a webkit sysroot), so when
-    # you gate a symbol, check every import and constant it was the sole user of.
+    # PLATFORM-GATED CODE IS THE ONE THING THIS CANNOT CHECK *LOCALLY*. Everything
+    # behind `#[cfg(target_os = "macos")]` compiles here and vanishes on the Linux
+    # and Windows runners, taking its imports and constants with it — so
+    # `-D warnings` finds dead code there that does not exist here. Cross-checking
+    # locally is not practical (a Linux build of the Tauri deps needs a webkit
+    # sysroot; a Windows one needs an MSVC toolchain the `ring` build script cannot
+    # find on a Mac), so when you gate a symbol, check every import and constant it
+    # was the sole user of. CI now runs this same job on all three, which is what
+    # turns "check it by hand" into "check it by hand, and then be told".
     #
     # And read the COUNT in a CI failure, not the errors you recognise: "due to 4
     # previous errors" got two of them fixed on 2026-08-06 because the other two
@@ -103,11 +157,13 @@ gates_rust() {
 }
 
 case "$JOB" in
-    python)   gates_python ;;
-    frontend) gates_frontend ;;
-    rust)     gates_rust ;;
-    all)      gates_python; gates_frontend; gates_rust ;;
-    *)        echo "usage: scripts/gates.sh [python|frontend|rust|all]" >&2; exit 2 ;;
+    python)        gates_python ;;
+    frontend)      gates_frontend ;;
+    rust)          gates_rust ;;
+    python-floors) gates_python_floors ;;
+    all)           gates_python; gates_frontend; gates_rust ;;
+    *)             echo "usage: scripts/gates.sh [python|frontend|rust|python-floors|all]" >&2
+                   exit 2 ;;
 esac
 
 printf '\nAll requested gates passed.\n'

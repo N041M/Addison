@@ -1,0 +1,22 @@
+# Line endings, and why this file exists.
+#
+# Several tests in the Rust shell read their OWN SOURCE with `include_str!` and
+# search it for `\n`-anchored patterns — the source pins that catch a call being
+# deleted out of a function where no runtime assertion can reach (see
+# `the_pump_asks_dispatch_off_loop_before_it_awaits_anything`). Git on Windows
+# checks out CRLF by default, so `body.find("\n}\n")` finds nothing and four such
+# tests failed on the Windows runner's first ever run (2026-08-24) for a reason
+# that had nothing to do with what they guard.
+#
+# `eol=lf` makes every checkout agree with the bytes in the repository. The tests
+# ALSO normalise CRLF themselves, deliberately: a gate that is green because of a
+# checkout setting is green for a reason outside the code it guards, and this
+# repository's own rule is that such a gate is worse than a red one. This file
+# fixes the working copy; the normalisation fixes the test.
+* text=auto eol=lf
+
+# Binary, never touched.
+*.png binary
+*.icns binary
+*.ico binary
+*.pdf binary

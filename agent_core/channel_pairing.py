@@ -6,7 +6,7 @@ keyword, no prefix, no "only obey messages that start with", nothing a message c
 say about itself. Step 8's reasoning is the whole argument and it transfers
 unchanged: a fixed prefix *"is forgeable by anything that can write English"*, and
 the fix is a code minted at the moment of asking, which no observed content could
-have written down in advance (docs/messaging-channel-plan.md §3.7).
+have written down in advance (docs/plans/messaging-channel-plan.md §3.7).
 
 **THE DESKTOP SHOWS THE CODE; THE PHONE SENDS IT.** Not the reverse. Sending a
 code to a number the person types in requires already knowing an address, which is

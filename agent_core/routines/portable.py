@@ -17,10 +17,10 @@ app wrote and fatal for bytes an unknown person sent. **Do not merge the two.**
 The trusting reader stays trusting and fast for the DB path; the reader below
 assumes the file is hostile and says so in a sentence a person can act on.
 
-WHITELIST, NEVER BLACKLIST. :func:`to_portable` names the fields it copies, one
+ALLOWLIST, NEVER DENYLIST. :func:`to_portable` names the fields it copies, one
 by one. A field added to ``Routine`` or ``RoutineStep`` tomorrow therefore leaves
 this machine only when somebody writes its name here and thinks about it, which
-is the property a blacklist cannot have. ``tests/test_routine_portable.py`` pins
+is the property a denylist cannot have. ``tests/test_routine_portable.py`` pins
 the exact key set so the decision cannot be made by omission.
 
 TWO NARROWINGS, and both are refusals rather than repairs:
@@ -73,7 +73,7 @@ PORTABLE_VERSION = 1
 _MIGRATIONS: dict[int, Any] = {}
 
 # Fields that exist on Routine / RoutineStep and deliberately do not travel. This
-# tuple is documentation, not machinery (the whitelist above is the machinery),
+# tuple is documentation, not machinery (the allowlist above is the machinery),
 # and the test suite reads it as the list of names that must be absent.
 _EXCLUDED_FIELDS = (
     # ``id``: import mints a fresh uuid4. A shared file must not collide with a
@@ -165,7 +165,7 @@ def _path_leaf(value: Any, trail: str) -> str | None:
 def to_portable(routine: Routine) -> dict | str:
     """The shareable form of ``routine``, or a plain sentence saying why it cannot
     be shared. Every field is named here on purpose (see the module docstring):
-    this is a whitelist, so a new field on Routine or RoutineStep does not travel
+    this is an allowlist, so a new field on Routine or RoutineStep does not travel
     until somebody adds it below."""
     for step in routine.steps:
         if step.command is not None:

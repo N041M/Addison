@@ -355,9 +355,16 @@ struct MintLedger {
 impl MintLedger {
     /// The live ledger, beside Addison's own data.
     fn live() -> Self {
-        Self { dir: std::env::var("HOME").ok().filter(|home| !home.is_empty()).map(|home| {
-            PathBuf::from(home).join(".addison")
-        }) }
+        // `home_from_env` rather than `HOME` directly: Windows does not set that
+        // variable, and the ledger would have had nowhere to live on the platform —
+        // benign today (its only consumer vetoes a self-heal that a Windows read
+        // never triggers, because there is no credential-ACL prompt there to make a
+        // read slow) and a silent platform difference all the same. One lookup for
+        // "the user's home", in one place, is the rule that stops the next one
+        // mattering.
+        Self {
+            dir: crate::filesystem::home_from_env().map(|home| PathBuf::from(home).join(".addison")),
+        }
     }
 
     fn path(&self) -> Option<PathBuf> {
@@ -1541,7 +1548,7 @@ fn ensure_device_keypair() -> Result<DeviceIdentity, RpcError> {
 // ===========================================================================
 // MESSAGING-CHANNEL TOKENS — a PARALLEL pair, never a call into the provider path
 // ===========================================================================
-// Messaging channels phase 1 (docs/messaging-channel-plan.md §3.9). A channel's bot
+// Messaging channels phase 1 (docs/plans/messaging-channel-plan.md §3.9). A channel's bot
 // token is a credential the person types into Settings, so it goes where every other
 // credential goes: from the webview straight into the OS keychain, on the same
 // SERVICE, under its own account namespace `channel-key:<kind>` — and never through
@@ -2940,14 +2947,22 @@ mod tests {
     /// The body of one top-level item in this file, for the source-level backstops.
     /// Two of them exist because the wiring they check cannot be reached in-process:
     /// the real paths need an OS keychain, and `cargo test` must never touch one.
-    fn item_source(signature: &str) -> &'static str {
-        let source = include_str!("keychain.rs");
+    fn item_source(signature: &str) -> String {
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("keychain.rs").replace("\r\n", "\n");
         let start = source
             .find(signature)
             .unwrap_or_else(|| panic!("{signature} moved — re-point this test"));
         let body = &source[start..];
         let end = body[1..].find("\nfn ").expect("no following item") + 1;
-        &body[..end]
+        // A `String` rather than a `&'static str`: the CRLF normalisation above
+        // makes an owned copy, and nothing can be borrowed out of it past the end
+        // of this function. Callers only ever `.contains()`, so the copy costs
+        // nothing they notice.
+        body[..end].to_string()
     }
 
     #[test]

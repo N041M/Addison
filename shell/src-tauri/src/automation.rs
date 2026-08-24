@@ -1280,7 +1280,11 @@ mod mac {
             // So the composition is pinned at source level, coarsely: it asserts ORDER
             // (validate, then build a path, then write, then hand it to launchd), which
             // is the property, and not the surrounding shape, which is free to change.
-            let source = include_str!("automation.rs");
+            // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("automation.rs").replace("\r\n", "\n");
             let start = source.find("fn arm_inner").expect("arm_inner must exist");
             let body = &source[start..];
             let end = body.find("\n    }\n").expect("arm_inner must be a closed function");
@@ -1564,7 +1568,11 @@ mod mac {
 
             // ...and `arm_inner` reads existence BEFORE writing, which is the only
             // point at which "was something already here" is knowable.
-            let source = include_str!("automation.rs");
+            // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("automation.rs").replace("\r\n", "\n");
             // BOUNDED TO THE FUNCTION. `split(..).nth(1)` runs to end-of-file, which
             // includes this test — so an assertion looking for its own literal found
             // itself and passed with the mutation applied. (The same self-referential
@@ -1610,7 +1618,11 @@ mod mac {
             assert_ne!(refused.code, 0, "a non-zero exit is an answer, not a failure to answer");
 
             // And the source rule: the file removal must sit behind the Err check.
-            let source = include_str!("automation.rs");
+            // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("automation.rs").replace("\r\n", "\n");
             let body = source
                 .split("fn disarm_inner(")
                 .nth(1)

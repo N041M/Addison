@@ -1,6 +1,6 @@
 """Step 5.5 — containment for the OPEN harness.
 
-Plan: docs/step-5.5-containment-plan.md. This file covers the CORE half of items
+Plan: docs/plans/step-5.5-containment-plan.md. This file covers the CORE half of items
 1, 2 and 3. **The boundary itself is tested in Rust** (`shell/src-tauri/src/exec.rs`,
 `mod tests`), because that is the process the boundary lives in — including the
 plan's headline, `an_approved_command_cannot_delete_the_recovery_floor`, which
@@ -30,6 +30,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+import sys
+
+import pytest
 
 from agent_core.orchestrator import Conversation, Orchestrator
 from agent_core.permissions.gate import PermissionGate, PermissionStatus
@@ -39,8 +42,13 @@ from agent_core.policy import (
     kernel_confines_writes,
     DENIED_INSIDE,
     OS_AUTOMATION_DIRS,
+    WINDOWS_AUTOMATION_DIRS,
     PolicyMode,
     _derived_data_dir,
+    _automation_roots,
+    _command_tokens,
+    _drive_qualified,
+    _expand_automation_dir,
     command_arms_automation,
     command_denied_path,
     denylisted_roots,
@@ -571,6 +579,184 @@ def test_the_denylist_covers_every_os_automation_directory():
     }
 
 
+def test_the_denylist_covers_every_windows_automation_directory():
+    """The Windows half of the fence, held to the same two standards as the tuple
+    above: every entry this platform can place is denylisted, and the set is
+    spelled out so a row cannot be deleted behind the iterations.
+
+    WHY IT IS A SECOND TEST RATHER THAN A SECOND LOOP. The entries reachable here
+    depend on the platform — ``%SystemRoot%`` expands on Windows and nowhere else —
+    and folding that condition into the test above would have put a skip inside the
+    one assertion whose whole job is to notice a shorter list."""
+    roots = [os.path.normcase(os.path.realpath(r)) for r in denylisted_roots(DATA_DIR)]
+    placeable = 0
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        expanded = _expand_automation_dir(entry)
+        if expanded is None:
+            # Only legitimate OFF Windows. On Windows an entry that will not expand
+            # is a hole in the fence, and `test_the_windows_fence_is_whole_on_
+            # windows` is the assertion that says so.
+            assert sys.platform != "win32", entry
+            continue
+        placeable += 1
+        assert os.path.normcase(os.path.realpath(expanded)) in roots, entry
+
+    # NOT VACUOUS ANYWHERE. Off Windows exactly one entry is spelled with `~` and
+    # therefore reachable, so this loop always asserts something real; a change that
+    # made every Windows row `%`-prefixed would turn the whole test into a no-op
+    # without this line.
+    assert placeable >= 1
+
+    assert set(WINDOWS_AUTOMATION_DIRS) == {
+        "~/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup",
+        "%ProgramData%/Microsoft/Windows/Start Menu/Programs/StartUp",
+        "%SystemRoot%/System32/Tasks",
+        "%SystemRoot%/Tasks",
+    }
+
+
+def test_a_fence_entry_this_platform_cannot_place_never_reaches_the_roots():
+    """Every expanded fence root is ABSOLUTE, on every platform.
+
+    The other half of `_expand_automation_dir`'s contract, and the half a
+    membership assertion cannot see: a relative entry does not make the fence
+    shorter, it makes it point somewhere else. `%SystemRoot%/Tasks` left unexpanded
+    would be resolved against whatever directory the process is running in, so the
+    fence would refuse a folder named `%SystemRoot%` under the project and refuse
+    the Task Scheduler nowhere at all — coverage that reads real and is not.
+
+    Written as a property rather than a list because it is one: nothing in
+    `denylisted_roots` or `_untrustable_dirs` compares paths in a way a relative
+    entry answers usefully."""
+    roots = _automation_roots()
+    assert roots, "the fence must not be empty on any platform this runs on"
+    for root in roots:
+        assert os.path.isabs(root), root
+
+
+def test_an_attached_short_flag_still_names_a_windows_path():
+    """`grep -fC:\\Users\\x/.ssh/id_rsa needle` must still name the credential store.
+
+    THE BUG THIS PINS, found by the Windows floors job on its first ever run
+    (2026-08-24). `_command_tokens` looked for the first `/`, `~` or `$` to find
+    where the path starts inside an attached short flag. A Windows path begins with
+    none of them — it begins with a drive — so the search walked PAST
+    `C:\\Users\\x` and cut at the first `/` INSIDE the path, leaving
+    `/.ssh/id_rsa`, which resolves nowhere. An attached short flag therefore walked
+    straight through the credential refusal on that platform, and the macOS suite
+    could not see it because `~` expands to a `/`-leading path here.
+
+    Runs everywhere, because `_command_tokens` is pure text: the token is written
+    out in its Windows spelling rather than built from `expanduser`, which is what
+    lets the machine that has the bug and the machine that does not both check it.
+    """
+    tokens = _command_tokens(r"grep -fC:\Users\x/.ssh/id_rsa needle")
+    assert r"C:\Users\x/.ssh/id_rsa" in tokens, tokens
+
+    # ...and the POSIX spelling is untouched, which is the half a widening fix
+    # breaks. The first version of this fix folded the new starting points into
+    # `min(positions)` and stopped naming `/etc/passwd` here, because a backslash
+    # is a legal filename character on POSIX and came earlier in the string.
+    assert "/etc/passwd" in _command_tokens(r"grep -fa\b/etc/passwd needle")
+    assert "/etc/passwd" in _command_tokens("grep -f/etc/passwd needle")
+
+
+def test_a_rooted_path_with_no_drive_is_pinned_to_homes_drive():
+    """`/` names the root of HOME's drive, not of whatever drive a process sits on.
+
+    `os.path.isabs("/")` answers True on Windows and is wrong about what it means:
+    the path is DRIVE-relative, so `realpath` resolved it against the Agent Core's
+    own current directory. On the CI runner the checkout is on `D:` while the data
+    directory is on `C:`, so `rm -rf /` did not contain the recovery floor and the
+    CONTAINS direction — the only thing under `rm -rf ~` on a platform with no
+    kernel confinement — missed it entirely. Which drive the floor protected
+    depended on where the process happened to be started.
+
+    Both arms run here because `_drive_qualified` takes the platform as an
+    argument. That is the rule `kernel_confines_writes` set, and the reason is this
+    exact class of bug: an arm that only executes on the other operating system is
+    an arm nothing has ever run.
+    """
+    # Windows: a rooted, driveless path is pinned to HOME's drive.
+    assert _drive_qualified("/", r"C:\Users\x", windows=True) == r"C:/"
+    assert _drive_qualified(r"\Users", r"C:\Users\x", windows=True) == r"C:\Users"
+    # A path that already names a drive is left exactly as it is.
+    assert _drive_qualified(r"D:\work", r"C:\Users\x", windows=True) == r"D:\work"
+    # A relative token is not this function's business; the caller joins it to HOME.
+    assert _drive_qualified("notes.txt", r"C:\Users\x", windows=True) == "notes.txt"
+    # A home directory with no drive at all cannot qualify anything, and says so by
+    # changing nothing rather than by inventing a letter.
+    assert _drive_qualified("/", "", windows=True) == "/"
+
+    # POSIX: byte-for-byte unchanged, which is what makes this fix free here.
+    assert _drive_qualified("/", "/Users/x", windows=False) == "/"
+    assert _drive_qualified("/etc/passwd", "/Users/x", windows=False) == "/etc/passwd"
+
+
+def test_absolute_form_actually_calls_the_drive_qualifier():
+    """THE WIRING, not the function — HANDOFF trap 3, caught here by its own
+    mutation before it could ship.
+
+    `test_a_rooted_path_with_no_drive_is_pinned_to_homes_drive` proves
+    `_drive_qualified` works and proves NOTHING about whether `_absolute_form`
+    still consults it. Measured: deleting the call leaves that test, and the whole
+    suite, green on this machine — because every assertion about the live path
+    needs a Windows filesystem to see the difference. That is the fourth time this
+    repository has moved the untested part to the caller by purifying a function
+    for testability, so it gets a source pin.
+
+    Matches the CALL and not the word: an earlier pin in this tree passed under its
+    own mutation because the deleted line left a comment behind that still said the
+    function's name.
+    """
+    source = (pathlib.Path(__file__).resolve().parent.parent / "agent_core" / "policy.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.find("def _absolute_form")
+    assert start != -1, "_absolute_form moved — re-point this test"
+    body = source[start:]
+    end = body.find("\ndef ", 1)
+    body = body[:end]
+    assert "_drive_qualified(expanded" in body, (
+        "_absolute_form must CALL _drive_qualified — without it a rooted, driveless "
+        "path resolves against whichever drive the Agent Core happens to be on, and "
+        "the CONTAINS direction stops covering the recovery floor on Windows:\n" + body
+    )
+
+    # AND THE OTHER SIDE OF THE COMPARISON. Qualifying only the token was a real
+    # bug that lasted exactly one CI run: `/Library/LaunchDaemons/y.plist` went to
+    # HOME's drive while the ROOT `/Library/LaunchDaemons` still resolved against
+    # the process's own, so the automation fence stopped matching on Windows. Every
+    # path this module compares goes through `_canonical`, which makes it the only
+    # place that can guarantee both sides agree.
+    start = source.find("def _canonical")
+    assert start != -1, "_canonical moved — re-point this test"
+    canonical = source[start:]
+    canonical = canonical[: canonical.find("\ndef ", 1)]
+    assert "_drive_qualified(os.path.expanduser" in canonical, (
+        "_canonical must CALL _drive_qualified — a rule applied to one side of a "
+        "comparison is not a rule:\n" + canonical
+    )
+
+
+def test_the_windows_fence_is_whole_on_windows():
+    """On Windows, EVERY Windows fence entry must expand to an absolute path.
+
+    This is the assertion `_expand_automation_dir`'s docstring promises. Its `None`
+    return is the correct answer off Windows and a fence hole on it: `%SystemRoot%`
+    and `%ProgramData%` are always set there, so an entry that fails to expand means
+    the environment lied or the spelling drifted, and the result would be a fence
+    that silently covers less than it reads.
+
+    A no-op off Windows, deliberately and visibly — the alternative was folding the
+    condition into the test above and losing the ability to say WHICH standard
+    failed."""
+    if sys.platform != "win32":
+        pytest.skip("the whole-fence claim is about Windows; the drop is correct here")
+    for entry in WINDOWS_AUTOMATION_DIRS:
+        assert _expand_automation_dir(entry) is not None, entry
+
+
 def test_an_automation_root_is_refused_inside_but_never_contains():
     """The asymmetry, pinned in both directions, because it is the one part of this
     fence that had to be reasoned about rather than copied.
@@ -884,7 +1070,7 @@ def test_a_routine_variable_cannot_smuggle_a_forbidden_path(tmp_path):
 def test_only_the_owner_modules_may_derive_the_data_directory():
     root = pathlib.Path(__file__).resolve().parent.parent / "agent_core"
     # MATCHED ON THE PATH FROM ``agent_core/``, NOT ON ``path.name``. A basename
-    # whitelist reads as if it names three modules; it actually exempts every file
+    # allowlist reads as if it names three modules; it actually exempts every file
     # in the tree that happens to share a basename — and `base.py` alone is
     # `tools/base.py`, `rpc/base.py` and `providers/base.py`. Two of those three
     # were silently allowed to re-derive the data dir by a guard whose entire job

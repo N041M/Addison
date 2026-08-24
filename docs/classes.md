@@ -312,7 +312,7 @@ settings-backed and both a closed vocabulary with a total strictness order:
 lets Simple and Developer keep passing `None`. `weakenings_between(old, new)` is the
 module function that decides whether a save *lowered* a guard; only a lowering mints the
 G4 anchor, and `guards.set` mints it **first**, refusing the change if it cannot.
-Neither the anchor nor the four floors (G1, G2, G3, the anchor rule, i.e. **G4** in code
+Neither the anchor nor the four floors (G1, G2, G3, the anchor rule, that is, **G4** in code
 and in `CLAUDE.md`; the two names are the same rule) are reachable from `GuardConfig`.
 `SnapshotManager`, `ConfigSnapshot`, the `CUSTOM` profile and `GuardConfig` are
 **shipped** and their names are fixed. `CapabilityTier` is the one *(Phase-2)* sketch

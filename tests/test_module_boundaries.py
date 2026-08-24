@@ -154,7 +154,7 @@ def test_boundary_packages_do_not_import_each_other():
 
 def test_the_channels_package_imports_none_of_the_three():
     """``agent_core/channels/`` is a FOURTH SIBLING under the boundary rule
-    (docs/messaging-channel-plan.md §3.1): it holds the transport contract and the
+    (docs/plans/messaging-channel-plan.md §3.1): it holds the transport contract and the
     adapters, and it imports none of ``tools/``, ``providers/`` or ``routines/``.
 
     That is the same placement ``mcp_client.py`` took and for the same stated

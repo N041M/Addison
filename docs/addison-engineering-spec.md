@@ -1,4 +1,4 @@
-# Addison: Engineering Implementation Spec
+# Addison: engineering implementation spec
 
 **Audience: Claude Code (or any implementing engineer/agent). This is a build brief, not a menu of options; architecture decisions below are final for v1 unless flagged otherwise.**
 
@@ -94,7 +94,7 @@ Build order matters. Section 12 gives the exact sequence. Do not build the Routi
 
 ---
 
-## 1. Chosen Architecture
+## 1. Chosen architecture
 
 ### 1.1 Component diagram
 
@@ -203,7 +203,7 @@ places them in the architecture.
 
 ---
 
-## 2. Repository Layout
+## 2. Repository layout
 
 ```
 addison/
@@ -275,7 +275,7 @@ Module boundary rule: **`tools/`, `providers/`, and `routines/` never import fro
 
 ---
 
-## 3. Core Data Structures
+## 3. Core data structures
 
 All persisted structures live in SQLite. Schema below; Python dataclasses mirror these 1:1 in `agent_core/*/model.py` files.
 
@@ -640,7 +640,7 @@ blocking; [KNOWN-GAPS.md](KNOWN-GAPS.md) owns that question.
 
 ---
 
-## 4. Key Concepts
+## 4. Key concepts
 
 ### 4.1 ModelProvider abstraction
 
@@ -684,8 +684,8 @@ The orchestrator (§4.4) calls `model_router.resolve()` once per turn instead of
 
 **How a role gets selected, in practice (v1 mechanisms, all explicit, no silent auto-routing):**
 
-- **User toggle per message.** A small selector next to the input box (frontend, §7) lets the user pick "Cloud" or "Local" for the next message, defaulting to whatever they used last. **The `LOCAL` side is not a single model:** a user can configure several local models at once (e.g. a 14B vision model and an 8B text-only model) and the selector exposes a model dropdown within Local (item **B** below). This is the primary mechanism in v1: simple, visible, no hidden decision-making about where a message goes.
-- **Routine-level assignment.** A Routine (§6.2) can declare `model_role` on a step that involves model reasoning (e.g., a summarization step), so a privacy-sensitive Routine can be built once to always run locally, regardless of what the live chat's current toggle is set to. A step may also pin a specific local model by name (item B).
+- **User toggle per message.** A small selector next to the input box (frontend, §7) lets the user pick "Cloud" or "Local" for the next message, defaulting to whatever they used last. **The `LOCAL` side is not a single model:** a user can configure several local models at once (for example, a 14B vision model and an 8B text-only model) and the selector exposes a model dropdown within Local (item **B** below). This is the primary mechanism in v1: simple, visible, no hidden decision-making about where a message goes.
+- **Routine-level assignment.** A Routine (§6.2) can declare `model_role` on a step that involves model reasoning (for example, a summarization step), so a privacy-sensitive Routine can be built once to always run locally, regardless of what the live chat's current toggle is set to. A step may also pin a specific local model by name (item B).
 - **(A) Capability-gated input paths (v1).** Providers report `vision`/`audio` in `ProviderCapabilities` (§3). The orchestrator uses this to gate capability-specific input: if the user drops an image while the active model is text-only (`vision=False`), Addison says so plainly and offers to switch to a vision-capable model, instead of feeding an image to a model that can't see it and getting a hallucinated answer. In v1 this is a **warning + explicit switch**, never an automatic model change.
 - **(B) Multiple local models with an explicit picker (v1).** The `LOCAL` role may hold more than one configured Ollama model at once; the user selects which per message from the Local dropdown, and a Routine step can pin one by name. Still fully explicit: the user picks; Addison never picks for them in v1.
 
@@ -719,12 +719,12 @@ Setup for the LOCAL role is a distinct, explicit flow, not something enabled by 
 
 1. User opts in from Settings ("Run a model on this computer").
 2. Hardware check (RAM/VRAM, disk space) before offering any model (see design doc §7.3.2 for the plain-language sizing UX).
-3. Model download via Ollama, progress shown in-app. **More than one local model can be added**: each becomes a selectable entry under Local (item B, §4.1.1), e.g. a 14B vision model at ~12GB and an 8B text model at ~8GB.
+3. Model download via Ollama, progress shown in-app. **More than one local model can be added**: each becomes a selectable entry under Local (item B, §4.1.1), for example, a 14B vision model at ~12GB and an 8B text model at ~8GB.
 4. Once at least one local model is verified working, `ModelRole.LOCAL` becomes available in `ModelRouter.available_roles()` and the per-message Local picker appears (a model dropdown when several are configured).
 
 This is genuinely "post-setup" as the product framing requires: LOCAL is never available during the Setup Assistant conversation itself (design doc §7.5.1), since that flow already has its own free relay for onboarding; local model setup is a separate, later, user-initiated action once the user is already up and running.
 
-### 4.2 Tool Registry & risk tiers
+### 4.2 Tool registry and risk tiers
 
 ```python
 # agent_core/tools/registry.py
@@ -762,7 +762,7 @@ v1 tool set (register exactly these; see design doc §7.4.1 for rationale on eac
 
 **Profile note (§4.7):** *which* of these tools get registered (and whether any opt-in higher-risk tools are added on top) is chosen by the active Profile at startup. The Simple profile registers exactly the table above; the Developer profile may register additional opt-in tools. The registration-time undo check applies identically regardless of profile: a Profile decides *what* is registered, never *how* safety is enforced.
 
-### 4.3 Permission Gate
+### 4.3 Permission gate
 
 ```python
 # agent_core/permissions/gate.py
@@ -817,7 +817,7 @@ def run_turn(self, conversation: Conversation, requested_role: ModelRole | None 
 
 This same loop is reused, in a constrained form, by the Routine Engine (§6.4): a Routine run is essentially this loop with tool calls coming from a saved plan instead of live model output, still passing through the same `PermissionGate`, `ToolRegistry`, and now `ModelRouter` (a step's `model_role`, if set, is passed as `requested_role`).
 
-### 4.5 Rewind & Self-Repair
+### 4.5 Rewind and self-repair
 
 `agent_core/snapshots/undo_manager.py` implements the two mechanisms from the design doc (§7.9):
 
@@ -839,7 +839,7 @@ class UndoManager:
 
 Retention: a background job prunes `action_snapshots` older than the configured window (default 20 actions or 7 days): implement as a simple SQL `DELETE ... WHERE created_at < ?` on startup, no need for anything more sophisticated in v1.
 
-> **NARROWED to reverted rows, owner decision 2026-08-08**, adopting the recommendation in [`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) prerequisite 3, which owns the reasoning and the cost. The window above is unchanged and so is the "whichever keeps MORE wins" AND of its two arms, but the statement now deletes **only rows with `reverted = 1`** (the keep-set is computed over reverted rows too). An unreverted row is not history: it describes a change still on disk, and its `undo_payload` is the only way back from it. The Developer review surface lists exactly those rows and offers per-file revert. The consequence is stated rather than hidden: retention no longer bounds the unreverted subset, which is bounded instead where it is read (`listEdits`, capped in that plan). `prune()` had **zero call sites** until this decision; it is now called once per launch from `main.JsonRpcServer._ensure_built`, which is this section's "on startup" and the only point at which a prune cannot race an undo or a `record()`.
+> **NARROWED to reverted rows, owner decision 2026-08-08**, adopting the recommendation in [`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md) prerequisite 3, which owns the reasoning and the cost. The window above is unchanged and so is the "whichever keeps MORE wins" AND of its two arms, but the statement now deletes **only rows with `reverted = 1`** (the keep-set is computed over reverted rows too). An unreverted row is not history: it describes a change still on disk, and its `undo_payload` is the only way back from it. The Developer review surface lists exactly those rows and offers per-file revert. The consequence is stated rather than hidden: retention no longer bounds the unreverted subset, which is bounded instead where it is read (`listEdits`, capped in that plan). `prune()` had **zero call sites** until this decision; it is now called once per launch from `main.JsonRpcServer._ensure_built`, which is this section's "on startup" and the only point at which a prune cannot race an undo or a `record()`.
 
 ### 4.6 Setup Assistant mode
 
@@ -891,7 +891,7 @@ The Developer profile deliberately reuses surfaces that already exist for other 
 *(**A departure from that sentence, named here rather than left to be discovered,
 2026-07-25.** It describes every Developer surface built so far and stops describing
 the next one. The **review surface** in
-[`phase-3-review-surface-plan.md`](phase-3-review-surface-plan.md) (a file tree over
+[`phase-3-review-surface-plan.md`](plans/phase-3-review-surface-plan.md) (a file tree over
 the trusted roots, a read-only viewer, a diff of Addison's still-live edits, per-file
 revert) is the **first Developer surface that is not a reuse**. Nothing in the app
 renders a file tree or a diff today, so it is new frontend, new handlers in
@@ -915,11 +915,11 @@ not capability either: Monaco needs the webview CSP widened with `style-src
 > over-window sentence in `providers/base.py`). The design below holds and the five
 > hard rules hold unchanged. What shipped, what it does when a step fails, and the
 > three places it falls short of this section are owned by
-> [`context-budget-plan.md`](context-budget-plan.md); do not restate them here.
+> [`context-budget-plan.md`](plans/context-budget-plan.md); do not restate them here.
 
 **The problem.** A model's context window is a *per-request* token budget, not a per-session resource: every `provider.send()` replays the conversation, so long chats get linearly more expensive and slower each turn, degrade model attention, and eventually exceed the window outright. "Migrating to a new session" cannot escape this: a fresh conversation carrying the full transcript hits the same wall on its first request. The only real mechanisms are (a) summarize, (b) store externally and retrieve selectively, or (c) truncate. the continuation feature is a deliberate combination of all three; there is no fourth option, so no document should pretend otherwise.
 
-**What is built: the Context Budget Manager.** Orchestrator-level machinery (measurement in `orchestrator.py`, alongside the loop in §4.4; the decision at the turn boundary in `rpc/conversation.py`) that watches per-turn token usage against a threshold (e.g. ~70% of the resolved provider's `max_context_tokens`, per-provider via `capabilities()`, never hardcoded). When crossed, at the next turn boundary it:
+**What is built: the Context Budget Manager.** Orchestrator-level machinery (measurement in `orchestrator.py`, alongside the loop in §4.4; the decision at the turn boundary in `rpc/conversation.py`) that watches per-turn token usage against a threshold (for example, ~70% of the resolved provider's `max_context_tokens`, per-provider via `capabilities()`, never hardcoded). When crossed, at the next turn boundary it:
 
 1. produces a summary of the older portion of the conversation (a `model_router.resolve()` call, a Routine-style summarization step, so a privacy-sensitive user can have it run on `LOCAL`),
 2. starts a continuation conversation seeded with: that summary, the user-confirmed `memory_facts`, and the most recent K turns verbatim,
@@ -957,7 +957,7 @@ the floor written to make that structurally impossible. **[`SAFETY.md`](SAFETY.m
 states G3 and its current scope**; do not restate either here. That scope has been
 wrong in this file twice, in opposite directions: first a copy of the guarantee made
 without its OPEN-mode qualification, then that same qualification left asserted here
-after [step 5.5](step-5.5-containment-plan.md) removed the reason for it.
+after [step 5.5](plans/step-5.5-containment-plan.md) removed the reason for it.
 
 Distinct from **§4.5 Rewind & Self-Repair**, which undoes *tool actions* and
 truncates *conversation history*. The snapshot subsystem restores *Addison's own
@@ -979,7 +979,7 @@ fine-grained per-tool `undo()` (§4.5) *and* a whole-config restore (this sectio
 - **Verified-working marking.** A config is marked *verified-working* after a turn
   completes successfully against it, and **restore targets the last
   verified-working state**: the difference between real recovery and the friend's
-  dead end. *(Q4 resolved: "successful turn" = the turn's response was sent, i.e.
+  dead end. *(Q4 resolved: "successful turn" = the turn's response was sent, that is,
   `rpc/conversation.py` reached `_respond({"ok": True, …})`. A tool failure is
   deliberately not a turn failure. The mark does **not** flag the pre-change row:
   that config never ran; it captures the **current** config as a new verified row,
@@ -1082,7 +1082,7 @@ auto-grant scope, the workspace-trust boundary, the keyword-gate strictness. The
 user may **never** touch the floors: G1, G2, G3, and the undeletable-anchor rule
 are **absent from the Custom panel entirely**. The Custom safety contract: it
 lives deep behind extra confirmation; turning any guard *off* mints the
-undeletable anchor (§4.9); the floors simply cannot be switched off. *(§13 Q3
+undeletable anchor (§4.9); the floors cannot be switched off. *(§13 Q3
 (whether Custom is reachable from Simple directly or only via Developer) is
 **RESOLVED**, 2026-07-24, as the lean: reachable from any profile, deep and
 questioned. `profile.get` marks the Custom entry `advanced: true`; the frontend
@@ -1206,7 +1206,7 @@ quota-sharing, MCP/A2A-as-a-*gateway*, and 11-engine token compression.
 > (phase 3); and output handling (one shared budget, redaction before every cut, and
 > a plain line naming what Addison will not carry) in phase 4. **Phase 5 is a recorded
 > later option, not a missing piece:** stdio under containment, and SAFE admission via
-> a promoted allowlist. [step-7-mcp-plan.md](step-7-mcp-plan.md) owns the phase order
+> a promoted allowlist. [step-7-mcp-plan.md](plans/step-7-mcp-plan.md) owns the phase order
 > and the step's two decisions: **transport is HTTP only for v1** (answered
 > 2026-08-06; a server row stores a URL, never a command), and MCP is **dev-only for
 > v1**, which defers amendment §13 Q6 (the exact SAFE constraint, and how MCP tool
@@ -1234,7 +1234,7 @@ Addison works with MCP as a **client**: it *consumes* external MCP servers/tools
 
 ---
 
-## 5. Credentials & Key Handling
+## 5. Credentials and key handling
 
 - **BYOK keys**: entered in the frontend, sent via IPC to the Rust shell, written to the OS keychain (`shell/src-tauri/src/keychain.rs`). The Agent Core requests the key from the shell (via a dedicated IPC call, not a shared file) only at the moment it's needed for a `DirectAPIProvider` call, and does not persist it in its own process memory beyond that call.
 - **Setup Assistant relay keys**: live only in the relay's own server-side secret store (external to this repo entirely). The desktop app and Agent Core never possess them, by construction. There is no code path in this repository that could leak them, because they never enter it.
@@ -1252,7 +1252,7 @@ go to the keychain, their non-secret config is what gets snapshotted.
 
 ---
 
-## 6. Automation / Routine Engine
+## 6. Automation / routine engine
 
 This is the section implementing "small scripts that automate features the user wants," scoped to fit the security model in §9 of the design doc.
 
@@ -1306,7 +1306,7 @@ Already shown in §3 as Python dataclasses; here's the JSON form as saved in `ro
 Notes on the schema:
 - `args_template` values may reference `{{variable_name}}` (user-supplied at run time) or `{{step_id.result}}` (output of an earlier step in the same run), resolved by the engine before each tool call, never interpreted as code.
 - `on_failure` is one of `"abort"` (stop the whole run, surface the error), `"skip"` (continue to the next independent step), or `"ask_user"` (pause and ask, same UI pattern as a permission card).
-- `model_role`, when a step involves model reasoning rather than a pure tool call, pins that step to `"primary"` or `"local"` regardless of the live session's current toggle (§4.1.1). In the example above, `step_2`'s summarization/extraction work is pinned to run locally, e.g. because invoice contents are sensitive, while `step_3` is a plain tool call with no model involved and so has no `model_role` at all.
+- `model_role`, when a step involves model reasoning rather than a pure tool call, pins that step to `"primary"` or `"local"` regardless of the live session's current toggle (§4.1.1). In the example above, `step_2`'s summarization/extraction work is pinned to run locally, for example, because invoice contents are sensitive, while `step_3` is a plain tool call with no model involved and so has no `model_role` at all.
 - `model_id`, when set, pins the step to a specific named model regardless of `model_role`: the substrate the Model Cascade module uses to send a "draft" step to a cheap model and a "refine" step to a strong one (§6.8).
 - There is no field anywhere in this schema for raw code, shell commands, or arbitrary expressions; this is intentional and should stay that way (§6.1).
 
@@ -1384,7 +1384,7 @@ Each run writes a `routine_runs` row with a step-by-step log; this is what backs
 
 `RoutineLibrary.tsx` lists saved Routines with: name, description, last-run time, a "Run now" button (prompts for any variables without defaults, then calls the engine), and an edit/delete action. Editing a Routine in v1 is limited to name, description, and variable defaults; editing the step sequence itself is a v2 feature; for v1, "delete and recreate via conversation" is the supported path for structural changes, which is consistent with keeping the authoring surface conversational rather than a form-based step editor.
 
-### 6.6 Example Routines (for grounding, not literal fixtures)
+### 6.6 Example routines (for grounding, not literal fixtures)
 
 - **"Summarize my weekly PDFs"**: `read_file` (repeated per dropped file) → model summarization (not a tool call, handled by the LLM turn itself) → `save_file`.
 - **"Draft my Monday check-in email"**: `read_file` (a notes file) → `draft_message`. No `send` step exists because no send-capable tool exists in v1 (design doc §7.4.1); the Routine opens a draft in the user's mail client, same as live conversation would.
@@ -1402,7 +1402,7 @@ while enabling the use case:
 > **Addison authors; the OS runs; Addison never triggers itself. Armed
 > actions require a user-typed keyword: a per-automation nonce Addison shows and
 > the person retypes (decided 2026-08-07;
-> [step-8-automation-plan.md](step-8-automation-plan.md) §3 owns it).**
+> [step-8-automation-plan.md](plans/step-8-automation-plan.md) §3 owns it).**
 
 - **Author, don't fire.** Addison may **write and set up** OS-level automation (a
   `launchd`/`cron` entry, a small watcher script), exactly as Claude Code can
@@ -1432,7 +1432,7 @@ in SAFE) is untouched.
 
 ### 6.8 Model cascade module (draft → refine): a module, not core
 
-A common request is a "cheap model drafts, strong model verifies and polishes" pipeline (e.g. Haiku drafts code, Opus refines it). Addison supports this **as an optional module composed from Routines, not as logic in the orchestrator or `ModelRouter`.** A cascade is literally a two-step Routine:
+A common request is a "cheap model drafts, strong model verifies and polishes" pipeline (for example, Haiku drafts code, Opus refines it). Addison supports this **as an optional module composed from Routines, not as logic in the orchestrator or `ModelRouter`.** A cascade is literally a two-step Routine:
 
 1. a `draft` step: a model-reasoning step pinned via `model_id` (§6.2) to a cheap model;
 2. a `refine` step: `depends_on` the draft, pinned to a strong model, taking `{{step_1.result}}` as input.
@@ -1446,7 +1446,7 @@ Because it's a Routine, it inherits everything: the same `ToolRegistry` and `Per
 
 ---
 
-## 7. Frontend ↔ Agent Core IPC Contract
+## 7. Frontend ↔ Agent Core IPC contract
 
 JSON-RPC 2.0 methods, implemented in `agent_core/main.py` and called from `shell/src/ipc/client.ts`. Representative subset:
 
@@ -1468,17 +1468,17 @@ JSON-RPC 2.0 methods, implemented in `agent_core/main.py` and called from `shell
 | `model.startLocalSetup` / `model.localSetupProgress` | Frontend ↔ Core | Drives the Ollama hardware-check → download → verify flow (§4.1.2) |
 | `keychain.getDeviceKey` / `keychain.getProviderKey` | Core → Shell (Rust-internal, not exposed to frontend) | §5 |
 
-Keep `protocol.py` (Agent Core) and `types/protocol.ts` (frontend) hand-synced for v1; a code-generation step (e.g., generating TS types from the Python dataclasses) is a reasonable Phase 3 improvement, not a v1 requirement.
+Keep `protocol.py` (Agent Core) and `types/protocol.ts` (frontend) hand-synced for v1; a code-generation step (for example, generating TS types from the Python dataclasses) is a reasonable Phase 3 improvement, not a v1 requirement.
 
 *(Phase 3 is no longer packaging-and-tooling only. Since 2026-07-25 it also carries
 the Developer **review surface** (file tree, read-only viewer, diff of Addison's
-live edits, per-file revert), scoped in `docs/phase-3-review-surface-plan.md`,
+live edits, per-file revert), scoped in `docs/plans/phase-3-review-surface-plan.md`,
 sequenced after Phase-2 steps 6–8, and built 2026-08-08. See the Phase-3 note at the
 end of §11.)*
 
 ---
 
-## 8. Security Constraints (non-negotiable, restated for the implementer)
+## 8. Security constraints (non-negotiable, restated for the implementer)
 
 These are hard constraints, not preferences; flag to the user if any of these appear to conflict with a specific implementation request rather than silently working around them:
 
@@ -1527,7 +1527,7 @@ working around it.
 |---|---|
 | **G1** | API keys never reach the frontend/webview or SQLite; keychain-only. **Reinforced:** excluded from every snapshot, including the Custom-mode undeletable anchor (§4.9, §5). |
 | **G2** | No autonomous self-triggering / scheduling *by Addison*. **Reinterpreted (§6):** Addison may *author* OS-run automation; the OS runs it; Addison never fires it. |
-| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** Enforced *within* the database (triggers, sidecars, gate-exempt RPC) and, since [step 5.5](step-5.5-containment-plan.md) shipped 2026-07-31, at the process edge as well, so it holds in OPEN too. The 2026-07-26 scope correction that made this row read *"overclaimed in OPEN"* is spent. [`SAFETY.md`](SAFETY.md) owns the floor's scope and the two edges it still does not reach. |
+| **G3** | Guaranteed one-action rollback to a last-verified-working state; the restore path is itself unbreakable (§4.9). **New.** Enforced *within* the database (triggers, sidecars, gate-exempt RPC) and, since [step 5.5](plans/step-5.5-containment-plan.md) shipped 2026-07-31, at the process edge as well, so it holds in OPEN too. The 2026-07-26 scope correction that made this row read *"overclaimed in OPEN"* is spent. [`SAFETY.md`](SAFETY.md) owns the floor's scope and the two edges it still does not reach. |
 | **Anchor** (**G4** in `CLAUDE.md` and in code; the two names are the same rule) | Turning a guard *off* in Custom mode mints an **undeletable** snapshot that **records the app build it was minted on** (a reference, not the binary; keys still excluded). Restoring a binary is a Phase-3 updater item (owner decision 2026-07-20, §4.9). **New.** |
 
 **Reinterpreting invariant 4 (widgets).** SAFE invariant 4 said "widgets are
@@ -1562,7 +1562,7 @@ constraint open; see §13 Q6.)
 
 ---
 
-## 9. Testing Strategy
+## 9. Testing strategy
 
 - **Tool Registry**: unit test that registering a MEDIUM/HIGH-risk tool without `undo()` raises; this is the single most important test in the codebase, since it's the mechanical enforcement of the entire safety model.
 - **Orchestration loop**: test with a mock `ModelProvider` that returns scripted tool-call sequences, asserting the permission gate is consulted before every execution.
@@ -1587,7 +1587,7 @@ Explicitly out of scope for the initial implementation pass; do not add these wi
   *build-order* instruction for the first working loop (§11 step 4), and it is spent.
 - Automatic task-based model routing / auto-switching: **planned for v2** (§4.1.1), deliberately deferred; v1 routing is explicit/user-selected only. (Multiple local models with an explicit picker, item B, *is* in v1; only the *automatic* choice among them is v2.)
 - The Model Cascade module (draft → refine, §6.8): **planned for v2**; v1 ships only its substrate (`RoutineStep.model_id`, per-step named-model pinning). It is a Routine-based *module*, never orchestrator/router core.
-- The Context Budget Manager / automatic long-conversation continuation: **no longer deferred. BUILT 2026-08-14** (§4.8, and [`context-budget-plan.md`](context-budget-plan.md) owns what shipped). Still orchestrator machinery only, never a registry tool.
+- The Context Budget Manager / automatic long-conversation continuation: **no longer deferred. BUILT 2026-08-14** (§4.8, and [`context-budget-plan.md`](plans/context-budget-plan.md) owns what shipped). Still orchestrator machinery only, never a registry tool.
 - Messaging channel integrations (Telegram/WhatsApp)
 - Routine step-*editing* UI (delete-and-recreate is sufficient for v1). The Developer profile (§4.7) may expose a *read-only* view of the declarative plan, but structural step editing stays v2.
 - Any form of Routine scheduling/triggers (§6.7)
@@ -1618,7 +1618,7 @@ the amendment; the boundaries are deliberately narrow:
 
 ---
 
-## 11. Implementation Order
+## 11. Implementation order
 
 Build in this sequence; each step should be independently testable before moving to the next:
 
@@ -1660,7 +1660,7 @@ of that pass); code then follows in **dependency order, safety floor first**:
    step 5 shipped without: `run_command` moved behind the ShellBridge and under a
    Seatbelt profile generated from the live trusted roots, a pre-gate denylist at
    all three dispatch sites, output redaction, and the `tool_audit` trail step 7
-   depends on. **Shipped 2026-07-31**; [plan](step-5.5-containment-plan.md).
+   depends on. **Shipped 2026-07-31**; [plan](plans/step-5.5-containment-plan.md).
 6. **Widget capability tiers + expanded vocabulary**: safe interactive kinds
    (to-do/checklist, note, timer) with trusted renderers + safe storage (buildable
    in all modes); capability-tier gating; make `primary.txt` capability-aware
@@ -1669,7 +1669,7 @@ of that pass); code then follows in **dependency order, safety floor first**:
    hard-coded list (§3 note, §4.10 head note).
 7. **MCP client integration**: external tools through the registry + gate,
    mode-scoped (§4.12). **DONE FOR v1, phases 1–4 of five, 2026-08-06 to
-   2026-08-07**; phase 5 is a recorded later option; [plan](step-7-mcp-plan.md).
+   2026-08-07**; phase 5 is a recorded later option; [plan](plans/step-7-mcp-plan.md).
 8. **Automation keyword gate** + author-OS-run automation (§6). **COMPLETE:
    phases 1–3 shipped 2026-08-07** (the fence, authoring, the gate and arming) **and
    phase 4 on 2026-08-08** (state honesty). ROADMAP owns status.
@@ -1697,7 +1697,7 @@ on it ([`KNOWN-GAPS.md`](KNOWN-GAPS.md) owns that question).
 
 This spec has described Phase 3 as packaging work only: installer signing and
 notarisation, the auto-updater, and the IPC codegen improvement noted at the end of
-§7. **`docs/phase-3-review-surface-plan.md` (approved 2026-07-25, BUILT 2026-08-08)
+§7. **`docs/plans/phase-3-review-surface-plan.md` (approved 2026-07-25, BUILT 2026-08-08)
 adds a second track to that phase:** a Developer/OPEN **review surface**, a file
 tree over trusted roots, a read-only viewer, a real diff of every edit Addison has
 made that is still live on disk, and per-file revert.

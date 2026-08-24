@@ -6,7 +6,7 @@ plain language before it touches anything, and it can undo what it did.**
 [![ci](https://github.com/N041M/Addison/actions/workflows/ci.yml/badge.svg)](https://github.com/N041M/Addison/actions/workflows/ci.yml)
 ![local-first](https://img.shields.io/badge/local--first-SQLite%20on%20your%20disk-B4A9F5)
 ![keys](https://img.shields.io/badge/API%20keys-OS%20keychain%20only-B4A9F5)
-![platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Tauri%202-2e2e33)
+![platform](https://img.shields.io/badge/platform-macOS%20%C2%B7%20Windows%20%28porting%29%20%C2%B7%20Tauri%202-2e2e33)
 
 ![Addison's chat window: a three-column shell with the conversation in the middle, a composed message in the composer, and the first-run setup block](docs/screenshots/hero.png)
 
@@ -286,7 +286,7 @@ topic:
   models. It was folded into the documents above and retired on 2026-07-27, and
   is kept for the story behind those decisions rather than to settle questions
   about them.
-- [docs/phase-3-review-surface-plan.md](docs/phase-3-review-surface-plan.md),
+- [docs/plans/phase-3-review-surface-plan.md](docs/plans/phase-3-review-surface-plan.md),
   the plan for the Developer review surface.
 
 How it looks:

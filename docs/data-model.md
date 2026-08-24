@@ -235,7 +235,7 @@ erDiagram
   (owner decision 2026-08-08). An unreverted row describes a change still on disk and its
   `undo_payload` is the only way back from it, so retention never deletes one; the
   unreverted set is bounded where it is read instead. `docs/addison-engineering-spec.md`
-  §4.5 and `docs/phase-3-review-surface-plan.md` prerequisite 3 own that decision.
+  §4.5 and `docs/plans/phase-3-review-surface-plan.md` prerequisite 3 own that decision.
   *(2026-08-08, review surface Build §2/§3.)* The table gained **its first index**,
   `idx_action_snapshots_tool_reverted` on `(tool_id, reverted, created_at)`, because the
   Developer review surface reads exactly the subset retention no longer collects
@@ -243,7 +243,7 @@ erDiagram
   grows for the life of an install. `write_project_file` rows also carry
   **`wrote_sha256`** in `undo_payload`: the digest of what Addison put on disk, so the
   surface can tell a file as Addison left it from one edited since. No migration and no
-  dataclass change (the column is TEXT holding JSON), so a row written before it simply
+  dataclass change (the column is TEXT holding JSON), so a row written before it
   lacks the key and the surface answers "can't tell" rather than guessing. **`wrote_ident`**
   arrived the same way *(2026-08-08)*: `st_dev`+`st_ino` of the file the write actually
   landed on, taken while that is still the truth about it. Two rows are one revert chain
@@ -519,7 +519,7 @@ erDiagram
   (Addison is never an MCP server/gateway). A row is a plain `name` the person chose, the
   server's `url`, `transport`, `enabled` and `created_at`. It was inert when it shipped;
   since phases 2–4 (2026-08-07) it is what a check connects to and what a call's address
-  is resolved from at the moment of use. [`step-7-mcp-plan.md`](step-7-mcp-plan.md) owns
+  is resolved from at the moment of use. [`step-7-mcp-plan.md`](plans/step-7-mcp-plan.md) owns
   the phase order.
   - **`url`, never a command.** Transport is **HTTP only for v1** (owner decision
     2026-08-06): `transport` is CHECK-constrained to `http`, and there is no column that
@@ -554,7 +554,7 @@ erDiagram
   person can talk to Addison through from their phone. A row is a `kind` (the
   transport), a plain `name` they chose, an off switch, what to do with a message that
   arrived while the Mac was asleep, and `created_at`.
-  [`messaging-channel-plan.md`](messaging-channel-plan.md) owns the phase order and the
+  [`messaging-channel-plan.md`](plans/messaging-channel-plan.md) owns the phase order and the
   eleven owner decisions of 2026-08-22.
   - **`kind` carries a CHECK and there is no command column**, on the `mcp_servers`
     terms: the schema is where "this row can never name a program" is enforced. A
@@ -614,7 +614,7 @@ erDiagram
   to launchd, through the shell, behind a typed per-automation code. A row is
   still only a record: **no column here says whether it is armed** (see below).
 
-  [`step-8-automation-plan.md`](step-8-automation-plan.md) owns the phase order.
+  [`step-8-automation-plan.md`](plans/step-8-automation-plan.md) owns the phase order.
   - **There is no `armed` column, and its absence is the design** (plan §5.6). Armed
     truth lives in the OS and is asked for when the surface loads. A stored flag is
     exactly what a **one-action G3 restore** would put back, and a restore can never

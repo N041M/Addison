@@ -11,7 +11,7 @@ nothing was watching the prompt.
 
 The prompt is prose about code. So it is checked against the code that actually
 decides the answer: `agent_core/widgets.py`'s closed kind list, its stat-source
-whitelist, and the tool registry.
+allowlist, and the tool registry.
 
 ## Adding a widget kind
 
@@ -178,7 +178,7 @@ _READS_AS_SCHEDULING = re.compile(r"\bschedule|\bcron\b|\brecurring\b|\bevery da
 # THE SET DID NOT GROW WHEN PHASE 3 LANDED (2026-08-07), exactly as this comment
 # promised: `arm_automation` genuinely makes "the app cannot schedule anything"
 # false, so `primary.txt`'s sentence changed instead — the plan
-# (docs/step-8-automation-plan.md §7) registers it among that commit's edits. This
+# (docs/plans/step-8-automation-plan.md §7) registers it among that commit's edits. This
 # set keeps its narrow meaning: a tool that WRITES a schedule down and can run
 # nothing, which is still exactly what `create_automation` is.
 _AUTHORS_A_SCHEDULE_BUT_RUNS_NOTHING = {"create_automation"}
@@ -288,7 +288,7 @@ def test_the_leak_check_reads_an_honest_limit_as_a_limit():
 
 
 def test_the_prompt_names_every_stat_source():
-    """`STAT_SOURCES` is a whitelist, so a source added there and not here is a
+    """`STAT_SOURCES` is an allowlist, so a source added there and not here is a
     readout the person is never told exists — the same silent-omission shape as a
     missing kind, one layer down.
     """

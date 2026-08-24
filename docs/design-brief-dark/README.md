@@ -27,13 +27,13 @@
 ## Overview
 A redesign of Addison, a local-first AI assistant desktop app (macOS). Core ideas: calm, text-first dark UI; everything reversible ("everything can be undone"); a left sidebar of chats, a center chat column, a right rail of ambient widgets, and full-page surfaces (Settings, Tools, Snapshots, Build-a-widget) that replace the chat column. Signature motion: a character-scramble text animation and small fade/rise transitions.
 
-## About the Design Files
+## About the design files
 The files in this bundle are **design references created in HTML**, a working prototype showing intended look and behavior, not production code to copy directly. Recreate this design in the target codebase's existing environment (Electron/React, Swift/AppKit, etc.) using its established patterns. If no environment exists yet, choose the stack that fits a macOS-style desktop app and implement the design there.
 
 - `Addison Prototype v2.dc.html`: the full prototype (open in a browser; `support.js` must sit next to it). All layout/styling is inline in the markup; all behavior is in the `<script data-dc-script>` class at the bottom.
 
 ## Fidelity
-**High-fidelity.** Colors, type, spacing, copy, and motion are final intent. Recreate pixel-perfectly; where the real app already has equivalents (e.g. native menus), match the prototype's styling.
+**High-fidelity.** Colors, type, spacing, copy, and motion are final intent. Recreate pixel-perfectly; where the real app already has equivalents (for example, native menus), match the prototype's styling.
 
 ## Design Tokens
 Colors (dark theme only):

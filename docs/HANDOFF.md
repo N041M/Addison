@@ -21,6 +21,16 @@ unusual and green gates are explicitly not it.
 
 ## Before you touch anything
 
+**`docs/plans/` is not in this repository.** Twelve design documents — every
+`*-plan.md` — were bundled there and gitignored on 2026-08-24 (owner decision). If
+your clone does not have the folder, links into it from `CLAUDE.md`, `ROADMAP.md`,
+`SAFETY.md`, `KNOWN-GAPS.md` and the source comments will not open, and ten rows in
+`tests/doc_claims.py` name an owner document you cannot read. The gates stay green
+either way — [`README.md`](README.md)'s Plans section says exactly what that green
+does and does not cover, and `BUNDLED_PLANS` in `tests/test_docs_drift.py` lists
+what is missing. Ask the owner for the folder before doing design work.
+
+
 ```bash
 ./scripts/gates.sh          # every gate, exactly as CI runs them
 ```
@@ -47,7 +57,7 @@ Two things it cannot check, both learned the hard way the same day:
 
 **START HERE: the manual real-Telegram pass.** Messaging channels phases 1–3 are
 BUILT and merged (2026-08-22, PRs #143–#145;
-[`messaging-channel-plan.md`](messaging-channel-plan.md) owns the design and the
+[`messaging-channel-plan.md`](plans/messaging-channel-plan.md) owns the design and the
 eleven answered owner decisions), and **nothing in the tree has ever spoken to
 real Telegram** — every test runs against `httpx.MockTransport` and Telegram's
 published limits. The pass needs the OWNER'S hands for one step: a bot token from

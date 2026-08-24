@@ -1,4 +1,4 @@
-"""MCP output handling — step 7, PHASE 4 (docs/step-7-mcp-plan.md §4.4).
+"""MCP output handling — step 7, PHASE 4 (docs/plans/step-7-mcp-plan.md §4.4).
 
 Phase 3 put a server's answer in front of a model, redacted and cut at 8000
 characters, and read only the parts of it that were plain text. Phase 4 owns

@@ -399,7 +399,7 @@ export function SettingsPage({
           Developer/Custom gate as Tool servers, and it sits beside it because both
           answer "what may reach Addison". The privacy sentence comes first and every
           time, and the standing list of what a phone may ask for comes second
-          (docs/messaging-channel-plan.md §3.12).
+          (docs/plans/messaging-channel-plan.md §3.12).
 
           `onAskAddison` is what "Ask this here" uses on a waiting request: it writes
           the person's own sentence into the composer and returns to chat, where they
