@@ -417,7 +417,11 @@ mod tests {
         // time in the same repo, so it gets a source-level pin rather than a
         // comment. Coarse on purpose: it asserts ORDER, which is the property, and
         // not the surrounding shape, which is free to change.
-        let source = include_str!("agent_process.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("agent_process.rs").replace("\r\n", "\n");
         let start = source
             .find("async fn handle_line")
             .expect("handle_line must exist for this test to mean anything");

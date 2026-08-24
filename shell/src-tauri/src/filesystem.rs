@@ -1766,7 +1766,11 @@ mod tests {
         // so the last link is pinned at the source, the same way the IPC pump's
         // is. Coarse on purpose: it asserts the call exists, which is the property
         // no runtime assertion here can reach.
-        let source = include_str!("filesystem.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("filesystem.rs").replace("\r\n", "\n");
         let start = source
             .find("pub fn addison_data_dirs")
             .expect("addison_data_dirs must exist");
@@ -2315,7 +2319,11 @@ mod tests {
         // `File::open` on a FIFO never return at all and the size ceiling cannot see it
         // (`len()` on a pipe is 0). No runtime assertion can tell an early check from a
         // late one — a late one HANGS rather than failing — so the order is pinned here.
-        let source = include_str!("filesystem.rs");
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("filesystem.rs").replace("\r\n", "\n");
         for (name, sized_with, opens_with) in [
             ("fn read_workspace_path", "stat_on_disk", "std::fs::read("),
             ("fn capture_prior_text", "stat_on_disk", "std::fs::read("),
@@ -3296,6 +3304,10 @@ mod tests {
         let _ = std::fs::remove_file(&fifo);
     }
 
+    // Unix-only for its FIXTURE: `/dev/null` is the device node, and Windows has
+    // no path that names one. The guard itself (`refuse_non_regular_file`) is
+    // portable and runs there. Same rule as the symlink gates above.
+    #[cfg(unix)]
     #[test]
     fn the_undo_write_back_refuses_a_device_node_and_a_directory_but_still_creates_and_deletes() {
         // The other three thirds of the same guard, and the two halves that must NOT be

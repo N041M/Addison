@@ -2947,14 +2947,22 @@ mod tests {
     /// The body of one top-level item in this file, for the source-level backstops.
     /// Two of them exist because the wiring they check cannot be reached in-process:
     /// the real paths need an OS keychain, and `cargo test` must never touch one.
-    fn item_source(signature: &str) -> &'static str {
-        let source = include_str!("keychain.rs");
+    fn item_source(signature: &str) -> String {
+        // CRLF-normalised: git checks out CRLF on Windows, so a `\n`-anchored
+        // search over the raw bytes finds nothing there. `.gitattributes` also
+        // pins the checkout to LF; this line is what keeps the pin from being
+        // the only thing standing between the gate and a silent pass.
+        let source = include_str!("keychain.rs").replace("\r\n", "\n");
         let start = source
             .find(signature)
             .unwrap_or_else(|| panic!("{signature} moved — re-point this test"));
         let body = &source[start..];
         let end = body[1..].find("\nfn ").expect("no following item") + 1;
-        &body[..end]
+        // A `String` rather than a `&'static str`: the CRLF normalisation above
+        // makes an owned copy, and nothing can be borrowed out of it past the end
+        // of this function. Callers only ever `.contains()`, so the copy costs
+        // nothing they notice.
+        body[..end].to_string()
     }
 
     #[test]

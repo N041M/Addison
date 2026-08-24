@@ -46,6 +46,8 @@ from agent_core.policy import (
     PolicyMode,
     _derived_data_dir,
     _automation_roots,
+    _command_tokens,
+    _drive_qualified,
     _expand_automation_dir,
     command_arms_automation,
     command_denied_path,
@@ -630,6 +632,96 @@ def test_a_fence_entry_this_platform_cannot_place_never_reaches_the_roots():
     assert roots, "the fence must not be empty on any platform this runs on"
     for root in roots:
         assert os.path.isabs(root), root
+
+
+def test_an_attached_short_flag_still_names_a_windows_path():
+    """`grep -fC:\\Users\\x/.ssh/id_rsa needle` must still name the credential store.
+
+    THE BUG THIS PINS, found by the Windows floors job on its first ever run
+    (2026-08-24). `_command_tokens` looked for the first `/`, `~` or `$` to find
+    where the path starts inside an attached short flag. A Windows path begins with
+    none of them — it begins with a drive — so the search walked PAST
+    `C:\\Users\\x` and cut at the first `/` INSIDE the path, leaving
+    `/.ssh/id_rsa`, which resolves nowhere. An attached short flag therefore walked
+    straight through the credential refusal on that platform, and the macOS suite
+    could not see it because `~` expands to a `/`-leading path here.
+
+    Runs everywhere, because `_command_tokens` is pure text: the token is written
+    out in its Windows spelling rather than built from `expanduser`, which is what
+    lets the machine that has the bug and the machine that does not both check it.
+    """
+    tokens = _command_tokens(r"grep -fC:\Users\x/.ssh/id_rsa needle")
+    assert r"C:\Users\x/.ssh/id_rsa" in tokens, tokens
+
+    # ...and the POSIX spelling is untouched, which is the half a widening fix
+    # breaks. The first version of this fix folded the new starting points into
+    # `min(positions)` and stopped naming `/etc/passwd` here, because a backslash
+    # is a legal filename character on POSIX and came earlier in the string.
+    assert "/etc/passwd" in _command_tokens(r"grep -fa\b/etc/passwd needle")
+    assert "/etc/passwd" in _command_tokens("grep -f/etc/passwd needle")
+
+
+def test_a_rooted_path_with_no_drive_is_pinned_to_homes_drive():
+    """`/` names the root of HOME's drive, not of whatever drive a process sits on.
+
+    `os.path.isabs("/")` answers True on Windows and is wrong about what it means:
+    the path is DRIVE-relative, so `realpath` resolved it against the Agent Core's
+    own current directory. On the CI runner the checkout is on `D:` while the data
+    directory is on `C:`, so `rm -rf /` did not contain the recovery floor and the
+    CONTAINS direction — the only thing under `rm -rf ~` on a platform with no
+    kernel confinement — missed it entirely. Which drive the floor protected
+    depended on where the process happened to be started.
+
+    Both arms run here because `_drive_qualified` takes the platform as an
+    argument. That is the rule `kernel_confines_writes` set, and the reason is this
+    exact class of bug: an arm that only executes on the other operating system is
+    an arm nothing has ever run.
+    """
+    # Windows: a rooted, driveless path is pinned to HOME's drive.
+    assert _drive_qualified("/", r"C:\Users\x", windows=True) == r"C:/"
+    assert _drive_qualified(r"\Users", r"C:\Users\x", windows=True) == r"C:\Users"
+    # A path that already names a drive is left exactly as it is.
+    assert _drive_qualified(r"D:\work", r"C:\Users\x", windows=True) == r"D:\work"
+    # A relative token is not this function's business; the caller joins it to HOME.
+    assert _drive_qualified("notes.txt", r"C:\Users\x", windows=True) == "notes.txt"
+    # A home directory with no drive at all cannot qualify anything, and says so by
+    # changing nothing rather than by inventing a letter.
+    assert _drive_qualified("/", "", windows=True) == "/"
+
+    # POSIX: byte-for-byte unchanged, which is what makes this fix free here.
+    assert _drive_qualified("/", "/Users/x", windows=False) == "/"
+    assert _drive_qualified("/etc/passwd", "/Users/x", windows=False) == "/etc/passwd"
+
+
+def test_absolute_form_actually_calls_the_drive_qualifier():
+    """THE WIRING, not the function — HANDOFF trap 3, caught here by its own
+    mutation before it could ship.
+
+    `test_a_rooted_path_with_no_drive_is_pinned_to_homes_drive` proves
+    `_drive_qualified` works and proves NOTHING about whether `_absolute_form`
+    still consults it. Measured: deleting the call leaves that test, and the whole
+    suite, green on this machine — because every assertion about the live path
+    needs a Windows filesystem to see the difference. That is the fourth time this
+    repository has moved the untested part to the caller by purifying a function
+    for testability, so it gets a source pin.
+
+    Matches the CALL and not the word: an earlier pin in this tree passed under its
+    own mutation because the deleted line left a comment behind that still said the
+    function's name.
+    """
+    source = (pathlib.Path(__file__).resolve().parent.parent / "agent_core" / "policy.py").read_text(
+        encoding="utf-8"
+    )
+    start = source.find("def _absolute_form")
+    assert start != -1, "_absolute_form moved — re-point this test"
+    body = source[start:]
+    end = body.find("\ndef ", 1)
+    body = body[:end]
+    assert "_drive_qualified(expanded" in body, (
+        "_absolute_form must CALL _drive_qualified — without it a rooted, driveless "
+        "path resolves against whichever drive the Agent Core happens to be on, and "
+        "the CONTAINS direction stops covering the recovery floor on Windows:\n" + body
+    )
 
 
 def test_the_windows_fence_is_whole_on_windows():

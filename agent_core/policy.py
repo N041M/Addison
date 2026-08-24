@@ -38,6 +38,7 @@ PolicyMode for the ExecutionContext, so the dependency runs one way only).
 from __future__ import annotations
 
 import fnmatch
+import ntpath
 import os
 import re
 import sys
@@ -561,11 +562,32 @@ def _command_tokens(command: str) -> list[str]:
             # ``if positions`` and not ``min(positions) > 0``: the de-dashed token
             # can START with the path character (``-/etc/x`` -> ``/etc/x``), and
             # requiring a non-zero index dropped exactly that candidate. Index 0
-            # simply means the whole de-dashed token is the path.
+            # means the whole de-dashed token is the path.
+            #
+            # A WINDOWS PATH BEGINS WITH NONE OF ``/~$``. It begins with a drive
+            # (``C:\``) or a bare backslash, so this search used to walk PAST the
+            # drive and cut at the first ``/`` INSIDE the path:
+            # ``-fC:\Users\x/.ssh/id_rsa`` became ``/.ssh/id_rsa``, which resolves
+            # nowhere, and an attached short flag walked straight through the
+            # credential refusal on that platform. Found by the Windows floors job
+            # on its first run (2026-08-24), which is what that job is for.
+            #
+            # EVERY START, NOT THE EARLIEST ONE. The first fix appended
+            # ``stripped[min(positions):]`` with the new positions folded in, and
+            # that LOSES coverage rather than adding it: on POSIX a backslash is a
+            # legal filename character, so ``-fa\b/etc/passwd`` would have cut at
+            # the backslash and stopped naming ``/etc/passwd``. Appending one
+            # candidate per start can only widen the set, which is this function's
+            # stated bargain — an extra token costs one comparison, a missed one is
+            # a hole.
             stripped = raw.lstrip("-")
-            positions = [stripped.find(c) for c in "/~$" if c in stripped]
-            if positions:
-                candidates.append(stripped[min(positions):])
+            positions = {stripped.find(c) for c in "/~$" if c in stripped}
+            if "\\" in stripped:
+                positions.add(stripped.find("\\"))
+            drive = _DRIVE_PREFIX.search(stripped)
+            if drive is not None:
+                positions.add(drive.start())
+            candidates.extend(stripped[start:] for start in sorted(positions))
         for candidate in candidates:
             for form in (candidate.strip("'\"`,"), _QUOTE_CHARS.sub("", candidate).strip(",")):
                 if form and form not in tokens:
@@ -585,9 +607,54 @@ def _absolute_form(token: str) -> str:
             expanded = os.path.expanduser("~") + expanded[len(name):]
             break
     expanded = os.path.expanduser(expanded)
+    expanded = _drive_qualified(expanded, os.path.expanduser("~"), os.name == "nt")
     if not os.path.isabs(expanded):
         expanded = os.path.join(os.path.expanduser("~"), expanded)
     return expanded
+
+
+#: ``C:\`` or ``C:/`` at the start of what is left of a de-dashed token.
+_DRIVE_PREFIX = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def _drive_qualified(path: str, home: str, windows: bool) -> str:
+    """A rooted-but-driveless Windows path, pinned to HOME's drive. Unchanged
+    everywhere else.
+
+    ``/`` IS NOT ABSOLUTE ON WINDOWS, whatever ``os.path.isabs`` says about it. It
+    is DRIVE-relative: it names the root of whichever drive the process happens to
+    be on, so ``realpath`` resolved it against the Agent Core's own current
+    directory. This function's docstring already rejects that reasoning for
+    relative tokens — *"resolving them against the Agent Core's own cwd would test
+    a path the command never touches"* — and the same argument decides this case:
+    the command runs from HOME (``exec.rs`` sets ``current_dir(home_dir())``), so
+    ``/`` is the root of HOME's drive and of nothing else.
+
+    The bug it fixes was found by the Windows floors job on its first run
+    (2026-08-24), where a checkout on ``D:`` made ``rm -rf /`` resolve to that drive
+    while the data directory sat on ``C:`` — so the CONTAINS direction, which is
+    the only thing between ``rm -rf ~`` and the recovery floor on a platform with
+    no kernel confinement, missed the floor entirely. Which drive the guard
+    protected depended on where the process happened to be started.
+
+    Takes ``windows`` as an ARGUMENT rather than reading ``os.name``, so the arm
+    that only ever runs on the other operating system is reachable from a test
+    here. That is the same rule ``kernel_confines_writes`` follows and the reason
+    this repository keeps finding arms nothing has ever executed.
+
+    ``ntpath.splitdrive`` AND NOT ``os.path.splitdrive``, which is the trap the
+    first version of this function fell into and its own test caught: on POSIX,
+    ``os.path`` IS ``posixpath``, and ``posixpath.splitdrive('C:\\Users\\x')``
+    answers ``('', ...)`` because a drive letter means nothing there. Reading the
+    platform through ``os.path`` would have made the parameter a decoration — the
+    Windows arm would have run on this machine and quietly done nothing, which is
+    precisely the shape of bug the parameter exists to expose."""
+    if not windows or not path.startswith(("/", "\\")):
+        return path
+    if ntpath.splitdrive(path)[0]:
+        return path
+    home_drive = ntpath.splitdrive(home)[0]
+    return home_drive + path if home_drive else path
 
 
 def _resolved_token(token: str) -> str | None:
