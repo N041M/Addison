@@ -27,6 +27,9 @@ _V1_TABLE = {
     "draft_message": RiskTier.MEDIUM,
     "open_link": RiskTier.LOW,
     "snapshot_now": RiskTier.LOW,    # capture-only, so LOW and no undo (invariant 2)
+    # Knowledge phase 2: read-only search over documents a person attached.
+    # LOW and no undo for the same reason — it writes nothing at all.
+    "search_knowledge": RiskTier.LOW,
     # The coding harness's file tools, in the SAFE view since 2026-08-11 (Simple can
     # change an existing file behind a card — docs/SAFETY.md). The tiers are the
     # point of listing them here: the read is LOW and read-only, and the write is

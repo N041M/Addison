@@ -28,6 +28,11 @@ from dataclasses import dataclass
 import httpx
 
 from agent_core.knowledge import index
+from agent_core.knowledge.index import (
+    NO_LOCAL_MODEL,
+    NOTHING_TO_INDEX,
+    EmbeddingUnavailable,
+)
 from agent_core.providers.ollama_provider import default_base_url
 from agent_core.screening import screen
 
@@ -35,28 +40,10 @@ from agent_core.screening import screen
 #: and the one an Ollama user is most likely to already have.
 DEFAULT_EMBEDDING_MODEL = "nomic-embed-text"
 
-#: Said when there is no local embedding model to index with (owner decision 3,
-#: 2026-08-24). NO CLOUD FALLBACK, EVER: embedding a document in the cloud uploads
-#: its contents to a provider, and Addison must not cross that line on somebody's
-#: behalf to save them an inconvenience. Plain language, one suggested next step, no
-#: stack trace — CLAUDE.md's rule for every error a person sees.
-NO_LOCAL_MODEL = (
-    "Addison couldn't add that document, because the part that reads documents "
-    "locally isn't available. Install Ollama and the '{model}' model, then try again."
-)
-
-#: Said when the file held nothing to index.
-NOTHING_TO_INDEX = "There was no text in that document, so Addison didn't add it."
-
 #: How long one embedding request may take. Generous next to a local model's real
 #: latency and short enough that a wedged Ollama cannot hold an indexing run open
 #: indefinitely.
 EMBED_TIMEOUT_SECONDS = 60.0
-
-
-class EmbeddingUnavailable(RuntimeError):
-    """No local embedding model answered. Carries the plain sentence to show."""
-
 
 @dataclass(frozen=True)
 class IndexedDocument:

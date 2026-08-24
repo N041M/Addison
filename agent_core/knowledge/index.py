@@ -18,6 +18,38 @@ import re
 import struct
 from dataclasses import dataclass
 
+# --- the words this feature uses when it cannot do something ---------------
+#
+# THEY LIVE IN THE PROVIDER-FREE HALF ON PURPOSE. `indexer.py` is what RAISES
+# `EmbeddingUnavailable`, and `tools/search_knowledge.py` is what has to CATCH it and
+# show the sentence — and a tool may not import the indexer (spec §2). Putting the
+# exception type and its sentences here is what lets both sides name the same thing
+# instead of keeping two spellings of one message in two modules that cannot see each
+# other. Nothing here touches a provider; they are a class and three strings.
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """No local embedding model answered. Carries the plain sentence to show."""
+
+
+#: Said when there is no local embedding model (owner decision 3, 2026-08-24). NO
+#: CLOUD FALLBACK, EVER: embedding a document in the cloud uploads its contents to a
+#: provider, and Addison must not cross that line on somebody's behalf to save them
+#: an inconvenience. Plain language, one suggested next step, no stack trace.
+NO_LOCAL_MODEL = (
+    "Addison couldn't do that, because the part that reads documents locally isn't "
+    "available. Install Ollama and the '{model}' model, then try again."
+)
+
+#: Said when the file held nothing to index.
+NOTHING_TO_INDEX = "There was no text in that document, so Addison didn't add it."
+
+#: Said when a search runs before there is anywhere to search.
+NOTHING_ADDED_YET = (
+    "There are no documents to search yet. Add one in Settings, under Your documents."
+)
+
+
 #: Target size of a chunk, in characters. Not tokens: this module has no tokenizer
 #: and inventing one would be a second, worse copy of the provider's. A thousand
 #: characters is a long paragraph or two — big enough to carry an answer, small

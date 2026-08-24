@@ -30,6 +30,10 @@ _V1_TOOLS = [
     "read_project_file",
     "read_web_page",
     "save_file",
+    # Knowledge phase 2 (2026-08-24, owner decision 2): BOTH profiles. LOW and
+    # read-only, so invariant 2 is satisfied with no undo() — it writes nothing.
+    # Sorted position: this list is compared against a sorted set of ids.
+    "search_knowledge",
     "snapshot_now",
     "web_search",
     "write_project_file",

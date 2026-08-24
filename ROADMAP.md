@@ -170,8 +170,11 @@ for that being a bespoke phone app.
 **Built 2026-08-24: phase 1 of Knowledge — the index, and nothing retrieves.**
 Addison can be given a document, chop it into passages, screen each one for writing
 shaped like an instruction, and remember it as a searchable index — all locally, with
-an embedding model running on your own machine. **Nothing can search it yet**: no
-tool is registered in this phase, so no model can reach any of it. Four owner
+an embedding model running on your own machine. **Phase 2 landed the same day**: `search_knowledge`, a read-only tool in both
+profiles, which returns the passages that best match a question — each marked with the
+document and the place in it that it came from, so an answer can never quietly
+pass a document's words off as your own. A passage that was flagged when the
+document was added says so where it appears. Four owner
 decisions of the same day set the shape: screening happens once when the document is
 added rather than on every query, both profiles will get the search when it lands,
 Addison refuses rather than sending a private document to a cloud provider when no
