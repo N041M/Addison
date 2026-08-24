@@ -723,6 +723,21 @@ def test_absolute_form_actually_calls_the_drive_qualifier():
         "the CONTAINS direction stops covering the recovery floor on Windows:\n" + body
     )
 
+    # AND THE OTHER SIDE OF THE COMPARISON. Qualifying only the token was a real
+    # bug that lasted exactly one CI run: `/Library/LaunchDaemons/y.plist` went to
+    # HOME's drive while the ROOT `/Library/LaunchDaemons` still resolved against
+    # the process's own, so the automation fence stopped matching on Windows. Every
+    # path this module compares goes through `_canonical`, which makes it the only
+    # place that can guarantee both sides agree.
+    start = source.find("def _canonical")
+    assert start != -1, "_canonical moved — re-point this test"
+    canonical = source[start:]
+    canonical = canonical[: canonical.find("\ndef ", 1)]
+    assert "_drive_qualified(os.path.expanduser" in canonical, (
+        "_canonical must CALL _drive_qualified — a rule applied to one side of a "
+        "comparison is not a rule:\n" + canonical
+    )
+
 
 def test_the_windows_fence_is_whole_on_windows():
     """On Windows, EVERY Windows fence entry must expand to an absolute path.

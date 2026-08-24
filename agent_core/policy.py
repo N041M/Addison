@@ -252,9 +252,21 @@ def _canonical(path: str | os.PathLike[str]) -> str | None:
     and workspace confinement errs toward admitting a sibling of a folder somebody
     trusted. Not fixed here; ``docs/KNOWN-GAPS.md`` carries it as a platform note.
     Anything that would make the fold conditional has to decide per-VOLUME, never
-    per-platform, because both kinds of volume mount on the same Mac."""
+    per-platform, because both kinds of volume mount on the same Mac.
+
+    THE DRIVE QUALIFICATION HAPPENS HERE SO THAT BOTH SIDES GET IT. Everything this
+    module compares — the tokens out of a command AND the denylisted roots — passes
+    through this function, so this is the one place that can guarantee they agree
+    about what a rooted, driveless path means on Windows. Doing it only in
+    ``_absolute_form`` was a real bug and lasted one CI run: the token
+    ``/Library/LaunchDaemons/y.plist`` was pinned to HOME's drive while the root
+    ``/Library/LaunchDaemons`` still resolved against the process's own, so the two
+    landed on different drives and the automation fence stopped matching. A rule
+    applied to one side of a comparison is not a rule."""
     try:
-        return os.path.normcase(os.path.realpath(os.path.expanduser(str(path)))).casefold()
+        qualified = _drive_qualified(os.path.expanduser(str(path)), os.path.expanduser("~"),
+                                     os.name == "nt")
+        return os.path.normcase(os.path.realpath(qualified)).casefold()
     except (OSError, ValueError):
         return None
 
